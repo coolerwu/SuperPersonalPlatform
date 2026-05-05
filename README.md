@@ -10,31 +10,29 @@ A compact personal platform served as one deployable Python application. The fro
 ## Setup
 
 ```bash
-cp config.example.yaml config.yaml
 ./run-dev.sh
 ```
 
 Open `http://localhost:8888` and log in with the token from `config.yaml`.
 
 Development mode uses the current shell directory as its workspace by default. The workspace holds `config.yaml` and runtime files only. It does not check git status or pull code. If the configured port is already held by a process whose working directory is this project, dev mode stops that process before starting.
+If the workspace does not contain `config.yaml`, the script creates it from `config.example.yaml`.
 
 To use a different workspace:
 
 ```bash
 mkdir -p /path/to/workspace
-cp config.example.yaml /path/to/workspace/config.yaml
 ./run-dev.sh --workspace /path/to/workspace
 ```
 
 ## Production
 
 ```bash
-mkdir -p ~/.super-personal-platform
-cp config.example.yaml ~/.super-personal-platform/config.yaml
 ./run-prod.sh
 ```
 
 Production mode uses `~/.super-personal-platform` as its workspace by default. It updates the git checkout with `git pull --ff-only`, prepares the Python virtualenv, registers or refreshes the systemd service with the current workspace path, and restarts it. The frontend build output in `web/dist` is expected to be committed; the run scripts do not install or build frontend assets.
+If the production workspace does not contain `config.yaml`, the script creates it from `config.example.yaml` before continuing.
 
 To deploy with a different workspace:
 

@@ -63,11 +63,9 @@ ensure_config() {
   local resolved_config
   resolved_config="$(config_path)"
   if [[ ! -f "$resolved_config" ]]; then
-    echo "Config file not found: ${resolved_config}" >&2
-    echo "Create it from the template:" >&2
-    echo "  mkdir -p ${WORKSPACE_DIR}" >&2
-    echo "  cp ${SCRIPT_DIR}/config.example.yaml ${resolved_config}" >&2
-    exit 1
+    mkdir -p "$WORKSPACE_DIR"
+    cp "${SCRIPT_DIR}/config.example.yaml" "$resolved_config"
+    echo "Created workspace config from template: ${resolved_config}"
   fi
 }
 
