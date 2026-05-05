@@ -186,7 +186,7 @@ SERVICE
 }
 
 run_prod() {
-  parse_workspace "${HOME}/.super-personal-platform" "$@"
+  parse_workspace "$(pwd -P)" "$@"
   ensure_config
   ensure_clean_git
   update_git

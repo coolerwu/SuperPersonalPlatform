@@ -44,7 +44,7 @@
 - Development startup uses the current shell directory as the default workspace. It does not run git checks or pull code; it is for the current local working tree. If the configured port is held by a process whose working directory is this project, dev startup stops it before launching.
 - Pass `--workspace /path/to/workspace` to dev or prod to override the default workspace. A workspace stores `config.yaml` and `.run/` runtime data only; code, `.venv`, and frontend assets stay in the repository directory.
 - Deploy production with `./run-prod.sh` or `./run.sh prod`.
-- Production startup uses `$HOME/.super-personal-platform` as the default workspace.
+- Production startup uses the current shell directory as the default workspace so dev and prod can reuse the same workspace unless `--workspace` is specified.
 - `run.sh` contains the dev/prod logic. `run-dev.sh` and `run-prod.sh` only forward to it.
 - The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
 - The service reads configuration from `${SUPER_PERSONAL_WORKSPACE}/config.yaml`. `SUPER_PERSONAL_CONFIG` is not supported.
