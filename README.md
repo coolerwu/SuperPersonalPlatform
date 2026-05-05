@@ -32,7 +32,7 @@ mkdir -p /path/to/workspace
 ```
 
 Production mode uses the current shell directory as its workspace by default. It updates the git checkout with `git pull --ff-only`, prepares the Python virtualenv, registers or refreshes the systemd service with the current workspace path, and restarts it. The frontend build output in `web/dist` is expected to be committed; the run scripts do not install or build frontend assets.
-If the production workspace does not contain `config.yaml`, the script creates it from `config.example.yaml` before continuing.
+If the default production workspace does not contain `config.yaml`, the script first reuses an existing `~/.super-personal-platform/config.yaml` when present; otherwise it creates one from `config.example.yaml`.
 
 To deploy with a different workspace:
 

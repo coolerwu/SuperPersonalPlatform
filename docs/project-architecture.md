@@ -40,6 +40,7 @@
 - Known upstream root asset prefixes `/fonts/*`, `/ds-assets/*`, and `/dashboard-plugins/*` also fall back to the upstream proxy so embedded absolute asset paths do not hit the platform SPA fallback.
 - Workspace `config.yaml` should stay local and must not be committed.
 - If a workspace has no `config.yaml`, `run.sh` creates one from the committed `config.example.yaml` template before continuing.
+- For default prod startup, if the current workspace has no `config.yaml` but the former default `$HOME/.super-personal-platform/config.yaml` exists, `run.sh` copies that existing prod config instead of the template.
 - Start development with `./run-dev.sh` or `./run.sh dev`.
 - Development startup uses the current shell directory as the default workspace. It does not run git checks or pull code; it is for the current local working tree. If the configured port is held by a process whose working directory is this project, dev startup stops it before launching.
 - Pass `--workspace /path/to/workspace` to dev or prod to override the default workspace. A workspace stores `config.yaml` and `.run/` runtime data only; code, `.venv`, and frontend assets stay in the repository directory.

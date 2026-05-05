@@ -31,6 +31,7 @@ parse_workspace() {
   local default_workspace="$1"
   shift
   WORKSPACE_DIR="$default_workspace"
+  WORKSPACE_WAS_EXPLICIT=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -40,10 +41,12 @@ parse_workspace() {
           exit 1
         fi
         WORKSPACE_DIR="$(absolute_path "$2")"
+        WORKSPACE_WAS_EXPLICIT=1
         shift 2
         ;;
       --workspace=*)
         WORKSPACE_DIR="$(absolute_path "${1#--workspace=}")"
+        WORKSPACE_WAS_EXPLICIT=1
         shift
         ;;
       *)
@@ -64,8 +67,14 @@ ensure_config() {
   resolved_config="$(config_path)"
   if [[ ! -f "$resolved_config" ]]; then
     mkdir -p "$WORKSPACE_DIR"
-    cp "${SCRIPT_DIR}/config.example.yaml" "$resolved_config"
-    echo "Created workspace config from template: ${resolved_config}"
+    local legacy_prod_config="${HOME}/.super-personal-platform/config.yaml"
+    if [[ "${RUN_MODE:-}" == "prod" && "$WORKSPACE_WAS_EXPLICIT" == "0" && -f "$legacy_prod_config" ]]; then
+      cp "$legacy_prod_config" "$resolved_config"
+      echo "Created workspace config from existing prod config: ${resolved_config}"
+    else
+      cp "${SCRIPT_DIR}/config.example.yaml" "$resolved_config"
+      echo "Created workspace config from template: ${resolved_config}"
+    fi
   fi
 }
 
@@ -133,6 +142,7 @@ stop_dev_port_processes() {
 }
 
 run_dev() {
+  RUN_MODE=dev
   parse_workspace "$(pwd -P)" "$@"
   ensure_config
   ensure_venv
@@ -186,6 +196,7 @@ SERVICE
 }
 
 run_prod() {
+  RUN_MODE=prod
   parse_workspace "$(pwd -P)" "$@"
   ensure_config
   ensure_clean_git
