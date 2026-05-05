@@ -20,13 +20,15 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
    - `.venv/bin/python -m pytest`
    - `cd web && npm test`
    - `cd web && npm run build`
-6. Stage all uncommitted code with `git add .`.
+6. Stage all uncommitted code by running the exact command `git add .`.
 7. Commit with a concise imperative message.
 8. Push the current branch with `git push origin HEAD`.
 
 ## Guardrails
 
 - This project intentionally commits all uncommitted code during this workflow.
+- Always use `git add .` for staging in this workflow; do not stage files one by
+  one or use partial staging.
 - Do not revert or overwrite existing changes unless the user explicitly asks.
 - Do not commit `config.yaml`, virtualenvs, caches, or dependency directories.
 - Treat `web/dist` as commit-worthy only when the frontend build output changed
