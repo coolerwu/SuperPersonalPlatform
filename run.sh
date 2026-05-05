@@ -67,8 +67,12 @@ ensure_config() {
   resolved_config="$(config_path)"
   if [[ ! -f "$resolved_config" ]]; then
     mkdir -p "$WORKSPACE_DIR"
+    local root_config="${SCRIPT_DIR}/config.yaml"
     local legacy_prod_config="${HOME}/.super-personal-platform/config.yaml"
-    if [[ "${RUN_MODE:-}" == "prod" && "$WORKSPACE_WAS_EXPLICIT" == "0" && -f "$legacy_prod_config" ]]; then
+    if [[ "$WORKSPACE_WAS_EXPLICIT" == "0" && -f "$root_config" ]]; then
+      cp "$root_config" "$resolved_config"
+      echo "Created workspace config from project config: ${resolved_config}"
+    elif [[ "${RUN_MODE:-}" == "prod" && "$WORKSPACE_WAS_EXPLICIT" == "0" && -f "$legacy_prod_config" ]]; then
       cp "$legacy_prod_config" "$resolved_config"
       echo "Created workspace config from existing prod config: ${resolved_config}"
     else
@@ -143,7 +147,7 @@ stop_dev_port_processes() {
 
 run_dev() {
   RUN_MODE=dev
-  parse_workspace "$(pwd -P)" "$@"
+  parse_workspace "${SCRIPT_DIR}/.super-personal-platform" "$@"
   ensure_config
   ensure_venv
   install_python_deps ".[dev]"
@@ -197,7 +201,7 @@ SERVICE
 
 run_prod() {
   RUN_MODE=prod
-  parse_workspace "$(pwd -P)" "$@"
+  parse_workspace "${SCRIPT_DIR}/.super-personal-platform" "$@"
   ensure_config
   ensure_clean_git
   update_git

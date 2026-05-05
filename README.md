@@ -15,8 +15,8 @@ A compact personal platform served as one deployable Python application. The fro
 
 Open `http://localhost:8888` and log in with the token from `config.yaml`.
 
-Development mode uses the current shell directory as its workspace by default. The workspace holds `config.yaml` and runtime files only. It does not check git status or pull code. If the configured port is already held by a process whose working directory is this project, dev mode stops that process before starting.
-If the workspace does not contain `config.yaml`, the script creates it from `config.example.yaml`.
+Development mode uses `.super-personal-platform` under the project directory as its workspace by default. The workspace holds `config.yaml` and runtime files only. It does not check git status or pull code. If the configured port is already held by a process whose working directory is this project, dev mode stops that process before starting.
+If the default workspace does not contain `config.yaml`, the script first reuses an existing project `config.yaml` when present; otherwise it creates one from `config.example.yaml`.
 
 To use a different workspace:
 
@@ -31,8 +31,8 @@ mkdir -p /path/to/workspace
 ./run-prod.sh
 ```
 
-Production mode uses the current shell directory as its workspace by default. It updates the git checkout with `git pull --ff-only`, prepares the Python virtualenv, registers or refreshes the systemd service with the current workspace path, and restarts it. The frontend build output in `web/dist` is expected to be committed; the run scripts do not install or build frontend assets.
-If the default production workspace does not contain `config.yaml`, the script first reuses an existing `~/.super-personal-platform/config.yaml` when present; otherwise it creates one from `config.example.yaml`.
+Production mode uses `.super-personal-platform` under the project directory as its workspace by default. It updates the git checkout with `git pull --ff-only`, prepares the Python virtualenv, registers or refreshes the systemd service with the current workspace path, and restarts it. The frontend build output in `web/dist` is expected to be committed; the run scripts do not install or build frontend assets.
+If the default production workspace does not contain `config.yaml`, the script first reuses an existing project `config.yaml` when present, then tries `~/.super-personal-platform/config.yaml`, and otherwise creates one from `config.example.yaml`.
 
 To deploy with a different workspace:
 
