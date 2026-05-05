@@ -1,4 +1,4 @@
-# Project Memory
+# Project Architecture
 
 ## Current Shape
 
@@ -29,11 +29,8 @@
 
 ## Operating Notes
 
-- `AGENTS.md` is the repository-level Codex instruction entrypoint. It tells
-  agents to read and maintain this `PROJECT_MEMORY.md`; this file is project
-  memory, not a Codex default configuration file.
-- The project contains a local Codex skill at `.codex/skills/project-commit`
-  for the standard test, memory update, commit, and push workflow.
+- `AGENTS.md` is the repository-level Codex instruction entrypoint. It indexes this architecture document for project memory and operating assumptions.
+- The project contains a local Codex skill at `.codex/skills/project-commit` for the standard test, architecture update, commit, and push workflow.
 - Copy `config.example.yaml` to `config.yaml` before running locally.
 - Default proxy target is `http://192.168.1.3:9119/`.
 - The proxy currently supports ordinary HTTP requests, not WebSocket upgrade traffic.
@@ -43,15 +40,15 @@
 - Known upstream root asset prefixes `/fonts/*`, `/ds-assets/*`, and `/dashboard-plugins/*` also fall back to the upstream proxy so embedded absolute asset paths do not hit the platform SPA fallback.
 - `config.yaml` should stay local and must not be committed.
 - Start development with `./run-dev.sh` or `./run.sh dev`.
-- Development startup does not run git checks or pull code; it is for the current local working tree.
+- Development startup does not run git checks or pull code; it is for the current local working tree. If the configured port is held by a process whose working directory is this project, dev startup stops it before launching.
 - Deploy production with `./run-prod.sh` or `./run.sh prod`.
 - `run.sh` contains the dev/prod logic. `run-dev.sh` and `run-prod.sh` only forward to it.
 - The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
 - Production deployment requires Linux systemd and sudo. It registers or refreshes `super-personal-platform.service`, enables it, and restarts it.
 - Use the web UI at `系统 -> 更新服务` to manually trigger the production update flow after login.
-- Before committing changes, run `.venv/bin/python -m pytest`,
-  `cd web && npm test`, and `cd web && npm run build`.
+- Before committing changes, execute the local `$project-commit` skill.
 
 ## Maintenance Rule
 
-- Every implementation pass must update this file if it changes architecture, behavior, setup, commands, dependencies, configuration, or public interfaces.
+- Every implementation pass must update this file if it changes architecture, behavior, setup, commands, dependencies, configuration, public interfaces, or operating assumptions.
+

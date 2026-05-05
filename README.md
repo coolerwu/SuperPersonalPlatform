@@ -16,7 +16,7 @@ cp config.example.yaml config.yaml
 
 Open `http://localhost:8888` and log in with the token from `config.yaml`.
 
-Development mode runs the current local working tree. It does not check git status or pull code.
+Development mode runs the current local working tree. It does not check git status or pull code. If the configured port is already held by a process whose working directory is this project, dev mode stops that process before starting.
 
 ## Production
 
@@ -28,6 +28,6 @@ Production mode updates the git checkout with `git pull --ff-only`, prepares the
 
 After login, use `系统 -> 更新服务` to trigger the same production update flow from the web UI.
 
-## Project Memory
+## Project Architecture
 
-`PROJECT_MEMORY.md` is part of the project contract. Update it whenever implementation changes behavior, architecture, commands, or operating assumptions.
+`docs/project-architecture.md` is part of the project contract. Update it whenever implementation changes behavior, architecture, commands, or operating assumptions.

@@ -66,10 +66,47 @@ install_python_deps() {
   "${APP_DIR}/.venv/bin/pip" install -e "$target"
 }
 
+pid_cwd() {
+  local pid="$1"
+  lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
+}
+
+stop_dev_port_processes() {
+  local port="${SUPER_PERSONAL_PORT:-8888}"
+  local pids
+  pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -z "$pids" ]]; then
+    return
+  fi
+
+  local pid cwd stopped=()
+  for pid in $pids; do
+    cwd="$(pid_cwd "$pid")"
+    if [[ "$cwd" == "$APP_DIR" ]]; then
+      echo "Stopping existing dev service on port ${port}: pid ${pid}"
+      kill "$pid" 2>/dev/null || true
+      stopped+=("$pid")
+    fi
+  done
+
+  for pid in "${stopped[@]}"; do
+    local remaining=20
+    while kill -0 "$pid" 2>/dev/null && (( remaining > 0 )); do
+      sleep 0.25
+      remaining=$((remaining - 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Force stopping dev service on port ${port}: pid ${pid}"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
 run_dev() {
   ensure_config
   ensure_venv
   install_python_deps ".[dev]"
+  stop_dev_port_processes
 
   cd "$APP_DIR"
   export SUPER_PERSONAL_HOST="${SUPER_PERSONAL_HOST:-0.0.0.0}"

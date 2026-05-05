@@ -1,21 +1,15 @@
-# Project Agent Instructions
+# 项目 Agent 指令
 
-`PROJECT_MEMORY.md` is not a Codex default configuration file. It is this
-project's long-term memory document.
+默认使用中文回复用户。
 
-Before implementing changes in this repository:
+`docs/project-architecture.md` 是本项目的架构说明、长期记忆和运行约定索引。
 
-- Read `PROJECT_MEMORY.md`.
-- Run `git status --short` and account for existing worktree changes.
-- Do not stage, commit, revert, or overwrite unrelated existing changes.
+开始实现任何变更前：
 
-Keep `PROJECT_MEMORY.md` updated whenever implementation changes behavior,
-architecture, commands, dependencies, configuration, public interfaces, or
-operating assumptions.
+- 读取 `docs/project-architecture.md`。
+- 执行 `git status --short`，确认当前未提交代码状态。
+- 按用户当前偏好，本项目提交流程会提交所有未提交代码。
 
-Before committing project changes, run:
+如果实现改变了架构、行为、命令、依赖、配置、公共接口或运维方式，必须同步更新 `docs/project-architecture.md`。
 
-- `.venv/bin/python -m pytest`
-- `cd web && npm test`
-- `cd web && npm run build`
-
+提交项目前必须执行项目内 `$project-commit` skill。
