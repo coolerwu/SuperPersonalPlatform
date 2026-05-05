@@ -19,7 +19,7 @@
 
 ## Implemented Capabilities
 
-- Single-token login using `config.yaml` at `auth.token`.
+- Single-token login using the active workspace `config.yaml` at `auth.token`.
 - Login writes an HttpOnly cookie. Logout clears it.
 - Auth state is available through `GET /api/auth/me`.
 - `/api/proxy/site/` reverse-proxies the configured upstream site under `proxy.upstream_base_url`.
@@ -31,24 +31,26 @@
 
 - `AGENTS.md` is the repository-level Codex instruction entrypoint. It indexes this architecture document for project memory and operating assumptions.
 - The project contains a local Codex skill at `.codex/skills/project-commit` for the standard test, architecture update, commit, and push workflow.
-- Copy `config.example.yaml` to `config.yaml` before running locally.
+- `config.example.yaml` is the committed template for workspace configuration.
 - Default proxy target is `http://192.168.1.3:9119/`.
 - The proxy currently supports ordinary HTTP requests, not WebSocket upgrade traffic.
 - The proxy HTTP client uses `trust_env=False` so system proxy settings do not intercept private LAN upstream requests.
 - HTML, CSS, and JavaScript returned through the proxy get light rewriting for common root-relative paths so upstream assets and API calls continue through `/api/proxy/site/`.
 - Unknown authenticated `/api/*` requests fall back to the upstream proxy after platform-owned API routes are checked, which supports embedded apps that call root-relative APIs such as `/api/status`.
 - Known upstream root asset prefixes `/fonts/*`, `/ds-assets/*`, and `/dashboard-plugins/*` also fall back to the upstream proxy so embedded absolute asset paths do not hit the platform SPA fallback.
-- `config.yaml` should stay local and must not be committed.
+- Workspace `config.yaml` should stay local and must not be committed.
 - Start development with `./run-dev.sh` or `./run.sh dev`.
-- Development startup does not run git checks or pull code; it is for the current local working tree. If the configured port is held by a process whose working directory is this project, dev startup stops it before launching.
+- Development startup uses the current shell directory as the default workspace. It does not run git checks or pull code; it is for the current local working tree. If the configured port is held by a process whose working directory is this project, dev startup stops it before launching.
+- Pass `--workspace /path/to/workspace` to dev or prod to override the default workspace. A workspace stores `config.yaml` and `.run/` runtime data only; code, `.venv`, and frontend assets stay in the repository directory.
 - Deploy production with `./run-prod.sh` or `./run.sh prod`.
+- Production startup uses `$HOME/.super-personal-platform` as the default workspace.
 - `run.sh` contains the dev/prod logic. `run-dev.sh` and `run-prod.sh` only forward to it.
 - The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
-- Production deployment requires Linux systemd and sudo. It registers or refreshes `super-personal-platform.service`, enables it, and restarts it.
+- The service reads configuration from `${SUPER_PERSONAL_WORKSPACE}/config.yaml`. `SUPER_PERSONAL_CONFIG` is not supported.
+- Production deployment requires Linux systemd and sudo. It registers or refreshes `super-personal-platform.service` on every run so systemd receives the current workspace, host, and port parameters; then it enables and restarts the service.
 - Use the web UI at `系统 -> 更新服务` to manually trigger the production update flow after login.
 - Before committing changes, execute the local `$project-commit` skill.
 
 ## Maintenance Rule
 
 - Every implementation pass must update this file if it changes architecture, behavior, setup, commands, dependencies, configuration, public interfaces, or operating assumptions.
-

@@ -1,32 +1,62 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SERVICE_NAME="super-personal-platform.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
-RUN_DIR="${APP_DIR}/.run"
 
 usage() {
   cat <<USAGE
 Usage:
-  ./run.sh dev
-  ./run.sh prod
-  ./run-dev.sh
-  ./run-prod.sh
+  ./run.sh dev [--workspace PATH]
+  ./run.sh prod [--workspace PATH]
+  ./run-dev.sh [--workspace PATH]
+  ./run-prod.sh [--workspace PATH]
 
 Environment:
   SUPER_PERSONAL_HOST    default: 0.0.0.0
   SUPER_PERSONAL_PORT    default: 8888
-  SUPER_PERSONAL_CONFIG  default: config.yaml
 USAGE
 }
 
-config_path() {
-  local raw_config="${SUPER_PERSONAL_CONFIG:-config.yaml}"
-  case "$raw_config" in
-    /*) printf '%s\n' "$raw_config" ;;
-    *) printf '%s\n' "${APP_DIR}/${raw_config}" ;;
+absolute_path() {
+  local raw_path="$1"
+  case "$raw_path" in
+    /*) printf '%s\n' "$raw_path" ;;
+    *) printf '%s\n' "$(pwd -P)/${raw_path}" ;;
   esac
+}
+
+parse_workspace() {
+  local default_workspace="$1"
+  shift
+  WORKSPACE_DIR="$default_workspace"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --workspace)
+        if [[ $# -lt 2 || -z "$2" ]]; then
+          echo "--workspace requires a path." >&2
+          exit 1
+        fi
+        WORKSPACE_DIR="$(absolute_path "$2")"
+        shift 2
+        ;;
+      --workspace=*)
+        WORKSPACE_DIR="$(absolute_path "${1#--workspace=}")"
+        shift
+        ;;
+      *)
+        echo "Unknown argument: $1" >&2
+        usage >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+
+config_path() {
+  printf '%s\n' "${WORKSPACE_DIR}/config.yaml"
 }
 
 ensure_config() {
@@ -34,13 +64,15 @@ ensure_config() {
   resolved_config="$(config_path)"
   if [[ ! -f "$resolved_config" ]]; then
     echo "Config file not found: ${resolved_config}" >&2
-    echo "Copy config.example.yaml to config.yaml or set SUPER_PERSONAL_CONFIG." >&2
+    echo "Create it from the template:" >&2
+    echo "  mkdir -p ${WORKSPACE_DIR}" >&2
+    echo "  cp ${SCRIPT_DIR}/config.example.yaml ${resolved_config}" >&2
     exit 1
   fi
 }
 
 ensure_clean_git() {
-  cd "$APP_DIR"
+  cd "$SCRIPT_DIR"
   if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
     echo "Git working tree is dirty. Commit or stash local changes before updating." >&2
     git status --short >&2
@@ -49,21 +81,21 @@ ensure_clean_git() {
 }
 
 update_git() {
-  cd "$APP_DIR"
+  cd "$SCRIPT_DIR"
   git pull --ff-only
 }
 
 ensure_venv() {
-  cd "$APP_DIR"
-  if [[ ! -x "${APP_DIR}/.venv/bin/python" ]]; then
-    python3 -m venv "${APP_DIR}/.venv"
+  cd "$SCRIPT_DIR"
+  if [[ ! -x "${SCRIPT_DIR}/.venv/bin/python" ]]; then
+    python3 -m venv "${SCRIPT_DIR}/.venv"
   fi
 }
 
 install_python_deps() {
   local target="$1"
-  cd "$APP_DIR"
-  "${APP_DIR}/.venv/bin/pip" install -e "$target"
+  cd "$SCRIPT_DIR"
+  "${SCRIPT_DIR}/.venv/bin/pip" install -e "$target"
 }
 
 pid_cwd() {
@@ -82,7 +114,7 @@ stop_dev_port_processes() {
   local pid cwd stopped=()
   for pid in $pids; do
     cwd="$(pid_cwd "$pid")"
-    if [[ "$cwd" == "$APP_DIR" ]]; then
+    if [[ "$cwd" == "$SCRIPT_DIR" ]]; then
       echo "Stopping existing dev service on port ${port}: pid ${pid}"
       kill "$pid" 2>/dev/null || true
       stopped+=("$pid")
@@ -103,17 +135,18 @@ stop_dev_port_processes() {
 }
 
 run_dev() {
+  parse_workspace "$(pwd -P)" "$@"
   ensure_config
   ensure_venv
   install_python_deps ".[dev]"
   stop_dev_port_processes
 
-  cd "$APP_DIR"
+  cd "$SCRIPT_DIR"
   export SUPER_PERSONAL_HOST="${SUPER_PERSONAL_HOST:-0.0.0.0}"
   export SUPER_PERSONAL_PORT="${SUPER_PERSONAL_PORT:-8888}"
-  export SUPER_PERSONAL_CONFIG="$(config_path)"
+  export SUPER_PERSONAL_WORKSPACE="$WORKSPACE_DIR"
   export SUPER_PERSONAL_RELOAD=1
-  exec "${APP_DIR}/.venv/bin/python" -m server
+  exec "${SCRIPT_DIR}/.venv/bin/python" -m server
 }
 
 write_service_file() {
@@ -122,13 +155,12 @@ write_service_file() {
     exit 1
   fi
 
-  mkdir -p "$RUN_DIR"
+  local run_dir="${WORKSPACE_DIR}/.run"
+  mkdir -p "$run_dir"
 
   local host="${SUPER_PERSONAL_HOST:-0.0.0.0}"
   local port="${SUPER_PERSONAL_PORT:-8888}"
-  local resolved_config
-  resolved_config="$(config_path)"
-  local generated_service="${RUN_DIR}/${SERVICE_NAME}"
+  local generated_service="${run_dir}/${SERVICE_NAME}"
 
   cat >"$generated_service" <<SERVICE
 [Unit]
@@ -137,11 +169,11 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=${APP_DIR}
+WorkingDirectory=${SCRIPT_DIR}
 Environment=SUPER_PERSONAL_HOST=${host}
 Environment=SUPER_PERSONAL_PORT=${port}
-Environment=SUPER_PERSONAL_CONFIG=${resolved_config}
-ExecStart=${APP_DIR}/.venv/bin/python -m server
+Environment=SUPER_PERSONAL_WORKSPACE=${WORKSPACE_DIR}
+ExecStart=${SCRIPT_DIR}/.venv/bin/python -m server
 Restart=always
 RestartSec=5
 
@@ -156,6 +188,7 @@ SERVICE
 }
 
 run_prod() {
+  parse_workspace "${HOME}/.super-personal-platform" "$@"
   ensure_config
   ensure_clean_git
   update_git

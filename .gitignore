@@ -1,11 +1,17 @@
-.venv/
+# Local workspace configuration and runtime data.
+config.yaml
 .run/
+.super-personal-platform/
+
+# Local Python environment and packaging output.
+.venv/
 *.egg-info/
 __pycache__/
 *.pyc
 .pytest_cache/
 .mypy_cache/
-config.yaml
+
+# Frontend dependency/cache output. The production build in web/dist is committed.
 web/node_modules/
 web/.vite/
 

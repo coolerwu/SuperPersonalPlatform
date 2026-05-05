@@ -16,15 +16,31 @@ cp config.example.yaml config.yaml
 
 Open `http://localhost:8888` and log in with the token from `config.yaml`.
 
-Development mode runs the current local working tree. It does not check git status or pull code. If the configured port is already held by a process whose working directory is this project, dev mode stops that process before starting.
+Development mode uses the current shell directory as its workspace by default. The workspace holds `config.yaml` and runtime files only. It does not check git status or pull code. If the configured port is already held by a process whose working directory is this project, dev mode stops that process before starting.
+
+To use a different workspace:
+
+```bash
+mkdir -p /path/to/workspace
+cp config.example.yaml /path/to/workspace/config.yaml
+./run-dev.sh --workspace /path/to/workspace
+```
 
 ## Production
 
 ```bash
+mkdir -p ~/.super-personal-platform
+cp config.example.yaml ~/.super-personal-platform/config.yaml
 ./run-prod.sh
 ```
 
-Production mode updates the git checkout with `git pull --ff-only`, prepares the Python virtualenv, registers or refreshes the systemd service, and restarts it. The frontend build output in `web/dist` is expected to be committed; the run scripts do not install or build frontend assets.
+Production mode uses `~/.super-personal-platform` as its workspace by default. It updates the git checkout with `git pull --ff-only`, prepares the Python virtualenv, registers or refreshes the systemd service with the current workspace path, and restarts it. The frontend build output in `web/dist` is expected to be committed; the run scripts do not install or build frontend assets.
+
+To deploy with a different workspace:
+
+```bash
+./run-prod.sh --workspace /path/to/workspace
+```
 
 After login, use `系统 -> 更新服务` to trigger the same production update flow from the web UI.
 

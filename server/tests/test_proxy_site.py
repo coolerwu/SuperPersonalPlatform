@@ -44,7 +44,7 @@ def authenticated_client_with_gateway(gateway) -> TestClient:
     container = AppContainer(
         auth_service=AuthService(AuthToken(token)),
         proxy_service=ProxyService(gateway),
-        system_update_service=SystemUpdateService(Path.cwd()),
+        system_update_service=SystemUpdateService(Path.cwd(), Path.cwd()),
         session_codec=SessionCodec(token),
     )
     from fastapi import FastAPI

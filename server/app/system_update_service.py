@@ -10,9 +10,10 @@ class UpdateAlreadyRunningError(Exception):
 
 
 class SystemUpdateService:
-    def __init__(self, project_root: Path) -> None:
+    def __init__(self, project_root: Path, workspace: Path) -> None:
         self.project_root = project_root
-        self.run_dir = project_root / ".run"
+        self.workspace = workspace
+        self.run_dir = workspace / ".run"
         self.lock_path = self.run_dir / "update-service.lock"
         self.log_path = self.run_dir / "update-service.log"
         self.script_path = project_root / "run-prod.sh"
@@ -36,6 +37,7 @@ class SystemUpdateService:
             f"trap 'rm -f {shlex.quote(str(self.lock_path))}' EXIT; "
             f"cd {shlex.quote(str(self.project_root))}; "
             f"{shlex.quote(str(self.script_path))} "
+            f"--workspace {shlex.quote(str(self.workspace))} "
             f">>{shlex.quote(str(self.log_path))} 2>&1"
         )
         try:

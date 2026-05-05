@@ -21,20 +21,23 @@ from server.infrastructure.http_proxy_gateway import HttpProxyGateway
 from server.infrastructure.session import SessionCodec
 
 
+def current_workspace() -> Path:
+    return Path(os.environ.get("SUPER_PERSONAL_WORKSPACE", Path.cwd())).resolve()
+
+
 def create_container(settings: Settings) -> AppContainer:
     project_root = Path(__file__).resolve().parents[2]
     return AppContainer(
         auth_service=AuthService(AuthToken(settings.auth.token)),
         proxy_service=ProxyService(HttpProxyGateway(settings.proxy.upstream_base_url)),
-        system_update_service=SystemUpdateService(project_root),
+        system_update_service=SystemUpdateService(project_root, current_workspace()),
         session_codec=SessionCodec(settings.auth.token),
     )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
-        config_path = os.environ.get("SUPER_PERSONAL_CONFIG", "config.yaml")
-        settings = load_settings(config_path)
+        settings = load_settings(current_workspace() / "config.yaml")
 
     container = create_container(settings)
     app = FastAPI(title="Super Personal Platform")

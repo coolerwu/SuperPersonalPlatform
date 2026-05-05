@@ -32,7 +32,7 @@ def load_settings(config_path: str | Path) -> Settings:
     path = Path(config_path)
     if not path.exists():
         raise FileNotFoundError(
-            f"config file not found: {path}. Copy config.example.yaml to config.yaml."
+            f"config file not found: {path}. Copy config.example.yaml to the workspace config.yaml."
         )
 
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

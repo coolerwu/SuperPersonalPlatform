@@ -25,7 +25,7 @@ def make_static_client(tmp_path) -> TestClient:
     container = AppContainer(
         auth_service=AuthService(AuthToken(token)),
         proxy_service=ProxyService(StaticProxyGateway()),
-        system_update_service=SystemUpdateService(tmp_path),
+        system_update_service=SystemUpdateService(tmp_path, tmp_path),
         session_codec=SessionCodec(token),
     )
     from server.adapter.auth_routes import create_auth_router

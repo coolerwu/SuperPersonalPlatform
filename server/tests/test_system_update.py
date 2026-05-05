@@ -90,12 +90,14 @@ def test_system_update_service_lock_blocks_duplicate_starts(tmp_path, monkeypatc
             calls.append((args, kwargs))
 
     monkeypatch.setattr("server.app.system_update_service.subprocess.Popen", FakePopen)
-    service = SystemUpdateService(tmp_path)
+    monkeypatch.setattr("server.app.system_update_service.shutil.which", lambda _: None)
+    service = SystemUpdateService(tmp_path, tmp_path)
 
     log_path = service.start_update()
 
     assert log_path == tmp_path / ".run" / "update-service.log"
     assert calls
+    assert f"--workspace {tmp_path}" in calls[0][0][0][2]
     try:
         service.start_update()
     except UpdateAlreadyRunningError:
