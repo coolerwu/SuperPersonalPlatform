@@ -1,6 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ArrowRight, LogOut, RefreshCw, ShieldCheck, TerminalSquare } from "lucide-react";
+import {
+  ArrowRight,
+  LogOut,
+  RefreshCw,
+  ShieldCheck,
+  TerminalSquare
+} from "lucide-react";
 import "./styles.css";
 
 async function api(path, options = {}) {
@@ -96,52 +102,8 @@ function HomePage() {
   );
 }
 
-function JsonPanel({ data }) {
-  const items = Array.isArray(data) ? data : [data];
-  return (
-    <div className="logs-grid">
-      {items.map((item, index) => (
-        <article className="log-card" key={index}>
-          <span>#{index + 1}</span>
-          <pre>{JSON.stringify(item, null, 2)}</pre>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function TextPanel({ lines }) {
-  if (!lines.length) {
-    return <div className="empty-state">暂无日志内容</div>;
-  }
-  return (
-    <div className="logs-list">
-      {lines.map((line, index) => (
-        <div className="log-line" key={`${index}-${line}`}>
-          <span>{String(index + 1).padStart(3, "0")}</span>
-          <code>{line}</code>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function LogsPage() {
-  const [state, setState] = useState({ status: "idle", payload: null, error: "" });
-
-  const load = useCallback(async () => {
-    setState({ status: "loading", payload: null, error: "" });
-    try {
-      const payload = await api("/api/proxy/logs");
-      setState({ status: "ready", payload, error: "" });
-    } catch (err) {
-      setState({ status: "error", payload: null, error: err.message });
-    }
-  }, []);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+function ProxyPage() {
+  const [frameKey, setFrameKey] = useState(0);
 
   return (
     <section className="page-section">
@@ -150,19 +112,76 @@ function LogsPage() {
           <p>Proxy</p>
           <h2>代理转发</h2>
         </div>
-        <button className="secondary-button" onClick={load} disabled={state.status === "loading"}>
+        <button className="secondary-button" onClick={() => setFrameKey((value) => value + 1)}>
           <RefreshCw size={17} />
           刷新
         </button>
       </div>
-      {state.status === "loading" ? <div className="empty-state">正在读取日志</div> : null}
-      {state.status === "error" ? <div className="error-state">{state.error}</div> : null}
-      {state.status === "ready" && state.payload?.type === "json" ? (
-        <JsonPanel data={state.payload.data} />
-      ) : null}
-      {state.status === "ready" && state.payload?.type === "text" ? (
-        <TextPanel lines={state.payload.data || []} />
-      ) : null}
+      <div className="proxy-frame-shell">
+        <iframe
+          key={frameKey}
+          className="proxy-frame"
+          src="/api/proxy/site/"
+          title="代理转发"
+        />
+      </div>
+    </section>
+  );
+}
+
+function SystemPage({ onUnauthorized }) {
+  const [updating, setUpdating] = useState(false);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+
+  async function updateService() {
+    setUpdating(true);
+    setStatus("");
+    setError("");
+    try {
+      const data = await api("/api/system/update-service", { method: "POST" });
+      setStatus(data.message || "更新已开始，请稍后刷新页面。");
+    } catch (err) {
+      if (err.message === "Authentication required") {
+        onUnauthorized();
+        return;
+      }
+      if (err.message === "Failed to fetch") {
+        setStatus("服务可能正在重启，请稍后刷新页面。");
+        return;
+      }
+      setError(err.message);
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  return (
+    <section className="page-section">
+      <div className="section-heading">
+        <p>System</p>
+        <h2>系统运维</h2>
+      </div>
+      <div className="system-grid">
+        <article className="metric-card">
+          <span>更新方式</span>
+          <strong>systemd</strong>
+          <p>生产环境通过 systemd 重启服务，前端产物随代码提交。</p>
+        </article>
+        <article className="action-panel">
+          <div>
+            <span>服务更新</span>
+            <h3>拉取代码并重启</h3>
+            <p>触发生产更新任务后，服务会短暂不可用。</p>
+          </div>
+          <button className="secondary-button" onClick={updateService} disabled={updating}>
+            <RefreshCw size={17} />
+            {updating ? "更新中" : "更新服务"}
+          </button>
+          {status ? <div className="status-message">{status}</div> : null}
+          {error ? <div className="form-error">{error}</div> : null}
+        </article>
+      </div>
     </section>
   );
 }
@@ -172,7 +191,8 @@ function AppShell({ onLogout }) {
   const navItems = useMemo(
     () => [
       { path: "/", label: "首页" },
-      { path: "/proxy/logs", label: "代理转发" }
+      { path: "/proxy", label: "代理转发" },
+      { path: "/system", label: "系统" }
     ],
     []
   );
@@ -192,6 +212,22 @@ function AppShell({ onLogout }) {
     await api("/api/auth/logout", { method: "POST" });
     onLogout();
     window.history.replaceState({}, "", "/login");
+  }
+
+  function unauthorized() {
+    onLogout();
+    window.history.replaceState({}, "", "/login");
+    setPath("/login");
+  }
+
+  function renderPage() {
+    if (path === "/proxy") {
+      return <ProxyPage />;
+    }
+    if (path === "/system") {
+      return <SystemPage onUnauthorized={unauthorized} />;
+    }
+    return <HomePage />;
   }
 
   return (
@@ -217,7 +253,7 @@ function AppShell({ onLogout }) {
           退出
         </button>
       </aside>
-      <main className="content">{path === "/proxy/logs" ? <LogsPage /> : <HomePage />}</main>
+      <main className="content">{renderPage()}</main>
     </div>
   );
 }

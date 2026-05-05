@@ -4,7 +4,7 @@
 
 - This is a new full-stack personal platform in `/Users/wulang/Desktop/AI/SuperPersonalPlatform`.
 - The backend is Python 3.12.x with FastAPI and listens on port `8888`.
-- The frontend is React + Vite. Production deployment requires `npm run build` in `web/`; the backend serves `web/dist`.
+- The frontend is React + Vite. Production uses the committed `web/dist` build output; run scripts do not install or build frontend assets.
 - The app is not deployed as separated frontend/backend services. Browser traffic goes to FastAPI, and FastAPI serves both API and built frontend assets.
 
 ## Backend Architecture
@@ -22,16 +22,35 @@
 - Single-token login using `config.yaml` at `auth.token`.
 - Login writes an HttpOnly cookie. Logout clears it.
 - Auth state is available through `GET /api/auth/me`.
-- `GET /api/proxy/logs` fetches the configured upstream logs URL and normalizes JSON or text into a frontend-friendly payload.
-- The frontend contains a login page, an app shell, a home overview, and an embedded proxy logs page.
+- `/api/proxy/site/` reverse-proxies the configured upstream site under `proxy.upstream_base_url`.
+- The proxy forwards normal HTTP methods through the Python backend and returns upstream status, body, and safe response headers.
+- `POST /api/system/update-service` starts a protected background production update task.
+- The frontend contains a login page, an app shell, a home overview, an iframe-based proxy page, and a system page with an update-service button.
 
 ## Operating Notes
 
+- `AGENTS.md` is the repository-level Codex instruction entrypoint. It tells
+  agents to read and maintain this `PROJECT_MEMORY.md`; this file is project
+  memory, not a Codex default configuration file.
+- The project contains a local Codex skill at `.codex/skills/project-commit`
+  for the standard test, memory update, commit, and push workflow.
 - Copy `config.example.yaml` to `config.yaml` before running locally.
-- Default proxy target is `http://192.168.1.3:9119/logs`.
+- Default proxy target is `http://192.168.1.3:9119/`.
+- The proxy currently supports ordinary HTTP requests, not WebSocket upgrade traffic.
+- The proxy HTTP client uses `trust_env=False` so system proxy settings do not intercept private LAN upstream requests.
+- HTML, CSS, and JavaScript returned through the proxy get light rewriting for common root-relative paths so upstream assets and API calls continue through `/api/proxy/site/`.
+- Unknown authenticated `/api/*` requests fall back to the upstream proxy after platform-owned API routes are checked, which supports embedded apps that call root-relative APIs such as `/api/status`.
+- Known upstream root asset prefixes `/fonts/*`, `/ds-assets/*`, and `/dashboard-plugins/*` also fall back to the upstream proxy so embedded absolute asset paths do not hit the platform SPA fallback.
 - `config.yaml` should stay local and must not be committed.
-- Build frontend before backend deployment: `cd web && npm run build`.
-- Start the platform with `./run.sh`.
+- Start development with `./run-dev.sh` or `./run.sh dev`.
+- Development startup does not run git checks or pull code; it is for the current local working tree.
+- Deploy production with `./run-prod.sh` or `./run.sh prod`.
+- `run.sh` contains the dev/prod logic. `run-dev.sh` and `run-prod.sh` only forward to it.
+- The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
+- Production deployment requires Linux systemd and sudo. It registers or refreshes `super-personal-platform.service`, enables it, and restarts it.
+- Use the web UI at `系统 -> 更新服务` to manually trigger the production update flow after login.
+- Before committing changes, run `.venv/bin/python -m pytest`,
+  `cd web && npm test`, and `cd web && npm run build`.
 
 ## Maintenance Rule
 

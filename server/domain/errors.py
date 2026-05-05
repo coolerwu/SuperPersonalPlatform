@@ -6,5 +6,5 @@ class InvalidTokenError(DomainError):
     """Raised when a login token does not match the configured token."""
 
 
-class UpstreamLogsError(DomainError):
-    """Raised when the logs upstream cannot be read."""
+class UpstreamProxyError(DomainError):
+    """Raised when the proxy upstream cannot be read."""

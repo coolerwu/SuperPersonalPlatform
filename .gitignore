@@ -1,9 +1,12 @@
 .venv/
+.run/
+*.egg-info/
 __pycache__/
 *.pyc
 .pytest_cache/
 .mypy_cache/
 config.yaml
 web/node_modules/
-web/dist/
 web/.vite/
+
+.idea

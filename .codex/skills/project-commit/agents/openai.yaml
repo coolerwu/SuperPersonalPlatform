@@ -1,0 +1,5 @@
+interface:
+  display_name: "Project Commit"
+  short_description: "Run checks, update memory, commit, and push."
+  default_prompt: "Use $project-commit to run repository checks, update project memory, commit the current task, and push it."
+

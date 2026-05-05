@@ -7,7 +7,7 @@ from server.infrastructure.fastapi_app import create_app
 def make_client() -> TestClient:
     settings = Settings(
         auth=AuthConfig(token="secret-token"),
-        proxy=ProxyConfig(logs_url="http://example.test/logs"),
+        proxy=ProxyConfig(upstream_base_url="http://example.test/"),
         server=ServerConfig(),
     )
     return TestClient(create_app(settings))

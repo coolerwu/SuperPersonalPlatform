@@ -12,7 +12,7 @@ class AuthConfig:
 
 @dataclass(frozen=True)
 class ProxyConfig:
-    logs_url: str
+    upstream_base_url: str
 
 
 @dataclass(frozen=True)
@@ -45,15 +45,15 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
     server_raw = raw.get("server") or {}
 
     token = str(auth_raw.get("token") or "").strip()
-    logs_url = str(proxy_raw.get("logs_url") or "").strip()
+    upstream_base_url = str(proxy_raw.get("upstream_base_url") or "").strip()
     if not token:
         raise ValueError("auth.token is required")
-    if not logs_url:
-        raise ValueError("proxy.logs_url is required")
+    if not upstream_base_url:
+        raise ValueError("proxy.upstream_base_url is required")
 
     return Settings(
         auth=AuthConfig(token=token),
-        proxy=ProxyConfig(logs_url=logs_url),
+        proxy=ProxyConfig(upstream_base_url=upstream_base_url),
         server=ServerConfig(
             host=str(server_raw.get("host") or "0.0.0.0"),
             port=int(server_raw.get("port") or 8888),

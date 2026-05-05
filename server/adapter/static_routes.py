@@ -25,7 +25,7 @@ def mount_frontend(app, container: AppContainer, dist_dir: Path) -> None:
                 status_code=503,
             )
 
-        is_login_path = path in {"login", ""}
+        is_login_path = path == "login"
         is_authenticated = container.session_codec.verify(
             request.cookies.get(SESSION_COOKIE)
         )

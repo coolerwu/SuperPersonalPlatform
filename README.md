@@ -5,23 +5,28 @@ A compact personal platform served as one deployable Python application. The fro
 ## Requirements
 
 - Python 3.12.x
-- Node.js 18+
-- npm 10+
+- Linux systemd + sudo for production deployment
 
 ## Setup
 
 ```bash
 cp config.example.yaml config.yaml
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-cd web
-npm install
-npm run build
-cd ..
-./run.sh
+./run-dev.sh
 ```
 
 Open `http://localhost:8888` and log in with the token from `config.yaml`.
+
+Development mode runs the current local working tree. It does not check git status or pull code.
+
+## Production
+
+```bash
+./run-prod.sh
+```
+
+Production mode updates the git checkout with `git pull --ff-only`, prepares the Python virtualenv, registers or refreshes the systemd service, and restarts it. The frontend build output in `web/dist` is expected to be committed; the run scripts do not install or build frontend assets.
+
+After login, use `系统 -> 更新服务` to trigger the same production update flow from the web UI.
 
 ## Project Memory
 
