@@ -254,6 +254,7 @@ def test_system_update_service_lock_blocks_duplicate_starts(tmp_path, monkeypatc
 
     class FakePopen:
         def __init__(self, *args, **kwargs) -> None:
+            self.pid = os.getpid()
             calls.append((args, kwargs))
 
     monkeypatch.setattr("server.app.system_update_service.subprocess.Popen", FakePopen)
@@ -275,3 +276,45 @@ def test_system_update_service_lock_blocks_duplicate_starts(tmp_path, monkeypatc
         pass
     else:
         raise AssertionError("expected UpdateAlreadyRunningError")
+
+
+def test_system_update_service_removes_stale_legacy_lock(tmp_path, monkeypatch) -> None:
+    calls = []
+    run_dir = tmp_path / ".run"
+    run_dir.mkdir()
+    (run_dir / "update-service.lock").write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs) -> None:
+            self.pid = os.getpid()
+            calls.append((args, kwargs))
+
+    monkeypatch.setattr("server.app.system_update_service.subprocess.Popen", FakePopen)
+    service = SystemUpdateService(tmp_path, tmp_path)
+
+    service.start_update()
+
+    assert calls
+    assert '"pid":' in (run_dir / "update-service.lock").read_text(encoding="utf-8")
+
+
+def test_system_update_service_removes_dead_json_lock(tmp_path, monkeypatch) -> None:
+    calls = []
+    run_dir = tmp_path / ".run"
+    run_dir.mkdir()
+    (run_dir / "update-service.lock").write_text(
+        '{"pid": 99999999, "started_at": "2026-05-06T10:00:00"}\n',
+        encoding="utf-8",
+    )
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs) -> None:
+            self.pid = os.getpid()
+            calls.append((args, kwargs))
+
+    monkeypatch.setattr("server.app.system_update_service.subprocess.Popen", FakePopen)
+    service = SystemUpdateService(tmp_path, tmp_path)
+
+    service.start_update()
+
+    assert calls
