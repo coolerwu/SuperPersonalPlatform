@@ -66,6 +66,15 @@ class TerminalSessionService:
             content=path.read_text(encoding="utf-8"),
         )
 
+    def delete_session(self, name: str) -> None:
+        self._ensure_sessions_dir()
+        path = self._resolve_session_path(name)
+        if not path.exists():
+            raise FileNotFoundError(name)
+        if not path.is_file():
+            raise InvalidTerminalSessionError("terminal session target is not a file")
+        path.unlink()
+
     async def run_interactive_session(
         self,
         receive_message: Callable[[], Awaitable[dict[str, object]]],

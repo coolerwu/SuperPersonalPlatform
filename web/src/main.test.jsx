@@ -254,7 +254,22 @@ describe("LoginPage", () => {
         if (path === "/api/system/terminal/sessions/list") {
           return {
             ok: true,
-            json: async () => ({ sessions: [] })
+            json: async () => ({
+              sessions: [
+                {
+                  name: "terminal-2026-05-06T143012-abcdef12.jsonl",
+                  path: "/workspace/terminal/sessions/terminal-2026-05-06T143012-abcdef12.jsonl",
+                  size: 12,
+                  modified_at: "2026-05-06T14:30:12"
+                }
+              ]
+            })
+          };
+        }
+        if (path === "/api/system/terminal/sessions/delete") {
+          return {
+            ok: true,
+            json: async () => ({ ok: true })
           };
         }
         return {
@@ -280,5 +295,19 @@ describe("LoginPage", () => {
     expect(JSON.parse(sockets[0].sent.at(-1))).toEqual({ type: "input", data: "ls\r" });
     const navButtons = screen.getAllByRole("button").map((button) => button.textContent);
     expect(navButtons.indexOf("终端")).toBeLessThan(navButtons.indexOf("系统"));
+
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: /删除 terminal-2026-05-06T143012-abcdef12\.jsonl/
+      })
+    );
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/system/terminal/sessions/delete",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ name: "terminal-2026-05-06T143012-abcdef12.jsonl" })
+      })
+    );
   });
 });

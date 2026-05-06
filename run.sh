@@ -19,6 +19,8 @@ Usage:
 Environment:
   SUPER_PERSONAL_HOST    default: 0.0.0.0
   SUPER_PERSONAL_PORT    default: 8888
+  SUPER_PERSONAL_SERVICE_USER
+                         prod systemd user; default: SUDO_USER or current user
 USAGE
 }
 
@@ -133,6 +135,23 @@ install_python_deps() {
   "${SCRIPT_DIR}/.venv/bin/pip" install -e "$target"
 }
 
+resolve_service_user() {
+  if [[ -n "${SUPER_PERSONAL_SERVICE_USER:-}" ]]; then
+    printf '%s\n' "$SUPER_PERSONAL_SERVICE_USER"
+    return
+  fi
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    printf '%s\n' "$SUDO_USER"
+    return
+  fi
+  id -un
+}
+
+resolve_service_group() {
+  local user="$1"
+  id -gn "$user" 2>/dev/null || true
+}
+
 pid_cwd() {
   local pid="$1"
   lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
@@ -197,6 +216,12 @@ write_service_file() {
   local host="${SUPER_PERSONAL_HOST:-0.0.0.0}"
   local port="${SUPER_PERSONAL_PORT:-8888}"
   local generated_service="${run_dir}/${SERVICE_NAME}"
+  local service_user service_group group_line=""
+  service_user="$(resolve_service_user)"
+  service_group="$(resolve_service_group "$service_user")"
+  if [[ -n "$service_group" ]]; then
+    group_line="Group=${service_group}"
+  fi
   SERVICE_FILE_CHANGED=0
 
   cat >"$generated_service" <<SERVICE
@@ -206,6 +231,8 @@ After=network.target
 
 [Service]
 Type=simple
+User=${service_user}
+${group_line}
 WorkingDirectory=${SCRIPT_DIR}
 Environment=SUPER_PERSONAL_HOST=${host}
 Environment=SUPER_PERSONAL_PORT=${port}

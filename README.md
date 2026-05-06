@@ -40,7 +40,9 @@ To deploy with a different workspace:
 ./run-prod.sh --workspace /path/to/workspace
 ```
 
-After login, use `系统 -> 更新` to trigger the same production update flow from the web UI, or `终端` to open an authenticated xterm.js shell on the backend machine. Terminal transcripts are saved under the active workspace at `terminal/sessions/`.
+After login, use `系统 -> 更新` to trigger the same production update flow from the web UI, or `终端` to open an authenticated xterm.js shell on the backend machine. Terminal transcripts are saved under the active workspace at `terminal/sessions/` and can be deleted from the terminal history list.
+
+The production systemd service runs as `SUPER_PERSONAL_SERVICE_USER` when set; otherwise it uses `SUDO_USER` or the current `id -un` user. The web terminal shell inherits that service user.
 
 ## Project Architecture
 

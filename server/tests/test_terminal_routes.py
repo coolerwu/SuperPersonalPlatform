@@ -124,6 +124,60 @@ def test_terminal_sessions_list_and_read_workspace_transcripts(tmp_path) -> None
     assert unsafe_response.status_code == 400
 
 
+def test_terminal_sessions_delete_requires_authentication(tmp_path) -> None:
+    write_config(tmp_path)
+    client = make_client(tmp_path)
+
+    response = client.post(
+        "/api/system/terminal/sessions/delete",
+        json={"name": "terminal-2026-05-06T143012-abcdef12.jsonl"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_terminal_sessions_delete_removes_workspace_transcript(tmp_path) -> None:
+    sessions_dir = tmp_path / "terminal" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    session_path = sessions_dir / "terminal-2026-05-06T143012-abcdef12.jsonl"
+    session_path.write_text("{}", encoding="utf-8")
+    client = make_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    response = client.post(
+        "/api/system/terminal/sessions/delete",
+        json={"name": session_path.name},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert not session_path.exists()
+
+
+def test_terminal_sessions_delete_rejects_unsafe_names(tmp_path) -> None:
+    client = make_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    response = client.post(
+        "/api/system/terminal/sessions/delete",
+        json={"name": "../config.yaml"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_terminal_sessions_delete_returns_not_found(tmp_path) -> None:
+    client = make_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    response = client.post(
+        "/api/system/terminal/sessions/delete",
+        json={"name": "terminal-2026-05-06T143012-abcdef12.jsonl"},
+    )
+
+    assert response.status_code == 404
+
+
 def test_terminal_service_writes_interactive_transcript(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SHELL", "/bin/sh")
     service = TerminalSessionService(tmp_path, tmp_path)

@@ -72,6 +72,22 @@ def create_terminal_router(container: AppContainer) -> APIRouter:
             "content": session.content,
         }
 
+    @router.post("/sessions/delete", dependencies=[Depends(require_terminal_auth)])
+    def delete_session(payload: TerminalSessionReadRequest) -> dict[str, str | bool]:
+        try:
+            container.terminal_session_service.delete_session(payload.name)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="终端会话不存在",
+            ) from exc
+        except InvalidTerminalSessionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="终端会话名无效",
+            ) from exc
+        return {"ok": True, "message": "终端历史已删除"}
+
     @router.websocket("/connect")
     async def connect_terminal(websocket: WebSocket) -> None:
         session_cookie = websocket.cookies.get(SESSION_COOKIE)

@@ -42,3 +42,15 @@ def test_prod_enable_only_runs_when_service_file_changed() -> None:
     assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then' in script
     assert 'sudo systemctl enable "$SERVICE_NAME"' in script
     assert 'sudo systemctl restart "$SERVICE_NAME"' in script
+
+
+def test_prod_service_uses_resolved_terminal_user() -> None:
+    script = read_run_sh()
+
+    assert "SUPER_PERSONAL_SERVICE_USER" in script
+    assert 'if [[ -n "${SUDO_USER:-}" ]]; then' in script
+    assert "id -un" in script
+    assert 'service_user="$(resolve_service_user)"' in script
+    assert 'service_group="$(resolve_service_group "$service_user")"' in script
+    assert "User=${service_user}" in script
+    assert "Group=${service_group}" in script

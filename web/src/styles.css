@@ -665,36 +665,66 @@ button {
   padding: 10px;
 }
 
-.terminal-session-list button {
+.terminal-session-item {
+  align-items: center;
   background: #ffffff;
-  border: 0;
   border-radius: 6px;
   color: #263532;
   display: grid;
-  gap: 4px;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 34px;
   min-height: 52px;
-  padding: 8px;
+  padding: 6px 8px;
+}
+
+.terminal-session-open,
+.terminal-session-delete {
+  background: transparent;
+  border: 0;
+  color: inherit;
+}
+
+.terminal-session-open {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 0;
   text-align: left;
 }
 
-.terminal-session-list button.active,
-.terminal-session-list button:hover {
+.terminal-session-delete {
+  align-items: center;
+  border-radius: 6px;
+  color: #8c4b35;
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  padding: 0;
+  width: 34px;
+}
+
+.terminal-session-item.active,
+.terminal-session-item:hover {
   background: #e8f0ec;
   box-shadow: inset 3px 0 0 #244f49;
 }
 
-.terminal-session-list span,
-.terminal-session-list small {
+.terminal-session-delete:hover {
+  background: #fff1eb;
+}
+
+.terminal-session-open span,
+.terminal-session-open small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.terminal-session-list span {
+.terminal-session-open span {
   font-weight: 800;
 }
 
-.terminal-session-list small {
+.terminal-session-open small {
   color: #65716d;
 }
 

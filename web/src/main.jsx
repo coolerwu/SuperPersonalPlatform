@@ -16,7 +16,8 @@ import {
   Save,
   ScrollText,
   ShieldCheck,
-  TerminalSquare
+  TerminalSquare,
+  Trash2
 } from "lucide-react";
 import "./styles.css";
 
@@ -527,6 +528,22 @@ function TerminalPage({ onUnauthorized }) {
     }
   }
 
+  async function deleteSession(name) {
+    try {
+      await api("/api/system/terminal/sessions/delete", {
+        method: "POST",
+        body: JSON.stringify({ name })
+      });
+      if (selectedSession?.name === name) {
+        setSelectedSession(null);
+        setHistoryContent("");
+      }
+      await loadSessions();
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
   function formatTranscript(content) {
     return content
       .split("\n")
@@ -607,14 +624,22 @@ function TerminalPage({ onUnauthorized }) {
         <div className="terminal-session-list">
           {sessions.length ? (
             sessions.map((session) => (
-              <button
+              <div
                 key={session.name}
-                className={selectedSession?.name === session.name ? "active" : ""}
-                onClick={() => readSession(session.name)}
+                className={`terminal-session-item ${selectedSession?.name === session.name ? "active" : ""}`}
               >
-                <span>{session.name}</span>
-                <small>{session.modified_at}</small>
-              </button>
+                <button className="terminal-session-open" onClick={() => readSession(session.name)}>
+                  <span>{session.name}</span>
+                  <small>{session.modified_at}</small>
+                </button>
+                <button
+                  className="terminal-session-delete"
+                  aria-label={`删除 ${session.name}`}
+                  onClick={() => deleteSession(session.name)}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
             ))
           ) : (
             <div className="empty-state">暂无终端历史</div>
