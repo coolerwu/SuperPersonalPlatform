@@ -62,6 +62,10 @@ config_path() {
   printf '%s\n' "${WORKSPACE_DIR}/config.yaml"
 }
 
+git_in_repo() {
+  git -c "safe.directory=${SCRIPT_DIR}" "$@"
+}
+
 ensure_config() {
   local resolved_config
   resolved_config="$(config_path)"
@@ -84,16 +88,16 @@ ensure_config() {
 
 ensure_clean_git() {
   cd "$SCRIPT_DIR"
-  if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+  if [[ -n "$(git_in_repo status --porcelain --untracked-files=all)" ]]; then
     echo "Git working tree is dirty. Commit or stash local changes before updating." >&2
-    git status --short >&2
+    git_in_repo status --short >&2
     exit 1
   fi
 }
 
 update_git() {
   cd "$SCRIPT_DIR"
-  git pull --ff-only
+  git_in_repo pull --ff-only
 }
 
 ensure_venv() {
@@ -173,6 +177,7 @@ write_service_file() {
   local host="${SUPER_PERSONAL_HOST:-0.0.0.0}"
   local port="${SUPER_PERSONAL_PORT:-8888}"
   local generated_service="${run_dir}/${SERVICE_NAME}"
+  SERVICE_FILE_CHANGED=0
 
   cat >"$generated_service" <<SERVICE
 [Unit]
@@ -193,10 +198,14 @@ RestartSec=5
 WantedBy=multi-user.target
 SERVICE
 
-  if ! sudo test -f "$SERVICE_PATH" || ! sudo cmp -s "$generated_service" "$SERVICE_PATH"; then
-    sudo install -m 0644 "$generated_service" "$SERVICE_PATH"
-    sudo systemctl daemon-reload
+  if [[ -f "$SERVICE_PATH" ]] && cmp -s "$generated_service" "$SERVICE_PATH"; then
+    echo "systemd service unchanged; skipping install and daemon-reload"
+    return
   fi
+
+  sudo install -m 0644 "$generated_service" "$SERVICE_PATH"
+  sudo systemctl daemon-reload
+  SERVICE_FILE_CHANGED=1
 }
 
 run_prod() {
@@ -209,7 +218,11 @@ run_prod() {
   install_python_deps "."
   write_service_file
 
-  sudo systemctl enable "$SERVICE_NAME"
+  if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then
+    sudo systemctl enable "$SERVICE_NAME"
+  else
+    echo "systemd service unchanged; skipping enable"
+  fi
   sudo systemctl restart "$SERVICE_NAME"
   sudo systemctl status "$SERVICE_NAME" --no-pager
 }
