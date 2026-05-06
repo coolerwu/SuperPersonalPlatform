@@ -103,5 +103,6 @@ describe("LoginPage", () => {
     await screen.findByText("hello log");
     expect(screen.getAllByText("platform-2026-05-06.log").length).toBeGreaterThan(0);
     expect(await screen.findByText("hello log")).toBeInTheDocument();
+    expect(screen.getByTestId("log-viewer-shell")).toHaveClass("log-viewer-shell");
   });
 });

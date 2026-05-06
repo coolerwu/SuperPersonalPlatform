@@ -13,10 +13,13 @@ def test_prod_git_commands_use_command_scoped_safe_directory() -> None:
 
     assert 'PROD_GIT_URL="https://github.com/coolerwu/SuperPersonalPlatform.git"' in script
     assert 'PROD_GIT_BRANCH="main"' in script
+    assert "PROD_GIT_PULL_ATTEMPTS=3" in script
     assert 'git -c "safe.directory=${SCRIPT_DIR}" "$@"' in script
+    assert 'git -c "safe.directory=${SCRIPT_DIR}" -c "http.version=HTTP/1.1" "$@"' in script
     assert "git_in_repo status --porcelain --untracked-files=all" in script
     assert "git_in_repo status --short" in script
-    assert 'git_in_repo pull --ff-only "$PROD_GIT_URL" "$PROD_GIT_BRANCH"' in script
+    assert 'git_https_in_repo pull --ff-only "$PROD_GIT_URL" "$PROD_GIT_BRANCH"' in script
+    assert "git pull failed; retrying" in script
     assert "git config --global --add safe.directory" not in script
     assert "GIT_SSH_COMMAND=" not in script
     assert "StrictHostKeyChecking" not in script

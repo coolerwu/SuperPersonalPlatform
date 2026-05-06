@@ -6,6 +6,7 @@ SERVICE_NAME="super-personal-platform.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 PROD_GIT_URL="https://github.com/coolerwu/SuperPersonalPlatform.git"
 PROD_GIT_BRANCH="main"
+PROD_GIT_PULL_ATTEMPTS=3
 
 usage() {
   cat <<USAGE
@@ -68,6 +69,10 @@ git_in_repo() {
   git -c "safe.directory=${SCRIPT_DIR}" "$@"
 }
 
+git_https_in_repo() {
+  git -c "safe.directory=${SCRIPT_DIR}" -c "http.version=HTTP/1.1" "$@"
+}
+
 ensure_config() {
   local resolved_config
   resolved_config="$(config_path)"
@@ -99,7 +104,20 @@ ensure_clean_git() {
 
 update_git() {
   cd "$SCRIPT_DIR"
-  git_in_repo pull --ff-only "$PROD_GIT_URL" "$PROD_GIT_BRANCH"
+  local attempt delay=2
+  for ((attempt = 1; attempt <= PROD_GIT_PULL_ATTEMPTS; attempt += 1)); do
+    echo "Pulling production code from ${PROD_GIT_URL} (${PROD_GIT_BRANCH}), attempt ${attempt}/${PROD_GIT_PULL_ATTEMPTS}"
+    if git_https_in_repo pull --ff-only "$PROD_GIT_URL" "$PROD_GIT_BRANCH"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt "$PROD_GIT_PULL_ATTEMPTS" ]]; then
+      echo "git pull failed; retrying in ${delay}s..." >&2
+      sleep "$delay"
+      delay=$((delay * 2))
+    fi
+  done
+  echo "git pull failed after ${PROD_GIT_PULL_ATTEMPTS} attempts." >&2
+  return 1
 }
 
 ensure_venv() {

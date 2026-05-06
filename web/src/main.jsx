@@ -346,11 +346,15 @@ function SystemPage({ onUnauthorized }) {
       ) : null}
       {activeTab === "logs" ? (
         <article className="log-panel">
-          <div className="config-panel-heading">
-            <div>
+          <div className="log-panel-heading">
+            <div className="log-title">
               <span>统一日志</span>
-              <h3>{selectedLog || "platform-YYYY-MM-DD.log"}</h3>
-              <p>{logInfo?.path || "日志保存在工作目录 logs 下，保留最近 3 天。"}</p>
+              <h3 title={selectedLog || "platform-YYYY-MM-DD.log"}>
+                {selectedLog || "platform-YYYY-MM-DD.log"}
+              </h3>
+              <p title={logInfo?.path || ""}>
+                {logInfo?.path || "日志保存在工作目录 logs 下，保留最近 3 天。"}
+              </p>
             </div>
             <button className="secondary-button" onClick={() => loadLogs()} disabled={logsLoading}>
               <RefreshCw size={17} />
@@ -368,14 +372,17 @@ function SystemPage({ onUnauthorized }) {
                   >
                     <List size={15} />
                     <span>{log.name}</span>
-                    <small>{formatBytes(log.size)}</small>
+                    <small>
+                      {formatBytes(log.size)}
+                      {log.modified_at ? ` · ${log.modified_at}` : ""}
+                    </small>
                   </button>
                 ))
               ) : (
                 <div className="empty-state">暂无日志文件</div>
               )}
             </div>
-            <div className="log-viewer-shell">
+            <div className="log-viewer-shell" data-testid="log-viewer-shell">
               {logInfo ? (
                 <div className="log-meta">
                   <span>{formatBytes(logInfo.size)}</span>

@@ -394,47 +394,89 @@ button {
 }
 
 .log-panel {
-  background: #ffffff;
-  border: 1px solid #e0ddd4;
+  background: #101820;
+  border: 1px solid #263642;
   border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(16, 24, 32, 0.14);
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+}
+
+.log-panel-heading {
+  align-items: center;
+  background: #ffffff;
+  border-bottom: 1px solid #e0ddd4;
   display: grid;
   gap: 16px;
-  padding: 22px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 18px 20px;
+}
+
+.log-title {
+  min-width: 0;
+}
+
+.log-title span {
+  color: #6c7673;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.log-title h3 {
+  font-size: 20px;
+  line-height: 1.2;
+  margin: 7px 0 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-title p {
+  color: #65716d;
+  line-height: 1.35;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-layout {
   display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr);
+  gap: 0;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 0;
 }
 
 .log-list {
-  border: 1px solid #e0ddd4;
-  border-radius: 8px;
+  background: #f7f7f4;
+  border-right: 1px solid #263642;
   display: grid;
-  gap: 6px;
-  max-height: 540px;
+  align-content: start;
+  gap: 4px;
+  height: clamp(460px, calc(100vh - 260px), 760px);
   overflow: auto;
-  padding: 8px;
+  padding: 10px;
 }
 
 .log-list button {
   align-items: center;
-  background: transparent;
+  background: #ffffff;
   border: 0;
   border-radius: 6px;
   color: #263532;
   display: grid;
   gap: 4px 8px;
   grid-template-columns: 16px minmax(0, 1fr);
-  min-height: 48px;
+  min-height: 44px;
   padding: 8px;
   text-align: left;
 }
 
 .log-list button.active,
 .log-list button:hover {
-  background: #eff4f1;
+  background: #e8f0ec;
+  box-shadow: inset 3px 0 0 #244f49;
 }
 
 .log-list button span {
@@ -447,14 +489,18 @@ button {
 .log-list button small {
   color: #65716d;
   grid-column: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-viewer-shell {
   background: #17202a;
-  border: 1px solid #34424d;
-  border-radius: 8px;
-  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: clamp(460px, calc(100vh - 260px), 760px);
   min-width: 0;
+  overflow: hidden;
 }
 
 .log-meta {
@@ -465,20 +511,21 @@ button {
   flex-wrap: wrap;
   font-size: 12px;
   gap: 10px;
-  padding: 10px 12px;
+  min-height: 38px;
+  padding: 9px 12px;
 }
 
 .log-viewer {
   color: #f7f2e8;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
-  line-height: 1.55;
+  grid-row: 2;
+  line-height: 1.45;
   margin: 0;
-  min-height: 420px;
+  min-width: 0;
   overflow: auto;
   padding: 14px;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
 }
 
 .status-message {
@@ -571,7 +618,22 @@ button {
     flex: 1 1 150px;
   }
 
+  .log-panel-heading {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
   .log-layout {
     grid-template-columns: 1fr;
+  }
+
+  .log-list {
+    border-bottom: 1px solid #263642;
+    border-right: 0;
+    height: 180px;
+  }
+
+  .log-viewer-shell {
+    height: clamp(380px, calc(100vh - 360px), 620px);
   }
 }
