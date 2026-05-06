@@ -40,6 +40,24 @@ class SystemLogService:
         today = datetime.now().strftime("%Y-%m-%d")
         return self.logs_dir / f"platform-{today}.log"
 
+    def append_request_log(
+        self,
+        method: str,
+        path: str,
+        status_code: int,
+        duration_ms: float,
+        client: str,
+    ) -> None:
+        self._ensure_logs_dir()
+        self.cleanup_old_logs()
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        line = (
+            f"{timestamp} request method={method} path={path} "
+            f"status={status_code} duration_ms={duration_ms:.1f} client={client}\n"
+        )
+        with self.current_log_path().open("a", encoding="utf-8") as log_file:
+            log_file.write(line)
+
     def list_logs(self) -> list[LogFileSummary]:
         self._ensure_logs_dir()
         self.cleanup_old_logs()

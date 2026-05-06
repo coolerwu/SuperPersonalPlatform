@@ -1,7 +1,8 @@
 import os
+import time
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from server.adapter.auth_routes import create_auth_router
 from server.adapter.dependencies import AppContainer
@@ -27,26 +28,56 @@ def current_workspace() -> Path:
     return Path(os.environ.get("SUPER_PERSONAL_WORKSPACE", Path.cwd())).resolve()
 
 
-def create_container(settings: Settings) -> AppContainer:
+def create_container(settings: Settings, workspace: Path | None = None) -> AppContainer:
     project_root = Path(__file__).resolve().parents[2]
-    workspace = current_workspace()
-    system_log_service = SystemLogService(workspace)
+    active_workspace = workspace or current_workspace()
+    system_log_service = SystemLogService(active_workspace)
     return AppContainer(
         auth_service=AuthService(AuthToken(settings.auth.token)),
-        config_file_service=ConfigFileService(workspace),
+        config_file_service=ConfigFileService(active_workspace),
         proxy_service=ProxyService(HttpProxyGateway(settings.proxy.upstream_base_url)),
         system_log_service=system_log_service,
-        system_update_service=SystemUpdateService(project_root, workspace, system_log_service),
+        system_update_service=SystemUpdateService(
+            project_root,
+            active_workspace,
+            system_log_service,
+        ),
         session_codec=SessionCodec(settings.auth.token),
     )
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    if settings is None:
-        settings = load_settings(current_workspace() / "config.yaml")
+def install_request_logging(app: FastAPI, container: AppContainer) -> None:
+    @app.middleware("http")
+    async def log_api_request(request: Request, call_next):
+        if not request.url.path.startswith("/api/"):
+            return await call_next(request)
 
-    container = create_container(settings)
+        started_at = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            client = request.client.host if request.client else "-"
+            container.system_log_service.append_request_log(
+                method=request.method,
+                path=request.url.path,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                client=client,
+            )
+
+
+def create_app(settings: Settings | None = None, workspace: Path | None = None) -> FastAPI:
+    if settings is None:
+        active_workspace = workspace or current_workspace()
+        settings = load_settings(active_workspace / "config.yaml")
+
+    container = create_container(settings, workspace)
     app = FastAPI(title="Super Personal Platform")
+    install_request_logging(app, container)
     app.include_router(create_auth_router(container))
     app.include_router(create_proxy_router(container))
     app.include_router(create_system_router(container))

@@ -1,6 +1,5 @@
 import os
 import shlex
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -66,24 +65,6 @@ class SystemUpdateService:
         return log_path
 
     def _start_background_command(self, command: str) -> None:
-        if shutil.which("systemd-run"):
-            subprocess.Popen(
-                [
-                    "systemd-run",
-                    "--unit",
-                    "super-personal-platform-update",
-                    "--collect",
-                    "/bin/sh",
-                    "-c",
-                    command,
-                ],
-                cwd=self.project_root,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return
-
         subprocess.Popen(
             ["/bin/sh", "-c", command],
             cwd=self.project_root,

@@ -63,7 +63,10 @@ config_path() {
 }
 
 git_in_repo() {
-  git -c "safe.directory=${SCRIPT_DIR}" "$@"
+  local run_dir="${WORKSPACE_DIR}/.run"
+  mkdir -p "$run_dir"
+  GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${run_dir}/known_hosts" \
+    git -c "safe.directory=${SCRIPT_DIR}" "$@"
 }
 
 ensure_config() {

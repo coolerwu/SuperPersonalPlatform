@@ -63,13 +63,13 @@ def authenticated_client_with_gateway(gateway) -> TestClient:
     return client
 
 
-def test_proxy_site_requires_authentication() -> None:
+def test_proxy_site_requires_authentication(tmp_path) -> None:
     settings = Settings(
         auth=AuthConfig(token="secret-token"),
         proxy=ProxyConfig(upstream_base_url="http://example.test/"),
         server=ServerConfig(),
     )
-    client = TestClient(create_app(settings))
+    client = TestClient(create_app(settings, workspace=tmp_path))
 
     response = client.get("/api/proxy/site/")
 

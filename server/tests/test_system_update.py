@@ -122,7 +122,7 @@ def test_system_config_route_precedes_api_proxy_fallback(tmp_path, monkeypatch) 
         proxy=ProxyConfig(upstream_base_url="http://example.test/"),
         server=ServerConfig(),
     )
-    client = TestClient(create_app(settings))
+    client = TestClient(create_app(settings, workspace=tmp_path))
     client.post("/api/auth/login", json={"token": "secret-token"})
 
     response = client.post("/api/system/config/read")
@@ -255,7 +255,6 @@ def test_system_update_service_lock_blocks_duplicate_starts(tmp_path, monkeypatc
             calls.append((args, kwargs))
 
     monkeypatch.setattr("server.app.system_update_service.subprocess.Popen", FakePopen)
-    monkeypatch.setattr("server.app.system_update_service.shutil.which", lambda _: None)
     service = SystemUpdateService(tmp_path, tmp_path)
 
     log_path = service.start_update()
@@ -264,8 +263,10 @@ def test_system_update_service_lock_blocks_duplicate_starts(tmp_path, monkeypatc
     assert log_path.name.startswith("platform-")
     assert log_path.name.endswith(".log")
     assert calls
+    assert calls[0][0][0][:3] == ["/bin/sh", "-c", calls[0][0][0][2]]
     assert f"--workspace {tmp_path}" in calls[0][0][0][2]
     assert str(log_path) in calls[0][0][0][2]
+    assert calls[0][1]["start_new_session"] is True
     try:
         service.start_update()
     except UpdateAlreadyRunningError:

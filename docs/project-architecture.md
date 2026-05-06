@@ -40,7 +40,7 @@
 - Known upstream root asset prefixes `/fonts/*`, `/ds-assets/*`, and `/dashboard-plugins/*` also fall back to the upstream proxy so embedded absolute asset paths do not hit the platform SPA fallback.
 - Workspace `config.yaml` should stay local and must not be committed.
 - The system page edits the active workspace `config.yaml` in place. Saved YAML is parsed and validated against required runtime settings before it replaces the file.
-- Workspace `logs/` contains unified platform log files named `platform-YYYY-MM-DD.log`; logs are read-only in the UI and retained for 3 days by the system log service.
+- Workspace `logs/` contains unified platform log files named `platform-YYYY-MM-DD.log`; logs are read-only in the UI and retained for 3 days by the system log service. The unified log includes update-service output and `/api/*` request summaries with method, path, status, duration, and client, but never request bodies.
 - Workspace `.run/` contains runtime-only files such as update locks and generated service files, not durable logs.
 - The default workspace is `.super-personal-platform` under the repository directory for both dev and prod.
 - If the default workspace has no `config.yaml`, `run.sh` first copies an existing repository-root `config.yaml`, then the former default `$HOME/.super-personal-platform/config.yaml` for prod, and finally the committed `config.example.yaml` template.
@@ -52,7 +52,7 @@
 - `run.sh` contains the dev/prod logic. `run-dev.sh` and `run-prod.sh` only forward to it.
 - The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
 - The service reads configuration from `${SUPER_PERSONAL_WORKSPACE}/config.yaml`. `SUPER_PERSONAL_CONFIG` is not supported.
-- Production deployment requires Linux systemd and sudo for service changes and restarts. `run.sh prod` runs git commands with command-scoped `safe.directory` for the repository, refreshes `super-personal-platform.service` only when the generated unit content differs, enables the unit only after a unit refresh, and restarts the service on every production update.
+- Production deployment requires Linux systemd and sudo for service changes and restarts. `run.sh prod` runs git commands with command-scoped `safe.directory` for the repository and stores SSH `known_hosts` at `${SUPER_PERSONAL_WORKSPACE}/.run/known_hosts`, refreshes `super-personal-platform.service` only when the generated unit content differs, enables the unit only after a unit refresh, and restarts the service on every production update. Web-triggered updates start `run-prod.sh` directly as a background process rather than through `systemd-run`.
 - Use the web UI at `系统 -> 配置` to edit the active workspace configuration, `系统 -> 日志` to inspect unified logs, and `系统 -> 更新` to manually trigger the production update flow after login.
 - Before committing changes, execute the local `$project-commit` skill.
 
