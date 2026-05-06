@@ -4,7 +4,9 @@ from fastapi.testclient import TestClient
 from server.adapter.dependencies import AppContainer
 from server.adapter.static_routes import mount_frontend
 from server.app.auth_service import AuthService
+from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
+from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.domain.auth import AuthToken
 from server.domain.proxy import ProxyRequest, ProxyResponse
@@ -24,7 +26,9 @@ def make_static_client(tmp_path) -> TestClient:
     token = "secret-token"
     container = AppContainer(
         auth_service=AuthService(AuthToken(token)),
+        config_file_service=ConfigFileService(tmp_path),
         proxy_service=ProxyService(StaticProxyGateway()),
+        system_log_service=SystemLogService(tmp_path),
         system_update_service=SystemUpdateService(tmp_path, tmp_path),
         session_codec=SessionCodec(token),
     )

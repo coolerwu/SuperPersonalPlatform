@@ -2,8 +2,12 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight,
+  FileText,
+  List,
   LogOut,
   RefreshCw,
+  Save,
+  ScrollText,
   ShieldCheck,
   TerminalSquare
 } from "lucide-react";
@@ -17,7 +21,9 @@ async function api(path, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.detail || "请求失败");
+    const error = new Error(data.detail || "请求失败");
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -110,7 +116,7 @@ function ProxyPage() {
       <div className="section-heading row-heading">
         <div>
           <p>Proxy</p>
-          <h2>代理转发</h2>
+          <h2>Hermes UI</h2>
         </div>
         <button className="secondary-button" onClick={() => setFrameKey((value) => value + 1)}>
           <RefreshCw size={17} />
@@ -122,7 +128,7 @@ function ProxyPage() {
           key={frameKey}
           className="proxy-frame"
           src="/api/proxy/site/"
-          title="代理转发"
+          title="Hermes UI"
         />
       </div>
     </section>
@@ -130,9 +136,121 @@ function ProxyPage() {
 }
 
 function SystemPage({ onUnauthorized }) {
+  const [activeTab, setActiveTab] = useState("config");
   const [updating, setUpdating] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  const [configPath, setConfigPath] = useState("");
+  const [configContent, setConfigContent] = useState("");
+  const [configLoading, setConfigLoading] = useState(true);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configStatus, setConfigStatus] = useState("");
+  const [configError, setConfigError] = useState("");
+  const [logs, setLogs] = useState([]);
+  const [selectedLog, setSelectedLog] = useState("");
+  const [logContent, setLogContent] = useState("");
+  const [logInfo, setLogInfo] = useState(null);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logError, setLogError] = useState("");
+
+  function handleApiError(err, setTargetError) {
+    if (err.status === 401 || err.message === "Authentication required") {
+      onUnauthorized();
+      return true;
+    }
+    setTargetError(err.message);
+    return false;
+  }
+
+  async function loadConfig() {
+    setConfigLoading(true);
+    setConfigStatus("");
+    setConfigError("");
+    try {
+      const data = await api("/api/system/config/read", { method: "POST" });
+      setConfigPath(data.path || "");
+      setConfigContent(data.content || "");
+    } catch (err) {
+      handleApiError(err, setConfigError);
+    } finally {
+      setConfigLoading(false);
+    }
+  }
+
+  async function saveConfig() {
+    setConfigSaving(true);
+    setConfigStatus("");
+    setConfigError("");
+    try {
+      const data = await api("/api/system/config", {
+        method: "PUT",
+        body: JSON.stringify({ content: configContent })
+      });
+      setConfigStatus(data.message || "config.yaml 已保存");
+    } catch (err) {
+      handleApiError(err, setConfigError);
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    loadConfig();
+  }, []);
+
+  async function loadLogs(nextSelectedLog = selectedLog) {
+    setLogsLoading(true);
+    setLogError("");
+    try {
+      const data = await api("/api/system/logs/list", { method: "POST" });
+      const nextLogs = data.logs || [];
+      setLogs(nextLogs);
+      const nextLogName =
+        nextLogs.find((log) => log.name === nextSelectedLog)?.name || nextLogs[0]?.name || "";
+      setSelectedLog(nextLogName);
+      if (nextLogName) {
+        await readLog(nextLogName);
+      } else {
+        setLogContent("");
+        setLogInfo(null);
+      }
+    } catch (err) {
+      handleApiError(err, setLogError);
+    } finally {
+      setLogsLoading(false);
+    }
+  }
+
+  async function readLog(name) {
+    setLogsLoading(true);
+    setLogError("");
+    try {
+      const data = await api("/api/system/logs/read", {
+        method: "POST",
+        body: JSON.stringify({ name })
+      });
+      setSelectedLog(data.name || name);
+      setLogInfo(data);
+      setLogContent(data.content || "");
+    } catch (err) {
+      handleApiError(err, setLogError);
+    } finally {
+      setLogsLoading(false);
+    }
+  }
+
+  function formatBytes(value) {
+    if (!Number.isFinite(value)) {
+      return "0 B";
+    }
+    if (value < 1024) {
+      return `${value} B`;
+    }
+    if (value < 1024 * 1024) {
+      return `${(value / 1024).toFixed(1)} KB`;
+    }
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
 
   async function updateService() {
     setUpdating(true);
@@ -142,12 +260,11 @@ function SystemPage({ onUnauthorized }) {
       const data = await api("/api/system/update-service", { method: "POST" });
       setStatus(data.message || "更新已开始，请稍后刷新页面。");
     } catch (err) {
-      if (err.message === "Authentication required") {
-        onUnauthorized();
-        return;
-      }
       if (err.message === "Failed to fetch") {
         setStatus("服务可能正在重启，请稍后刷新页面。");
+        return;
+      }
+      if (handleApiError(err, setError)) {
         return;
       }
       setError(err.message);
@@ -162,26 +279,138 @@ function SystemPage({ onUnauthorized }) {
         <p>System</p>
         <h2>系统运维</h2>
       </div>
-      <div className="system-grid">
-        <article className="metric-card">
-          <span>更新方式</span>
-          <strong>systemd</strong>
-          <p>生产环境通过 systemd 重启服务，前端产物随代码提交。</p>
-        </article>
-        <article className="action-panel">
-          <div>
-            <span>服务更新</span>
-            <h3>拉取代码并重启</h3>
-            <p>触发生产更新任务后，服务会短暂不可用。</p>
-          </div>
-          <button className="secondary-button" onClick={updateService} disabled={updating}>
-            <RefreshCw size={17} />
-            {updating ? "更新中" : "更新服务"}
-          </button>
-          {status ? <div className="status-message">{status}</div> : null}
-          {error ? <div className="form-error">{error}</div> : null}
-        </article>
+      <div className="tab-bar" role="tablist" aria-label="系统功能">
+        {[
+          { id: "config", label: "配置", icon: FileText },
+          { id: "logs", label: "日志", icon: ScrollText },
+          { id: "update", label: "更新", icon: RefreshCw }
+        ].map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              className={activeTab === tab.id ? "active" : ""}
+              onClick={() => {
+                setActiveTab(tab.id);
+                if (tab.id === "logs" && logs.length === 0) {
+                  loadLogs();
+                }
+              }}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+            >
+              <Icon size={16} />
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
+      {activeTab === "config" ? (
+        <article className="config-panel">
+          <div className="config-panel-heading">
+            <div>
+              <span>工作目录配置</span>
+              <h3>config.yaml</h3>
+              <p>{configPath || "正在读取配置路径"}</p>
+            </div>
+            <div className="config-actions">
+              <button className="secondary-button" onClick={loadConfig} disabled={configLoading}>
+                <RefreshCw size={17} />
+                重新读取
+              </button>
+              <button
+                className="secondary-button primary-action"
+                onClick={saveConfig}
+                disabled={configLoading || configSaving}
+              >
+                {configSaving ? <RefreshCw size={17} /> : <Save size={17} />}
+                {configSaving ? "保存中" : "保存"}
+              </button>
+            </div>
+          </div>
+          <label className="config-editor-label" htmlFor="config-editor">
+            <FileText size={16} />
+            YAML
+          </label>
+          <textarea
+            id="config-editor"
+            className="config-editor"
+            value={configContent}
+            onChange={(event) => setConfigContent(event.target.value)}
+            spellCheck="false"
+            disabled={configLoading}
+          />
+          {configStatus ? <div className="status-message">{configStatus}</div> : null}
+          {configError ? <div className="form-error">{configError}</div> : null}
+        </article>
+      ) : null}
+      {activeTab === "logs" ? (
+        <article className="log-panel">
+          <div className="config-panel-heading">
+            <div>
+              <span>统一日志</span>
+              <h3>{selectedLog || "platform-YYYY-MM-DD.log"}</h3>
+              <p>{logInfo?.path || "日志保存在工作目录 logs 下，保留最近 3 天。"}</p>
+            </div>
+            <button className="secondary-button" onClick={() => loadLogs()} disabled={logsLoading}>
+              <RefreshCw size={17} />
+              刷新
+            </button>
+          </div>
+          <div className="log-layout">
+            <div className="log-list" aria-label="日志文件列表">
+              {logs.length ? (
+                logs.map((log) => (
+                  <button
+                    key={log.name}
+                    className={selectedLog === log.name ? "active" : ""}
+                    onClick={() => readLog(log.name)}
+                  >
+                    <List size={15} />
+                    <span>{log.name}</span>
+                    <small>{formatBytes(log.size)}</small>
+                  </button>
+                ))
+              ) : (
+                <div className="empty-state">暂无日志文件</div>
+              )}
+            </div>
+            <div className="log-viewer-shell">
+              {logInfo ? (
+                <div className="log-meta">
+                  <span>{formatBytes(logInfo.size)}</span>
+                  <span>{logInfo.modified_at}</span>
+                  {logInfo.truncated ? <span>仅显示尾部 200KB</span> : null}
+                </div>
+              ) : null}
+              <pre className="log-viewer">{logContent || "选择日志文件后查看内容"}</pre>
+            </div>
+          </div>
+          {logError ? <div className="form-error">{logError}</div> : null}
+        </article>
+      ) : null}
+      {activeTab === "update" ? (
+        <div className="system-grid">
+          <article className="metric-card">
+            <span>更新方式</span>
+            <strong>systemd</strong>
+            <p>生产环境通过 systemd 重启服务，前端产物随代码提交。</p>
+          </article>
+          <article className="action-panel">
+            <div>
+              <span>服务更新</span>
+              <h3>拉取代码并重启</h3>
+              <p>触发生产更新任务后，输出会写入当天统一日志。</p>
+            </div>
+            <button className="secondary-button" onClick={updateService} disabled={updating}>
+              <RefreshCw size={17} />
+              {updating ? "更新中" : "更新服务"}
+            </button>
+            {status ? <div className="status-message">{status}</div> : null}
+            {error ? <div className="form-error">{error}</div> : null}
+          </article>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -191,7 +420,7 @@ function AppShell({ onLogout }) {
   const navItems = useMemo(
     () => [
       { path: "/", label: "首页" },
-      { path: "/proxy", label: "代理转发" },
+      { path: "/proxy", label: "Hermes UI" },
       { path: "/system", label: "系统" }
     ],
     []

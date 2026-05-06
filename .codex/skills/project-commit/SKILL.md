@@ -1,6 +1,6 @@
 ---
 name: project-commit
-description: Standard commit workflow for this repository. Use when Codex is asked to prepare, commit, or push code changes in SuperPersonalPlatform, especially after implementation work that must update docs/project-architecture.md, run backend tests, run frontend tests, build the frontend, create a git commit, and push the current branch.
+description: Standard commit workflow for this repository. Use when Codex is asked to prepare, commit, or push code changes in SuperPersonalPlatform, especially after implementation work that must sync docs/project-architecture.md, AGENTS.md, and affected skill or operating files before tests, commit, and push.
 ---
 
 # Project Commit
@@ -12,10 +12,19 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
 1. Read `AGENTS.md` and `docs/project-architecture.md`.
 2. Run `git status --short` before staging anything.
 3. Inspect the current diff so the final summary can describe what is being committed.
-4. Update `docs/project-architecture.md` when behavior, architecture, commands,
-   dependencies, configuration, public interfaces, or operating assumptions
-   changed. Update `AGENTS.md` only when the repository-level agent contract
-   changed.
+4. Before committing, synchronize documentation and operating instructions for
+   the current change:
+   - Update `docs/project-architecture.md` when behavior, architecture,
+     commands, dependencies, configuration, public interfaces, or operating
+     assumptions changed.
+   - Update `AGENTS.md` when agent workflow, commit policy, skill usage,
+     repository-level collaboration rules, or long-term operating expectations
+     changed.
+   - Update any affected `.codex/skills/*/SKILL.md`, README, config template,
+     or other corresponding file when the change modifies that workflow,
+     command, interface, or documented behavior.
+   - Do not proceed to staging until these matching files reflect the actual
+     code and process changes being committed.
 5. Run the required checks:
    - `.venv/bin/python -m pytest`
    - `cd web && npm test`
@@ -33,4 +42,6 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
 - Do not commit `config.yaml`, virtualenvs, caches, or dependency directories.
 - Treat `web/dist` as commit-worthy only when the frontend build output changed
   as part of the task or deployment path.
+- If a user asks to adjust this commit workflow, update both `AGENTS.md` and
+  this skill before continuing the commit.
 - Include the exact test commands and outcomes in the final response.

@@ -9,7 +9,9 @@ from server.adapter.dependencies import AppContainer
 from server.adapter.proxy_routes import create_api_fallback_proxy_router, create_proxy_router
 from server.adapter.proxy_routes import create_root_asset_proxy_router
 from server.app.auth_service import AuthService
+from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
+from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.domain.auth import AuthToken
 from server.domain.errors import UpstreamProxyError
@@ -43,7 +45,9 @@ def authenticated_client_with_gateway(gateway) -> TestClient:
     token = "secret-token"
     container = AppContainer(
         auth_service=AuthService(AuthToken(token)),
+        config_file_service=ConfigFileService(Path.cwd()),
         proxy_service=ProxyService(gateway),
+        system_log_service=SystemLogService(Path.cwd()),
         system_update_service=SystemUpdateService(Path.cwd(), Path.cwd()),
         session_codec=SessionCodec(token),
     )

@@ -19,7 +19,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -227,6 +228,42 @@ button {
   font-weight: 700;
 }
 
+.primary-action {
+  background: #244f49;
+  border-color: #244f49;
+  color: #ffffff;
+}
+
+.tab-bar {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #e0ddd4;
+  border-radius: 8px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  width: fit-content;
+}
+
+.tab-bar button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #53605d;
+  display: inline-flex;
+  font-weight: 800;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.tab-bar button.active,
+.tab-bar button:hover {
+  background: #244f49;
+  color: #ffffff;
+}
+
 .metrics-grid {
   display: grid;
   gap: 18px;
@@ -285,6 +322,163 @@ button {
   color: #65716d;
   line-height: 1.55;
   margin: 0;
+}
+
+.config-panel {
+  background: #ffffff;
+  border: 1px solid #e0ddd4;
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+}
+
+.config-panel-heading {
+  align-items: start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.config-panel-heading span,
+.config-editor-label {
+  color: #6c7673;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.config-panel-heading h3 {
+  font-size: 22px;
+  line-height: 1.2;
+  margin: 8px 0;
+}
+
+.config-panel-heading p {
+  color: #65716d;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.config-editor-label {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.config-editor {
+  background: #17202a;
+  border: 1px solid #34424d;
+  border-radius: 8px;
+  color: #f7f2e8;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  min-height: 360px;
+  padding: 14px;
+  resize: vertical;
+  tab-size: 2;
+  width: 100%;
+}
+
+.config-editor:focus {
+  border-color: #c96842;
+  outline: 3px solid rgba(201, 104, 66, 0.16);
+}
+
+.log-panel {
+  background: #ffffff;
+  border: 1px solid #e0ddd4;
+  border-radius: 8px;
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+}
+
+.log-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr);
+}
+
+.log-list {
+  border: 1px solid #e0ddd4;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  max-height: 540px;
+  overflow: auto;
+  padding: 8px;
+}
+
+.log-list button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #263532;
+  display: grid;
+  gap: 4px 8px;
+  grid-template-columns: 16px minmax(0, 1fr);
+  min-height: 48px;
+  padding: 8px;
+  text-align: left;
+}
+
+.log-list button.active,
+.log-list button:hover {
+  background: #eff4f1;
+}
+
+.log-list button span {
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-list button small {
+  color: #65716d;
+  grid-column: 2;
+}
+
+.log-viewer-shell {
+  background: #17202a;
+  border: 1px solid #34424d;
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.log-meta {
+  align-items: center;
+  border-bottom: 1px solid #34424d;
+  color: #d9e0db;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.log-viewer {
+  color: #f7f2e8;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  min-height: 420px;
+  overflow: auto;
+  padding: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .status-message {
@@ -353,5 +547,31 @@ button {
   .row-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .tab-bar {
+    display: grid;
+    width: 100%;
+  }
+
+  .tab-bar button {
+    justify-content: center;
+  }
+
+  .config-panel-heading {
+    flex-direction: column;
+  }
+
+  .config-actions {
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .config-actions .secondary-button {
+    flex: 1 1 150px;
+  }
+
+  .log-layout {
+    grid-template-columns: 1fr;
   }
 }

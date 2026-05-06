@@ -24,8 +24,8 @@
 - Auth state is available through `GET /api/auth/me`.
 - `/api/proxy/site/` reverse-proxies the configured upstream site under `proxy.upstream_base_url`.
 - The proxy forwards normal HTTP methods through the Python backend and returns upstream status, body, and safe response headers.
-- `POST /api/system/update-service` starts a protected background production update task.
-- The frontend contains a login page, an app shell, a home overview, an iframe-based proxy page, and a system page with an update-service button.
+- `/api/system/*` routes are protected at the router level. `POST /api/system/config/read` reads the active workspace `config.yaml`, `PUT /api/system/config` validates and writes it, `POST /api/system/logs/list` and `POST /api/system/logs/read` expose read-only unified logs, and `POST /api/system/update-service` starts a background production update task.
+- The frontend contains a login page, an app shell, a home overview, an iframe-based Hermes UI proxy page, and a system page split into config, logs, and update tabs.
 
 ## Operating Notes
 
@@ -39,6 +39,9 @@
 - Unknown authenticated `/api/*` requests fall back to the upstream proxy after platform-owned API routes are checked, which supports embedded apps that call root-relative APIs such as `/api/status`.
 - Known upstream root asset prefixes `/fonts/*`, `/ds-assets/*`, and `/dashboard-plugins/*` also fall back to the upstream proxy so embedded absolute asset paths do not hit the platform SPA fallback.
 - Workspace `config.yaml` should stay local and must not be committed.
+- The system page edits the active workspace `config.yaml` in place. Saved YAML is parsed and validated against required runtime settings before it replaces the file.
+- Workspace `logs/` contains unified platform log files named `platform-YYYY-MM-DD.log`; logs are read-only in the UI and retained for 3 days by the system log service.
+- Workspace `.run/` contains runtime-only files such as update locks and generated service files, not durable logs.
 - The default workspace is `.super-personal-platform` under the repository directory for both dev and prod.
 - If the default workspace has no `config.yaml`, `run.sh` first copies an existing repository-root `config.yaml`, then the former default `$HOME/.super-personal-platform/config.yaml` for prod, and finally the committed `config.example.yaml` template.
 - Start development with `./run-dev.sh` or `./run.sh dev`.
@@ -50,7 +53,7 @@
 - The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
 - The service reads configuration from `${SUPER_PERSONAL_WORKSPACE}/config.yaml`. `SUPER_PERSONAL_CONFIG` is not supported.
 - Production deployment requires Linux systemd and sudo. It registers or refreshes `super-personal-platform.service` on every run so systemd receives the current workspace, host, and port parameters; then it enables and restarts the service.
-- Use the web UI at `系统 -> 更新服务` to manually trigger the production update flow after login.
+- Use the web UI at `系统 -> 配置` to edit the active workspace configuration, `系统 -> 日志` to inspect unified logs, and `系统 -> 更新` to manually trigger the production update flow after login.
 - Before committing changes, execute the local `$project-commit` skill.
 
 ## Maintenance Rule

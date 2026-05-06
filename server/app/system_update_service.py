@@ -4,22 +4,32 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from server.app.system_log_service import SystemLogService
+
 
 class UpdateAlreadyRunningError(Exception):
     """Raised when a service update is already in progress."""
 
 
 class SystemUpdateService:
-    def __init__(self, project_root: Path, workspace: Path) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        workspace: Path,
+        log_service: SystemLogService | None = None,
+    ) -> None:
         self.project_root = project_root
         self.workspace = workspace
         self.run_dir = workspace / ".run"
         self.lock_path = self.run_dir / "update-service.lock"
-        self.log_path = self.run_dir / "update-service.log"
+        self.log_service = log_service or SystemLogService(workspace)
         self.script_path = project_root / "run-prod.sh"
 
     def start_update(self) -> Path:
         self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.log_service.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.log_service.cleanup_old_logs()
+        log_path = self.log_service.current_log_path()
         try:
             fd = os.open(
                 self.lock_path,
@@ -33,12 +43,19 @@ class SystemUpdateService:
             lock_file.write(f"{os.getpid()}\n")
 
         command = (
-            "set -e; "
+            "set +e; "
             f"trap 'rm -f {shlex.quote(str(self.lock_path))}' EXIT; "
+            f"mkdir -p {shlex.quote(str(self.log_service.logs_dir))}; "
+            "printf '\\n=== update-service started at %s ===\\n' \"$(date -Is)\" "
+            f">>{shlex.quote(str(log_path))}; "
             f"cd {shlex.quote(str(self.project_root))}; "
             f"{shlex.quote(str(self.script_path))} "
             f"--workspace {shlex.quote(str(self.workspace))} "
-            f">>{shlex.quote(str(self.log_path))} 2>&1"
+            f">>{shlex.quote(str(log_path))} 2>&1; "
+            "status=$?; "
+            "printf '=== update-service finished at %s status=%s ===\\n' "
+            f"\"$(date -Is)\" \"$status\" >>{shlex.quote(str(log_path))}; "
+            "exit \"$status\""
         )
         try:
             self._start_background_command(command)
@@ -46,7 +63,7 @@ class SystemUpdateService:
             self.lock_path.unlink(missing_ok=True)
             raise
 
-        return self.log_path
+        return log_path
 
     def _start_background_command(self, command: str) -> None:
         if shutil.which("systemd-run"):
