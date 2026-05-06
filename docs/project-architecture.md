@@ -52,7 +52,7 @@
 - `run.sh` contains the dev/prod logic. `run-dev.sh` and `run-prod.sh` only forward to it.
 - The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
 - The service reads configuration from `${SUPER_PERSONAL_WORKSPACE}/config.yaml`. `SUPER_PERSONAL_CONFIG` is not supported.
-- Production deployment requires Linux systemd and sudo for service changes and restarts. `run.sh prod` runs git commands with command-scoped `safe.directory` for the repository and stores SSH `known_hosts` at `${SUPER_PERSONAL_WORKSPACE}/.run/known_hosts`, refreshes `super-personal-platform.service` only when the generated unit content differs, enables the unit only after a unit refresh, and restarts the service on every production update. Web-triggered updates start `run-prod.sh` directly as a background process rather than through `systemd-run`.
+- Production deployment requires Linux systemd and sudo for service changes and restarts. `run.sh prod` pulls `main` from the public HTTPS repository `https://github.com/coolerwu/SuperPersonalPlatform.git` with command-scoped `safe.directory`, refreshes `super-personal-platform.service` only when the generated unit content differs, enables the unit only after a unit refresh, and restarts the service on every production update. Web-triggered updates start `run-prod.sh` directly as a background process rather than through `systemd-run`.
 - Use the web UI at `系统 -> 配置` to edit the active workspace configuration, `系统 -> 日志` to inspect unified logs, and `系统 -> 更新` to manually trigger the production update flow after login.
 - Before committing changes, execute the local `$project-commit` skill.
 

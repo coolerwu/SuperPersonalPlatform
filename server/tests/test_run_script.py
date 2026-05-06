@@ -11,14 +11,15 @@ def read_run_sh() -> str:
 def test_prod_git_commands_use_command_scoped_safe_directory() -> None:
     script = read_run_sh()
 
+    assert 'PROD_GIT_URL="https://github.com/coolerwu/SuperPersonalPlatform.git"' in script
+    assert 'PROD_GIT_BRANCH="main"' in script
     assert 'git -c "safe.directory=${SCRIPT_DIR}" "$@"' in script
-    assert "GIT_SSH_COMMAND=" in script
-    assert "StrictHostKeyChecking=accept-new" in script
-    assert "UserKnownHostsFile=${run_dir}/known_hosts" in script
     assert "git_in_repo status --porcelain --untracked-files=all" in script
     assert "git_in_repo status --short" in script
-    assert "git_in_repo pull --ff-only" in script
+    assert 'git_in_repo pull --ff-only "$PROD_GIT_URL" "$PROD_GIT_BRANCH"' in script
     assert "git config --global --add safe.directory" not in script
+    assert "GIT_SSH_COMMAND=" not in script
+    assert "StrictHostKeyChecking" not in script
 
 
 def test_prod_service_file_compare_avoids_sudo_when_unchanged() -> None:

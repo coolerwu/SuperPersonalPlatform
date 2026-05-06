@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SERVICE_NAME="super-personal-platform.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+PROD_GIT_URL="https://github.com/coolerwu/SuperPersonalPlatform.git"
+PROD_GIT_BRANCH="main"
 
 usage() {
   cat <<USAGE
@@ -63,10 +65,7 @@ config_path() {
 }
 
 git_in_repo() {
-  local run_dir="${WORKSPACE_DIR}/.run"
-  mkdir -p "$run_dir"
-  GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${run_dir}/known_hosts" \
-    git -c "safe.directory=${SCRIPT_DIR}" "$@"
+  git -c "safe.directory=${SCRIPT_DIR}" "$@"
 }
 
 ensure_config() {
@@ -100,7 +99,7 @@ ensure_clean_git() {
 
 update_git() {
   cd "$SCRIPT_DIR"
-  git_in_repo pull --ff-only
+  git_in_repo pull --ff-only "$PROD_GIT_URL" "$PROD_GIT_BRANCH"
 }
 
 ensure_venv() {
