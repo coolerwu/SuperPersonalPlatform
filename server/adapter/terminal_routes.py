@@ -19,6 +19,10 @@ class TerminalSessionReadRequest(BaseModel):
     name: str
 
 
+class InvalidTerminalMessageError(Exception):
+    pass
+
+
 def create_terminal_router(container: AppContainer) -> APIRouter:
     def require_terminal_auth(request: Request) -> None:
         require_authenticated(request, container)
@@ -71,12 +75,24 @@ def create_terminal_router(container: AppContainer) -> APIRouter:
             return
 
         await websocket.accept()
+
+        async def receive_terminal_message() -> dict[str, object]:
+            data = await websocket.receive_json()
+            if not isinstance(data, dict):
+                raise InvalidTerminalMessageError("terminal message must be an object")
+            return data
+
+        async def send_terminal_output(text: str) -> None:
+            await websocket.send_json({"type": "output", "data": text})
+
         try:
             await container.terminal_session_service.run_interactive_session(
-                websocket.receive_text,
-                websocket.send_text,
+                receive_terminal_message,
+                send_terminal_output,
             )
         except WebSocketDisconnect:
             return
+        except InvalidTerminalMessageError:
+            await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
 
     return router

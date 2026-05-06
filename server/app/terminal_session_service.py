@@ -1,9 +1,12 @@
 import asyncio
+import fcntl
 import json
 import os
 import pty
 import select
 import subprocess
+import struct
+import termios
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -65,7 +68,7 @@ class TerminalSessionService:
 
     async def run_interactive_session(
         self,
-        receive_text: Callable[[], Awaitable[str]],
+        receive_message: Callable[[], Awaitable[dict[str, object]]],
         send_text: Callable[[str], Awaitable[None]],
     ) -> Path:
         self._ensure_sessions_dir()
@@ -105,9 +108,22 @@ class TerminalSessionService:
 
         async def write_pty() -> None:
             while process.poll() is None:
-                text = await receive_text()
-                self._append_event(session_path, "input", text)
-                os.write(master_fd, text.encode("utf-8"))
+                message = await receive_message()
+                message_type = message.get("type")
+                if message_type == "input":
+                    text = str(message.get("data", ""))
+                    self._append_event(session_path, "input", text)
+                    os.write(master_fd, text.encode("utf-8"))
+                elif message_type == "resize":
+                    cols = self._positive_int(message.get("cols"))
+                    rows = self._positive_int(message.get("rows"))
+                    if cols and rows:
+                        self.resize_pty(master_fd, cols, rows)
+                        self._append_event(
+                            session_path,
+                            "system",
+                            f"resize cols={cols} rows={rows}",
+                        )
 
         reader = asyncio.create_task(read_pty())
         writer = asyncio.create_task(write_pty())
@@ -169,6 +185,9 @@ class TerminalSessionService:
         with path.open("a", encoding="utf-8") as session_file:
             session_file.write(json.dumps(event, ensure_ascii=False) + "\n")
 
+    def resize_pty(self, fd: int, cols: int, rows: int) -> None:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
     def _read_available(self, fd: int) -> bytes:
         readable, _, _ = select.select([fd], [], [], 0.1)
         if not readable:
@@ -185,3 +204,12 @@ class TerminalSessionService:
             if shell and Path(shell).exists():
                 return shell
         return "/bin/sh"
+
+    def _positive_int(self, value: object) -> int | None:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return None
+        if number <= 0:
+            return None
+        return number

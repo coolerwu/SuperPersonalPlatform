@@ -40,7 +40,7 @@ To deploy with a different workspace:
 ./run-prod.sh --workspace /path/to/workspace
 ```
 
-After login, use `系统 -> 更新` to trigger the same production update flow from the web UI, or `终端` to open an authenticated shell on the backend machine. Terminal transcripts are saved under the active workspace at `terminal/sessions/`.
+After login, use `系统 -> 更新` to trigger the same production update flow from the web UI, or `终端` to open an authenticated xterm.js shell on the backend machine. Terminal transcripts are saved under the active workspace at `terminal/sessions/`.
 
 ## Project Architecture
 

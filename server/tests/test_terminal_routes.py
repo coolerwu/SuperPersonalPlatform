@@ -91,23 +91,30 @@ def test_terminal_sessions_list_and_read_workspace_transcripts(tmp_path) -> None
 def test_terminal_service_writes_interactive_transcript(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SHELL", "/bin/sh")
     service = TerminalSessionService(tmp_path, tmp_path)
-    sent = False
+    messages = [
+        {"type": "resize", "cols": 120, "rows": 34},
+        {"type": "input", "data": "printf codex-terminal-test\rexit\r"},
+    ]
     outputs = []
+    resizes = []
 
-    async def receive_text() -> str:
-        nonlocal sent
-        if not sent:
-            sent = True
-            return "printf codex-terminal-test\rexit\r"
+    async def receive_message() -> dict[str, object]:
+        if messages:
+            return messages.pop(0)
         await asyncio.sleep(60)
-        return ""
+        return {"type": "input", "data": ""}
 
     async def send_text(text: str) -> None:
         outputs.append(text)
 
+    def fake_resize(fd: int, cols: int, rows: int) -> None:
+        resizes.append((fd, cols, rows))
+
+    monkeypatch.setattr(service, "resize_pty", fake_resize)
+
     asyncio.run(
         asyncio.wait_for(
-            service.run_interactive_session(receive_text, send_text),
+            service.run_interactive_session(receive_message, send_text),
             timeout=5,
         )
     )
@@ -126,4 +133,9 @@ def test_terminal_service_writes_interactive_transcript(tmp_path, monkeypatch) -
         event["stream"] == "output" and "codex-terminal-test" in event["content"]
         for event in transcript
     )
+    assert any(
+        event["stream"] == "system" and "resize cols=120 rows=34" in event["content"]
+        for event in transcript
+    )
     assert any("codex-terminal-test" in output for output in outputs)
+    assert resizes[0][1:] == (120, 34)

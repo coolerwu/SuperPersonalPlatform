@@ -4,9 +4,61 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const xtermState = vi.hoisted(() => ({
+  terminals: [],
+  fitAddons: []
+}));
+
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class MockTerminal {
+    constructor() {
+      this.cols = 120;
+      this.rows = 34;
+      this._dataHandler = null;
+      xtermState.terminals.push(this);
+    }
+
+    loadAddon() {}
+
+    open(element) {
+      this.element = element;
+    }
+
+    onData(handler) {
+      this._dataHandler = handler;
+    }
+
+    write(data) {
+      this.element.textContent = `${this.element.textContent}${data}`;
+    }
+
+    focus() {}
+
+    dispose() {}
+
+    emitData(data) {
+      this._dataHandler?.(data);
+    }
+  }
+}));
+
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: class MockFitAddon {
+    constructor() {
+      xtermState.fitAddons.push(this);
+    }
+
+    fit() {
+      this.fitted = true;
+    }
+  }
+}));
+
 describe("LoginPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    xtermState.terminals.length = 0;
+    xtermState.fitAddons.length = 0;
     document.body.innerHTML = "";
     window.history.replaceState({}, "", "/");
   });
@@ -164,16 +216,17 @@ describe("LoginPage", () => {
       constructor(url) {
         this.url = url;
         this.readyState = MockWebSocket.CONNECTING;
+        this.sent = [];
         sockets.push(this);
         setTimeout(() => {
           this.readyState = MockWebSocket.OPEN;
           this.onopen?.();
-          this.onmessage?.({ data: "terminal ready\n" });
+          this.onmessage?.({ data: JSON.stringify({ type: "output", data: "terminal ready\n" }) });
         }, 0);
       }
 
       send(data) {
-        this.sent = data;
+        this.sent.push(data);
       }
 
       close() {
@@ -182,6 +235,13 @@ describe("LoginPage", () => {
       }
     }
     vi.stubGlobal("WebSocket", MockWebSocket);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class MockResizeObserver {
+        observe() {}
+        disconnect() {}
+      }
+    );
     vi.stubGlobal(
       "fetch",
       vi.fn(async (path) => {
@@ -213,5 +273,12 @@ describe("LoginPage", () => {
     expect(await screen.findByRole("button", { name: "终端" })).toBeInTheDocument();
     expect(await screen.findByText("terminal ready")).toBeInTheDocument();
     expect(sockets[0].url).toContain("/api/system/terminal/connect");
+    expect(JSON.parse(sockets[0].sent[0])).toEqual({ type: "resize", cols: 120, rows: 34 });
+
+    xtermState.terminals[0].emitData("ls\r");
+
+    expect(JSON.parse(sockets[0].sent.at(-1))).toEqual({ type: "input", data: "ls\r" });
+    const navButtons = screen.getAllByRole("button").map((button) => button.textContent);
+    expect(navButtons.indexOf("终端")).toBeLessThan(navButtons.indexOf("系统"));
   });
 });

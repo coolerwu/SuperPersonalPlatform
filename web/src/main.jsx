@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
 import {
   ArrowRight,
+  ChevronsLeft,
+  ChevronsRight,
   FileText,
   History,
   List,
@@ -10,7 +15,6 @@ import {
   RefreshCw,
   Save,
   ScrollText,
-  Send,
   ShieldCheck,
   TerminalSquare
 } from "lucide-react";
@@ -424,14 +428,16 @@ function SystemPage({ onUnauthorized }) {
 
 function TerminalPage({ onUnauthorized }) {
   const [status, setStatus] = useState("disconnected");
-  const [output, setOutput] = useState("");
-  const [command, setCommand] = useState("");
   const [sessions, setSessions] = useState([]);
   const [selectedSession, setSelectedSession] = useState(null);
   const [historyContent, setHistoryContent] = useState("");
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [error, setError] = useState("");
   const socketRef = useRef(null);
-  const outputRef = useRef(null);
+  const terminalRef = useRef(null);
+  const terminalContainerRef = useRef(null);
+  const fitAddonRef = useRef(null);
+  const resizeObserverRef = useRef(null);
 
   function handleApiError(err) {
     if (err.status === 401 || err.message === "Authentication required") {
@@ -453,11 +459,19 @@ function TerminalPage({ onUnauthorized }) {
     }
     setError("");
     setStatus("connecting");
-    setOutput("");
     const socket = new WebSocket(websocketUrl());
     socketRef.current = socket;
-    socket.onopen = () => setStatus("connected");
-    socket.onmessage = (event) => setOutput((value) => `${value}${event.data}`);
+    socket.onopen = () => {
+      setStatus("connected");
+      terminalRef.current?.focus();
+      fitAndSendSize();
+    };
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === "output") {
+        terminalRef.current?.write(message.data || "");
+      }
+    };
     socket.onerror = () => {
       setError("终端连接失败");
       setStatus("disconnected");
@@ -472,13 +486,23 @@ function TerminalPage({ onUnauthorized }) {
     socketRef.current?.close();
   }
 
-  function submitCommand(event) {
-    event.preventDefault();
-    if (!command.trim() || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+  function sendTerminalMessage(message) {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       return;
     }
-    socketRef.current.send(`${command}\r`);
-    setCommand("");
+    socketRef.current.send(JSON.stringify(message));
+  }
+
+  function fitAndSendSize() {
+    if (!fitAddonRef.current || !terminalRef.current) {
+      return;
+    }
+    fitAddonRef.current.fit();
+    sendTerminalMessage({
+      type: "resize",
+      cols: terminalRef.current.cols,
+      rows: terminalRef.current.rows
+    });
   }
 
   async function loadSessions() {
@@ -519,19 +543,38 @@ function TerminalPage({ onUnauthorized }) {
   }
 
   useEffect(() => {
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: false,
+      fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+      fontSize: 13,
+      theme: {
+        background: "#101820",
+        foreground: "#f7f2e8",
+        cursor: "#f7f2e8",
+        selectionBackground: "#3f5f67"
+      }
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(terminalContainerRef.current);
+    terminal.onData((data) => sendTerminalMessage({ type: "input", data }));
+    terminalRef.current = terminal;
+    fitAddonRef.current = fitAddon;
+    resizeObserverRef.current = new ResizeObserver(() => fitAndSendSize());
+    resizeObserverRef.current.observe(terminalContainerRef.current);
+
     loadSessions();
     connect();
-    return () => socketRef.current?.close();
+    return () => {
+      resizeObserverRef.current?.disconnect();
+      socketRef.current?.close();
+      terminal.dispose();
+    };
   }, []);
 
-  useEffect(() => {
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
-    }
-  }, [output]);
-
   return (
-    <section className="page-section terminal-section">
+    <section className={`page-section terminal-section ${historyCollapsed ? "history-collapsed" : ""}`}>
       <div className="terminal-shell">
         <div className="terminal-toolbar">
           <span className={`terminal-status ${status}`}>{status === "connected" ? "已连接" : "未连接"}</span>
@@ -545,27 +588,17 @@ function TerminalPage({ onUnauthorized }) {
             </button>
           </div>
         </div>
-        <pre className="terminal-output" ref={outputRef} data-testid="terminal-output">
-          {output || "正在连接终端..."}
-        </pre>
-        <form className="terminal-input-row" onSubmit={submitCommand}>
-          <input
-            value={command}
-            onChange={(event) => setCommand(event.target.value)}
-            placeholder="输入命令后回车"
-            disabled={status !== "connected"}
-          />
-          <button className="secondary-button primary-action" type="submit" disabled={status !== "connected"}>
-            <Send size={17} />
-            发送
-          </button>
-        </form>
+        <div className="terminal-output" ref={terminalContainerRef} data-testid="terminal-output" />
         {error ? <div className="form-error">{error}</div> : null}
       </div>
       <aside className="terminal-history">
         <div className="terminal-history-heading">
           <History size={17} />
           <span>历史会话</span>
+          <button className="secondary-button" onClick={() => setHistoryCollapsed((value) => !value)}>
+            {historyCollapsed ? <ChevronsLeft size={16} /> : <ChevronsRight size={16} />}
+            {historyCollapsed ? "展开" : "收起"}
+          </button>
           <button className="secondary-button" onClick={loadSessions}>
             <RefreshCw size={16} />
             刷新
@@ -600,9 +633,9 @@ function AppShell({ onLogout }) {
   const navItems = useMemo(
     () => [
       { path: "/", label: "首页" },
+      { path: "/terminal", label: "终端" },
       { path: "/proxy", label: "Hermes UI" },
-      { path: "/system", label: "系统" },
-      { path: "/terminal", label: "终端" }
+      { path: "/system", label: "系统" }
     ],
     []
   );

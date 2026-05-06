@@ -4,7 +4,7 @@
 
 - This is a new full-stack personal platform in `/Users/wulang/Desktop/AI/SuperPersonalPlatform`.
 - The backend is Python 3.12.x with FastAPI and listens on port `8888`.
-- The frontend is React + Vite. Production uses the committed `web/dist` build output; run scripts do not install or build frontend assets.
+- The frontend is React + Vite and uses xterm.js for the browser terminal. Production uses the committed `web/dist` build output; run scripts do not install or build frontend assets.
 - The app is not deployed as separated frontend/backend services. Browser traffic goes to FastAPI, and FastAPI serves both API and built frontend assets.
 
 ## Backend Architecture
@@ -25,7 +25,7 @@
 - `/api/proxy/site/` reverse-proxies the configured upstream site under `proxy.upstream_base_url`.
 - The proxy forwards normal HTTP methods through the Python backend and returns upstream status, body, and safe response headers.
 - `/api/system/*` routes are protected at the router level. `POST /api/system/config/read` reads the active workspace `config.yaml`, `PUT /api/system/config` validates and writes it, `POST /api/system/logs/list` and `POST /api/system/logs/read` expose read-only unified logs, `POST /api/system/update-service` starts a background production update task, and `/api/system/terminal/*` exposes authenticated terminal sessions and history.
-- `WebSocket /api/system/terminal/connect` starts an interactive PTY shell on the backend machine, and terminal history APIs `POST /api/system/terminal/sessions/list` and `POST /api/system/terminal/sessions/read` expose saved transcripts.
+- `WebSocket /api/system/terminal/connect` starts an interactive PTY shell on the backend machine. The terminal WebSocket uses JSON messages: client `input` messages write raw key data to the PTY, client `resize` messages update PTY rows and columns, and server `output` messages carry raw terminal output. Terminal history APIs `POST /api/system/terminal/sessions/list` and `POST /api/system/terminal/sessions/read` expose saved transcripts.
 - The frontend contains a login page, an app shell, a home overview, an iframe-based Hermes UI proxy page, a terminal page, and a system page split into config, logs, and update tabs.
 
 ## Operating Notes
@@ -55,7 +55,7 @@
 - The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
 - The service reads configuration from `${SUPER_PERSONAL_WORKSPACE}/config.yaml`. `SUPER_PERSONAL_CONFIG` is not supported.
 - Production deployment requires Linux systemd and sudo for service changes and restarts. `run.sh prod` pulls `main` from the public HTTPS repository `https://github.com/coolerwu/SuperPersonalPlatform.git` with command-scoped `safe.directory`, forces Git HTTPS pulls to HTTP/1.1, retries transient pull failures 3 times, refreshes `super-personal-platform.service` only when the generated unit content differs, enables the unit only after a unit refresh, and restarts the service on every production update. Web-triggered updates start `run-prod.sh` directly as a background process rather than through `systemd-run`.
-- Use the web UI at `系统 -> 配置` to edit the active workspace configuration, `系统 -> 日志` to inspect unified logs in a fixed-height console viewer, `系统 -> 更新` to manually trigger the production update flow after login, and `终端` to open an authenticated interactive shell on the backend machine with transcripts saved in the workspace.
+- Use the web UI at `系统 -> 配置` to edit the active workspace configuration, `系统 -> 日志` to inspect unified logs in a fixed-height console viewer, `系统 -> 更新` to manually trigger the production update flow after login, and `终端` to open an authenticated xterm.js shell on the backend machine with transcripts saved in the workspace.
 - Before committing changes, execute the local `$project-commit` skill.
 
 ## Maintenance Rule
