@@ -25,7 +25,26 @@ class EmptyProxyGateway:
         return ProxyResponse(status_code=200, headers={}, body=b"")
 
 
-def make_client(workspace: Path) -> TestClient:
+class ReceiveOnceTerminalService:
+    async def run_interactive_session(self, receive_message, send_text) -> Path:
+        await receive_message()
+        return Path("terminal/sessions/fake.jsonl")
+
+    def list_sessions(self):
+        return []
+
+    def read_session(self, name: str):
+        raise FileNotFoundError(name)
+
+
+def write_config(workspace: Path, token: str = "secret-token") -> None:
+    (workspace / "config.yaml").write_text(
+        f"auth:\n  token: {token}\nproxy:\n  upstream_base_url: http://example.test/\n",
+        encoding="utf-8",
+    )
+
+
+def make_client(workspace: Path, terminal_service=None) -> TestClient:
     token = "secret-token"
     container = AppContainer(
         auth_service=AuthService(AuthToken(token)),
@@ -33,7 +52,7 @@ def make_client(workspace: Path) -> TestClient:
         proxy_service=ProxyService(EmptyProxyGateway()),
         system_log_service=SystemLogService(workspace),
         system_update_service=SystemUpdateService(workspace, workspace),
-        terminal_session_service=TerminalSessionService(workspace, workspace),
+        terminal_session_service=terminal_service or TerminalSessionService(workspace, workspace),
         session_codec=SessionCodec(token),
     )
     app = FastAPI()
@@ -51,6 +70,7 @@ def test_terminal_sessions_require_authentication(tmp_path) -> None:
 
 
 def test_terminal_websocket_requires_authentication(tmp_path) -> None:
+    write_config(tmp_path)
     client = make_client(tmp_path)
 
     try:
@@ -58,6 +78,22 @@ def test_terminal_websocket_requires_authentication(tmp_path) -> None:
             raise AssertionError("expected websocket authentication failure")
     except WebSocketDisconnect as exc:
         assert exc.code == 1008
+
+
+def test_terminal_websocket_rechecks_current_token_for_each_message(tmp_path) -> None:
+    write_config(tmp_path)
+    client = make_client(tmp_path, ReceiveOnceTerminalService())
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    with client.websocket_connect("/api/system/terminal/connect") as websocket:
+        write_config(tmp_path, token="changed-token")
+        websocket.send_json({"type": "input", "data": "ls\r"})
+        try:
+            websocket.receive_json()
+        except WebSocketDisconnect as exc:
+            assert exc.code == 1008
+        else:
+            raise AssertionError("expected websocket to close after token changed")
 
 
 def test_terminal_sessions_list_and_read_workspace_transcripts(tmp_path) -> None:

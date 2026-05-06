@@ -13,6 +13,8 @@ from server.adapter.auth_routes import SESSION_COOKIE
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
 from server.app.terminal_session_service import InvalidTerminalSessionError
+from server.infrastructure.config import load_settings
+from server.infrastructure.session import SessionCodec
 
 
 class TerminalSessionReadRequest(BaseModel):
@@ -20,6 +22,10 @@ class TerminalSessionReadRequest(BaseModel):
 
 
 class InvalidTerminalMessageError(Exception):
+    pass
+
+
+class TerminalAuthenticationError(Exception):
     pass
 
 
@@ -70,7 +76,8 @@ def create_terminal_router(container: AppContainer) -> APIRouter:
 
     @router.websocket("/connect")
     async def connect_terminal(websocket: WebSocket) -> None:
-        if not container.session_codec.verify(websocket.cookies.get(SESSION_COOKIE)):
+        session_cookie = websocket.cookies.get(SESSION_COOKIE)
+        if not _verify_current_session(container, session_cookie):
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
@@ -80,6 +87,9 @@ def create_terminal_router(container: AppContainer) -> APIRouter:
             data = await websocket.receive_json()
             if not isinstance(data, dict):
                 raise InvalidTerminalMessageError("terminal message must be an object")
+            if not _verify_current_session(container, session_cookie):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                raise TerminalAuthenticationError("terminal session is no longer authenticated")
             return data
 
         async def send_terminal_output(text: str) -> None:
@@ -92,7 +102,17 @@ def create_terminal_router(container: AppContainer) -> APIRouter:
             )
         except WebSocketDisconnect:
             return
+        except TerminalAuthenticationError:
+            return
         except InvalidTerminalMessageError:
             await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
 
     return router
+
+
+def _verify_current_session(container: AppContainer, session_cookie: str | None) -> bool:
+    try:
+        settings = load_settings(container.config_file_service.config_path)
+    except Exception:
+        return False
+    return SessionCodec(settings.auth.token).verify(session_cookie)
