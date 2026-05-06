@@ -24,8 +24,9 @@
 - Auth state is available through `GET /api/auth/me`.
 - `/api/proxy/site/` reverse-proxies the configured upstream site under `proxy.upstream_base_url`.
 - The proxy forwards normal HTTP methods through the Python backend and returns upstream status, body, and safe response headers.
-- `/api/system/*` routes are protected at the router level. `POST /api/system/config/read` reads the active workspace `config.yaml`, `PUT /api/system/config` validates and writes it, `POST /api/system/logs/list` and `POST /api/system/logs/read` expose read-only unified logs, and `POST /api/system/update-service` starts a background production update task.
-- The frontend contains a login page, an app shell, a home overview, an iframe-based Hermes UI proxy page, and a system page split into config, logs, and update tabs.
+- `/api/system/*` routes are protected at the router level. `POST /api/system/config/read` reads the active workspace `config.yaml`, `PUT /api/system/config` validates and writes it, `POST /api/system/logs/list` and `POST /api/system/logs/read` expose read-only unified logs, `POST /api/system/update-service` starts a background production update task, and `/api/system/terminal/*` exposes authenticated terminal sessions and history.
+- `WebSocket /api/system/terminal/connect` starts an interactive PTY shell on the backend machine, and terminal history APIs `POST /api/system/terminal/sessions/list` and `POST /api/system/terminal/sessions/read` expose saved transcripts.
+- The frontend contains a login page, an app shell, a home overview, an iframe-based Hermes UI proxy page, a terminal page, and a system page split into config, logs, and update tabs.
 
 ## Operating Notes
 
@@ -40,20 +41,21 @@
 - Known upstream root asset prefixes `/fonts/*`, `/ds-assets/*`, and `/dashboard-plugins/*` also fall back to the upstream proxy so embedded absolute asset paths do not hit the platform SPA fallback.
 - Workspace `config.yaml` should stay local and must not be committed.
 - The system page edits the active workspace `config.yaml` in place. Saved YAML is parsed and validated against required runtime settings before it replaces the file.
-- Workspace `logs/` contains unified platform log files named `platform-YYYY-MM-DD.log`; logs are read-only in the UI and retained for 3 days by the system log service. The unified log includes update-service output and `/api/*` request summaries with method, path, status, duration, and client, but never request bodies.
-- Workspace `.run/` contains runtime-only files such as update locks and generated service files, not durable logs.
+- Workspace `logs/` contains unified platform log files named `platform-YYYY-MM-DD.log`; logs are read-only in the UI, default to the latest file, scroll to the tail when loaded, and are retained for 3 days by the system log service. The unified log includes update-service output and `/api/*` request summaries with method, path, status, duration, and client, but never request bodies.
+- Workspace `terminal/sessions/` contains durable JSONL terminal transcripts named `terminal-YYYY-MM-DDTHHMMSS-<id>.jsonl`. Each record stores timestamp, stream (`input`, `output`, or `system`), and content.
+- Workspace `.run/` contains runtime-only files such as update locks and generated service files, not durable logs or terminal history. If `.run/` is missing in production, it has no effect until an operation needs it; production startup or web-triggered update creates it automatically.
 - The default workspace is `.super-personal-platform` under the repository directory for both dev and prod.
 - If the default workspace has no `config.yaml`, `run.sh` first copies an existing repository-root `config.yaml`, then the former default `$HOME/.super-personal-platform/config.yaml` for prod, and finally the committed `config.example.yaml` template.
 - Start development with `./run-dev.sh` or `./run.sh dev`.
 - Development startup uses the default `.super-personal-platform` workspace. It does not run git checks or pull code; it is for the current local working tree. If the configured port is held by a process whose working directory is this project, dev startup stops it before launching.
-- Pass `--workspace /path/to/workspace` to dev or prod to override the default workspace. A workspace stores `config.yaml` and `.run/` runtime data only; code, `.venv`, and frontend assets stay in the repository directory.
+- Pass `--workspace /path/to/workspace` to dev or prod to override the default workspace. A workspace stores `config.yaml`, unified logs, terminal transcripts, and `.run/` runtime data; code, `.venv`, and frontend assets stay in the repository directory.
 - Deploy production with `./run-prod.sh` or `./run.sh prod`.
 - Production startup uses the default `.super-personal-platform` workspace so dev and prod reuse the same workspace unless `--workspace` is specified.
 - `run.sh` contains the dev/prod logic. `run-dev.sh` and `run-prod.sh` only forward to it.
 - The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
 - The service reads configuration from `${SUPER_PERSONAL_WORKSPACE}/config.yaml`. `SUPER_PERSONAL_CONFIG` is not supported.
 - Production deployment requires Linux systemd and sudo for service changes and restarts. `run.sh prod` pulls `main` from the public HTTPS repository `https://github.com/coolerwu/SuperPersonalPlatform.git` with command-scoped `safe.directory`, forces Git HTTPS pulls to HTTP/1.1, retries transient pull failures 3 times, refreshes `super-personal-platform.service` only when the generated unit content differs, enables the unit only after a unit refresh, and restarts the service on every production update. Web-triggered updates start `run-prod.sh` directly as a background process rather than through `systemd-run`.
-- Use the web UI at `系统 -> 配置` to edit the active workspace configuration, `系统 -> 日志` to inspect unified logs in a fixed-height console viewer, and `系统 -> 更新` to manually trigger the production update flow after login.
+- Use the web UI at `系统 -> 配置` to edit the active workspace configuration, `系统 -> 日志` to inspect unified logs in a fixed-height console viewer, `系统 -> 更新` to manually trigger the production update flow after login, and `终端` to open an authenticated interactive shell on the backend machine with transcripts saved in the workspace.
 - Before committing changes, execute the local `$project-commit` skill.
 
 ## Maintenance Rule

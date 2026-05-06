@@ -5,6 +5,7 @@ from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
+from server.app.terminal_session_service import TerminalSessionService
 from server.infrastructure.session import SessionCodec
 
 
@@ -15,4 +16,5 @@ class AppContainer:
     proxy_service: ProxyService
     system_log_service: SystemLogService
     system_update_service: SystemUpdateService
+    terminal_session_service: TerminalSessionService
     session_codec: SessionCodec

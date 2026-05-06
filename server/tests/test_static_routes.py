@@ -8,6 +8,7 @@ from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
+from server.app.terminal_session_service import TerminalSessionService
 from server.domain.auth import AuthToken
 from server.domain.proxy import ProxyRequest, ProxyResponse
 from server.infrastructure.session import SessionCodec
@@ -30,6 +31,7 @@ def make_static_client(tmp_path) -> TestClient:
         proxy_service=ProxyService(StaticProxyGateway()),
         system_log_service=SystemLogService(tmp_path),
         system_update_service=SystemUpdateService(tmp_path, tmp_path),
+        terminal_session_service=TerminalSessionService(tmp_path, tmp_path),
         session_codec=SessionCodec(token),
     )
     from server.adapter.auth_routes import create_auth_router

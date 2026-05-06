@@ -1,13 +1,16 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight,
   FileText,
+  History,
   List,
   LogOut,
+  PlugZap,
   RefreshCw,
   Save,
   ScrollText,
+  Send,
   ShieldCheck,
   TerminalSquare
 } from "lucide-react";
@@ -83,10 +86,6 @@ function LoginPage({ onLogin }) {
 function HomePage() {
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <p>Overview</p>
-        <h2>个人平台控制台</h2>
-      </div>
       <div className="metrics-grid">
         <article className="metric-card">
           <span>访问模式</span>
@@ -113,11 +112,7 @@ function ProxyPage() {
 
   return (
     <section className="page-section">
-      <div className="section-heading row-heading">
-        <div>
-          <p>Proxy</p>
-          <h2>Hermes UI</h2>
-        </div>
+      <div className="page-toolbar">
         <button className="secondary-button" onClick={() => setFrameKey((value) => value + 1)}>
           <RefreshCw size={17} />
           刷新
@@ -152,6 +147,7 @@ function SystemPage({ onUnauthorized }) {
   const [logInfo, setLogInfo] = useState(null);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logError, setLogError] = useState("");
+  const logViewerRef = useRef(null);
 
   function handleApiError(err, setTargetError) {
     if (err.status === 401 || err.message === "Authentication required") {
@@ -197,6 +193,12 @@ function SystemPage({ onUnauthorized }) {
   useEffect(() => {
     loadConfig();
   }, []);
+
+  useEffect(() => {
+    if (logViewerRef.current) {
+      logViewerRef.current.scrollTop = logViewerRef.current.scrollHeight;
+    }
+  }, [logContent, selectedLog]);
 
   async function loadLogs(nextSelectedLog = selectedLog) {
     setLogsLoading(true);
@@ -275,10 +277,6 @@ function SystemPage({ onUnauthorized }) {
 
   return (
     <section className="page-section">
-      <div className="section-heading">
-        <p>System</p>
-        <h2>系统运维</h2>
-      </div>
       <div className="tab-bar" role="tablist" aria-label="系统功能">
         {[
           { id: "config", label: "配置", icon: FileText },
@@ -390,7 +388,9 @@ function SystemPage({ onUnauthorized }) {
                   {logInfo.truncated ? <span>仅显示尾部 200KB</span> : null}
                 </div>
               ) : null}
-              <pre className="log-viewer">{logContent || "选择日志文件后查看内容"}</pre>
+              <pre className="log-viewer" ref={logViewerRef}>
+                {logContent || "选择日志文件后查看内容"}
+              </pre>
             </div>
           </div>
           {logError ? <div className="form-error">{logError}</div> : null}
@@ -422,13 +422,187 @@ function SystemPage({ onUnauthorized }) {
   );
 }
 
+function TerminalPage({ onUnauthorized }) {
+  const [status, setStatus] = useState("disconnected");
+  const [output, setOutput] = useState("");
+  const [command, setCommand] = useState("");
+  const [sessions, setSessions] = useState([]);
+  const [selectedSession, setSelectedSession] = useState(null);
+  const [historyContent, setHistoryContent] = useState("");
+  const [error, setError] = useState("");
+  const socketRef = useRef(null);
+  const outputRef = useRef(null);
+
+  function handleApiError(err) {
+    if (err.status === 401 || err.message === "Authentication required") {
+      onUnauthorized();
+      return true;
+    }
+    setError(err.message);
+    return false;
+  }
+
+  function websocketUrl() {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}/api/system/terminal/connect`;
+  }
+
+  function connect() {
+    if (socketRef.current && socketRef.current.readyState <= WebSocket.OPEN) {
+      return;
+    }
+    setError("");
+    setStatus("connecting");
+    setOutput("");
+    const socket = new WebSocket(websocketUrl());
+    socketRef.current = socket;
+    socket.onopen = () => setStatus("connected");
+    socket.onmessage = (event) => setOutput((value) => `${value}${event.data}`);
+    socket.onerror = () => {
+      setError("终端连接失败");
+      setStatus("disconnected");
+    };
+    socket.onclose = () => {
+      setStatus("disconnected");
+      loadSessions();
+    };
+  }
+
+  function disconnect() {
+    socketRef.current?.close();
+  }
+
+  function submitCommand(event) {
+    event.preventDefault();
+    if (!command.trim() || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    socketRef.current.send(`${command}\r`);
+    setCommand("");
+  }
+
+  async function loadSessions() {
+    try {
+      const data = await api("/api/system/terminal/sessions/list", { method: "POST" });
+      setSessions(data.sessions || []);
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  async function readSession(name) {
+    try {
+      const data = await api("/api/system/terminal/sessions/read", {
+        method: "POST",
+        body: JSON.stringify({ name })
+      });
+      setSelectedSession(data);
+      setHistoryContent(formatTranscript(data.content || ""));
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  function formatTranscript(content) {
+    return content
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          const event = JSON.parse(line);
+          return `[${event.timestamp}] ${event.stream}: ${event.content}`;
+        } catch {
+          return line;
+        }
+      })
+      .join("\n");
+  }
+
+  useEffect(() => {
+    loadSessions();
+    connect();
+    return () => socketRef.current?.close();
+  }, []);
+
+  useEffect(() => {
+    if (outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
+  }, [output]);
+
+  return (
+    <section className="page-section terminal-section">
+      <div className="terminal-shell">
+        <div className="terminal-toolbar">
+          <span className={`terminal-status ${status}`}>{status === "connected" ? "已连接" : "未连接"}</span>
+          <div className="terminal-actions">
+            <button className="secondary-button" onClick={connect} disabled={status === "connected"}>
+              <PlugZap size={17} />
+              连接
+            </button>
+            <button className="secondary-button" onClick={disconnect} disabled={status !== "connected"}>
+              断开
+            </button>
+          </div>
+        </div>
+        <pre className="terminal-output" ref={outputRef} data-testid="terminal-output">
+          {output || "正在连接终端..."}
+        </pre>
+        <form className="terminal-input-row" onSubmit={submitCommand}>
+          <input
+            value={command}
+            onChange={(event) => setCommand(event.target.value)}
+            placeholder="输入命令后回车"
+            disabled={status !== "connected"}
+          />
+          <button className="secondary-button primary-action" type="submit" disabled={status !== "connected"}>
+            <Send size={17} />
+            发送
+          </button>
+        </form>
+        {error ? <div className="form-error">{error}</div> : null}
+      </div>
+      <aside className="terminal-history">
+        <div className="terminal-history-heading">
+          <History size={17} />
+          <span>历史会话</span>
+          <button className="secondary-button" onClick={loadSessions}>
+            <RefreshCw size={16} />
+            刷新
+          </button>
+        </div>
+        <div className="terminal-session-list">
+          {sessions.length ? (
+            sessions.map((session) => (
+              <button
+                key={session.name}
+                className={selectedSession?.name === session.name ? "active" : ""}
+                onClick={() => readSession(session.name)}
+              >
+                <span>{session.name}</span>
+                <small>{session.modified_at}</small>
+              </button>
+            ))
+          ) : (
+            <div className="empty-state">暂无终端历史</div>
+          )}
+        </div>
+        <pre className="terminal-history-content">
+          {historyContent || "选择历史会话后查看转录"}
+        </pre>
+      </aside>
+    </section>
+  );
+}
+
 function AppShell({ onLogout }) {
   const [path, setPath] = useState(window.location.pathname);
   const navItems = useMemo(
     () => [
       { path: "/", label: "首页" },
       { path: "/proxy", label: "Hermes UI" },
-      { path: "/system", label: "系统" }
+      { path: "/system", label: "系统" },
+      { path: "/terminal", label: "终端" }
     ],
     []
   );
@@ -462,6 +636,9 @@ function AppShell({ onLogout }) {
     }
     if (path === "/system") {
       return <SystemPage onUnauthorized={unauthorized} />;
+    }
+    if (path === "/terminal") {
+      return <TerminalPage onUnauthorized={unauthorized} />;
     }
     return <HomePage />;
   }
