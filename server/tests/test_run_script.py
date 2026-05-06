@@ -25,6 +25,15 @@ def test_prod_git_commands_use_command_scoped_safe_directory() -> None:
     assert "StrictHostKeyChecking" not in script
 
 
+def test_python_dependency_install_retries_transient_pip_failures() -> None:
+    script = read_run_sh()
+
+    assert "PYTHON_DEPS_INSTALL_ATTEMPTS=3" in script
+    assert 'pip" install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 60 -e "$target"' in script
+    assert "pip install failed; retrying" in script
+    assert 'pip install failed after ${PYTHON_DEPS_INSTALL_ATTEMPTS} attempts.' in script
+
+
 def test_prod_service_file_compare_avoids_sudo_when_unchanged() -> None:
     script = read_run_sh()
 

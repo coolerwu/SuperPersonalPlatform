@@ -7,6 +7,7 @@ SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 PROD_GIT_URL="https://github.com/coolerwu/SuperPersonalPlatform.git"
 PROD_GIT_BRANCH="main"
 PROD_GIT_PULL_ATTEMPTS=3
+PYTHON_DEPS_INSTALL_ATTEMPTS=3
 
 usage() {
   cat <<USAGE
@@ -132,7 +133,20 @@ ensure_venv() {
 install_python_deps() {
   local target="$1"
   cd "$SCRIPT_DIR"
-  "${SCRIPT_DIR}/.venv/bin/pip" install -e "$target"
+  local attempt delay=2
+  for ((attempt = 1; attempt <= PYTHON_DEPS_INSTALL_ATTEMPTS; attempt += 1)); do
+    echo "Installing Python dependencies (${target}), attempt ${attempt}/${PYTHON_DEPS_INSTALL_ATTEMPTS}"
+    if "${SCRIPT_DIR}/.venv/bin/pip" install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 60 -e "$target"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt "$PYTHON_DEPS_INSTALL_ATTEMPTS" ]]; then
+      echo "pip install failed; retrying in ${delay}s..." >&2
+      sleep "$delay"
+      delay=$((delay * 2))
+    fi
+  done
+  echo "pip install failed after ${PYTHON_DEPS_INSTALL_ATTEMPTS} attempts." >&2
+  return 1
 }
 
 resolve_service_user() {

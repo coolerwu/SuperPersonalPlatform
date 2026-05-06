@@ -9,7 +9,9 @@ import {
   ChevronsLeft,
   ChevronsRight,
   FileText,
+  Globe2,
   History,
+  Home,
   Image as ImageIcon,
   List,
   LogOut,
@@ -19,6 +21,7 @@ import {
   Save,
   ScrollText,
   Send,
+  Settings,
   ShieldCheck,
   TerminalSquare,
   Trash2,
@@ -93,9 +96,26 @@ function LoginPage({ onLogin }) {
   );
 }
 
-function HomePage() {
+function HomePage({ onNavigate }) {
   return (
     <section className="page-section">
+      <div className="home-hero">
+        <div>
+          <span>控制台概览</span>
+          <h2>个人平台运行中</h2>
+          <p>统一入口承载 Agent、终端、系统配置和 Hermes UI。</p>
+        </div>
+        <div className="home-actions">
+          <button className="secondary-button primary-action" onClick={() => onNavigate("/agents")}>
+            <Bot size={17} />
+            打开 Agent
+          </button>
+          <button className="secondary-button" onClick={() => onNavigate("/system")}>
+            <Settings size={17} />
+            系统设置
+          </button>
+        </div>
+      </div>
       <div className="metrics-grid">
         <article className="metric-card">
           <span>访问模式</span>
@@ -112,6 +132,23 @@ function HomePage() {
           <strong>8888</strong>
           <p>统一入口为 http://localhost:8888。</p>
         </article>
+      </div>
+      <div className="quick-grid">
+        <button className="quick-card" onClick={() => onNavigate("/terminal")}>
+          <TerminalSquare size={18} />
+          <span>终端</span>
+          <p>打开认证后的后端 PTY 会话。</p>
+        </button>
+        <button className="quick-card" onClick={() => onNavigate("/proxy")}>
+          <Globe2 size={18} />
+          <span>Hermes UI</span>
+          <p>进入同源代理后的上游应用。</p>
+        </button>
+        <button className="quick-card" onClick={() => onNavigate("/system")}>
+          <ScrollText size={18} />
+          <span>日志</span>
+          <p>查看统一平台日志和更新输出。</p>
+        </button>
       </div>
     </section>
   );
@@ -1155,11 +1192,11 @@ function AppShell({ onLogout }) {
   const [path, setPath] = useState(window.location.pathname);
   const navItems = useMemo(
     () => [
-      { path: "/", label: "首页" },
-      { path: "/agents", label: "Agent" },
-      { path: "/terminal", label: "终端" },
-      { path: "/proxy", label: "Hermes UI" },
-      { path: "/system", label: "系统" }
+      { path: "/", label: "首页", icon: Home },
+      { path: "/agents", label: "Agent", icon: Bot },
+      { path: "/terminal", label: "终端", icon: TerminalSquare },
+      { path: "/proxy", label: "Hermes UI", icon: Globe2 },
+      { path: "/system", label: "系统", icon: Settings }
     ],
     []
   );
@@ -1200,7 +1237,7 @@ function AppShell({ onLogout }) {
     if (path === "/terminal") {
       return <TerminalPage onUnauthorized={unauthorized} />;
     }
-    return <HomePage />;
+    return <HomePage onNavigate={navigate} />;
   }
 
   return (
@@ -1211,15 +1248,19 @@ function AppShell({ onLogout }) {
           <span>超级个人平台</span>
         </div>
         <nav>
-          {navItems.map((item) => (
-            <button
-              key={item.path}
-              className={path === item.path ? "active" : ""}
-              onClick={() => navigate(item.path)}
-            >
-              {item.label}
-            </button>
-          ))}
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.path}
+                className={path === item.path ? "active" : ""}
+                onClick={() => navigate(item.path)}
+              >
+                <Icon size={18} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
         <button className="logout-button" onClick={logout}>
           <LogOut size={17} />
