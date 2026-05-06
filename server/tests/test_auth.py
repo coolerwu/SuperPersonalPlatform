@@ -33,6 +33,33 @@ def test_login_rejects_invalid_token(tmp_path) -> None:
     assert client.get("/api/auth/me").json() == {"authenticated": False}
 
 
+def test_login_uses_current_workspace_config_token_without_restart(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "auth:\n  token: secret-token\nproxy:\n  upstream_base_url: http://example.test/\n",
+        encoding="utf-8",
+    )
+    client = make_client(tmp_path)
+
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+
+    config_path.write_text(
+        "auth:\n  token: 1b55aa21-4359-447f-98c8-b6154c86f8b9\n"
+        "proxy:\n  upstream_base_url: http://example.test/\n",
+        encoding="utf-8",
+    )
+
+    assert client.get("/api/auth/me").json() == {"authenticated": False}
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 401
+    response = client.post(
+        "/api/auth/login",
+        json={"token": "1b55aa21-4359-447f-98c8-b6154c86f8b9"},
+    )
+
+    assert response.status_code == 200
+    assert client.get("/api/auth/me").json() == {"authenticated": True}
+
+
 def test_logout_clears_session(tmp_path) -> None:
     client = make_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})

@@ -2,7 +2,10 @@ from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from server.adapter.dependencies import AppContainer
+from server.domain.auth import AuthToken
 from server.domain.errors import InvalidTokenError
+from server.infrastructure.config import load_settings
+from server.infrastructure.session import SessionCodec
 
 
 SESSION_COOKIE = "spp_session"
@@ -17,8 +20,9 @@ def create_auth_router(container: AppContainer) -> APIRouter:
 
     @router.post("/login")
     def login(payload: LoginRequest, response: Response) -> dict[str, bool]:
+        session_codec = current_session_codec(container)
         try:
-            container.auth_service.login(payload.token)
+            AuthToken(session_codec.secret).verify(payload.token)
         except InvalidTokenError as exc:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -27,7 +31,7 @@ def create_auth_router(container: AppContainer) -> APIRouter:
 
         response.set_cookie(
             SESSION_COOKIE,
-            container.session_codec.issue(),
+            session_codec.issue(),
             httponly=True,
             samesite="lax",
             secure=False,
@@ -43,9 +47,17 @@ def create_auth_router(container: AppContainer) -> APIRouter:
     @router.get("/me")
     def me(request: Request) -> dict[str, bool]:
         return {
-            "authenticated": container.session_codec.verify(
+            "authenticated": current_session_codec(container).verify(
                 request.cookies.get(SESSION_COOKIE)
             )
         }
 
     return router
+
+
+def current_session_codec(container: AppContainer) -> SessionCodec:
+    try:
+        settings = load_settings(container.config_file_service.config_path)
+    except Exception:
+        return container.session_codec
+    return SessionCodec(settings.auth.token)

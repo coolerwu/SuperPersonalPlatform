@@ -9,12 +9,10 @@ from fastapi import (
     status,
 )
 
-from server.adapter.auth_routes import SESSION_COOKIE
+from server.adapter.auth_routes import SESSION_COOKIE, current_session_codec
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
 from server.app.terminal_session_service import InvalidTerminalSessionError
-from server.infrastructure.config import load_settings
-from server.infrastructure.session import SessionCodec
 
 
 class TerminalSessionReadRequest(BaseModel):
@@ -111,8 +109,4 @@ def create_terminal_router(container: AppContainer) -> APIRouter:
 
 
 def _verify_current_session(container: AppContainer, session_cookie: str | None) -> bool:
-    try:
-        settings = load_settings(container.config_file_service.config_path)
-    except Exception:
-        return False
-    return SessionCodec(settings.auth.token).verify(session_cookie)
+    return current_session_codec(container).verify(session_cookie)

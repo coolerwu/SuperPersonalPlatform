@@ -19,7 +19,7 @@
 
 ## Implemented Capabilities
 
-- Single-token login using the active workspace `config.yaml` at `auth.token`.
+- Single-token login using the active workspace `config.yaml` at `auth.token`. Login, auth-state checks, protected HTTP routes, and terminal WebSocket messages re-read the current workspace token, so changing `config.yaml` invalidates old sessions and allows the new token without a service restart.
 - Login writes an HttpOnly cookie. Logout clears it.
 - Auth state is available through `GET /api/auth/me`.
 - `/api/proxy/site/` reverse-proxies the configured upstream site under `proxy.upstream_base_url`.
@@ -40,7 +40,7 @@
 - Unknown authenticated `/api/*` requests fall back to the upstream proxy after platform-owned API routes are checked, which supports embedded apps that call root-relative APIs such as `/api/status`.
 - Known upstream root asset prefixes `/fonts/*`, `/ds-assets/*`, and `/dashboard-plugins/*` also fall back to the upstream proxy so embedded absolute asset paths do not hit the platform SPA fallback.
 - Workspace `config.yaml` should stay local and must not be committed.
-- The system page edits the active workspace `config.yaml` in place. Saved YAML is parsed and validated against required runtime settings before it replaces the file.
+- The system page edits the active workspace `config.yaml` in place. Saved YAML is parsed and validated against required runtime settings before it replaces the file. Changing `auth.token` takes effect immediately for login and route authentication; existing cookies issued with the old token no longer authenticate.
 - Workspace `logs/` contains unified platform log files named `platform-YYYY-MM-DD.log`; logs are read-only in the UI, default to the latest file, scroll to the tail when loaded, and are retained for 3 days by the system log service. The unified log includes update-service output and `/api/*` request summaries with method, path, status, duration, and client, but never request bodies.
 - Workspace `terminal/sessions/` contains durable JSONL terminal transcripts named `terminal-YYYY-MM-DDTHHMMSS-<id>.jsonl`. Each record stores timestamp, stream (`input`, `output`, or `system`), and content.
 - Workspace `.run/` contains runtime-only files such as update locks and generated service files, not durable logs or terminal history. If `.run/` is missing in production, it has no effect until an operation needs it; production startup or web-triggered update creates it automatically. Web-triggered update locks record the background update process PID, and stale legacy or dead-process locks are removed before starting a new update.
