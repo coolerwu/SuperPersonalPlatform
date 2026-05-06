@@ -5,19 +5,24 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import {
   ArrowRight,
+  Bot,
   ChevronsLeft,
   ChevronsRight,
   FileText,
   History,
+  Image as ImageIcon,
   List,
   LogOut,
   PlugZap,
+  Plus,
   RefreshCw,
   Save,
   ScrollText,
+  Send,
   ShieldCheck,
   TerminalSquare,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
 import "./styles.css";
 
@@ -131,6 +136,499 @@ function ProxyPage() {
           title="Hermes UI"
         />
       </div>
+    </section>
+  );
+}
+
+function AgentPage({ onUnauthorized }) {
+  const [activeTab, setActiveTab] = useState("chat");
+  const [options, setOptions] = useState(null);
+  const [config, setConfig] = useState(null);
+  const [agentId, setAgentId] = useState("");
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState([]);
+  const [status, setStatus] = useState("disconnected");
+  const [loading, setLoading] = useState(true);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [configError, setConfigError] = useState("");
+  const [configStatus, setConfigStatus] = useState("");
+  const socketRef = useRef(null);
+  const messageListRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  function handleApiError(err) {
+    if (err.status === 401 || err.message === "Authentication required") {
+      onUnauthorized();
+      return true;
+    }
+    setError(err.message);
+    return false;
+  }
+
+  function websocketUrl() {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}/api/agents/chat/connect`;
+  }
+
+  async function loadOptions() {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await api("/api/agents/options");
+      setOptions(data);
+      setAgentId(data.default_agent_id || data.agents?.[0]?.id || "");
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadAgentConfig() {
+    setConfigLoading(true);
+    setConfigError("");
+    setConfigStatus("");
+    try {
+      const data = await api("/api/agents/config");
+      setConfig(data);
+    } catch (err) {
+      handleApiError(err);
+      setConfigError(err.message);
+    } finally {
+      setConfigLoading(false);
+    }
+  }
+
+  function connect() {
+    if (socketRef.current && socketRef.current.readyState <= WebSocket.OPEN) {
+      return;
+    }
+    setError("");
+    setStatus("connecting");
+    const socket = new WebSocket(websocketUrl());
+    socketRef.current = socket;
+    socket.onopen = () => setStatus("connected");
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === "status") {
+        setStatus(message.status === "running" ? "running" : "connected");
+      }
+      if (message.type === "assistant_message") {
+        setMessages((items) => [
+          ...items.filter((item) => item.role !== "pending"),
+          { role: "assistant", content: message.content || "" }
+        ]);
+        setSending(false);
+        setStatus("connected");
+      }
+      if (message.type === "error") {
+        setMessages((items) => items.filter((item) => item.role !== "pending"));
+        setError(message.message || "Agent 回复失败");
+        setSending(false);
+        setStatus("connected");
+      }
+    };
+    socket.onerror = () => {
+      setError("Agent 连接失败");
+      setSending(false);
+      setStatus("disconnected");
+    };
+    socket.onclose = () => {
+      setSending(false);
+      setStatus("disconnected");
+    };
+  }
+
+  function sendMessage() {
+    const content = input.trim();
+    if ((!content && attachments.length === 0) || sending || !agentId || blocked) {
+      return;
+    }
+    if (attachments.length > 0 && !selectedAgent?.model?.supports_images) {
+      setError("当前模型不支持图片输入");
+      return;
+    }
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      connect();
+      setError("连接未就绪，请稍后重试");
+      return;
+    }
+    setError("");
+    setInput("");
+    setAttachments([]);
+    setSending(true);
+    setMessages((items) => [
+      ...items,
+      { role: "user", content, images: attachments },
+      { role: "pending", content: "生成中" }
+    ]);
+    socketRef.current.send(
+      JSON.stringify({
+        type: "message",
+        agent_id: agentId,
+        content,
+        images: attachments.map((image) => ({
+          mime_type: image.mime_type,
+          data: image.data
+        }))
+      })
+    );
+  }
+
+  function handleKeyDown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage();
+    }
+  }
+
+  useEffect(() => {
+    loadOptions();
+    loadAgentConfig();
+    connect();
+    return () => socketRef.current?.close();
+  }, []);
+
+  useEffect(() => {
+    if (messageListRef.current) {
+      messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const selectedAgent = options?.agents?.find((agent) => agent.id === agentId);
+  const canChat = Boolean(options?.agents?.length);
+  const blocked = !loading && (!canChat || !selectedAgent?.model || !selectedAgent?.model?.has_api_key);
+
+  async function addFiles(fileList) {
+    const imageFiles = Array.from(fileList || []).filter((file) =>
+      ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)
+    );
+    const nextImages = await Promise.all(
+      imageFiles.map(
+        (file) =>
+          new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = String(reader.result || "");
+              resolve({
+                id: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
+                name: file.name,
+                mime_type: file.type,
+                data: result.split(",")[1] || "",
+                preview: result
+              });
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          })
+      )
+    );
+    setAttachments((items) => [...items, ...nextImages]);
+  }
+
+  function handlePaste(event) {
+    const files = Array.from(event.clipboardData?.files || []);
+    if (files.some((file) => file.type.startsWith("image/"))) {
+      addFiles(files);
+    }
+  }
+
+  function updateModel(index, field, value) {
+    setConfig((current) => ({
+      ...current,
+      models: current.models.map((model, modelIndex) =>
+        modelIndex === index ? { ...model, [field]: value } : model
+      )
+    }));
+  }
+
+  function updateAgent(index, field, value) {
+    setConfig((current) => ({
+      ...current,
+      agents: current.agents.map((agent, agentIndex) =>
+        agentIndex === index ? { ...agent, [field]: value } : agent
+      )
+    }));
+  }
+
+  function addModel() {
+    const id = `model-${(config?.models?.length || 0) + 1}`;
+    setConfig((current) => ({
+      ...current,
+      default_model_id: current.default_model_id || id,
+      models: [
+        ...current.models,
+        {
+          id,
+          name: "新模型",
+          base_url: "https://api.openai.com/v1",
+          model: "",
+          api_key: "",
+          temperature: 0.7,
+          supports_images: false,
+          has_api_key: false,
+          api_key_mask: ""
+        }
+      ]
+    }));
+  }
+
+  function addAgent() {
+    const id = `agent-${(config?.agents?.length || 0) + 1}`;
+    setConfig((current) => ({
+      ...current,
+      default_agent_id: current.default_agent_id || id,
+      agents: [
+        ...current.agents,
+        {
+          id,
+          name: "新 Agent",
+          model_id: current.default_model_id || current.models?.[0]?.id || "",
+          system_prompt: ""
+        }
+      ]
+    }));
+  }
+
+  async function saveAgentConfig() {
+    setConfigSaving(true);
+    setConfigError("");
+    setConfigStatus("");
+    try {
+      await api("/api/agents/config", {
+        method: "PUT",
+        body: JSON.stringify({
+          default_model_id: config.default_model_id || config.models?.[0]?.id || "",
+          default_agent_id: config.default_agent_id || config.agents?.[0]?.id || "",
+          models: config.models.map((model) => ({
+            id: model.id,
+            name: model.name,
+            base_url: model.base_url,
+            model: model.model,
+            api_key: model.api_key || "",
+            temperature: model.temperature === "" ? null : Number(model.temperature),
+            supports_images: Boolean(model.supports_images)
+          })),
+          agents: config.agents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            model_id: agent.model_id,
+            system_prompt: agent.system_prompt
+          }))
+        })
+      });
+      setConfigStatus("Agent 配置已保存");
+      await loadAgentConfig();
+      await loadOptions();
+    } catch (err) {
+      handleApiError(err);
+      setConfigError(err.message);
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  return (
+    <section className="page-section agent-section">
+      <div className="tab-bar" role="tablist" aria-label="Agent">
+        <button className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>
+          <Bot size={16} />
+          对话
+        </button>
+        <button className={activeTab === "config" ? "active" : ""} onClick={() => setActiveTab("config")}>
+          <Save size={16} />
+          配置
+        </button>
+      </div>
+      {activeTab === "chat" ? (
+        <div className="agent-chat-shell">
+          <div className="agent-chat-topbar">
+            <select
+              aria-label="Agent"
+              value={agentId}
+              onChange={(event) => setAgentId(event.target.value)}
+              disabled={loading || !canChat}
+            >
+              {(options?.agents || []).map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name}
+                </option>
+              ))}
+            </select>
+            <button className="secondary-button" onClick={connect} disabled={status === "connected" || loading}>
+              <PlugZap size={17} />
+              {status === "disconnected" ? "重连" : "已连接"}
+            </button>
+            <span className={`terminal-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
+              {status === "running" ? "生成中" : status === "connected" ? "已连接" : "未连接"}
+            </span>
+          </div>
+          <div className="agent-message-list" ref={messageListRef}>
+            {loading ? <div className="empty-state">正在加载 Agent 配置</div> : null}
+            {!loading && error && !options ? <div className="error-state">{error}</div> : null}
+            {!loading && !options?.agents?.length ? <div className="empty-state">请先在配置页添加 Agent</div> : null}
+            {!loading && selectedAgent && !selectedAgent.model ? <div className="empty-state">Agent 未配置模型</div> : null}
+            {!loading && selectedAgent?.model && !selectedAgent.model.has_api_key ? (
+              <div className="empty-state">模型 API Key 不可用</div>
+            ) : null}
+            {!loading && !blocked && messages.length === 0 ? <div className="empty-state">开始对话</div> : null}
+            {messages.map((message, index) => (
+              <div key={`${message.role}-${index}`} className={`agent-message ${message.role}`}>
+                <span>{message.role === "user" ? "你" : message.role === "assistant" ? "Agent" : ""}</span>
+                {message.content ? <p>{message.content}</p> : null}
+                {message.images?.length ? (
+                  <div className="agent-message-images">
+                    {message.images.map((image) => (
+                      <img key={image.id} src={image.preview} alt={image.name || "上传图片"} />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          {error && options ? <div className="form-error">{error}</div> : null}
+          <div className="agent-input-row">
+            {attachments.length ? (
+              <div className="agent-attachments">
+                {attachments.map((image) => (
+                  <div key={image.id} className="agent-attachment">
+                    <img src={image.preview} alt={image.name} />
+                    <button
+                      type="button"
+                      aria-label={`移除 ${image.name}`}
+                      onClick={() => setAttachments((items) => items.filter((item) => item.id !== image.id))}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="agent-composer">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                multiple
+                hidden
+                onChange={(event) => {
+                  addFiles(event.target.files);
+                  event.target.value = "";
+                }}
+              />
+              <button
+                className="secondary-button agent-icon-button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={loading || !canChat || sending}
+                aria-label="添加图片"
+              >
+                <ImageIcon size={17} />
+              </button>
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                placeholder={canChat ? "输入消息，Enter 发送，Shift+Enter 换行" : "Agent 未配置"}
+                disabled={loading || blocked || sending}
+              />
+              <button
+                className="secondary-button primary-action"
+                onClick={sendMessage}
+                disabled={loading || blocked || sending || (!input.trim() && attachments.length === 0)}
+              >
+                <Send size={17} />
+                {sending ? "发送中" : "发送"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {activeTab === "config" ? (
+        <div className="agent-config-panel">
+          <div className="agent-config-heading">
+            <div>
+              <span>Workspace 配置</span>
+              <p>{config?.path || "正在读取 config.yaml"}</p>
+            </div>
+            <div className="config-actions">
+              <button className="secondary-button" onClick={loadAgentConfig} disabled={configLoading}>
+                <RefreshCw size={17} />
+                重新读取
+              </button>
+              <button className="secondary-button primary-action" onClick={saveAgentConfig} disabled={!config || configSaving}>
+                <Save size={17} />
+                {configSaving ? "保存中" : "保存到 workspace"}
+              </button>
+            </div>
+          </div>
+          {configError ? <div className="form-error">{configError}</div> : null}
+          {configStatus ? <div className="status-message">{configStatus}</div> : null}
+          {config ? (
+            <>
+              <section className="agent-config-section">
+                <div className="agent-config-section-heading">
+                  <h3>模型</h3>
+                  <button className="secondary-button" onClick={addModel}>
+                    <Plus size={17} />
+                    添加模型
+                  </button>
+                </div>
+                <div className="agent-config-list">
+                  {config.models.map((model, index) => (
+                    <article className="agent-config-card" key={`${model.id}-${index}`}>
+                      <div className="agent-config-grid">
+                        <label>ID<input value={model.id} onChange={(event) => updateModel(index, "id", event.target.value)} /></label>
+                        <label>显示名<input value={model.name} onChange={(event) => updateModel(index, "name", event.target.value)} /></label>
+                        <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} /></label>
+                        <label>Model<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
+                        <label>API Key<input type="password" placeholder={model.api_key_mask || "留空保留旧 key"} value={model.api_key || ""} onChange={(event) => updateModel(index, "api_key", event.target.value)} /></label>
+                        <label>Temperature<input type="number" step="0.1" value={model.temperature ?? ""} onChange={(event) => updateModel(index, "temperature", event.target.value)} /></label>
+                      </div>
+                      <div className="agent-config-card-actions">
+                        <label className="agent-checkbox"><input type="checkbox" checked={Boolean(model.supports_images)} onChange={(event) => updateModel(index, "supports_images", event.target.checked)} />支持图片</label>
+                        <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, default_model_id: model.id }))}>设为默认</button>
+                        <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, models: current.models.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+              <section className="agent-config-section">
+                <div className="agent-config-section-heading">
+                  <h3>Agent</h3>
+                  <button className="secondary-button" onClick={addAgent}>
+                    <Plus size={17} />
+                    添加 Agent
+                  </button>
+                </div>
+                <div className="agent-config-list">
+                  {config.agents.map((agent, index) => (
+                    <article className="agent-config-card" key={`${agent.id}-${index}`}>
+                      <div className="agent-config-grid">
+                        <label>ID<input value={agent.id} onChange={(event) => updateAgent(index, "id", event.target.value)} /></label>
+                        <label>名称<input value={agent.name} onChange={(event) => updateAgent(index, "name", event.target.value)} /></label>
+                        <label>绑定模型<select value={agent.model_id || ""} onChange={(event) => updateAgent(index, "model_id", event.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></label>
+                      </div>
+                      <label className="agent-prompt-label">系统提示词<textarea value={agent.system_prompt} onChange={(event) => updateAgent(index, "system_prompt", event.target.value)} /></label>
+                      <div className="agent-config-card-actions">
+                        <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, default_agent_id: agent.id }))}>设为默认</button>
+                        <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, agents: current.agents.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </>
+          ) : (
+            <div className="empty-state">正在加载 Agent 配置</div>
+          )}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -658,6 +1156,7 @@ function AppShell({ onLogout }) {
   const navItems = useMemo(
     () => [
       { path: "/", label: "首页" },
+      { path: "/agents", label: "Agent" },
       { path: "/terminal", label: "终端" },
       { path: "/proxy", label: "Hermes UI" },
       { path: "/system", label: "系统" }
@@ -691,6 +1190,9 @@ function AppShell({ onLogout }) {
   function renderPage() {
     if (path === "/proxy") {
       return <ProxyPage />;
+    }
+    if (path === "/agents") {
+      return <AgentPage onUnauthorized={unauthorized} />;
     }
     if (path === "/system") {
       return <SystemPage onUnauthorized={unauthorized} />;

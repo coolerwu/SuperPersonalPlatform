@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from server.app.agent_chat_service import AgentChatService
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
@@ -18,3 +19,4 @@ class AppContainer:
     system_update_service: SystemUpdateService
     terminal_session_service: TerminalSessionService
     session_codec: SessionCodec
+    agent_chat_service: AgentChatService | None = None

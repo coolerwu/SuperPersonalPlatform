@@ -20,7 +20,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -751,6 +752,274 @@ button {
   min-height: 100%;
 }
 
+.agent-section {
+  max-width: 1120px;
+}
+
+.agent-chat-topbar select,
+.agent-config-card input,
+.agent-config-card select {
+  background: #fdfcf9;
+  border: 1px solid #d5d2c8;
+  border-radius: 8px;
+  color: #263532;
+  min-height: 42px;
+  padding: 0 10px;
+  width: 100%;
+}
+
+.agent-chat-topbar select:focus,
+.agent-config-card input:focus,
+.agent-config-card select:focus,
+.agent-config-card textarea:focus,
+.agent-input-row textarea:focus {
+  border-color: #244f49;
+  outline: 3px solid rgba(36, 79, 73, 0.14);
+}
+
+.agent-chat-shell {
+  background: #ffffff;
+  border: 1px solid #e0ddd4;
+  border-radius: 8px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  height: clamp(560px, calc(100vh - 150px), 820px);
+  overflow: hidden;
+}
+
+.agent-chat-topbar {
+  align-items: center;
+  border-bottom: 1px solid #e0ddd4;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 320px) auto auto;
+  min-height: 48px;
+  padding: 12px 14px;
+}
+
+.agent-message-list {
+  align-content: start;
+  background: #f8f7f3;
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+  padding: 18px;
+}
+
+.agent-message {
+  display: grid;
+  gap: 5px;
+  max-width: 78%;
+}
+
+.agent-message span {
+  color: #65716d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agent-message p {
+  border: 1px solid #e0ddd4;
+  border-radius: 8px;
+  line-height: 1.6;
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding: 12px 14px;
+  white-space: pre-wrap;
+}
+
+.agent-message.user {
+  justify-self: end;
+}
+
+.agent-message.user span {
+  text-align: right;
+}
+
+.agent-message.user p {
+  background: #244f49;
+  border-color: #244f49;
+  color: #ffffff;
+}
+
+.agent-message.assistant p {
+  background: #ffffff;
+  color: #263532;
+}
+
+.agent-message.pending p {
+  background: #fff8ed;
+  border-color: #ead1ac;
+  color: #8c5c16;
+}
+
+.agent-input-row {
+  border-top: 1px solid #e0ddd4;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.agent-composer {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.agent-icon-button {
+  min-width: 44px;
+  padding: 0 12px;
+}
+
+.agent-input-row textarea {
+  border: 1px solid #d5d2c8;
+  border-radius: 8px;
+  line-height: 1.45;
+  max-height: 110px;
+  min-height: 70px;
+  min-width: 0;
+  overflow: auto;
+  padding: 11px 12px;
+  resize: none;
+}
+
+.agent-attachments,
+.agent-message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-attachment {
+  border: 1px solid #d5d2c8;
+  border-radius: 8px;
+  height: 72px;
+  overflow: hidden;
+  position: relative;
+  width: 72px;
+}
+
+.agent-attachment img,
+.agent-message-images img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.agent-attachment button {
+  align-items: center;
+  background: rgba(23, 32, 42, 0.78);
+  border: 0;
+  border-radius: 99px;
+  color: #ffffff;
+  display: flex;
+  height: 24px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 24px;
+}
+
+.agent-message-images img {
+  border: 1px solid #d5d2c8;
+  border-radius: 8px;
+  height: 120px;
+  width: 120px;
+}
+
+.agent-config-panel {
+  background: #ffffff;
+  border: 1px solid #e0ddd4;
+  border-radius: 8px;
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.agent-config-heading,
+.agent-config-section-heading,
+.agent-config-card-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.agent-config-heading span {
+  color: #6c7673;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.agent-config-heading p {
+  color: #65716d;
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-config-section {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-config-section-heading h3 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.agent-config-list {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-config-card {
+  border: 1px solid #e0ddd4;
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.agent-config-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.agent-config-card label {
+  color: #485652;
+  display: grid;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.agent-checkbox {
+  align-items: center;
+  display: inline-flex !important;
+  gap: 8px;
+}
+
+.agent-checkbox input {
+  height: 16px;
+  width: 16px;
+}
+
+.agent-prompt-label textarea {
+  border: 1px solid #d5d2c8;
+  border-radius: 8px;
+  line-height: 1.45;
+  min-height: 130px;
+  padding: 11px 12px;
+  resize: vertical;
+  width: 100%;
+}
+
 @media (max-width: 820px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -836,5 +1105,24 @@ button {
 
   .terminal-section.history-collapsed {
     grid-template-columns: 1fr;
+  }
+
+  .agent-chat-topbar,
+  .agent-composer,
+  .agent-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-chat-topbar .secondary-button,
+  .agent-composer .secondary-button {
+    width: 100%;
+  }
+
+  .agent-message {
+    max-width: 92%;
+  }
+
+  .agent-chat-shell {
+    height: clamp(540px, calc(100vh - 180px), 760px);
   }
 }

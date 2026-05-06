@@ -1,8 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from server.domain.agents import (
+    AgentDefinition,
+    AgentPlatformDefinition,
+    ModelDefinition,
+)
 
 
 @dataclass(frozen=True)
@@ -26,6 +32,14 @@ class Settings:
     auth: AuthConfig
     proxy: ProxyConfig
     server: ServerConfig
+    agent_platform: AgentPlatformDefinition = field(
+        default_factory=lambda: AgentPlatformDefinition(
+            models=(),
+            default_model_id="",
+            agents=(),
+            default_agent_id="",
+        )
+    )
 
 
 def load_settings(config_path: str | Path) -> Settings:
@@ -58,4 +72,56 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
             host=str(server_raw.get("host") or "0.0.0.0"),
             port=int(server_raw.get("port") or 8888),
         ),
+        agent_platform=parse_agent_platform(raw),
+    )
+
+
+def parse_agent_platform(raw: dict[str, Any]) -> AgentPlatformDefinition:
+    llm_raw = raw.get("llm") or {}
+    agents_raw = raw.get("agents") or {}
+    models_raw = llm_raw.get("models") or []
+    definitions_raw = agents_raw.get("definitions") or []
+    if not isinstance(models_raw, list):
+        raise ValueError("llm.models must be a list")
+    if not isinstance(definitions_raw, list):
+        raise ValueError("agents.definitions must be a list")
+
+    models = tuple(parse_model_definition(item) for item in models_raw)
+    agents = tuple(parse_agent_definition(item) for item in definitions_raw)
+    default_model_id = str(llm_raw.get("default_model_id") or (models[0].id if models else "")).strip()
+    default_agent_id = str(
+        agents_raw.get("default_agent_id") or (agents[0].id if agents else "")
+    ).strip()
+    return AgentPlatformDefinition(
+        models=models,
+        default_model_id=default_model_id,
+        agents=agents,
+        default_agent_id=default_agent_id,
+    )
+
+
+def parse_model_definition(raw: Any) -> ModelDefinition:
+    if not isinstance(raw, dict):
+        raise ValueError("llm.models[] must be an object")
+    temperature_raw = raw.get("temperature")
+    return ModelDefinition(
+        id=str(raw.get("id") or "").strip(),
+        name=str(raw.get("name") or "").strip(),
+        base_url=str(raw.get("base_url") or "").strip(),
+        api_key=str(raw.get("api_key") or "").strip(),
+        model=str(raw.get("model") or "").strip(),
+        temperature=float(temperature_raw) if temperature_raw is not None else None,
+        supports_images=bool(raw.get("supports_images", False)),
+    )
+
+
+def parse_agent_definition(raw: Any) -> AgentDefinition:
+    if not isinstance(raw, dict):
+        raise ValueError("agents.definitions[] must be an object")
+    model_id = raw.get("model_id")
+    return AgentDefinition(
+        id=str(raw.get("id") or "").strip(),
+        name=str(raw.get("name") or "").strip(),
+        system_prompt=str(raw.get("system_prompt") or "").strip(),
+        model_id=str(model_id).strip() if model_id is not None else None,
     )

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 
+from server.adapter.agent_routes import create_agent_router
 from server.adapter.auth_routes import create_auth_router
 from server.adapter.dependencies import AppContainer
 from server.adapter.proxy_routes import (
@@ -15,6 +16,7 @@ from server.adapter.static_routes import mount_frontend
 from server.adapter.system_routes import create_system_router
 from server.adapter.terminal_routes import create_terminal_router
 from server.app.auth_service import AuthService
+from server.app.agent_chat_service import AgentChatService
 from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
@@ -23,6 +25,7 @@ from server.app.terminal_session_service import TerminalSessionService
 from server.domain.auth import AuthToken
 from server.infrastructure.config import Settings, load_settings
 from server.infrastructure.http_proxy_gateway import HttpProxyGateway
+from server.infrastructure.langchain_llm_adapter import LangChainOpenAICompatibleAdapter
 from server.infrastructure.session import SessionCodec
 
 
@@ -46,6 +49,10 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         ),
         terminal_session_service=TerminalSessionService(active_workspace, project_root),
         session_codec=SessionCodec(settings.auth.token),
+        agent_chat_service=AgentChatService(
+            active_workspace / "config.yaml",
+            LangChainOpenAICompatibleAdapter(),
+        ),
     )
 
 
@@ -82,6 +89,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     app = FastAPI(title="Super Personal Platform")
     install_request_logging(app, container)
     app.include_router(create_auth_router(container))
+    app.include_router(create_agent_router(container))
     app.include_router(create_proxy_router(container))
     app.include_router(create_system_router(container))
     app.include_router(create_terminal_router(container))

@@ -5,3 +5,20 @@ proxy:
 server:
   host: "0.0.0.0"
   port: 8888
+llm:
+  default_model_id: "default"
+  models:
+    - id: "default"
+      name: "默认模型"
+      base_url: "https://api.openai.com/v1"
+      api_key: "change-me"
+      model: "gpt-4o-mini"
+      temperature: 0.7
+      supports_images: true
+agents:
+  default_agent_id: "assistant"
+  definitions:
+    - id: "assistant"
+      name: "个人助理"
+      system_prompt: "你是一个直接、可靠的个人助理。用中文简洁回答。"
+      model_id: "default"
