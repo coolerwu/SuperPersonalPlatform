@@ -1313,6 +1313,17 @@ button:disabled {
     max-width: 92%;
   }
 
+  .page-section .self-dev-three-column {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .self-dev-three-column > .self-dev-task-sidebar,
+  .self-dev-three-column > .self-dev-workbench {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 14px;
+  }
+
   .agent-chat-shell {
     height: calc(100vh - 36px);
     height: calc(100dvh - 36px);
@@ -1369,6 +1380,36 @@ button:disabled {
   .config-panel,
   .agent-config-card {
     padding: 12px;
+  }
+
+  .page-section.self-dev-section .self-dev-three-column {
+    gap: 10px;
+    padding: 0 12px 14px;
+  }
+
+  .self-dev-three-column > .self-dev-task-sidebar,
+  .self-dev-three-column > .self-dev-workbench {
+    gap: 10px;
+    padding-bottom: 10px;
+  }
+
+  .self-dev-workbench .create-task-view,
+  .self-dev-workbench .running-task-view,
+  .self-dev-workbench .review-task-view {
+    padding: 18px;
+  }
+
+  .self-dev-workbench .chat-panel .chat-messages {
+    padding: 12px;
+  }
+
+  .self-dev-workbench .chat-panel .chat-input-row {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .self-dev-detail-sidebar .detail-empty {
+    padding: 28px 16px;
   }
 
   .agent-composer {
