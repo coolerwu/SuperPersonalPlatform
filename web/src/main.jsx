@@ -2077,6 +2077,16 @@ function AppShell({ onLogout }) {
     return () => window.removeEventListener("popstate", handler);
   }, []);
 
+  useEffect(() => {
+    if (!window.matchMedia?.("(max-width: 430px)").matches) {
+      return;
+    }
+    document.querySelector(".sidebar nav button.active")?.scrollIntoView({
+      block: "nearest",
+      inline: "center"
+    });
+  }, [path]);
+
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
     onLogout();
@@ -2121,7 +2131,9 @@ function AppShell({ onLogout }) {
             return (
               <button
                 key={item.path}
+                type="button"
                 className={path === item.path ? "active" : ""}
+                aria-current={path === item.path ? "page" : undefined}
                 onClick={() => navigate(item.path)}
               >
                 <Icon size={18} />

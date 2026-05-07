@@ -1338,8 +1338,10 @@ button:disabled {
 
   .sidebar nav button {
     flex: 0 0 auto;
-    min-width: 124px;
-    scroll-snap-align: start;
+    justify-content: center;
+    min-width: 104px;
+    scroll-snap-align: center;
+    width: auto;
   }
 
   .page-section {
