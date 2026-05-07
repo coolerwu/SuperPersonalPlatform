@@ -1,9 +1,5 @@
-from pydantic import BaseModel
 from fastapi import (
     APIRouter,
-    Depends,
-    HTTPException,
-    Request,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -11,12 +7,6 @@ from fastapi import (
 
 from server.adapter.auth_routes import SESSION_COOKIE, current_session_codec
 from server.adapter.dependencies import AppContainer
-from server.adapter.security import require_authenticated
-from server.app.terminal_session_service import InvalidTerminalSessionError
-
-
-class TerminalSessionReadRequest(BaseModel):
-    name: str
 
 
 class InvalidTerminalMessageError(Exception):
@@ -28,65 +18,10 @@ class TerminalAuthenticationError(Exception):
 
 
 def create_terminal_router(container: AppContainer) -> APIRouter:
-    def require_terminal_auth(request: Request) -> None:
-        require_authenticated(request, container)
-
     router = APIRouter(
         prefix="/api/system/terminal",
         tags=["terminal"],
     )
-
-    @router.post("/sessions/list", dependencies=[Depends(require_terminal_auth)])
-    def list_sessions() -> dict[str, list[dict[str, str | int]]]:
-        return {
-            "sessions": [
-                {
-                    "name": session.name,
-                    "path": session.path,
-                    "size": session.size,
-                    "modified_at": session.modified_at,
-                }
-                for session in container.terminal_session_service.list_sessions()
-            ]
-        }
-
-    @router.post("/sessions/read", dependencies=[Depends(require_terminal_auth)])
-    def read_session(payload: TerminalSessionReadRequest) -> dict[str, str | int]:
-        try:
-            session = container.terminal_session_service.read_session(payload.name)
-        except FileNotFoundError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="终端会话不存在",
-            ) from exc
-        except InvalidTerminalSessionError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="终端会话名无效",
-            ) from exc
-        return {
-            "name": session.name,
-            "path": session.path,
-            "size": session.size,
-            "modified_at": session.modified_at,
-            "content": session.content,
-        }
-
-    @router.post("/sessions/delete", dependencies=[Depends(require_terminal_auth)])
-    def delete_session(payload: TerminalSessionReadRequest) -> dict[str, str | bool]:
-        try:
-            container.terminal_session_service.delete_session(payload.name)
-        except FileNotFoundError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="终端会话不存在",
-            ) from exc
-        except InvalidTerminalSessionError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="终端会话名无效",
-            ) from exc
-        return {"ok": True, "message": "终端历史已删除"}
 
     @router.websocket("/connect")
     async def connect_terminal(websocket: WebSocket) -> None:

@@ -68,8 +68,14 @@ class AgentSkillService:
             raise AgentConfigError("Invalid skill id")
         namespace, stem = skill_id.split(":", 1)
         if namespace == "common":
+            directory_path = self._skills_dir / "common" / stem / "SKILL.md"
+            if directory_path.exists():
+                return directory_path
             return self._skills_dir / "common" / f"{stem}.md"
         if namespace == "private":
+            directory_path = self._skills_dir / "agents" / agent.id / stem / "SKILL.md"
+            if directory_path.exists():
+                return directory_path
             return self._skills_dir / "agents" / agent.id / f"{stem}.md"
         raise AgentConfigError("Invalid skill namespace")
 

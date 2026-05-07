@@ -15,12 +15,14 @@ from server.adapter.proxy_routes import (
 from server.adapter.static_routes import mount_frontend
 from server.adapter.system_routes import create_system_router
 from server.adapter.terminal_routes import create_terminal_router
+from server.adapter.self_dev_routes import create_self_dev_router
 from server.app.auth_service import AuthService
 from server.app.agent_chat_service import AgentChatService
 from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
+from server.app.self_dev_service import SelfDevService
 from server.app.terminal_session_service import TerminalSessionService
 from server.domain.auth import AuthToken
 from server.infrastructure.config import Settings, load_settings
@@ -37,6 +39,10 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     project_root = Path(__file__).resolve().parents[2]
     active_workspace = workspace or current_workspace()
     system_log_service = SystemLogService(active_workspace)
+    agent_chat_service = AgentChatService(
+        active_workspace / "config.yaml",
+        LangChainOpenAICompatibleAdapter(),
+    )
     return AppContainer(
         auth_service=AuthService(AuthToken(settings.auth.token)),
         config_file_service=ConfigFileService(active_workspace),
@@ -49,10 +55,8 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         ),
         terminal_session_service=TerminalSessionService(active_workspace, project_root),
         session_codec=SessionCodec(settings.auth.token),
-        agent_chat_service=AgentChatService(
-            active_workspace / "config.yaml",
-            LangChainOpenAICompatibleAdapter(),
-        ),
+        agent_chat_service=agent_chat_service,
+        self_dev_service=SelfDevService(active_workspace, agent_chat_service),
     )
 
 
@@ -93,6 +97,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     app.include_router(create_proxy_router(container))
     app.include_router(create_system_router(container))
     app.include_router(create_terminal_router(container))
+    app.include_router(create_self_dev_router(container))
     app.include_router(create_api_fallback_proxy_router(container))
     app.include_router(create_root_asset_proxy_router(container))
 

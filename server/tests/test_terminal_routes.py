@@ -1,5 +1,4 @@
 import asyncio
-import json
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -26,15 +25,8 @@ class EmptyProxyGateway:
 
 
 class ReceiveOnceTerminalService:
-    async def run_interactive_session(self, receive_message, send_text) -> Path:
+    async def run_interactive_session(self, receive_message, send_text) -> None:
         await receive_message()
-        return Path("terminal/sessions/fake.jsonl")
-
-    def list_sessions(self):
-        return []
-
-    def read_session(self, name: str):
-        raise FileNotFoundError(name)
 
 
 def write_config(workspace: Path, token: str = "secret-token") -> None:
@@ -61,12 +53,12 @@ def make_client(workspace: Path, terminal_service=None) -> TestClient:
     return TestClient(app)
 
 
-def test_terminal_sessions_require_authentication(tmp_path) -> None:
+def test_terminal_history_routes_are_not_exposed(tmp_path) -> None:
     client = make_client(tmp_path)
 
     response = client.post("/api/system/terminal/sessions/list")
 
-    assert response.status_code == 401
+    assert response.status_code == 404
 
 
 def test_terminal_websocket_requires_authentication(tmp_path) -> None:
@@ -96,89 +88,7 @@ def test_terminal_websocket_rechecks_current_token_for_each_message(tmp_path) ->
             raise AssertionError("expected websocket to close after token changed")
 
 
-def test_terminal_sessions_list_and_read_workspace_transcripts(tmp_path) -> None:
-    sessions_dir = tmp_path / "terminal" / "sessions"
-    sessions_dir.mkdir(parents=True)
-    session_path = sessions_dir / "terminal-2026-05-06T143012-abcdef12.jsonl"
-    session_path.write_text(
-        '{"timestamp":"2026-05-06T14:30:12","stream":"input","content":"pwd\\n"}\n',
-        encoding="utf-8",
-    )
-    client = make_client(tmp_path)
-    client.post("/api/auth/login", json={"token": "secret-token"})
-
-    list_response = client.post("/api/system/terminal/sessions/list")
-    read_response = client.post(
-        "/api/system/terminal/sessions/read",
-        json={"name": session_path.name},
-    )
-    unsafe_response = client.post(
-        "/api/system/terminal/sessions/read",
-        json={"name": "../config.yaml"},
-    )
-
-    assert list_response.status_code == 200
-    assert list_response.json()["sessions"][0]["name"] == session_path.name
-    assert read_response.status_code == 200
-    assert "pwd" in read_response.json()["content"]
-    assert unsafe_response.status_code == 400
-
-
-def test_terminal_sessions_delete_requires_authentication(tmp_path) -> None:
-    write_config(tmp_path)
-    client = make_client(tmp_path)
-
-    response = client.post(
-        "/api/system/terminal/sessions/delete",
-        json={"name": "terminal-2026-05-06T143012-abcdef12.jsonl"},
-    )
-
-    assert response.status_code == 401
-
-
-def test_terminal_sessions_delete_removes_workspace_transcript(tmp_path) -> None:
-    sessions_dir = tmp_path / "terminal" / "sessions"
-    sessions_dir.mkdir(parents=True)
-    session_path = sessions_dir / "terminal-2026-05-06T143012-abcdef12.jsonl"
-    session_path.write_text("{}", encoding="utf-8")
-    client = make_client(tmp_path)
-    client.post("/api/auth/login", json={"token": "secret-token"})
-
-    response = client.post(
-        "/api/system/terminal/sessions/delete",
-        json={"name": session_path.name},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
-    assert not session_path.exists()
-
-
-def test_terminal_sessions_delete_rejects_unsafe_names(tmp_path) -> None:
-    client = make_client(tmp_path)
-    client.post("/api/auth/login", json={"token": "secret-token"})
-
-    response = client.post(
-        "/api/system/terminal/sessions/delete",
-        json={"name": "../config.yaml"},
-    )
-
-    assert response.status_code == 400
-
-
-def test_terminal_sessions_delete_returns_not_found(tmp_path) -> None:
-    client = make_client(tmp_path)
-    client.post("/api/auth/login", json={"token": "secret-token"})
-
-    response = client.post(
-        "/api/system/terminal/sessions/delete",
-        json={"name": "terminal-2026-05-06T143012-abcdef12.jsonl"},
-    )
-
-    assert response.status_code == 404
-
-
-def test_terminal_service_writes_interactive_transcript(tmp_path, monkeypatch) -> None:
+def test_terminal_service_runs_without_persisting_transcript(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SHELL", "/bin/sh")
     service = TerminalSessionService(tmp_path, tmp_path)
     messages = [
@@ -209,23 +119,6 @@ def test_terminal_service_writes_interactive_transcript(tmp_path, monkeypatch) -
         )
     )
 
-    session_files = list((tmp_path / "terminal" / "sessions").glob("terminal-*.jsonl"))
-    assert len(session_files) == 1
-    transcript = [
-        json.loads(line)
-        for line in session_files[0].read_text(encoding="utf-8").splitlines()
-    ]
-    assert any(
-        event["stream"] == "input" and "codex-terminal-test" in event["content"]
-        for event in transcript
-    )
-    assert any(
-        event["stream"] == "output" and "codex-terminal-test" in event["content"]
-        for event in transcript
-    )
-    assert any(
-        event["stream"] == "system" and "resize cols=120 rows=34" in event["content"]
-        for event in transcript
-    )
+    assert not (tmp_path / "terminal" / "sessions").exists()
     assert any("codex-terminal-test" in output for output in outputs)
     assert resizes[0][1:] == (120, 34)

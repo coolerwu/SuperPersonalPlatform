@@ -50,12 +50,14 @@ class AgentDefinitionConfigPayload(BaseModel):
     model_id: str
     system_prompt: str
     skill_ids: list[str] | None = None
+    tools: dict[str, object] | None = None
 
 
 class AgentConfigUpdatePayload(BaseModel):
     default_model_id: str
     default_agent_id: str
     common_skill_tools: list[str] | None = None
+    tools: dict[str, object] | None = None
     models: list[AgentModelConfigPayload]
     agents: list[AgentDefinitionConfigPayload]
 
@@ -114,6 +116,11 @@ def create_agent_router(container: AppContainer) -> APIRouter:
             "default_model_id": snapshot.default_model_id,
             "default_agent_id": snapshot.default_agent_id,
             "common_skill_tools": list(snapshot.common_skill_tools),
+            "tools": {
+                "profile": snapshot.tools_profile,
+                "allow": list(snapshot.tools_allow),
+                "deny": list(snapshot.tools_deny),
+            },
             "models": [
                 {
                     "id": model.id,
@@ -134,6 +141,11 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                     "model_id": agent.model_id,
                     "system_prompt": agent.system_prompt,
                     "skill_ids": list(agent.skill_ids),
+                    "tools": {
+                        "profile": agent.tools_profile,
+                        "allow": list(agent.tools_allow),
+                        "deny": list(agent.tools_deny),
+                    },
                 }
                 for agent in snapshot.agents
             ],

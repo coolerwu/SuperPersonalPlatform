@@ -9,8 +9,14 @@ from server.domain.agents import (
     AgentDefinition,
     AgentPlatformDefinition,
     ModelDefinition,
+    ToolAccessDefinition,
 )
 from server.app.agent_skill_service import AgentSkillService, AgentSkillToolbox
+from server.app.agent_tool_service import (
+    AgentToolRegistry,
+    AgentToolRuntime,
+    DEFAULT_AGENT_TOOL_REGISTRY,
+)
 from server.infrastructure.config import load_settings, parse_settings
 
 
@@ -146,6 +152,9 @@ class EditableAgent:
     model_id: str | None
     system_prompt: str
     skill_ids: tuple[str, ...]
+    tools_profile: str
+    tools_allow: tuple[str, ...]
+    tools_deny: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -154,6 +163,9 @@ class AgentConfigSnapshot:
     default_model_id: str
     default_agent_id: str
     common_skill_tools: tuple[str, ...]
+    tools_profile: str
+    tools_allow: tuple[str, ...]
+    tools_deny: tuple[str, ...]
     models: tuple[EditableModel, ...]
     agents: tuple[EditableAgent, ...]
 
@@ -163,7 +175,7 @@ class AgentGraphState(TypedDict):
     user_message: str
     images: tuple[ChatImage, ...]
     model: ModelDefinition
-    common_skill_tools: tuple[str, ...]
+    tool_names: tuple[str, ...]
     task_goal: str
     tool_messages: tuple[Any, ...]
     pending_tool_calls: tuple[AgentToolCall, ...]
@@ -181,10 +193,12 @@ class AgentChatService:
         self,
         config_path: str | Path,
         model_gateway: AgentChatModelGateway,
+        tool_registry: AgentToolRegistry | None = None,
     ) -> None:
         self._config_path = Path(config_path)
         self._model_gateway = model_gateway
         self._skill_service = AgentSkillService(self._config_path.parent)
+        self._tool_registry = tool_registry or DEFAULT_AGENT_TOOL_REGISTRY
 
     def options(self) -> AgentOptions:
         platform = self._load_platform()
@@ -208,6 +222,9 @@ class AgentChatService:
             default_model_id=platform.default_model_id,
             default_agent_id=platform.default_agent_id,
             common_skill_tools=platform.common_skill_tools,
+            tools_profile=platform.tools.profile,
+            tools_allow=platform.tools.allow,
+            tools_deny=platform.tools.deny,
             models=tuple(
                 EditableModel(
                     id=model.id,
@@ -228,6 +245,13 @@ class AgentChatService:
                     model_id=agent.model_id,
                     system_prompt=agent.system_prompt,
                     skill_ids=agent.skill_ids,
+                    tools_profile=(agent.tools or platform.tools).profile,
+                    tools_allow=(agent.tools or ToolAccessDefinition()).allow
+                    if agent.tools
+                    else (),
+                    tools_deny=(agent.tools or ToolAccessDefinition()).deny
+                    if agent.tools
+                    else (),
                 )
                 for agent in platform.agents
             ),
@@ -239,6 +263,7 @@ class AgentChatService:
         models = payload.get("models") or []
         agents = payload.get("agents") or []
         common_skill_tools = payload.get("common_skill_tools")
+        tools_payload = payload.get("tools")
         if not isinstance(models, list):
             raise AgentConfigError("models must be a list")
         if not isinstance(agents, list):
@@ -247,6 +272,10 @@ class AgentChatService:
             common_skill_tools = raw.get("common_skills", {}).get("tools", [])
         if not isinstance(common_skill_tools, list):
             raise AgentConfigError("common_skill_tools must be a list")
+        if tools_payload is None:
+            tools_payload = raw.get("tools", {})
+        if not isinstance(tools_payload, dict):
+            raise AgentConfigError("tools must be an object")
 
         old_keys = {model.id: model.api_key for model in old_settings.agent_platform.models}
         old_agent_skill_ids = {
@@ -276,12 +305,15 @@ class AgentChatService:
                 raise AgentConfigError("agents[] must be an object")
             model_id = agent.get("model_id")
             raw_skill_ids = agent.get("skill_ids")
+            raw_tools = agent.get("tools")
             if raw_skill_ids is None:
                 skill_ids = old_agent_skill_ids.get(str(agent.get("id") or "").strip(), ())
             else:
                 skill_ids = raw_skill_ids
             if not isinstance(skill_ids, (list, tuple)):
                 raise AgentConfigError("agents[].skill_ids must be a list")
+            if raw_tools is not None and not isinstance(raw_tools, dict):
+                raise AgentConfigError("agents[].tools must be an object")
             normalized_agents.append(
                 {
                     "id": str(agent.get("id") or "").strip(),
@@ -289,6 +321,7 @@ class AgentChatService:
                     "model_id": str(model_id).strip() if model_id is not None else "",
                     "system_prompt": str(agent.get("system_prompt") or "").strip(),
                     "skill_ids": [str(skill_id).strip() for skill_id in skill_ids if str(skill_id).strip()],
+                    **({"tools": self._normalize_tool_access(raw_tools)} if raw_tools is not None else {}),
                 }
             )
 
@@ -304,6 +337,7 @@ class AgentChatService:
         raw["common_skills"] = {
             "tools": [str(tool).strip() for tool in common_skill_tools if str(tool).strip()]
         }
+        raw["tools"] = self._normalize_tool_access(tools_payload)
         parse_settings(raw)
         self._write_raw_config(raw)
 
@@ -333,10 +367,46 @@ class AgentChatService:
         return await self._run_graph(
             agent,
             model,
-            platform.common_skill_tools,
+            self._tool_registry.resolve_tools(
+                platform.tools,
+                agent,
+                platform.common_skill_tools,
+            ),
             content.strip(),
             images,
             on_checkpoint,
+        )
+
+    async def run_with_tool_runtime(
+        self,
+        agent_id: str,
+        content: str,
+        tool_runtime: AgentToolRuntime,
+        on_checkpoint: Callable[[AgentChatCheckpoint], Awaitable[None]] | None = None,
+    ) -> str:
+        platform = self._load_platform()
+        if not platform.agents:
+            raise AgentChatUnavailableError("未配置 Agent")
+        if not platform.models:
+            raise AgentChatUnavailableError("未配置模型")
+        agent = platform.get_agent(agent_id or platform.default_agent_id)
+        if not agent.model_id:
+            raise AgentChatUnavailableError("Agent 未配置模型")
+        model = platform.get_model(agent.model_id)
+        if not self._has_usable_api_key(model):
+            raise AgentChatUnavailableError("模型 API Key 不可用")
+        return await self._run_graph(
+            agent,
+            model,
+            self._tool_registry.resolve_tools(
+                platform.tools,
+                agent,
+                platform.common_skill_tools,
+            ),
+            content.strip(),
+            (),
+            on_checkpoint,
+            tool_runtime,
         )
 
     def _load_platform(self) -> AgentPlatformDefinition:
@@ -384,14 +454,28 @@ class AgentChatService:
             return None
         return float(value)
 
+    def _normalize_tool_access(self, raw: dict[str, Any]) -> dict[str, object]:
+        allow = raw.get("allow") or []
+        deny = raw.get("deny") or []
+        if not isinstance(allow, list):
+            raise AgentConfigError("tools.allow must be a list")
+        if not isinstance(deny, list):
+            raise AgentConfigError("tools.deny must be a list")
+        return {
+            "profile": str(raw.get("profile") or "default").strip() or "default",
+            "allow": [str(tool).strip() for tool in allow if str(tool).strip()],
+            "deny": [str(tool).strip() for tool in deny if str(tool).strip()],
+        }
+
     async def _run_graph(
         self,
         agent: AgentDefinition,
         model: ModelDefinition,
-        common_skill_tools: tuple[str, ...],
+        tool_names: tuple[str, ...],
         content: str,
         images: tuple[ChatImage, ...],
         on_checkpoint: Callable[[AgentChatCheckpoint], Awaitable[None]] | None = None,
+        tool_runtime: AgentToolRuntime | None = None,
     ) -> str:
         async def emit(stage: str, title: str, detail: str = "") -> None:
             if on_checkpoint is not None:
@@ -433,17 +517,18 @@ class AgentChatService:
                 f"第 {state['tool_iterations'] + 1} 轮",
             )
             system_prompt = skill_system_prompt(state)
-            if state["common_skill_tools"]:
+            if state["tool_names"]:
                 system_prompt = (
                     f"{system_prompt}\n\n"
-                    "你可以在需要时通过只读工具 list_skill 和 read_skill 读取当前 Agent "
-                    "显式绑定的技能说明。不要假装读取不存在或未绑定的 skill。"
+                    "你可以在需要时调用平台暴露的 typed tools。Skills 是操作规程，"
+                    "tools 才是真正可调用能力；不要假装读取不存在或未绑定的 skill，"
+                    "也不要假装执行未暴露的 tool。"
                 )
                 result = await self._model_gateway.reason_with_tools(
                     state["model"],
                     system_prompt,
                     state["user_message"],
-                    state["common_skill_tools"],
+                    state["tool_names"],
                     state["tool_messages"],
                     state["images"],
                 )
@@ -464,16 +549,15 @@ class AgentChatService:
             return await direct_model(state)
 
         async def act_skill_tools(state: AgentGraphState) -> dict[str, object]:
-            skill_tools = self._skill_service.toolbox(agent)
+            runtime = tool_runtime or AgentToolRuntime(skill_tools=self._skill_service.toolbox(agent))
             tool_results: list[AgentToolResult] = []
             for tool_call in state["pending_tool_calls"]:
                 await emit("act", f"执行工具 {tool_call.name}", self._tool_checkpoint_detail(tool_call))
-                if tool_call.name == "list_skill":
-                    content = await skill_tools.list_skill()
-                elif tool_call.name == "read_skill":
-                    content = await skill_tools.read_skill(str(tool_call.args.get("id") or ""))
-                else:
-                    content = f"Unsupported tool: {tool_call.name}"
+                content = await self._tool_registry.dispatch(
+                    tool_call.name,
+                    tool_call.args,
+                    runtime,
+                )
                 await emit("act", f"工具完成 {tool_call.name}")
                 tool_results.append(
                     AgentToolResult(tool_call_id=tool_call.id, content=content)
@@ -507,7 +591,7 @@ class AgentChatService:
             "user_message": content,
             "images": images,
             "model": model,
-            "common_skill_tools": common_skill_tools,
+            "tool_names": tool_names,
             "task_goal": "",
             "tool_messages": (),
             "pending_tool_calls": (),
@@ -520,7 +604,7 @@ class AgentChatService:
         except ImportError:
             goal_result = await confirm_task_goal(initial_state)
             state: AgentGraphState = {**initial_state, **goal_result}
-            if not state["common_skill_tools"]:
+            if not state["tool_names"]:
                 result = await direct_model(state)
                 return result["assistant_message"]
             while True:
@@ -544,7 +628,7 @@ class AgentChatService:
         graph.add_edge(START, "confirm_task_goal")
         graph.add_conditional_edges(
             "confirm_task_goal",
-            lambda state: "reason" if state["common_skill_tools"] else "direct",
+            lambda state: "reason" if state["tool_names"] else "direct",
             {
                 "reason": "reason_skill_tools",
                 "direct": "direct_model",

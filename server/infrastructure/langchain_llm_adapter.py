@@ -8,6 +8,7 @@ from server.app.agent_chat_service import (
     AgentToolResult,
     ChatImage,
 )
+from server.app.agent_tool_service import DEFAULT_AGENT_TOOL_REGISTRY
 from server.app.agent_skill_service import AgentSkillToolbox
 from server.domain.agents import ModelDefinition
 
@@ -202,44 +203,7 @@ class LangChainOpenAICompatibleAdapter(AgentChatModelGateway):
         )
 
     def _tool_schemas(self, tool_names: tuple[str, ...]) -> list[dict[str, object]]:
-        schemas: list[dict[str, object]] = []
-        if "list_skill" in tool_names:
-            schemas.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "list_skill",
-                        "description": "列出当前 Agent 显式绑定且存在的 Markdown skills。",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "additionalProperties": False,
-                        },
-                    },
-                }
-            )
-        if "read_skill" in tool_names:
-            schemas.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "read_skill",
-                        "description": "读取当前 Agent 显式绑定的某个 Markdown skill 内容。",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "id": {
-                                    "type": "string",
-                                    "description": "Skill id, such as common:research or private:daily.",
-                                }
-                            },
-                            "required": ["id"],
-                            "additionalProperties": False,
-                        },
-                    },
-                }
-            )
-        return schemas
+        return DEFAULT_AGENT_TOOL_REGISTRY.schemas(tool_names)
 
     def _tool_call(self, raw_tool_call: dict[str, Any]) -> AgentToolCall:
         args = raw_tool_call.get("args") or {}

@@ -18,6 +18,7 @@ from server.app.agent_chat_service import (
     ChatImage,
 )
 from server.app.agent_skill_service import AgentSkillService
+from server.app.agent_tool_service import AgentToolRegistry, AgentToolRuntime
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
 from server.domain.agents import ModelDefinition
@@ -448,6 +449,68 @@ def test_agent_config_rejects_unknown_common_skill_tool(tmp_path) -> None:
         load_settings(tmp_path / "config.yaml")
 
 
+def test_agent_tool_config_resolves_profile_allow_and_deny(tmp_path) -> None:
+    write_config(tmp_path)
+    raw = load_settings(tmp_path / "config.yaml")
+    agent = raw.agent_platform.get_agent("assistant")
+    registry = AgentToolRegistry()
+
+    settings = parse_settings(
+        {
+            "auth": {"token": "secret-token"},
+            "proxy": {"upstream_base_url": "http://example.test/"},
+            "tools": {
+                "profile": "self-dev",
+                "allow": ["repo_push"],
+                "deny": ["repo_push", "repo_write_file"],
+            },
+            "llm": {
+                "models": [
+                    {
+                        "id": "fast",
+                        "name": "Fast",
+                        "base_url": "https://llm.example.test/v1",
+                        "api_key": "key",
+                        "model": "fast-chat",
+                    }
+                ]
+            },
+            "agents": {
+                "definitions": [
+                    {
+                        "id": "assistant",
+                        "name": "Assistant",
+                        "system_prompt": "You are concise.",
+                        "model_id": "fast",
+                    }
+                ]
+            },
+        }
+    )
+
+    tool_names = registry.resolve_tools(
+        settings.agent_platform.tools,
+        settings.agent_platform.get_agent("assistant"),
+        (),
+    )
+
+    assert "repo_read_file" in tool_names
+    assert "repo_push" not in tool_names
+    assert "repo_write_file" not in tool_names
+    assert registry.resolve_tools(raw.agent_platform.tools, agent, ("list_skill",)) == ("list_skill",)
+
+
+def test_agent_tool_config_rejects_unknown_tool() -> None:
+    with pytest.raises(ValueError, match="unsupported tool"):
+        parse_settings(
+            {
+                "auth": {"token": "secret-token"},
+                "proxy": {"upstream_base_url": "http://example.test/"},
+                "tools": {"allow": ["not_a_tool"]},
+            }
+        )
+
+
 def test_agent_skill_service_lists_and_reads_bound_common_and_private_skills(tmp_path) -> None:
     write_config(
         tmp_path,
@@ -474,6 +537,43 @@ def test_agent_skill_service_lists_and_reads_bound_common_and_private_skills(tmp
     content = service.read_skill(platform.get_agent("assistant"), "private:daily")
     assert content.name == "日常技能"
     assert "处理每日任务" in content.content
+
+
+def test_agent_skill_service_reads_directory_skill_md(tmp_path) -> None:
+    write_config(tmp_path, skill_ids=("common:writing", "private:self-dev"))
+    (tmp_path / "skills" / "common" / "writing").mkdir(parents=True)
+    (tmp_path / "skills" / "common" / "writing" / "SKILL.md").write_text(
+        "# 写作目录技能\n目录式 skill。",
+        encoding="utf-8",
+    )
+    (tmp_path / "skills" / "agents" / "assistant" / "self-dev").mkdir(parents=True)
+    (tmp_path / "skills" / "agents" / "assistant" / "self-dev" / "SKILL.md").write_text(
+        "# 自开发\n按流程开发。",
+        encoding="utf-8",
+    )
+    platform = load_settings(tmp_path / "config.yaml").agent_platform
+    service = AgentSkillService(tmp_path)
+
+    common = service.read_skill(platform.get_agent("assistant"), "common:writing")
+    private = service.read_skill(platform.get_agent("assistant"), "private:self-dev")
+
+    assert common.name == "写作目录技能"
+    assert "目录式 skill" in common.content
+    assert private.name == "自开发"
+
+
+def test_repo_tools_reject_paths_outside_task_repo(tmp_path) -> None:
+    write_config(tmp_path, skill_ids=("common:writing",))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    platform = load_settings(tmp_path / "config.yaml").agent_platform
+    runtime = AgentToolRuntime(
+        skill_tools=AgentSkillService(tmp_path).toolbox(platform.get_agent("assistant")),
+        repo_root=repo,
+    )
+
+    with pytest.raises(ValueError, match="escapes task repo"):
+        runtime.resolve_repo_path("../config.yaml")
 
 
 def test_agent_skill_service_rejects_unbound_or_unsafe_skill(tmp_path) -> None:

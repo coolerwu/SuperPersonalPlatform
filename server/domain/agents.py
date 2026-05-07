@@ -7,7 +7,34 @@ class AgentConfigError(ValueError):
 
 
 SUPPORTED_COMMON_SKILL_TOOLS = {"list_skill", "read_skill"}
+SUPPORTED_TOOL_PROFILES = {"default", "self-dev"}
+SUPPORTED_AGENT_TOOLS = {
+    "list_skill",
+    "read_skill",
+    "repo_search",
+    "repo_read_file",
+    "repo_write_file",
+    "repo_run_command",
+    "repo_status",
+    "repo_diff",
+    "repo_commit",
+    "repo_push",
+}
 SKILL_ID_PATTERN = re.compile(r"^(common|private):[A-Za-z0-9_-]+$")
+
+
+@dataclass(frozen=True)
+class ToolAccessDefinition:
+    profile: str = "default"
+    allow: tuple[str, ...] = ()
+    deny: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.profile not in SUPPORTED_TOOL_PROFILES:
+            raise AgentConfigError(f"tools.profile is unsupported: {self.profile}")
+        for tool_id in (*self.allow, *self.deny):
+            if tool_id not in SUPPORTED_AGENT_TOOLS:
+                raise AgentConfigError(f"tools contains unsupported tool: {tool_id}")
 
 
 @dataclass(frozen=True)
@@ -40,6 +67,7 @@ class AgentDefinition:
     system_prompt: str
     model_id: str | None = None
     skill_ids: tuple[str, ...] = ()
+    tools: ToolAccessDefinition | None = None
 
     def __post_init__(self) -> None:
         if not self.id.strip():
@@ -62,6 +90,7 @@ class AgentPlatformDefinition:
     agents: tuple[AgentDefinition, ...]
     default_agent_id: str
     common_skill_tools: tuple[str, ...] = ()
+    tools: ToolAccessDefinition = ToolAccessDefinition()
 
     def __post_init__(self) -> None:
         model_ids = {model.id for model in self.models}

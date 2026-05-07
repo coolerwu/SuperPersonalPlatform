@@ -19,6 +19,10 @@ common_skills:
   tools:
     - "list_skill"
     - "read_skill"
+tools:
+  profile: "default"
+  allow: []
+  deny: []
 agents:
   default_agent_id: "assistant"
   definitions:
@@ -27,3 +31,7 @@ agents:
       system_prompt: "你是一个直接、可靠的个人助理。用中文简洁回答。"
       model_id: "default"
       skill_ids: []
+      tools:
+        profile: "default"
+        allow: []
+        deny: []
