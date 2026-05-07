@@ -1888,6 +1888,8 @@ function DetailSidebar({ selectedTask, fileChanges, selectedFile, onSelectFile, 
 function TerminalPage({ onUnauthorized }) {
   const [status, setStatus] = useState("disconnected");
   const [error, setError] = useState("");
+  const [mobileInput, setMobileInput] = useState("");
+  const [mobileSecret, setMobileSecret] = useState(true);
   const socketRef = useRef(null);
   const terminalRef = useRef(null);
   const terminalContainerRef = useRef(null);
@@ -1959,6 +1961,17 @@ function TerminalPage({ onUnauthorized }) {
     });
   }
 
+  function sendMobileInput(event) {
+    event.preventDefault();
+    if (!mobileInput) {
+      sendTerminalMessage({ type: "input", data: "\r" });
+      return;
+    }
+    sendTerminalMessage({ type: "input", data: mobileInput });
+    sendTerminalMessage({ type: "input", data: "\r" });
+    setMobileInput("");
+  }
+
   useEffect(() => {
     const terminal = new Terminal({
       cursorBlink: true,
@@ -2005,6 +2018,34 @@ function TerminalPage({ onUnauthorized }) {
           </div>
         </div>
         <div className="terminal-output" ref={terminalContainerRef} data-testid="terminal-output" />
+        <form className="terminal-mobile-input" onSubmit={sendMobileInput}>
+          <label htmlFor="terminal-mobile-input">移动端输入（密码场景可用）</label>
+          <div className="terminal-mobile-input-row">
+            <input
+              id="terminal-mobile-input"
+              type={mobileSecret ? "password" : "text"}
+              value={mobileInput}
+              onChange={(event) => setMobileInput(event.target.value)}
+              placeholder="输入后发送到终端"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              disabled={status !== "connected"}
+            />
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => setMobileSecret((value) => !value)}
+              disabled={status !== "connected"}
+            >
+              {mobileSecret ? "显示" : "隐藏"}
+            </button>
+            <button className="secondary-button primary-action" type="submit" disabled={status !== "connected"}>
+              发送
+            </button>
+          </div>
+        </form>
         {error ? <div className="form-error">{error}</div> : null}
       </div>
     </section>

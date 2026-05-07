@@ -107,10 +107,18 @@ ensure_clean_git() {
 
 update_git() {
   cd "$SCRIPT_DIR"
+  local before_head after_head
+  before_head="$(git_in_repo rev-parse HEAD)"
   local attempt delay=2
   for ((attempt = 1; attempt <= PROD_GIT_PULL_ATTEMPTS; attempt += 1)); do
     echo "Pulling production code from ${PROD_GIT_URL} (${PROD_GIT_BRANCH}), attempt ${attempt}/${PROD_GIT_PULL_ATTEMPTS}"
     if git_https_in_repo pull --ff-only "$PROD_GIT_URL" "$PROD_GIT_BRANCH"; then
+      after_head="$(git_in_repo rev-parse HEAD)"
+      if [[ "$before_head" == "$after_head" ]]; then
+        CODE_UPDATED=0
+      else
+        CODE_UPDATED=1
+      fi
       return 0
     fi
     if [[ "$attempt" -lt "$PROD_GIT_PULL_ATTEMPTS" ]]; then
@@ -164,6 +172,21 @@ resolve_service_user() {
 resolve_service_group() {
   local user="$1"
   id -gn "$user" 2>/dev/null || true
+}
+
+require_non_interactive_sudo() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    return
+  fi
+  if sudo -n true 2>/dev/null; then
+    return
+  fi
+  cat >&2 <<'MSG'
+Production mode requires non-interactive sudo for systemctl/install commands.
+Current environment cannot prompt for a password (for example when triggered by update-service).
+Please run with a TTY once, or configure passwordless sudo for install/systemctl.
+MSG
+  exit 1
 }
 
 pid_cwd() {
@@ -278,6 +301,15 @@ run_prod() {
   ensure_venv
   install_python_deps "."
   write_service_file
+  local needs_sudo=0
+  if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then
+    needs_sudo=1
+  fi
+  if [[ "$needs_sudo" == "0" ]]; then
+    echo "No code or systemd unit changes; skipping systemctl enable/restart/status."
+    return
+  fi
+  require_non_interactive_sudo
 
   if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then
     sudo systemctl enable "$SERVICE_NAME"

@@ -53,6 +53,27 @@ def test_prod_enable_only_runs_when_service_file_changed() -> None:
     assert 'sudo systemctl restart "$SERVICE_NAME"' in script
 
 
+def test_prod_requires_non_interactive_sudo_for_background_updates() -> None:
+    script = read_run_sh()
+
+    assert "require_non_interactive_sudo()" in script
+    assert 'if sudo -n true 2>/dev/null; then' in script
+    assert "Production mode requires non-interactive sudo" in script
+    run_prod_body = script.split("run_prod() {", 1)[1]
+    assert "require_non_interactive_sudo" in run_prod_body
+    assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then' in run_prod_body
+    assert "No code or systemd unit changes; skipping systemctl enable/restart/status." in run_prod_body
+
+
+def test_prod_detects_code_change_with_head_compare() -> None:
+    script = read_run_sh()
+
+    assert 'before_head="$(git_in_repo rev-parse HEAD)"' in script
+    assert 'after_head="$(git_in_repo rev-parse HEAD)"' in script
+    assert 'if [[ "$before_head" == "$after_head" ]]; then' in script
+    assert "CODE_UPDATED=1" in script
+
+
 def test_prod_service_uses_resolved_terminal_user() -> None:
     script = read_run_sh()
 
