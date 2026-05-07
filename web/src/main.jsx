@@ -262,6 +262,25 @@ function AgentPage({ onUnauthorized }) {
         setSending(false);
         setStatus("connected");
       }
+      if (message.type === "checkpoint") {
+        setMessages((items) =>
+          items.map((item) =>
+            item.role === "pending"
+              ? {
+                  ...item,
+                  checkpoints: [
+                    ...(item.checkpoints || []),
+                    {
+                      stage: message.stage || "",
+                      title: message.title || "",
+                      detail: message.detail || ""
+                    }
+                  ]
+                }
+              : item
+          )
+        );
+      }
       if (message.type === "error") {
         setMessages((items) => items.filter((item) => item.role !== "pending"));
         setError(message.message || "Agent 回复失败");
@@ -301,7 +320,7 @@ function AgentPage({ onUnauthorized }) {
     setMessages((items) => [
       ...items,
       { role: "user", content, images: attachments },
-      { role: "pending", content: "生成中" }
+      { role: "pending", content: "生成中", checkpoints: [] }
     ]);
     socketRef.current.send(
       JSON.stringify({
@@ -392,6 +411,17 @@ function AgentPage({ onUnauthorized }) {
     }));
   }
 
+  function updateCommonSkillTools(value) {
+    setConfig((current) => ({
+      ...current,
+      common_skill_tools: value.split(/\s+/).map((item) => item.trim()).filter(Boolean)
+    }));
+  }
+
+  function updateAgentSkillIds(index, value) {
+    updateAgent(index, "skill_ids", value.split(/\s+/).map((item) => item.trim()).filter(Boolean));
+  }
+
   function addModel() {
     const id = `model-${(config?.models?.length || 0) + 1}`;
     setConfig((current) => ({
@@ -425,7 +455,8 @@ function AgentPage({ onUnauthorized }) {
           id,
           name: "新 Agent",
           model_id: current.default_model_id || current.models?.[0]?.id || "",
-          system_prompt: ""
+          system_prompt: "",
+          skill_ids: []
         }
       ]
     }));
@@ -441,6 +472,7 @@ function AgentPage({ onUnauthorized }) {
         body: JSON.stringify({
           default_model_id: config.default_model_id || config.models?.[0]?.id || "",
           default_agent_id: config.default_agent_id || config.agents?.[0]?.id || "",
+          common_skill_tools: config.common_skill_tools || [],
           models: config.models.map((model) => ({
             id: model.id,
             name: model.name,
@@ -454,7 +486,8 @@ function AgentPage({ onUnauthorized }) {
             id: agent.id,
             name: agent.name,
             model_id: agent.model_id,
-            system_prompt: agent.system_prompt
+            system_prompt: agent.system_prompt,
+            skill_ids: agent.skill_ids || []
           }))
         })
       });
@@ -517,6 +550,16 @@ function AgentPage({ onUnauthorized }) {
               <div key={`${message.role}-${index}`} className={`agent-message ${message.role}`}>
                 <span>{message.role === "user" ? "你" : message.role === "assistant" ? "Agent" : ""}</span>
                 {message.content ? <p>{message.content}</p> : null}
+                {message.checkpoints?.length ? (
+                  <ol className="agent-checkpoints">
+                    {message.checkpoints.map((checkpoint, checkpointIndex) => (
+                      <li key={`${checkpoint.stage}-${checkpointIndex}`}>
+                        <strong>{checkpoint.title}</strong>
+                        {checkpoint.detail ? <small>{checkpoint.detail}</small> : null}
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
                 {message.images?.length ? (
                   <div className="agent-message-images">
                     {message.images.map((image) => (
@@ -609,6 +652,14 @@ function AgentPage({ onUnauthorized }) {
             <>
               <section className="agent-config-section">
                 <div className="agent-config-section-heading">
+                  <h3>Common Skill Tools</h3>
+                </div>
+                <article className="agent-config-card">
+                  <label className="agent-prompt-label">工具声明<textarea value={(config.common_skill_tools || []).join("\n")} onChange={(event) => updateCommonSkillTools(event.target.value)} /></label>
+                </article>
+              </section>
+              <section className="agent-config-section">
+                <div className="agent-config-section-heading">
                   <h3>模型</h3>
                   <button className="secondary-button" onClick={addModel}>
                     <Plus size={17} />
@@ -652,6 +703,7 @@ function AgentPage({ onUnauthorized }) {
                         <label>绑定模型<select value={agent.model_id || ""} onChange={(event) => updateAgent(index, "model_id", event.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></label>
                       </div>
                       <label className="agent-prompt-label">系统提示词<textarea value={agent.system_prompt} onChange={(event) => updateAgent(index, "system_prompt", event.target.value)} /></label>
+                      <label className="agent-prompt-label">Skill IDs<textarea value={(agent.skill_ids || []).join("\n")} onChange={(event) => updateAgentSkillIds(index, event.target.value)} /></label>
                       <div className="agent-config-card-actions">
                         <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, default_agent_id: agent.id }))}>设为默认</button>
                         <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, agents: current.agents.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>

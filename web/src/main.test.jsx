@@ -337,6 +337,14 @@ describe("LoginPage", () => {
         this.sent.push(data);
         this.onmessage?.({ data: JSON.stringify({ type: "status", status: "running" }) });
         this.onmessage?.({
+          data: JSON.stringify({
+            type: "checkpoint",
+            stage: "goal",
+            title: "task 目标已确认",
+            detail: "回复用户问候"
+          })
+        });
+        this.onmessage?.({
           data: JSON.stringify({ type: "assistant_message", content: "你好，我是 Agent" })
         });
       }
@@ -540,6 +548,7 @@ describe("LoginPage", () => {
             ok: true,
             json: async () => ({
               path: "/workspace/config.yaml",
+              common_skill_tools: ["list_skill", "read_skill"],
               default_model_id: "fast",
               default_agent_id: "assistant",
               models: [
@@ -559,7 +568,8 @@ describe("LoginPage", () => {
                   id: "assistant",
                   name: "个人助理",
                   model_id: "fast",
-                  system_prompt: "You are concise."
+                  system_prompt: "You are concise.",
+                  skill_ids: ["common:writing"]
                 }
               ]
             })
@@ -584,6 +594,12 @@ describe("LoginPage", () => {
     await user.type(screen.getByLabelText(/显示名/), "视觉模型");
     await user.click(screen.getByRole("button", { name: /保存到 workspace/ }));
 
+    const saveCall = fetch.mock.calls.find(
+      ([path, options]) => path === "/api/agents/config" && options?.method === "PUT"
+    );
+    const payload = JSON.parse(saveCall[1].body);
+    expect(payload.common_skill_tools).toEqual(["list_skill", "read_skill"]);
+    expect(payload.agents[0].skill_ids).toEqual(["common:writing"]);
     expect(fetch).toHaveBeenCalledWith(
       "/api/agents/config",
       expect.objectContaining({

@@ -919,6 +919,33 @@ button:disabled {
   color: var(--warning);
 }
 
+.agent-checkpoints {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.agent-checkpoints li {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.agent-checkpoints strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.agent-checkpoints small {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
 .agent-input-row {
   background: #ffffff;
   border-top: 1px solid var(--border);

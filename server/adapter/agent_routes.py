@@ -49,11 +49,13 @@ class AgentDefinitionConfigPayload(BaseModel):
     name: str
     model_id: str
     system_prompt: str
+    skill_ids: list[str] | None = None
 
 
 class AgentConfigUpdatePayload(BaseModel):
     default_model_id: str
     default_agent_id: str
+    common_skill_tools: list[str] | None = None
     models: list[AgentModelConfigPayload]
     agents: list[AgentDefinitionConfigPayload]
 
@@ -111,6 +113,7 @@ def create_agent_router(container: AppContainer) -> APIRouter:
             "path": snapshot.path,
             "default_model_id": snapshot.default_model_id,
             "default_agent_id": snapshot.default_agent_id,
+            "common_skill_tools": list(snapshot.common_skill_tools),
             "models": [
                 {
                     "id": model.id,
@@ -130,6 +133,7 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                     "name": agent.name,
                     "model_id": agent.model_id,
                     "system_prompt": agent.system_prompt,
+                    "skill_ids": list(agent.skill_ids),
                 }
                 for agent in snapshot.agents
             ],
@@ -187,10 +191,21 @@ def create_agent_router(container: AppContainer) -> APIRouter:
 
                 await websocket.send_json({"type": "status", "status": "running"})
                 try:
+                    async def send_checkpoint(checkpoint) -> None:
+                        await websocket.send_json(
+                            {
+                                "type": "checkpoint",
+                                "stage": checkpoint.stage,
+                                "title": checkpoint.title,
+                                "detail": checkpoint.detail,
+                            }
+                        )
+
                     message = await service.chat(
                         payload.agent_id or "",
                         payload.content or "",
                         images,
+                        on_checkpoint=send_checkpoint,
                     )
                 except (AgentConfigError, AgentChatUnavailableError) as exc:
                     await websocket.send_json({"type": "error", "message": str(exc)})
