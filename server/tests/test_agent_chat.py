@@ -199,7 +199,6 @@ def make_client(workspace: Path, gateway: FakeModelGateway | None = None) -> Tes
         proxy_service=None,
         system_log_service=None,
         system_update_service=None,
-        terminal_session_service=None,
         session_codec=SessionCodec("secret-token"),
         agent_chat_service=AgentChatService(config_service.config_path, gateway or FakeModelGateway()),
     )

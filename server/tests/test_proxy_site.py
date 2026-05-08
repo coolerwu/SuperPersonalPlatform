@@ -13,7 +13,6 @@ from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
-from server.app.terminal_session_service import TerminalSessionService
 from server.domain.auth import AuthToken
 from server.domain.errors import UpstreamProxyError
 from server.domain.proxy import ProxyRequest, ProxyResponse
@@ -50,7 +49,6 @@ def authenticated_client_with_gateway(gateway) -> TestClient:
         proxy_service=ProxyService(gateway),
         system_log_service=SystemLogService(Path.cwd()),
         system_update_service=SystemUpdateService(Path.cwd(), Path.cwd()),
-        terminal_session_service=TerminalSessionService(Path.cwd(), Path.cwd()),
         session_codec=SessionCodec(token),
     )
     from fastapi import FastAPI

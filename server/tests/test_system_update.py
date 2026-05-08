@@ -16,7 +16,6 @@ from server.app.system_update_service import (
     SystemUpdateService,
     UpdateAlreadyRunningError,
 )
-from server.app.terminal_session_service import TerminalSessionService
 from server.domain.auth import AuthToken
 from server.domain.proxy import ProxyRequest, ProxyResponse
 from server.infrastructure.session import SessionCodec
@@ -51,7 +50,6 @@ def make_client(update_service, workspace: Path | None = None) -> TestClient:
         proxy_service=ProxyService(EmptyProxyGateway()),
         system_log_service=system_log_service,
         system_update_service=update_service,
-        terminal_session_service=TerminalSessionService(workspace, workspace),
         session_codec=SessionCodec(token),
     )
     app = FastAPI()

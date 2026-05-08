@@ -28,7 +28,6 @@ def make_client(workspace: Path) -> TestClient:
         proxy_service=None,
         system_log_service=None,
         system_update_service=None,
-        terminal_session_service=None,
         session_codec=SessionCodec("secret-token"),
         self_dev_service=SelfDevService(workspace, None),
     )

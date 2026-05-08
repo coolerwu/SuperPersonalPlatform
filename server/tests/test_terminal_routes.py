@@ -5,15 +5,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from server.adapter import terminal_routes
 from server.adapter.auth_routes import create_auth_router
 from server.adapter.dependencies import AppContainer
-from server.adapter.terminal_routes import create_terminal_router
+from server.adapter.terminal_routes import create_terminal_router, run_interactive_terminal
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
-from server.app.terminal_session_service import TerminalSessionService
 from server.domain.auth import AuthToken
 from server.domain.proxy import ProxyRequest, ProxyResponse
 from server.infrastructure.session import SessionCodec
@@ -24,9 +24,8 @@ class EmptyProxyGateway:
         return ProxyResponse(status_code=200, headers={}, body=b"")
 
 
-class ReceiveOnceTerminalService:
-    async def run_interactive_session(self, receive_message, send_text) -> None:
-        await receive_message()
+async def receive_once_terminal(receive_message, send_text, working_directory) -> None:
+    await receive_message()
 
 
 def write_config(workspace: Path, token: str = "secret-token") -> None:
@@ -36,20 +35,19 @@ def write_config(workspace: Path, token: str = "secret-token") -> None:
     )
 
 
-def make_client(workspace: Path, terminal_service=None) -> TestClient:
+def make_client(tmp_path: Path) -> TestClient:
     token = "secret-token"
     container = AppContainer(
         auth_service=AuthService(AuthToken(token)),
-        config_file_service=ConfigFileService(workspace),
+        config_file_service=ConfigFileService(tmp_path),
         proxy_service=ProxyService(EmptyProxyGateway()),
-        system_log_service=SystemLogService(workspace),
-        system_update_service=SystemUpdateService(workspace, workspace),
-        terminal_session_service=terminal_service or TerminalSessionService(workspace, workspace),
+        system_log_service=SystemLogService(tmp_path),
+        system_update_service=SystemUpdateService(tmp_path, tmp_path),
         session_codec=SessionCodec(token),
     )
     app = FastAPI()
     app.include_router(create_auth_router(container))
-    app.include_router(create_terminal_router(container))
+    app.include_router(create_terminal_router(container, tmp_path))
     return TestClient(app)
 
 
@@ -72,10 +70,11 @@ def test_terminal_websocket_requires_authentication(tmp_path) -> None:
         assert exc.code == 1008
 
 
-def test_terminal_websocket_rechecks_current_token_for_each_message(tmp_path) -> None:
+def test_terminal_websocket_rechecks_current_token_for_each_message(tmp_path, monkeypatch) -> None:
     write_config(tmp_path)
-    client = make_client(tmp_path, ReceiveOnceTerminalService())
+    client = make_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})
+    monkeypatch.setattr(terminal_routes, "run_interactive_terminal", receive_once_terminal)
 
     with client.websocket_connect("/api/system/terminal/connect") as websocket:
         write_config(tmp_path, token="changed-token")
@@ -88,9 +87,8 @@ def test_terminal_websocket_rechecks_current_token_for_each_message(tmp_path) ->
             raise AssertionError("expected websocket to close after token changed")
 
 
-def test_terminal_service_runs_without_persisting_transcript(tmp_path, monkeypatch) -> None:
+def test_terminal_runs_without_persisting_transcript(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SHELL", "/bin/sh")
-    service = TerminalSessionService(tmp_path, tmp_path)
     messages = [
         {"type": "resize", "cols": 120, "rows": 34},
         {"type": "input", "data": "printf codex-terminal-test\rexit\r"},
@@ -110,11 +108,11 @@ def test_terminal_service_runs_without_persisting_transcript(tmp_path, monkeypat
     def fake_resize(fd: int, cols: int, rows: int) -> None:
         resizes.append((fd, cols, rows))
 
-    monkeypatch.setattr(service, "resize_pty", fake_resize)
+    monkeypatch.setattr(terminal_routes, "resize_pty", fake_resize)
 
     asyncio.run(
         asyncio.wait_for(
-            service.run_interactive_session(receive_message, send_text),
+            run_interactive_terminal(receive_message, send_text, tmp_path),
             timeout=5,
         )
     )

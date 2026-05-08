@@ -23,7 +23,6 @@ from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.app.self_dev_service import SelfDevService
-from server.app.terminal_session_service import TerminalSessionService
 from server.domain.auth import AuthToken
 from server.infrastructure.config import Settings, load_settings
 from server.infrastructure.http_proxy_gateway import HttpProxyGateway
@@ -53,7 +52,6 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
             active_workspace,
             system_log_service,
         ),
-        terminal_session_service=TerminalSessionService(active_workspace, project_root),
         session_codec=SessionCodec(settings.auth.token),
         agent_chat_service=agent_chat_service,
         self_dev_service=SelfDevService(active_workspace, agent_chat_service),
@@ -96,11 +94,11 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     app.include_router(create_agent_router(container))
     app.include_router(create_proxy_router(container))
     app.include_router(create_system_router(container))
-    app.include_router(create_terminal_router(container))
+    project_root = Path(__file__).resolve().parents[2]
+    app.include_router(create_terminal_router(container, project_root))
     app.include_router(create_self_dev_router(container))
     app.include_router(create_api_fallback_proxy_router(container))
     app.include_router(create_root_asset_proxy_router(container))
 
-    project_root = Path(__file__).resolve().parents[2]
     mount_frontend(app, container, project_root / "web" / "dist")
     return app
