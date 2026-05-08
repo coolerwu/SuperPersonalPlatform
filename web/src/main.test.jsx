@@ -463,6 +463,105 @@ describe("LoginPage", () => {
     expect(await screen.findByText("请先在配置页添加 Agent")).toBeInTheDocument();
   });
 
+  it("shows self-dev create form by default without the old step indicator", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/self-dev");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path) => {
+        if (path === "/api/auth/me") {
+          return { ok: true, json: async () => ({ authenticated: true }) };
+        }
+        if (path === "/api/agents/options") {
+          return {
+            ok: true,
+            json: async () => ({
+              default_agent_id: "coder",
+              agents: [{ id: "coder", name: "编码 Agent" }]
+            })
+          };
+        }
+        if (path === "/api/self-dev/tasks") {
+          return { ok: true, json: async () => ({ tasks: [] }) };
+        }
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+      })
+    );
+
+    vi.resetModules();
+    await act(async () => {
+      await import("./main.jsx");
+    });
+
+    expect(await screen.findByRole("button", { name: "自开发" })).toBeInTheDocument();
+    expect(await screen.findByText("新建开发任务")).toBeInTheDocument();
+    expect(screen.queryByText("选择或创建一个任务")).not.toBeInTheDocument();
+    expect(screen.queryByText("创建")).not.toBeInTheDocument();
+    expect(screen.queryByText("审查")).not.toBeInTheDocument();
+  });
+
+  it("opens selected self-dev task in tabs with real status instead of fake progress", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/self-dev");
+    const task = {
+      id: "task-1",
+      status: "running",
+      goal: "重构自开发页面",
+      branch: "agent/self-dev-task-1",
+      created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+      updated_at: new Date().toISOString(),
+      events: [
+        { type: "run", goal: "重构自开发页面", timestamp: "2026-05-06T09:00:00" },
+        { type: "log", level: "info", message: "正在执行真实任务" }
+      ],
+      diff: "diff --git a/web/src/main.jsx b/web/src/main.jsx\n--- a/web/src/main.jsx\n+++ b/web/src/main.jsx\n@@ -1 +1 @@\n-old\n+new\n"
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path) => {
+        if (path === "/api/auth/me") {
+          return { ok: true, json: async () => ({ authenticated: true }) };
+        }
+        if (path === "/api/agents/options") {
+          return {
+            ok: true,
+            json: async () => ({ default_agent_id: "coder", agents: [{ id: "coder", name: "编码 Agent" }] })
+          };
+        }
+        if (path === "/api/self-dev/tasks") {
+          return { ok: true, json: async () => ({ tasks: [task] }) };
+        }
+        if (path === "/api/self-dev/tasks/task-1") {
+          return { ok: true, json: async () => ({ task }) };
+        }
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+      })
+    );
+
+    const user = userEvent.setup();
+    vi.resetModules();
+    await act(async () => {
+      await import("./main.jsx");
+    });
+
+    await user.click(await screen.findByRole("button", { name: /重构自开发页面/ }));
+
+    expect((await screen.findAllByText("运行中")).length).toBeGreaterThan(0);
+    expect(screen.getByRole("tab", { name: /对话/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /文件变更/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /执行日志/ })).toBeInTheDocument();
+    expect(screen.getByText(/实际状态/)).toBeInTheDocument();
+    expect(screen.getByText(/运行时间/)).toBeInTheDocument();
+    expect(screen.queryByText("分析需求")).not.toBeInTheDocument();
+    expect(screen.queryByText("生成报告")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /文件变更/ }));
+    expect(await screen.findByText("web/src/main.jsx")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /执行日志/ }));
+    expect(await screen.findByText("正在执行真实任务")).toBeInTheDocument();
+  });
+
   it("edits Agent workspace config from the config tab", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/agents");

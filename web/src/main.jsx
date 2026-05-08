@@ -1080,15 +1080,58 @@ function SelfDevPage({ onUnauthorized }) {
   const [reviewNote, setReviewNote] = useState("");
   const [taskChatInput, setTaskChatInput] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
-  const [detailTab, setDetailTab] = useState("files");
-  const [isCreatingNew, setIsCreatingNew] = useState(false);
+  const [taskTab, setTaskTab] = useState("chat");
 
-  const steps = [
-    { key: "created", label: "创建", icon: Plus },
-    { key: "running", label: "执行中", icon: RefreshCw },
-    { key: "review", label: "审查", icon: Eye },
-    { key: "completed", label: "完成", icon: CheckCircle }
-  ];
+  const taskActions = useMemo(() => ({
+    createAndRun: {
+      requireTask: false,
+      run: async () => {
+        const created = await api("/api/self-dev/tasks", {
+          method: "POST",
+          body: JSON.stringify({ goal, agent_id: agentId, repo_url: repoUrl })
+        });
+        const runData = await api(`/api/self-dev/tasks/${created.task.id}/run`, {
+          method: "POST",
+          body: JSON.stringify({ instruction: goal })
+        });
+        setGoal("");
+        return runData.task;
+      }
+    },
+    chat: {
+      requireTask: true,
+      run: async (task) => {
+        const data = await api(`/api/self-dev/tasks/${task.id}/run`, {
+          method: "POST",
+          body: JSON.stringify({ instruction: taskChatInput })
+        });
+        setTaskChatInput("");
+        return data.task;
+      }
+    },
+    accept: {
+      requireTask: true,
+      run: async (task) => {
+        const data = await api(`/api/self-dev/tasks/${task.id}/accept`, {
+          method: "POST",
+          body: JSON.stringify({ note: reviewNote })
+        });
+        setReviewNote("");
+        return data.task;
+      }
+    },
+    reject: {
+      requireTask: true,
+      run: async (task) => {
+        const data = await api(`/api/self-dev/tasks/${task.id}/reject`, {
+          method: "POST",
+          body: JSON.stringify({ reason: reviewNote })
+        });
+        setReviewNote("");
+        return data.task;
+      }
+    }
+  }), [agentId, goal, repoUrl, reviewNote, taskChatInput]);
 
   function statusLabel(value) {
     return {
@@ -1123,11 +1166,6 @@ function SelfDevPage({ onUnauthorized }) {
     }[value] || Circle;
   }
 
-  const currentStepIndex = useMemo(() => {
-    const stepMap = { created: 0, running: 1, needs_review: 2, pushed: 3, accepted: 3, failed: 3 };
-    return stepMap[selectedTask?.status] ?? 0;
-  }, [selectedTask?.status]);
-
   function handleApiError(err) {
     if (err.status === 401 || err.message === "Authentication required") {
       onUnauthorized();
@@ -1155,94 +1193,31 @@ function SelfDevPage({ onUnauthorized }) {
     }
   }
 
-  async function createTask() {
-    setError("");
-    setRunning(true);
-    try {
-      const data = await api("/api/self-dev/tasks", {
-        method: "POST",
-        body: JSON.stringify({ goal, agent_id: agentId, repo_url: repoUrl })
-      });
-      const task = data.task;
-      setSelectedTask(task);
-      setIsCreatingNew(false);
-      const runData = await api(`/api/self-dev/tasks/${task.id}/run`, {
-        method: "POST",
-        body: JSON.stringify({ instruction: goal })
-      });
-      setSelectedTask(runData.task);
-      setGoal("");
-      await refreshTask(runData.task.id);
-      await loadSelfDev();
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setRunning(false);
-    }
-  }
-
   async function refreshTask(taskId = selectedTask?.id) {
     if (!taskId) return;
     try {
       const data = await api(`/api/self-dev/tasks/${taskId}`);
       setSelectedTask(data.task);
+      setSelectedFile(null);
+      setTaskTab((current) => current || "chat");
+      return data.task;
     } catch (err) {
       handleApiError(err);
     }
   }
 
-  async function rejectTask() {
-    if (!selectedTask?.id) return;
+  async function performTaskAction(actionName) {
+    const action = taskActions[actionName];
+    if (!action) return;
+    if (action.requireTask && !selectedTask?.id) return;
     setRunning(true);
     setError("");
     try {
-      const data = await api(`/api/self-dev/tasks/${selectedTask.id}/reject`, {
-        method: "POST",
-        body: JSON.stringify({ reason: reviewNote })
-      });
-      setSelectedTask(data.task);
-      setReviewNote("");
-      await refreshTask(data.task.id);
-      await loadSelfDev();
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  async function acceptTask() {
-    if (!selectedTask?.id) return;
-    setRunning(true);
-    setError("");
-    try {
-      const data = await api(`/api/self-dev/tasks/${selectedTask.id}/accept`, {
-        method: "POST",
-        body: JSON.stringify({ note: reviewNote })
-      });
-      setSelectedTask(data.task);
-      setReviewNote("");
-      await refreshTask(data.task.id);
-      await loadSelfDev();
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  async function sendTaskChat() {
-    if (!selectedTask?.id || !taskChatInput.trim()) return;
-    setRunning(true);
-    setError("");
-    try {
-      const data = await api(`/api/self-dev/tasks/${selectedTask.id}/run`, {
-        method: "POST",
-        body: JSON.stringify({ instruction: taskChatInput })
-      });
-      setSelectedTask(data.task);
-      setTaskChatInput("");
-      await refreshTask(data.task.id);
+      const nextTask = await action.run(selectedTask);
+      if (nextTask) {
+        setSelectedTask(nextTask);
+        await refreshTask(nextTask.id);
+      }
       await loadSelfDev();
     } catch (err) {
       handleApiError(err);
@@ -1273,6 +1248,18 @@ function SelfDevPage({ onUnauthorized }) {
     if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`;
     return date.toLocaleDateString("zh-CN");
+  }
+
+  function formatDuration(start, end) {
+    if (!start) return "未知";
+    const startedAt = new Date(start).getTime();
+    const endedAt = end ? new Date(end).getTime() : Date.now();
+    if (Number.isNaN(startedAt) || Number.isNaN(endedAt)) return "未知";
+    const totalSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes < 1) return `${seconds} 秒`;
+    return `${minutes} 分 ${seconds} 秒`;
   }
 
   function parseDiffToFiles(diff) {
@@ -1326,8 +1313,9 @@ function SelfDevPage({ onUnauthorized }) {
   const parsedEvents = useMemo(() => parseEvents(selectedTask?.events), [selectedTask?.events]);
 
   function handleNewTask() {
-    setIsCreatingNew(true);
     setSelectedTask(null);
+    setSelectedFile(null);
+    setTaskTab("chat");
     setGoal("");
   }
 
@@ -1338,9 +1326,7 @@ function SelfDevPage({ onUnauthorized }) {
 
   return (
     <section className="page-section self-dev-section">
-      <StepIndicator steps={steps} currentStep={currentStepIndex} />
-      
-      <div className="self-dev-three-column">
+      <div className="self-dev-layout">
         <TaskListSidebar
           tasks={tasks}
           selectedTask={selectedTask}
@@ -1351,12 +1337,11 @@ function SelfDevPage({ onUnauthorized }) {
           statusIcon={statusIcon}
           formatTime={formatTime}
           truncate={truncate}
-          isCreatingNew={isCreatingNew}
+          loading={loading}
         />
         
         <MainWorkbench
           selectedTask={selectedTask}
-          isCreatingNew={isCreatingNew}
           agents={agents}
           agentId={agentId}
           setAgentId={setAgentId}
@@ -1364,75 +1349,45 @@ function SelfDevPage({ onUnauthorized }) {
           setRepoUrl={setRepoUrl}
           goal={goal}
           setGoal={setGoal}
-          createTask={createTask}
+          createTask={() => performTaskAction("createAndRun")}
           running={running}
           error={error}
           reviewNote={reviewNote}
           setReviewNote={setReviewNote}
-          onAccept={acceptTask}
-          onReject={rejectTask}
+          onAccept={() => performTaskAction("accept")}
+          onReject={() => performTaskAction("reject")}
           taskChatInput={taskChatInput}
           setTaskChatInput={setTaskChatInput}
-          onSendChat={sendTaskChat}
-          fileChanges={fileChanges}
-          parsedEvents={parsedEvents}
-          statusLabel={statusLabel}
-          statusColor={statusColor}
-          onRefresh={() => refreshTask()}
-        />
-        
-        <DetailSidebar
-          selectedTask={selectedTask}
+          onSendChat={() => performTaskAction("chat")}
           fileChanges={fileChanges}
           selectedFile={selectedFile}
           onSelectFile={setSelectedFile}
           parsedEvents={parsedEvents}
-          detailTab={detailTab}
-          setDetailTab={setDetailTab}
+          statusLabel={statusLabel}
+          statusColor={statusColor}
+          statusIcon={statusIcon}
+          formatDuration={formatDuration}
+          taskTab={taskTab}
+          setTaskTab={setTaskTab}
+          onRefresh={() => refreshTask()}
         />
       </div>
     </section>
   );
 }
 
-function StepIndicator({ steps, currentStep }) {
-  return (
-    <div className="step-indicator">
-      {steps.map((step, index) => {
-        const isCompleted = index < currentStep;
-        const isCurrent = index === currentStep;
-        const Icon = step.icon;
-        
-        return (
-          <React.Fragment key={step.key}>
-            <div className={`step-item ${isCurrent ? "active" : ""} ${isCompleted ? "completed" : ""}`}>
-              <div className="step-icon">
-                {isCompleted ? <Check size={16} /> : <Icon size={16} className={isCurrent ? "spin" : ""} />}
-              </div>
-              <span className="step-label">{step.label}</span>
-            </div>
-            {index < steps.length - 1 && (
-              <div className={`step-connector ${isCompleted ? "completed" : ""}`} />
-            )}
-          </React.Fragment>
-        );
-      })}
-    </div>
-  );
-}
-
-function TaskListSidebar({ tasks, selectedTask, onSelectTask, onNewTask, statusLabel, statusColor, statusIcon, formatTime, truncate, isCreatingNew }) {
+function TaskListSidebar({ tasks, selectedTask, onSelectTask, onNewTask, statusLabel, statusColor, statusIcon, formatTime, truncate, loading }) {
   return (
     <aside className="self-dev-task-sidebar">
       <div className="task-sidebar-header">
         <h3>任务列表</h3>
-        <span className="task-count">{tasks.length} 个任务</span>
+        <span className="task-count">{loading ? "加载中" : `${tasks.length} 个任务`}</span>
       </div>
       
       <div className="self-dev-task-list">
         {tasks.length ? tasks.map((task) => {
           const StatusIcon = statusIcon(task.status);
-          const isActive = selectedTask?.id === task.id && !isCreatingNew;
+          const isActive = selectedTask?.id === task.id;
           
           return (
             <button
@@ -1451,14 +1406,14 @@ function TaskListSidebar({ tasks, selectedTask, onSelectTask, onNewTask, statusL
                 </span>
                 <time className="task-time">{formatTime(task.updated_at)}</time>
               </div>
-              <p className="task-goal">{truncate(task.goal, 60)}</p>
+              <p className="task-goal">{truncate(task.goal, 72)}</p>
               <div className="task-branch">
                 <GitBranch size={12} />
                 <span>{task.branch}</span>
               </div>
             </button>
           );
-        }) : <div className="empty-state">暂无自开发任务</div>}
+        }) : <div className="empty-state">暂无自开发任务，右侧可直接创建</div>}
       </div>
       
       <button className="self-dev-new-task-btn" onClick={onNewTask}>
@@ -1469,13 +1424,14 @@ function TaskListSidebar({ tasks, selectedTask, onSelectTask, onNewTask, statusL
 }
 
 function MainWorkbench({
-  selectedTask, isCreatingNew, agents, agentId, setAgentId, repoUrl, setRepoUrl, goal, setGoal,
+  selectedTask, agents, agentId, setAgentId, repoUrl, setRepoUrl, goal, setGoal,
   createTask, running, error, reviewNote, setReviewNote, onAccept, onReject,
-  taskChatInput, setTaskChatInput, onSendChat, fileChanges, parsedEvents, statusLabel, statusColor, onRefresh
+  taskChatInput, setTaskChatInput, onSendChat, fileChanges, selectedFile, onSelectFile,
+  parsedEvents, statusLabel, statusColor, statusIcon, formatDuration, taskTab, setTaskTab, onRefresh
 }) {
-  if (isCreatingNew || !selectedTask) {
+  if (!selectedTask) {
     return (
-      <main className="self-dev-workbench">
+      <main className="self-dev-workbench create-mode">
         <CreateTaskView
           agents={agents}
           agentId={agentId}
@@ -1493,14 +1449,17 @@ function MainWorkbench({
   }
 
   return (
-    <main className="self-dev-workbench">
+    <main className="self-dev-workbench task-mode">
       {error ? <div className="form-error">{error}</div> : null}
-      
-      {selectedTask.status === "running" && (
-        <RunningTaskView task={selectedTask} statusLabel={statusLabel} statusColor={statusColor} onRefresh={onRefresh} />
-      )}
-      
-      {selectedTask.status === "needs_review" && (
+      <TaskOverviewBar
+        task={selectedTask}
+        statusLabel={statusLabel}
+        statusColor={statusColor}
+        statusIcon={statusIcon}
+        formatDuration={formatDuration}
+        onRefresh={onRefresh}
+      />
+      {selectedTask.status === "needs_review" ? (
         <ReviewTaskView
           task={selectedTask}
           reviewNote={reviewNote}
@@ -1510,19 +1469,19 @@ function MainWorkbench({
           running={running}
           fileChanges={fileChanges}
         />
-      )}
-      
-      {(selectedTask.status === "pushed" || selectedTask.status === "accepted" || selectedTask.status === "failed") && (
-        <CompletedTaskView task={selectedTask} statusLabel={statusLabel} statusColor={statusColor} />
-      )}
-      
-      <ChatPanel
+      ) : null}
+      <TaskTabs
         task={selectedTask}
-        input={taskChatInput}
-        setInput={setTaskChatInput}
-        onSend={onSendChat}
-        running={running}
+        activeTab={taskTab}
+        setActiveTab={setTaskTab}
+        fileChanges={fileChanges}
+        selectedFile={selectedFile}
+        onSelectFile={onSelectFile}
         parsedEvents={parsedEvents}
+        taskChatInput={taskChatInput}
+        setTaskChatInput={setTaskChatInput}
+        onSendChat={onSendChat}
+        running={running}
       />
     </main>
   );
@@ -1563,6 +1522,7 @@ function CreateTaskView({ agents, agentId, setAgentId, repoUrl, setRepoUrl, goal
             rows={5}
           />
         </label>
+        {error ? <div className="form-error">{error}</div> : null}
         
         <button
           className="secondary-button primary-action create-task-btn"
@@ -1576,43 +1536,96 @@ function CreateTaskView({ agents, agentId, setAgentId, repoUrl, setRepoUrl, goal
   );
 }
 
-function RunningTaskView({ task, statusLabel, statusColor, onRefresh }) {
+function TaskOverviewBar({ task, statusLabel, statusColor, statusIcon, formatDuration, onRefresh }) {
+  const StatusIcon = statusIcon(task.status);
+  const finishedAt = ["pushed", "accepted", "failed", "needs_review"].includes(task.status) ? task.updated_at : null;
+  const outcome = {
+    pushed: "已推送到远程仓库，请前往 GitHub 合并该分支。",
+    accepted: "已接受 AI 建议，可继续通过对话补充修改。",
+    failed: task.error || "任务执行失败，请查看执行日志。"
+  }[task.status];
+
   return (
-    <div className="running-task-view">
-      <div className="task-status-header">
-        <Loader2 size={28} className="spin" style={{ color: statusColor(task.status) }} />
-        <div>
-          <h3>{statusLabel(task.status)}</h3>
-          <p>AI 正在执行任务，请稍候...</p>
-        </div>
-        <button className="secondary-button icon-btn" onClick={onRefresh}>
-          <RefreshCw size={16} />
-        </button>
-      </div>
-      
-      <div className="running-task-progress">
-        <div className="progress-bar">
-          <div className="progress-fill" style={{ width: "60%" }} />
-        </div>
-        <div className="progress-steps">
-          <span className="completed">✓ 分析需求</span>
-          <span className="completed">✓ 克隆仓库</span>
-          <span className="active">● 执行修改</span>
-          <span>○ 生成报告</span>
+    <section className={`task-overview-bar ${task.status}`}>
+      <div className="task-overview-main">
+        <StatusBadge task={task} label={statusLabel(task.status)} color={statusColor(task.status)} icon={StatusIcon} />
+        <div className="task-overview-title">
+          <h2>{task.goal}</h2>
+          <p>
+            <GitBranch size={13} />
+            <span>{task.branch}</span>
+          </p>
         </div>
       </div>
-      
-      <div className="task-info-cards">
-        <div className="info-card">
-          <GitBranch size={16} />
-          <span>{task.branch}</span>
-        </div>
-        <div className="info-card">
-          <Clock size={16} />
-          <span>已运行 {Math.floor((Date.now() - new Date(task.created_at)) / 60000)} 分钟</span>
-        </div>
+      <div className="task-overview-meta">
+        <span>实际状态：{statusLabel(task.status)}</span>
+        <span>运行时间：{formatDuration(task.created_at, finishedAt)}</span>
+        {outcome ? <strong>{outcome}</strong> : null}
       </div>
-    </div>
+      <button className="secondary-button icon-btn" onClick={onRefresh} aria-label="刷新任务">
+        <RefreshCw size={16} />
+      </button>
+    </section>
+  );
+}
+
+function StatusBadge({ task, label, color, icon: StatusIcon }) {
+  return (
+    <span className="task-status-badge" style={{ color }}>
+      <StatusIcon size={15} className={task.status === "running" ? "spin" : ""} />
+      {label}
+    </span>
+  );
+}
+
+function TaskTabs({
+  task, activeTab, setActiveTab, fileChanges, selectedFile, onSelectFile, parsedEvents,
+  taskChatInput, setTaskChatInput, onSendChat, running
+}) {
+  const tabs = [
+    { key: "chat", label: "对话", icon: MessageSquare, count: null },
+    { key: "files", label: "文件变更", icon: FileCode, count: fileChanges.length || null },
+    { key: "logs", label: "执行日志", icon: TerminalIcon, count: parsedEvents.length || null }
+  ];
+
+  return (
+    <section className="task-detail-tabs-shell">
+      <div className="task-detail-tabs" role="tablist" aria-label="任务详情">
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.key}
+              role="tab"
+              type="button"
+              aria-selected={activeTab === tab.key}
+              className={activeTab === tab.key ? "active" : ""}
+              onClick={() => setActiveTab(tab.key)}
+            >
+              <Icon size={15} />
+              {tab.label}
+              {tab.count ? <span className="tab-badge">{tab.count}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+      <div className="task-tab-panel">
+        {activeTab === "chat" ? (
+          <ChatPanel
+            task={task}
+            input={taskChatInput}
+            setInput={setTaskChatInput}
+            onSend={onSendChat}
+            running={running}
+            parsedEvents={parsedEvents}
+          />
+        ) : null}
+        {activeTab === "files" ? (
+          <FileChangesPanel fileChanges={fileChanges} selectedFile={selectedFile} onSelectFile={onSelectFile} />
+        ) : null}
+        {activeTab === "logs" ? <ExecutionLogsPanel parsedEvents={parsedEvents} /> : null}
+      </div>
+    </section>
   );
 }
 
@@ -1627,17 +1640,17 @@ function ReviewTaskView({ task, reviewNote, setReviewNote, onAccept, onReject, r
   const RecIcon = config.icon;
   
   return (
-    <div className="review-task-view">
+    <section className="review-task-view">
       <div className="review-header">
-        <Eye size={24} style={{ color: "var(--warning)" }} />
+        <Eye size={22} style={{ color: "var(--warning)" }} />
         <div>
-          <h2>审查 AI 建议</h2>
-          <p>请查看代码变更，决定是否接受 AI 的建议</p>
+          <h3>审查 AI 建议</h3>
+          <p>请查看代码变更，决定是否接受 AI 的建议。</p>
         </div>
       </div>
       
       <div className="recommendation-card" style={{ background: config.bg, borderColor: config.border }}>
-        <RecIcon size={36} style={{ color: config.color }} />
+        <RecIcon size={30} style={{ color: config.color }} />
         <div className="recommendation-content">
           <h3 style={{ color: config.color }}>{config.title}</h3>
           <p>{task.result || config.desc}</p>
@@ -1646,7 +1659,7 @@ function ReviewTaskView({ task, reviewNote, setReviewNote, onAccept, onReject, r
       
       {fileChanges.length > 0 && (
         <div className="review-file-summary">
-          <h4>变更摘要</h4>
+          <h4>Diff 摘要</h4>
           <div className="file-summary-list">
             {fileChanges.slice(0, 5).map((file, idx) => (
               <div key={idx} className={`file-summary-item ${file.status}`}>
@@ -1685,30 +1698,7 @@ function ReviewTaskView({ task, reviewNote, setReviewNote, onAccept, onReject, r
           接受 AI 建议
         </button>
       </div>
-    </div>
-  );
-}
-
-function CompletedTaskView({ task, statusLabel, statusColor }) {
-  const config = {
-    pushed: { icon: GitBranch, color: "var(--success)", title: "已推送到远程仓库", desc: "请前往 GitHub 合并该分支" },
-    accepted: { icon: CheckCircle, color: "var(--success)", title: "已接受 AI 建议", desc: "可继续对话修改" },
-    failed: { icon: XCircle, color: "var(--danger)", title: "任务执行失败", desc: task.error || "请查看日志了解详情" }
-  }[task.status];
-
-  const Icon = config.icon;
-
-  return (
-    <div className="completed-task-view">
-      <Icon size={20} style={{ color: config.color }} />
-      <div className="completed-task-content">
-        <span style={{ color: config.color, fontWeight: 600 }}>{config.title}</span>
-        <small>{config.desc}</small>
-      </div>
-      {task.status === "pushed" && task.branch && (
-        <code className="branch-tag">{task.branch}</code>
-      )}
-    </div>
+    </section>
   );
 }
 
@@ -1729,7 +1719,9 @@ function ChatPanel({ task, input, setInput, onSend, running, parsedEvents }) {
   }, [parsedEvents]);
   
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (typeof messagesEndRef.current?.scrollIntoView === "function") {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages]);
   
   const canChat = task.status !== "running" && task.status !== "pushed";
@@ -1788,101 +1780,78 @@ function ChatPanel({ task, input, setInput, onSend, running, parsedEvents }) {
   );
 }
 
-function DetailSidebar({ selectedTask, fileChanges, selectedFile, onSelectFile, parsedEvents, detailTab, setDetailTab }) {
-  if (!selectedTask) {
-    return (
-      <aside className="self-dev-detail-sidebar">
-        <div className="detail-empty">
-          <FileCode size={48} />
-          <p>选择或创建一个任务<br />查看文件变更和日志</p>
-        </div>
-      </aside>
-    );
-  }
-  
+function FileChangesPanel({ fileChanges, selectedFile, onSelectFile }) {
   const selectedFileContent = selectedFile ? fileChanges.find(f => f.path === selectedFile)?.content : "";
-  
+
+  if (fileChanges.length === 0) {
+    return <div className="panel-empty">暂无文件变更</div>;
+  }
+
   return (
-    <aside className="self-dev-detail-sidebar">
-      <div className="detail-tabs">
-        <button className={detailTab === "files" ? "active" : ""} onClick={() => setDetailTab("files")}>
-          <FileCode size={14} /> 文件变更
-          {fileChanges.length > 0 && <span className="tab-badge">{fileChanges.length}</span>}
-        </button>
-        <button className={detailTab === "logs" ? "active" : ""} onClick={() => setDetailTab("logs")}>
-          <TerminalIcon size={14} /> 执行日志
-          {parsedEvents.length > 0 && <span className="tab-badge">{parsedEvents.length}</span>}
-        </button>
+    <div className="files-panel">
+      <div className="file-change-tree">
+        {fileChanges.map((file, idx) => (
+          <button
+            type="button"
+            key={idx}
+            className={`file-change-item ${file.status} ${selectedFile === file.path ? "selected" : ""}`}
+            onClick={() => onSelectFile(file.path)}
+          >
+            {file.status === "added" && <FilePlus size={14} className="file-icon added" />}
+            {file.status === "deleted" && <FileMinus size={14} className="file-icon deleted" />}
+            {file.status === "modified" && <FileCode size={14} className="file-icon modified" />}
+            <span className="file-path">{file.path}</span>
+            <span className="file-stats">
+              {file.additions > 0 && <span className="stat-add">+{file.additions}</span>}
+              {file.deletions > 0 && <span className="stat-del">-{file.deletions}</span>}
+            </span>
+          </button>
+        ))}
       </div>
-      
-      {detailTab === "files" ? (
-        <div className="files-panel">
-          {fileChanges.length === 0 ? (
-            <div className="panel-empty">暂无文件变更</div>
-          ) : (
-            <>
-              <div className="file-change-tree">
-                {fileChanges.map((file, idx) => (
-                  <div
-                    key={idx}
-                    className={`file-change-item ${file.status} ${selectedFile === file.path ? "selected" : ""}`}
-                    onClick={() => onSelectFile(file.path)}
-                  >
-                    {file.status === "added" && <FilePlus size={14} className="file-icon added" />}
-                    {file.status === "deleted" && <FileMinus size={14} className="file-icon deleted" />}
-                    {file.status === "modified" && <FileCode size={14} className="file-icon modified" />}
-                    <span className="file-path">{file.path}</span>
-                    <span className="file-stats">
-                      {file.additions > 0 && <span className="stat-add">+{file.additions}</span>}
-                      {file.deletions > 0 && <span className="stat-del">-{file.deletions}</span>}
-                    </span>
-                  </div>
-                ))}
+      <div className="diff-viewer">
+        {selectedFileContent ? (
+          <pre>{selectedFileContent}</pre>
+        ) : (
+          <div className="diff-placeholder">选择文件查看变更详情</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ExecutionLogsPanel({ parsedEvents }) {
+  if (parsedEvents.length === 0) {
+    return <div className="panel-empty">暂无执行日志</div>;
+  }
+
+  return (
+    <div className="logs-panel">
+      <div className="execution-logs">
+        {parsedEvents.map((event, idx) => (
+          <div key={idx} className={`log-entry ${event.type} ${event.level || ''}`}>
+            {event.type === 'log' ? (
+              <div className="log-line">
+                <span className={`log-level ${event.level || 'info'}`}></span>
+                <span className="log-message">{event.message}</span>
               </div>
-              <div className="diff-viewer">
-                {selectedFileContent ? (
-                  <pre>{selectedFileContent}</pre>
-                ) : (
-                  <div className="diff-placeholder">选择文件查看变更详情</div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="logs-panel">
-          {parsedEvents.length === 0 ? (
-            <div className="panel-empty">暂无执行日志</div>
-          ) : (
-            <div className="execution-logs">
-              {parsedEvents.map((event, idx) => (
-                <div key={idx} className={`log-entry ${event.type} ${event.level || ''}`}>
-                  {event.type === 'log' ? (
-                    <div className="log-line">
-                      <span className={`log-level ${event.level || 'info'}`}></span>
-                      <span className="log-message">{event.message}</span>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="log-header">
-                        <span className="log-type">{event.type}</span>
-                        {event.timestamp && <time>{new Date(event.timestamp).toLocaleTimeString()}</time>}
-                      </div>
-                      <div className="log-content">
-                        {event.goal && <p className="log-goal">🎯 {event.goal}</p>}
-                        {event.status && <p className="log-status">状态: {event.status}</p>}
-                        {event.result && <p className="log-result">{event.result}</p>}
-                        {event.error && <p className="log-error">❌ {event.error}</p>}
-                      </div>
-                    </>
-                  )}
+            ) : (
+              <>
+                <div className="log-header">
+                  <span className="log-type">{event.type}</span>
+                  {event.timestamp && <time>{new Date(event.timestamp).toLocaleTimeString()}</time>}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </aside>
+                <div className="log-content">
+                  {event.goal && <p className="log-goal">🎯 {event.goal}</p>}
+                  {event.status && <p className="log-status">状态: {event.status}</p>}
+                  {event.result && <p className="log-result">{event.result}</p>}
+                  {event.error && <p className="log-error">❌ {event.error}</p>}
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 function TerminalPage({ onUnauthorized }) {
