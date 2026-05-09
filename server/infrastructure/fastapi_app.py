@@ -1,5 +1,6 @@
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -23,6 +24,8 @@ from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.app.self_dev_service import SelfDevService
+from server.app.job_service import JobService
+from server.app.job_worker import JobWorker
 from server.domain.auth import AuthToken
 from server.infrastructure.config import Settings, load_settings
 from server.infrastructure.http_proxy_gateway import HttpProxyGateway
@@ -38,10 +41,12 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     project_root = Path(__file__).resolve().parents[2]
     active_workspace = workspace or current_workspace()
     system_log_service = SystemLogService(active_workspace)
+    job_service = JobService(active_workspace)
     agent_chat_service = AgentChatService(
         active_workspace / "config.yaml",
         LangChainOpenAICompatibleAdapter(),
     )
+    self_dev_service = SelfDevService(active_workspace, agent_chat_service, job_service)
     return AppContainer(
         auth_service=AuthService(AuthToken(settings.auth.token)),
         config_file_service=ConfigFileService(active_workspace),
@@ -54,7 +59,8 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         ),
         session_codec=SessionCodec(settings.auth.token),
         agent_chat_service=agent_chat_service,
-        self_dev_service=SelfDevService(active_workspace, agent_chat_service),
+        job_service=job_service,
+        self_dev_service=self_dev_service,
     )
 
 
@@ -88,7 +94,24 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
         settings = load_settings(active_workspace / "config.yaml")
 
     container = create_container(settings, workspace)
-    app = FastAPI(title="Super Personal Platform")
+    worker = (
+        JobWorker(container.job_service, container.self_dev_service)
+        if container.job_service is not None and container.self_dev_service is not None
+        else None
+    )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if worker is not None:
+            app.state.job_worker = worker
+            await worker.start()
+        try:
+            yield
+        finally:
+            if worker is not None:
+                await worker.stop()
+
+    app = FastAPI(title="Super Personal Platform", lifespan=lifespan)
     install_request_logging(app, container)
     app.include_router(create_auth_router(container))
     app.include_router(create_agent_router(container))

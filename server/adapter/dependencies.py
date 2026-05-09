@@ -7,6 +7,7 @@ from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.app.self_dev_service import SelfDevService
+from server.app.job_service import JobService
 from server.infrastructure.session import SessionCodec
 
 
@@ -19,4 +20,5 @@ class AppContainer:
     system_update_service: SystemUpdateService
     session_codec: SessionCodec
     agent_chat_service: AgentChatService | None = None
+    job_service: JobService | None = None
     self_dev_service: SelfDevService | None = None

@@ -75,6 +75,21 @@ def test_self_dev_task_create_list_and_read(tmp_path) -> None:
     assert read_response.json()["task"]["events"][0]["type"] == "created"
 
 
+def test_self_dev_run_task_enqueues_durable_job(tmp_path) -> None:
+    write_config(tmp_path)
+    service = SelfDevService(tmp_path, object())
+    task = service.create_task("update README", "assistant")
+
+    result = __import__("asyncio").run(service.run_task(task.id, instruction="continue"))
+
+    assert result.status == "queued"
+    raw = __import__("json").loads(
+        (tmp_path / "self-dev" / "tasks" / task.id / "task.json").read_text(encoding="utf-8")
+    )
+    assert raw["job"]["type"] == "self_dev.run_task"
+    assert raw["job"]["payload"] == {"allow_push": False, "instruction": "continue"}
+
+
 def test_self_dev_accept_reject_require_review_status(tmp_path) -> None:
     write_config(tmp_path)
     client = make_client(tmp_path)

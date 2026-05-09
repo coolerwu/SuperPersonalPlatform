@@ -1,4 +1,3 @@
-import asyncio
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
@@ -9,6 +8,9 @@ from uuid import uuid4
 from server.app.agent_chat_service import AgentChatCheckpoint, AgentChatService
 from server.app.agent_tool_service import AgentToolRuntime
 from server.app.agent_skill_service import AgentSkillService
+from server.app.job_service import JobService
+from server.domain.jobs import JobStatus
+from server.infrastructure.async_command_runner import AsyncCommandResult, AsyncCommandRunner
 
 
 DEFAULT_REPO_URL = "https://github.com/coolerwu/SuperPersonalPlatform.git"
@@ -31,12 +33,21 @@ class SelfDevTask:
 
 
 class SelfDevService:
-    def __init__(self, workspace: Path, agent_chat_service: AgentChatService | None) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        agent_chat_service: AgentChatService | None,
+        job_service: JobService | None = None,
+        command_runner: AsyncCommandRunner | None = None,
+    ) -> None:
         self._workspace = workspace
         self._tasks_dir = workspace / "self-dev" / "tasks"
         self._agent_chat_service = agent_chat_service
-        # Track running tasks: task_id -> asyncio.Task
-        self._running_tasks: dict[str, asyncio.Task] = {}
+        self._job_service = job_service or JobService(workspace)
+        self._command_runner = command_runner or AsyncCommandRunner()
+        # Rebuilt from task.json job state on service construction. The durable
+        # task directory remains the source of truth after process restarts.
+        self._running_tasks: dict[str, str] = self._rebuild_running_tasks()
 
     def create_task(self, goal: str, agent_id: str, repo_url: str = DEFAULT_REPO_URL) -> SelfDevTask:
         task_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8]
@@ -79,11 +90,15 @@ class SelfDevService:
         return tasks
 
     def is_task_running(self, task_id: str) -> bool:
-        """Check if a task is currently running."""
-        if task_id not in self._running_tasks:
+        """Check durable task.json state instead of process-local asyncio tasks."""
+        try:
+            task = self._read_task(task_id)
+        except FileNotFoundError:
             return False
-        task = self._running_tasks[task_id]
-        return not task.done()
+        raw_job = self._raw_job(task_id)
+        return task.status == "running" or (
+            isinstance(raw_job, dict) and raw_job.get("status") == JobStatus.RUNNING.value
+        )
 
     async def run_task(
         self,
@@ -91,34 +106,22 @@ class SelfDevService:
         allow_push: bool = False,
         instruction: str = "",
     ) -> SelfDevTask:
-        """Start a task in the background and return immediately."""
+        """Enqueue a durable job and return immediately for API compatibility."""
         if self._agent_chat_service is None:
             raise RuntimeError("Agent service is unavailable")
 
-        # Check if already running
         if self.is_task_running(task_id):
             return self._read_task(task_id)
 
         task = self._read_task(task_id)
-
-        # If task is already in a final state, reset to running
-        if task.status in ("needs_review", "pushed", "failed"):
-            task = self._replace_task(task, status="running", error="")
-
-        task = self._replace_task(task, status="running", error="")
-        self._append_event(task.id, "status", {"status": "running"})
-
-        # Start background task
-        bg_task = asyncio.create_task(
-            self._run_task_internal(task_id, allow_push, instruction)
+        job = self._job_service.enqueue(
+            task_id,
+            "self_dev.run_task",
+            {"allow_push": allow_push, "instruction": instruction},
         )
-        self._running_tasks[task_id] = bg_task
-
-        # Clean up when done
-        def cleanup(t):
-            self._running_tasks.pop(task_id, None)
-        bg_task.add_done_callback(cleanup)
-
+        self._running_tasks = self._rebuild_running_tasks()
+        task = self._read_task(task_id)
+        self._append_event(task.id, "status", {"status": task.status, "job_id": job.id})
         return task
 
     async def _run_task_internal(
@@ -136,14 +139,24 @@ class SelfDevService:
             self._append_event(task.id, "log", {"level": "info", "message": "🚀 开始执行开发任务"})
             if not repo.exists():
                 self._append_event(task.id, "log", {"level": "info", "message": f"📦 克隆仓库: {task.repo_url}"})
-                self._run_git_process(["clone", task.repo_url, str(repo)], self._task_dir(task_id))
+                await self._run_git_process_async(
+                    ["clone", task.repo_url, str(repo)],
+                    self._task_dir(task_id),
+                    on_stdout=lambda text: self._append_event(task.id, "log", {"level": "info", "message": text.rstrip()}),
+                    on_stderr=lambda text: self._append_event(task.id, "log", {"level": "info", "message": text.rstrip()}),
+                )
                 self._append_event(task.id, "log", {"level": "success", "message": "✅ 仓库克隆完成"})
             else:
                 self._append_event(task.id, "log", {"level": "info", "message": "📦 使用已存在的仓库"})
 
             # Step 2: Checkout branch
             self._append_event(task.id, "log", {"level": "info", "message": f"🌿 检出分支: {task.branch}"})
-            self._run_git_process(["checkout", "-B", task.branch], repo)
+            await self._run_git_process_async(
+                ["checkout", "-B", task.branch],
+                repo,
+                on_stdout=lambda text: self._append_event(task.id, "log", {"level": "info", "message": text.rstrip()}),
+                on_stderr=lambda text: self._append_event(task.id, "log", {"level": "info", "message": text.rstrip()}),
+            )
             self._append_event(task.id, "log", {"level": "success", "message": "✅ 分支准备就绪"})
 
             # Step 3: Prepare agent and runtime
@@ -310,6 +323,39 @@ class SelfDevService:
             capture_output=True,
             check=check,
         )
+
+    async def _run_git_process_async(
+        self,
+        args: list[str],
+        cwd: Path,
+        check: bool = True,
+        timeout: float | None = None,
+        on_stdout=None,
+        on_stderr=None,
+    ) -> AsyncCommandResult:
+        return await self._command_runner.run(
+            ["git", *args],
+            cwd=cwd,
+            timeout=timeout,
+            check=check,
+            on_stdout=on_stdout,
+            on_stderr=on_stderr,
+        )
+
+    def _raw_job(self, task_id: str) -> dict[str, object] | None:
+        try:
+            raw = json.loads((self._task_dir(task_id) / "task.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        job = raw.get("job")
+        return job if isinstance(job, dict) else None
+
+    def _rebuild_running_tasks(self) -> dict[str, str]:
+        running: dict[str, str] = {}
+        for job in self._job_service.list_active():
+            if job.status == JobStatus.RUNNING:
+                running[job.task_id] = job.id
+        return running
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
