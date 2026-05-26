@@ -236,6 +236,61 @@ function ProxyPage() {
   );
 }
 
+function renderInlineMarkdown(text, keyPrefix) {
+  const parts = [];
+  const pattern = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let lastIndex = 0;
+  let match;
+  let index = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith("**")) {
+      parts.push(<strong key={`${keyPrefix}-strong-${index}`}>{token.slice(2, -2)}</strong>);
+    } else {
+      parts.push(<code key={`${keyPrefix}-code-${index}`}>{token.slice(1, -1)}</code>);
+    }
+    lastIndex = pattern.lastIndex;
+    index += 1;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts;
+}
+
+function MarkdownMessage({ content }) {
+  const blocks = String(content || "").split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+  return (
+    <div className="agent-markdown">
+      {blocks.map((block, blockIndex) => {
+        const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+        const ordered = lines.every((line) => /^\d+\.\s+/.test(line));
+        const unordered = lines.every((line) => /^[-*]\s+/.test(line));
+        if (ordered || unordered) {
+          const ListTag = ordered ? "ol" : "ul";
+          return (
+            <ListTag key={`block-${blockIndex}`}>
+              {lines.map((line, lineIndex) => (
+                <li key={`line-${lineIndex}`}>
+                  {renderInlineMarkdown(line.replace(ordered ? /^\d+\.\s+/ : /^[-*]\s+/, ""), `${blockIndex}-${lineIndex}`)}
+                </li>
+              ))}
+            </ListTag>
+          );
+        }
+        return (
+          <p key={`block-${blockIndex}`}>
+            {renderInlineMarkdown(lines.join("\n"), `${blockIndex}`)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 function AgentPage({ onUnauthorized }) {
   const [activeTab, setActiveTab] = useState("chat");
   const [options, setOptions] = useState(null);
@@ -685,7 +740,8 @@ function AgentPage({ onUnauthorized }) {
               {messages.map((message, index) => (
                 <div key={`${message.role}-${index}`} className={`agent-message ${message.role}`}>
                   <span>{message.role === "user" ? "你" : message.role === "assistant" ? selectedAgent?.name || "Agent" : ""}</span>
-                  {message.content ? <p>{message.content}</p> : null}
+                  {message.content && message.role === "assistant" ? <MarkdownMessage content={message.content} /> : null}
+                  {message.content && message.role !== "assistant" ? <p>{message.content}</p> : null}
                   {message.checkpoints?.length ? (
                     <ol className="agent-checkpoints">
                       {message.checkpoints.map((checkpoint, checkpointIndex) => (

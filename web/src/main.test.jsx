@@ -315,7 +315,7 @@ describe("LoginPage", () => {
           })
         });
         this.onmessage?.({
-          data: JSON.stringify({ type: "assistant_message", content: "你好，我是 Agent" })
+          data: JSON.stringify({ type: "assistant_message", content: "1. **重点**：你好，我是 `Agent`" })
         });
       }
 
@@ -402,7 +402,9 @@ describe("LoginPage", () => {
     expect(payload.model_id).toBeUndefined();
     expect(payload.images).toHaveLength(1);
     expect(payload.images[0].mime_type).toBe("image/png");
-    expect(await screen.findByText("你好，我是 Agent")).toBeInTheDocument();
+    expect(await screen.findByText("重点")).toBeInTheDocument();
+    expect(screen.getByText("重点").tagName).toBe("STRONG");
+    expect(screen.getAllByText("Agent").some((node) => node.tagName === "CODE")).toBe(true);
   });
 
   it("keeps the Agent menu available and shows an empty state without agents", async () => {
