@@ -384,6 +384,7 @@ describe("LoginPage", () => {
     });
 
     expect(await screen.findByRole("button", { name: "Agent" })).toBeInTheDocument();
+    expect(document.querySelector("main.content")).toHaveClass("content-agents");
     expect(screen.queryByText("模型")).not.toBeInTheDocument();
     expect(screen.queryByText("你是一个直接、可靠的个人助理。")).not.toBeInTheDocument();
 

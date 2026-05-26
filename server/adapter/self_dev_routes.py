@@ -23,6 +23,10 @@ class RejectSelfDevTaskPayload(BaseModel):
     reason: str | None = None
 
 
+class CancelSelfDevTaskPayload(BaseModel):
+    reason: str | None = None
+
+
 def create_self_dev_router(container: AppContainer) -> APIRouter:
     def require_self_dev_auth(request: Request) -> None:
         require_authenticated(request, container)
@@ -67,6 +71,25 @@ def create_self_dev_router(container: AppContainer) -> APIRouter:
     async def run_task(task_id: str, payload: RunSelfDevTaskPayload | None = None) -> dict[str, object]:
         task = await service().run_task(task_id, instruction=(payload.instruction if payload else "") or "")
         return {"task": task.__dict__}
+
+    @router.post("/tasks/{task_id}/cancel")
+    def cancel_task(
+        request: Request,
+        task_id: str,
+        payload: CancelSelfDevTaskPayload | None = None,
+    ) -> dict[str, object]:
+        reason = (payload.reason if payload else "") or "user cancelled"
+        worker = getattr(request.app.state, "job_worker", None)
+        cancelled_by_worker = bool(worker and worker.cancel_task(task_id, reason=reason))
+        try:
+            task = service().get_task(task_id)
+            if not cancelled_by_worker:
+                task = service().cancel_task(task_id, reason).__dict__
+            return {"task": task}
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="task not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/tasks/{task_id}/accept")
     async def accept_task(task_id: str, payload: AcceptSelfDevTaskPayload) -> dict[str, object]:

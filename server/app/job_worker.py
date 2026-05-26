@@ -26,6 +26,7 @@ class JobWorker:
         self._worker_id = worker_id or f"self-dev-worker-{uuid4().hex[:8]}"
         self._loop_task: asyncio.Task[None] | None = None
         self._active_jobs: dict[str, asyncio.Task[None]] = {}
+        self._cancelled_job_ids: set[str] = set()
         self._stopping = asyncio.Event()
 
     async def start(self) -> None:
@@ -62,6 +63,18 @@ class JobWorker:
         task.add_done_callback(lambda _done: self._active_jobs.pop(job.id, None))
         return job
 
+    def cancel_task(self, task_id: str, reason: str = "user cancelled") -> bool:
+        for job in self._job_service.list_active():
+            if job.task_id != task_id:
+                continue
+            self._cancelled_job_ids.add(job.id)
+            active_task = self._active_jobs.get(job.id)
+            if active_task is not None:
+                active_task.cancel()
+            self._job_service.cancel(job.id, reason=reason)
+            return True
+        return False
+
     async def _execute(self, job: Job) -> None:
         try:
             result_task = await self._self_dev_service._run_task_internal(
@@ -77,13 +90,23 @@ class JobWorker:
                 clear_lease=True,
             )
         except asyncio.CancelledError:
-            self._job_service.update(
-                job.id,
-                status=JobStatus.QUEUED,
-                result={"reason": "worker stopped before completion"},
-                clear_lease=True,
-                task_status="queued",
-            )
+            if job.id in self._cancelled_job_ids:
+                self._job_service.update(
+                    job.id,
+                    status=JobStatus.CANCELLED,
+                    result={"reason": "user cancelled"},
+                    clear_lease=True,
+                    task_status="cancelled",
+                )
+                self._cancelled_job_ids.discard(job.id)
+            else:
+                self._job_service.update(
+                    job.id,
+                    status=JobStatus.QUEUED,
+                    result={"reason": "worker stopped before completion"},
+                    clear_lease=True,
+                    task_status="queued",
+                )
             raise
         except Exception as exc:
             self._job_service.update(

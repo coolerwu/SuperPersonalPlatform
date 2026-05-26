@@ -111,58 +111,103 @@ function LoginPage({ onLogin }) {
 }
 
 function HomePage({ onNavigate }) {
+  const primaryItems = [
+    {
+      path: "/agents",
+      icon: Bot,
+      title: "Agent 对话",
+      desc: "处理问题、上传截图、跟进上下文。",
+      meta: "默认入口"
+    },
+    {
+      path: "/self-dev",
+      icon: Code2,
+      title: "自开发",
+      desc: "创建任务、查看变更、审查推送。",
+      meta: "任务队列"
+    },
+    {
+      path: "/terminal",
+      icon: TerminalSquare,
+      title: "终端",
+      desc: "认证 PTY，会话不落盘。",
+      meta: "本机命令"
+    }
+  ];
+  const secondaryItems = [
+    {
+      path: "/channels",
+      icon: MessageSquare,
+      title: "渠道",
+      desc: "个人微信扫码机器人、Webhook。",
+      meta: "QR"
+    },
+    {
+      path: "/system",
+      icon: Settings,
+      title: "系统",
+      desc: "配置、日志、更新。",
+      meta: "ops"
+    },
+    {
+      path: "/proxy",
+      icon: Globe2,
+      title: "Hermes UI",
+      desc: "同源代理的上游工作区。",
+      meta: "proxy"
+    }
+  ];
+
   return (
-    <section className="page-section">
-      <div className="home-hero">
-        <div>
-          <span>控制台概览</span>
-          <h2>个人平台运行中</h2>
-          <p>统一入口承载 Agent、终端、系统配置和 Hermes UI。</p>
+    <section className="page-section home-workspace">
+      <div className="home-console">
+        <div className="home-console-title">
+          <span>Workspace</span>
+          <h2>控制台</h2>
         </div>
-        <div className="home-actions">
-          <button className="secondary-button primary-action" onClick={() => onNavigate("/agents")}>
-            <Bot size={17} />
-            打开 Agent
-          </button>
-          <button className="secondary-button" onClick={() => onNavigate("/system")}>
-            <Settings size={17} />
-            系统设置
-          </button>
+        <div className="home-status-strip" aria-label="运行状态">
+          <span><ShieldCheck size={15} /> Token 会话</span>
+          <span><PlugZap size={15} /> localhost:8888</span>
+          <span><Clock size={15} /> FastAPI 同源</span>
         </div>
+        <button className="home-agent-command" onClick={() => onNavigate("/agents")}>
+          <span><Bot size={18} /></span>
+          <strong>今天想处理什么？</strong>
+          <small>打开 Agent 对话，直接输入任务或上传截图</small>
+          <ArrowRight size={17} />
+        </button>
       </div>
-      <div className="metrics-grid">
-        <article className="metric-card">
-          <span>访问模式</span>
-          <strong>Token</strong>
-          <p>单 token 登录，后端签发 HttpOnly 会话 cookie。</p>
-        </article>
-        <article className="metric-card">
-          <span>部署方式</span>
-          <strong>同源</strong>
-          <p>FastAPI 托管 Vite 构建产物和 API。</p>
-        </article>
-        <article className="metric-card">
-          <span>服务端口</span>
-          <strong>8888</strong>
-          <p>统一入口为 http://localhost:8888。</p>
-        </article>
-      </div>
-      <div className="quick-grid">
-        <button className="quick-card" onClick={() => onNavigate("/terminal")}>
-          <TerminalSquare size={18} />
-          <span>终端</span>
-          <p>打开认证后的后端 PTY 会话。</p>
-        </button>
-        <button className="quick-card" onClick={() => onNavigate("/proxy")}>
-          <Globe2 size={18} />
-          <span>Hermes UI</span>
-          <p>进入同源代理后的上游应用。</p>
-        </button>
-        <button className="quick-card" onClick={() => onNavigate("/system")}>
-          <ScrollText size={18} />
-          <span>日志</span>
-          <p>查看统一平台日志和更新输出。</p>
-        </button>
+
+      <div className="home-grid">
+        <div className="home-primary-grid">
+          {primaryItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button key={item.path} className="home-tool-card" onClick={() => onNavigate(item.path)}>
+                <span className="workspace-row-icon"><Icon size={18} /></span>
+                <strong>{item.title}</strong>
+                <small>{item.desc}</small>
+                <em>{item.meta}</em>
+              </button>
+            );
+          })}
+        </div>
+        <div className="workspace-list compact" aria-label="辅助入口">
+          {secondaryItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button key={item.path} className="workspace-row" onClick={() => onNavigate(item.path)}>
+                <span className="workspace-row-icon"><Icon size={17} /></span>
+                <span className="workspace-row-copy">
+                  <strong>{item.title}</strong>
+                  <small>{item.desc}</small>
+                </span>
+                <span className="workspace-row-meta">{item.meta}</span>
+                <ArrowRight size={15} />
+              </button>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
@@ -372,6 +417,12 @@ function AgentPage({ onUnauthorized }) {
   const selectedAgent = options?.agents?.find((agent) => agent.id === agentId);
   const canChat = Boolean(options?.agents?.length);
   const blocked = !loading && (!canChat || !selectedAgent?.model || !selectedAgent?.model?.has_api_key);
+  const quickPrompts = [
+    "总结一下今天需要处理的事项",
+    "帮我检查系统设置有没有风险",
+    "根据截图分析这个 UI 怎么改",
+    "生成一个开发任务说明"
+  ];
 
   async function addFiles(fileList) {
     const imageFiles = Array.from(fileList || []).filter((file) =>
@@ -422,13 +473,6 @@ function AgentPage({ onUnauthorized }) {
       agents: current.agents.map((agent, agentIndex) =>
         agentIndex === index ? { ...agent, [field]: value } : agent
       )
-    }));
-  }
-
-  function updateCommonSkillTools(value) {
-    setConfig((current) => ({
-      ...current,
-      common_skill_tools: value.split(/\s+/).map((item) => item.trim()).filter(Boolean)
     }));
   }
 
@@ -546,7 +590,7 @@ function AgentPage({ onUnauthorized }) {
   }
 
   return (
-    <section className="page-section agent-section">
+    <section className={`page-section agent-section${activeTab === "config" ? " agent-section-config" : ""}`}>
       <div className="tab-bar" role="tablist" aria-label="Agent">
         <button className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>
           <Bot size={16} />
@@ -558,117 +602,168 @@ function AgentPage({ onUnauthorized }) {
         </button>
       </div>
       {activeTab === "chat" ? (
-        <div className="agent-chat-shell">
-          <div className="agent-chat-topbar">
-            <select
-              aria-label="Agent"
-              value={agentId}
-              onChange={(event) => setAgentId(event.target.value)}
-              disabled={loading || !canChat}
-            >
-              {(options?.agents || []).map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name}
-                </option>
-              ))}
-            </select>
-            <button className="secondary-button" onClick={connect} disabled={status === "connected" || loading}>
-              <PlugZap size={17} />
-              {status === "disconnected" ? "重连" : "已连接"}
-            </button>
-            <span className={`terminal-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
-              {status === "running" ? "生成中" : status === "connected" ? "已连接" : "未连接"}
-            </span>
-          </div>
-          <div className="agent-message-list" ref={messageListRef}>
-            {loading ? <div className="empty-state">正在加载 Agent 配置</div> : null}
-            {!loading && error && !options ? <div className="error-state">{error}</div> : null}
-            {!loading && !options?.agents?.length ? <div className="empty-state">请先在配置页添加 Agent</div> : null}
-            {!loading && selectedAgent && !selectedAgent.model ? <div className="empty-state">Agent 未配置模型</div> : null}
-            {!loading && selectedAgent?.model && !selectedAgent.model.has_api_key ? (
-              <div className="empty-state">模型 API Key 不可用</div>
-            ) : null}
-            {!loading && !blocked && messages.length === 0 ? <div className="empty-state">开始对话</div> : null}
-            {messages.map((message, index) => (
-              <div key={`${message.role}-${index}`} className={`agent-message ${message.role}`}>
-                <span>{message.role === "user" ? "你" : message.role === "assistant" ? "Agent" : ""}</span>
-                {message.content ? <p>{message.content}</p> : null}
-                {message.checkpoints?.length ? (
-                  <ol className="agent-checkpoints">
-                    {message.checkpoints.map((checkpoint, checkpointIndex) => (
-                      <li key={`${checkpoint.stage}-${checkpointIndex}`}>
-                        <strong>{checkpoint.title}</strong>
-                        {checkpoint.detail ? <small>{checkpoint.detail}</small> : null}
-                      </li>
-                    ))}
-                  </ol>
-                ) : null}
-                {message.images?.length ? (
-                  <div className="agent-message-images">
-                    {message.images.map((image) => (
-                      <img key={image.id} src={image.preview} alt={image.name || "上传图片"} />
-                    ))}
-                  </div>
-                ) : null}
+        <div className="agent-chat-shell ai-chat-workspace">
+          <aside className="ai-chat-sidebar">
+            <div className="ai-agent-card">
+              <span className="ai-agent-orb">
+                <Bot size={18} />
+              </span>
+              <div>
+                <strong>{selectedAgent?.name || "Agent"}</strong>
+                <small>{selectedAgent?.model?.name || "未选择模型"}</small>
               </div>
-            ))}
-          </div>
-          {error && options ? <div className="form-error">{error}</div> : null}
-          <div className="agent-input-row">
-            {attachments.length ? (
-              <div className="agent-attachments">
-                {attachments.map((image) => (
-                  <div key={image.id} className="agent-attachment">
-                    <img src={image.preview} alt={image.name} />
-                    <button
-                      type="button"
-                      aria-label={`移除 ${image.name}`}
-                      onClick={() => setAttachments((items) => items.filter((item) => item.id !== image.id))}
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
+            </div>
+            <label className="ai-agent-select">
+              <span>当前 Agent</span>
+              <select
+                aria-label="Agent"
+                value={agentId}
+                onChange={(event) => setAgentId(event.target.value)}
+                disabled={loading || !canChat}
+              >
+                {(options?.agents || []).map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
                 ))}
-              </div>
-            ) : null}
-            <div className="agent-composer">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                multiple
-                hidden
-                onChange={(event) => {
-                  addFiles(event.target.files);
-                  event.target.value = "";
-                }}
-              />
-              <button
-                className="secondary-button agent-icon-button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={loading || !canChat || sending}
-                aria-label="添加图片"
-              >
-                <ImageIcon size={17} />
-              </button>
-              <textarea
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                placeholder={canChat ? "输入消息，Enter 发送，Shift+Enter 换行" : "Agent 未配置"}
-                disabled={loading || blocked || sending}
-              />
-              <button
-                className="secondary-button primary-action"
-                onClick={sendMessage}
-                disabled={loading || blocked || sending || (!input.trim() && attachments.length === 0)}
-              >
-                <Send size={17} />
-                {sending ? "发送中" : "发送"}
+              </select>
+            </label>
+            <div className="ai-session-list">
+              <span>快捷开始</span>
+              {quickPrompts.map((prompt) => (
+                <button key={prompt} type="button" onClick={() => setInput(prompt)}>
+                  <MessageSquare size={14} />
+                  {prompt}
+                </button>
+              ))}
+            </div>
+            <div className="ai-agent-health">
+              <span className={`terminal-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
+                {status === "running" ? "生成中" : status === "connected" ? "已连接" : "未连接"}
+              </span>
+              <button className="secondary-button" onClick={connect} disabled={status === "connected" || loading}>
+                <PlugZap size={15} />
+                重连
               </button>
             </div>
-          </div>
+          </aside>
+          <main className="ai-chat-main">
+            <div className="ai-chat-topline">
+              <div>
+                <strong>{selectedAgent?.name || "Agent Chat"}</strong>
+                <span>
+                  {selectedAgent?.model?.model || "model"}
+                  {selectedAgent?.model?.supports_images ? " · vision" : ""}
+                </span>
+              </div>
+              <div className="ai-chat-badges">
+                {selectedAgent?.model?.has_api_key ? <span>key ready</span> : <span>key missing</span>}
+                {selectedAgent?.model?.supports_images ? <span>image input</span> : null}
+              </div>
+            </div>
+            <div className="agent-message-list" ref={messageListRef}>
+              {loading ? <div className="empty-state">正在加载 Agent 配置</div> : null}
+              {!loading && error && !options ? <div className="error-state">{error}</div> : null}
+              {!loading && !options?.agents?.length ? <div className="empty-state">请先在配置页添加 Agent</div> : null}
+              {!loading && selectedAgent && !selectedAgent.model ? <div className="empty-state">Agent 未配置模型</div> : null}
+              {!loading && selectedAgent?.model && !selectedAgent.model.has_api_key ? (
+                <div className="empty-state">模型 API Key 不可用</div>
+              ) : null}
+              {!loading && !blocked && messages.length === 0 ? (
+                <div className="agent-welcome">
+                  <h2>开始新的对话</h2>
+                  <p>选择一个快捷问题，或者直接输入你的任务。</p>
+                  <div className="ai-empty-prompts">
+                    {quickPrompts.slice(0, 3).map((prompt) => (
+                      <button key={prompt} type="button" onClick={() => setInput(prompt)}>
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {messages.map((message, index) => (
+                <div key={`${message.role}-${index}`} className={`agent-message ${message.role}`}>
+                  <span>{message.role === "user" ? "你" : message.role === "assistant" ? selectedAgent?.name || "Agent" : ""}</span>
+                  {message.content ? <p>{message.content}</p> : null}
+                  {message.checkpoints?.length ? (
+                    <ol className="agent-checkpoints">
+                      {message.checkpoints.map((checkpoint, checkpointIndex) => (
+                        <li key={`${checkpoint.stage}-${checkpointIndex}`}>
+                          <strong>{checkpoint.title}</strong>
+                          {checkpoint.detail ? <small>{checkpoint.detail}</small> : null}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : null}
+                  {message.images?.length ? (
+                    <div className="agent-message-images">
+                      {message.images.map((image) => (
+                        <img key={image.id} src={image.preview} alt={image.name || "上传图片"} />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            {error && options ? <div className="form-error">{error}</div> : null}
+            <div className="agent-input-row">
+              {attachments.length ? (
+                <div className="agent-attachments">
+                  {attachments.map((image) => (
+                    <div key={image.id} className="agent-attachment">
+                      <img src={image.preview} alt={image.name} />
+                      <button
+                        type="button"
+                        aria-label={`移除 ${image.name}`}
+                        onClick={() => setAttachments((items) => items.filter((item) => item.id !== image.id))}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="agent-composer">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  multiple
+                  hidden
+                  onChange={(event) => {
+                    addFiles(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+                <button
+                  className="secondary-button agent-icon-button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={loading || !canChat || sending}
+                  aria-label="添加图片"
+                  title="添加图片"
+                >
+                  <ImageIcon size={20} />
+                </button>
+                <textarea
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
+                  placeholder={canChat ? "输入消息..." : "Agent 未配置"}
+                  disabled={loading || blocked || sending}
+                />
+                <button
+                  className="secondary-button primary-action"
+                  onClick={sendMessage}
+                  disabled={loading || blocked || sending || (!input.trim() && attachments.length === 0)}
+                >
+                  <Send size={17} />
+                  {sending ? "发送中" : "发送"}
+                </button>
+              </div>
+            </div>
+          </main>
         </div>
       ) : null}
       {activeTab === "config" ? (
@@ -692,23 +787,44 @@ function AgentPage({ onUnauthorized }) {
           {configError ? <div className="form-error">{configError}</div> : null}
           {configStatus ? <div className="status-message">{configStatus}</div> : null}
           {config ? (
-            <>
+            <div className="agent-config-workspace">
+              <aside className="agent-config-rail">
+                <div className="agent-config-rail-card">
+                  <span>默认 Agent</span>
+                  <strong>{config.agents.find((agent) => agent.id === config.default_agent_id)?.name || config.default_agent_id || "未设置"}</strong>
+                </div>
+                <div className="agent-config-rail-card">
+                  <span>默认模型</span>
+                  <strong>{config.models.find((model) => model.id === config.default_model_id)?.name || config.default_model_id || "未设置"}</strong>
+                </div>
+                <div className="agent-config-rail-card compact">
+                  <small>{config.models.length} 个模型</small>
+                  <small>{config.agents.length} 个 Agent</small>
+                  <small>Tools: {config.tools?.profile || "default"}</small>
+                </div>
+              </aside>
+              <div className="agent-config-content">
               <section className="agent-config-section">
                 <div className="agent-config-section-heading">
-                  <h3>Tools</h3>
+                  <div>
+                    <h3>工具权限</h3>
+                    <p>控制平台级工具集合，Agent 可在自己的配置中覆盖。</p>
+                  </div>
                 </div>
                 <article className="agent-config-card">
                   <div className="agent-config-grid">
-                    <label>Profile<select value={config.tools?.profile || "default"} onChange={(event) => updatePlatformTools("profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
-                    <label className="agent-prompt-label">Allow<textarea value={(config.tools?.allow || []).join("\n")} onChange={(event) => updatePlatformTools("allow", event.target.value)} /></label>
-                    <label className="agent-prompt-label">Deny<textarea value={(config.tools?.deny || []).join("\n")} onChange={(event) => updatePlatformTools("deny", event.target.value)} /></label>
+                    <label>工具模板<select value={config.tools?.profile || "default"} onChange={(event) => updatePlatformTools("profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
+                    <label className="agent-prompt-label">允许工具<textarea placeholder="每行一个工具 id" value={(config.tools?.allow || []).join("\n")} onChange={(event) => updatePlatformTools("allow", event.target.value)} /></label>
+                    <label className="agent-prompt-label">禁用工具<textarea placeholder="每行一个工具 id，优先级高于允许列表" value={(config.tools?.deny || []).join("\n")} onChange={(event) => updatePlatformTools("deny", event.target.value)} /></label>
                   </div>
-                  <label className="agent-prompt-label">Legacy Common Skill Tools<textarea value={(config.common_skill_tools || []).join("\n")} onChange={(event) => updateCommonSkillTools(event.target.value)} /></label>
                 </article>
               </section>
               <section className="agent-config-section">
                 <div className="agent-config-section-heading">
-                  <h3>模型</h3>
+                  <div>
+                    <h3>模型</h3>
+                    <p>配置 OpenAI-compatible 接口，API Key 留空会保留原值。</p>
+                  </div>
                   <button className="secondary-button" onClick={addModel}>
                     <Plus size={17} />
                     添加模型
@@ -717,11 +833,15 @@ function AgentPage({ onUnauthorized }) {
                 <div className="agent-config-list">
                   {config.models.map((model, index) => (
                     <article className="agent-config-card" key={`${model.id}-${index}`}>
+                      <div className="agent-config-card-title">
+                        <strong>{model.name || model.id || "未命名模型"}</strong>
+                        {config.default_model_id === model.id ? <span>默认</span> : null}
+                      </div>
                       <div className="agent-config-grid">
                         <label>ID<input value={model.id} onChange={(event) => updateModel(index, "id", event.target.value)} /></label>
                         <label>显示名<input value={model.name} onChange={(event) => updateModel(index, "name", event.target.value)} /></label>
                         <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} /></label>
-                        <label>Model<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
+                        <label>模型名<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
                         <label>API Key<input type="password" placeholder={model.api_key_mask || "留空保留旧 key"} value={model.api_key || ""} onChange={(event) => updateModel(index, "api_key", event.target.value)} /></label>
                         <label>Temperature<input type="number" step="0.1" value={model.temperature ?? ""} onChange={(event) => updateModel(index, "temperature", event.target.value)} /></label>
                       </div>
@@ -736,7 +856,10 @@ function AgentPage({ onUnauthorized }) {
               </section>
               <section className="agent-config-section">
                 <div className="agent-config-section-heading">
-                  <h3>Agent</h3>
+                  <div>
+                    <h3>Agent</h3>
+                    <p>定义人格、系统提示词、绑定模型和私有工具权限。</p>
+                  </div>
                   <button className="secondary-button" onClick={addAgent}>
                     <Plus size={17} />
                     添加 Agent
@@ -745,17 +868,21 @@ function AgentPage({ onUnauthorized }) {
                 <div className="agent-config-list">
                   {config.agents.map((agent, index) => (
                     <article className="agent-config-card" key={`${agent.id}-${index}`}>
+                      <div className="agent-config-card-title">
+                        <strong>{agent.name || agent.id || "未命名 Agent"}</strong>
+                        {config.default_agent_id === agent.id ? <span>默认</span> : null}
+                      </div>
                       <div className="agent-config-grid">
                         <label>ID<input value={agent.id} onChange={(event) => updateAgent(index, "id", event.target.value)} /></label>
                         <label>名称<input value={agent.name} onChange={(event) => updateAgent(index, "name", event.target.value)} /></label>
                         <label>绑定模型<select value={agent.model_id || ""} onChange={(event) => updateAgent(index, "model_id", event.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></label>
                       </div>
-                      <label className="agent-prompt-label">系统提示词<textarea value={agent.system_prompt} onChange={(event) => updateAgent(index, "system_prompt", event.target.value)} /></label>
-                      <label className="agent-prompt-label">Skill IDs<textarea value={(agent.skill_ids || []).join("\n")} onChange={(event) => updateAgentSkillIds(index, event.target.value)} /></label>
+                      <label className="agent-prompt-label large">系统提示词<textarea value={agent.system_prompt} onChange={(event) => updateAgent(index, "system_prompt", event.target.value)} /></label>
+                      <label className="agent-prompt-label">Skill IDs<textarea placeholder="每行一个 skill id，如 common:xxx" value={(agent.skill_ids || []).join("\n")} onChange={(event) => updateAgentSkillIds(index, event.target.value)} /></label>
                       <div className="agent-config-grid">
-                        <label>Tools Profile<select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(event) => updateAgentTools(index, "profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
-                        <label className="agent-prompt-label">Tools Allow<textarea value={(agent.tools?.allow || []).join("\n")} onChange={(event) => updateAgentTools(index, "allow", event.target.value)} /></label>
-                        <label className="agent-prompt-label">Tools Deny<textarea value={(agent.tools?.deny || []).join("\n")} onChange={(event) => updateAgentTools(index, "deny", event.target.value)} /></label>
+                        <label>工具模板<select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(event) => updateAgentTools(index, "profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
+                        <label className="agent-prompt-label">允许工具<textarea value={(agent.tools?.allow || []).join("\n")} onChange={(event) => updateAgentTools(index, "allow", event.target.value)} /></label>
+                        <label className="agent-prompt-label">禁用工具<textarea value={(agent.tools?.deny || []).join("\n")} onChange={(event) => updateAgentTools(index, "deny", event.target.value)} /></label>
                       </div>
                       <div className="agent-config-card-actions">
                         <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, default_agent_id: agent.id }))}>设为默认</button>
@@ -765,7 +892,8 @@ function AgentPage({ onUnauthorized }) {
                   ))}
                 </div>
               </section>
-            </>
+              </div>
+            </div>
           ) : (
             <div className="empty-state">正在加载 Agent 配置</div>
           )}
@@ -1130,6 +1258,16 @@ function SelfDevPage({ onUnauthorized }) {
         setReviewNote("");
         return data.task;
       }
+    },
+    cancel: {
+      requireTask: true,
+      run: async (task) => {
+        const data = await api(`/api/self-dev/tasks/${task.id}/cancel`, {
+          method: "POST",
+          body: JSON.stringify({ reason: "user cancelled from UI" })
+        });
+        return data.task;
+      }
     }
   }), [agentId, goal, repoUrl, reviewNote, taskChatInput]);
 
@@ -1140,6 +1278,7 @@ function SelfDevPage({ onUnauthorized }) {
       needs_review: "待确认",
       pushed: "已 Push",
       accepted: "已接受",
+      cancelled: "已终止",
       failed: "失败"
     }[value] || value || "未选择任务";
   }
@@ -1151,6 +1290,7 @@ function SelfDevPage({ onUnauthorized }) {
       needs_review: "var(--warning)",
       pushed: "var(--success)",
       accepted: "var(--success)",
+      cancelled: "var(--text-muted)",
       failed: "var(--danger)"
     }[value] || "var(--text-muted)";
   }
@@ -1162,6 +1302,7 @@ function SelfDevPage({ onUnauthorized }) {
       needs_review: Eye,
       pushed: GitBranch,
       accepted: CheckCircle,
+      cancelled: XCircle,
       failed: XCircle
     }[value] || Circle;
   }
@@ -1370,6 +1511,7 @@ function SelfDevPage({ onUnauthorized }) {
           taskTab={taskTab}
           setTaskTab={setTaskTab}
           onRefresh={() => refreshTask()}
+          onCancel={() => performTaskAction("cancel")}
         />
       </div>
     </section>
@@ -1427,7 +1569,7 @@ function MainWorkbench({
   selectedTask, agents, agentId, setAgentId, repoUrl, setRepoUrl, goal, setGoal,
   createTask, running, error, reviewNote, setReviewNote, onAccept, onReject,
   taskChatInput, setTaskChatInput, onSendChat, fileChanges, selectedFile, onSelectFile,
-  parsedEvents, statusLabel, statusColor, statusIcon, formatDuration, taskTab, setTaskTab, onRefresh
+  parsedEvents, statusLabel, statusColor, statusIcon, formatDuration, taskTab, setTaskTab, onRefresh, onCancel
 }) {
   if (!selectedTask) {
     return (
@@ -1458,6 +1600,8 @@ function MainWorkbench({
         statusIcon={statusIcon}
         formatDuration={formatDuration}
         onRefresh={onRefresh}
+        onCancel={onCancel}
+        running={running}
       />
       {selectedTask.status === "needs_review" ? (
         <ReviewTaskView
@@ -1536,12 +1680,13 @@ function CreateTaskView({ agents, agentId, setAgentId, repoUrl, setRepoUrl, goal
   );
 }
 
-function TaskOverviewBar({ task, statusLabel, statusColor, statusIcon, formatDuration, onRefresh }) {
+function TaskOverviewBar({ task, statusLabel, statusColor, statusIcon, formatDuration, onRefresh, onCancel, running }) {
   const StatusIcon = statusIcon(task.status);
-  const finishedAt = ["pushed", "accepted", "failed", "needs_review"].includes(task.status) ? task.updated_at : null;
+  const finishedAt = ["pushed", "accepted", "failed", "needs_review", "cancelled"].includes(task.status) ? task.updated_at : null;
   const outcome = {
     pushed: "已推送到远程仓库，请前往 GitHub 合并该分支。",
     accepted: "已接受 AI 建议，可继续通过对话补充修改。",
+    cancelled: "任务已终止，不会继续占用执行队列。",
     failed: task.error || "任务执行失败，请查看执行日志。"
   }[task.status];
 
@@ -1562,9 +1707,17 @@ function TaskOverviewBar({ task, statusLabel, statusColor, statusIcon, formatDur
         <span>运行时间：{formatDuration(task.created_at, finishedAt)}</span>
         {outcome ? <strong>{outcome}</strong> : null}
       </div>
-      <button className="secondary-button icon-btn" onClick={onRefresh} aria-label="刷新任务">
-        <RefreshCw size={16} />
-      </button>
+      <div className="task-overview-actions">
+        {task.status === "running" ? (
+          <button className="secondary-button danger-button" onClick={onCancel} disabled={running}>
+            <XCircle size={16} />
+            终止
+          </button>
+        ) : null}
+        <button className="secondary-button icon-btn" onClick={onRefresh} aria-label="刷新任务">
+          <RefreshCw size={16} />
+        </button>
+      </div>
     </section>
   );
 }
@@ -1841,10 +1994,10 @@ function ExecutionLogsPanel({ parsedEvents }) {
                   {event.timestamp && <time>{new Date(event.timestamp).toLocaleTimeString()}</time>}
                 </div>
                 <div className="log-content">
-                  {event.goal && <p className="log-goal">🎯 {event.goal}</p>}
+                  {event.goal && <p className="log-goal">{event.goal}</p>}
                   {event.status && <p className="log-status">状态: {event.status}</p>}
                   {event.result && <p className="log-result">{event.result}</p>}
-                  {event.error && <p className="log-error">❌ {event.error}</p>}
+                  {event.error && <p className="log-error">{event.error}</p>}
                 </div>
               </>
             )}
@@ -2021,6 +2174,131 @@ function TerminalPage({ onUnauthorized }) {
   );
 }
 
+function ChannelsPage({ onUnauthorized }) {
+  const [wechat, setWechat] = useState(null);
+  const [channelLoading, setChannelLoading] = useState(false);
+  const [channelError, setChannelError] = useState("");
+
+  async function loadWechatStatus() {
+    try {
+      const data = await api("/api/channels/wechat/status");
+      setWechat(data.wechat);
+    } catch (err) {
+      if (err.status === 401 || err.message === "Authentication required") {
+        onUnauthorized();
+        return;
+      }
+      setChannelError(err.message);
+    }
+  }
+
+  async function updateWechat(action) {
+    setChannelLoading(true);
+    setChannelError("");
+    try {
+      const data = await api(`/api/channels/wechat/${action}`, { method: "POST" });
+      setWechat(data.wechat);
+    } catch (err) {
+      if (err.status === 401 || err.message === "Authentication required") {
+        onUnauthorized();
+        return;
+      }
+      setChannelError(err.message);
+    } finally {
+      setChannelLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadWechatStatus();
+    const timer = setInterval(loadWechatStatus, 2500);
+    return () => clearInterval(timer);
+  }, []);
+
+  const wechatQrSource = wechat?.qrcode_data_url || wechat?.qrcode_url || "";
+  const wechatError = channelError || wechat?.error || "";
+  const wechatErrorText = wechatError.includes("400")
+    ? "扫码通道返回了内部状态提示。二维码仍可扫描；如果扫码失败，请停止后重新启动微信。"
+    : wechatError;
+
+  return (
+    <section className="page-section channels-section">
+      <div className="channels-hero">
+        <span>Channels</span>
+        <h2>消息渠道</h2>
+        <p>把外部消息入口接入 Agent runtime。个人微信可以做扫码登录机器人，适合你这种单人自用场景；当前版本已接入 Wechaty sidecar、二维码登录状态和默认 Agent 回复通道。</p>
+      </div>
+      <div className="channel-grid">
+        <article className="channel-card primary-channel">
+          <div className="channel-card-heading">
+            <span className="channel-icon"><MessageSquare size={18} /></span>
+            <div>
+              <h3>个人微信机器人</h3>
+              <p>扫码登录 + 白名单 + 默认 Agent 回复</p>
+            </div>
+            <strong>{wechat?.login_state || "stopped"}</strong>
+          </div>
+          <div className="wechat-control">
+            <div>
+              <span className={`terminal-status ${wechat?.running ? "connected" : ""}`}>
+                {wechat?.running ? "运行中" : "未启动"}
+              </span>
+              {wechat?.user ? <strong>{wechat.user}</strong> : null}
+            </div>
+            <div className="wechat-actions">
+              <button className="secondary-button primary-action" onClick={() => updateWechat("start")} disabled={channelLoading || wechat?.running}>
+                <Play size={16} />
+                启动微信
+              </button>
+              <button className="secondary-button" onClick={() => updateWechat("stop")} disabled={channelLoading || !wechat?.running}>
+                <XCircle size={16} />
+                停止
+              </button>
+            </div>
+          </div>
+          {wechatQrSource ? (
+            <div className="wechat-qr-panel">
+              <img src={wechatQrSource} alt="微信登录二维码" />
+              <div>
+                <strong>用微信扫码登录</strong>
+                <p>状态：{wechat.qrcode_status || "等待扫码"}</p>
+              </div>
+            </div>
+          ) : null}
+          {wechatErrorText && !wechatQrSource ? <div className="form-error">{wechatErrorText}</div> : null}
+          {wechatErrorText && wechatQrSource ? <div className="wechat-notice">{wechatErrorText}</div> : null}
+          <div className="channel-steps">
+            <div>
+              <span>1</span>
+              <p>启动 Wechaty sidecar，浏览器展示登录二维码。</p>
+            </div>
+            <div>
+              <span>2</span>
+              <p>扫码登录后保活会话，并限制只响应你的联系人或指定群。</p>
+            </div>
+            <div>
+              <span>3</span>
+              <p>消息进入后转发到默认 Agent，回复再发送回微信。</p>
+            </div>
+          </div>
+        </article>
+        <article className="channel-card">
+          <h3>建议配置形态</h3>
+          <pre>{`channels:
+  wechat_personal:
+    enabled: true
+    provider: "wechaty"
+    login: "qr"
+    default_agent_id: "assistant"
+    allow_contacts:
+      - "你的微信昵称或备注"
+    allow_rooms: []`}</pre>
+        </article>
+      </div>
+    </section>
+  );
+}
+
 function AppShell({ onLogout }) {
   const [path, setPath] = useState(window.location.pathname);
   const navItems = useMemo(
@@ -2028,6 +2306,7 @@ function AppShell({ onLogout }) {
       { path: "/", label: "首页", icon: Home },
       { path: "/agents", label: "Agent", icon: Bot },
       { path: "/self-dev", label: "自开发", icon: Code2 },
+      { path: "/channels", label: "渠道", icon: MessageSquare },
       { path: "/terminal", label: "终端", icon: TerminalSquare },
       { path: "/proxy", label: "Hermes UI", icon: Globe2 },
       { path: "/system", label: "系统", icon: Settings }
@@ -2084,6 +2363,9 @@ function AppShell({ onLogout }) {
     if (path === "/terminal") {
       return <TerminalPage onUnauthorized={unauthorized} />;
     }
+    if (path === "/channels") {
+      return <ChannelsPage onUnauthorized={unauthorized} />;
+    }
     return <HomePage onNavigate={navigate} />;
   }
 
@@ -2116,7 +2398,7 @@ function AppShell({ onLogout }) {
           退出
         </button>
       </aside>
-      <main className="content">{renderPage()}</main>
+      <main className={`content${path === "/agents" ? " content-agents" : ""}`}>{renderPage()}</main>
     </div>
   );
 }

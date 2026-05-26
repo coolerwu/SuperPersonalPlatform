@@ -14,5 +14,7 @@ __pycache__/
 # Frontend dependency/cache output. The production build in web/dist is committed.
 web/node_modules/
 web/.vite/
+server/infrastructure/wechat/node_modules/
+server/infrastructure/wechat/*.memory-card.json
 
 .idea

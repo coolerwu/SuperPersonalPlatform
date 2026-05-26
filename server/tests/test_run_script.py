@@ -34,6 +34,21 @@ def test_python_dependency_install_retries_transient_pip_failures() -> None:
     assert 'pip install failed after ${PYTHON_DEPS_INSTALL_ATTEMPTS} attempts.' in script
 
 
+def test_python_dependency_install_skips_when_fingerprint_unchanged() -> None:
+    script = read_run_sh()
+
+    assert 'PYTHON_DEPS_STAMP_PREFIX=".super-personal-platform-python-deps"' in script
+    assert "python_deps_fingerprint()" in script
+    assert '"pyproject.toml",' in script
+    assert 'digest.update(sys.version.encode("utf-8"))' in script
+    assert 'stamp_path="$(python_deps_stamp_path "$name")"' in script
+    assert 'if [[ "$current_fingerprint" == "$expected_fingerprint" ]]; then' in script
+    assert 'echo "Python dependencies unchanged (${target}); skipping install."' in script
+    assert 'printf \'%s\\n\' "$expected_fingerprint" >"$stamp_path"' in script
+    assert 'install_python_deps ".[dev]" "dev"' in script
+    assert 'install_python_deps "." "prod"' in script
+
+
 def test_prod_service_file_compare_avoids_sudo_when_unchanged() -> None:
     script = read_run_sh()
 

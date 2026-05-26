@@ -9,6 +9,7 @@ from server.adapter.self_dev_routes import create_self_dev_router
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
 from server.app.self_dev_service import SelfDevService
+from server.app.job_service import JobService
 from server.domain.auth import AuthToken
 from server.infrastructure.session import SessionCodec
 
@@ -88,6 +89,45 @@ def test_self_dev_run_task_enqueues_durable_job(tmp_path) -> None:
     )
     assert raw["job"]["type"] == "self_dev.run_task"
     assert raw["job"]["payload"] == {"allow_push": False, "instruction": "continue"}
+
+
+def test_self_dev_cancel_task_marks_job_cancelled(tmp_path) -> None:
+    write_config(tmp_path)
+    client = make_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    task = client.post(
+        "/api/self-dev/tasks",
+        json={"goal": "update README", "agent_id": "assistant"},
+    ).json()["task"]
+    JobService(tmp_path).enqueue(task["id"], "self_dev.run_task", {"instruction": "continue"})
+
+    response = client.post(
+        f"/api/self-dev/tasks/{task['id']}/cancel",
+        json={"reason": "not needed"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["task"]["status"] == "cancelled"
+
+
+def test_self_dev_cancel_task_marks_stale_running_task_cancelled(tmp_path) -> None:
+    write_config(tmp_path)
+    client = make_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    task = client.post(
+        "/api/self-dev/tasks",
+        json={"goal": "update README", "agent_id": "assistant"},
+    ).json()["task"]
+    service = SelfDevService(tmp_path, None)
+    service._replace_task(service._read_task(task["id"]), status="running")
+
+    response = client.post(
+        f"/api/self-dev/tasks/{task['id']}/cancel",
+        json={"reason": "stale running task"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["task"]["status"] == "cancelled"
 
 
 def test_self_dev_accept_reject_require_review_status(tmp_path) -> None:

@@ -23,6 +23,18 @@ tools:
   profile: "default"
   allow: []
   deny: []
+channels:
+  wechat_personal:
+    enabled: false
+    provider: "wechaty"
+    login: "qr"
+    profile: "super-personal-platform"
+    # Optional for token-based puppet providers.
+    puppet: ""
+    token: ""
+    default_agent_id: "assistant"
+    allow_contacts: []
+    allow_rooms: []
 agents:
   default_agent_id: "assistant"
   definitions:

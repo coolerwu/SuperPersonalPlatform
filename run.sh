@@ -8,6 +8,7 @@ PROD_GIT_URL="https://github.com/coolerwu/SuperPersonalPlatform.git"
 PROD_GIT_BRANCH="main"
 PROD_GIT_PULL_ATTEMPTS=3
 PYTHON_DEPS_INSTALL_ATTEMPTS=3
+PYTHON_DEPS_STAMP_PREFIX=".super-personal-platform-python-deps"
 
 usage() {
   cat <<USAGE
@@ -138,13 +139,68 @@ ensure_venv() {
   fi
 }
 
-install_python_deps() {
+python_deps_stamp_path() {
+  local name="$1"
+  printf '%s\n' "${SCRIPT_DIR}/.venv/${PYTHON_DEPS_STAMP_PREFIX}-${name}.sha256"
+}
+
+python_deps_fingerprint() {
   local target="$1"
   cd "$SCRIPT_DIR"
+  "${SCRIPT_DIR}/.venv/bin/python" - "$target" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+root = Path.cwd()
+target = sys.argv[1]
+dependency_files = (
+    "pyproject.toml",
+    "setup.cfg",
+    "setup.py",
+    "requirements.txt",
+    "requirements-dev.txt",
+)
+
+digest = hashlib.sha256()
+digest.update(sys.version.encode("utf-8"))
+digest.update(b"\0")
+digest.update(target.encode("utf-8"))
+digest.update(b"\0")
+
+for relative_path in dependency_files:
+    path = root / relative_path
+    if not path.is_file():
+        continue
+    digest.update(relative_path.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(path.read_bytes())
+    digest.update(b"\0")
+
+print(digest.hexdigest())
+PY
+}
+
+install_python_deps() {
+  local target="$1"
+  local name="$2"
+  cd "$SCRIPT_DIR"
+  local stamp_path expected_fingerprint current_fingerprint
+  stamp_path="$(python_deps_stamp_path "$name")"
+  expected_fingerprint="$(python_deps_fingerprint "$target")"
+  if [[ -f "$stamp_path" ]]; then
+    current_fingerprint="$(<"$stamp_path")"
+    if [[ "$current_fingerprint" == "$expected_fingerprint" ]]; then
+      echo "Python dependencies unchanged (${target}); skipping install."
+      return 0
+    fi
+  fi
+
   local attempt delay=2
   for ((attempt = 1; attempt <= PYTHON_DEPS_INSTALL_ATTEMPTS; attempt += 1)); do
     echo "Installing Python dependencies (${target}), attempt ${attempt}/${PYTHON_DEPS_INSTALL_ATTEMPTS}"
     if "${SCRIPT_DIR}/.venv/bin/pip" install --disable-pip-version-check --no-cache-dir --retries 5 --timeout 60 -e "$target"; then
+      printf '%s\n' "$expected_fingerprint" >"$stamp_path"
       return 0
     fi
     if [[ "$attempt" -lt "$PYTHON_DEPS_INSTALL_ATTEMPTS" ]]; then
@@ -230,7 +286,7 @@ run_dev() {
   parse_workspace "${SCRIPT_DIR}/.super-personal-platform" "$@"
   ensure_config
   ensure_venv
-  install_python_deps ".[dev]"
+  install_python_deps ".[dev]" "dev"
   stop_dev_port_processes
 
   cd "$SCRIPT_DIR"
@@ -299,7 +355,7 @@ run_prod() {
   ensure_clean_git
   update_git
   ensure_venv
-  install_python_deps "."
+  install_python_deps "." "prod"
   write_service_file
   local needs_sudo=0
   if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then

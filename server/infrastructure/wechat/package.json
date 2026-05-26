@@ -1,0 +1,9 @@
+{
+  "name": "super-personal-platform-wechat-sidecar",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "wechaty": "^1.20.2"
+  }
+}

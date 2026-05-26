@@ -60,3 +60,25 @@ def test_job_worker_requeues_active_job_on_shutdown(tmp_path) -> None:
         assert raw["job"]["lease"] is None
 
     asyncio.run(scenario())
+
+
+def test_job_worker_cancel_task_stops_active_job(tmp_path) -> None:
+    async def scenario() -> None:
+        write_task(tmp_path, "task-1")
+        job_service = JobService(tmp_path)
+        job_service.enqueue("task-1", "self_dev.run_task", {})
+        worker = JobWorker(job_service, SlowSelfDevService(), poll_interval_seconds=0.01)
+
+        claimed = worker.claim_once()
+        assert claimed is not None
+        await asyncio.sleep(0)
+
+        assert worker.cancel_task("task-1", reason="not needed")
+        await asyncio.sleep(0)
+
+        raw = read_task(tmp_path, "task-1")
+        assert raw["status"] == "cancelled"
+        assert raw["job"]["status"] == "cancelled"
+        assert raw["job"]["lease"] is None
+
+    asyncio.run(scenario())

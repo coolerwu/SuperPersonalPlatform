@@ -100,6 +100,29 @@ class SelfDevService:
             isinstance(raw_job, dict) and raw_job.get("status") == JobStatus.RUNNING.value
         )
 
+    def cancel_task(self, task_id: str, reason: str = "user cancelled") -> SelfDevTask:
+        task = self._read_task(task_id)
+        raw_job = self._raw_job(task_id)
+        if isinstance(raw_job, dict) and raw_job.get("id"):
+            job_status = str(raw_job.get("status") or "")
+            if job_status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
+                self._job_service.cancel(str(raw_job["id"]), reason=reason)
+                self._append_event(task_id, "status", {"status": "cancelled", "reason": reason})
+                return self._read_task(task_id)
+
+        if task.status not in {"queued", "running"}:
+            raise ValueError("task has no active job")
+
+        task = self._replace_task(
+            task,
+            status="cancelled",
+            error="",
+            result=task.result,
+            recommendation=task.recommendation,
+        )
+        self._append_event(task_id, "status", {"status": "cancelled", "reason": reason})
+        return task
+
     async def run_task(
         self,
         task_id: str,

@@ -8,6 +8,7 @@ from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.app.self_dev_service import SelfDevService
 from server.app.job_service import JobService
+from server.app.wechat_channel_service import WechatChannelService
 from server.infrastructure.session import SessionCodec
 
 
@@ -22,3 +23,4 @@ class AppContainer:
     agent_chat_service: AgentChatService | None = None
     job_service: JobService | None = None
     self_dev_service: SelfDevService | None = None
+    wechat_channel_service: WechatChannelService | None = None
