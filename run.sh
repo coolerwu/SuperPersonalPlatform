@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SERVICE_NAME="super-personal-platform.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+SUDOERS_PATH="/etc/sudoers.d/super-personal-platform"
 PROD_GIT_URL="https://github.com/coolerwu/SuperPersonalPlatform.git"
 PROD_GIT_BRANCH="main"
 PROD_GIT_PULL_ATTEMPTS=3
@@ -15,6 +16,7 @@ usage() {
 Usage:
   ./run.sh dev [--workspace PATH]
   ./run.sh prod [--workspace PATH]
+  ./run.sh setup-sudo
   ./run-dev.sh [--workspace PATH]
   ./run-prod.sh [--workspace PATH]
 
@@ -230,19 +232,62 @@ resolve_service_group() {
   id -gn "$user" 2>/dev/null || true
 }
 
-require_non_interactive_sudo() {
+require_sudo() {
+  local reason="$1"
   if [[ "${EUID}" -eq 0 ]]; then
     return
   fi
   if sudo -n true 2>/dev/null; then
     return
   fi
-  cat >&2 <<'MSG'
-Production mode requires non-interactive sudo for systemctl/install commands.
-Current environment cannot prompt for a password (for example when triggered by update-service).
-Please run with a TTY once, or configure passwordless sudo for install/systemctl.
+  if [[ -t 0 ]]; then
+    echo "sudo is required for ${reason}; prompting once."
+    sudo -v
+    return
+  fi
+  cat >&2 <<MSG
+Production mode needs sudo for ${reason}, but this environment cannot prompt for a password.
+Run './run.sh setup-sudo' once from a TTY to allow web-triggered restarts, or run './run.sh prod' from a terminal.
 MSG
   exit 1
+}
+
+can_restart_without_prompt() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    return 0
+  fi
+  local systemctl_path
+  systemctl_path="$(command -v systemctl)"
+  sudo -n -l "$systemctl_path" restart "$SERVICE_NAME" >/dev/null 2>&1
+}
+
+install_restart_sudoers() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "systemctl is required for setup-sudo." >&2
+    exit 1
+  fi
+  if ! command -v visudo >/dev/null 2>&1; then
+    echo "visudo is required for setup-sudo." >&2
+    exit 1
+  fi
+
+  local service_user systemctl_path temp_file
+  service_user="$(resolve_service_user)"
+  systemctl_path="$(command -v systemctl)"
+  temp_file="$(mktemp)"
+  cat >"$temp_file" <<SUDOERS
+# Managed by SuperPersonalPlatform run.sh.
+# Allows web-triggered code updates to restart the existing service unit.
+${service_user} ALL=(root) NOPASSWD: ${systemctl_path} restart ${SERVICE_NAME}
+${service_user} ALL=(root) NOPASSWD: ${systemctl_path} status ${SERVICE_NAME} --no-pager
+${service_user} ALL=(root) NOPASSWD: ${systemctl_path} is-active ${SERVICE_NAME}
+SUDOERS
+
+  visudo -cf "$temp_file"
+  require_sudo "installing ${SUDOERS_PATH}"
+  sudo install -m 0440 "$temp_file" "$SUDOERS_PATH"
+  rm -f "$temp_file"
+  echo "Installed limited sudoers rule at ${SUDOERS_PATH} for ${service_user}."
 }
 
 pid_cwd() {
@@ -343,6 +388,7 @@ SERVICE
     return
   fi
 
+  require_sudo "installing or reloading the systemd service file"
   sudo install -m 0644 "$generated_service" "$SERVICE_PATH"
   sudo systemctl daemon-reload
   SERVICE_FILE_CHANGED=1
@@ -354,6 +400,13 @@ run_prod() {
   ensure_config
   ensure_clean_git
   update_git
+  if [[ "${CODE_UPDATED:-0}" == "1" ]] && ! can_restart_without_prompt && [[ ! -t 0 ]]; then
+    cat >&2 <<'MSG'
+Code was pulled, but this no-TTY update cannot restart systemd without passwordless sudo.
+Run './run.sh setup-sudo' once from a terminal, then trigger the web update again.
+MSG
+    exit 1
+  fi
   ensure_venv
   install_python_deps "." "prod"
   write_service_file
@@ -365,9 +418,8 @@ run_prod() {
     echo "No code or systemd unit changes; skipping systemctl enable/restart/status."
     return
   fi
-  require_non_interactive_sudo
-
   if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then
+    require_sudo "systemctl enable/restart/status"
     sudo systemctl enable "$SERVICE_NAME"
   else
     echo "systemd service unchanged; skipping enable"
@@ -389,6 +441,15 @@ main() {
       ;;
     help|--help|-h)
       usage
+      ;;
+    setup-sudo)
+      shift
+      if [[ $# -gt 0 ]]; then
+        echo "setup-sudo does not accept arguments." >&2
+        usage >&2
+        exit 1
+      fi
+      install_restart_sudoers
       ;;
     *)
       usage >&2

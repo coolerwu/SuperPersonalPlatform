@@ -68,16 +68,31 @@ def test_prod_enable_only_runs_when_service_file_changed() -> None:
     assert 'sudo systemctl restart "$SERVICE_NAME"' in script
 
 
-def test_prod_requires_non_interactive_sudo_for_background_updates() -> None:
+def test_prod_preflights_restart_sudo_for_background_updates() -> None:
     script = read_run_sh()
 
-    assert "require_non_interactive_sudo()" in script
-    assert 'if sudo -n true 2>/dev/null; then' in script
-    assert "Production mode requires non-interactive sudo" in script
+    assert "can_restart_without_prompt()" in script
+    assert 'sudo -n -l "$systemctl_path" restart "$SERVICE_NAME" >/dev/null 2>&1' in script
     run_prod_body = script.split("run_prod() {", 1)[1]
-    assert "require_non_interactive_sudo" in run_prod_body
+    assert '[[ "${CODE_UPDATED:-0}" == "1" ]] && ! can_restart_without_prompt && [[ ! -t 0 ]]' in run_prod_body
+    assert "Code was pulled, but this no-TTY update cannot restart systemd without passwordless sudo." in run_prod_body
     assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then' in run_prod_body
     assert "No code or systemd unit changes; skipping systemctl enable/restart/status." in run_prod_body
+    service_changed_block = run_prod_body.split('if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then', 1)[1]
+    assert 'require_sudo "systemctl enable/restart/status"' in service_changed_block
+
+
+def test_setup_sudo_installs_limited_restart_sudoers() -> None:
+    script = read_run_sh()
+
+    assert 'SUDOERS_PATH="/etc/sudoers.d/super-personal-platform"' in script
+    assert "install_restart_sudoers()" in script
+    assert "Managed by SuperPersonalPlatform run.sh." in script
+    assert '${service_user} ALL=(root) NOPASSWD: ${systemctl_path} restart ${SERVICE_NAME}' in script
+    assert '${service_user} ALL=(root) NOPASSWD: ${systemctl_path} status ${SERVICE_NAME} --no-pager' in script
+    assert '${service_user} ALL=(root) NOPASSWD: ${systemctl_path} is-active ${SERVICE_NAME}' in script
+    assert 'visudo -cf "$temp_file"' in script
+    assert 'setup-sudo)' in script
 
 
 def test_prod_detects_code_change_with_head_compare() -> None:
