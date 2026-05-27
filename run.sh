@@ -261,6 +261,21 @@ can_restart_without_prompt() {
   sudo -n -l "$systemctl_path" restart "$SERVICE_NAME" >/dev/null 2>&1
 }
 
+trigger_restart_by_service_exit() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "systemctl is required to find the running service process for exit-based restart." >&2
+    return 1
+  fi
+  local main_pid
+  main_pid="$(systemctl show "$SERVICE_NAME" --property=MainPID --value 2>/dev/null || true)"
+  if [[ -z "$main_pid" || "$main_pid" == "0" ]]; then
+    echo "Cannot trigger exit-based restart because ${SERVICE_NAME} has no active MainPID." >&2
+    return 1
+  fi
+  echo "Triggering systemd Restart=always by sending SIGTERM to ${SERVICE_NAME} MainPID=${main_pid}."
+  kill -TERM "$main_pid"
+}
+
 install_restart_sudoers() {
   if ! command -v systemctl >/dev/null 2>&1; then
     echo "systemctl is required for setup-sudo." >&2
@@ -401,15 +416,21 @@ run_prod() {
   ensure_config
   ensure_clean_git
   update_git
-  if [[ "${CODE_UPDATED:-0}" == "1" ]] && ! can_restart_without_prompt && [[ ! -t 0 ]]; then
-    cat >&2 <<'MSG'
-Code was pulled, but this no-TTY update cannot restart systemd without passwordless sudo.
-Run './run.sh setup-sudo' once from a terminal, then trigger the web update again.
+  RESTART_BY_EXIT=0
+  if ! can_restart_without_prompt && [[ ! -t 0 ]]; then
+    RESTART_BY_EXIT=1
+    cat <<'MSG'
+This no-TTY update cannot run passwordless sudo for systemctl restart.
+The update will install dependencies, skip systemd unit refresh/status, then terminate the current service process so systemd Restart=always starts the code currently on disk.
 MSG
-    exit 1
   fi
   ensure_venv
   install_python_deps "." "prod"
+  if [[ "${RESTART_BY_EXIT:-0}" == "1" ]]; then
+    echo "Skipping systemd unit refresh/status because restart is using the service-exit fallback."
+    trigger_restart_by_service_exit
+    return
+  fi
   write_service_file
   local needs_sudo=0
   if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then

@@ -81,13 +81,24 @@ def test_prod_preflights_restart_sudo_for_background_updates() -> None:
 
     assert "can_restart_without_prompt()" in script
     assert 'sudo -n -l "$systemctl_path" restart "$SERVICE_NAME" >/dev/null 2>&1' in script
+    assert "trigger_restart_by_service_exit()" in script
     run_prod_body = script.split("run_prod() {", 1)[1]
-    assert '[[ "${CODE_UPDATED:-0}" == "1" ]] && ! can_restart_without_prompt && [[ ! -t 0 ]]' in run_prod_body
-    assert "Code was pulled, but this no-TTY update cannot restart systemd without passwordless sudo." in run_prod_body
+    assert 'if ! can_restart_without_prompt && [[ ! -t 0 ]]; then' in run_prod_body
+    assert "This no-TTY update cannot run passwordless sudo for systemctl restart." in run_prod_body
+    assert "systemd Restart=always starts the code currently on disk." in run_prod_body
+    assert "Skipping systemd unit refresh/status because restart is using the service-exit fallback." in run_prod_body
+    assert "trigger_restart_by_service_exit" in run_prod_body
     assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then' in run_prod_body
     assert "No code or systemd unit changes; skipping systemctl enable/restart/status." in run_prod_body
     service_changed_block = run_prod_body.split('if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then', 1)[1]
     assert 'require_sudo "systemctl enable/restart/status"' in service_changed_block
+
+
+def test_exit_based_restart_terminates_service_main_pid() -> None:
+    script = read_run_sh()
+
+    assert 'systemctl show "$SERVICE_NAME" --property=MainPID --value' in script
+    assert 'kill -TERM "$main_pid"' in script
 
 
 def test_setup_sudo_installs_limited_restart_sudoers() -> None:
