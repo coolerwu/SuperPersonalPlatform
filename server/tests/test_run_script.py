@@ -54,6 +54,8 @@ def test_prod_service_file_compare_avoids_sudo_when_unchanged() -> None:
 
     assert '[[ -f "$SERVICE_PATH" ]] && cmp -s "$generated_service" "$SERVICE_PATH"' in script
     assert "systemd service unchanged; skipping install and daemon-reload" in script
+    assert "SERVICE_FILE_REFRESH_SKIPPED=1" in script
+    assert "skipping unit refresh for this run" in script
     assert "sudo test -f" not in script
     assert "sudo cmp -s" not in script
 
@@ -88,7 +90,7 @@ def test_prod_preflights_restart_sudo_for_background_updates() -> None:
     assert "systemd Restart=always starts the code currently on disk." in run_prod_body
     assert "Skipping systemd unit refresh/status because restart is using the service-exit fallback." in run_prod_body
     assert "trigger_restart_by_service_exit" in run_prod_body
-    assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then' in run_prod_body
+    assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${SERVICE_FILE_REFRESH_SKIPPED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then' in run_prod_body
     assert "No code or systemd unit changes; skipping systemctl enable/restart/status." in run_prod_body
     service_changed_block = run_prod_body.split('if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then', 1)[1]
     assert 'require_sudo "systemctl enable/restart/status"' in service_changed_block

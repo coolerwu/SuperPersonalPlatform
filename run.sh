@@ -404,6 +404,12 @@ SERVICE
     return
   fi
 
+  if [[ ! -t 0 ]] && ! sudo -n true 2>/dev/null; then
+    SERVICE_FILE_REFRESH_SKIPPED=1
+    echo "systemd service file changed, but this no-TTY update cannot install it without broader sudo; skipping unit refresh for this run."
+    return
+  fi
+
   require_sudo "installing or reloading the systemd service file"
   sudo install -m 0644 "$generated_service" "$SERVICE_PATH"
   sudo systemctl daemon-reload
@@ -433,7 +439,7 @@ MSG
   fi
   write_service_file
   local needs_sudo=0
-  if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then
+  if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${SERVICE_FILE_REFRESH_SKIPPED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then
     needs_sudo=1
   fi
   if [[ "$needs_sudo" == "0" ]]; then
