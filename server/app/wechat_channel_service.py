@@ -62,8 +62,7 @@ class WechatChannelService:
             self._qrcode_url = ""
             self._qrcode_data_url = ""
             self._qrcode_status = ""
-            env = os.environ.copy()
-            env.update(self._sidecar_env())
+            env = self._sidecar_env()
             self._process = subprocess.Popen(
                 ["node", str(script)],
                 cwd=str(script.parent),
@@ -108,6 +107,8 @@ class WechatChannelService:
         with self._lock:
             if self._login_state != "stopped":
                 self._login_state = "exited"
+                if not self._error:
+                    self._error = self._last_error_locked() or f"Wechaty sidecar exited with code {process.poll()}"
 
     def _handle_event(self, event: dict[str, Any]) -> None:
         with self._lock:
@@ -170,16 +171,38 @@ class WechatChannelService:
 
     def _sidecar_env(self) -> dict[str, str]:
         config = self._channel_config()
-        env = {
+        env = os.environ.copy()
+        for name in (
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+        ):
+            env.pop(name, None)
+        env.update({
             "SPP_WECHAT_PROFILE": str(config.get("profile") or "super-personal-platform"),
-        }
+        })
         puppet = str(config.get("puppet") or "").strip()
         token = str(config.get("token") or "").strip()
+        proxy = str(config.get("proxy") or "").strip()
         if puppet:
             env["SPP_WECHAT_PUPPET"] = puppet
         if token:
             env["SPP_WECHAT_PUPPET_SERVICE_TOKEN"] = token
+        if proxy:
+            env["HTTPS_PROXY"] = proxy
+            env["HTTP_PROXY"] = proxy
         return env
+
+    def _last_error_locked(self) -> str:
+        for event in reversed(self._logs):
+            if str(event.get("type") or "") == "error":
+                return str(event.get("error") or "")
+        return ""
 
     def _channel_config(self) -> dict[str, Any]:
         path = self._workspace / "config.yaml"

@@ -289,6 +289,7 @@ WARNING: This link could potentially be dangerous`)){let i=window.open();if(i){t
     enabled: true
     provider: "wechaty"
     login: "qr"
+    proxy: ""
     default_agent_id: "assistant"
     allow_contacts:
       - "你的微信昵称或备注"

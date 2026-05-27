@@ -7,6 +7,7 @@ from server.adapter.auth_routes import create_auth_router
 from server.adapter.channel_routes import create_channel_router
 from server.adapter.dependencies import AppContainer
 from server.app.auth_service import AuthService
+from server.app.wechat_channel_service import WechatChannelService
 from server.domain.auth import AuthToken
 from server.infrastructure.session import SessionCodec
 
@@ -74,3 +75,33 @@ def test_wechat_channel_start_and_stop(tmp_path) -> None:
     assert stop_response.status_code == 200
     assert service.started
     assert service.stopped
+
+
+def test_wechat_sidecar_env_drops_inherited_proxy(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "config.yaml").write_text("channels:\n  wechat_personal: {}\n", encoding="utf-8")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:7890")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+    service = WechatChannelService(workspace, tmp_path)
+
+    env = service._sidecar_env()
+
+    assert "HTTP_PROXY" not in env
+    assert "HTTPS_PROXY" not in env
+
+
+def test_wechat_sidecar_env_uses_explicit_proxy(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "config.yaml").write_text(
+        "channels:\n  wechat_personal:\n    proxy: http://10.0.0.2:7890\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:7890")
+    service = WechatChannelService(workspace, tmp_path)
+
+    env = service._sidecar_env()
+
+    assert env["HTTP_PROXY"] == "http://10.0.0.2:7890"
+    assert env["HTTPS_PROXY"] == "http://10.0.0.2:7890"

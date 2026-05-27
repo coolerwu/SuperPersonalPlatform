@@ -32,6 +32,8 @@ channels:
     # Optional for token-based puppet providers.
     puppet: ""
     token: ""
+    # Optional explicit proxy for Wechaty. Inherited system proxy variables are ignored by default.
+    proxy: ""
     default_agent_id: "assistant"
     allow_contacts: []
     allow_rooms: []
