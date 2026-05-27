@@ -378,6 +378,7 @@ Environment=SUPER_PERSONAL_WORKSPACE=${WORKSPACE_DIR}
 ExecStart=${SCRIPT_DIR}/.venv/bin/python -m server
 Restart=always
 RestartSec=5
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target
@@ -424,7 +425,9 @@ MSG
   else
     echo "systemd service unchanged; skipping enable"
   fi
+  echo "Restarting ${SERVICE_NAME} because code_updated=${CODE_UPDATED:-0} service_file_changed=${SERVICE_FILE_CHANGED:-0}."
   sudo systemctl restart "$SERVICE_NAME"
+  echo "Restart command completed for ${SERVICE_NAME}; fetching service status."
   sudo systemctl status "$SERVICE_NAME" --no-pager
 }
 

@@ -65,7 +65,15 @@ def test_prod_enable_only_runs_when_service_file_changed() -> None:
     assert "SERVICE_FILE_CHANGED=1" in script
     assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then' in script
     assert 'sudo systemctl enable "$SERVICE_NAME"' in script
+    assert 'echo "Restarting ${SERVICE_NAME} because code_updated=${CODE_UPDATED:-0} service_file_changed=${SERVICE_FILE_CHANGED:-0}."' in script
     assert 'sudo systemctl restart "$SERVICE_NAME"' in script
+    assert 'echo "Restart command completed for ${SERVICE_NAME}; fetching service status."' in script
+
+
+def test_prod_service_keeps_update_process_alive_during_restart() -> None:
+    script = read_run_sh()
+
+    assert "KillMode=process" in script
 
 
 def test_prod_preflights_restart_sudo_for_background_updates() -> None:
