@@ -36,6 +36,10 @@ absolute_path() {
   esac
 }
 
+has_systemctl() {
+  command -v systemctl >/dev/null 2>&1
+}
+
 parse_workspace() {
   local default_workspace="$1"
   shift
@@ -262,7 +266,7 @@ can_restart_without_prompt() {
 }
 
 trigger_restart_by_service_exit() {
-  if ! command -v systemctl >/dev/null 2>&1; then
+  if ! has_systemctl; then
     echo "systemctl is required to find the running service process for exit-based restart." >&2
     return 1
   fi
@@ -277,7 +281,7 @@ trigger_restart_by_service_exit() {
 }
 
 install_restart_sudoers() {
-  if ! command -v systemctl >/dev/null 2>&1; then
+  if ! has_systemctl; then
     echo "systemctl is required for setup-sudo." >&2
     exit 1
   fi
@@ -358,7 +362,7 @@ run_dev() {
 }
 
 write_service_file() {
-  if ! command -v systemctl >/dev/null 2>&1; then
+  if ! has_systemctl; then
     echo "systemctl is required for prod mode." >&2
     exit 1
   fi
@@ -432,6 +436,16 @@ MSG
   fi
   ensure_venv
   install_python_deps "." "prod"
+
+  if ! has_systemctl; then
+    if [[ "${CODE_UPDATED:-0}" == "1" ]]; then
+      echo "systemctl not available; code and dependencies updated, but service restart must be done manually." >&2
+    else
+      echo "systemctl not available; no code changes detected, service restart skipped." >&2
+    fi
+    return 0
+  fi
+
   if [[ "${RESTART_BY_EXIT:-0}" == "1" ]]; then
     echo "Skipping systemd unit refresh/status because restart is using the service-exit fallback."
     trigger_restart_by_service_exit
