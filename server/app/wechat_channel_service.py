@@ -53,6 +53,10 @@ class WechatChannelService:
         self._bot_token = ""
         self._baseurl = ""
 
+    def auto_start_enabled(self) -> bool:
+        config = self._channel_config()
+        return bool(config.get("auto_start"))
+
     async def status(self) -> WechatChannelStatus:
         async with self._lock:
             return self._snapshot_locked()

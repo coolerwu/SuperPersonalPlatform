@@ -109,6 +109,8 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
         if worker is not None:
             app.state.job_worker = worker
             await worker.start()
+        if container.wechat_channel_service is not None and container.wechat_channel_service.auto_start_enabled():
+            await container.wechat_channel_service.start()
         try:
             yield
         finally:
