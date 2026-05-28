@@ -282,8 +282,10 @@ class WechatChannelService:
         if not self._message_allowed(event):
             return
 
-        config = self._channel_config()
-        agent_id = str(config.get("default_agent_id") or "").strip()
+        channel_config = self._channel_config()
+        agent_id = str(channel_config.get("default_agent_id") or "").strip()
+        if not agent_id:
+            agent_id = str(self._workspace_config().get("agents", {}).get("default_agent_id") or "").strip()
 
         if self._agent_chat_service is None:
             await self._send_reply(from_user_id, to_user_id, context_token, "微信通道已收到消息，但 Agent 服务不可用。")
@@ -293,6 +295,8 @@ class WechatChannelService:
             reply = await self._agent_chat_service.chat(agent_id, text)
         except Exception as exc:
             reply = f"Agent 处理失败：{exc}"
+            async with self._lock:
+                self._logs.append({"type": "error", "error": f"agent chat failed: {exc}"})
         await self._send_reply(from_user_id, to_user_id, context_token, reply)
 
     async def _send_reply(
@@ -312,8 +316,9 @@ class WechatChannelService:
                     "item_list": [{"text_item": {"text": text}}],
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            async with self._lock:
+                self._logs.append({"type": "error", "error": f"send reply failed: {exc}"})
 
     def _message_allowed(self, event: dict[str, Any]) -> bool:
         config = self._channel_config()
@@ -326,14 +331,18 @@ class WechatChannelService:
         return not allow_contacts or talker in allow_contacts
 
     def _channel_config(self) -> dict[str, Any]:
+        raw = self._workspace_config()
+        channels = raw.get("channels") if isinstance(raw, dict) else {}
+        wechat = channels.get("wechat_personal") if isinstance(channels, dict) else {}
+        return wechat if isinstance(wechat, dict) else {}
+
+    def _workspace_config(self) -> dict[str, Any]:
         path = self._workspace / "config.yaml"
         try:
             raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except FileNotFoundError:
             return {}
-        channels = raw.get("channels") if isinstance(raw, dict) else {}
-        wechat = channels.get("wechat_personal") if isinstance(channels, dict) else {}
-        return wechat if isinstance(wechat, dict) else {}
+        return raw if isinstance(raw, dict) else {}
 
     def _last_error_locked(self) -> str:
         for event in reversed(self._logs):
