@@ -49,7 +49,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         LangChainOpenAICompatibleAdapter(),
     )
     self_dev_service = SelfDevService(active_workspace, agent_chat_service, job_service)
-    wechat_channel_service = WechatChannelService(active_workspace, agent_chat_service)
+    wechat_channel_service = WechatChannelService(active_workspace, agent_chat_service, system_log_service)
     return AppContainer(
         auth_service=AuthService(AuthToken(settings.auth.token)),
         config_file_service=ConfigFileService(active_workspace),

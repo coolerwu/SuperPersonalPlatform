@@ -35,9 +35,11 @@ class WechatChannelService:
         self,
         workspace: Path,
         agent_chat_service: AgentChatService | None = None,
+        system_log_service: Any = None,
     ) -> None:
         self._workspace = workspace
         self._agent_chat_service = agent_chat_service
+        self._system_log_service = system_log_service
         self._client: ILinkClient | None = None
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
@@ -307,6 +309,9 @@ class WechatChannelService:
         async with self._lock:
             self._logs.append(event)
 
+        if self._system_log_service:
+            self._system_log_service.append_line(f"wechat rx from={from_user_id} text={text[:200]}")
+
         if not self._message_allowed(event):
             return
 
@@ -347,6 +352,10 @@ class WechatChannelService:
         except Exception as exc:
             async with self._lock:
                 self._logs.append({"type": "error", "error": f"send reply failed: {exc}"})
+            return
+
+        if self._system_log_service:
+            self._system_log_service.append_line(f"wechat tx to={to_user_id} text={text[:200]}")
 
     def _message_allowed(self, event: dict[str, Any]) -> bool:
         config = self._channel_config()

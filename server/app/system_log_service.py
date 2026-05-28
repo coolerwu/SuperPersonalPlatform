@@ -58,6 +58,13 @@ class SystemLogService:
         with self.current_log_path().open("a", encoding="utf-8") as log_file:
             log_file.write(line)
 
+    def append_line(self, text: str) -> None:
+        self._ensure_logs_dir()
+        self.cleanup_old_logs()
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        with self.current_log_path().open("a", encoding="utf-8") as log_file:
+            log_file.write(f"{timestamp} {text}\n")
+
     def list_logs(self) -> list[LogFileSummary]:
         self._ensure_logs_dir()
         self.cleanup_old_logs()
