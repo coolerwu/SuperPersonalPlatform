@@ -344,7 +344,8 @@ class WechatChannelService:
                 self._bot_token,
                 {
                     "to_user_id": to_user_id,
-                    "message_type": 1,
+                    "message_type": 2,
+                    "message_state": 2,
                     "context_token": context_token,
                     "item_list": [{"type": 1, "text_item": {"text": text}}],
                 },

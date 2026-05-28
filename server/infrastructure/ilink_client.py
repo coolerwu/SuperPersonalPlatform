@@ -95,7 +95,7 @@ class ILinkClient:
         url = f"{ILINK_BASE}/ilink/bot/sendmessage"
         response = await self._client.post(
             url,
-            json=message,
+            json={"msg": message},
             headers=self._auth_headers(bot_token),
         )
         if response.status_code in (401, 403):
