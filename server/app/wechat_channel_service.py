@@ -116,6 +116,9 @@ class WechatChannelService:
                 self._login_state = "exited"
             return
 
+        async with self._lock:
+            self._logs.append({"type": "qr_code_raw", "response": qr_response})
+
         qrcode_str = str(qr_response.get("qrcode") or "")
         qrcode_img = str(qr_response.get("qrcode_img_content") or "")
         qrcode_data_url = ""
