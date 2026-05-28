@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,7 +88,11 @@ class WechatChannelService:
     async def _run(self) -> None:
         try:
             while True:
-                await self._login_phase()
+                if not await self._try_resume_session():
+                    await self._login_phase()
+                else:
+                    proxy = self._channel_config().get("proxy", "")
+                    self._client = ILinkClient(proxy=str(proxy).strip() if proxy else None)
                 await self._message_loop()
         except asyncio.CancelledError:
             async with self._lock:
@@ -97,6 +102,24 @@ class WechatChannelService:
             async with self._lock:
                 self._login_state = "exited"
             raise
+
+    async def _try_resume_session(self) -> bool:
+        session = self._load_session()
+        if not session:
+            return False
+        bot_token = str(session.get("bot_token") or "")
+        baseurl = str(session.get("baseurl") or "")
+        if not bot_token or not baseurl:
+            return False
+        async with self._lock:
+            self._bot_token = bot_token
+            self._baseurl = baseurl
+            self._login_state = "logged_in"
+            self._user = "微信用户"
+            self._qrcode_url = ""
+            self._qrcode_data_url = ""
+            self._logs.append({"type": "login", "user": self._user, "resumed": True})
+        return True
 
     async def _login_phase(self) -> None:
         proxy = self._channel_config().get("proxy", "")
@@ -192,6 +215,7 @@ class WechatChannelService:
                     self._qrcode_url = ""
                     self._qrcode_data_url = ""
                     self._logs.append({"type": "login", "user": self._user})
+                self._save_session(bot_token, baseurl)
                 return
 
             if status in ("expired", "cancelled", "timeout", "408", "fail"):
@@ -215,6 +239,7 @@ class WechatChannelService:
             try:
                 updates = await self._client.get_updates(baseurl, token, cursor)
             except ILinkSessionExpiredError:
+                self._delete_session()
                 async with self._lock:
                     self._login_state = "exited"
                     self._error = "会话已过期，需要重新扫码"
@@ -362,6 +387,35 @@ class WechatChannelService:
             error=self._error,
             logs=tuple(self._logs),
         )
+
+    @property
+    def _session_path(self) -> Path:
+        return self._workspace / ".run" / "wechat_session.json"
+
+    def _save_session(self, bot_token: str, baseurl: str) -> None:
+        try:
+            self._session_path.parent.mkdir(parents=True, exist_ok=True)
+            self._session_path.write_text(
+                json.dumps({"bot_token": bot_token, "baseurl": baseurl}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _load_session(self) -> dict[str, Any] | None:
+        try:
+            data = json.loads(self._session_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("bot_token"):
+                return data
+        except Exception:
+            pass
+        return None
+
+    def _delete_session(self) -> None:
+        try:
+            self._session_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     async def _close_client(self) -> None:
         client = self._client
