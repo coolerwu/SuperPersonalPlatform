@@ -90,7 +90,7 @@ class ILinkClient:
         message: dict[str, Any],
     ) -> dict[str, Any]:
         import json as _json
-        url = f"{ILINK_BASE}/ilink/bot/sendmessage"
+        url = f"{baseurl}/ilink/bot/sendmessage"
         body = {"msg": message}
         response = await self._client.post(
             url,
