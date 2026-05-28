@@ -90,8 +90,14 @@ class ILinkClient:
         message: dict[str, Any],
     ) -> dict[str, Any]:
         import json as _json
+        import uuid as _uuid
         url = f"{baseurl}/ilink/bot/sendmessage"
-        body = {"msg": message}
+        message.setdefault("from_user_id", "")
+        message.setdefault("client_id", f"wx-{_uuid.uuid4().hex[:12]}")
+        body = {
+            "msg": message,
+            "base_info": {"channel_version": "1.0.2"},
+        }
         response = await self._client.post(
             url,
             json=body,
