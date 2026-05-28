@@ -49,7 +49,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         LangChainOpenAICompatibleAdapter(),
     )
     self_dev_service = SelfDevService(active_workspace, agent_chat_service, job_service)
-    wechat_channel_service = WechatChannelService(active_workspace, project_root, agent_chat_service)
+    wechat_channel_service = WechatChannelService(active_workspace, agent_chat_service)
     return AppContainer(
         auth_service=AuthService(AuthToken(settings.auth.token)),
         config_file_service=ConfigFileService(active_workspace),
@@ -114,6 +114,8 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
         finally:
             if worker is not None:
                 await worker.stop()
+            if container.wechat_channel_service is not None:
+                await container.wechat_channel_service.stop()
 
     app = FastAPI(title="Super Personal Platform", lifespan=lifespan)
     install_request_logging(app, container)

@@ -28,15 +28,15 @@ def create_channel_router(container: AppContainer) -> APIRouter:
         return asdict(value) if is_dataclass(value) else dict(value)
 
     @router.get("/wechat/status")
-    def wechat_status() -> dict[str, object]:
-        return {"wechat": serialize_status(wechat_service().status())}
+    async def wechat_status() -> dict[str, object]:
+        return {"wechat": serialize_status(await wechat_service().status())}
 
     @router.post("/wechat/start")
-    def wechat_start() -> dict[str, object]:
-        return {"wechat": serialize_status(wechat_service().start())}
+    async def wechat_start() -> dict[str, object]:
+        return {"wechat": serialize_status(await wechat_service().start())}
 
     @router.post("/wechat/stop")
-    def wechat_stop() -> dict[str, object]:
-        return {"wechat": serialize_status(wechat_service().stop())}
+    async def wechat_stop() -> dict[str, object]:
+        return {"wechat": serialize_status(await wechat_service().stop())}
 
     return router
