@@ -316,9 +316,6 @@ class WechatChannelService:
         if self._system_log_service:
             self._system_log_service.append_line(f"wechat rx from={from_user_id} text={text[:200]}")
 
-        if not self._message_allowed(event):
-            return
-
         channel_config = self._channel_config()
         agent_id = str(channel_config.get("default_agent_id") or "").strip()
         if not agent_id:
@@ -360,16 +357,6 @@ class WechatChannelService:
 
         if self._system_log_service:
             self._system_log_service.append_line(f"wechat tx to={to_user_id} text={text[:200]}")
-
-    def _message_allowed(self, event: dict[str, Any]) -> bool:
-        config = self._channel_config()
-        allow_contacts = {str(item).strip() for item in config.get("allow_contacts") or [] if str(item).strip()}
-        allow_rooms = {str(item).strip() for item in config.get("allow_rooms") or [] if str(item).strip()}
-        talker = str(event.get("talker_name") or "").strip()
-        room = str(event.get("room_topic") or "").strip()
-        if room:
-            return not allow_rooms or room in allow_rooms
-        return not allow_contacts or talker in allow_contacts
 
     def _channel_config(self) -> dict[str, Any]:
         raw = self._workspace_config()

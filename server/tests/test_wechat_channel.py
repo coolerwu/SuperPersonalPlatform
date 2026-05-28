@@ -131,21 +131,6 @@ class TestWechatChannelService:
         assert svc._login_state == "stopped"
         assert svc._user == ""
 
-    def test_message_allowed_empty_whitelist(self) -> None:
-        svc = WechatChannelService(Path("/tmp"))
-        event: dict[str, Any] = {"talker_name": "test_user", "room_topic": ""}
-        assert svc._message_allowed(event) is True
-
-    def test_message_allowed_contacts(self) -> None:
-        svc = WechatChannelService(Path("/tmp"))
-        event: dict[str, Any] = {"talker_name": "Alice", "room_topic": ""}
-        assert svc._message_allowed(event) is True
-
-    def test_message_allowed_room_whitelist(self) -> None:
-        svc = WechatChannelService(Path("/tmp"))
-        event: dict[str, Any] = {"talker_name": "Bob", "room_topic": "TestRoom"}
-        assert svc._message_allowed(event) is True
-
     def test_snapshot_locked(self) -> None:
         svc = WechatChannelService(Path("/tmp"))
         snapshot = svc._snapshot_locked()
