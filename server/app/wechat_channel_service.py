@@ -144,14 +144,38 @@ class WechatChannelService:
                     self._logs.append({"type": "error", "error": str(exc)})
                 return
 
-            status = str(status_response.get("status") or "")
+            async with self._lock:
+                self._logs.append({"type": "qr_poll_raw", "response": status_response})
+
+            status = str(
+                status_response.get("status")
+                or status_response.get("state")
+                or ""
+            )
             async with self._lock:
                 self._qrcode_status = status
-                self._logs.append({"type": "scan_status", "status": status})
 
-            if status == "confirmed":
-                bot_token = str(status_response.get("bot_token") or "")
-                baseurl = str(status_response.get("baseurl") or "")
+            if status in ("confirmed", "200", "success", "ok"):
+                bot_token = str(
+                    status_response.get("bot_token")
+                    or status_response.get("token")
+                    or status_response.get("botToken")
+                    or ""
+                )
+                baseurl = str(
+                    status_response.get("baseurl")
+                    or status_response.get("base_url")
+                    or status_response.get("baseUrl")
+                    or ""
+                )
+                if not bot_token:
+                    async with self._lock:
+                        self._logs.append({
+                            "type": "error",
+                            "error": f"confirmed but no token found, raw: {status_response}",
+                        })
+                    await asyncio.sleep(2)
+                    continue
                 async with self._lock:
                     self._bot_token = bot_token
                     self._baseurl = baseurl
@@ -162,7 +186,7 @@ class WechatChannelService:
                     self._logs.append({"type": "login", "user": self._user})
                 return
 
-            if status in ("expired", "cancelled", "timeout"):
+            if status in ("expired", "cancelled", "timeout", "408", "fail"):
                 async with self._lock:
                     self._error = f"扫码{status}"
                     self._login_state = "exited"
