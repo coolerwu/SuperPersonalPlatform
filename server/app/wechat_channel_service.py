@@ -344,8 +344,7 @@ class WechatChannelService:
                 self._bot_token,
                 {
                     "to_user_id": to_user_id,
-                    "message_type": 2,
-                    "message_state": 2,
+                    "message_type": 1,
                     "context_token": context_token,
                     "item_list": [{"type": 1, "text_item": {"text": text}}],
                 },
@@ -360,8 +359,10 @@ class WechatChannelService:
             return
 
         if self._system_log_service:
+            raw_info = resp.get("_raw", "") if isinstance(resp, dict) else ""
             self._system_log_service.append_line(
                 f"wechat tx to={to_user_id} text={text[:200]} resp={resp}"
+                + (f" raw={raw_info[:200]}" if raw_info else "")
             )
 
     def _channel_config(self) -> dict[str, Any]:

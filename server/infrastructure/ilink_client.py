@@ -92,8 +92,9 @@ class ILinkClient:
         bot_token: str,
         message: dict[str, Any],
     ) -> dict[str, Any]:
+        url = f"{baseurl}/ilink/bot/sendmessage"
         response = await self._client.post(
-            f"{baseurl}/ilink/bot/sendmessage",
+            url,
             json=message,
             headers=self._auth_headers(bot_token),
         )
@@ -101,7 +102,11 @@ class ILinkClient:
             raise ILinkSessionExpiredError(response.status_code, response.text)
         if response.status_code != 200:
             raise ILinkAPIError(response.status_code, response.text)
-        return response.json()
+        raw = response.text
+        try:
+            return response.json()
+        except Exception:
+            return {"_raw": raw}
 
     async def close(self) -> None:
         await self._client.aclose()
