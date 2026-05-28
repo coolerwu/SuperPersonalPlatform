@@ -32,9 +32,6 @@ class ILinkSessionExpiredError(ILinkAPIError):
 
 class ILinkClient:
     def __init__(self, proxy: str | None = None) -> None:
-        self._uin = base64.b64encode(
-            str(random.randint(0, 2**32 - 1)).encode()
-        ).decode()
         timeout = httpx.Timeout(40.0, connect=10.0)
         proxy_url = proxy.strip() if proxy else None
         self._client = httpx.AsyncClient(
@@ -114,7 +111,9 @@ class ILinkClient:
     def _auth_headers(self, bot_token: str | None = None) -> dict[str, str]:
         headers = {
             "AuthorizationType": "ilink_bot_token",
-            "X-WECHAT-UIN": self._uin,
+            "X-WECHAT-UIN": base64.b64encode(
+                str(random.randint(0, 2**32 - 1)).encode()
+            ).decode(),
         }
         if bot_token:
             headers["Authorization"] = f"Bearer {bot_token}"
