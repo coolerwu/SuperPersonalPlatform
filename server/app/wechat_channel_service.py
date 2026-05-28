@@ -314,7 +314,7 @@ class WechatChannelService:
             self._logs.append(event)
 
         if self._system_log_service:
-            self._system_log_service.append_line(f"wechat rx from={from_user_id} text={text[:200]}")
+            self._system_log_service.append_line(f"wechat rx from={from_user_id} to={to_user_id} text={text[:200]}")
 
         channel_config = self._channel_config()
         agent_id = str(channel_config.get("default_agent_id") or "").strip()
@@ -339,7 +339,7 @@ class WechatChannelService:
         if not self._client or not self._baseurl or not self._bot_token:
             return
         try:
-            await self._client.send_message(
+            resp = await self._client.send_message(
                 self._baseurl,
                 self._bot_token,
                 {
@@ -353,10 +353,16 @@ class WechatChannelService:
         except Exception as exc:
             async with self._lock:
                 self._logs.append({"type": "error", "error": f"send reply failed: {exc}"})
+            if self._system_log_service:
+                self._system_log_service.append_line(
+                    f"wechat tx FAIL to={to_user_id} error={exc}"
+                )
             return
 
         if self._system_log_service:
-            self._system_log_service.append_line(f"wechat tx to={to_user_id} text={text[:200]}")
+            self._system_log_service.append_line(
+                f"wechat tx to={to_user_id} text={text[:200]} resp={resp}"
+            )
 
     def _channel_config(self) -> dict[str, Any]:
         raw = self._workspace_config()
