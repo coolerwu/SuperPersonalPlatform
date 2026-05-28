@@ -334,7 +334,7 @@ class WechatChannelService:
         await self._send_reply(from_user_id, to_user_id, context_token, reply)
 
     async def _send_reply(
-        self, to_user_id: str, from_user_id: str, context_token: str, text: str
+        self, to_user_id: str, _from_user_id: str, context_token: str, text: str
     ) -> None:
         if not self._client or not self._baseurl or not self._bot_token:
             return
@@ -344,10 +344,10 @@ class WechatChannelService:
                 self._bot_token,
                 {
                     "to_user_id": to_user_id,
-                    "from_user_id": from_user_id,
-                    "message_type": 1,
+                    "message_type": 2,
+                    "message_state": 2,
                     "context_token": context_token,
-                    "item_list": [{"text_item": {"text": text}}],
+                    "item_list": [{"type": 1, "text_item": {"text": text}}],
                 },
             )
         except Exception as exc:
