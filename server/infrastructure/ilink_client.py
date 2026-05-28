@@ -92,7 +92,7 @@ class ILinkClient:
         bot_token: str,
         message: dict[str, Any],
     ) -> dict[str, Any]:
-        url = f"{baseurl}/ilink/bot/sendmessage"
+        url = f"{ILINK_BASE}/ilink/bot/sendmessage"
         response = await self._client.post(
             url,
             json=message,
