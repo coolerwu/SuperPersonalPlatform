@@ -27,8 +27,7 @@ channels:
   wechat_personal:
     enabled: false
     default_agent_id: "assistant"
-    allow_contacts: []
-    allow_rooms: []
+    auto_start: false
     # Optional explicit proxy for iLink HTTP client.
     proxy: ""
 agents:
