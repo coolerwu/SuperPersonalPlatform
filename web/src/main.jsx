@@ -2231,127 +2231,301 @@ function TerminalPage({ onUnauthorized }) {
 }
 
 function ChannelsPage({ onUnauthorized }) {
-  const [wechat, setWechat] = useState(null);
-  const [channelLoading, setChannelLoading] = useState(false);
-  const [channelError, setChannelError] = useState("");
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addForm, setAddForm] = useState({ id: "", name: "", default_agent_id: "", auto_start: false, proxy: "" });
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [agentOptions, setAgentOptions] = useState([]);
+  const [useMultiAccount, setUseMultiAccount] = useState(true);
 
-  async function loadWechatStatus() {
+  async function loadAgentOptions() {
     try {
-      const data = await api("/api/channels/wechat/status");
-      setWechat(data.wechat);
+      const data = await api("/api/agents/options");
+      setAgentOptions(data.agents || []);
+    } catch (_) {}
+  }
+
+  async function loadAccounts() {
+    if (!useMultiAccount) {
+      try {
+        const data = await api("/api/channels/wechat/status");
+        if (data.wechat) {
+          setAccounts([{ id: "default", name: "微信机器人", status: data.wechat }]);
+        } else {
+          setAccounts([]);
+        }
+      } catch (err) {
+        if (err.status === 401) { onUnauthorized(); return; }
+        setError(err.message);
+      }
+      return;
+    }
+    try {
+      const data = await api("/api/channels/wechat/accounts");
+      setAccounts(data.accounts || []);
+      setError("");
     } catch (err) {
-      if (err.status === 401 || err.message === "Authentication required") {
-        onUnauthorized();
+      if (err.status === 401) { onUnauthorized(); return; }
+      if (err.status === 404) {
+        setUseMultiAccount(false);
         return;
       }
-      setChannelError(err.message);
+      setError(err.message);
     }
   }
 
-  async function updateWechat(action) {
-    setChannelLoading(true);
-    setChannelError("");
+  async function startAccount(id) {
+    setLoading(true);
+    setError("");
     try {
-      const data = await api(`/api/channels/wechat/${action}`, { method: "POST" });
-      setWechat(data.wechat);
-    } catch (err) {
-      if (err.status === 401 || err.message === "Authentication required") {
-        onUnauthorized();
-        return;
+      if (useMultiAccount) {
+        const data = await api(`/api/channels/wechat/accounts/${id}/start`, { method: "POST" });
+        setAccounts(prev => prev.map(a => a.id === id ? data.account : a));
+      } else {
+        const data = await api("/api/channels/wechat/start", { method: "POST" });
+        setAccounts([{ id: "default", name: "微信机器人", status: data.wechat }]);
       }
-      setChannelError(err.message);
-    } finally {
-      setChannelLoading(false);
-    }
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setError(err.message);
+    } finally { setLoading(false); }
+  }
+
+  async function stopAccount(id) {
+    setLoading(true);
+    setError("");
+    try {
+      if (useMultiAccount) {
+        const data = await api(`/api/channels/wechat/accounts/${id}/stop`, { method: "POST" });
+        setAccounts(prev => prev.map(a => a.id === id ? data.account : a));
+      } else {
+        const data = await api("/api/channels/wechat/stop", { method: "POST" });
+        setAccounts([{ id: "default", name: "微信机器人", status: data.wechat }]);
+      }
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setError(err.message);
+    } finally { setLoading(false); }
+  }
+
+  async function addAccount() {
+    if (!addForm.id.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      await api("/api/channels/wechat/accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          id: addForm.id.trim(),
+          name: addForm.name.trim() || addForm.id.trim(),
+          default_agent_id: addForm.default_agent_id,
+          auto_start: addForm.auto_start,
+          proxy: addForm.proxy,
+        }),
+      });
+      setShowAddModal(false);
+      setAddForm({ id: "", name: "", default_agent_id: "", auto_start: false, proxy: "" });
+      await loadAccounts();
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setError(err.message);
+    } finally { setLoading(false); }
+  }
+
+  async function deleteAccount(id) {
+    setLoading(true);
+    setError("");
+    try {
+      await api(`/api/channels/wechat/accounts/${id}`, { method: "DELETE" });
+      setDeleteConfirm(null);
+      setAccounts(prev => prev.filter(a => a.id !== id));
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setError(err.message);
+    } finally { setLoading(false); }
   }
 
   useEffect(() => {
-    loadWechatStatus();
-    const timer = setInterval(loadWechatStatus, 2500);
+    loadAgentOptions();
+    loadAccounts();
+    const timer = setInterval(loadAccounts, 3000);
     return () => clearInterval(timer);
-  }, []);
-
-  const wechatQrSource = wechat?.qrcode_data_url || wechat?.qrcode_url || "";
-  const wechatError = channelError || wechat?.error || "";
-  const wechatErrorText = wechatError.includes("400")
-    ? "扫码通道返回了内部状态提示。二维码仍可扫描；如果扫码失败，请停止后重新启动微信。"
-    : wechatError;
+  }, [useMultiAccount]);
 
   return (
     <section className="page-section channels-section">
       <div className="channels-hero">
         <span>Channels</span>
         <h2>消息渠道</h2>
-        <p>把外部消息入口接入 Agent runtime。个人微信可以做扫码登录机器人，适合你这种单人自用场景；当前版本已接入 Wechaty sidecar、二维码登录状态和默认 Agent 回复通道。</p>
+        <p>把外部消息入口接入 Agent runtime。支持多个微信账号独立扫码登录，每个账号可绑定不同微信号，独立收发消息。</p>
       </div>
-      <div className="channel-grid">
-        <article className="channel-card primary-channel">
-          <div className="channel-card-heading">
-            <span className="channel-icon"><MessageSquare size={18} /></span>
-            <div>
-              <h3>个人微信机器人</h3>
-              <p>扫码登录 + 白名单 + 默认 Agent 回复</p>
+
+      {useMultiAccount && (
+        <div className="channels-toolbar">
+          <button className="primary-button" onClick={() => setShowAddModal(true)} disabled={loading}>
+            <Plus size={16} /> 添加账号
+          </button>
+        </div>
+      )}
+
+      {error ? <div className="form-error">{error}</div> : null}
+
+      {accounts.length === 0 && !loading ? (
+        <div className="channel-grid">
+          <article className="channel-card">
+            <h3>暂无微信账号</h3>
+            <p>点击"添加账号"创建第一个微信机器人账号，然后扫码登录即可使用。</p>
+          </article>
+        </div>
+      ) : (
+        <div className="channel-grid">
+          {accounts.map(acct => {
+            const s = acct.status || {};
+            const qrSource = s.qrcode_data_url || s.qrcode_url || "";
+            const acctError = s.error || "";
+            const acctErrorText = acctError.includes("400")
+              ? "扫码通道返回了内部状态提示。二维码仍可扫描；如果扫码失败，请停止后重新启动微信。"
+              : acctError;
+            return (
+              <article className="channel-card primary-channel" key={acct.id}>
+                <div className="channel-card-heading">
+                  <span className="channel-icon"><MessageSquare size={18} /></span>
+                  <div>
+                    <h3>{acct.name || acct.id}</h3>
+                    <p>个人微信机器人 · {acct.id}</p>
+                  </div>
+                  <strong>{s.login_state || "stopped"}</strong>
+                </div>
+                <div className="wechat-control">
+                  <div>
+                    <span className={`terminal-status ${s.running ? "connected" : ""}`}>
+                      {s.running ? "运行中" : "未启动"}
+                    </span>
+                    {s.user ? <strong>{s.user}</strong> : null}
+                  </div>
+                  <div className="wechat-actions">
+                    <button className="secondary-button primary-action" onClick={() => startAccount(acct.id)} disabled={loading || s.running}>
+                      <Play size={16} /> 启动微信
+                    </button>
+                    <button className="secondary-button" onClick={() => stopAccount(acct.id)} disabled={loading || !s.running}>
+                      <XCircle size={16} /> 停止
+                    </button>
+                    {useMultiAccount && (
+                      <button
+                        className="secondary-button delete-account-button"
+                        onClick={() => setDeleteConfirm(acct.id)}
+                        disabled={loading}
+                        title="删除账号"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {qrSource ? (
+                  <div className="wechat-qr-panel">
+                    <img src={qrSource} alt="微信登录二维码" />
+                    <div>
+                      <strong>用微信扫码登录</strong>
+                      <p>状态：{s.qrcode_status || "等待扫码"}</p>
+                    </div>
+                  </div>
+                ) : null}
+                {acctErrorText && !qrSource ? <div className="form-error">{acctErrorText}</div> : null}
+                {acctErrorText && qrSource ? <div className="wechat-notice">{acctErrorText}</div> : null}
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Add Account Modal */}
+      {showAddModal ? (
+        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>添加微信账号</h3>
+              <button className="icon-button" onClick={() => setShowAddModal(false)}><X size={18} /></button>
             </div>
-            <strong>{wechat?.login_state || "stopped"}</strong>
-          </div>
-          <div className="wechat-control">
-            <div>
-              <span className={`terminal-status ${wechat?.running ? "connected" : ""}`}>
-                {wechat?.running ? "运行中" : "未启动"}
-              </span>
-              {wechat?.user ? <strong>{wechat.user}</strong> : null}
-            </div>
-            <div className="wechat-actions">
-              <button className="secondary-button primary-action" onClick={() => updateWechat("start")} disabled={channelLoading || wechat?.running}>
-                <Play size={16} />
-                启动微信
-              </button>
-              <button className="secondary-button" onClick={() => updateWechat("stop")} disabled={channelLoading || !wechat?.running}>
-                <XCircle size={16} />
-                停止
-              </button>
-            </div>
-          </div>
-          {wechatQrSource ? (
-            <div className="wechat-qr-panel">
-              <img src={wechatQrSource} alt="微信登录二维码" />
-              <div>
-                <strong>用微信扫码登录</strong>
-                <p>状态：{wechat.qrcode_status || "等待扫码"}</p>
+            <div className="modal-form">
+              <label className="form-label">
+                账号 ID
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="英文、数字、短横线，如 work"
+                  value={addForm.id}
+                  onChange={e => setAddForm(f => ({ ...f, id: e.target.value }))}
+                />
+              </label>
+              <label className="form-label">
+                显示名称
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="如：工作微信"
+                  value={addForm.name}
+                  onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))}
+                />
+              </label>
+              <label className="form-label">
+                默认 Agent
+                <select
+                  className="form-input"
+                  value={addForm.default_agent_id}
+                  onChange={e => setAddForm(f => ({ ...f, default_agent_id: e.target.value }))}
+                >
+                  <option value="">使用全局默认</option>
+                  {agentOptions.map(a => (
+                    <option key={a.id} value={a.id}>{a.name || a.id}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="form-label-checkbox">
+                <input
+                  type="checkbox"
+                  checked={addForm.auto_start}
+                  onChange={e => setAddForm(f => ({ ...f, auto_start: e.target.checked }))}
+                />
+                启动时自动登录
+              </label>
+              <label className="form-label">
+                HTTP 代理（可选）
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="如 http://127.0.0.1:7890"
+                  value={addForm.proxy}
+                  onChange={e => setAddForm(f => ({ ...f, proxy: e.target.value }))}
+                />
+              </label>
+              <div className="modal-actions">
+                <button className="secondary-button" onClick={() => setShowAddModal(false)}>取消</button>
+                <button className="primary-button" onClick={addAccount} disabled={loading || !addForm.id.trim()}>保存</button>
               </div>
             </div>
-          ) : null}
-          {wechatErrorText && !wechatQrSource ? <div className="form-error">{wechatErrorText}</div> : null}
-          {wechatErrorText && wechatQrSource ? <div className="wechat-notice">{wechatErrorText}</div> : null}
-          <div className="channel-steps">
-            <div>
-              <span>1</span>
-              <p>启动 Wechaty sidecar，浏览器展示登录二维码。</p>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirm ? (
+        <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div className="modal-content modal-confirm" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>确认删除</h3>
+              <button className="icon-button" onClick={() => setDeleteConfirm(null)}><X size={18} /></button>
             </div>
-            <div>
-              <span>2</span>
-              <p>扫码登录后保活会话，并限制只响应你的联系人或指定群。</p>
-            </div>
-            <div>
-              <span>3</span>
-              <p>消息进入后转发到默认 Agent，回复再发送回微信。</p>
+            <p>删除后将停止该账号并清除登录会话，无法恢复。</p>
+            <div className="modal-actions">
+              <button className="secondary-button" onClick={() => setDeleteConfirm(null)}>取消</button>
+              <button className="primary-button danger-button" onClick={() => deleteAccount(deleteConfirm)} disabled={loading}>确认删除</button>
             </div>
           </div>
-        </article>
-        <article className="channel-card">
-          <h3>建议配置形态</h3>
-          <pre>{`channels:
-  wechat_personal:
-    enabled: true
-    provider: "wechaty"
-    login: "qr"
-    proxy: ""
-    default_agent_id: "assistant"
-    allow_contacts:
-      - "你的微信昵称或备注"
-    allow_rooms: []`}</pre>
-        </article>
-      </div>
+        </div>
+      ) : null}
     </section>
   );
 }

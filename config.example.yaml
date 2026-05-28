@@ -25,11 +25,21 @@ tools:
   deny: []
 channels:
   wechat_personal:
-    enabled: false
+    enabled: true
     default_agent_id: "assistant"
-    auto_start: false
-    # Optional explicit proxy for iLink HTTP client.
-    proxy: ""
+    # Multi-account format (preferred):
+    accounts:
+      - id: "main"
+        name: "主账号"
+        default_agent_id: "assistant"
+        auto_start: false
+        # Optional explicit proxy for iLink HTTP client.
+        proxy: ""
+    # Legacy single-account format (used when 'accounts' is absent):
+    # enabled: false
+    # default_agent_id: "assistant"
+    # auto_start: false
+    # proxy: ""
 agents:
   default_agent_id: "assistant"
   definitions:

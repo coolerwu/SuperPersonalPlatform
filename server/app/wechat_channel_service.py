@@ -36,10 +36,12 @@ class WechatChannelService:
         workspace: Path,
         agent_chat_service: AgentChatService | None = None,
         system_log_service: Any = None,
+        account_id: str = "default",
     ) -> None:
         self._workspace = workspace
         self._agent_chat_service = agent_chat_service
         self._system_log_service = system_log_service
+        self._account_id = account_id
         self._client: ILinkClient | None = None
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
@@ -375,7 +377,18 @@ class WechatChannelService:
         raw = self._workspace_config()
         channels = raw.get("channels") if isinstance(raw, dict) else {}
         wechat = channels.get("wechat_personal") if isinstance(channels, dict) else {}
-        return wechat if isinstance(wechat, dict) else {}
+        if not isinstance(wechat, dict):
+            return {}
+        accounts = wechat.get("accounts")
+        if isinstance(accounts, list) and len(accounts) > 0:
+            for entry in accounts:
+                if isinstance(entry, dict) and entry.get("id") == self._account_id:
+                    merged = dict(wechat)
+                    merged.pop("accounts", None)
+                    merged.update(entry)
+                    return merged
+            return {}
+        return wechat
 
     def _workspace_config(self) -> dict[str, Any]:
         path = self._workspace / "config.yaml"
@@ -406,7 +419,15 @@ class WechatChannelService:
 
     @property
     def _session_path(self) -> Path:
-        return self._workspace / ".run" / "wechat_session.json"
+        run_dir = self._workspace / ".run"
+        new_path = run_dir / f"wechat_session_{self._account_id}.json"
+        legacy_path = run_dir / "wechat_session.json"
+        if self._account_id == "default" and legacy_path.exists() and not new_path.exists():
+            try:
+                legacy_path.rename(new_path)
+            except Exception:
+                pass
+        return new_path
 
     def _save_session(self, bot_token: str, baseurl: str) -> None:
         try:
