@@ -89,10 +89,12 @@ class ILinkClient:
         bot_token: str,
         message: dict[str, Any],
     ) -> dict[str, Any]:
+        import json as _json
         url = f"{ILINK_BASE}/ilink/bot/sendmessage"
+        body = {"msg": message}
         response = await self._client.post(
             url,
-            json={"msg": message},
+            json=body,
             headers=self._auth_headers(bot_token),
         )
         if response.status_code in (401, 403):
@@ -101,9 +103,14 @@ class ILinkClient:
             raise ILinkAPIError(response.status_code, response.text)
         raw = response.text
         try:
-            return response.json()
+            result = response.json()
         except Exception:
-            return {"_raw": raw}
+            result = {}
+        result.setdefault("_debug_url", url)
+        result.setdefault("_debug_status", response.status_code)
+        result.setdefault("_debug_body", _json.dumps(body, ensure_ascii=False)[:500])
+        result.setdefault("_debug_raw", raw[:500])
+        return result
 
     async def close(self) -> None:
         await self._client.aclose()

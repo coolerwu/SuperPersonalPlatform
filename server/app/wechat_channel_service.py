@@ -360,10 +360,15 @@ class WechatChannelService:
             return
 
         if self._system_log_service:
-            raw_info = resp.get("_raw", "") if isinstance(resp, dict) else ""
+            url = resp.get("_debug_url", "") if isinstance(resp, dict) else ""
+            status = resp.get("_debug_status", "") if isinstance(resp, dict) else ""
+            body = resp.get("_debug_body", "") if isinstance(resp, dict) else ""
+            raw = resp.get("_debug_raw", "") if isinstance(resp, dict) else ""
             self._system_log_service.append_line(
-                f"wechat tx to={to_user_id} text={text[:200]} resp={resp}"
-                + (f" raw={raw_info[:200]}" if raw_info else "")
+                f"wechat tx to={to_user_id} text={text[:200]}"
+                f" url={url} status={status}"
+                f" req={body}"
+                f" resp={raw}"
             )
 
     def _channel_config(self) -> dict[str, Any]:
