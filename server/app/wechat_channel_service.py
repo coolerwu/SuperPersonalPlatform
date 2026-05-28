@@ -120,10 +120,15 @@ class WechatChannelService:
             self._logs.append({"type": "qr_code_raw", "response": qr_response})
 
         qrcode_str = str(qr_response.get("qrcode") or "")
-        qrcode_img = str(qr_response.get("qrcode_img_content") or "")
+        qrcode_img_content = str(qr_response.get("qrcode_img_content") or "")
         qrcode_data_url = ""
-        if qrcode_img and qrcode_img.startswith("data:image"):
-            qrcode_data_url = qrcode_img
+        if qrcode_img_content and qrcode_img_content.startswith("data:image"):
+            qrcode_data_url = qrcode_img_content
+        elif qrcode_img_content and qrcode_img_content.startswith("http"):
+            try:
+                qrcode_data_url = generate_qrcode_data_url(qrcode_img_content)
+            except Exception:
+                pass
         elif qrcode_str:
             try:
                 qrcode_data_url = generate_qrcode_data_url(qrcode_str)
