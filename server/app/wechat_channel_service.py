@@ -271,6 +271,9 @@ class WechatChannelService:
                 cursor = new_cursor
 
             msgs = updates.get("msgs") or []
+            if msgs:
+                async with self._lock:
+                    self._logs.append({"type": "poll_result", "msg_count": len(msgs)})
             for msg in msgs:
                 if msg.get("message_type") != 1:
                     continue
