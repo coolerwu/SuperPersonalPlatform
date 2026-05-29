@@ -22,31 +22,9 @@ class LangChainOpenAICompatibleAdapter(AgentChatModelGateway):
         images: tuple[ChatImage, ...] = (),
     ) -> str:
         from langchain_core.messages import HumanMessage, SystemMessage
-        from langchain_openai import ChatOpenAI
 
-        chat_model = ChatOpenAI(
-            api_key=model.api_key,
-            base_url=model.base_url,
-            model=model.model,
-            temperature=model.temperature if model.temperature is not None else 0.7,
-        )
-        human_content: str | list[dict[str, object]]
-        if images:
-            human_content = []
-            if user_message:
-                human_content.append({"type": "text", "text": user_message})
-            for image in images:
-                human_content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{image.mime_type};base64,{image.data}",
-                        },
-                    }
-                )
-        else:
-            human_content = user_message
-
+        chat_model = self._chat_model(model)
+        human_content: str | list[dict[str, object]] = self._human_content(user_message, images)
         response = await chat_model.ainvoke(
             [SystemMessage(content=system_prompt), HumanMessage(content=human_content)]
         )
@@ -193,6 +171,18 @@ class LangChainOpenAICompatibleAdapter(AgentChatModelGateway):
         return human_content
 
     def _chat_model(self, model: ModelDefinition):
+        if model.provider == "anthropic":
+            from langchain_anthropic import ChatAnthropic
+
+            kwargs: dict[str, object] = {
+                "api_key": model.api_key,
+                "model": model.model,
+                "temperature": model.temperature if model.temperature is not None else 0.7,
+            }
+            if model.base_url.strip():
+                kwargs["base_url"] = model.base_url
+            return ChatAnthropic(**kwargs)
+
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(

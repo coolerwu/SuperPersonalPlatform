@@ -572,6 +572,7 @@ function AgentPage({ onUnauthorized }) {
         {
           id,
           name: "新模型",
+          provider: "openai_compatible",
           base_url: "https://api.openai.com/v1",
           model: "",
           api_key: "",
@@ -617,6 +618,7 @@ function AgentPage({ onUnauthorized }) {
           models: config.models.map((model) => ({
             id: model.id,
             name: model.name,
+            provider: model.provider || "openai_compatible",
             base_url: model.base_url,
             model: model.model,
             api_key: model.api_key || "",
@@ -879,7 +881,7 @@ function AgentPage({ onUnauthorized }) {
                 <div className="agent-config-section-heading">
                   <div>
                     <h3>模型</h3>
-                    <p>配置 OpenAI-compatible 接口，API Key 留空会保留原值。</p>
+                    <p>配置模型接口，API Key 留空会保留原值。</p>
                   </div>
                   <button className="secondary-button" onClick={addModel}>
                     <Plus size={17} />
@@ -894,9 +896,10 @@ function AgentPage({ onUnauthorized }) {
                         {config.default_model_id === model.id ? <span>默认</span> : null}
                       </div>
                       <div className="agent-config-grid">
+                        <label>提供商<select value={model.provider || "openai_compatible"} onChange={(event) => updateModel(index, "provider", event.target.value)}><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic">Anthropic (Claude)</option></select></label>
                         <label>ID<input value={model.id} onChange={(event) => updateModel(index, "id", event.target.value)} /></label>
                         <label>显示名<input value={model.name} onChange={(event) => updateModel(index, "name", event.target.value)} /></label>
-                        <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} /></label>
+                        <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} placeholder={(model.provider || "openai_compatible") === "anthropic" ? "可选" : ""} /></label>
                         <label>模型名<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
                         <label>API Key<input type="password" placeholder={model.api_key_mask || "留空保留旧 key"} value={model.api_key || ""} onChange={(event) => updateModel(index, "api_key", event.target.value)} /></label>
                         <label>Temperature<input type="number" step="0.1" value={model.temperature ?? ""} onChange={(event) => updateModel(index, "temperature", event.target.value)} /></label>

@@ -10,6 +10,7 @@ llm:
   models:
     - id: "default"
       name: "默认模型"
+      provider: "openai_compatible"
       base_url: "https://api.openai.com/v1"
       api_key: "change-me"
       model: "gpt-4o-mini"

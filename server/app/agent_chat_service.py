@@ -139,6 +139,7 @@ class EditableModel:
     name: str
     base_url: str
     model: str
+    provider: str
     temperature: float | None
     supports_images: bool
     has_api_key: bool
@@ -231,6 +232,7 @@ class AgentChatService:
                     name=model.name,
                     base_url=model.base_url,
                     model=model.model,
+                    provider=model.provider,
                     temperature=model.temperature,
                     supports_images=model.supports_images,
                     has_api_key=self._has_usable_api_key(model),
@@ -294,6 +296,7 @@ class AgentChatService:
                     "base_url": str(model.get("base_url") or "").strip(),
                     "api_key": api_key or old_keys.get(model_id, ""),
                     "model": str(model.get("model") or "").strip(),
+                    "provider": str(model.get("provider") or "openai_compatible").strip() or "openai_compatible",
                     "temperature": self._optional_float(model.get("temperature")),
                     "supports_images": bool(model.get("supports_images", False)),
                 }

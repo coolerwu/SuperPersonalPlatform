@@ -115,12 +115,14 @@ def parse_model_definition(raw: Any) -> ModelDefinition:
     if not isinstance(raw, dict):
         raise ValueError("llm.models[] must be an object")
     temperature_raw = raw.get("temperature")
+    provider = str(raw.get("provider") or "openai_compatible").strip()
     return ModelDefinition(
         id=str(raw.get("id") or "").strip(),
         name=str(raw.get("name") or "").strip(),
         base_url=str(raw.get("base_url") or "").strip(),
         api_key=str(raw.get("api_key") or "").strip(),
         model=str(raw.get("model") or "").strip(),
+        provider=provider or "openai_compatible",
         temperature=float(temperature_raw) if temperature_raw is not None else None,
         supports_images=bool(raw.get("supports_images", False)),
     )

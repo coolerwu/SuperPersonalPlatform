@@ -7,7 +7,7 @@
 - The frontend is React + Vite and uses xterm.js for the browser terminal. Production uses the committed `web/dist` build output; run scripts do not install or build frontend assets.
 - Personal WeChat channel support uses the Tencent iLink Bot HTTP API through a pure Python async implementation under `server/infrastructure/ilink_client.py`.
 - The app is not deployed as separated frontend/backend services. Browser traffic goes to FastAPI, and FastAPI serves both API and built frontend assets.
-- Agent Chat uses LangGraph as the backend agent execution platform and LangChain as the infrastructure adapter for OpenAI-compatible external chat models.
+- Agent Chat uses LangGraph as the backend agent execution platform and LangChain as the infrastructure adapter for multi-provider chat models. Supported providers: OpenAI-compatible (`ChatOpenAI`) and Anthropic Claude (`ChatAnthropic`).
 
 ## Backend Architecture
 
@@ -25,7 +25,7 @@
 - Login writes an HttpOnly cookie. Logout clears it.
 - Auth state is available through `GET /api/auth/me`.
 - Agent Chat uses the existing single-token login model. There is no Agent-specific permission switch, user model, role model, or per-Agent authorization; authenticated users can access Agent routes.
-- Agent Chat configuration lives in workspace `config.yaml` under `llm.models`, `llm.default_model_id`, platform `tools`, legacy `common_skills.tools`, `agents.definitions`, and `agents.default_agent_id`. Model entries contain OpenAI-compatible `base_url`, `api_key`, `model`, optional `temperature`, and `supports_images`; Agent entries contain `id`, `name`, `system_prompt`, `model_id`, optional `skill_ids`, and optional per-Agent `tools` overrides.
+- Agent Chat configuration lives in workspace `config.yaml` under `llm.models`, `llm.default_model_id`, platform `tools`, legacy `common_skills.tools`, `agents.definitions`, and `agents.default_agent_id`. Model entries contain `provider` (`openai_compatible` or `anthropic`), OpenAI-compatible `base_url`, `api_key`, `model`, optional `temperature`, and `supports_images`; Agent entries contain `id`, `name`, `system_prompt`, `model_id`, optional `skill_ids`, and optional per-Agent `tools` overrides.
 - `GET /api/agents/options` is authenticated and returns Agent options with each Agent's bound model capability metadata without exposing `api_key`.
 - `GET /api/agents/config` and `PUT /api/agents/config` are authenticated workspace configuration APIs for model, platform tool, legacy common skill tool, and Agent definitions. They mask model API keys in read responses; empty `api_key` values on update preserve existing keys.
 - Agent tools follow an OpenClaw/Hermes-style split: tools are typed callable functions registered by the backend Tool Registry; skills are Markdown operating instructions visible only when bound through `skill_ids`. Platform and Agent `tools` config uses `profile`, `allow`, and `deny`; `deny` wins over profile and allow. The default profile exposes no tools by itself, the `self-dev` profile exposes skill, repo filesystem, runtime command, and git tools, and legacy `common_skills.tools` still enables `list_skill`/`read_skill` for backwards compatibility.

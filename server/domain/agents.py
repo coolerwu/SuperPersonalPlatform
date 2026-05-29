@@ -6,6 +6,7 @@ class AgentConfigError(ValueError):
     pass
 
 
+SUPPORTED_PROVIDERS = {"openai_compatible", "anthropic"}
 SUPPORTED_COMMON_SKILL_TOOLS = {"list_skill", "read_skill"}
 SUPPORTED_TOOL_PROFILES = {"default", "self-dev"}
 SUPPORTED_AGENT_TOOLS = {
@@ -44,6 +45,7 @@ class ModelDefinition:
     base_url: str
     api_key: str
     model: str
+    provider: str = "openai_compatible"
     temperature: float | None = None
     supports_images: bool = False
 
@@ -52,8 +54,12 @@ class ModelDefinition:
             raise AgentConfigError("llm.models[].id is required")
         if not self.name.strip():
             raise AgentConfigError(f"llm.models[{self.id}].name is required")
-        if not self.base_url.strip():
-            raise AgentConfigError(f"llm.models[{self.id}].base_url is required")
+        if self.provider not in SUPPORTED_PROVIDERS:
+            raise AgentConfigError(
+                f"llm.models[{self.id}].provider must be one of {sorted(SUPPORTED_PROVIDERS)}"
+            )
+        if self.provider != "anthropic" and not self.base_url.strip():
+            raise AgentConfigError(f"llm.models[{self.id}].base_url is required for non-Anthropic providers")
         if not self.api_key.strip():
             raise AgentConfigError(f"llm.models[{self.id}].api_key is required")
         if not self.model.strip():
