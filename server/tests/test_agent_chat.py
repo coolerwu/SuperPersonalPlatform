@@ -13,7 +13,6 @@ from server.app.agent_chat_service import (
     AgentToolCallingUnsupportedError,
     AgentToolReasoningResult,
     AgentToolResult,
-    TASK_GOAL_CONFIRMATION_PROMPT,
     AgentChatService,
     ChatImage,
 )
@@ -49,8 +48,6 @@ class FakeModelGateway:
                 "images": images,
             }
         )
-        if system_prompt == TASK_GOAL_CONFIRMATION_PROMPT:
-            return f"确认目标：{user_message}"
         return f"{model.model}: {system_prompt[:7]} / {user_message} / images={len(images)}"
 
     async def complete_with_tools(
@@ -349,18 +346,16 @@ def test_agent_chat_websocket_uses_agent_bound_model_without_model_id(tmp_path) 
         assert websocket.receive_json() == {"type": "status", "status": "running"}
         checkpoint = websocket.receive_json()
         assert checkpoint["type"] == "checkpoint"
-        assert checkpoint["stage"] == "goal"
+        assert checkpoint["stage"] == "reason"
         assert receive_until(websocket, "assistant_message") == {
             "type": "assistant_message",
             "content": "fast-chat: You are / 你好 / images=0",
         }
         assert websocket.receive_json() == {"type": "status", "status": "idle"}
 
-    assert [call["model"] for call in gateway.calls] == ["fast", "fast"]
-    assert gateway.calls[0]["system_prompt"] == TASK_GOAL_CONFIRMATION_PROMPT
+    assert [call["model"] for call in gateway.calls] == ["fast"]
+    assert gateway.calls[0]["system_prompt"] == "You are concise."
     assert gateway.calls[0]["user_message"] == "你好"
-    assert gateway.calls[1]["system_prompt"] == "You are concise.\n\n本次 task 目标：确认目标：你好"
-    assert gateway.calls[1]["user_message"] == "你好"
 
 
 def test_agent_chat_websocket_passes_images_to_adapter(tmp_path) -> None:
@@ -383,7 +378,6 @@ def test_agent_chat_websocket_passes_images_to_adapter(tmp_path) -> None:
         assert receive_until(websocket, "assistant_message")["content"].endswith("images=1")
 
     assert gateway.calls[0]["images"] == (ChatImage(mime_type="image/png", data="aW1hZ2U="),)
-    assert gateway.calls[1]["images"] == (ChatImage(mime_type="image/png", data="aW1hZ2U="),)
 
 
 def test_agent_chat_websocket_rejects_images_for_text_model(tmp_path) -> None:
@@ -437,8 +431,8 @@ def test_agent_chat_falls_back_to_sequential_goal_confirmation_without_langgraph
     )
 
     assert result == "fast-chat: You are / 整理今天任务 / images=0"
-    assert gateway.calls[0]["system_prompt"] == TASK_GOAL_CONFIRMATION_PROMPT
-    assert gateway.calls[1]["system_prompt"] == "You are concise.\n\n本次 task 目标：确认目标：整理今天任务"
+    assert gateway.calls[0]["system_prompt"] == "You are concise."
+    assert gateway.calls[0]["user_message"] == "整理今天任务"
 
 
 def test_agent_config_rejects_unknown_common_skill_tool(tmp_path) -> None:
@@ -612,7 +606,7 @@ def test_agent_chat_uses_langchain_skill_tools_when_configured(tmp_path) -> None
         assert receive_until(websocket, "assistant_message")["content"].startswith("tool answer:")
         assert websocket.receive_json() == {"type": "status", "status": "idle"}
 
-    assert gateway.calls[0]["system_prompt"] == TASK_GOAL_CONFIRMATION_PROMPT
+    assert len(gateway.calls) == 0  # tools configured, reason uses reason_with_tools not complete
     assert gateway.reason_calls[0]["tool_names"] == ("list_skill", "read_skill")
     assert gateway.reason_calls[1]["messages"]
     assert any("common:writing" in result.content for result in gateway.tool_results)

@@ -177,16 +177,12 @@ class AgentGraphState(TypedDict):
     images: tuple[ChatImage, ...]
     model: ModelDefinition
     tool_names: tuple[str, ...]
-    task_goal: str
+    max_iterations: int
     tool_messages: tuple[Any, ...]
     pending_tool_calls: tuple[AgentToolCall, ...]
     tool_iterations: int
     assistant_message: str
 
-
-TASK_GOAL_CONFIRMATION_PROMPT = (
-    "请从用户输入中提炼本次单次 task 的明确目标，只返回一句简洁目标；不要回答任务本身。"
-)
 
 
 class AgentChatService:
@@ -484,45 +480,11 @@ class AgentChatService:
             if on_checkpoint is not None:
                 await on_checkpoint(AgentChatCheckpoint(stage=stage, title=title, detail=detail))
 
-        async def confirm_task_goal(state: AgentGraphState) -> dict[str, str]:
-            await emit("goal", "确认 task 目标")
-            task_goal = await self._model_gateway.complete(
-                state["model"],
-                TASK_GOAL_CONFIRMATION_PROMPT,
-                state["user_message"],
-                state["images"],
-            )
-            task_goal = task_goal.strip()
-            await emit("goal", "task 目标已确认", task_goal)
-            return {"task_goal": task_goal}
-
-        def skill_system_prompt(state: AgentGraphState) -> str:
-            system_prompt = state["system_prompt"]
-            if state["task_goal"]:
-                system_prompt = f"{system_prompt}\n\n本次 task 目标：{state['task_goal']}"
-            return system_prompt
-
-        async def direct_model(state: AgentGraphState) -> dict[str, str]:
-            await emit("answer", "生成最终回复")
-            message = await self._model_gateway.complete(
-                state["model"],
-                skill_system_prompt(state),
-                state["user_message"],
-                state["images"],
-            )
-            await emit("answer", "最终回复已生成")
-            return {"assistant_message": message}
-
-        async def reason_skill_tools(state: AgentGraphState) -> dict[str, object]:
-            await emit(
-                "reason",
-                "推理下一步",
-                f"第 {state['tool_iterations'] + 1} 轮",
-            )
-            system_prompt = skill_system_prompt(state)
+        async def reason(state: AgentGraphState) -> dict[str, object]:
+            await emit("reason", "推理下一步", f"第 {state['tool_iterations'] + 1} 轮")
             if state["tool_names"]:
                 system_prompt = (
-                    f"{system_prompt}\n\n"
+                    f"{state['system_prompt']}\n\n"
                     "你可以在需要时调用平台暴露的 typed tools。Skills 是操作规程，"
                     "tools 才是真正可调用能力；不要假装读取不存在或未绑定的 skill，"
                     "也不要假装执行未暴露的 tool。"
@@ -547,11 +509,18 @@ class AgentChatService:
                     "assistant_message": result.content if not result.tool_calls else "",
                     "pending_tool_calls": result.tool_calls,
                     "tool_messages": result.messages,
-                    "tool_iterations": state["tool_iterations"] + 1,
                 }
-            return await direct_model(state)
+            await emit("answer", "生成最终回复")
+            message = await self._model_gateway.complete(
+                state["model"],
+                state["system_prompt"],
+                state["user_message"],
+                state["images"],
+            )
+            await emit("answer", "最终回复已生成")
+            return {"assistant_message": message, "pending_tool_calls": ()}
 
-        async def act_skill_tools(state: AgentGraphState) -> dict[str, object]:
+        async def act(state: AgentGraphState) -> dict[str, object]:
             runtime = tool_runtime or AgentToolRuntime(skill_tools=self._skill_service.toolbox(agent))
             tool_results: list[AgentToolResult] = []
             for tool_call in state["pending_tool_calls"]:
@@ -571,10 +540,16 @@ class AgentChatService:
                     tuple(tool_results),
                 ),
                 "pending_tool_calls": (),
+                "tool_iterations": state["tool_iterations"] + 1,
             }
 
-        async def force_tool_final(state: AgentGraphState) -> dict[str, str]:
-            await emit("answer", "达到 60 轮上限，生成最终回复")
+        async def check(state: AgentGraphState) -> dict[str, object]:
+            return {}
+
+        async def finalize(state: AgentGraphState) -> dict[str, str]:
+            if state["assistant_message"]:
+                return {}
+            await emit("answer", f"达到 {state['max_iterations']} 轮上限，生成最终回复")
             return {
                 "assistant_message": await self._model_gateway.force_tool_final(
                     state["model"],
@@ -583,11 +558,14 @@ class AgentChatService:
             }
 
         def route_after_reason(state: AgentGraphState) -> str:
-            if not state["pending_tool_calls"]:
-                return "end"
-            if state["tool_iterations"] >= 60:
-                return "force_final"
-            return "act"
+            if state["pending_tool_calls"]:
+                return "act"
+            return "check"
+
+        def route_after_check(state: AgentGraphState) -> str:
+            if not state["assistant_message"] and state["tool_iterations"] < state["max_iterations"]:
+                return "reason"
+            return "finalize"
 
         initial_state: AgentGraphState = {
             "system_prompt": agent.system_prompt,
@@ -595,7 +573,7 @@ class AgentChatService:
             "images": images,
             "model": model,
             "tool_names": tool_names,
-            "task_goal": "",
+            "max_iterations": 60,
             "tool_messages": (),
             "pending_tool_calls": (),
             "tool_iterations": 0,
@@ -605,50 +583,38 @@ class AgentChatService:
         try:
             from langgraph.graph import END, START, StateGraph
         except ImportError:
-            goal_result = await confirm_task_goal(initial_state)
-            state: AgentGraphState = {**initial_state, **goal_result}
-            if not state["tool_names"]:
-                result = await direct_model(state)
-                return result["assistant_message"]
+            state: AgentGraphState = initial_state
             while True:
-                reason_result = await reason_skill_tools(state)
+                reason_result = await reason(state)
                 state = {**state, **reason_result}
-                route = route_after_reason(state)
-                if route == "end":
-                    return state["assistant_message"]
-                if route == "force_final":
-                    final_result = await force_tool_final(state)
-                    return final_result["assistant_message"]
-                act_result = await act_skill_tools(state)
-                state = {**state, **act_result}
+                if state["pending_tool_calls"]:
+                    act_result = await act(state)
+                    state = {**state, **act_result}
+                check_result = await check(state)
+                state = {**state, **check_result}
+                if route_after_check(state) == "finalize":
+                    final_result = await finalize(state)
+                    state = {**state, **final_result}
+                    return str(state.get("assistant_message") or "")
 
         graph = StateGraph(AgentGraphState)
-        graph.add_node("confirm_task_goal", confirm_task_goal)
-        graph.add_node("direct_model", direct_model)
-        graph.add_node("reason_skill_tools", reason_skill_tools)
-        graph.add_node("act_skill_tools", act_skill_tools)
-        graph.add_node("force_tool_final", force_tool_final)
-        graph.add_edge(START, "confirm_task_goal")
+        graph.add_node("reason", reason)
+        graph.add_node("act", act)
+        graph.add_node("check", check)
+        graph.add_node("finalize", finalize)
+        graph.add_edge(START, "reason")
         graph.add_conditional_edges(
-            "confirm_task_goal",
-            lambda state: "reason" if state["tool_names"] else "direct",
-            {
-                "reason": "reason_skill_tools",
-                "direct": "direct_model",
-            },
-        )
-        graph.add_conditional_edges(
-            "reason_skill_tools",
+            "reason",
             route_after_reason,
-            {
-                "act": "act_skill_tools",
-                "force_final": "force_tool_final",
-                "end": END,
-            },
+            {"act": "act", "check": "check"},
         )
-        graph.add_edge("act_skill_tools", "reason_skill_tools")
-        graph.add_edge("direct_model", END)
-        graph.add_edge("force_tool_final", END)
+        graph.add_edge("act", "check")
+        graph.add_conditional_edges(
+            "check",
+            route_after_check,
+            {"reason": "reason", "finalize": "finalize"},
+        )
+        graph.add_edge("finalize", END)
         app = graph.compile()
         result = await app.ainvoke(initial_state)
         return str(result.get("assistant_message") or "")

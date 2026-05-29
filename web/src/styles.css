@@ -1130,6 +1130,45 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.agent-checkpoints-wrapper {
+  margin-top: 8px;
+}
+
+.checkpoint-toggle {
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  gap: 4px;
+  padding: 4px 0;
+  user-select: none;
+}
+
+.checkpoint-toggle:hover {
+  color: var(--text);
+}
+
+.checkpoint-toggle-icon {
+  font-size: 10px;
+  width: 12px;
+}
+
+.checkpoint-toggle-count {
+  color: var(--text-muted);
+  margin-left: 2px;
+}
+
+.checkpoint-toggle-count::before {
+  content: "(";
+}
+
+.checkpoint-toggle-count::after {
+  content: ")";
+}
+
 .agent-input-row {
   background: #ffffff;
   border-top: 1px solid var(--border);

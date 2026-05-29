@@ -369,10 +369,24 @@ function AgentPage({ onUnauthorized }) {
         setStatus(message.status === "running" ? "running" : "connected");
       }
       if (message.type === "assistant_message") {
-        setMessages((items) => [
-          ...items.filter((item) => item.role !== "pending"),
-          { role: "assistant", content: message.content || "" }
-        ]);
+        setMessages((items) => {
+          const kept = [];
+          let checkpoints = [];
+          for (const item of items) {
+            if (item.role === "pending") {
+              checkpoints = item.checkpoints || [];
+            } else {
+              kept.push(item);
+            }
+          }
+          kept.push({
+            role: "assistant",
+            content: message.content || "",
+            checkpoints,
+            checkpointsCollapsed: true
+          });
+          return kept;
+        });
         setSending(false);
         setStatus("connected");
       }
@@ -446,6 +460,16 @@ function AgentPage({ onUnauthorized }) {
           data: image.data
         }))
       })
+    );
+  }
+
+  function toggleCheckpoints(messageIndex) {
+    setMessages((items) =>
+      items.map((item, i) =>
+        i === messageIndex
+          ? { ...item, checkpointsCollapsed: !item.checkpointsCollapsed }
+          : item
+      )
     );
   }
 
@@ -745,14 +769,31 @@ function AgentPage({ onUnauthorized }) {
                   {message.content && message.role === "assistant" ? <MarkdownMessage content={message.content} /> : null}
                   {message.content && message.role !== "assistant" ? <p>{message.content}</p> : null}
                   {message.checkpoints?.length ? (
-                    <ol className="agent-checkpoints">
-                      {message.checkpoints.map((checkpoint, checkpointIndex) => (
-                        <li key={`${checkpoint.stage}-${checkpointIndex}`}>
-                          <strong>{checkpoint.title}</strong>
-                          {checkpoint.detail ? <small>{checkpoint.detail}</small> : null}
-                        </li>
-                      ))}
-                    </ol>
+                    <div className="agent-checkpoints-wrapper">
+                      <button
+                        type="button"
+                        className="checkpoint-toggle"
+                        onClick={() => toggleCheckpoints(index)}
+                      >
+                        <span className="checkpoint-toggle-icon">
+                          {message.checkpointsCollapsed ? "▶" : "▼"}
+                        </span>
+                        {message.checkpointsCollapsed ? "展开" : "折叠"}思维链
+                        <span className="checkpoint-toggle-count">
+                          {message.checkpoints.length} 步
+                        </span>
+                      </button>
+                      {!message.checkpointsCollapsed ? (
+                        <ol className="agent-checkpoints">
+                          {message.checkpoints.map((checkpoint, checkpointIndex) => (
+                            <li key={`${checkpoint.stage}-${checkpointIndex}`}>
+                              <strong>{checkpoint.title}</strong>
+                              {checkpoint.detail ? <small>{checkpoint.detail}</small> : null}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : null}
+                    </div>
                   ) : null}
                   {message.images?.length ? (
                     <div className="agent-message-images">
