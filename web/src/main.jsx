@@ -317,6 +317,7 @@ function AgentPage({ onUnauthorized }) {
   const socketRef = useRef(null);
   const messageListRef = useRef(null);
   const fileInputRef = useRef(null);
+  const composingRef = useRef(false);
 
   function handleApiError(err) {
     if (err.status === 401 || err.message === "Authentication required") {
@@ -1001,8 +1002,8 @@ function AgentPage({ onUnauthorized }) {
                   {config.agents.map((agent, index) => (
                     <React.Fragment key={`${agent.id}-${index}`}>
                       <tr className={expandedRow === index ? "row-active" : ""}>
-                        <td><input value={agent.id} onChange={(e) => updateAgent(index, "id", e.target.value)} disabled={agent.is_builtin} /></td>
-                        <td><input value={agent.name} onChange={(e) => updateAgent(index, "name", e.target.value)} disabled={agent.is_builtin} /></td>
+                        <td><input value={agent.id} onChange={(e) => { if (!composingRef.current) updateAgent(index, "id", e.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(e) => { composingRef.current = false; updateAgent(index, "id", e.target.value); }} disabled={agent.is_builtin} /></td>
+                        <td><input value={agent.name} onChange={(e) => { if (!composingRef.current) updateAgent(index, "name", e.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(e) => { composingRef.current = false; updateAgent(index, "name", e.target.value); }} disabled={agent.is_builtin} /></td>
                         <td><select value={agent.model_id || ""} onChange={(e) => updateAgent(index, "model_id", e.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></td>
                         <td className="td-badges">
                           {config.default_agent_id === agent.id ? <span className="badge-default">默认</span> : null}
@@ -1075,6 +1076,7 @@ function ModelsPage({ onUnauthorized }) {
   const [configSaving, setConfigSaving] = useState(false);
   const [configError, setConfigError] = useState("");
   const [configStatus, setConfigStatus] = useState("");
+  const composingRef = useRef(false);
 
   function handleApiError(err) {
     if (err.status === 401 || err.message === "Authentication required") {
@@ -1257,8 +1259,8 @@ function ModelsPage({ onUnauthorized }) {
                     </div>
                     <div className="agent-config-grid">
                       <label>提供商<select value={model.provider || "openai_compatible"} onChange={(event) => updateModel(index, "provider", event.target.value)}><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic">Anthropic (Claude)</option></select></label>
-                      <label>ID<input value={model.id} onChange={(event) => updateModel(index, "id", event.target.value)} /></label>
-                      <label>显示名<input value={model.name} onChange={(event) => updateModel(index, "name", event.target.value)} /></label>
+                      <label>ID<input value={model.id} onChange={(event) => { if (!composingRef.current) updateModel(index, "id", event.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(event) => { composingRef.current = false; updateModel(index, "id", event.target.value); }} /></label>
+                      <label>显示名<input value={model.name} onChange={(event) => { if (!composingRef.current) updateModel(index, "name", event.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(event) => { composingRef.current = false; updateModel(index, "name", event.target.value); }} /></label>
                       <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} placeholder={(model.provider || "openai_compatible") === "anthropic" ? "可选" : ""} /></label>
                       <label>模型名<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
                       <label>API Key<input type="password" placeholder={model.api_key_mask || "留空保留旧 key"} value={model.api_key || ""} onChange={(event) => updateModel(index, "api_key", event.target.value)} /></label>
