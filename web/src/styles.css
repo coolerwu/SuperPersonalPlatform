@@ -6150,7 +6150,7 @@ body {
 }
 
 .portfolio-panel-header strong {
-  color: #ffffff;
+  color: var(--text);
   font-size: 15px;
 }
 
@@ -6160,8 +6160,8 @@ body {
 }
 
 .portfolio-form {
-  background: rgba(9, 13, 18, 0.6);
-  border: 1px solid rgba(66, 88, 112, 0.55);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 12px;
   display: grid;
   gap: 10px;
@@ -6188,8 +6188,8 @@ body {
 
 .portfolio-form input,
 .portfolio-form select {
-  background: #0c1219;
-  border: 1px solid rgba(66, 88, 112, 0.65);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text);
   font-size: 13px;
@@ -6199,7 +6199,7 @@ body {
 
 .portfolio-form input:focus,
 .portfolio-form select:focus {
-  border-color: #4f8cff;
+  border-color: var(--primary);
   outline: none;
 }
 
@@ -6230,8 +6230,8 @@ body {
 }
 
 .portfolio-table td {
-  border-top: 1px solid rgba(66, 88, 112, 0.3);
-  color: #c8d4e3;
+  border-top: 1px solid var(--border);
+  color: var(--text);
   font-size: 13px;
   padding: 10px 10px;
   white-space: nowrap;
@@ -6247,9 +6247,9 @@ body {
 }
 
 .type-badge {
-  background: rgba(79, 140, 255, 0.15);
+  background: var(--primary-soft);
   border-radius: 6px;
-  color: #7db8ff;
+  color: var(--primary);
   font-size: 11px;
   font-weight: 600;
   padding: 3px 8px;
@@ -6274,19 +6274,19 @@ body {
 }
 
 .icon-btn:hover {
-  background: rgba(79, 140, 255, 0.1);
-  color: #b0ceff;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
 }
 
 .icon-btn.danger:hover {
-  background: rgba(255, 79, 79, 0.12);
-  color: #ff6b6b;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 /* ── AI Chat panel ── */
 
 .portfolio-chat-panel {
-  border-left: 1px solid rgba(66, 88, 112, 0.55);
+  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -6294,7 +6294,7 @@ body {
 
 .portfolio-chat-header {
   align-items: center;
-  border-bottom: 1px solid rgba(66, 88, 112, 0.4);
+  border-bottom: 1px solid var(--border);
   color: var(--text-muted);
   display: flex;
   gap: 8px;
@@ -6302,7 +6302,7 @@ body {
 }
 
 .portfolio-chat-header strong {
-  color: #e8edf5;
+  color: var(--text);
   font-size: 13px;
 }
 
@@ -6356,10 +6356,10 @@ body {
 }
 
 .chat-msg-bubble {
-  background: rgba(12, 18, 25, 0.7);
-  border: 1px solid rgba(66, 88, 112, 0.45);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  color: #c8d4e3;
+  color: var(--text);
   display: inline-block;
   font-size: 13px;
   line-height: 1.5;
@@ -6370,9 +6370,9 @@ body {
 }
 
 .portfolio-chat-msg.user .chat-msg-bubble {
-  background: rgba(79, 140, 255, 0.15);
-  border-color: rgba(79, 140, 255, 0.3);
-  color: #e8edf5;
+  background: var(--primary-soft);
+  border-color: var(--primary-border);
+  color: var(--text);
 }
 
 .chat-msg-bubble.thinking {
@@ -6390,15 +6390,15 @@ body {
 }
 
 .portfolio-chat-input-row {
-  border-top: 1px solid rgba(66, 88, 112, 0.4);
+  border-top: 1px solid var(--border);
   display: flex;
   gap: 8px;
   padding: 10px 14px;
 }
 
 .portfolio-chat-input-row .chat-input {
-  background: #0c1219;
-  border: 1px solid rgba(66, 88, 112, 0.65);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
   flex: 1;
@@ -6409,7 +6409,7 @@ body {
 }
 
 .portfolio-chat-input-row .chat-input:focus {
-  border-color: #4f8cff;
+  border-color: var(--primary);
 }
 
 .send-btn {
@@ -6430,7 +6430,7 @@ body {
 
   .portfolio-chat-panel {
     border-left: 0;
-    border-top: 1px solid rgba(66, 88, 112, 0.55);
+    border-top: 1px solid var(--border);
     max-height: 40vh;
   }
 

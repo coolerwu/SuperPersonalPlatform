@@ -2867,11 +2867,96 @@ function PortfolioPage({ onUnauthorized }) {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
+  const [chatStatus, setChatStatus] = useState("disconnected");
+  const [chatError, setChatError] = useState("");
   const chatEndRef = useRef(null);
+  const wsRef = useRef(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
+
+  function chatWsUrl() {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}/api/agents/chat/connect`;
+  }
+
+  function connectChat() {
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
+    setChatError("");
+    setChatStatus("connecting");
+    const ws = new WebSocket(chatWsUrl());
+    wsRef.current = ws;
+    ws.onopen = () => setChatStatus("connected");
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === "status") {
+        setChatStatus(message.status === "running" ? "running" : "connected");
+      }
+      if (message.type === "assistant_message") {
+        setChatMessages((items) => {
+          const kept = [];
+          let checkpoints = [];
+          for (const item of items) {
+            if (item.role === "pending") {
+              checkpoints = item.checkpoints || [];
+            } else {
+              kept.push(item);
+            }
+          }
+          kept.push({
+            role: "assistant",
+            content: message.content || "",
+            checkpoints,
+            checkpointsCollapsed: true
+          });
+          return kept;
+        });
+        setChatSending(false);
+        setChatStatus("connected");
+        loadHoldings();
+      }
+      if (message.type === "checkpoint") {
+        setChatMessages((items) =>
+          items.map((item) =>
+            item.role === "pending"
+              ? {
+                  ...item,
+                  checkpoints: [
+                    ...(item.checkpoints || []),
+                    {
+                      stage: message.stage || "",
+                      title: message.title || "",
+                      detail: message.detail || ""
+                    }
+                  ]
+                }
+              : item
+          )
+        );
+      }
+      if (message.type === "error") {
+        setChatMessages((items) => items.filter((item) => item.role !== "pending"));
+        setChatError(message.message || "AI 回复失败");
+        setChatSending(false);
+        setChatStatus("connected");
+      }
+    };
+    ws.onerror = () => {
+      setChatError("连接失败");
+      setChatSending(false);
+      setChatStatus("disconnected");
+    };
+    ws.onclose = () => {
+      setChatSending(false);
+      setChatStatus("disconnected");
+    };
+  }
+
+  useEffect(() => {
+    connectChat();
+    return () => wsRef.current?.close();
+  }, []);
 
   async function loadHoldings() {
     setLoading(true);
@@ -2951,23 +3036,29 @@ function PortfolioPage({ onUnauthorized }) {
     return holdings.reduce((s, h) => s + h.total_cost, 0).toFixed(2);
   }
 
-  async function sendChat() {
+  function sendChat() {
     const msg = chatInput.trim();
     if (!msg || chatSending) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      connectChat();
+      setChatError("连接未就绪，请稍后重试");
+      return;
+    }
     setChatInput("");
     setChatSending(true);
-    setChatMessages(prev => [...prev, { role: "user", content: msg }]);
-    try {
-      const data = await api("/api/portfolio/chat", {
-        method: "POST", body: JSON.stringify({ message: msg })
-      });
-      setChatMessages(prev => [...prev, { role: "assistant", content: data.reply }]);
-      // Refresh holdings after AI actions
-      await loadHoldings();
-    } catch (err) {
-      if (err.status === 401) { onUnauthorized(); return; }
-      setChatMessages(prev => [...prev, { role: "assistant", content: `错误: ${err.message}` }]);
-    } finally { setChatSending(false); }
+    setChatError("");
+    setChatMessages((items) => [
+      ...items,
+      { role: "user", content: msg },
+      { role: "pending", content: "思考中", checkpoints: [] }
+    ]);
+    wsRef.current.send(
+      JSON.stringify({
+        type: "message",
+        agent_id: "ai-investment-advisor",
+        content: msg
+      })
+    );
   }
 
   function handleChatKey(event) {
@@ -2998,7 +3089,7 @@ function PortfolioPage({ onUnauthorized }) {
                 {holdings.length} 项 · 总成本 {totalCost(holdings)} {holdings[0]?.currency || "CNY"}
               </span>
             </div>
-            <button className="primary-button" onClick={() => { resetForm(); setShowForm(true); }}>
+            <button className="secondary-button" onClick={() => { resetForm(); setShowForm(true); }}>
               <Plus size={15} />
               添加持仓
             </button>
@@ -3054,7 +3145,7 @@ function PortfolioPage({ onUnauthorized }) {
                   placeholder="可选备注" />
               </label>
               <div className="portfolio-form-actions">
-                <button className="primary-button" type="submit" disabled={loading}>
+                <button className="secondary-button primary-action" type="submit" disabled={loading}>
                   {editId ? "保存修改" : "添加"}
                 </button>
                 <button className="secondary-button" type="button" onClick={resetForm}>取消</button>
@@ -3110,7 +3201,9 @@ function PortfolioPage({ onUnauthorized }) {
           <div className="portfolio-chat-header">
             <Bot size={16} />
             <strong>AI 投资助手</strong>
-            <span>对话管理持仓</span>
+            <span className={`terminal-status ${chatStatus === "connected" || chatStatus === "running" ? "connected" : ""}`}>
+              {chatStatus === "running" ? "生成中" : chatStatus === "connected" ? "已连接" : "未连接"}
+            </span>
           </div>
           <div className="portfolio-chat-messages">
             {chatMessages.length === 0 ? (
@@ -3127,16 +3220,39 @@ function PortfolioPage({ onUnauthorized }) {
               chatMessages.map((m, i) => (
                 <div key={i} className={`portfolio-chat-msg ${m.role}`}>
                   <div className="chat-msg-bubble">{m.content}</div>
+                  {m.checkpoints?.length ? (
+                    <div className="agent-checkpoints-wrapper" style={{marginTop: 4}}>
+                      <button
+                        type="button"
+                        className="checkpoint-toggle"
+                        onClick={() => setChatMessages((items) =>
+                          items.map((item, idx) =>
+                            idx === i ? { ...item, checkpointsCollapsed: !item.checkpointsCollapsed } : item
+                          )
+                        )}
+                      >
+                        <span className="checkpoint-toggle-icon">
+                          {m.checkpointsCollapsed ? "▶" : "▼"}
+                        </span>
+                        {m.checkpointsCollapsed ? "展开" : "折叠"}思维链
+                        <span className="checkpoint-toggle-count">{m.checkpoints.length} 步</span>
+                      </button>
+                      {!m.checkpointsCollapsed ? (
+                        <ol className="agent-checkpoints">
+                          {m.checkpoints.map((cp, cpi) => (
+                            <li key={`${cp.stage}-${cpi}`}>
+                              <strong>{cp.title}</strong>
+                              {cp.detail ? <small>{cp.detail}</small> : null}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               ))
             )}
-            {chatSending ? (
-              <div className="portfolio-chat-msg assistant">
-                <div className="chat-msg-bubble thinking">
-                  <Loader2 size={14} className="spin" /> 思考中...
-                </div>
-              </div>
-            ) : null}
+            {chatError ? <div className="form-error" style={{margin: "8px 14px", fontSize: 12}}>{chatError}</div> : null}
             <div ref={chatEndRef} />
           </div>
           <div className="portfolio-chat-input-row">
@@ -3146,9 +3262,9 @@ function PortfolioPage({ onUnauthorized }) {
               onChange={e => setChatInput(e.target.value)}
               onKeyDown={handleChatKey}
               placeholder="输入指令管理持仓..."
-              disabled={chatSending}
+              disabled={chatSending || chatStatus === "disconnected"}
             />
-            <button className="primary-button send-btn" onClick={sendChat} disabled={!chatInput.trim() || chatSending}>
+            <button className="secondary-button primary-action send-btn" onClick={sendChat} disabled={!chatInput.trim() || chatSending || chatStatus === "disconnected"}>
               <Send size={16} />
             </button>
           </div>

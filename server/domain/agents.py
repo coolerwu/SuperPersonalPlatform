@@ -8,7 +8,7 @@ class AgentConfigError(ValueError):
 
 SUPPORTED_PROVIDERS = {"openai_compatible", "anthropic"}
 SUPPORTED_COMMON_SKILL_TOOLS = {"list_skill", "read_skill"}
-SUPPORTED_TOOL_PROFILES = {"default", "self-dev"}
+SUPPORTED_TOOL_PROFILES = {"default", "self-dev", "portfolio"}
 SUPPORTED_AGENT_TOOLS = {
     "list_skill",
     "read_skill",
@@ -20,6 +20,10 @@ SUPPORTED_AGENT_TOOLS = {
     "repo_diff",
     "repo_commit",
     "repo_push",
+    "list_portfolio_holdings",
+    "add_portfolio_holding",
+    "update_portfolio_holding",
+    "delete_portfolio_holding",
 }
 SKILL_ID_PATTERN = re.compile(r"^(common|private):[A-Za-z0-9_-]+$")
 

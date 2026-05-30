@@ -17,6 +17,7 @@ from server.app.agent_tool_service import (
     AgentToolRuntime,
     DEFAULT_AGENT_TOOL_REGISTRY,
 )
+from server.app.portfolio_service import PortfolioService
 from server.infrastructure.config import load_settings, parse_settings
 
 
@@ -193,6 +194,7 @@ BUILTIN_AGENTS: tuple[dict[str, Any], ...] = (
         "id": "ai-investment-advisor",
         "name": "AI投资助手",
         "is_builtin": True,
+        "tools_profile": "portfolio",
         "system_prompt": (
             "你是一个专业的投资组合助手，帮助用户管理投资持仓。\n\n"
             "你可以做的操作：\n"
@@ -442,17 +444,32 @@ class AgentChatService:
             raise AgentChatUnavailableError("模型 API Key 不可用")
         if images and not model.supports_images:
             raise AgentChatUnavailableError("当前模型不支持图片输入")
+        tool_names = self._tool_registry.resolve_tools(
+            platform.tools,
+            agent,
+            platform.common_skill_tools,
+        )
+        tool_runtime: AgentToolRuntime | None = None
+        portfolio_tool_names = {
+            "list_portfolio_holdings",
+            "add_portfolio_holding",
+            "update_portfolio_holding",
+            "delete_portfolio_holding",
+        }
+        if any(name in portfolio_tool_names for name in tool_names):
+            portfolio_svc = PortfolioService(self._config_path.parent)
+            tool_runtime = AgentToolRuntime(
+                skill_tools=self._skill_service.toolbox(agent),
+                portfolio_service=portfolio_svc,
+            )
         return await self._run_graph(
             agent,
             model,
-            self._tool_registry.resolve_tools(
-                platform.tools,
-                agent,
-                platform.common_skill_tools,
-            ),
+            tool_names,
             content.strip(),
             images,
             on_checkpoint,
+            tool_runtime,
         )
 
     async def run_with_tool_runtime(
@@ -514,12 +531,16 @@ class AgentChatService:
             if ba["id"] in config_ids:
                 continue  # already defined in config.yaml
             model_id = ba.get("model_id") or platform.default_model_id or ""
+            tools = None
+            if ba.get("tools_profile"):
+                tools = ToolAccessDefinition(profile=ba["tools_profile"])
             definitions.append(
                 AgentDefinition(
                     id=ba["id"],
                     name=ba["name"],
                     system_prompt=ba.get("system_prompt", ""),
                     model_id=model_id or None,
+                    tools=tools,
                 )
             )
         return definitions
