@@ -13,6 +13,7 @@ import {
   Code2,
   Eye,
   FileCode,
+  FileEdit,
   FileMinus,
   FilePlus,
   FileText,
@@ -37,6 +38,7 @@ import {
   ShieldCheck,
   Terminal as TerminalIcon,
   TerminalSquare,
+  TrendingUp,
   User,
   X,
   XCircle
@@ -2702,6 +2704,309 @@ function ChannelsPage({ onUnauthorized }) {
   );
 }
 
+function PortfolioPage({ onUnauthorized }) {
+  const [holdings, setHoldings] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({
+    type: "stock", symbol: "", name: "", quantity: "", avg_cost: "", currency: "CNY", notes: ""
+  });
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const chatEndRef = useRef(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
+
+  async function loadHoldings() {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await api("/api/portfolio/holdings");
+      setHoldings(data.holdings || []);
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setError(err.message);
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => { loadHoldings(); }, []);
+
+  function resetForm() {
+    setForm({ type: "stock", symbol: "", name: "", quantity: "", avg_cost: "", currency: "CNY", notes: "" });
+    setEditId(null);
+    setShowForm(false);
+  }
+
+  function openEdit(h) {
+    setForm({
+      type: h.type, symbol: h.symbol, name: h.name,
+      quantity: String(h.quantity), avg_cost: String(h.avg_cost),
+      currency: h.currency, notes: h.notes
+    });
+    setEditId(h.id);
+    setShowForm(true);
+  }
+
+  async function submitForm(event) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const body = {
+        type: form.type, symbol: form.symbol, name: form.name,
+        quantity: parseFloat(form.quantity), avg_cost: parseFloat(form.avg_cost),
+        currency: form.currency, notes: form.notes
+      };
+      if (editId) {
+        const data = await api(`/api/portfolio/holdings/${editId}`, {
+          method: "PUT", body: JSON.stringify(body)
+        });
+        setHoldings(prev => prev.map(h => h.id === editId ? data.holding : h));
+      } else {
+        const data = await api("/api/portfolio/holdings", {
+          method: "POST", body: JSON.stringify(body)
+        });
+        setHoldings(prev => [data.holding, ...prev]);
+      }
+      resetForm();
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setError(err.message);
+    } finally { setLoading(false); }
+  }
+
+  async function deleteHolding(id) {
+    if (!confirm("确定删除这条持仓记录？")) return;
+    setLoading(true);
+    try {
+      await api(`/api/portfolio/holdings/${id}`, { method: "DELETE" });
+      setHoldings(prev => prev.filter(h => h.id !== id));
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setError(err.message);
+    } finally { setLoading(false); }
+  }
+
+  function typeLabel(t) {
+    return { stock: "股票", fund: "基金", crypto: "加密货币" }[t] || t;
+  }
+
+  function totalCost(holdings) {
+    return holdings.reduce((s, h) => s + h.total_cost, 0).toFixed(2);
+  }
+
+  async function sendChat() {
+    const msg = chatInput.trim();
+    if (!msg || chatSending) return;
+    setChatInput("");
+    setChatSending(true);
+    setChatMessages(prev => [...prev, { role: "user", content: msg }]);
+    try {
+      const data = await api("/api/portfolio/chat", {
+        method: "POST", body: JSON.stringify({ message: msg })
+      });
+      setChatMessages(prev => [...prev, { role: "assistant", content: data.reply }]);
+      // Refresh holdings after AI actions
+      await loadHoldings();
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setChatMessages(prev => [...prev, { role: "assistant", content: `错误: ${err.message}` }]);
+    } finally { setChatSending(false); }
+  }
+
+  function handleChatKey(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendChat();
+    }
+  }
+
+  return (
+    <section className="page-section portfolio-section">
+      <div className="tab-bar" role="tablist" aria-label="资产组合">
+        <button className="active">
+          <TrendingUp size={16} />
+          投资组合
+        </button>
+      </div>
+
+      {error ? <div className="error-state">{error}</div> : null}
+
+      <div className="portfolio-workspace">
+        {/* ── Left: Holdings panel ── */}
+        <div className="portfolio-panel">
+          <div className="portfolio-panel-header">
+            <div>
+              <strong>持仓列表</strong>
+              <span className="portfolio-summary">
+                {holdings.length} 项 · 总成本 {totalCost(holdings)} {holdings[0]?.currency || "CNY"}
+              </span>
+            </div>
+            <button className="primary-button" onClick={() => { resetForm(); setShowForm(true); }}>
+              <Plus size={15} />
+              添加持仓
+            </button>
+          </div>
+
+          {showForm ? (
+            <form className="portfolio-form" onSubmit={submitForm}>
+              <div className="portfolio-form-row">
+                <label>
+                  <span>类型</span>
+                  <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
+                    <option value="stock">股票</option>
+                    <option value="fund">基金</option>
+                    <option value="crypto">加密货币</option>
+                  </select>
+                </label>
+                <label>
+                  <span>代码</span>
+                  <input value={form.symbol} onChange={e => setForm(f => ({ ...f, symbol: e.target.value }))}
+                    placeholder="如 AAPL, 00700" required />
+                </label>
+                <label>
+                  <span>名称</span>
+                  <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="如 苹果, 腾讯控股" />
+                </label>
+              </div>
+              <div className="portfolio-form-row">
+                <label>
+                  <span>数量</span>
+                  <input type="number" step="any" value={form.quantity}
+                    onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))}
+                    placeholder="100" required />
+                </label>
+                <label>
+                  <span>均价</span>
+                  <input type="number" step="any" value={form.avg_cost}
+                    onChange={e => setForm(f => ({ ...f, avg_cost: e.target.value }))}
+                    placeholder="380" required />
+                </label>
+                <label>
+                  <span>货币</span>
+                  <select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}>
+                    <option value="CNY">CNY</option>
+                    <option value="USD">USD</option>
+                    <option value="HKD">HKD</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                <span>备注</span>
+                <input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                  placeholder="可选备注" />
+              </label>
+              <div className="portfolio-form-actions">
+                <button className="primary-button" type="submit" disabled={loading}>
+                  {editId ? "保存修改" : "添加"}
+                </button>
+                <button className="secondary-button" type="button" onClick={resetForm}>取消</button>
+              </div>
+            </form>
+          ) : null}
+
+          <div className="portfolio-table-wrap">
+            {holdings.length === 0 && !loading ? (
+              <div className="empty-state">暂无持仓记录。点击"添加持仓"手动录入，或通过 AI 对话创建。</div>
+            ) : (
+              <table className="portfolio-table">
+                <thead>
+                  <tr>
+                    <th>类型</th>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>数量</th>
+                    <th>均价</th>
+                    <th>总成本</th>
+                    <th>货币</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {holdings.map(h => (
+                    <tr key={h.id}>
+                      <td><span className="type-badge">{typeLabel(h.type)}</span></td>
+                      <td className="mono">{h.symbol}</td>
+                      <td>{h.name}</td>
+                      <td className="num">{h.quantity}</td>
+                      <td className="num">{h.avg_cost}</td>
+                      <td className="num">{h.total_cost}</td>
+                      <td>{h.currency}</td>
+                      <td className="actions-cell">
+                        <button className="icon-btn" title="编辑" onClick={() => openEdit(h)}>
+                          <FileEdit size={14} />
+                        </button>
+                        <button className="icon-btn danger" title="删除" onClick={() => deleteHolding(h.id)}>
+                          <X size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        {/* ── Right: AI Chat panel ── */}
+        <div className="portfolio-chat-panel">
+          <div className="portfolio-chat-header">
+            <Bot size={16} />
+            <strong>AI 投资助手</strong>
+            <span>对话管理持仓</span>
+          </div>
+          <div className="portfolio-chat-messages">
+            {chatMessages.length === 0 ? (
+              <div className="chat-empty-hint">
+                <Bot size={32} />
+                <p>告诉我想做什么，比如：</p>
+                <ul>
+                  <li>"帮我添加 100 股腾讯，成本价 380 HKD"</li>
+                  <li>"目前都有哪些持仓？"</li>
+                  <li>"删除苹果的持仓记录"</li>
+                </ul>
+              </div>
+            ) : (
+              chatMessages.map((m, i) => (
+                <div key={i} className={`portfolio-chat-msg ${m.role}`}>
+                  <div className="chat-msg-bubble">{m.content}</div>
+                </div>
+              ))
+            )}
+            {chatSending ? (
+              <div className="portfolio-chat-msg assistant">
+                <div className="chat-msg-bubble thinking">
+                  <Loader2 size={14} className="spin" /> 思考中...
+                </div>
+              </div>
+            ) : null}
+            <div ref={chatEndRef} />
+          </div>
+          <div className="portfolio-chat-input-row">
+            <input
+              className="chat-input"
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              onKeyDown={handleChatKey}
+              placeholder="输入指令管理持仓..."
+              disabled={chatSending}
+            />
+            <button className="primary-button send-btn" onClick={sendChat} disabled={!chatInput.trim() || chatSending}>
+              <Send size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function AppShell({ onLogout }) {
   const [path, setPath] = useState(window.location.pathname);
   const navItems = useMemo(
@@ -2712,6 +3017,7 @@ function AppShell({ onLogout }) {
       { path: "/channels", label: "渠道", icon: MessageSquare },
       { path: "/terminal", label: "终端", icon: TerminalSquare },
       { path: "/proxy", label: "Hermes UI", icon: Globe2 },
+      { path: "/portfolio", label: "资产组合", icon: TrendingUp },
       { path: "/system", label: "系统", icon: Settings }
     ],
     []
@@ -2756,6 +3062,9 @@ function AppShell({ onLogout }) {
     }
     if (path === "/agents") {
       return <AgentPage onUnauthorized={unauthorized} />;
+    }
+    if (path === "/portfolio") {
+      return <PortfolioPage onUnauthorized={unauthorized} />;
     }
     if (path === "/system") {
       return <SystemPage onUnauthorized={unauthorized} />;

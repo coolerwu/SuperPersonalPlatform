@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from server.adapter.agent_routes import create_agent_router
 from server.adapter.auth_routes import create_auth_router
 from server.adapter.dependencies import AppContainer
+from server.adapter.portfolio_routes import create_portfolio_router
 from server.adapter.proxy_routes import (
     create_api_fallback_proxy_router,
     create_proxy_router,
@@ -23,6 +24,7 @@ from server.app.auth_service import AuthService
 from server.app.agent_chat_service import AgentChatService
 from server.app.chat_session_service import ChatSessionService
 from server.app.config_file_service import ConfigFileService
+from server.app.portfolio_service import PortfolioService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
@@ -65,6 +67,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         session_codec=SessionCodec(settings.auth.token),
         agent_chat_service=agent_chat_service,
         chat_session_service=ChatSessionService(active_workspace),
+        portfolio_service=PortfolioService(active_workspace),
         job_service=job_service,
         self_dev_service=self_dev_service,
         wechat_channel_manager=wechat_channel_manager,
@@ -132,6 +135,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     app.include_router(create_terminal_router(container, project_root))
     app.include_router(create_self_dev_router(container))
     app.include_router(create_channel_router(container))
+    app.include_router(create_portfolio_router(container))
     app.include_router(create_session_router(container))
     app.include_router(create_api_fallback_proxy_router(container))
     app.include_router(create_root_asset_proxy_router(container))
