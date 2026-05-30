@@ -312,6 +312,7 @@ function AgentPage({ onUnauthorized }) {
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(false);
+  const [expandedRow, setExpandedRow] = useState(null);
   const socketRef = useRef(null);
   const messageListRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -1095,39 +1096,78 @@ function AgentPage({ onUnauthorized }) {
                     添加 Agent
                   </button>
                 </div>
-                <div className="agent-config-list">
-                  {config.agents.map((agent, index) => (
-                    <article className="agent-config-card" key={`${agent.id}-${index}`}>
-                      <div className="agent-config-card-title">
-                        <strong>{agent.name || agent.id || "未命名 Agent"}</strong>
-                        {config.default_agent_id === agent.id ? <span>默认</span> : null}
-                        {agent.is_builtin ? <span className="badge-builtin">内置</span> : null}
-                      </div>
-                      <div className="agent-config-grid">
-                        <label>ID<input value={agent.id} onChange={(event) => updateAgent(index, "id", event.target.value)} disabled={agent.is_builtin} /></label>
-                        <label>名称<input value={agent.name} onChange={(event) => updateAgent(index, "name", event.target.value)} disabled={agent.is_builtin} /></label>
-                        <label>绑定模型<select value={agent.model_id || ""} onChange={(event) => updateAgent(index, "model_id", event.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></label>
-                      </div>
-                      <label className="agent-prompt-label large">系统提示词<textarea value={agent.system_prompt} onChange={(event) => updateAgent(index, "system_prompt", event.target.value)} /></label>
-                      {!agent.is_builtin ? (
-                        <>
-                          <label className="agent-prompt-label">Skill IDs<textarea placeholder="每行一个 skill id，如 common:xxx" value={(agent.skill_ids || []).join("\n")} onChange={(event) => updateAgentSkillIds(index, event.target.value)} /></label>
-                          <div className="agent-config-grid">
-                            <label>工具模板<select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(event) => updateAgentTools(index, "profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
-                            <label className="agent-prompt-label">允许工具<textarea value={(agent.tools?.allow || []).join("\n")} onChange={(event) => updateAgentTools(index, "allow", event.target.value)} /></label>
-                            <label className="agent-prompt-label">禁用工具<textarea value={(agent.tools?.deny || []).join("\n")} onChange={(event) => updateAgentTools(index, "deny", event.target.value)} /></label>
-                          </div>
-                        </>
-                      ) : null}
-                      <div className="agent-config-card-actions">
-                        <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, default_agent_id: agent.id }))}>设为默认</button>
-                        {!agent.is_builtin ? (
-                          <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, agents: current.agents.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
+                <table className="agent-table">
+                  <thead>
+                    <tr>
+                      <th className="th-id">ID</th>
+                      <th className="th-name">名称</th>
+                      <th className="th-model">绑定模型</th>
+                      <th className="th-badge"></th>
+                      <th className="th-actions">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {config.agents.map((agent, index) => (
+                      <React.Fragment key={`${agent.id}-${index}`}>
+                        <tr className={expandedRow === index ? "row-active" : ""}>
+                          <td><input value={agent.id} onChange={(e) => updateAgent(index, "id", e.target.value)} disabled={agent.is_builtin} /></td>
+                          <td><input value={agent.name} onChange={(e) => updateAgent(index, "name", e.target.value)} disabled={agent.is_builtin} /></td>
+                          <td><select value={agent.model_id || ""} onChange={(e) => updateAgent(index, "model_id", e.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></td>
+                          <td className="td-badges">
+                            {config.default_agent_id === agent.id ? <span className="badge-default">默认</span> : null}
+                            {agent.is_builtin ? <span className="badge-builtin" style={{marginLeft: config.default_agent_id === agent.id ? 6 : 0}}>内置</span> : null}
+                          </td>
+                          <td className="td-actions">
+                            <button className="secondary-button small" onClick={() => setConfig((c) => ({ ...c, default_agent_id: agent.id }))}>设为默认</button>
+                            <button className="secondary-button small" onClick={() => setExpandedRow(expandedRow === index ? null : index)}>
+                              {expandedRow === index ? "收起" : "展开"}
+                            </button>
+                            {!agent.is_builtin ? (
+                              <button className="secondary-button small" onClick={() => setConfig((c) => ({ ...c, agents: c.agents.filter((_, i) => i !== index) }))}>删除</button>
+                            ) : null}
+                          </td>
+                        </tr>
+                        {expandedRow === index ? (
+                          <tr className="agent-detail-row">
+                            <td colSpan={5}>
+                              <div className="agent-detail-content">
+                                <label className="agent-detail-field">
+                                  <span>系统提示词</span>
+                                  <textarea value={agent.system_prompt} onChange={(e) => updateAgent(index, "system_prompt", e.target.value)} />
+                                </label>
+                                {!agent.is_builtin ? (
+                                  <>
+                                    <label className="agent-detail-field">
+                                      <span>Skill IDs</span>
+                                      <textarea placeholder="每行一个 skill id，如 common:xxx" value={(agent.skill_ids || []).join("\n")} onChange={(e) => updateAgentSkillIds(index, e.target.value)} />
+                                    </label>
+                                    <div className="agent-detail-tools">
+                                      <label>
+                                        <span>工具模板</span>
+                                        <select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(e) => updateAgentTools(index, "profile", e.target.value)}>
+                                          <option value="default">default</option>
+                                          <option value="self-dev">self-dev</option>
+                                        </select>
+                                      </label>
+                                      <label className="large">
+                                        <span>允许工具</span>
+                                        <textarea value={(agent.tools?.allow || []).join("\n")} onChange={(e) => updateAgentTools(index, "allow", e.target.value)} />
+                                      </label>
+                                      <label className="large">
+                                        <span>禁用工具</span>
+                                        <textarea value={(agent.tools?.deny || []).join("\n")} onChange={(e) => updateAgentTools(index, "deny", e.target.value)} />
+                                      </label>
+                                    </div>
+                                  </>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
                         ) : null}
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
               </section>
               </div>
             </div>
