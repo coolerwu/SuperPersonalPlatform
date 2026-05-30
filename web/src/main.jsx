@@ -307,6 +307,9 @@ function AgentPage({ onUnauthorized }) {
   const [error, setError] = useState("");
   const [configError, setConfigError] = useState("");
   const [configStatus, setConfigStatus] = useState("");
+  const [sessions, setSessions] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [sessionLoading, setSessionLoading] = useState(false);
   const socketRef = useRef(null);
   const messageListRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -323,6 +326,81 @@ function AgentPage({ onUnauthorized }) {
   function websocketUrl() {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     return `${protocol}//${window.location.host}/api/agents/chat/connect`;
+  }
+
+  async function loadSessions() {
+    try {
+      const data = await api("/api/sessions");
+      setSessions(data.sessions || []);
+    } catch (err) {
+      if (err.status !== 404) {
+        handleApiError(err);
+      }
+    }
+  }
+
+  async function createSessionRequest(selectedAgentId) {
+    setSessionLoading(true);
+    try {
+      const data = await api("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ agent_id: selectedAgentId || agentId })
+      });
+      const session = data.session;
+      setSessions((prev) => [session, ...prev]);
+      setActiveSessionId(session.id);
+      setMessages([]);
+      return session;
+    } catch (err) {
+      handleApiError(err);
+      return null;
+    } finally {
+      setSessionLoading(false);
+    }
+  }
+
+  async function deleteSessionItem(sessionId) {
+    try {
+      await api(`/api/sessions/${sessionId}`, { method: "DELETE" });
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(null);
+        setMessages([]);
+      }
+    } catch (err) {
+      handleApiError(err);
+    }
+  }
+
+  async function switchSession(sessionId) {
+    setSessionLoading(true);
+    setError("");
+    try {
+      const data = await api(`/api/sessions/${sessionId}`);
+      const session = data.session;
+      setActiveSessionId(session.id);
+      const historyMessages = (session.messages || []).map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+        images: (msg.images || []).map((img, i) => ({
+          id: `history-${session.id}-${i}`,
+          name: "",
+          mime_type: img.mime_type,
+          data: img.data,
+          preview: `data:${img.mime_type};base64,${img.data}`
+        })),
+        checkpoints: msg.checkpoints || [],
+        checkpointsCollapsed: true
+      }));
+      setMessages(historyMessages);
+      if (session.agent_id && session.agent_id !== agentId) {
+        setAgentId(session.agent_id);
+      }
+    } catch (err) {
+      handleApiError(err);
+    } finally {
+      setSessionLoading(false);
+    }
   }
 
   async function loadOptions() {
@@ -389,6 +467,7 @@ function AgentPage({ onUnauthorized }) {
         });
         setSending(false);
         setStatus("connected");
+        loadSessions();
       }
       if (message.type === "checkpoint") {
         setMessages((items) =>
@@ -427,7 +506,7 @@ function AgentPage({ onUnauthorized }) {
     };
   }
 
-  function sendMessage() {
+  async function sendMessage() {
     const content = input.trim();
     if ((!content && attachments.length === 0) || sending || !agentId || blocked) {
       return;
@@ -441,6 +520,13 @@ function AgentPage({ onUnauthorized }) {
       setError("连接未就绪，请稍后重试");
       return;
     }
+
+    let currentSessionId = activeSessionId;
+    if (!currentSessionId) {
+      const session = await createSessionRequest(agentId);
+      currentSessionId = session ? session.id : null;
+    }
+
     setError("");
     setInput("");
     setAttachments([]);
@@ -455,6 +541,7 @@ function AgentPage({ onUnauthorized }) {
         type: "message",
         agent_id: agentId,
         content,
+        session_id: currentSessionId,
         images: attachments.map((image) => ({
           mime_type: image.mime_type,
           data: image.data
@@ -483,6 +570,7 @@ function AgentPage({ onUnauthorized }) {
   useEffect(() => {
     loadOptions();
     loadAgentConfig();
+    loadSessions();
     connect();
     return () => socketRef.current?.close();
   }, []);
@@ -709,14 +797,48 @@ function AgentPage({ onUnauthorized }) {
                 ))}
               </select>
             </label>
+            <button
+              className="session-new-button"
+              onClick={() => createSessionRequest(agentId)}
+              disabled={sessionLoading || loading || !canChat}
+            >
+              <Plus size={16} />
+              新对话
+            </button>
             <div className="ai-session-list">
-              <span>快捷开始</span>
-              {quickPrompts.map((prompt) => (
-                <button key={prompt} type="button" onClick={() => setInput(prompt)}>
-                  <MessageSquare size={14} />
-                  {prompt}
-                </button>
-              ))}
+              <span>对话历史</span>
+              {sessionLoading ? (
+                <div className="session-empty">加载中...</div>
+              ) : sessions.length === 0 ? (
+                <div className="session-empty">暂无对话记录</div>
+              ) : (
+                sessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    className={`session-item${activeSessionId === session.id ? " active" : ""}`}
+                    onClick={() => switchSession(session.id)}
+                  >
+                    <span className="session-item-title">
+                      <MessageSquare size={14} />
+                      {session.title || "新对话"}
+                    </span>
+                    <span className="session-item-meta">
+                      <span>{session.message_count} 条消息</span>
+                      <button
+                        className="session-delete-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteSessionItem(session.id);
+                        }}
+                        title="删除对话"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  </button>
+                ))
+              )}
             </div>
             <div className="ai-agent-health">
               <span className={`terminal-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
@@ -750,10 +872,10 @@ function AgentPage({ onUnauthorized }) {
               {!loading && selectedAgent?.model && !selectedAgent.model.has_api_key ? (
                 <div className="empty-state">模型 API Key 不可用</div>
               ) : null}
-              {!loading && !blocked && messages.length === 0 ? (
+              {!loading && !blocked && messages.length === 0 && sessions.length === 0 ? (
                 <div className="agent-welcome">
                   <h2>开始新的对话</h2>
-                  <p>选择一个快捷问题，或者直接输入你的任务。</p>
+                  <p>点击左侧"新对话"开始，或直接输入你的任务。</p>
                   <div className="ai-empty-prompts">
                     {quickPrompts.slice(0, 3).map((prompt) => (
                       <button key={prompt} type="button" onClick={() => setInput(prompt)}>
@@ -761,6 +883,12 @@ function AgentPage({ onUnauthorized }) {
                       </button>
                     ))}
                   </div>
+                </div>
+              ) : null}
+              {!loading && !blocked && messages.length === 0 && sessions.length > 0 ? (
+                <div className="agent-welcome">
+                  <h2>选择对话或创建新对话</h2>
+                  <p>从左侧对话历史中选择，或点击"新对话"开始。</p>
                 </div>
               ) : null}
               {messages.map((message, index) => (

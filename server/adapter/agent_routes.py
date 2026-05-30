@@ -17,6 +17,7 @@ from server.app.agent_chat_service import (
     ChatImage,
 )
 from server.domain.agents import AgentConfigError
+from server.domain.sessions import ChatImageData, ChatMessageData
 
 
 SUPPORTED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
@@ -32,6 +33,7 @@ class AgentChatMessage(BaseModel):
     agent_id: str | None = None
     content: str | None = None
     images: list[AgentChatImagePayload] = []
+    session_id: str | None = None
 
 
 class AgentModelConfigPayload(BaseModel):
@@ -230,6 +232,15 @@ def create_agent_router(container: AppContainer) -> APIRouter:
 
                 await websocket.send_json({"type": "assistant_message", "content": message})
                 await websocket.send_json({"type": "status", "status": "idle"})
+
+                if payload.session_id and container.chat_session_service is not None:
+                    _save_session_messages(
+                        container.chat_session_service,
+                        payload.session_id,
+                        payload.content or "",
+                        images,
+                        message,
+                    )
         except WebSocketDisconnect:
             return
 
@@ -244,6 +255,23 @@ def _agent_service(container: AppContainer):
             detail="Agent 服务不可用",
         )
     return service
+
+
+def _save_session_messages(session_service, session_id: str, user_content: str, images: tuple[ChatImage, ...], assistant_content: str) -> None:
+    try:
+        image_data = tuple(
+            ChatImageData(mime_type=img.mime_type, data=img.data) for img in images
+        )
+        session_service.append_message(
+            session_id,
+            ChatMessageData(role="user", content=user_content, images=image_data),
+        )
+        session_service.append_message(
+            session_id,
+            ChatMessageData(role="assistant", content=assistant_content),
+        )
+    except Exception:
+        pass
 
 
 def _parse_images(images: list[AgentChatImagePayload]) -> tuple[ChatImage, ...]:

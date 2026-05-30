@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from server.app.agent_chat_service import AgentChatService
 from server.app.auth_service import AuthService
+from server.app.chat_session_service import ChatSessionService
 from server.app.config_file_service import ConfigFileService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
@@ -21,6 +22,7 @@ class AppContainer:
     system_update_service: SystemUpdateService
     session_codec: SessionCodec
     agent_chat_service: AgentChatService | None = None
+    chat_session_service: ChatSessionService | None = None
     job_service: JobService | None = None
     self_dev_service: SelfDevService | None = None
     wechat_channel_manager: WechatChannelManager | None = None
