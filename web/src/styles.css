@@ -5708,6 +5708,29 @@ body {
   }
 }
 
+/* Models page */
+.content-models {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.content-models .page-section {
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 18px 22px 44px;
+}
+
+@media (max-width: 980px) {
+  .content-models {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+}
+
 /* Agent config workspace */
 .agent-config-panel {
   max-width: 1360px !important;

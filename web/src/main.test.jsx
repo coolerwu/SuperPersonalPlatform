@@ -565,18 +565,9 @@ describe("LoginPage", () => {
     expect(await screen.findByText("正在执行真实任务")).toBeInTheDocument();
   });
 
-  it("edits Agent workspace config from the config tab", async () => {
+  it("edits model config from the models page", async () => {
     document.body.innerHTML = '<div id="root"></div>';
-    window.history.replaceState({}, "", "/agents");
-    class MockWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      constructor() {
-        setTimeout(() => this.onopen?.(), 0);
-      }
-      close() {}
-    }
-    vi.stubGlobal("WebSocket", MockWebSocket);
+    window.history.replaceState({}, "", "/models");
     vi.stubGlobal(
       "fetch",
       vi.fn(async (path, options) => {
@@ -584,29 +575,6 @@ describe("LoginPage", () => {
           return {
             ok: true,
             json: async () => ({ authenticated: true })
-          };
-        }
-        if (path === "/api/agents/options") {
-          return {
-            ok: true,
-            json: async () => ({
-              default_agent_id: "assistant",
-              agents: [
-                {
-                  id: "assistant",
-                  name: "个人助理",
-                  model_id: "fast",
-                  model: {
-                    id: "fast",
-                    name: "快速模型",
-                    model: "fast-chat",
-                    base_url: "https://llm.example.test/v1",
-                    supports_images: true,
-                    has_api_key: true
-                  }
-                }
-              ]
-            })
           };
         }
         if (path === "/api/agents/config") {
@@ -661,7 +629,6 @@ describe("LoginPage", () => {
       await import("./main.jsx");
     });
 
-    await user.click(await screen.findByRole("button", { name: /配置/ }));
     await user.clear((await screen.findAllByDisplayValue("快速模型"))[0]);
     await user.type(screen.getByLabelText(/显示名/), "视觉模型");
     await user.click(screen.getByRole("button", { name: /保存到 workspace/ }));

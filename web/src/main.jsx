@@ -10,6 +10,7 @@ import {
   CheckCircle,
   Circle,
   Clock,
+  Cpu,
   Code2,
   Eye,
   FileCode,
@@ -628,31 +629,12 @@ function AgentPage({ onUnauthorized }) {
     }
   }
 
-  function updateModel(index, field, value) {
-    setConfig((current) => ({
-      ...current,
-      models: current.models.map((model, modelIndex) =>
-        modelIndex === index ? { ...model, [field]: value } : model
-      )
-    }));
-  }
-
   function updateAgent(index, field, value) {
     setConfig((current) => ({
       ...current,
       agents: current.agents.map((agent, agentIndex) =>
         agentIndex === index ? { ...agent, [field]: value } : agent
       )
-    }));
-  }
-
-  function updatePlatformTools(field, value) {
-    setConfig((current) => ({
-      ...current,
-      tools: {
-        ...(current.tools || { profile: "default", allow: [], deny: [] }),
-        [field]: field === "profile" ? value : value.split(/\s+/).map((item) => item.trim()).filter(Boolean)
-      }
     }));
   }
 
@@ -675,29 +657,6 @@ function AgentPage({ onUnauthorized }) {
 
   function updateAgentSkillIds(index, value) {
     updateAgent(index, "skill_ids", value.split(/\s+/).map((item) => item.trim()).filter(Boolean));
-  }
-
-  function addModel() {
-    const id = `model-${(config?.models?.length || 0) + 1}`;
-    setConfig((current) => ({
-      ...current,
-      default_model_id: current.default_model_id || id,
-      models: [
-        ...current.models,
-        {
-          id,
-          name: "新模型",
-          provider: "openai_compatible",
-          base_url: "https://api.openai.com/v1",
-          model: "",
-          api_key: "",
-          temperature: 0.7,
-          supports_images: false,
-          has_api_key: false,
-          api_key_mask: ""
-        }
-      ]
-    }));
   }
 
   function addAgent() {
@@ -750,7 +709,7 @@ function AgentPage({ onUnauthorized }) {
           }))
         })
       });
-      setConfigStatus("Agent 配置已保存");
+      setConfigStatus("Agent 管理配置已保存");
       await loadAgentConfig();
       await loadOptions();
     } catch (err) {
@@ -762,15 +721,15 @@ function AgentPage({ onUnauthorized }) {
   }
 
   return (
-    <section className={`page-section agent-section${activeTab === "config" ? " agent-section-config" : ""}`}>
+    <section className={`page-section agent-section${activeTab === "agents" ? " agent-section-config" : ""}`}>
       <div className="tab-bar" role="tablist" aria-label="Agent">
         <button className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>
           <Bot size={16} />
           对话
         </button>
-        <button className={activeTab === "config" ? "active" : ""} onClick={() => setActiveTab("config")}>
-          <Save size={16} />
-          配置
+        <button className={activeTab === "agents" ? "active" : ""} onClick={() => setActiveTab("agents")}>
+          <List size={16} />
+          Agent 管理
         </button>
       </div>
       {activeTab === "chat" ? (
@@ -996,11 +955,11 @@ function AgentPage({ onUnauthorized }) {
           </main>
         </div>
       ) : null}
-      {activeTab === "config" ? (
+      {activeTab === "agents" ? (
         <div className="agent-config-panel">
           <div className="agent-config-heading">
             <div>
-              <span>Workspace 配置</span>
+              <span>Agent 管理</span>
               <p>{config?.path || "正在读取 config.yaml"}</p>
             </div>
             <div className="config-actions">
@@ -1017,165 +976,308 @@ function AgentPage({ onUnauthorized }) {
           {configError ? <div className="form-error">{configError}</div> : null}
           {configStatus ? <div className="status-message">{configStatus}</div> : null}
           {config ? (
-            <div className="agent-config-workspace">
-              <aside className="agent-config-rail">
-                <div className="agent-config-rail-card">
-                  <span>默认 Agent</span>
-                  <strong>{config.agents.find((agent) => agent.id === config.default_agent_id)?.name || config.default_agent_id || "未设置"}</strong>
+            <section className="agent-config-section">
+              <div className="agent-config-section-heading">
+                <div>
+                  <h3>Agent</h3>
+                  <p>定义人格、系统提示词、绑定模型和私有工具权限。</p>
                 </div>
-                <div className="agent-config-rail-card">
-                  <span>默认模型</span>
-                  <strong>{config.models.find((model) => model.id === config.default_model_id)?.name || config.default_model_id || "未设置"}</strong>
-                </div>
-                <div className="agent-config-rail-card compact">
-                  <small>{config.models.length} 个模型</small>
-                  <small>{config.agents.length} 个 Agent</small>
-                  <small>Tools: {config.tools?.profile || "default"}</small>
-                </div>
-              </aside>
-              <div className="agent-config-content">
-              <section className="agent-config-section">
-                <div className="agent-config-section-heading">
-                  <div>
-                    <h3>工具权限</h3>
-                    <p>控制平台级工具集合，Agent 可在自己的配置中覆盖。</p>
-                  </div>
-                </div>
-                <article className="agent-config-card">
-                  <div className="agent-config-grid">
-                    <label>工具模板<select value={config.tools?.profile || "default"} onChange={(event) => updatePlatformTools("profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
-                    <label className="agent-prompt-label">允许工具<textarea placeholder="每行一个工具 id" value={(config.tools?.allow || []).join("\n")} onChange={(event) => updatePlatformTools("allow", event.target.value)} /></label>
-                    <label className="agent-prompt-label">禁用工具<textarea placeholder="每行一个工具 id，优先级高于允许列表" value={(config.tools?.deny || []).join("\n")} onChange={(event) => updatePlatformTools("deny", event.target.value)} /></label>
-                  </div>
-                </article>
-              </section>
-              <section className="agent-config-section">
-                <div className="agent-config-section-heading">
-                  <div>
-                    <h3>模型</h3>
-                    <p>配置模型接口，API Key 留空会保留原值。</p>
-                  </div>
-                  <button className="secondary-button" onClick={addModel}>
-                    <Plus size={17} />
-                    添加模型
-                  </button>
-                </div>
-                <div className="agent-config-list">
-                  {config.models.map((model, index) => (
-                    <article className="agent-config-card" key={`${model.id}-${index}`}>
-                      <div className="agent-config-card-title">
-                        <strong>{model.name || model.id || "未命名模型"}</strong>
-                        {config.default_model_id === model.id ? <span>默认</span> : null}
-                      </div>
-                      <div className="agent-config-grid">
-                        <label>提供商<select value={model.provider || "openai_compatible"} onChange={(event) => updateModel(index, "provider", event.target.value)}><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic">Anthropic (Claude)</option></select></label>
-                        <label>ID<input value={model.id} onChange={(event) => updateModel(index, "id", event.target.value)} /></label>
-                        <label>显示名<input value={model.name} onChange={(event) => updateModel(index, "name", event.target.value)} /></label>
-                        <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} placeholder={(model.provider || "openai_compatible") === "anthropic" ? "可选" : ""} /></label>
-                        <label>模型名<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
-                        <label>API Key<input type="password" placeholder={model.api_key_mask || "留空保留旧 key"} value={model.api_key || ""} onChange={(event) => updateModel(index, "api_key", event.target.value)} /></label>
-                        <label>Temperature<input type="number" step="0.1" value={model.temperature ?? ""} onChange={(event) => updateModel(index, "temperature", event.target.value)} /></label>
-                      </div>
-                      <div className="agent-config-card-actions">
-                        <label className="agent-checkbox"><input type="checkbox" checked={Boolean(model.supports_images)} onChange={(event) => updateModel(index, "supports_images", event.target.checked)} />支持图片</label>
-                        <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, default_model_id: model.id }))}>设为默认</button>
-                        <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, models: current.models.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
-              <section className="agent-config-section">
-                <div className="agent-config-section-heading">
-                  <div>
-                    <h3>Agent</h3>
-                    <p>定义人格、系统提示词、绑定模型和私有工具权限。</p>
-                  </div>
-                  <button className="secondary-button" onClick={addAgent}>
-                    <Plus size={17} />
-                    添加 Agent
-                  </button>
-                </div>
-                <table className="agent-table">
-                  <thead>
-                    <tr>
-                      <th className="th-id">ID</th>
-                      <th className="th-name">名称</th>
-                      <th className="th-model">绑定模型</th>
-                      <th className="th-badge"></th>
-                      <th className="th-actions">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {config.agents.map((agent, index) => (
-                      <React.Fragment key={`${agent.id}-${index}`}>
-                        <tr className={expandedRow === index ? "row-active" : ""}>
-                          <td><input value={agent.id} onChange={(e) => updateAgent(index, "id", e.target.value)} disabled={agent.is_builtin} /></td>
-                          <td><input value={agent.name} onChange={(e) => updateAgent(index, "name", e.target.value)} disabled={agent.is_builtin} /></td>
-                          <td><select value={agent.model_id || ""} onChange={(e) => updateAgent(index, "model_id", e.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></td>
-                          <td className="td-badges">
-                            {config.default_agent_id === agent.id ? <span className="badge-default">默认</span> : null}
-                            {agent.is_builtin ? <span className="badge-builtin" style={{marginLeft: config.default_agent_id === agent.id ? 6 : 0}}>内置</span> : null}
-                          </td>
-                          <td className="td-actions">
-                            <button className="secondary-button small" onClick={() => setConfig((c) => ({ ...c, default_agent_id: agent.id }))}>设为默认</button>
-                            <button className="secondary-button small" onClick={() => setExpandedRow(expandedRow === index ? null : index)}>
-                              {expandedRow === index ? "收起" : "展开"}
-                            </button>
-                            {!agent.is_builtin ? (
-                              <button className="secondary-button small" onClick={() => setConfig((c) => ({ ...c, agents: c.agents.filter((_, i) => i !== index) }))}>删除</button>
-                            ) : null}
+                <button className="secondary-button" onClick={addAgent}>
+                  <Plus size={17} />
+                  添加 Agent
+                </button>
+              </div>
+              <table className="agent-table">
+                <thead>
+                  <tr>
+                    <th className="th-id">ID</th>
+                    <th className="th-name">名称</th>
+                    <th className="th-model">绑定模型</th>
+                    <th className="th-badge"></th>
+                    <th className="th-actions">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {config.agents.map((agent, index) => (
+                    <React.Fragment key={`${agent.id}-${index}`}>
+                      <tr className={expandedRow === index ? "row-active" : ""}>
+                        <td><input value={agent.id} onChange={(e) => updateAgent(index, "id", e.target.value)} disabled={agent.is_builtin} /></td>
+                        <td><input value={agent.name} onChange={(e) => updateAgent(index, "name", e.target.value)} disabled={agent.is_builtin} /></td>
+                        <td><select value={agent.model_id || ""} onChange={(e) => updateAgent(index, "model_id", e.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></td>
+                        <td className="td-badges">
+                          {config.default_agent_id === agent.id ? <span className="badge-default">默认</span> : null}
+                          {agent.is_builtin ? <span className="badge-builtin" style={{marginLeft: config.default_agent_id === agent.id ? 6 : 0}}>内置</span> : null}
+                        </td>
+                        <td className="td-actions">
+                          <button className="secondary-button small" onClick={() => setConfig((c) => ({ ...c, default_agent_id: agent.id }))}>设为默认</button>
+                          <button className="secondary-button small" onClick={() => setExpandedRow(expandedRow === index ? null : index)}>
+                            {expandedRow === index ? "收起" : "展开"}
+                          </button>
+                          {!agent.is_builtin ? (
+                            <button className="secondary-button small" onClick={() => setConfig((c) => ({ ...c, agents: c.agents.filter((_, i) => i !== index) }))}>删除</button>
+                          ) : null}
+                        </td>
+                      </tr>
+                      {expandedRow === index ? (
+                        <tr className="agent-detail-row">
+                          <td colSpan={5}>
+                            <div className="agent-detail-content">
+                              <label className="agent-detail-field">
+                                <span>系统提示词</span>
+                                <textarea value={agent.system_prompt} onChange={(e) => updateAgent(index, "system_prompt", e.target.value)} />
+                              </label>
+                              {!agent.is_builtin ? (
+                                <>
+                                  <label className="agent-detail-field">
+                                    <span>Skill IDs</span>
+                                    <textarea placeholder="每行一个 skill id，如 common:xxx" value={(agent.skill_ids || []).join("\n")} onChange={(e) => updateAgentSkillIds(index, e.target.value)} />
+                                  </label>
+                                  <div className="agent-detail-tools">
+                                    <label>
+                                      <span>工具模板</span>
+                                      <select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(e) => updateAgentTools(index, "profile", e.target.value)}>
+                                        <option value="default">default</option>
+                                        <option value="self-dev">self-dev</option>
+                                      </select>
+                                    </label>
+                                    <label className="large">
+                                      <span>允许工具</span>
+                                      <textarea value={(agent.tools?.allow || []).join("\n")} onChange={(e) => updateAgentTools(index, "allow", e.target.value)} />
+                                    </label>
+                                    <label className="large">
+                                      <span>禁用工具</span>
+                                      <textarea value={(agent.tools?.deny || []).join("\n")} onChange={(e) => updateAgentTools(index, "deny", e.target.value)} />
+                                    </label>
+                                  </div>
+                                </>
+                              ) : null}
+                            </div>
                           </td>
                         </tr>
-                        {expandedRow === index ? (
-                          <tr className="agent-detail-row">
-                            <td colSpan={5}>
-                              <div className="agent-detail-content">
-                                <label className="agent-detail-field">
-                                  <span>系统提示词</span>
-                                  <textarea value={agent.system_prompt} onChange={(e) => updateAgent(index, "system_prompt", e.target.value)} />
-                                </label>
-                                {!agent.is_builtin ? (
-                                  <>
-                                    <label className="agent-detail-field">
-                                      <span>Skill IDs</span>
-                                      <textarea placeholder="每行一个 skill id，如 common:xxx" value={(agent.skill_ids || []).join("\n")} onChange={(e) => updateAgentSkillIds(index, e.target.value)} />
-                                    </label>
-                                    <div className="agent-detail-tools">
-                                      <label>
-                                        <span>工具模板</span>
-                                        <select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(e) => updateAgentTools(index, "profile", e.target.value)}>
-                                          <option value="default">default</option>
-                                          <option value="self-dev">self-dev</option>
-                                        </select>
-                                      </label>
-                                      <label className="large">
-                                        <span>允许工具</span>
-                                        <textarea value={(agent.tools?.allow || []).join("\n")} onChange={(e) => updateAgentTools(index, "allow", e.target.value)} />
-                                      </label>
-                                      <label className="large">
-                                        <span>禁用工具</span>
-                                        <textarea value={(agent.tools?.deny || []).join("\n")} onChange={(e) => updateAgentTools(index, "deny", e.target.value)} />
-                                      </label>
-                                    </div>
-                                  </>
-                                ) : null}
-                              </div>
-                            </td>
-                          </tr>
-                        ) : null}
-                      </React.Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </section>
-              </div>
-            </div>
+                      ) : null}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </section>
           ) : (
             <div className="empty-state">正在加载 Agent 配置</div>
           )}
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function ModelsPage({ onUnauthorized }) {
+  const [config, setConfig] = useState(null);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState("");
+  const [configStatus, setConfigStatus] = useState("");
+
+  function handleApiError(err) {
+    if (err.status === 401 || err.message === "Authentication required") {
+      onUnauthorized();
+      return true;
+    }
+    setConfigError(err.message);
+    return false;
+  }
+
+  async function loadModelConfig() {
+    setConfigLoading(true);
+    setConfigError("");
+    setConfigStatus("");
+    try {
+      const data = await api("/api/agents/config");
+      setConfig(data);
+    } catch (err) {
+      handleApiError(err);
+      setConfigError(err.message);
+    } finally {
+      setConfigLoading(false);
+    }
+  }
+
+  async function saveModelConfig() {
+    setConfigSaving(true);
+    setConfigError("");
+    setConfigStatus("");
+    try {
+      await api("/api/agents/config", {
+        method: "PUT",
+        body: JSON.stringify({
+          default_model_id: config.default_model_id || config.models?.[0]?.id || "",
+          default_agent_id: config.default_agent_id || config.agents?.[0]?.id || "",
+          common_skill_tools: config.common_skill_tools || [],
+          tools: config.tools || { profile: "default", allow: [], deny: [] },
+          models: config.models.map((model) => ({
+            id: model.id,
+            name: model.name,
+            provider: model.provider || "openai_compatible",
+            base_url: model.base_url,
+            model: model.model,
+            api_key: model.api_key || "",
+            temperature: model.temperature === "" ? null : Number(model.temperature),
+            supports_images: Boolean(model.supports_images)
+          })),
+          agents: config.agents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            model_id: agent.model_id,
+            system_prompt: agent.system_prompt,
+            skill_ids: agent.skill_ids || [],
+            tools: agent.tools || null
+          }))
+        })
+      });
+      setConfigStatus("模型配置已保存");
+      await loadModelConfig();
+    } catch (err) {
+      handleApiError(err);
+      setConfigError(err.message);
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  function updateModel(index, field, value) {
+    setConfig((current) => ({
+      ...current,
+      models: current.models.map((model, modelIndex) =>
+        modelIndex === index ? { ...model, [field]: value } : model
+      )
+    }));
+  }
+
+  function updatePlatformTools(field, value) {
+    setConfig((current) => ({
+      ...current,
+      tools: {
+        ...(current.tools || { profile: "default", allow: [], deny: [] }),
+        [field]: field === "profile" ? value : value.split(/\s+/).map((item) => item.trim()).filter(Boolean)
+      }
+    }));
+  }
+
+  function addModel() {
+    const id = `model-${(config?.models?.length || 0) + 1}`;
+    setConfig((current) => ({
+      ...current,
+      default_model_id: current.default_model_id || id,
+      models: [
+        ...current.models,
+        {
+          id,
+          name: "新模型",
+          provider: "openai_compatible",
+          base_url: "https://api.openai.com/v1",
+          model: "",
+          api_key: "",
+          temperature: 0.7,
+          supports_images: false,
+          has_api_key: false,
+          api_key_mask: ""
+        }
+      ]
+    }));
+  }
+
+  useEffect(() => {
+    loadModelConfig();
+  }, []);
+
+  return (
+    <section className="page-section">
+      <div className="agent-config-heading">
+        <div>
+          <span>模型配置</span>
+          <p>{config?.path || "正在读取 config.yaml"}</p>
+        </div>
+        <div className="config-actions">
+          <button className="secondary-button" onClick={loadModelConfig} disabled={configLoading}>
+            <RefreshCw size={17} />
+            重新读取
+          </button>
+          <button className="secondary-button primary-action" onClick={saveModelConfig} disabled={!config || configSaving}>
+            <Save size={17} />
+            {configSaving ? "保存中" : "保存到 workspace"}
+          </button>
+        </div>
+      </div>
+      {configError ? <div className="form-error">{configError}</div> : null}
+      {configStatus ? <div className="status-message">{configStatus}</div> : null}
+      {config ? (
+        <div className="agent-config-workspace">
+          <aside className="agent-config-rail">
+            <div className="agent-config-rail-card">
+              <span>默认模型</span>
+              <strong>{config.models.find((model) => model.id === config.default_model_id)?.name || config.default_model_id || "未设置"}</strong>
+            </div>
+            <div className="agent-config-rail-card compact">
+              <small>{config.models.length} 个模型</small>
+              <small>{config.agents.length} 个 Agent</small>
+              <small>Tools: {config.tools?.profile || "default"}</small>
+            </div>
+          </aside>
+          <div className="agent-config-content">
+            <section className="agent-config-section">
+              <div className="agent-config-section-heading">
+                <div>
+                  <h3>工具权限</h3>
+                  <p>控制平台级工具集合，Agent 可在自己的配置中覆盖。</p>
+                </div>
+              </div>
+              <article className="agent-config-card">
+                <div className="agent-config-grid">
+                  <label>工具模板<select value={config.tools?.profile || "default"} onChange={(event) => updatePlatformTools("profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
+                  <label className="agent-prompt-label">允许工具<textarea placeholder="每行一个工具 id" value={(config.tools?.allow || []).join("\n")} onChange={(event) => updatePlatformTools("allow", event.target.value)} /></label>
+                  <label className="agent-prompt-label">禁用工具<textarea placeholder="每行一个工具 id，优先级高于允许列表" value={(config.tools?.deny || []).join("\n")} onChange={(event) => updatePlatformTools("deny", event.target.value)} /></label>
+                </div>
+              </article>
+            </section>
+            <section className="agent-config-section">
+              <div className="agent-config-section-heading">
+                <div>
+                  <h3>模型</h3>
+                  <p>配置模型接口，API Key 留空会保留原值。</p>
+                </div>
+                <button className="secondary-button" onClick={addModel}>
+                  <Plus size={17} />
+                  添加模型
+                </button>
+              </div>
+              <div className="agent-config-list">
+                {config.models.map((model, index) => (
+                  <article className="agent-config-card" key={`${model.id}-${index}`}>
+                    <div className="agent-config-card-title">
+                      <strong>{model.name || model.id || "未命名模型"}</strong>
+                      {config.default_model_id === model.id ? <span>默认</span> : null}
+                    </div>
+                    <div className="agent-config-grid">
+                      <label>提供商<select value={model.provider || "openai_compatible"} onChange={(event) => updateModel(index, "provider", event.target.value)}><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic">Anthropic (Claude)</option></select></label>
+                      <label>ID<input value={model.id} onChange={(event) => updateModel(index, "id", event.target.value)} /></label>
+                      <label>显示名<input value={model.name} onChange={(event) => updateModel(index, "name", event.target.value)} /></label>
+                      <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} placeholder={(model.provider || "openai_compatible") === "anthropic" ? "可选" : ""} /></label>
+                      <label>模型名<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
+                      <label>API Key<input type="password" placeholder={model.api_key_mask || "留空保留旧 key"} value={model.api_key || ""} onChange={(event) => updateModel(index, "api_key", event.target.value)} /></label>
+                      <label>Temperature<input type="number" step="0.1" value={model.temperature ?? ""} onChange={(event) => updateModel(index, "temperature", event.target.value)} /></label>
+                    </div>
+                    <div className="agent-config-card-actions">
+                      <label className="agent-checkbox"><input type="checkbox" checked={Boolean(model.supports_images)} onChange={(event) => updateModel(index, "supports_images", event.target.checked)} />支持图片</label>
+                      <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, default_model_id: model.id }))}>设为默认</button>
+                      <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, models: current.models.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          </div>
+        </div>
+      ) : (
+        <div className="empty-state">正在加载模型配置</div>
+      )}
     </section>
   );
 }
@@ -3060,6 +3162,7 @@ function AppShell({ onLogout }) {
     () => [
       { path: "/", label: "首页", icon: Home },
       { path: "/agents", label: "Agent", icon: Bot },
+      { path: "/models", label: "模型配置", icon: Cpu },
       { path: "/self-dev", label: "自开发", icon: Code2 },
       { path: "/channels", label: "渠道", icon: MessageSquare },
       { path: "/terminal", label: "终端", icon: TerminalSquare },
@@ -3110,6 +3213,9 @@ function AppShell({ onLogout }) {
     if (path === "/agents") {
       return <AgentPage onUnauthorized={unauthorized} />;
     }
+    if (path === "/models") {
+      return <ModelsPage onUnauthorized={unauthorized} />;
+    }
     if (path === "/portfolio") {
       return <PortfolioPage onUnauthorized={unauthorized} />;
     }
@@ -3157,7 +3263,7 @@ function AppShell({ onLogout }) {
           退出
         </button>
       </aside>
-      <main className={`content${path === "/agents" ? " content-agents" : ""}`}>{renderPage()}</main>
+      <main className={`content${path === "/agents" ? " content-agents" : ""}${path === "/models" ? " content-models" : ""}`}>{renderPage()}</main>
     </div>
   );
 }
