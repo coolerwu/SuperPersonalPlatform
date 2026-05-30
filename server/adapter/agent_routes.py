@@ -143,6 +143,7 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                     "model_id": agent.model_id,
                     "system_prompt": agent.system_prompt,
                     "skill_ids": list(agent.skill_ids),
+                    "is_builtin": agent.is_builtin,
                     "tools": {
                         "profile": agent.tools_profile,
                         "allow": list(agent.tools_allow),

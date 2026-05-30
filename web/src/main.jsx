@@ -1101,22 +1101,29 @@ function AgentPage({ onUnauthorized }) {
                       <div className="agent-config-card-title">
                         <strong>{agent.name || agent.id || "未命名 Agent"}</strong>
                         {config.default_agent_id === agent.id ? <span>默认</span> : null}
+                        {agent.is_builtin ? <span className="badge-builtin">内置</span> : null}
                       </div>
                       <div className="agent-config-grid">
-                        <label>ID<input value={agent.id} onChange={(event) => updateAgent(index, "id", event.target.value)} /></label>
-                        <label>名称<input value={agent.name} onChange={(event) => updateAgent(index, "name", event.target.value)} /></label>
+                        <label>ID<input value={agent.id} onChange={(event) => updateAgent(index, "id", event.target.value)} disabled={agent.is_builtin} /></label>
+                        <label>名称<input value={agent.name} onChange={(event) => updateAgent(index, "name", event.target.value)} disabled={agent.is_builtin} /></label>
                         <label>绑定模型<select value={agent.model_id || ""} onChange={(event) => updateAgent(index, "model_id", event.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></label>
                       </div>
                       <label className="agent-prompt-label large">系统提示词<textarea value={agent.system_prompt} onChange={(event) => updateAgent(index, "system_prompt", event.target.value)} /></label>
-                      <label className="agent-prompt-label">Skill IDs<textarea placeholder="每行一个 skill id，如 common:xxx" value={(agent.skill_ids || []).join("\n")} onChange={(event) => updateAgentSkillIds(index, event.target.value)} /></label>
-                      <div className="agent-config-grid">
-                        <label>工具模板<select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(event) => updateAgentTools(index, "profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
-                        <label className="agent-prompt-label">允许工具<textarea value={(agent.tools?.allow || []).join("\n")} onChange={(event) => updateAgentTools(index, "allow", event.target.value)} /></label>
-                        <label className="agent-prompt-label">禁用工具<textarea value={(agent.tools?.deny || []).join("\n")} onChange={(event) => updateAgentTools(index, "deny", event.target.value)} /></label>
-                      </div>
+                      {!agent.is_builtin ? (
+                        <>
+                          <label className="agent-prompt-label">Skill IDs<textarea placeholder="每行一个 skill id，如 common:xxx" value={(agent.skill_ids || []).join("\n")} onChange={(event) => updateAgentSkillIds(index, event.target.value)} /></label>
+                          <div className="agent-config-grid">
+                            <label>工具模板<select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(event) => updateAgentTools(index, "profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
+                            <label className="agent-prompt-label">允许工具<textarea value={(agent.tools?.allow || []).join("\n")} onChange={(event) => updateAgentTools(index, "allow", event.target.value)} /></label>
+                            <label className="agent-prompt-label">禁用工具<textarea value={(agent.tools?.deny || []).join("\n")} onChange={(event) => updateAgentTools(index, "deny", event.target.value)} /></label>
+                          </div>
+                        </>
+                      ) : null}
                       <div className="agent-config-card-actions">
                         <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, default_agent_id: agent.id }))}>设为默认</button>
-                        <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, agents: current.agents.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
+                        {!agent.is_builtin ? (
+                          <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, agents: current.agents.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
+                        ) : null}
                       </div>
                     </article>
                   ))}

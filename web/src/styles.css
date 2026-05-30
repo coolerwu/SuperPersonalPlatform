@@ -5851,6 +5851,18 @@ body {
   padding: 4px 8px;
 }
 
+.agent-config-card-title .badge-builtin {
+  background: rgba(79, 140, 255, 0.15);
+  border-color: rgba(79, 140, 255, 0.35);
+  color: #7db8ff;
+}
+
+.agent-config-card input:disabled,
+.agent-config-card select:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .agent-config-grid {
   gap: 12px !important;
 }

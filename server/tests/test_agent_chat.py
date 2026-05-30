@@ -253,21 +253,22 @@ def test_agent_options_require_auth_and_do_not_leak_api_key(tmp_path) -> None:
     body = response.json()
     assert body["default_agent_id"] == "assistant"
     assert "top-secret-key" not in str(body)
-    assert body["agents"] == [
-        {
-            "id": "assistant",
-            "name": "Assistant",
-            "model_id": "fast",
-            "model": {
-                "id": "fast",
-                "name": "Fast Model",
-                "model": "fast-chat",
-                "base_url": "https://llm.example.test/v1",
-                "supports_images": True,
-                "has_api_key": True,
-            },
-        }
-    ]
+    assert body["agents"][0] == {
+        "id": "assistant",
+        "name": "Assistant",
+        "model_id": "fast",
+        "model": {
+            "id": "fast",
+            "name": "Fast Model",
+            "model": "fast-chat",
+            "base_url": "https://llm.example.test/v1",
+            "supports_images": True,
+            "has_api_key": True,
+        },
+    }
+    # Built-in agents are appended
+    assert body["agents"][1]["id"] == "ai-investment-advisor"
+    assert "top-secret-key" not in str(body)
 
 
 def test_agent_config_endpoint_masks_api_keys(tmp_path) -> None:
