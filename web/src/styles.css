@@ -1153,7 +1153,7 @@ button:disabled {
 
 .agent-config-panel {
   display: grid;
-  gap: 20px;
+  gap: 12px;
   padding: 0 20px 20px;
   overflow: auto;
 }
@@ -1161,6 +1161,20 @@ button:disabled {
 .agent-section-config {
   height: auto;
   min-height: 100vh;
+}
+
+.agent-config-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 0 0;
+}
+
+.agent-config-meta small {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .agent-config-heading {
@@ -1245,18 +1259,14 @@ button:disabled {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 
-.agent-config-section-heading h3 {
-  font-size: 16px;
+.agent-config-section-heading .agent-count {
+  font-size: 12px;
   font-weight: 600;
-  margin: 0;
-}
-
-.agent-config-section-heading p {
-  color: var(--text-secondary);
-  font-size: 13px;
-  margin: 4px 0 0;
+  color: var(--text-muted);
 }
 
 .agent-config-list {
@@ -1373,12 +1383,26 @@ button:disabled {
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
 }
 
+.agent-table .th-id {
+  width: 22%;
+}
+
+.agent-table .th-actions {
+  width: 100px;
+  text-align: right;
+}
+
+.agent-table .td-actions {
+  text-align: right;
+  justify-content: flex-end;
+}
+
 .agent-table td {
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
@@ -1397,7 +1421,7 @@ button:disabled {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   color: var(--text);
-  min-height: 32px;
+  min-height: 30px;
   padding: 0 8px;
   width: 100%;
   font-size: 13px;
@@ -1409,9 +1433,15 @@ button:disabled {
   border-color: var(--primary);
 }
 
-.td-badges {
+.agent-name-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-name-badges {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
 
 .badge-default {
@@ -1421,7 +1451,7 @@ button:disabled {
   color: var(--primary);
   font-size: 10px;
   font-weight: 700;
-  padding: 2px 8px;
+  padding: 1px 6px;
 }
 
 .badge-builtin {
@@ -1431,12 +1461,37 @@ button:disabled {
   color: var(--text-secondary);
   font-size: 10px;
   font-weight: 700;
-  padding: 2px 8px;
+  padding: 1px 6px;
 }
 
 .td-actions {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 2px;
+}
+
+.icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  height: 28px;
+  width: 28px;
+  padding: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.icon-action:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.icon-action.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .agent-detail-row td {
@@ -1445,15 +1500,15 @@ button:disabled {
 }
 
 .agent-detail-content {
-  padding: 16px;
+  padding: 14px;
   background: var(--surface-raised);
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 
 .agent-detail-field {
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .agent-detail-field span {
@@ -1467,21 +1522,52 @@ button:disabled {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   color: var(--text);
-  padding: 10px;
-  min-height: 100px;
+  padding: 8px 10px;
+  min-height: 80px;
   resize: vertical;
   width: 100%;
+  line-height: 1.5;
 }
 
 .agent-detail-tools {
   display: grid;
   gap: 12px;
-  grid-template-columns: 180px 1fr 1fr;
+  grid-template-columns: 160px 1fr 1fr;
 }
 
 .agent-detail-tools label {
   display: grid;
   gap: 5px;
+}
+
+.agent-detail-tools label span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.agent-detail-tools label select,
+.agent-detail-tools label textarea {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text);
+  min-height: 30px;
+  padding: 0 8px;
+  width: 100%;
+}
+
+.agent-detail-tools label textarea {
+  min-height: 80px;
+  padding: 8px 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.agent-detail-tools label select:focus,
+.agent-detail-tools label textarea:focus {
+  outline: none;
+  border-color: var(--primary);
 }
 
 .agent-detail-tools label.large {

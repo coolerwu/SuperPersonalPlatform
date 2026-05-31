@@ -8,6 +8,8 @@ import {
   Bot,
   Check,
   CheckCircle,
+  ChevronDown,
+  ChevronUp,
   Circle,
   Clock,
   Cpu,
@@ -37,8 +39,10 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Star,
   Terminal as TerminalIcon,
   TerminalSquare,
+  Trash2,
   TrendingUp,
   User,
   X,
@@ -959,19 +963,18 @@ function AgentPage({ onUnauthorized }) {
       ) : null}
       {activeTab === "agents" ? (
         <div className="agent-config-panel">
-          <div className="agent-config-heading">
-            <div>
-              <span>Agent 管理</span>
-              <p>{config?.path || "正在读取 config.yaml"}</p>
+          <div className="agent-config-toolbar">
+            <div className="agent-config-meta">
+              <small>{config?.path || "正在读取 config.yaml"}</small>
             </div>
             <div className="config-actions">
-              <button className="secondary-button" onClick={loadAgentConfig} disabled={configLoading}>
-                <RefreshCw size={17} />
+              <button className="secondary-button small" onClick={loadAgentConfig} disabled={configLoading}>
+                <RefreshCw size={15} />
                 重新读取
               </button>
-              <button className="secondary-button primary-action" onClick={saveAgentConfig} disabled={!config || configSaving}>
-                <Save size={17} />
-                {configSaving ? "保存中" : "保存到 workspace"}
+              <button className="secondary-button primary-action small" onClick={saveAgentConfig} disabled={!config || configSaving}>
+                <Save size={15} />
+                {configSaving ? "保存中" : "保存"}
               </button>
             </div>
           </div>
@@ -980,13 +983,10 @@ function AgentPage({ onUnauthorized }) {
           {config ? (
             <section className="agent-config-section">
               <div className="agent-config-section-heading">
-                <div>
-                  <h3>Agent</h3>
-                  <p>定义人格、系统提示词、绑定模型和私有工具权限。</p>
-                </div>
-                <button className="secondary-button" onClick={addAgent}>
-                  <Plus size={17} />
-                  添加 Agent
+                <div className="agent-count">{config.agents.length} 个 Agent</div>
+                <button className="secondary-button small" onClick={addAgent}>
+                  <Plus size={15} />
+                  添加
                 </button>
               </div>
               <table className="agent-table">
@@ -995,7 +995,6 @@ function AgentPage({ onUnauthorized }) {
                     <th className="th-id">ID</th>
                     <th className="th-name">名称</th>
                     <th className="th-model">绑定模型</th>
-                    <th className="th-badge"></th>
                     <th className="th-actions">操作</th>
                   </tr>
                 </thead>
@@ -1004,25 +1003,33 @@ function AgentPage({ onUnauthorized }) {
                     <React.Fragment key={`${agent.id}-${index}`}>
                       <tr className={expandedRow === index ? "row-active" : ""}>
                         <td><input value={agent.id} onChange={(e) => { if (!composingRef.current) updateAgent(index, "id", e.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(e) => { composingRef.current = false; updateAgent(index, "id", e.target.value); }} disabled={agent.is_builtin} /></td>
-                        <td><input value={agent.name} onChange={(e) => { if (!composingRef.current) updateAgent(index, "name", e.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(e) => { composingRef.current = false; updateAgent(index, "name", e.target.value); }} disabled={agent.is_builtin} /></td>
-                        <td><select value={agent.model_id || ""} onChange={(e) => updateAgent(index, "model_id", e.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></td>
-                        <td className="td-badges">
-                          {config.default_agent_id === agent.id ? <span className="badge-default">默认</span> : null}
-                          {agent.is_builtin ? <span className="badge-builtin" style={{marginLeft: config.default_agent_id === agent.id ? 6 : 0}}>内置</span> : null}
+                        <td>
+                          <div className="agent-name-cell">
+                            <input value={agent.name} onChange={(e) => { if (!composingRef.current) updateAgent(index, "name", e.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(e) => { composingRef.current = false; updateAgent(index, "name", e.target.value); }} disabled={agent.is_builtin} />
+                            <div className="agent-name-badges">
+                              {config.default_agent_id === agent.id ? <span className="badge-default">默认</span> : null}
+                              {agent.is_builtin ? <span className="badge-builtin">内置</span> : null}
+                            </div>
+                          </div>
                         </td>
+                        <td><select value={agent.model_id || ""} onChange={(e) => updateAgent(index, "model_id", e.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></td>
                         <td className="td-actions">
-                          <button className="secondary-button small" onClick={() => setConfig((c) => ({ ...c, default_agent_id: agent.id }))}>设为默认</button>
-                          <button className="secondary-button small" onClick={() => setExpandedRow(expandedRow === index ? null : index)}>
-                            {expandedRow === index ? "收起" : "展开"}
+                          <button className="icon-action" title="设为默认" onClick={() => setConfig((c) => ({ ...c, default_agent_id: agent.id }))}>
+                            <Star size={14} />
+                          </button>
+                          <button className="icon-action" title={expandedRow === index ? "收起" : "展开"} onClick={() => setExpandedRow(expandedRow === index ? null : index)}>
+                            {expandedRow === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                           </button>
                           {!agent.is_builtin ? (
-                            <button className="secondary-button small" onClick={() => setConfig((c) => ({ ...c, agents: c.agents.filter((_, i) => i !== index) }))}>删除</button>
+                            <button className="icon-action danger" title="删除" onClick={() => setConfig((c) => ({ ...c, agents: c.agents.filter((_, i) => i !== index) }))}>
+                              <Trash2 size={14} />
+                            </button>
                           ) : null}
                         </td>
                       </tr>
                       {expandedRow === index ? (
                         <tr className="agent-detail-row">
-                          <td colSpan={5}>
+                          <td colSpan={4}>
                             <div className="agent-detail-content">
                               <label className="agent-detail-field">
                                 <span>系统提示词</span>
