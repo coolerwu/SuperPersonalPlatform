@@ -163,23 +163,24 @@ function HomePage({ onNavigate }) {
 
   return (
     <section className="page-section home-workspace">
-      <div className="home-console">
-        <div className="home-console-title">
-          <span>Workspace</span>
-          <h2>控制台</h2>
-        </div>
-        <div className="home-status-strip" aria-label="运行状态">
-          <span><ShieldCheck size={15} /> Token 会话</span>
-          <span><PlugZap size={15} /> localhost:8888</span>
-          <span><Clock size={15} /> FastAPI 同源</span>
-        </div>
-        <button className="home-agent-command" onClick={() => onNavigate("/agents")}>
-          <span><Bot size={18} /></span>
-          <strong>今天想处理什么？</strong>
-          <small>打开 Agent 对话，直接输入任务或上传截图</small>
-          <ArrowRight size={17} />
-        </button>
+      <div className="home-hero">
+        <span>Workspace</span>
+        <h2>控制台</h2>
+        <p>超级个人平台统一控制台，管理 Agent、终端、渠道与系统配置。</p>
       </div>
+
+      <div className="home-status-strip" aria-label="运行状态">
+        <span><ShieldCheck size={14} /> Token 会话</span>
+        <span><PlugZap size={14} /> localhost:8888</span>
+        <span><Clock size={14} /> FastAPI 同源</span>
+      </div>
+
+      <button className="home-agent-command" onClick={() => onNavigate("/agents")}>
+        <span><Bot size={18} /></span>
+        <strong>今天想处理什么？</strong>
+        <small>打开 Agent 对话，直接输入任务或上传截图</small>
+        <ArrowRight size={16} />
+      </button>
 
       <div className="home-grid">
         <div className="home-primary-grid">
@@ -195,7 +196,7 @@ function HomePage({ onNavigate }) {
             );
           })}
         </div>
-        <div className="workspace-list compact" aria-label="辅助入口">
+        <div className="workspace-list" aria-label="辅助入口">
           {secondaryItems.map((item) => {
             const Icon = item.icon;
             return (
