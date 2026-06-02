@@ -12,7 +12,7 @@ from fastapi import (
 from server.adapter.auth_routes import SESSION_COOKIE, current_session_codec
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
-from server.app.agent_chat_service import (
+from server.domain.harness import (
     AgentChatUnavailableError,
     ChatImage,
 )

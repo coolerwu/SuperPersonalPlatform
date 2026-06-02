@@ -5,10 +5,11 @@ from pathlib import Path
 import subprocess
 from uuid import uuid4
 
-from server.app.agent_chat_service import AgentChatCheckpoint, AgentChatService
+from server.app.agent_chat_service import AgentChatService
 from server.app.agent_tool_service import AgentToolRuntime
 from server.app.agent_skill_service import AgentSkillService
 from server.app.job_service import JobService
+from server.domain.harness import AgentChatCheckpoint
 from server.domain.jobs import JobStatus
 from server.infrastructure.async_command_runner import AsyncCommandResult, AsyncCommandRunner
 

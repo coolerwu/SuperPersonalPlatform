@@ -35,7 +35,7 @@ from server.app.wechat_channel_manager import WechatChannelManager
 from server.domain.auth import AuthToken
 from server.infrastructure.config import Settings, load_settings
 from server.infrastructure.http_proxy_gateway import HttpProxyGateway
-from server.infrastructure.langchain_llm_adapter import LangChainOpenAICompatibleAdapter
+from server.infrastructure.llm_client import LLMClient
 from server.infrastructure.session import SessionCodec
 
 
@@ -50,7 +50,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     job_service = JobService(active_workspace)
     agent_chat_service = AgentChatService(
         active_workspace / "config.yaml",
-        LangChainOpenAICompatibleAdapter(),
+        LLMClient(),
     )
     self_dev_service = SelfDevService(active_workspace, agent_chat_service, job_service)
     wechat_channel_manager = WechatChannelManager(active_workspace, agent_chat_service, system_log_service)

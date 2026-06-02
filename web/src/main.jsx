@@ -21,7 +21,6 @@ import {
   FilePlus,
   FileText,
   GitBranch,
-  Globe2,
   HelpCircle,
   Home,
   Image as ImageIcon,
@@ -155,13 +154,6 @@ function HomePage({ onNavigate }) {
       title: "系统",
       desc: "配置、日志、更新。",
       meta: "ops"
-    },
-    {
-      path: "/proxy",
-      icon: Globe2,
-      title: "Hermes UI",
-      desc: "同源代理的上游工作区。",
-      meta: "proxy"
     }
   ];
 
@@ -216,29 +208,6 @@ function HomePage({ onNavigate }) {
             );
           })}
         </div>
-      </div>
-    </section>
-  );
-}
-
-function ProxyPage() {
-  const [frameKey, setFrameKey] = useState(0);
-
-  return (
-    <section className="page-section">
-      <div className="page-toolbar">
-        <button className="secondary-button" onClick={() => setFrameKey((value) => value + 1)}>
-          <RefreshCw size={17} />
-          刷新
-        </button>
-      </div>
-      <div className="proxy-frame-shell">
-        <iframe
-          key={frameKey}
-          className="proxy-frame"
-          src="/api/proxy/site/"
-          title="Hermes UI"
-        />
       </div>
     </section>
   );
@@ -3292,7 +3261,6 @@ function AppShell({ onLogout }) {
       { path: "/self-dev", label: "自开发", icon: Code2 },
       { path: "/channels", label: "渠道", icon: MessageSquare },
       { path: "/terminal", label: "终端", icon: TerminalSquare },
-      { path: "/proxy", label: "Hermes UI", icon: Globe2 },
       { path: "/portfolio", label: "资产组合", icon: TrendingUp },
       { path: "/system", label: "系统", icon: Settings }
     ],
@@ -3333,9 +3301,6 @@ function AppShell({ onLogout }) {
   }
 
   function renderPage() {
-    if (path === "/proxy") {
-      return <ProxyPage />;
-    }
     if (path === "/agents") {
       return <AgentPage onUnauthorized={unauthorized} />;
     }

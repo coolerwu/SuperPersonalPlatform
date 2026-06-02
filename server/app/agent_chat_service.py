@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol, TypedDict
+from typing import Any, Awaitable, Callable
 
 import yaml
 
@@ -11,7 +11,18 @@ from server.domain.agents import (
     ModelDefinition,
     ToolAccessDefinition,
 )
-from server.app.agent_skill_service import AgentSkillService, AgentSkillToolbox
+from server.domain.harness import (
+    Agent,
+    AgentChatCheckpoint,
+    AgentChatUnavailableError,
+    ChatOptions,
+    ChatImage,
+    PromptSkillContext,
+    ReactSkillContext,
+    SkillContext,
+    run_agent,
+)
+from server.app.agent_skill_service import AgentSkillService
 from server.app.agent_tool_service import (
     AgentToolRegistry,
     AgentToolRuntime,
@@ -19,95 +30,6 @@ from server.app.agent_tool_service import (
 )
 from server.app.portfolio_service import PortfolioService
 from server.infrastructure.config import load_settings, parse_settings
-
-
-class AgentChatUnavailableError(Exception):
-    pass
-
-
-class AgentToolCallingUnsupportedError(AgentChatUnavailableError):
-    pass
-
-
-@dataclass(frozen=True)
-class ChatImage:
-    mime_type: str
-    data: str
-
-
-@dataclass(frozen=True)
-class AgentToolCall:
-    id: str
-    name: str
-    args: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class AgentToolResult:
-    tool_call_id: str
-    content: str
-
-
-@dataclass(frozen=True)
-class AgentToolReasoningResult:
-    content: str
-    tool_calls: tuple[AgentToolCall, ...]
-    messages: tuple[Any, ...]
-
-
-@dataclass(frozen=True)
-class AgentChatCheckpoint:
-    stage: str
-    title: str
-    detail: str = ""
-
-
-class AgentChatModelGateway(Protocol):
-    async def complete(
-        self,
-        model: ModelDefinition,
-        system_prompt: str,
-        user_message: str,
-        images: tuple[ChatImage, ...] = (),
-    ) -> str:
-        pass
-
-    async def complete_with_tools(
-        self,
-        model: ModelDefinition,
-        system_prompt: str,
-        user_message: str,
-        tool_names: tuple[str, ...],
-        skill_tools: AgentSkillToolbox,
-        images: tuple[ChatImage, ...] = (),
-        max_iterations: int = 60,
-    ) -> str:
-        pass
-
-    async def reason_with_tools(
-        self,
-        model: ModelDefinition,
-        system_prompt: str,
-        user_message: str,
-        tool_names: tuple[str, ...],
-        messages: tuple[Any, ...],
-        images: tuple[ChatImage, ...] = (),
-    ) -> AgentToolReasoningResult:
-        pass
-
-    def append_tool_results(
-        self,
-        messages: tuple[Any, ...],
-        tool_results: tuple[AgentToolResult, ...],
-    ) -> tuple[Any, ...]:
-        pass
-
-    async def force_tool_final(
-        self,
-        model: ModelDefinition,
-        messages: tuple[Any, ...],
-    ) -> str:
-        pass
 
 
 @dataclass(frozen=True)
@@ -173,20 +95,6 @@ class AgentConfigSnapshot:
     agents: tuple[EditableAgent, ...]
 
 
-class AgentGraphState(TypedDict):
-    system_prompt: str
-    user_message: str
-    images: tuple[ChatImage, ...]
-    model: ModelDefinition
-    tool_names: tuple[str, ...]
-    max_iterations: int
-    tool_messages: tuple[Any, ...]
-    pending_tool_calls: tuple[AgentToolCall, ...]
-    tool_iterations: int
-    assistant_message: str
-
-
-
 # ── Built-in agents ───────────────────────────────────────────────────
 
 BUILTIN_AGENTS: tuple[dict[str, Any], ...] = (
@@ -215,11 +123,11 @@ class AgentChatService:
     def __init__(
         self,
         config_path: str | Path,
-        model_gateway: AgentChatModelGateway,
+        llm_client: Any,
         tool_registry: AgentToolRegistry | None = None,
     ) -> None:
         self._config_path = Path(config_path)
-        self._model_gateway = model_gateway
+        self._llm_client = llm_client
         self._skill_service = AgentSkillService(self._config_path.parent)
         self._tool_registry = tool_registry or DEFAULT_AGENT_TOOL_REGISTRY
 
@@ -428,48 +336,66 @@ class AgentChatService:
         images: tuple[ChatImage, ...] = (),
         on_checkpoint: Callable[[AgentChatCheckpoint], Awaitable[None]] | None = None,
     ) -> str:
+        agent_id = agent_id.strip()
+        if not agent_id:
+            raise AgentConfigError("agent_id is required")
         platform = self._load_platform()
-        if not platform.agents:
-            raise AgentChatUnavailableError("未配置 Agent")
-        if not platform.models:
-            raise AgentChatUnavailableError("未配置模型")
-        if not content.strip() and not images:
-            raise AgentConfigError("消息内容不能为空")
-
-        agent = platform.get_agent(agent_id or platform.default_agent_id)
-        if not agent.model_id:
-            raise AgentChatUnavailableError("Agent 未配置模型")
-        model = platform.get_model(agent.model_id)
-        if not self._has_usable_api_key(model):
-            raise AgentChatUnavailableError("模型 API Key 不可用")
-        if images and not model.supports_images:
-            raise AgentChatUnavailableError("当前模型不支持图片输入")
+        agent = platform.get_agent(agent_id)
         tool_names = self._tool_registry.resolve_tools(
             platform.tools,
             agent,
             platform.common_skill_tools,
         )
-        tool_runtime: AgentToolRuntime | None = None
-        portfolio_tool_names = {
-            "list_portfolio_holdings",
-            "add_portfolio_holding",
-            "update_portfolio_holding",
-            "delete_portfolio_holding",
-        }
-        if any(name in portfolio_tool_names for name in tool_names):
-            portfolio_svc = PortfolioService(self._config_path.parent)
-            tool_runtime = AgentToolRuntime(
-                skill_tools=self._skill_service.toolbox(agent),
-                portfolio_service=portfolio_svc,
+        skill_context: SkillContext
+        if tool_names:
+            skill_context = ReactSkillContext(
+                content=content.strip(),
+                images=images,
+                tool_names=tool_names,
+                tool_registry=self._tool_registry,
+                tool_runtime=self._tool_runtime(agent, tool_names),
             )
-        return await self._run_graph(
-            agent,
-            model,
-            tool_names,
-            content.strip(),
-            images,
-            on_checkpoint,
-            tool_runtime,
+        else:
+            skill_context = PromptSkillContext(content=content.strip(), images=images)
+        return await self.run_agent(
+            agent_id,
+            skill_context,
+            ChatOptions(on_checkpoint=on_checkpoint),
+        )
+
+    async def run_agent(
+        self,
+        agent_id: str,
+        skill_context: SkillContext,
+        options: ChatOptions | None = None,
+    ) -> str:
+        agent_id = agent_id.strip()
+        if not agent_id:
+            raise AgentConfigError("agent_id is required")
+        platform = self._load_platform()
+        if not platform.agents:
+            raise AgentChatUnavailableError("未配置 Agent")
+        if not platform.models:
+            raise AgentChatUnavailableError("未配置模型")
+        if not skill_context.content.strip() and not skill_context.images:
+            raise AgentConfigError("消息内容不能为空")
+
+        agent = platform.get_agent(agent_id)
+        if not agent.model_id:
+            raise AgentChatUnavailableError("Agent 未配置模型")
+        model = platform.get_model(agent.model_id)
+        if not self._has_usable_api_key(model):
+            raise AgentChatUnavailableError("模型 API Key 不可用")
+        if skill_context.images and not model.supports_images:
+            raise AgentChatUnavailableError("当前模型不支持图片输入")
+        return await run_agent(
+            Agent(
+                definition=agent,
+                model=model,
+                llm_client=self._llm_client,
+            ),
+            skill_context=skill_context,
+            options=options,
         )
 
     async def run_with_tool_runtime(
@@ -479,30 +405,43 @@ class AgentChatService:
         tool_runtime: AgentToolRuntime,
         on_checkpoint: Callable[[AgentChatCheckpoint], Awaitable[None]] | None = None,
     ) -> str:
+        agent_id = agent_id.strip()
+        if not agent_id:
+            raise AgentConfigError("agent_id is required")
         platform = self._load_platform()
-        if not platform.agents:
-            raise AgentChatUnavailableError("未配置 Agent")
-        if not platform.models:
-            raise AgentChatUnavailableError("未配置模型")
-        agent = platform.get_agent(agent_id or platform.default_agent_id)
-        if not agent.model_id:
-            raise AgentChatUnavailableError("Agent 未配置模型")
-        model = platform.get_model(agent.model_id)
-        if not self._has_usable_api_key(model):
-            raise AgentChatUnavailableError("模型 API Key 不可用")
-        return await self._run_graph(
-            agent,
-            model,
-            self._tool_registry.resolve_tools(
-                platform.tools,
-                agent,
-                platform.common_skill_tools,
+        agent = platform.get_agent(agent_id)
+        return await self.run_agent(
+            agent_id,
+            ReactSkillContext(
+                content=content.strip(),
+                tool_names=self._tool_registry.resolve_tools(
+                    platform.tools,
+                    agent,
+                    platform.common_skill_tools,
+                ),
+                tool_registry=self._tool_registry,
+                tool_runtime=tool_runtime,
             ),
-            content.strip(),
-            (),
-            on_checkpoint,
-            tool_runtime,
+            ChatOptions(on_checkpoint=on_checkpoint),
         )
+
+    def _tool_runtime(
+        self,
+        agent: AgentDefinition,
+        tool_names: tuple[str, ...],
+    ) -> AgentToolRuntime:
+        portfolio_tool_names = {
+            "list_portfolio_holdings",
+            "add_portfolio_holding",
+            "update_portfolio_holding",
+            "delete_portfolio_holding",
+        }
+        if any(name in portfolio_tool_names for name in tool_names):
+            return AgentToolRuntime(
+                skill_tools=self._skill_service.toolbox(agent),
+                portfolio_service=PortfolioService(self._config_path.parent),
+            )
+        return AgentToolRuntime(skill_tools=self._skill_service.toolbox(agent))
 
     def _load_platform(self) -> AgentPlatformDefinition:
         platform = load_settings(self._config_path).agent_platform
@@ -625,161 +564,3 @@ class AgentChatService:
             "allow": [str(tool).strip() for tool in allow if str(tool).strip()],
             "deny": [str(tool).strip() for tool in deny if str(tool).strip()],
         }
-
-    async def _run_graph(
-        self,
-        agent: AgentDefinition,
-        model: ModelDefinition,
-        tool_names: tuple[str, ...],
-        content: str,
-        images: tuple[ChatImage, ...],
-        on_checkpoint: Callable[[AgentChatCheckpoint], Awaitable[None]] | None = None,
-        tool_runtime: AgentToolRuntime | None = None,
-    ) -> str:
-        async def emit(stage: str, title: str, detail: str = "") -> None:
-            if on_checkpoint is not None:
-                await on_checkpoint(AgentChatCheckpoint(stage=stage, title=title, detail=detail))
-
-        async def reason(state: AgentGraphState) -> dict[str, object]:
-            await emit("reason", "推理下一步", f"第 {state['tool_iterations'] + 1} 轮")
-            if state["tool_names"]:
-                system_prompt = (
-                    f"{state['system_prompt']}\n\n"
-                    "你可以在需要时调用平台暴露的 typed tools。Skills 是操作规程，"
-                    "tools 才是真正可调用能力；不要假装读取不存在或未绑定的 skill，"
-                    "也不要假装执行未暴露的 tool。"
-                )
-                result = await self._model_gateway.reason_with_tools(
-                    state["model"],
-                    system_prompt,
-                    state["user_message"],
-                    state["tool_names"],
-                    state["tool_messages"],
-                    state["images"],
-                )
-                if result.tool_calls:
-                    await emit(
-                        "reason",
-                        "模型请求工具",
-                        ", ".join(tool_call.name for tool_call in result.tool_calls),
-                    )
-                else:
-                    await emit("answer", "最终回复已生成")
-                return {
-                    "assistant_message": result.content if not result.tool_calls else "",
-                    "pending_tool_calls": result.tool_calls,
-                    "tool_messages": result.messages,
-                }
-            await emit("answer", "生成最终回复")
-            message = await self._model_gateway.complete(
-                state["model"],
-                state["system_prompt"],
-                state["user_message"],
-                state["images"],
-            )
-            await emit("answer", "最终回复已生成")
-            return {"assistant_message": message, "pending_tool_calls": ()}
-
-        async def act(state: AgentGraphState) -> dict[str, object]:
-            runtime = tool_runtime or AgentToolRuntime(skill_tools=self._skill_service.toolbox(agent))
-            tool_results: list[AgentToolResult] = []
-            for tool_call in state["pending_tool_calls"]:
-                await emit("act", f"执行工具 {tool_call.name}", self._tool_checkpoint_detail(tool_call))
-                content = await self._tool_registry.dispatch(
-                    tool_call.name,
-                    tool_call.args,
-                    runtime,
-                )
-                await emit("act", f"工具完成 {tool_call.name}")
-                tool_results.append(
-                    AgentToolResult(tool_call_id=tool_call.id, content=content)
-                )
-            return {
-                "tool_messages": self._model_gateway.append_tool_results(
-                    state["tool_messages"],
-                    tuple(tool_results),
-                ),
-                "pending_tool_calls": (),
-                "tool_iterations": state["tool_iterations"] + 1,
-            }
-
-        async def check(state: AgentGraphState) -> dict[str, object]:
-            return {}
-
-        async def finalize(state: AgentGraphState) -> dict[str, str]:
-            if state["assistant_message"]:
-                return {}
-            await emit("answer", f"达到 {state['max_iterations']} 轮上限，生成最终回复")
-            return {
-                "assistant_message": await self._model_gateway.force_tool_final(
-                    state["model"],
-                    state["tool_messages"],
-                )
-            }
-
-        def route_after_reason(state: AgentGraphState) -> str:
-            if state["pending_tool_calls"]:
-                return "act"
-            return "check"
-
-        def route_after_check(state: AgentGraphState) -> str:
-            if not state["assistant_message"] and state["tool_iterations"] < state["max_iterations"]:
-                return "reason"
-            return "finalize"
-
-        initial_state: AgentGraphState = {
-            "system_prompt": agent.system_prompt,
-            "user_message": content,
-            "images": images,
-            "model": model,
-            "tool_names": tool_names,
-            "max_iterations": 60,
-            "tool_messages": (),
-            "pending_tool_calls": (),
-            "tool_iterations": 0,
-            "assistant_message": "",
-        }
-
-        try:
-            from langgraph.graph import END, START, StateGraph
-        except ImportError:
-            state: AgentGraphState = initial_state
-            while True:
-                reason_result = await reason(state)
-                state = {**state, **reason_result}
-                if state["pending_tool_calls"]:
-                    act_result = await act(state)
-                    state = {**state, **act_result}
-                check_result = await check(state)
-                state = {**state, **check_result}
-                if route_after_check(state) == "finalize":
-                    final_result = await finalize(state)
-                    state = {**state, **final_result}
-                    return str(state.get("assistant_message") or "")
-
-        graph = StateGraph(AgentGraphState)
-        graph.add_node("reason", reason)
-        graph.add_node("act", act)
-        graph.add_node("check", check)
-        graph.add_node("finalize", finalize)
-        graph.add_edge(START, "reason")
-        graph.add_conditional_edges(
-            "reason",
-            route_after_reason,
-            {"act": "act", "check": "check"},
-        )
-        graph.add_edge("act", "check")
-        graph.add_conditional_edges(
-            "check",
-            route_after_check,
-            {"reason": "reason", "finalize": "finalize"},
-        )
-        graph.add_edge("finalize", END)
-        app = graph.compile()
-        result = await app.ainvoke(initial_state)
-        return str(result.get("assistant_message") or "")
-
-    def _tool_checkpoint_detail(self, tool_call: AgentToolCall) -> str:
-        if tool_call.name == "read_skill":
-            return str(tool_call.args.get("id") or "")
-        return ""

@@ -9,19 +9,26 @@ from server.adapter.agent_routes import create_agent_router
 from server.adapter.auth_routes import create_auth_router
 from server.adapter.dependencies import AppContainer
 from server.app.agent_chat_service import (
-    AgentToolCall,
-    AgentToolCallingUnsupportedError,
-    AgentToolReasoningResult,
-    AgentToolResult,
     AgentChatService,
-    ChatImage,
 )
 from server.app.agent_skill_service import AgentSkillService
 from server.app.agent_tool_service import AgentToolRegistry, AgentToolRuntime
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
-from server.domain.agents import ModelDefinition
+from server.domain.agents import AgentConfigError, ModelDefinition
 from server.domain.auth import AuthToken
+from server.domain.harness import (
+    Agent,
+    AgentToolCall,
+    AgentToolCallingUnsupportedError,
+    AgentToolReasoningResult,
+    AgentToolResult,
+    ChatOptions,
+    ChatImage,
+    PromptSkillContext,
+    ReactSkillContext,
+    run_agent,
+)
 from server.infrastructure.config import load_settings, parse_settings
 from server.infrastructure.session import SessionCodec
 
@@ -347,7 +354,7 @@ def test_agent_chat_websocket_uses_agent_bound_model_without_model_id(tmp_path) 
         assert websocket.receive_json() == {"type": "status", "status": "running"}
         checkpoint = websocket.receive_json()
         assert checkpoint["type"] == "checkpoint"
-        assert checkpoint["stage"] == "reason"
+        assert checkpoint["stage"] == "answer"
         assert receive_until(websocket, "assistant_message") == {
             "type": "assistant_message",
             "content": "fast-chat: You are / 你好 / images=0",
@@ -403,6 +410,14 @@ def test_agent_chat_websocket_rejects_images_for_text_model(tmp_path) -> None:
         }
 
 
+def test_agent_chat_requires_agent_id(tmp_path) -> None:
+    write_config(tmp_path)
+    service = AgentChatService(tmp_path / "config.yaml", FakeModelGateway())
+
+    with pytest.raises(AgentConfigError, match="agent_id is required"):
+        asyncio.run(service.run_agent("", PromptSkillContext(content="你好")))
+
+
 def test_agent_chat_falls_back_to_sequential_goal_confirmation_without_langgraph(
     tmp_path,
     monkeypatch,
@@ -421,13 +436,20 @@ def test_agent_chat_falls_back_to_sequential_goal_confirmation_without_langgraph
 
     monkeypatch.setattr("builtins.__import__", fake_import)
 
+    agent = platform.get_agent("assistant")
     result = asyncio.run(
-        service._run_graph(
-            platform.get_agent("assistant"),
-            platform.get_model("fast"),
-            (),
-            "整理今天任务",
-            (),
+        run_agent(
+            Agent(
+                definition=agent,
+                model=platform.get_model("fast"),
+                llm_client=gateway,
+            ),
+            skill_context=ReactSkillContext(
+                content="整理今天任务",
+                tool_registry=service._tool_registry,
+                tool_runtime=AgentToolRuntime(skill_tools=AgentSkillService(tmp_path).toolbox(agent)),
+            ),
+            options=ChatOptions(),
         )
     )
 

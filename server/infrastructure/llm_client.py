@@ -1,7 +1,6 @@
 from typing import Any
 
-from server.app.agent_chat_service import (
-    AgentChatModelGateway,
+from server.domain.harness import (
     AgentToolCall,
     AgentToolCallingUnsupportedError,
     AgentToolReasoningResult,
@@ -9,11 +8,10 @@ from server.app.agent_chat_service import (
     ChatImage,
 )
 from server.app.agent_tool_service import DEFAULT_AGENT_TOOL_REGISTRY
-from server.app.agent_skill_service import AgentSkillToolbox
 from server.domain.agents import ModelDefinition
 
 
-class LangChainOpenAICompatibleAdapter(AgentChatModelGateway):
+class LLMClient:
     async def complete(
         self,
         model: ModelDefinition,
@@ -36,7 +34,7 @@ class LangChainOpenAICompatibleAdapter(AgentChatModelGateway):
         system_prompt: str,
         user_message: str,
         tool_names: tuple[str, ...],
-        skill_tools: AgentSkillToolbox,
+        skill_tools: Any,
         images: tuple[ChatImage, ...] = (),
         max_iterations: int = 60,
     ) -> str:
@@ -205,7 +203,7 @@ class LangChainOpenAICompatibleAdapter(AgentChatModelGateway):
             args=args,
         )
 
-    async def _run_tool(self, skill_tools: AgentSkillToolbox, tool_call: AgentToolCall) -> str:
+    async def _run_tool(self, skill_tools: Any, tool_call: AgentToolCall) -> str:
         name = tool_call.name
         args = tool_call.args
         if name == "list_skill":
