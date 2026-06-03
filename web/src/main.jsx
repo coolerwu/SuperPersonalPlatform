@@ -49,6 +49,23 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
+const AGENT_TOOL_OPTIONS = [
+  { id: "list_skill", label: "列出 Skill", group: "Skills" },
+  { id: "read_skill", label: "读取 Skill", group: "Skills" },
+  { id: "repo_search", label: "仓库搜索", group: "自开发" },
+  { id: "repo_read_file", label: "读取文件", group: "自开发" },
+  { id: "repo_write_file", label: "写入文件", group: "自开发" },
+  { id: "repo_run_command", label: "运行命令", group: "自开发" },
+  { id: "repo_status", label: "Git 状态", group: "自开发" },
+  { id: "repo_diff", label: "Git Diff", group: "自开发" },
+  { id: "repo_commit", label: "Git 提交", group: "自开发" },
+  { id: "repo_push", label: "Git 推送", group: "自开发" },
+  { id: "list_portfolio_holdings", label: "查看持仓", group: "资产组合" },
+  { id: "add_portfolio_holding", label: "添加持仓", group: "资产组合" },
+  { id: "update_portfolio_holding", label: "修改持仓", group: "资产组合" },
+  { id: "delete_portfolio_holding", label: "删除持仓", group: "资产组合" }
+];
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: "include",
@@ -268,8 +285,8 @@ function MarkdownMessage({ content }) {
   );
 }
 
-function AgentPage({ onUnauthorized }) {
-  const [activeTab, setActiveTab] = useState("chat");
+function AgentPage({ onUnauthorized, initialTab = "chat" }) {
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [options, setOptions] = useState(null);
   const [config, setConfig] = useState(null);
   const [agentId, setAgentId] = useState("");
@@ -288,6 +305,7 @@ function AgentPage({ onUnauthorized }) {
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
+  const [expandedModelIndex, setExpandedModelIndex] = useState(null);
   const socketRef = useRef(null);
   const messageListRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -555,6 +573,10 @@ function AgentPage({ onUnauthorized }) {
   }, []);
 
   useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
     if (messageListRef.current) {
       messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
     }
@@ -572,6 +594,7 @@ function AgentPage({ onUnauthorized }) {
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const connectionLabel = status === "running" ? "生成中" : status === "connected" ? "已连接" : "未连接";
   const modelCapabilityLabel = selectedAgent?.model?.supports_images ? "文本 + 图片" : "文本";
+  const providerLabel = (provider) => provider === "anthropic" ? "Anthropic" : "OpenAI 兼容";
 
   async function addFiles(fileList) {
     const imageFiles = Array.from(fileList || []).filter((file) =>
@@ -637,6 +660,33 @@ function AgentPage({ onUnauthorized }) {
     updateAgent(index, "skill_ids", value.split(/\s+/).map((item) => item.trim()).filter(Boolean));
   }
 
+  function toggleAgentTool(index, toolId) {
+    setConfig((current) => ({
+      ...current,
+      agents: current.agents.map((agent, agentIndex) => {
+        if (agentIndex !== index) {
+          return agent;
+        }
+        const tools = agent.tools || { profile: config?.tools?.profile || "default", allow: [], deny: [] };
+        const allow = new Set(tools.allow || []);
+        if (allow.has(toolId)) {
+          allow.delete(toolId);
+        } else {
+          allow.add(toolId);
+        }
+        const deny = (tools.deny || []).filter((item) => item !== toolId);
+        return {
+          ...agent,
+          tools: {
+            ...tools,
+            allow: Array.from(allow),
+            deny
+          }
+        };
+      })
+    }));
+  }
+
   function addAgent() {
     const id = `agent-${(config?.agents?.length || 0) + 1}`;
     setConfig((current) => ({
@@ -655,7 +705,41 @@ function AgentPage({ onUnauthorized }) {
     }));
   }
 
-  async function saveAgentConfig() {
+  function updateModel(index, field, value) {
+    setConfig((current) => ({
+      ...current,
+      models: current.models.map((model, modelIndex) =>
+        modelIndex === index ? { ...model, [field]: value } : model
+      )
+    }));
+  }
+
+  function addModel() {
+    const id = `model-${(config?.models?.length || 0) + 1}`;
+    const nextIndex = config?.models?.length || 0;
+    setConfig((current) => ({
+      ...current,
+      default_model_id: current.default_model_id || id,
+      models: [
+        ...current.models,
+        {
+          id,
+          name: "新模型",
+          provider: "openai_compatible",
+          base_url: "https://api.openai.com/v1",
+          model: "",
+          api_key: "",
+          temperature: 0.7,
+          supports_images: false,
+          has_api_key: false,
+          api_key_mask: ""
+        }
+      ]
+    }));
+    setExpandedModelIndex(nextIndex);
+  }
+
+  async function saveAgentConfig(successMessage = "Agent 管理配置已保存") {
     setConfigSaving(true);
     setConfigError("");
     setConfigStatus("");
@@ -687,7 +771,7 @@ function AgentPage({ onUnauthorized }) {
           }))
         })
       });
-      setConfigStatus("Agent 管理配置已保存");
+      setConfigStatus(successMessage);
       await loadAgentConfig();
       await loadOptions();
     } catch (err) {
@@ -699,7 +783,7 @@ function AgentPage({ onUnauthorized }) {
   }
 
   return (
-    <section className={`page-section agent-section${activeTab === "agents" ? " agent-section-config" : ""}`}>
+    <section className={`page-section agent-section${activeTab === "agents" || activeTab === "models" ? " agent-section-config" : ""}`}>
       <div className="tab-bar" role="tablist" aria-label="Agent">
         <button className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>
           <Bot size={16} />
@@ -708,6 +792,10 @@ function AgentPage({ onUnauthorized }) {
         <button className={activeTab === "agents" ? "active" : ""} onClick={() => setActiveTab("agents")}>
           <List size={16} />
           Agent 管理
+        </button>
+        <button className={activeTab === "models" ? "active" : ""} onClick={() => setActiveTab("models")}>
+          <Cpu size={16} />
+          模型配置
         </button>
       </div>
       {activeTab === "chat" ? (
@@ -828,7 +916,7 @@ function AgentPage({ onUnauthorized }) {
             <div className="agent-message-list" ref={messageListRef}>
               {loading ? <div className="empty-state">正在加载 Agent 配置</div> : null}
               {!loading && error && !options ? <div className="error-state">{error}</div> : null}
-              {!loading && !options?.agents?.length ? <div className="empty-state">请先在配置页添加 Agent</div> : null}
+              {!loading && !options?.agents?.length ? <div className="empty-state">请先在 Agent 管理中添加 Agent</div> : null}
               {!loading && selectedAgent && !selectedAgent.model ? <div className="empty-state">Agent 未配置模型</div> : null}
               {!loading && selectedAgent?.model && !selectedAgent.model.has_api_key ? (
                 <div className="empty-state">模型 API Key 不可用</div>
@@ -1061,15 +1149,39 @@ function AgentPage({ onUnauthorized }) {
                                       <select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(e) => updateAgentTools(index, "profile", e.target.value)}>
                                         <option value="default">default</option>
                                         <option value="self-dev">self-dev</option>
+                                        <option value="portfolio">portfolio</option>
                                       </select>
                                     </label>
+                                    <div className="agent-tool-picker">
+                                      <div className="agent-tool-picker-heading">
+                                        <span>额外启用工具</span>
+                                        <small>{(agent.tools?.allow || []).length} 个已选</small>
+                                      </div>
+                                      <div className="agent-tool-grid">
+                                        {AGENT_TOOL_OPTIONS.map((tool) => {
+                                          const selected = (agent.tools?.allow || []).includes(tool.id);
+                                          return (
+                                            <label key={tool.id} className={`agent-tool-option${selected ? " selected" : ""}`}>
+                                              <input
+                                                type="checkbox"
+                                                checked={selected}
+                                                onChange={() => toggleAgentTool(index, tool.id)}
+                                              />
+                                              <span className="agent-tool-check" aria-hidden="true">
+                                                {selected ? <Check size={12} /> : null}
+                                              </span>
+                                              <span className="agent-tool-copy">
+                                                <strong>{tool.label}</strong>
+                                                <small>{tool.group}</small>
+                                              </span>
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
                                     <label className="large">
-                                      <span>允许工具</span>
-                                      <textarea value={(agent.tools?.allow || []).join("\n")} onChange={(e) => updateAgentTools(index, "allow", e.target.value)} />
-                                    </label>
-                                    <label className="large">
-                                      <span>禁用工具</span>
-                                      <textarea value={(agent.tools?.deny || []).join("\n")} onChange={(e) => updateAgentTools(index, "deny", e.target.value)} />
+                                      <span>禁用工具 ID（高级）</span>
+                                      <textarea placeholder="每行一个工具 id，会覆盖模板和勾选项" value={(agent.tools?.deny || []).join("\n")} onChange={(e) => updateAgentTools(index, "deny", e.target.value)} />
                                     </label>
                                   </div>
                                 </>
@@ -1090,220 +1202,107 @@ function AgentPage({ onUnauthorized }) {
           )}
         </div>
       ) : null}
-    </section>
-  );
-}
-
-function ModelsPage({ onUnauthorized }) {
-  const [config, setConfig] = useState(null);
-  const [configLoading, setConfigLoading] = useState(false);
-  const [configSaving, setConfigSaving] = useState(false);
-  const [configError, setConfigError] = useState("");
-  const [configStatus, setConfigStatus] = useState("");
-  const composingRef = useRef(false);
-
-  function handleApiError(err) {
-    if (err.status === 401 || err.message === "Authentication required") {
-      onUnauthorized();
-      return true;
-    }
-    setConfigError(err.message);
-    return false;
-  }
-
-  async function loadModelConfig() {
-    setConfigLoading(true);
-    setConfigError("");
-    setConfigStatus("");
-    try {
-      const data = await api("/api/agents/config");
-      setConfig(data);
-    } catch (err) {
-      handleApiError(err);
-      setConfigError(err.message);
-    } finally {
-      setConfigLoading(false);
-    }
-  }
-
-  async function saveModelConfig() {
-    setConfigSaving(true);
-    setConfigError("");
-    setConfigStatus("");
-    try {
-      await api("/api/agents/config", {
-        method: "PUT",
-        body: JSON.stringify({
-          default_model_id: config.default_model_id || config.models?.[0]?.id || "",
-          default_agent_id: config.default_agent_id || config.agents?.[0]?.id || "",
-          common_skill_tools: config.common_skill_tools || [],
-          tools: config.tools || { profile: "default", allow: [], deny: [] },
-          models: config.models.map((model) => ({
-            id: model.id,
-            name: model.name,
-            provider: model.provider || "openai_compatible",
-            base_url: model.base_url,
-            model: model.model,
-            api_key: model.api_key || "",
-            temperature: model.temperature === "" ? null : Number(model.temperature),
-            supports_images: Boolean(model.supports_images)
-          })),
-          agents: config.agents.map((agent) => ({
-            id: agent.id,
-            name: agent.name,
-            model_id: agent.model_id,
-            system_prompt: agent.system_prompt,
-            skill_ids: agent.skill_ids || [],
-            tools: agent.tools || null
-          }))
-        })
-      });
-      setConfigStatus("模型配置已保存");
-      await loadModelConfig();
-    } catch (err) {
-      handleApiError(err);
-      setConfigError(err.message);
-    } finally {
-      setConfigSaving(false);
-    }
-  }
-
-  function updateModel(index, field, value) {
-    setConfig((current) => ({
-      ...current,
-      models: current.models.map((model, modelIndex) =>
-        modelIndex === index ? { ...model, [field]: value } : model
-      )
-    }));
-  }
-
-  function updatePlatformTools(field, value) {
-    setConfig((current) => ({
-      ...current,
-      tools: {
-        ...(current.tools || { profile: "default", allow: [], deny: [] }),
-        [field]: field === "profile" ? value : value.split(/\s+/).map((item) => item.trim()).filter(Boolean)
-      }
-    }));
-  }
-
-  function addModel() {
-    const id = `model-${(config?.models?.length || 0) + 1}`;
-    setConfig((current) => ({
-      ...current,
-      default_model_id: current.default_model_id || id,
-      models: [
-        ...current.models,
-        {
-          id,
-          name: "新模型",
-          provider: "openai_compatible",
-          base_url: "https://api.openai.com/v1",
-          model: "",
-          api_key: "",
-          temperature: 0.7,
-          supports_images: false,
-          has_api_key: false,
-          api_key_mask: ""
-        }
-      ]
-    }));
-  }
-
-  useEffect(() => {
-    loadModelConfig();
-  }, []);
-
-  return (
-    <section className="page-section">
-      <div className="agent-config-heading">
-        <div>
-          <span>模型配置</span>
-          <p>{config?.path || "正在读取 config.yaml"}</p>
-        </div>
-        <div className="config-actions">
-          <button className="secondary-button" onClick={loadModelConfig} disabled={configLoading}>
-            <RefreshCw size={17} />
-            重新读取
-          </button>
-          <button className="secondary-button primary-action" onClick={saveModelConfig} disabled={!config || configSaving}>
-            <Save size={17} />
-            {configSaving ? "保存中" : "保存到 workspace"}
-          </button>
-        </div>
-      </div>
-      {configError ? <div className="form-error">{configError}</div> : null}
-      {configStatus ? <div className="status-message">{configStatus}</div> : null}
-      {config ? (
-        <div className="agent-config-workspace">
-          <aside className="agent-config-rail">
-            <div className="agent-config-rail-card">
-              <span>默认模型</span>
-              <strong>{config.models.find((model) => model.id === config.default_model_id)?.name || config.default_model_id || "未设置"}</strong>
+      {activeTab === "models" ? (
+        <div className="agent-config-panel">
+          <div className="agent-config-toolbar">
+            <div className="agent-config-meta">
+              <span>模型配置</span>
+              <small>{config?.path || "正在读取 config.yaml"}</small>
             </div>
-            <div className="agent-config-rail-card compact">
-              <small>{config.models.length} 个模型</small>
-              <small>{config.agents.length} 个 Agent</small>
-              <small>Tools: {config.tools?.profile || "default"}</small>
+            <div className="config-actions">
+              <button className="secondary-button small" onClick={loadAgentConfig} disabled={configLoading}>
+                <RefreshCw size={15} />
+                重新读取
+              </button>
+              <button className="secondary-button primary-action small" onClick={() => saveAgentConfig("模型配置已保存")} disabled={!config || configSaving}>
+                <Save size={15} />
+                {configSaving ? "保存中" : "保存"}
+              </button>
             </div>
-          </aside>
-          <div className="agent-config-content">
-            <section className="agent-config-section">
-              <div className="agent-config-section-heading">
-                <div>
-                  <h3>工具权限</h3>
-                  <p>控制平台级工具集合，Agent 可在自己的配置中覆盖。</p>
-                </div>
-              </div>
-              <article className="agent-config-card">
-                <div className="agent-config-grid">
-                  <label>工具模板<select value={config.tools?.profile || "default"} onChange={(event) => updatePlatformTools("profile", event.target.value)}><option value="default">default</option><option value="self-dev">self-dev</option></select></label>
-                  <label className="agent-prompt-label">允许工具<textarea placeholder="每行一个工具 id" value={(config.tools?.allow || []).join("\n")} onChange={(event) => updatePlatformTools("allow", event.target.value)} /></label>
-                  <label className="agent-prompt-label">禁用工具<textarea placeholder="每行一个工具 id，优先级高于允许列表" value={(config.tools?.deny || []).join("\n")} onChange={(event) => updatePlatformTools("deny", event.target.value)} /></label>
-                </div>
-              </article>
-            </section>
-            <section className="agent-config-section">
-              <div className="agent-config-section-heading">
-                <div>
-                  <h3>模型</h3>
-                  <p>配置模型接口，API Key 留空会保留原值。</p>
-                </div>
-                <button className="secondary-button" onClick={addModel}>
-                  <Plus size={17} />
-                  添加模型
-                </button>
-              </div>
-              <div className="agent-config-list">
-                {config.models.map((model, index) => (
-                  <article className="agent-config-card" key={`${model.id}-${index}`}>
-                    <div className="agent-config-card-title">
-                      <strong>{model.name || model.id || "未命名模型"}</strong>
-                      {config.default_model_id === model.id ? <span>默认</span> : null}
-                    </div>
-                    <div className="agent-config-grid">
-                      <label>提供商<select value={model.provider || "openai_compatible"} onChange={(event) => updateModel(index, "provider", event.target.value)}><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic">Anthropic (Claude)</option></select></label>
-                      <label>ID<input value={model.id} onChange={(event) => { if (!composingRef.current) updateModel(index, "id", event.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(event) => { composingRef.current = false; updateModel(index, "id", event.target.value); }} /></label>
-                      <label>显示名<input value={model.name} onChange={(event) => { if (!composingRef.current) updateModel(index, "name", event.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(event) => { composingRef.current = false; updateModel(index, "name", event.target.value); }} /></label>
-                      <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} placeholder={(model.provider || "openai_compatible") === "anthropic" ? "可选" : ""} /></label>
-                      <label>模型名<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
-                      <label>API Key<input type="password" placeholder={model.api_key_mask || "留空保留旧 key"} value={model.api_key || ""} onChange={(event) => updateModel(index, "api_key", event.target.value)} /></label>
-                      <label>Temperature<input type="number" step="0.1" value={model.temperature ?? ""} onChange={(event) => updateModel(index, "temperature", event.target.value)} /></label>
-                    </div>
-                    <div className="agent-config-card-actions">
-                      <label className="agent-checkbox"><input type="checkbox" checked={Boolean(model.supports_images)} onChange={(event) => updateModel(index, "supports_images", event.target.checked)} />支持图片</label>
-                      <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, default_model_id: model.id }))}>设为默认</button>
-                      <button className="secondary-button" onClick={() => setConfig((current) => ({ ...current, models: current.models.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
           </div>
+          {configError ? <div className="form-error">{configError}</div> : null}
+          {configStatus ? <div className="status-message">{configStatus}</div> : null}
+          {config ? (
+            <div className="agent-config-workspace">
+              <aside className="agent-config-rail">
+                <div className="agent-config-rail-card">
+                  <span>默认模型</span>
+                  <strong>{config.models.find((model) => model.id === config.default_model_id)?.name || config.default_model_id || "未设置"}</strong>
+                </div>
+                <div className="agent-config-rail-card compact">
+                  <small>{config.models.length} 个模型</small>
+                  <small>{config.agents.length} 个 Agent</small>
+                </div>
+              </aside>
+              <div className="agent-config-content">
+                <section className="agent-config-section">
+                  <div className="agent-config-section-heading">
+                    <div>
+                      <h3>模型</h3>
+                      <p>配置模型接口，API Key 留空会保留原值。</p>
+                    </div>
+                    <button className="secondary-button small" onClick={addModel}>
+                      <Plus size={15} />
+                      添加模型
+                    </button>
+                  </div>
+                  <div className="agent-config-list">
+                    {config.models.map((model, index) => (
+                      <article className="agent-config-card" key={`${model.id}-${index}`}>
+                        <div className="agent-config-card-title">
+                          <div className="agent-config-card-summary">
+                            <strong>{model.name || model.id || "未命名模型"}</strong>
+                            <div className="agent-config-card-meta">
+                              <span>{providerLabel(model.provider)}</span>
+                              <span>{model.model || "未填写模型名"}</span>
+                              <span>{model.base_url || "无 Base URL"}</span>
+                            </div>
+                          </div>
+                          <div className="agent-config-card-controls">
+                            {config.default_model_id === model.id ? <span className="badge-default">默认</span> : null}
+                            {model.supports_images ? <span className="badge-builtin">图片</span> : null}
+                            <button className="icon-action" title={expandedModelIndex === index ? "收起" : "展开"} onClick={() => setExpandedModelIndex((current) => current === index ? null : index)}>
+                              {expandedModelIndex === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                            </button>
+                          </div>
+                        </div>
+                        {expandedModelIndex === index ? (
+                          <>
+                            <div className="agent-config-grid">
+                              <label>提供商<select value={model.provider || "openai_compatible"} onChange={(event) => updateModel(index, "provider", event.target.value)}><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic">Anthropic (Claude)</option></select></label>
+                              <label>ID<input value={model.id} onChange={(event) => { if (!composingRef.current) updateModel(index, "id", event.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(event) => { composingRef.current = false; updateModel(index, "id", event.target.value); }} /></label>
+                              <label>显示名<input value={model.name} onChange={(event) => { if (!composingRef.current) updateModel(index, "name", event.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(event) => { composingRef.current = false; updateModel(index, "name", event.target.value); }} /></label>
+                              <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} placeholder={(model.provider || "openai_compatible") === "anthropic" ? "可选" : ""} /></label>
+                              <label>模型名<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
+                              <label>API Key<input type="password" placeholder={model.api_key_mask || "留空保留旧 key"} value={model.api_key || ""} onChange={(event) => updateModel(index, "api_key", event.target.value)} /></label>
+                              <label>Temperature<input type="number" step="0.1" value={model.temperature ?? ""} onChange={(event) => updateModel(index, "temperature", event.target.value)} /></label>
+                            </div>
+                            <div className="agent-config-card-actions">
+                              <label className="agent-checkbox"><input type="checkbox" checked={Boolean(model.supports_images)} onChange={(event) => updateModel(index, "supports_images", event.target.checked)} />支持图片</label>
+                              <button className="secondary-button small" onClick={() => setConfig((current) => ({ ...current, default_model_id: model.id }))}>设为默认</button>
+                              <button
+                                className="secondary-button small"
+                                onClick={() => {
+                                  setConfig((current) => ({ ...current, models: current.models.filter((_, itemIndex) => itemIndex !== index) }));
+                                  setExpandedModelIndex((current) => current === index ? null : current > index ? current - 1 : current);
+                                }}
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            </div>
+          ) : (
+            <div className="empty-state">正在加载模型配置</div>
+          )}
         </div>
-      ) : (
-        <div className="empty-state">正在加载模型配置</div>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -2893,6 +2892,9 @@ function PortfolioPage({ onUnauthorized }) {
   const [chatSending, setChatSending] = useState(false);
   const [chatStatus, setChatStatus] = useState("disconnected");
   const [chatError, setChatError] = useState("");
+  const [chatSessions, setChatSessions] = useState([]);
+  const [activeChatSessionId, setActiveChatSessionId] = useState(null);
+  const [chatSessionLoading, setChatSessionLoading] = useState(false);
   const chatEndRef = useRef(null);
   const wsRef = useRef(null);
 
@@ -2939,6 +2941,7 @@ function PortfolioPage({ onUnauthorized }) {
         setChatSending(false);
         setChatStatus("connected");
         loadHoldings();
+        loadPortfolioSessions();
       }
       if (message.type === "checkpoint") {
         setChatMessages((items) =>
@@ -2982,6 +2985,60 @@ function PortfolioPage({ onUnauthorized }) {
     return () => wsRef.current?.close();
   }, []);
 
+  async function loadPortfolioSessions() {
+    setChatSessionLoading(true);
+    try {
+      const data = await api("/api/sessions");
+      setChatSessions((data.sessions || []).filter((session) => session.agent_id === "ai-investment-advisor"));
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+    } finally {
+      setChatSessionLoading(false);
+    }
+  }
+
+  async function createPortfolioSession() {
+    setChatSessionLoading(true);
+    try {
+      const data = await api("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ agent_id: "ai-investment-advisor" })
+      });
+      const session = data.session;
+      setChatSessions((items) => [session, ...items]);
+      setActiveChatSessionId(session.id);
+      setChatMessages([]);
+      return session;
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return null; }
+      setChatError(err.message);
+      return null;
+    } finally {
+      setChatSessionLoading(false);
+    }
+  }
+
+  async function switchPortfolioSession(sessionId) {
+    setChatSessionLoading(true);
+    setChatError("");
+    try {
+      const data = await api(`/api/sessions/${sessionId}`);
+      const session = data.session;
+      setActiveChatSessionId(session.id);
+      setChatMessages((session.messages || []).map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+        checkpoints: msg.checkpoints || [],
+        checkpointsCollapsed: true
+      })));
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setChatError(err.message);
+    } finally {
+      setChatSessionLoading(false);
+    }
+  }
+
   async function loadHoldings() {
     setLoading(true);
     setError("");
@@ -2994,7 +3051,10 @@ function PortfolioPage({ onUnauthorized }) {
     } finally { setLoading(false); }
   }
 
-  useEffect(() => { loadHoldings(); }, []);
+  useEffect(() => {
+    loadHoldings();
+    loadPortfolioSessions();
+  }, []);
 
   function resetForm() {
     setForm({ type: "stock", symbol: "", name: "", quantity: "", avg_cost: "", currency: "CNY", notes: "" });
@@ -3060,13 +3120,18 @@ function PortfolioPage({ onUnauthorized }) {
     return holdings.reduce((s, h) => s + h.total_cost, 0).toFixed(2);
   }
 
-  function sendChat() {
+  async function sendChat() {
     const msg = chatInput.trim();
     if (!msg || chatSending) return;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       connectChat();
       setChatError("连接未就绪，请稍后重试");
       return;
+    }
+    let sessionId = activeChatSessionId;
+    if (!sessionId) {
+      const session = await createPortfolioSession();
+      sessionId = session?.id || null;
     }
     setChatInput("");
     setChatSending(true);
@@ -3080,7 +3145,8 @@ function PortfolioPage({ onUnauthorized }) {
       JSON.stringify({
         type: "message",
         agent_id: "ai-investment-advisor",
-        content: msg
+        content: msg,
+        session_id: sessionId
       })
     );
   }
@@ -3225,72 +3291,103 @@ function PortfolioPage({ onUnauthorized }) {
           <div className="portfolio-chat-header">
             <Bot size={16} />
             <strong>AI 投资助手</strong>
+            <button className="secondary-button small" onClick={createPortfolioSession} disabled={chatSessionLoading}>
+              <Plus size={14} />
+              新对话
+            </button>
             <span className={`terminal-status ${chatStatus === "connected" || chatStatus === "running" ? "connected" : ""}`}>
               {chatStatus === "running" ? "生成中" : chatStatus === "connected" ? "已连接" : "未连接"}
             </span>
           </div>
-          <div className="portfolio-chat-messages">
-            {chatMessages.length === 0 ? (
-              <div className="chat-empty-hint">
-                <Bot size={32} />
-                <p>告诉我想做什么，比如：</p>
-                <ul>
-                  <li>"帮我添加 100 股腾讯，成本价 380 HKD"</li>
-                  <li>"目前都有哪些持仓？"</li>
-                  <li>"删除苹果的持仓记录"</li>
-                </ul>
+          <div className="portfolio-chat-body">
+            <aside className="portfolio-chat-history">
+              <div className="portfolio-chat-history-heading">
+                <span>对话历史</span>
+                <small>{chatSessions.length} 个</small>
               </div>
-            ) : (
-              chatMessages.map((m, i) => (
-                <div key={i} className={`portfolio-chat-msg ${m.role}`}>
-                  <div className="chat-msg-bubble">{m.content}</div>
-                  {m.checkpoints?.length ? (
-                    <div className="agent-checkpoints-wrapper" style={{marginTop: 4}}>
-                      <button
-                        type="button"
-                        className="checkpoint-toggle"
-                        onClick={() => setChatMessages((items) =>
-                          items.map((item, idx) =>
-                            idx === i ? { ...item, checkpointsCollapsed: !item.checkpointsCollapsed } : item
-                          )
-                        )}
-                      >
-                        <span className="checkpoint-toggle-icon">
-                          {m.checkpointsCollapsed ? "▶" : "▼"}
-                        </span>
-                        {m.checkpointsCollapsed ? "展开" : "折叠"}思维链
-                        <span className="checkpoint-toggle-count">{m.checkpoints.length} 步</span>
-                      </button>
-                      {!m.checkpointsCollapsed ? (
-                        <ol className="agent-checkpoints">
-                          {m.checkpoints.map((cp, cpi) => (
-                            <li key={`${cp.stage}-${cpi}`}>
-                              <strong>{cp.title}</strong>
-                              {cp.detail ? <small>{cp.detail}</small> : null}
-                            </li>
-                          ))}
-                        </ol>
+              {chatSessionLoading ? (
+                <div className="portfolio-chat-history-empty">加载中...</div>
+              ) : chatSessions.length === 0 ? (
+                <div className="portfolio-chat-history-empty">暂无历史</div>
+              ) : (
+                chatSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    className={`portfolio-chat-history-item${activeChatSessionId === session.id ? " active" : ""}`}
+                    onClick={() => switchPortfolioSession(session.id)}
+                  >
+                    <span>{session.title || "新对话"}</span>
+                    <small>{session.message_count} 条消息</small>
+                  </button>
+                ))
+              )}
+            </aside>
+            <div className="portfolio-chat-main">
+              <div className="portfolio-chat-messages">
+                {chatMessages.length === 0 ? (
+                  <div className="chat-empty-hint">
+                    <Bot size={32} />
+                    <p>告诉我想做什么，比如：</p>
+                    <ul>
+                      <li>"帮我添加 100 股腾讯，成本价 380 HKD"</li>
+                      <li>"目前都有哪些持仓？"</li>
+                      <li>"删除苹果的持仓记录"</li>
+                    </ul>
+                  </div>
+                ) : (
+                  chatMessages.map((m, i) => (
+                    <div key={i} className={`portfolio-chat-msg ${m.role}`}>
+                      <div className="chat-msg-bubble">{m.content}</div>
+                      {m.checkpoints?.length ? (
+                        <div className="agent-checkpoints-wrapper" style={{marginTop: 4}}>
+                          <button
+                            type="button"
+                            className="checkpoint-toggle"
+                            onClick={() => setChatMessages((items) =>
+                              items.map((item, idx) =>
+                                idx === i ? { ...item, checkpointsCollapsed: !item.checkpointsCollapsed } : item
+                              )
+                            )}
+                          >
+                            <span className="checkpoint-toggle-icon">
+                              {m.checkpointsCollapsed ? "▶" : "▼"}
+                            </span>
+                            {m.checkpointsCollapsed ? "展开" : "折叠"}思维链
+                            <span className="checkpoint-toggle-count">{m.checkpoints.length} 步</span>
+                          </button>
+                          {!m.checkpointsCollapsed ? (
+                            <ol className="agent-checkpoints">
+                              {m.checkpoints.map((cp, cpi) => (
+                                <li key={`${cp.stage}-${cpi}`}>
+                                  <strong>{cp.title}</strong>
+                                  {cp.detail ? <small>{cp.detail}</small> : null}
+                                </li>
+                              ))}
+                            </ol>
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
-                  ) : null}
-                </div>
-              ))
-            )}
-            {chatError ? <div className="form-error" style={{margin: "8px 14px", fontSize: 12}}>{chatError}</div> : null}
-            <div ref={chatEndRef} />
-          </div>
-          <div className="portfolio-chat-input-row">
-            <input
-              className="chat-input"
-              value={chatInput}
-              onChange={e => setChatInput(e.target.value)}
-              onKeyDown={handleChatKey}
-              placeholder="输入指令管理持仓..."
-              disabled={chatSending || chatStatus === "disconnected"}
-            />
-            <button className="secondary-button primary-action send-btn" onClick={sendChat} disabled={!chatInput.trim() || chatSending || chatStatus === "disconnected"}>
-              <Send size={16} />
-            </button>
+                  ))
+                )}
+                {chatError ? <div className="form-error" style={{margin: "8px 14px", fontSize: 12}}>{chatError}</div> : null}
+                <div ref={chatEndRef} />
+              </div>
+              <div className="portfolio-chat-input-row">
+                <input
+                  className="chat-input"
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={handleChatKey}
+                  placeholder="输入指令管理持仓..."
+                  disabled={chatSending || chatStatus === "disconnected"}
+                />
+                <button className="secondary-button primary-action send-btn" onClick={sendChat} disabled={!chatInput.trim() || chatSending || chatStatus === "disconnected"}>
+                  <Send size={16} />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -3304,7 +3401,6 @@ function AppShell({ onLogout }) {
     () => [
       { path: "/", label: "首页", icon: Home },
       { path: "/agents", label: "Agent", icon: Bot },
-      { path: "/models", label: "模型配置", icon: Cpu },
       { path: "/self-dev", label: "自开发", icon: Code2 },
       { path: "/channels", label: "渠道", icon: MessageSquare },
       { path: "/terminal", label: "终端", icon: TerminalSquare },
@@ -3352,7 +3448,7 @@ function AppShell({ onLogout }) {
       return <AgentPage onUnauthorized={unauthorized} />;
     }
     if (path === "/models") {
-      return <ModelsPage onUnauthorized={unauthorized} />;
+      return <AgentPage onUnauthorized={unauthorized} initialTab="models" />;
     }
     if (path === "/portfolio") {
       return <PortfolioPage onUnauthorized={unauthorized} />;
@@ -3401,7 +3497,7 @@ function AppShell({ onLogout }) {
           退出
         </button>
       </aside>
-      <main className={`content${path === "/agents" ? " content-agents" : ""}${path === "/models" ? " content-models" : ""}`}>{renderPage()}</main>
+      <main className={`content${path === "/agents" || path === "/models" ? " content-agents" : ""}`}>{renderPage()}</main>
     </div>
   );
 }

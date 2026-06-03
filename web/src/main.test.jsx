@@ -463,7 +463,7 @@ describe("LoginPage", () => {
     });
 
     expect(await screen.findByRole("button", { name: "Agent" })).toBeInTheDocument();
-    expect(await screen.findByText("请先在配置页添加 Agent")).toBeInTheDocument();
+    expect(await screen.findByText("请先在 Agent 管理中添加 Agent")).toBeInTheDocument();
   });
 
   it("shows self-dev create form by default without the old step indicator", async () => {
@@ -565,9 +565,18 @@ describe("LoginPage", () => {
     expect(await screen.findByText("正在执行真实任务")).toBeInTheDocument();
   });
 
-  it("edits model config from the models page", async () => {
+  it("edits model config from the Agent model tab", async () => {
     document.body.innerHTML = '<div id="root"></div>';
-    window.history.replaceState({}, "", "/models");
+    window.history.replaceState({}, "", "/agents");
+    class ClosedWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      constructor() {
+        setTimeout(() => this.onclose?.(), 0);
+      }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", ClosedWebSocket);
     vi.stubGlobal(
       "fetch",
       vi.fn(async (path, options) => {
@@ -575,6 +584,33 @@ describe("LoginPage", () => {
           return {
             ok: true,
             json: async () => ({ authenticated: true })
+          };
+        }
+        if (path === "/api/agents/options") {
+          return {
+            ok: true,
+            json: async () => ({
+              default_agent_id: "assistant",
+              agents: [
+                {
+                  id: "assistant",
+                  name: "个人助理",
+                  model: {
+                    id: "fast",
+                    name: "快速模型",
+                    model: "fast-chat",
+                    has_api_key: true,
+                    supports_images: true
+                  }
+                }
+              ]
+            })
+          };
+        }
+        if (path === "/api/sessions") {
+          return {
+            ok: true,
+            json: async () => ({ sessions: [] })
           };
         }
         if (path === "/api/agents/config") {
@@ -629,9 +665,12 @@ describe("LoginPage", () => {
       await import("./main.jsx");
     });
 
+    await user.click(await screen.findByRole("button", { name: /模型配置/ }));
+    expect(screen.queryByText("工具权限")).not.toBeInTheDocument();
+    await user.click(await screen.findByTitle("展开"));
     await user.clear((await screen.findAllByDisplayValue("快速模型"))[0]);
     await user.type(screen.getByLabelText(/显示名/), "视觉模型");
-    await user.click(screen.getByRole("button", { name: /保存到 workspace/ }));
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
 
     const saveCall = fetch.mock.calls.find(
       ([path, options]) => path === "/api/agents/config" && options?.method === "PUT"
@@ -646,5 +685,81 @@ describe("LoginPage", () => {
         body: expect.stringContaining("视觉模型")
       })
     );
+  });
+
+  it("selects tools from the Agent management tab", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/agents");
+    class ClosedWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      constructor() {
+        setTimeout(() => this.onclose?.(), 0);
+      }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", ClosedWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path, options) => {
+        if (path === "/api/auth/me") {
+          return { ok: true, json: async () => ({ authenticated: true }) };
+        }
+        if (path === "/api/agents/options") {
+          return {
+            ok: true,
+            json: async () => ({
+              default_agent_id: "assistant",
+              agents: [{ id: "assistant", name: "个人助理", model: { has_api_key: true } }]
+            })
+          };
+        }
+        if (path === "/api/sessions") {
+          return { ok: true, json: async () => ({ sessions: [] }) };
+        }
+        if (path === "/api/agents/config") {
+          if (options?.method === "PUT") {
+            return { ok: true, json: async () => ({ ok: true }) };
+          }
+          return {
+            ok: true,
+            json: async () => ({
+              path: "/workspace/config.yaml",
+              common_skill_tools: [],
+              tools: { profile: "default", allow: [], deny: [] },
+              default_model_id: "fast",
+              default_agent_id: "assistant",
+              models: [{ id: "fast", name: "快速模型", base_url: "", model: "fast-chat", temperature: 0.2, supports_images: false }],
+              agents: [{
+                id: "assistant",
+                name: "个人助理",
+                model_id: "fast",
+                system_prompt: "You are concise.",
+                skill_ids: [],
+                tools: { profile: "default", allow: [], deny: [] }
+              }]
+            })
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+      })
+    );
+
+    const user = userEvent.setup();
+    vi.resetModules();
+    await act(async () => {
+      await import("./main.jsx");
+    });
+
+    await user.click(await screen.findByRole("button", { name: /Agent 管理/ }));
+    await user.click(await screen.findByTitle("展开"));
+    await user.click(await screen.findByLabelText(/仓库搜索/));
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+
+    const saveCall = fetch.mock.calls.find(
+      ([path, options]) => path === "/api/agents/config" && options?.method === "PUT"
+    );
+    const payload = JSON.parse(saveCall[1].body);
+    expect(payload.agents[0].tools.allow).toContain("repo_search");
   });
 });
