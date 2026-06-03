@@ -33,6 +33,15 @@ def test_login_rejects_invalid_token(tmp_path) -> None:
     assert client.get("/api/auth/me").json() == {"authenticated": False}
 
 
+def test_dev_auth_bypass_marks_session_authenticated_without_cookie(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SUPER_PERSONAL_RELOAD", "1")
+    monkeypatch.setenv("SUPER_PERSONAL_DEV_AUTH_BYPASS", "1")
+    client = make_client(tmp_path)
+
+    assert client.get("/api/auth/me").json() == {"authenticated": True}
+    assert client.post("/api/auth/login", json={"token": "wrong"}).status_code == 200
+
+
 def test_login_uses_current_workspace_config_token_without_restart(tmp_path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(

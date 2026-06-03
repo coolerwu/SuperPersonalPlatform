@@ -4,7 +4,7 @@ from fastapi import Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from server.adapter.auth_routes import SESSION_COOKIE
+from server.adapter.auth_routes import SESSION_COOKIE, is_authenticated_request
 from server.adapter.dependencies import AppContainer
 
 
@@ -26,9 +26,7 @@ def mount_frontend(app, container: AppContainer, dist_dir: Path) -> None:
             )
 
         is_login_path = path == "login"
-        is_authenticated = container.session_codec.verify(
-            request.cookies.get(SESSION_COOKIE)
-        )
+        is_authenticated = is_authenticated_request(container, request.cookies.get(SESSION_COOKIE))
         if not is_login_path and not is_authenticated:
             return RedirectResponse("/login", status_code=303)
         if is_login_path and is_authenticated:

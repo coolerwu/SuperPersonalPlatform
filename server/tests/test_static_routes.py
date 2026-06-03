@@ -57,6 +57,17 @@ def test_root_redirects_when_unauthenticated(tmp_path) -> None:
     assert response.headers["location"] == "/login"
 
 
+def test_frontend_route_serves_index_with_dev_auth_bypass(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SUPER_PERSONAL_RELOAD", "1")
+    monkeypatch.setenv("SUPER_PERSONAL_DEV_AUTH_BYPASS", "1")
+    client = make_static_client(tmp_path)
+
+    response = client.get("/agents", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "root" in response.text
+
+
 def test_frontend_route_serves_index_when_authenticated(tmp_path) -> None:
     client = make_static_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})

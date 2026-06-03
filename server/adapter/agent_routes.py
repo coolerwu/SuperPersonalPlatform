@@ -9,7 +9,7 @@ from fastapi import (
     status,
 )
 
-from server.adapter.auth_routes import SESSION_COOKIE, current_session_codec
+from server.adapter.auth_routes import SESSION_COOKIE, is_authenticated_request
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
 from server.domain.harness import (
@@ -181,7 +181,7 @@ def create_agent_router(container: AppContainer) -> APIRouter:
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
             return
         session_cookie = websocket.cookies.get(SESSION_COOKIE)
-        if not current_session_codec(container).verify(session_cookie):
+        if not is_authenticated_request(container, session_cookie):
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 

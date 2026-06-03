@@ -569,6 +569,9 @@ function AgentPage({ onUnauthorized }) {
     "根据截图分析这个 UI 怎么改",
     "生成一个开发任务说明"
   ];
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const connectionLabel = status === "running" ? "生成中" : status === "connected" ? "已连接" : "未连接";
+  const modelCapabilityLabel = selectedAgent?.model?.supports_images ? "文本 + 图片" : "文本";
 
   async function addFiles(fileList) {
     const imageFiles = Array.from(fileList || []).filter((file) =>
@@ -714,10 +717,11 @@ function AgentPage({ onUnauthorized }) {
               <span className="ai-agent-orb">
                 <Bot size={18} />
               </span>
-              <div>
+              <div className="ai-agent-card-copy">
                 <strong>{selectedAgent?.name || "Agent"}</strong>
                 <small>{selectedAgent?.model?.name || "未选择模型"}</small>
               </div>
+              <span className={`ai-agent-dot ${status === "connected" || status === "running" ? "online" : ""}`} />
             </div>
             <label className="ai-agent-select">
               <span>当前 Agent</span>
@@ -743,7 +747,10 @@ function AgentPage({ onUnauthorized }) {
               新对话
             </button>
             <div className="ai-session-list">
-              <span>对话历史</span>
+              <div className="ai-session-heading">
+                <span>对话历史</span>
+                <small>{sessions.length} 个</small>
+              </div>
               {sessionLoading ? (
                 <div className="session-empty">加载中...</div>
               ) : sessions.length === 0 ? (
@@ -779,7 +786,7 @@ function AgentPage({ onUnauthorized }) {
             </div>
             <div className="ai-agent-health">
               <span className={`terminal-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
-                {status === "running" ? "生成中" : status === "connected" ? "已连接" : "未连接"}
+                {connectionLabel}
               </span>
               <button className="secondary-button" onClick={connect} disabled={status === "connected" || loading}>
                 <PlugZap size={15} />
@@ -789,7 +796,7 @@ function AgentPage({ onUnauthorized }) {
           </aside>
           <main className="ai-chat-main">
             <div className="ai-chat-topline">
-              <div>
+              <div className="ai-chat-titleblock">
                 <strong>{selectedAgent?.name || "Agent Chat"}</strong>
                 <span>
                   {selectedAgent?.model?.model || "model"}
@@ -797,9 +804,26 @@ function AgentPage({ onUnauthorized }) {
                 </span>
               </div>
               <div className="ai-chat-badges">
+                <span className={`terminal-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
+                  {connectionLabel}
+                </span>
                 {selectedAgent?.model?.has_api_key ? <span>key ready</span> : <span>key missing</span>}
                 {selectedAgent?.model?.supports_images ? <span>image input</span> : null}
               </div>
+            </div>
+            <div className="ai-context-strip" aria-label="当前对话上下文">
+              <span>
+                <Cpu size={14} />
+                {selectedAgent?.model?.name || "未选择模型"}
+              </span>
+              <span>
+                <MessageSquare size={14} />
+                {activeSession?.title || (activeSessionId ? "当前会话" : "临时会话")}
+              </span>
+              <span>
+                <ImageIcon size={14} />
+                {modelCapabilityLabel}
+              </span>
             </div>
             <div className="agent-message-list" ref={messageListRef}>
               {loading ? <div className="empty-state">正在加载 Agent 配置</div> : null}
@@ -811,10 +835,11 @@ function AgentPage({ onUnauthorized }) {
               ) : null}
               {!loading && !blocked && messages.length === 0 && sessions.length === 0 ? (
                 <div className="agent-welcome">
+                  <span className="agent-welcome-mark"><Bot size={20} /></span>
                   <h2>开始新的对话</h2>
                   <p>点击左侧"新对话"开始，或直接输入你的任务。</p>
                   <div className="ai-empty-prompts">
-                    {quickPrompts.slice(0, 3).map((prompt) => (
+                    {quickPrompts.map((prompt) => (
                       <button key={prompt} type="button" onClick={() => setInput(prompt)}>
                         {prompt}
                       </button>
@@ -934,6 +959,7 @@ function AgentPage({ onUnauthorized }) {
         <div className="agent-config-panel">
           <div className="agent-config-toolbar">
             <div className="agent-config-meta">
+              <span>Workspace 配置</span>
               <small>{config?.path || "正在读取 config.yaml"}</small>
             </div>
             <div className="config-actions">
@@ -950,15 +976,34 @@ function AgentPage({ onUnauthorized }) {
           {configError ? <div className="form-error">{configError}</div> : null}
           {configStatus ? <div className="status-message">{configStatus}</div> : null}
           {config ? (
-            <section className="agent-config-section">
+            <div className="agent-management-workspace">
+              <aside className="agent-management-rail">
+                <div className="agent-metric">
+                  <span>Agent</span>
+                  <strong>{config.agents.length}</strong>
+                </div>
+                <div className="agent-metric">
+                  <span>默认</span>
+                  <strong>{config.agents.find((agent) => agent.id === config.default_agent_id)?.name || config.default_agent_id || "未设置"}</strong>
+                </div>
+                <div className="agent-metric compact">
+                  <span>模型</span>
+                  <strong>{config.models.length}</strong>
+                </div>
+              </aside>
+              <section className="agent-config-section">
               <div className="agent-config-section-heading">
-                <div className="agent-count">{config.agents.length} 个 Agent</div>
+                <div className="agent-count">
+                  <strong>Agent 定义</strong>
+                  <span>{config.agents.length} 个 Agent</span>
+                </div>
                 <button className="secondary-button small" onClick={addAgent}>
                   <Plus size={15} />
                   添加
                 </button>
               </div>
-              <table className="agent-table">
+              <div className="agent-table-wrap">
+                <table className="agent-table">
                 <thead>
                   <tr>
                     <th className="th-id">ID</th>
@@ -1036,8 +1081,10 @@ function AgentPage({ onUnauthorized }) {
                     </React.Fragment>
                   ))}
                 </tbody>
-              </table>
-            </section>
+                </table>
+              </div>
+              </section>
+            </div>
           ) : (
             <div className="empty-state">正在加载 Agent 配置</div>
           )}

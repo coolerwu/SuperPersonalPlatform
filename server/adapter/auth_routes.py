@@ -1,3 +1,5 @@
+import os
+
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
@@ -20,6 +22,9 @@ def create_auth_router(container: AppContainer) -> APIRouter:
 
     @router.post("/login")
     def login(payload: LoginRequest, response: Response) -> dict[str, bool]:
+        if is_dev_auth_bypass_enabled():
+            return {"ok": True}
+
         session_codec = current_session_codec(container)
         try:
             AuthToken(session_codec.secret).verify(payload.token)
@@ -47,12 +52,22 @@ def create_auth_router(container: AppContainer) -> APIRouter:
     @router.get("/me")
     def me(request: Request) -> dict[str, bool]:
         return {
-            "authenticated": current_session_codec(container).verify(
-                request.cookies.get(SESSION_COOKIE)
-            )
+            "authenticated": is_authenticated_request(container, request.cookies.get(SESSION_COOKIE))
         }
 
     return router
+
+
+def is_dev_auth_bypass_enabled() -> bool:
+    enabled = os.environ.get("SUPER_PERSONAL_DEV_AUTH_BYPASS", "").lower()
+    reload_enabled = os.environ.get("SUPER_PERSONAL_RELOAD", "").lower()
+    return enabled in {"1", "true", "yes", "on"} and reload_enabled in {"1", "true", "yes", "on"}
+
+
+def is_authenticated_request(container: AppContainer, session_cookie: str | None) -> bool:
+    if is_dev_auth_bypass_enabled():
+        return True
+    return current_session_codec(container).verify(session_cookie)
 
 
 def current_session_codec(container: AppContainer) -> SessionCodec:

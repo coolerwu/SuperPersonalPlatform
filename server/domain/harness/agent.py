@@ -85,8 +85,10 @@ class AgentGraphState(TypedDict):
     max_iterations: int
     tool_messages: tuple[Any, ...]
     pending_tool_calls: tuple[AgentToolCall, ...]
+    turn: int
     tool_iterations: int
     assistant_message: str
+    next_step: str
 
 
 async def run_agent(
@@ -118,7 +120,7 @@ async def run_agent(
     tool_runtime = skill_context.tool_runtime
 
     async def reason(state: AgentGraphState) -> dict[str, object]:
-        await emit("reason", "推理下一步", f"第 {state['tool_iterations'] + 1} 轮")
+        await emit("reason", "推理下一步", f"第 {state['turn'] + 1} 轮")
         if state["tool_names"]:
             system_prompt = (
                 f"{state['system_prompt']}\n\n"
@@ -178,7 +180,13 @@ async def run_agent(
         }
 
     async def check(state: AgentGraphState) -> dict[str, object]:
-        return {}
+        turn = state["turn"] + 1
+        next_step = (
+            "reason"
+            if not state["assistant_message"] and turn < state["max_iterations"]
+            else "finalize"
+        )
+        return {"turn": turn, "next_step": next_step}
 
     async def finalize(state: AgentGraphState) -> dict[str, str]:
         if state["assistant_message"]:
@@ -191,16 +199,6 @@ async def run_agent(
             )
         }
 
-    def route_after_reason(state: AgentGraphState) -> str:
-        if state["pending_tool_calls"]:
-            return "act"
-        return "check"
-
-    def route_after_check(state: AgentGraphState) -> str:
-        if not state["assistant_message"] and state["tool_iterations"] < state["max_iterations"]:
-            return "reason"
-        return "finalize"
-
     initial_state: AgentGraphState = {
         "system_prompt": agent.definition.system_prompt,
         "user_message": content,
@@ -210,8 +208,10 @@ async def run_agent(
         "max_iterations": options.max_iterations,
         "tool_messages": (),
         "pending_tool_calls": (),
+        "turn": 0,
         "tool_iterations": 0,
         "assistant_message": "",
+        "next_step": "reason",
     }
 
     try:
@@ -226,7 +226,7 @@ async def run_agent(
                 state = {**state, **act_result}
             check_result = await check(state)
             state = {**state, **check_result}
-            if route_after_check(state) == "finalize":
+            if state["next_step"] == "finalize":
                 final_result = await finalize(state)
                 state = {**state, **final_result}
                 return str(state.get("assistant_message") or "")
@@ -239,13 +239,13 @@ async def run_agent(
     graph.add_edge(START, "reason")
     graph.add_conditional_edges(
         "reason",
-        route_after_reason,
+        lambda state: "act" if state["pending_tool_calls"] else "check",
         {"act": "act", "check": "check"},
     )
     graph.add_edge("act", "check")
     graph.add_conditional_edges(
         "check",
-        route_after_check,
+        lambda state: state["next_step"],
         {"reason": "reason", "finalize": "finalize"},
     )
     graph.add_edge("finalize", END)

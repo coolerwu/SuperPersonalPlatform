@@ -16,7 +16,7 @@ from fastapi import (
     status,
 )
 
-from server.adapter.auth_routes import SESSION_COOKIE, current_session_codec
+from server.adapter.auth_routes import SESSION_COOKIE, is_authenticated_request
 from server.adapter.dependencies import AppContainer
 
 
@@ -173,4 +173,4 @@ def _positive_int(value: object) -> int | None:
 
 
 def _verify_current_session(container: AppContainer, session_cookie: str | None) -> bool:
-    return current_session_codec(container).verify(session_cookie)
+    return is_authenticated_request(container, session_cookie)

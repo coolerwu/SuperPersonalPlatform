@@ -458,6 +458,61 @@ def test_agent_chat_falls_back_to_sequential_goal_confirmation_without_langgraph
     assert gateway.calls[0]["user_message"] == "整理今天任务"
 
 
+def test_agent_harness_limits_empty_tool_reasoning_turns(tmp_path) -> None:
+    class EmptyReasoningGateway(FakeModelGateway):
+        async def reason_with_tools(
+            self,
+            model: ModelDefinition,
+            system_prompt: str,
+            user_message: str,
+            tool_names,
+            messages,
+            images: tuple[ChatImage, ...] = (),
+        ) -> AgentToolReasoningResult:
+            self.reason_calls.append(
+                {
+                    "model": model.id,
+                    "system_prompt": system_prompt,
+                    "user_message": user_message,
+                    "tool_names": tool_names,
+                    "images": images,
+                    "messages": messages,
+                }
+            )
+            return AgentToolReasoningResult(
+                content="",
+                tool_calls=(),
+                messages=tuple(messages) + ("empty",),
+            )
+
+    write_config(tmp_path, common_tools=("list_skill",), skill_ids=("common:writing",))
+    gateway = EmptyReasoningGateway()
+    service = AgentChatService(tmp_path / "config.yaml", gateway)
+    platform = load_settings(tmp_path / "config.yaml").agent_platform
+    agent = platform.get_agent("assistant")
+
+    result = asyncio.run(
+        run_agent(
+            Agent(
+                definition=agent,
+                model=platform.get_model("fast"),
+                llm_client=gateway,
+            ),
+            skill_context=ReactSkillContext(
+                content="整理今天任务",
+                tool_names=("list_skill",),
+                tool_registry=service._tool_registry,
+                tool_runtime=AgentToolRuntime(skill_tools=AgentSkillService(tmp_path).toolbox(agent)),
+            ),
+            options=ChatOptions(max_iterations=2),
+        )
+    )
+
+    assert result == "forced final"
+    assert len(gateway.reason_calls) == 2
+    assert gateway.tool_results == []
+
+
 def test_agent_config_rejects_unknown_common_skill_tool(tmp_path) -> None:
     write_config(tmp_path, common_tools=("list_skill", "shell"))
 

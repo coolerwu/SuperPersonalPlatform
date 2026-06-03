@@ -345,10 +345,17 @@ stop_dev_port_processes() {
   done
 }
 
+build_frontend_assets() {
+  cd "${SCRIPT_DIR}/web"
+  echo "Building frontend assets with npm run build."
+  npm run build
+}
+
 run_dev() {
   RUN_MODE=dev
   parse_workspace "${SCRIPT_DIR}/.super-personal-platform" "$@"
   ensure_config
+  build_frontend_assets
   ensure_venv
   install_python_deps ".[dev]" "dev"
   stop_dev_port_processes
@@ -358,6 +365,7 @@ run_dev() {
   export SUPER_PERSONAL_PORT="${SUPER_PERSONAL_PORT:-8888}"
   export SUPER_PERSONAL_WORKSPACE="$WORKSPACE_DIR"
   export SUPER_PERSONAL_RELOAD=1
+  export SUPER_PERSONAL_DEV_AUTH_BYPASS="${SUPER_PERSONAL_DEV_AUTH_BYPASS:-1}"
   exec "${SCRIPT_DIR}/.venv/bin/python" -m server
 }
 
