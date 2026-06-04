@@ -52,8 +52,14 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         active_workspace / "config.yaml",
         LLMClient(),
     )
+    chat_session_service = ChatSessionService(active_workspace)
     self_dev_service = SelfDevService(active_workspace, agent_chat_service, job_service)
-    wechat_channel_manager = WechatChannelManager(active_workspace, agent_chat_service, system_log_service)
+    wechat_channel_manager = WechatChannelManager(
+        workspace=active_workspace,
+        agent_chat_service=agent_chat_service,
+        system_log_service=system_log_service,
+        chat_session_service=chat_session_service,
+    )
     return AppContainer(
         auth_service=AuthService(AuthToken(settings.auth.token)),
         config_file_service=ConfigFileService(active_workspace),
@@ -66,7 +72,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         ),
         session_codec=SessionCodec(settings.auth.token),
         agent_chat_service=agent_chat_service,
-        chat_session_service=ChatSessionService(active_workspace),
+        chat_session_service=chat_session_service,
         portfolio_service=PortfolioService(active_workspace),
         job_service=job_service,
         self_dev_service=self_dev_service,

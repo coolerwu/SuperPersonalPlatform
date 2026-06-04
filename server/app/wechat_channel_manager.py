@@ -23,9 +23,11 @@ class WechatChannelManager:
         workspace: Path,
         agent_chat_service: Any = None,
         system_log_service: Any = None,
+        chat_session_service: Any = None,
     ) -> None:
         self._workspace = workspace
         self._agent_chat_service = agent_chat_service
+        self._chat_session_service = chat_session_service
         self._system_log_service = system_log_service
         self._instances: dict[str, WechatChannelService] = {}
         self._lock = asyncio.Lock()
@@ -73,6 +75,7 @@ class WechatChannelManager:
             self._instances[account_id] = WechatChannelService(
                 workspace=self._workspace,
                 agent_chat_service=self._agent_chat_service,
+                chat_session_service=self._chat_session_service,
                 system_log_service=self._system_log_service,
                 account_id=account_id,
             )

@@ -4,18 +4,26 @@ import asyncio
 import json
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from server.app.agent_chat_service import AgentChatService
+from server.app.chat_session_service import ChatSessionService
+from server.domain.sessions import ChatMessageData, ChatSession, ChatSessionNotFoundError
 from server.infrastructure.ilink_client import (
     ILinkAPIError,
     ILinkClient,
     ILinkSessionExpiredError,
     generate_qrcode_data_url,
 )
+
+
+WECHAT_CHAT_SESSION_TTL = timedelta(hours=24)
+WECHAT_CONTEXT_RECENT_MESSAGE_COUNT = 8
+WECHAT_CONTEXT_SNIPPET_CHARS = 180
 
 
 @dataclass(frozen=True)
@@ -37,9 +45,11 @@ class WechatChannelService:
         agent_chat_service: AgentChatService | None = None,
         system_log_service: Any = None,
         account_id: str = "default",
+        chat_session_service: ChatSessionService | None = None,
     ) -> None:
         self._workspace = workspace
         self._agent_chat_service = agent_chat_service
+        self._chat_session_service = chat_session_service
         self._system_log_service = system_log_service
         self._account_id = account_id
         self._client: ILinkClient | None = None
@@ -327,12 +337,16 @@ class WechatChannelService:
             await self._send_reply(from_user_id, to_user_id, context_token, "微信通道已收到消息，但 Agent 服务不可用。")
             return
 
+        chat_session = self._get_or_create_chat_session(agent_id)
+        agent_content = self._compose_agent_content(chat_session, text) if chat_session else text
+
         try:
-            reply = await self._agent_chat_service.chat(agent_id, text)
+            reply = await self._agent_chat_service.chat(agent_id, agent_content)
         except Exception as exc:
             reply = f"Agent 处理失败：{exc}"
             async with self._lock:
                 self._logs.append({"type": "error", "error": f"agent chat failed: {exc}"})
+        self._append_chat_session_messages(chat_session, agent_id, text, reply)
         await self._send_reply(from_user_id, to_user_id, context_token, reply)
 
     async def _send_reply(
@@ -398,6 +412,115 @@ class WechatChannelService:
             return {}
         return raw if isinstance(raw, dict) else {}
 
+    def _get_or_create_chat_session(self, agent_id: str) -> ChatSession | None:
+        if self._chat_session_service is None:
+            return None
+        index = self._load_chat_session_index()
+        now = datetime.now(timezone.utc)
+        session_id = str(index.get("session_id") or "")
+        indexed_agent_id = str(index.get("agent_id") or "")
+        last_message_at = _parse_iso_datetime(str(index.get("last_message_at") or ""))
+        can_reuse = (
+            bool(session_id)
+            and indexed_agent_id == agent_id
+            and last_message_at is not None
+            and now - last_message_at <= WECHAT_CHAT_SESSION_TTL
+        )
+        if can_reuse:
+            try:
+                return self._chat_session_service.get_session(session_id)
+            except ChatSessionNotFoundError:
+                pass
+            except Exception:
+                return None
+
+        try:
+            session = self._chat_session_service.create_session(agent_id, f"微信 {self._account_id}")
+            self._save_chat_session_index(session.id, agent_id, now)
+            return session
+        except Exception as exc:
+            async_log = {"type": "error", "error": f"wechat chat session create failed: {exc}"}
+            self._logs.append(async_log)
+            return None
+
+    def _append_chat_session_messages(
+        self,
+        session: ChatSession | None,
+        agent_id: str,
+        user_content: str,
+        assistant_content: str,
+    ) -> None:
+        if session is None or self._chat_session_service is None:
+            return
+        try:
+            self._chat_session_service.append_message(
+                session.id,
+                ChatMessageData(role="user", content=user_content),
+            )
+            self._chat_session_service.append_message(
+                session.id,
+                ChatMessageData(role="assistant", content=assistant_content),
+            )
+            self._save_chat_session_index(session.id, agent_id, datetime.now(timezone.utc))
+        except Exception as exc:
+            self._logs.append({"type": "error", "error": f"wechat chat session append failed: {exc}"})
+
+    def _compose_agent_content(self, session: ChatSession, current_text: str) -> str:
+        messages = session.messages
+        if not messages:
+            return current_text
+
+        parts = [
+            "以下是同一微信账号在 24 小时 session 内的对话上下文，供你保持连续性。",
+            "较早内容已压缩为摘要，最近消息保持原文。",
+            "",
+        ]
+        older = messages[:-WECHAT_CONTEXT_RECENT_MESSAGE_COUNT]
+        recent = messages[-WECHAT_CONTEXT_RECENT_MESSAGE_COUNT:]
+        if older:
+            parts.append("较早消息摘要:")
+            for message in older:
+                parts.append(f"- {_role_label(message.role)}: {_snippet(message.content)}")
+            parts.append("")
+        if recent:
+            parts.append("最近消息:")
+            for message in recent:
+                parts.append(f"{_role_label(message.role)}: {message.content}")
+            parts.append("")
+        parts.append("当前用户消息:")
+        parts.append(current_text)
+        return "\n".join(parts)
+
+    @property
+    def _chat_session_index_path(self) -> Path:
+        return self._workspace / "channels" / "wechat_sessions" / f"{self._account_id}.json"
+
+    def _load_chat_session_index(self) -> dict[str, Any]:
+        try:
+            raw = json.loads(self._chat_session_index_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _save_chat_session_index(self, session_id: str, agent_id: str, last_message_at: datetime) -> None:
+        try:
+            self._chat_session_index_path.parent.mkdir(parents=True, exist_ok=True)
+            self._chat_session_index_path.write_text(
+                json.dumps(
+                    {
+                        "account_id": self._account_id,
+                        "agent_id": agent_id,
+                        "session_id": session_id,
+                        "last_message_at": last_message_at.astimezone(timezone.utc).isoformat(),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
     def _last_error_locked(self) -> str:
         for event in reversed(self._logs):
             if str(event.get("type") or "") == "error":
@@ -462,3 +585,28 @@ class WechatChannelService:
                 await client.close()
             except Exception:
                 pass
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    if not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _snippet(value: str) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= WECHAT_CONTEXT_SNIPPET_CHARS:
+        return normalized
+    return f"{normalized[:WECHAT_CONTEXT_SNIPPET_CHARS]}..."
+
+
+def _role_label(role: str) -> str:
+    if role == "assistant":
+        return "助手"
+    return "用户"

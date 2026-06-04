@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from collections import deque
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -13,9 +15,11 @@ from fastapi.testclient import TestClient
 from server.adapter.channel_routes import create_channel_router
 from server.adapter.dependencies import AppContainer
 from server.app.auth_service import AuthService
+from server.app.chat_session_service import ChatSessionService
 from server.app.wechat_channel_service import WechatChannelService, WechatChannelStatus
 from server.app.wechat_channel_manager import WechatChannelManager
 from server.domain.auth import AuthToken
+from server.domain.sessions import ChatMessageData
 from server.infrastructure.session import SessionCodec
 
 
@@ -141,6 +145,15 @@ class FakeWechatManager:
         return None
 
 
+class FakeAgentChatService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    async def chat(self, agent_id: str, content: str) -> str:
+        self.calls.append({"agent_id": agent_id, "content": content})
+        return f"reply-{len(self.calls)}"
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -170,6 +183,37 @@ def auth_headers(client: TestClient) -> dict[str, str]:
     assert resp.status_code == 200, f"login failed: {resp.json()}"
     cookie = resp.headers.get("set-cookie", "")
     return {"Cookie": cookie.split(";")[0]} if cookie else {}
+
+
+def write_wechat_config(workspace: Path) -> None:
+    workspace.joinpath("config.yaml").write_text(
+        """
+agents:
+  default_agent_id: assistant
+channels:
+  wechat_personal:
+    enabled: true
+    default_agent_id: assistant
+    accounts:
+      - id: default
+        name: 默认账号
+        default_agent_id: assistant
+      - id: wife
+        name: wife
+        default_agent_id: assistant
+""",
+        encoding="utf-8",
+    )
+
+
+def text_msg(text: str) -> dict[str, Any]:
+    return {
+        "message_type": 1,
+        "from_user_id": "wechat-user",
+        "to_user_id": "bot-user",
+        "context_token": f"context-{text}",
+        "item_list": [{"type": 1, "text_item": {"text": text}}],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +286,113 @@ class TestWechatChannelService:
     def test_session_path_includes_account_id(self) -> None:
         svc = WechatChannelService(Path("/tmp"), account_id="work")
         assert "work" in str(svc._session_path)
+
+    @pytest.mark.asyncio
+    async def test_wechat_account_reuses_session_within_24_hours(self, tmp_path: Path) -> None:
+        write_wechat_config(tmp_path)
+        agent = FakeAgentChatService()
+        chat_sessions = ChatSessionService(tmp_path)
+        svc = WechatChannelService(
+            tmp_path,
+            agent_chat_service=agent,
+            chat_session_service=chat_sessions,
+            account_id="wife",
+        )
+
+        await svc._process_message(text_msg("first"))
+        await svc._process_message(text_msg("second"))
+
+        summaries = chat_sessions.list_sessions()
+        assert len(summaries) == 1
+        session = chat_sessions.get_session(summaries[0].id)
+        assert session.title == "微信 wife"
+        assert [msg.content for msg in session.messages] == [
+            "first",
+            "reply-1",
+            "second",
+            "reply-2",
+        ]
+        assert agent.calls[1]["content"].startswith("以下是同一微信账号在 24 小时 session 内的对话上下文")
+        assert "用户: first" in agent.calls[1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_wechat_account_opens_new_session_after_24_hours(self, tmp_path: Path) -> None:
+        write_wechat_config(tmp_path)
+        agent = FakeAgentChatService()
+        chat_sessions = ChatSessionService(tmp_path)
+        svc = WechatChannelService(
+            tmp_path,
+            agent_chat_service=agent,
+            chat_session_service=chat_sessions,
+            account_id="default",
+        )
+
+        await svc._process_message(text_msg("old"))
+        index_path = tmp_path / "channels" / "wechat_sessions" / "default.json"
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        index["last_message_at"] = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+        index_path.write_text(json.dumps(index), encoding="utf-8")
+
+        await svc._process_message(text_msg("new"))
+
+        summaries = chat_sessions.list_sessions()
+        assert len(summaries) == 2
+        newest = chat_sessions.get_session(summaries[0].id)
+        assert [msg.content for msg in newest.messages] == ["new", "reply-2"]
+        assert agent.calls[1]["content"] == "new"
+
+    @pytest.mark.asyncio
+    async def test_wechat_context_compresses_long_session_history(self, tmp_path: Path) -> None:
+        write_wechat_config(tmp_path)
+        agent = FakeAgentChatService()
+        chat_sessions = ChatSessionService(tmp_path)
+        session = chat_sessions.create_session("assistant", "微信 default")
+        for index in range(10):
+            chat_sessions.append_message(
+                session.id,
+                ChatMessageData(role="user", content=f"early-user-{index} " + ("x" * 120)),
+            )
+            chat_sessions.append_message(
+                session.id,
+                ChatMessageData(role="assistant", content=f"early-assistant-{index} " + ("y" * 120)),
+            )
+        for index in range(4):
+            chat_sessions.append_message(
+                session.id,
+                ChatMessageData(role="user", content=f"recent-user-{index}"),
+            )
+            chat_sessions.append_message(
+                session.id,
+                ChatMessageData(role="assistant", content=f"recent-assistant-{index}"),
+            )
+        index_path = tmp_path / "channels" / "wechat_sessions" / "default.json"
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(
+            json.dumps(
+                {
+                    "account_id": "default",
+                    "agent_id": "assistant",
+                    "session_id": session.id,
+                    "last_message_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        svc = WechatChannelService(
+            tmp_path,
+            agent_chat_service=agent,
+            chat_session_service=chat_sessions,
+            account_id="default",
+        )
+
+        await svc._process_message(text_msg("current"))
+
+        content = agent.calls[0]["content"]
+        assert "较早消息摘要" in content
+        assert "最近消息" in content
+        assert "early-user-0" in content
+        assert "recent-user-3" in content
+        assert content.endswith("current")
 
 
 # ---------------------------------------------------------------------------
