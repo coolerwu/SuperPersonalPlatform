@@ -1249,10 +1249,10 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                   {config.agents.map((agent, index) => (
                     <React.Fragment key={`agent-row-${index}`}>
                       <tr className={expandedRow === index ? "row-active" : ""}>
-                        <td><input value={agent.id} onChange={(e) => { if (!composingRef.current) updateAgent(index, "id", e.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(e) => { composingRef.current = false; updateAgent(index, "id", e.target.value); }} disabled={agent.is_builtin} /></td>
+                        <td><input value={agent.id} onChange={(e) => updateAgent(index, "id", e.target.value)} disabled={agent.is_builtin} /></td>
                         <td>
                           <div className="agent-name-cell">
-                            <input value={agent.name} onChange={(e) => { if (!composingRef.current) updateAgent(index, "name", e.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(e) => { composingRef.current = false; updateAgent(index, "name", e.target.value); }} disabled={agent.is_builtin} />
+                            <input value={agent.name} onChange={(e) => updateAgent(index, "name", e.target.value)} disabled={agent.is_builtin} />
                             <div className="agent-name-badges">
                               {config.default_agent_id === agent.id ? <span className="badge-default">默认</span> : null}
                               {agent.is_builtin ? <span className="badge-builtin">内置</span> : null}

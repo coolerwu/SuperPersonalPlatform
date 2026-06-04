@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act } from "react";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -765,6 +765,78 @@ describe("LoginPage", () => {
       id: "agent-renamed",
       name: "Renamed Agent"
     });
+  });
+
+  it("keeps Agent ID and name editable during Chinese IME composition", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/agents");
+    class ClosedWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      constructor() {
+        setTimeout(() => this.onclose?.(), 0);
+      }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", ClosedWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path, options) => {
+        if (path === "/api/auth/me") {
+          return { ok: true, json: async () => ({ authenticated: true }) };
+        }
+        if (path === "/api/agents/options") {
+          return {
+            ok: true,
+            json: async () => ({
+              default_agent_id: "agent-1",
+              agents: [{ id: "agent-1", name: "Agent", model: { has_api_key: true } }]
+            })
+          };
+        }
+        if (path === "/api/sessions") {
+          return { ok: true, json: async () => ({ sessions: [] }) };
+        }
+        if (path === "/api/agents/config") {
+          if (options?.method === "PUT") {
+            return { ok: true, json: async () => ({ ok: true }) };
+          }
+          return {
+            ok: true,
+            json: async () => ({
+              path: "/workspace/config.yaml",
+              common_skill_tools: [],
+              tools: { profile: "default", allow: [], deny: [] },
+              skills: [],
+              default_model_id: "fast",
+              default_agent_id: "agent-1",
+              models: [{ id: "fast", name: "快速模型", base_url: "", model: "fast-chat", temperature: 0.2, supports_images: false }],
+              agents: [
+                { id: "agent-1", name: "Agent", model_id: "fast", system_prompt: "You are terse.", skill_ids: [] }
+              ]
+            })
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+      })
+    );
+
+    vi.resetModules();
+    await act(async () => {
+      await import("./main.jsx");
+    });
+
+    await screen.findByRole("button", { name: /Agent 管理/ });
+    fireEvent.click(screen.getByRole("button", { name: /Agent 管理/ }));
+    const idInput = await screen.findByDisplayValue("agent-1");
+    fireEvent.compositionStart(idInput);
+    fireEvent.change(idInput, { target: { value: "理财助手" } });
+    expect(idInput).toHaveValue("理财助手");
+
+    const nameInput = screen.getByDisplayValue("Agent");
+    fireEvent.compositionStart(nameInput);
+    fireEvent.change(nameInput, { target: { value: "理财顾问" } });
+    expect(nameInput).toHaveValue("理财顾问");
   });
 
   it("selects tools from the Skill management tab", async () => {
