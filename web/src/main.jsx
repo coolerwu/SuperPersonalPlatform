@@ -1247,7 +1247,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                 </thead>
                 <tbody>
                   {config.agents.map((agent, index) => (
-                    <React.Fragment key={`${agent.id}-${index}`}>
+                    <React.Fragment key={`agent-row-${index}`}>
                       <tr className={expandedRow === index ? "row-active" : ""}>
                         <td><input value={agent.id} onChange={(e) => { if (!composingRef.current) updateAgent(index, "id", e.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(e) => { composingRef.current = false; updateAgent(index, "id", e.target.value); }} disabled={agent.is_builtin} /></td>
                         <td>
