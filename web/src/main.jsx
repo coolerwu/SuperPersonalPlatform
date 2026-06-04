@@ -34,6 +34,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   ScrollText,
   Send,
   Settings,
@@ -65,6 +66,7 @@ const AGENT_TOOL_OPTIONS = [
   { id: "update_portfolio_holding", label: "修改持仓", group: "资产组合" },
   { id: "delete_portfolio_holding", label: "删除持仓", group: "资产组合" }
 ];
+const AGENT_TOOL_GROUPS = ["Skills", "自开发", "资产组合"];
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -263,6 +265,15 @@ function MarkdownMessage({ content }) {
         const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
         const ordered = lines.every((line) => /^\d+\.\s+/.test(line));
         const unordered = lines.every((line) => /^[-*]\s+/.test(line));
+        if (/^###\s+/.test(block)) {
+          return <h4 key={`block-${blockIndex}`}>{renderInlineMarkdown(block.replace(/^###\s+/, ""), `${blockIndex}`)}</h4>;
+        }
+        if (/^##\s+/.test(block)) {
+          return <h3 key={`block-${blockIndex}`}>{renderInlineMarkdown(block.replace(/^##\s+/, ""), `${blockIndex}`)}</h3>;
+        }
+        if (/^#\s+/.test(block)) {
+          return <h2 key={`block-${blockIndex}`}>{renderInlineMarkdown(block.replace(/^#\s+/, ""), `${blockIndex}`)}</h2>;
+        }
         if (ordered || unordered) {
           const ListTag = ordered ? "ol" : "ul";
           return (
@@ -305,6 +316,11 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
+  const [expandedSkillIndex, setExpandedSkillIndex] = useState(null);
+  const [skillContents, setSkillContents] = useState({});
+  const [skillContentLoading, setSkillContentLoading] = useState(null);
+  const [skillToolQuery, setSkillToolQuery] = useState("");
+  const [skillToolFilter, setSkillToolFilter] = useState("all");
   const [expandedModelIndex, setExpandedModelIndex] = useState(null);
   const socketRef = useRef(null);
   const messageListRef = useRef(null);
@@ -420,7 +436,10 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     setConfigStatus("");
     try {
       const data = await api("/api/agents/config");
-      setConfig(data);
+      setConfig({
+        ...data,
+        skills: data.skills || []
+      });
     } catch (err) {
       handleApiError(err);
       setConfigError(err.message);
@@ -577,6 +596,17 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   }, [initialTab]);
 
   useEffect(() => {
+    if (activeTab !== "skills" || !config?.skills?.length) {
+      return;
+    }
+    const nextIndex = Math.min(expandedSkillIndex ?? 0, config.skills.length - 1);
+    if (expandedSkillIndex !== nextIndex) {
+      setExpandedSkillIndex(nextIndex);
+    }
+    loadSkillContent(config.skills[nextIndex]);
+  }, [activeTab, config, expandedSkillIndex]);
+
+  useEffect(() => {
     if (messageListRef.current) {
       messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
     }
@@ -595,6 +625,30 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   const connectionLabel = status === "running" ? "生成中" : status === "connected" ? "已连接" : "未连接";
   const modelCapabilityLabel = selectedAgent?.model?.supports_images ? "文本 + 图片" : "文本";
   const providerLabel = (provider) => provider === "anthropic" ? "Anthropic" : "OpenAI 兼容";
+  const skillItems = config?.skills || [];
+  const selectedSkillIndex = skillItems.length ? Math.min(expandedSkillIndex ?? 0, skillItems.length - 1) : -1;
+  const selectedSkill = selectedSkillIndex >= 0 ? skillItems[selectedSkillIndex] : null;
+  const selectedSkillAllow = selectedSkill?.tools?.allow || [];
+  const selectedSkillMarkdown = selectedSkill
+    ? skillContentLoading === selectedSkill.id && skillContents[selectedSkill.id] === undefined
+      ? "加载中..."
+      : skillContents[selectedSkill.id] ?? ""
+    : "";
+  const normalizedToolQuery = skillToolQuery.trim().toLowerCase();
+  const filteredSkillToolGroups = AGENT_TOOL_GROUPS.map((group) => {
+    const tools = AGENT_TOOL_OPTIONS.filter((tool) => {
+      const selected = selectedSkillAllow.includes(tool.id);
+      const matchesQuery = !normalizedToolQuery || [tool.label, tool.id, tool.group].some((value) =>
+        String(value).toLowerCase().includes(normalizedToolQuery)
+      );
+      const matchesFilter =
+        skillToolFilter === "all" ||
+        (skillToolFilter === "selected" && selected) ||
+        (skillToolFilter === "unselected" && !selected);
+      return tool.group === group && matchesQuery && matchesFilter;
+    });
+    return { group, tools };
+  }).filter((item) => item.tools.length);
 
   async function addFiles(fileList) {
     const imageFiles = Array.from(fileList || []).filter((file) =>
@@ -639,52 +693,118 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     }));
   }
 
-  function updateAgentTools(index, field, value) {
+  function updateSkill(index, field, value) {
     setConfig((current) => ({
       ...current,
-      agents: current.agents.map((agent, agentIndex) =>
-        agentIndex === index
-          ? {
-              ...agent,
-              tools: {
-                ...(agent.tools || { profile: config?.tools?.profile || "default", allow: [], deny: [] }),
-                [field]: field === "profile" ? value : value.split(/\s+/).map((item) => item.trim()).filter(Boolean)
-              }
-            }
-          : agent
+      skills: (current.skills || []).map((skill, skillIndex) =>
+        skillIndex === index ? { ...skill, [field]: value } : skill
       )
     }));
+  }
+
+  function skillAgentId(skillId) {
+    if (!String(skillId || "").startsWith("private:")) {
+      return null;
+    }
+    return (config?.agents || []).find((agent) => (agent.skill_ids || []).includes(skillId))?.id || "";
+  }
+
+  async function loadSkillContent(skill) {
+    if (!skill?.id || Object.prototype.hasOwnProperty.call(skillContents, skill.id)) {
+      return;
+    }
+    setSkillContentLoading(skill.id);
+    try {
+      const params = new URLSearchParams({ id: skill.id });
+      const agentForSkill = skillAgentId(skill.id);
+      if (agentForSkill) {
+        params.set("agent_id", agentForSkill);
+      }
+      const data = await api(`/api/agents/skills/content?${params.toString()}`);
+      setSkillContents((current) => ({ ...current, [skill.id]: data.content || "" }));
+      setConfig((current) => ({
+        ...current,
+        skills: (current.skills || []).map((item) =>
+          item.id === skill.id
+            ? {
+                ...item,
+                name: item.id,
+                tools: { ...(data.tools || item.tools || { profile: "default", allow: [], deny: [] }), profile: "default", deny: [] }
+              }
+            : item
+        )
+      }));
+    } catch (err) {
+      handleApiError(err);
+      setConfigError(err.message);
+      setSkillContents((current) => ({ ...current, [skill.id]: "" }));
+    } finally {
+      setSkillContentLoading(null);
+    }
+  }
+
+  function toggleSkillExpanded(index) {
+    const nextIndex = expandedSkillIndex === index ? null : index;
+    setExpandedSkillIndex(nextIndex);
+    if (nextIndex !== null) {
+      loadSkillContent((config?.skills || [])[nextIndex]);
+    }
+  }
+
+  function selectSkill(index) {
+    setExpandedSkillIndex(index);
+    loadSkillContent((config?.skills || [])[index]);
+  }
+
+  function updateSkillContent(skillId, content) {
+    setSkillContents((current) => ({ ...current, [skillId]: content }));
   }
 
   function updateAgentSkillIds(index, value) {
     updateAgent(index, "skill_ids", value.split(/\s+/).map((item) => item.trim()).filter(Boolean));
   }
 
-  function toggleAgentTool(index, toolId) {
+  function toggleSkillTool(index, toolId) {
     setConfig((current) => ({
       ...current,
-      agents: current.agents.map((agent, agentIndex) => {
-        if (agentIndex !== index) {
-          return agent;
+      skills: (current.skills || []).map((skill, skillIndex) => {
+        if (skillIndex !== index) {
+          return skill;
         }
-        const tools = agent.tools || { profile: config?.tools?.profile || "default", allow: [], deny: [] };
+        const tools = skill.tools || { profile: "default", allow: [], deny: [] };
         const allow = new Set(tools.allow || []);
         if (allow.has(toolId)) {
           allow.delete(toolId);
         } else {
           allow.add(toolId);
         }
-        const deny = (tools.deny || []).filter((item) => item !== toolId);
         return {
-          ...agent,
+          ...skill,
           tools: {
             ...tools,
             allow: Array.from(allow),
-            deny
+            deny: []
           }
         };
       })
     }));
+  }
+
+  function addSkill() {
+    const id = `common:skill-${(config?.skills?.length || 0) + 1}`;
+    const nextIndex = config?.skills?.length || 0;
+    setConfig((current) => ({
+      ...current,
+      skills: [
+        ...(current.skills || []),
+        {
+          id,
+          name: id,
+          tools: { profile: "default", allow: [], deny: [] }
+        }
+      ]
+    }));
+    setExpandedSkillIndex(nextIndex);
   }
 
   function addAgent() {
@@ -744,6 +864,24 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     setConfigError("");
     setConfigStatus("");
     try {
+      await Promise.all(
+        Object.entries(skillContents).map(([skillId, content]) =>
+          api("/api/agents/skills/content", {
+            method: "PUT",
+            body: JSON.stringify({
+              id: skillId,
+              content,
+              name: skillId,
+              tools: {
+                ...((config.skills || []).find((skill) => skill.id === skillId)?.tools || { allow: [], deny: [] }),
+                profile: "default",
+                deny: []
+              },
+              agent_id: skillAgentId(skillId) || null
+            })
+          })
+        )
+      );
       await api("/api/agents/config", {
         method: "PUT",
         body: JSON.stringify({
@@ -751,6 +889,10 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
           default_agent_id: config.default_agent_id || config.agents?.[0]?.id || "",
           common_skill_tools: config.common_skill_tools || [],
           tools: config.tools || { profile: "default", allow: [], deny: [] },
+          skills: (config.skills || []).map((skill) => ({
+            id: skill.id,
+            name: skill.id
+          })),
           models: config.models.map((model) => ({
             id: model.id,
             name: model.name,
@@ -766,8 +908,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
             name: agent.name,
             model_id: agent.model_id,
             system_prompt: agent.system_prompt,
-            skill_ids: agent.skill_ids || [],
-            tools: agent.tools || null
+            skill_ids: agent.skill_ids || []
           }))
         })
       });
@@ -783,7 +924,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   }
 
   return (
-    <section className={`page-section agent-section${activeTab === "agents" || activeTab === "models" ? " agent-section-config" : ""}`}>
+    <section className={`page-section agent-section${activeTab === "agents" || activeTab === "skills" || activeTab === "models" ? " agent-section-config" : ""}`}>
       <div className="tab-bar" role="tablist" aria-label="Agent">
         <button className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>
           <Bot size={16} />
@@ -792,6 +933,10 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         <button className={activeTab === "agents" ? "active" : ""} onClick={() => setActiveTab("agents")}>
           <List size={16} />
           Agent 管理
+        </button>
+        <button className={activeTab === "skills" ? "active" : ""} onClick={() => setActiveTab("skills")}>
+          <FileText size={16} />
+          Skill 管理
         </button>
         <button className={activeTab === "models" ? "active" : ""} onClick={() => setActiveTab("models")}>
           <Cpu size={16} />
@@ -1143,47 +1288,6 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                                     <span>Skill IDs</span>
                                     <textarea placeholder="每行一个 skill id，如 common:xxx" value={(agent.skill_ids || []).join("\n")} onChange={(e) => updateAgentSkillIds(index, e.target.value)} />
                                   </label>
-                                  <div className="agent-detail-tools">
-                                    <label>
-                                      <span>工具模板</span>
-                                      <select value={agent.tools?.profile || config.tools?.profile || "default"} onChange={(e) => updateAgentTools(index, "profile", e.target.value)}>
-                                        <option value="default">default</option>
-                                        <option value="self-dev">self-dev</option>
-                                        <option value="portfolio">portfolio</option>
-                                      </select>
-                                    </label>
-                                    <div className="agent-tool-picker">
-                                      <div className="agent-tool-picker-heading">
-                                        <span>额外启用工具</span>
-                                        <small>{(agent.tools?.allow || []).length} 个已选</small>
-                                      </div>
-                                      <div className="agent-tool-grid">
-                                        {AGENT_TOOL_OPTIONS.map((tool) => {
-                                          const selected = (agent.tools?.allow || []).includes(tool.id);
-                                          return (
-                                            <label key={tool.id} className={`agent-tool-option${selected ? " selected" : ""}`}>
-                                              <input
-                                                type="checkbox"
-                                                checked={selected}
-                                                onChange={() => toggleAgentTool(index, tool.id)}
-                                              />
-                                              <span className="agent-tool-check" aria-hidden="true">
-                                                {selected ? <Check size={12} /> : null}
-                                              </span>
-                                              <span className="agent-tool-copy">
-                                                <strong>{tool.label}</strong>
-                                                <small>{tool.group}</small>
-                                              </span>
-                                            </label>
-                                          );
-                                        })}
-                                      </div>
-                                    </div>
-                                    <label className="large">
-                                      <span>禁用工具 ID（高级）</span>
-                                      <textarea placeholder="每行一个工具 id，会覆盖模板和勾选项" value={(agent.tools?.deny || []).join("\n")} onChange={(e) => updateAgentTools(index, "deny", e.target.value)} />
-                                    </label>
-                                  </div>
                                 </>
                               ) : null}
                             </div>
@@ -1196,6 +1300,194 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                 </table>
               </div>
               </section>
+            </div>
+          ) : (
+            <div className="empty-state">正在加载 Agent 配置</div>
+          )}
+        </div>
+      ) : null}
+      {activeTab === "skills" ? (
+        <div className="agent-config-panel">
+          <div className="agent-config-toolbar">
+            <div className="agent-config-meta">
+              <span>Workspace 配置</span>
+              <small>{config?.path || "正在读取 config.yaml"}</small>
+            </div>
+            <div className="config-actions">
+              <button className="secondary-button small" onClick={loadAgentConfig} disabled={configLoading}>
+                <RefreshCw size={15} />
+                重新读取
+              </button>
+              <button className="secondary-button primary-action small" onClick={() => saveAgentConfig("Skill 工具配置已保存")} disabled={!config || configSaving}>
+                <Save size={15} />
+                {configSaving ? "保存中" : "保存"}
+              </button>
+            </div>
+          </div>
+          {configError ? <div className="form-error">{configError}</div> : null}
+          {configStatus ? <div className="status-message">{configStatus}</div> : null}
+          {config ? (
+            <div className="skill-management-workspace">
+              <aside className="skill-library-panel" aria-label="Skill 文件">
+                <div className="skill-library-heading">
+                  <div>
+                    <strong>Skill 文件</strong>
+                    <span>{skillItems.length} 个文件</span>
+                  </div>
+                  <button className="icon-action" title="添加 Skill" onClick={addSkill}>
+                    <Plus size={15} />
+                  </button>
+                </div>
+                <div className="skill-library-list">
+                  {skillItems.map((skill, index) => (
+                    <button
+                      key={`${skill.id}-${index}`}
+                      className={`skill-library-item${selectedSkillIndex === index ? " active" : ""}`}
+                      onClick={() => selectSkill(index)}
+                    >
+                      <span className="skill-library-icon"><FileText size={15} /></span>
+                      <span className="skill-library-copy">
+                        <strong>{skill.id || "未命名 Skill"}</strong>
+                        <small>{skill.id || "未填写 ID"}</small>
+                      </span>
+                      {skill.is_builtin ? <span className="badge-builtin">内置</span> : null}
+                    </button>
+                  ))}
+                </div>
+                <div className="skill-library-stats">
+                  <span>{config.agents.reduce((sum, agent) => sum + (agent.skill_ids || []).length, 0)} 次绑定</span>
+                  <span>{AGENT_TOOL_OPTIONS.length} 个工具项</span>
+                </div>
+              </aside>
+              {selectedSkill ? (
+                <section className="skill-editor-shell">
+                  <div className="skill-editor-topbar">
+                    <div className="skill-editor-title">
+                      <span className="skill-editor-icon"><FileCode size={16} /></span>
+                      <div>
+                        <strong>{selectedSkill.id || "未命名 Skill"}</strong>
+                        <small>{selectedSkill.id}</small>
+                      </div>
+                    </div>
+                    <div className="skill-editor-status">
+                      {selectedSkill.is_builtin ? <span>内置</span> : <span>自定义</span>}
+                      <span>{selectedSkillAllow.length} tools</span>
+                    </div>
+                    <div className="skill-editor-actions">
+                      {!selectedSkill.is_builtin ? (
+                        <button
+                          className="icon-action danger"
+                          title="删除 Skill"
+                          onClick={() => {
+                            setConfig((current) => ({
+                              ...current,
+                              skills: (current.skills || []).filter((_, itemIndex) => itemIndex !== selectedSkillIndex)
+                            }));
+                            setExpandedSkillIndex((current) => {
+                              const nextLength = Math.max((skillItems.length || 1) - 1, 0);
+                              if (!nextLength) {
+                                return null;
+                              }
+                              return Math.min(current ?? 0, nextLength - 1);
+                            });
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="skill-editor-fields">
+                    <label>
+                      <span>Skill ID</span>
+                      <input value={selectedSkill.id} onChange={(event) => updateSkill(selectedSkillIndex, "id", event.target.value)} disabled={selectedSkill.is_builtin} />
+                    </label>
+                  </div>
+                  <div className="skill-editor-grid">
+                    <div className="skill-markdown-pane">
+                      <div className="skill-markdown-toolbar">
+                        <span>Markdown 内容</span>
+                        <small>实时预览</small>
+                      </div>
+                      <div className="skill-markdown-split">
+                        <textarea
+                          aria-label="Markdown 内容"
+                          className="skill-markdown-editor"
+                          placeholder="# Skill 名称&#10;&#10;描述这个 skill 的工作方式。"
+                          value={selectedSkillMarkdown}
+                          onChange={(event) => updateSkillContent(selectedSkill.id, event.target.value)}
+                          disabled={skillContentLoading === selectedSkill.id}
+                        />
+                        <div className="skill-markdown-preview" aria-label="Markdown 预览">
+                          {selectedSkillMarkdown.trim() ? (
+                            <MarkdownMessage content={selectedSkillMarkdown} />
+                          ) : (
+                            <div className="skill-preview-empty">Markdown 预览会实时显示在这里</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <aside className="skill-tools-pane">
+                      <div className="skill-tools-heading">
+                        <div>
+                          <strong>工具能力</strong>
+                          <span>{selectedSkillAllow.length} 个额外启用</span>
+                        </div>
+                      </div>
+                      <div className="skill-tool-controls">
+                        <label className="skill-tool-search">
+                          <Search size={14} />
+                          <input
+                            aria-label="搜索工具能力"
+                            placeholder="搜索工具名称或 ID"
+                            value={skillToolQuery}
+                            onChange={(event) => setSkillToolQuery(event.target.value)}
+                          />
+                        </label>
+                        <div className="skill-tool-filter" aria-label="工具过滤">
+                          <button className={skillToolFilter === "all" ? "active" : ""} onClick={() => setSkillToolFilter("all")}>全部</button>
+                          <button className={skillToolFilter === "selected" ? "active" : ""} onClick={() => setSkillToolFilter("selected")}>已选</button>
+                          <button className={skillToolFilter === "unselected" ? "active" : ""} onClick={() => setSkillToolFilter("unselected")}>未选</button>
+                        </div>
+                      </div>
+                      <div className="skill-tool-groups">
+                        {filteredSkillToolGroups.length ? (
+                          filteredSkillToolGroups.map(({ group, tools }) => (
+                            <div className="skill-tool-group" key={group}>
+                              <div className="skill-tool-group-title">
+                                <span>{group}</span>
+                              </div>
+                              <div className="skill-tool-list">
+                                {tools.map((tool) => {
+                                  const selected = selectedSkillAllow.includes(tool.id);
+                                  return (
+                                    <label key={tool.id} className={`skill-tool-row${selected ? " selected" : ""}`}>
+                                      <input
+                                        type="checkbox"
+                                        checked={selected}
+                                        onChange={() => toggleSkillTool(selectedSkillIndex, tool.id)}
+                                      />
+                                      <span className="agent-tool-check" aria-hidden="true">
+                                        {selected ? <Check size={12} /> : null}
+                                      </span>
+                                      <span>{tool.label}</span>
+                                      <small>{tool.id}</small>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="skill-tool-empty">没有匹配的工具能力</div>
+                        )}
+                      </div>
+                    </aside>
+                  </div>
+                </section>
+              ) : (
+                <div className="empty-state">还没有 Skill，点击添加创建一个 Markdown skill。</div>
+              )}
             </div>
           ) : (
             <div className="empty-state">正在加载 Agent 配置</div>

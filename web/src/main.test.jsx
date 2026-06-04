@@ -687,7 +687,7 @@ describe("LoginPage", () => {
     );
   });
 
-  it("selects tools from the Agent management tab", async () => {
+  it("selects tools from the Skill management tab", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/agents");
     class ClosedWebSocket {
@@ -727,6 +727,11 @@ describe("LoginPage", () => {
               path: "/workspace/config.yaml",
               common_skill_tools: [],
               tools: { profile: "default", allow: [], deny: [] },
+              skills: [{
+                id: "common:self-dev",
+                name: "自开发",
+                tools: { profile: "default", allow: [], deny: [] }
+              }],
               default_model_id: "fast",
               default_agent_id: "assistant",
               models: [{ id: "fast", name: "快速模型", base_url: "", model: "fast-chat", temperature: 0.2, supports_images: false }],
@@ -735,11 +740,16 @@ describe("LoginPage", () => {
                 name: "个人助理",
                 model_id: "fast",
                 system_prompt: "You are concise.",
-                skill_ids: [],
-                tools: { profile: "default", allow: [], deny: [] }
+                skill_ids: ["common:self-dev"]
               }]
             })
           };
+        }
+        if (String(path).startsWith("/api/agents/skills/content")) {
+          if (options?.method === "PUT") {
+            return { ok: true, json: async () => ({ ok: true }) };
+          }
+          return { ok: true, json: async () => ({ id: "common:self-dev", content: "# 自开发\n旧内容" }) };
         }
         return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
       })
@@ -751,8 +761,13 @@ describe("LoginPage", () => {
       await import("./main.jsx");
     });
 
-    await user.click(await screen.findByRole("button", { name: /Agent 管理/ }));
-    await user.click(await screen.findByTitle("展开"));
+    await user.click(await screen.findByRole("button", { name: /Skill 管理/ }));
+    expect(await screen.findByText("Skill 文件")).toBeInTheDocument();
+    expect(screen.queryByText(/禁用工具/)).not.toBeInTheDocument();
+    const markdownEditor = await screen.findByLabelText(/Markdown 内容/);
+    await waitFor(() => expect(markdownEditor).toHaveValue("# 自开发\n旧内容"));
+    await user.clear(markdownEditor);
+    await user.type(markdownEditor, "# 自开发\n新内容");
     await user.click(await screen.findByLabelText(/仓库搜索/));
     await user.click(screen.getByRole("button", { name: /^保存$/ }));
 
@@ -760,6 +775,17 @@ describe("LoginPage", () => {
       ([path, options]) => path === "/api/agents/config" && options?.method === "PUT"
     );
     const payload = JSON.parse(saveCall[1].body);
-    expect(payload.agents[0].tools.allow).toContain("repo_search");
+    expect(payload.skills[0].tools).toBeUndefined();
+    expect(payload.agents[0].tools).toBeUndefined();
+    const skillContentCall = fetch.mock.calls.find(
+      ([path, options]) => path === "/api/agents/skills/content" && options?.method === "PUT"
+    );
+    expect(JSON.parse(skillContentCall[1].body)).toEqual({
+      id: "common:self-dev",
+      content: "# 自开发\n新内容",
+      name: "common:self-dev",
+      tools: { profile: "default", allow: ["repo_search"], deny: [] },
+      agent_id: null
+    });
   });
 });

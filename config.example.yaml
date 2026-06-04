@@ -24,6 +24,9 @@ tools:
   profile: "default"
   allow: []
   deny: []
+skills:
+  definitions:
+    - id: "common:self-dev"
 channels:
   wechat_personal:
     enabled: true
@@ -49,7 +52,3 @@ agents:
       system_prompt: "你是一个直接、可靠的个人助理。用中文简洁回答。"
       model_id: "default"
       skill_ids: []
-      tools:
-        profile: "default"
-        allow: []
-        deny: []

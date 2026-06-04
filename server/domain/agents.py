@@ -94,22 +94,37 @@ class AgentDefinition:
 
 
 @dataclass(frozen=True)
+class SkillDefinition:
+    id: str
+    name: str = ""
+    tools: ToolAccessDefinition = ToolAccessDefinition()
+
+    def __post_init__(self) -> None:
+        if not SKILL_ID_PATTERN.fullmatch(self.id):
+            raise AgentConfigError("skills.definitions[].id contains invalid skill id")
+
+
+@dataclass(frozen=True)
 class AgentPlatformDefinition:
     models: tuple[ModelDefinition, ...]
     default_model_id: str
     agents: tuple[AgentDefinition, ...]
     default_agent_id: str
+    skill_definitions: tuple[SkillDefinition, ...] = ()
     common_skill_tools: tuple[str, ...] = ()
     tools: ToolAccessDefinition = ToolAccessDefinition()
 
     def __post_init__(self) -> None:
         model_ids = {model.id for model in self.models}
         agent_ids = {agent.id for agent in self.agents}
+        skill_ids = {skill.id for skill in self.skill_definitions}
         tool_ids = set(self.common_skill_tools)
         if len(model_ids) != len(self.models):
             raise AgentConfigError("llm.models[].id must be unique")
         if len(agent_ids) != len(self.agents):
             raise AgentConfigError("agents.definitions[].id must be unique")
+        if len(skill_ids) != len(self.skill_definitions):
+            raise AgentConfigError("skills.definitions[].id must be unique")
         if len(tool_ids) != len(self.common_skill_tools):
             raise AgentConfigError("common_skills.tools must be unique")
         unsupported_tools = tool_ids - SUPPORTED_COMMON_SKILL_TOOLS

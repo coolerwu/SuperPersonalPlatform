@@ -304,6 +304,14 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
             "default_model_id": "fast",
             "default_agent_id": "assistant",
             "common_skill_tools": ["list_skill", "read_skill"],
+            "skills": [
+                {
+                    "id": "common:writing",
+                },
+                {
+                    "id": "common:portfolio",
+                }
+            ],
             "models": [
                 {
                     "id": "fast",
@@ -333,7 +341,45 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
     assert settings.agent_platform.get_model("fast").name == "Renamed Model"
     assert settings.agent_platform.get_model("fast").supports_images is False
     assert settings.agent_platform.common_skill_tools == ("list_skill", "read_skill")
+    assert settings.agent_platform.skill_definitions[0].id == "common:writing"
+    assert settings.agent_platform.skill_definitions[1].id == "common:portfolio"
     assert settings.agent_platform.get_agent("assistant").skill_ids == ("common:writing",)
+    raw = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "agents:\n" in raw
+    assert "skills:\n" in raw
+    assert "skills:\n  definitions:\n  - id: common:writing\n  - id: common:portfolio\n" in raw
+
+
+def test_agent_skill_content_endpoint_reads_and_writes_markdown(tmp_path) -> None:
+    write_config(tmp_path, skill_ids=("common:self-dev",))
+    skill_dir = tmp_path / "skills" / "common" / "self-dev"
+    skill_dir.mkdir(parents=True)
+    skill_path = skill_dir / "SKILL.md"
+    skill_path.write_text("# 自开发\n旧内容", encoding="utf-8")
+    client = make_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    read_response = client.get("/api/agents/skills/content", params={"id": "common:self-dev"})
+
+    assert read_response.status_code == 200
+    assert read_response.json()["content"] == "# 自开发\n旧内容"
+
+    write_response = client.put(
+        "/api/agents/skills/content",
+        json={
+            "id": "common:self-dev",
+            "name": "common:self-dev",
+            "content": "# 自开发\n新内容",
+            "tools": {"profile": "default", "allow": ["repo_search"], "deny": []},
+        },
+    )
+
+    assert write_response.status_code == 200
+    saved = skill_path.read_text(encoding="utf-8")
+    assert saved.startswith("---\n")
+    assert "profile: default" in saved
+    assert "- repo_search" in saved
+    assert saved.endswith("# 自开发\n新内容")
 
 
 def test_agent_chat_websocket_uses_agent_bound_model_without_model_id(tmp_path) -> None:
@@ -569,6 +615,77 @@ def test_agent_tool_config_resolves_profile_allow_and_deny(tmp_path) -> None:
     assert "repo_push" not in tool_names
     assert "repo_write_file" not in tool_names
     assert registry.resolve_tools(raw.agent_platform.tools, agent, ("list_skill",)) == ("list_skill",)
+
+
+def test_agent_tools_are_resolved_from_bound_skill_frontmatter(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(
+        """
+auth:
+  token: secret-token
+proxy:
+  upstream_base_url: http://example.test/
+tools:
+  profile: self-dev
+  allow:
+    - repo_push
+  deny: []
+skills:
+  definitions:
+    - id: common:self-dev
+      name: 自开发
+llm:
+  models:
+    - id: fast
+      name: Fast
+      base_url: https://llm.example.test/v1
+      api_key: key
+      model: fast-chat
+agents:
+  definitions:
+    - id: assistant
+      name: Assistant
+      system_prompt: You are concise.
+      model_id: fast
+      skill_ids:
+        - common:self-dev
+      tools:
+        profile: portfolio
+        allow: []
+        deny: []
+""".strip(),
+        encoding="utf-8",
+    )
+    skill_dir = tmp_path / "skills" / "common" / "self-dev"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: 自开发
+tools:
+  profile: self-dev
+  allow:
+    - repo_push
+  deny:
+    - repo_write_file
+---
+# 自开发
+""",
+        encoding="utf-8",
+    )
+    service = AgentChatService(tmp_path / "config.yaml", FakeModelGateway())
+    settings = service._load_platform()
+    registry = AgentToolRegistry()
+
+    tool_names = registry.resolve_tools(
+        settings.tools,
+        settings.get_agent("assistant"),
+        settings.common_skill_tools,
+        settings.skill_definitions,
+    )
+
+    assert "repo_read_file" in tool_names
+    assert "repo_push" in tool_names
+    assert "repo_write_file" not in tool_names
+    assert "list_portfolio_holdings" not in tool_names
 
 
 def test_agent_tool_config_rejects_unknown_tool() -> None:

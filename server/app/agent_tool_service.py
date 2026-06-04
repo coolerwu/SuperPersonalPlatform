@@ -5,7 +5,7 @@ import subprocess
 from typing import Any, Awaitable, Callable
 
 from server.app.agent_skill_service import AgentSkillToolbox
-from server.domain.agents import AgentConfigError, AgentDefinition, ToolAccessDefinition
+from server.domain.agents import AgentConfigError, AgentDefinition, SkillDefinition, ToolAccessDefinition
 
 
 ToolHandler = Callable[[dict[str, Any], "AgentToolRuntime"], Awaitable[str]]
@@ -262,12 +262,21 @@ class AgentToolRegistry:
         platform_tools: ToolAccessDefinition,
         agent: AgentDefinition,
         legacy_common_tools: tuple[str, ...],
+        skill_definitions: tuple[SkillDefinition, ...] = (),
     ) -> tuple[str, ...]:
-        access = agent.tools or platform_tools
-        names = set(PROFILE_TOOLS[access.profile])
+        names = set(PROFILE_TOOLS[platform_tools.profile])
+        denied = set(platform_tools.deny)
         names.update(legacy_common_tools)
-        names.update(access.allow)
-        names.difference_update(access.deny)
+        names.update(platform_tools.allow)
+        skill_by_id = {skill.id: skill for skill in skill_definitions}
+        for skill_id in agent.skill_ids:
+            skill = skill_by_id.get(skill_id)
+            if skill is None:
+                continue
+            names.update(PROFILE_TOOLS[skill.tools.profile])
+            names.update(skill.tools.allow)
+            denied.update(skill.tools.deny)
+        names.difference_update(denied)
         unknown = sorted(name for name in names if name not in self._tools)
         if unknown:
             raise AgentConfigError(f"tools contains unsupported tool: {unknown[0]}")

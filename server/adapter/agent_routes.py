@@ -3,6 +3,7 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Query,
     Request,
     WebSocket,
     WebSocketDisconnect,
@@ -55,11 +56,26 @@ class AgentDefinitionConfigPayload(BaseModel):
     tools: dict[str, object] | None = None
 
 
+class SkillDefinitionConfigPayload(BaseModel):
+    id: str
+    name: str = ""
+    tools: dict[str, object] | None = None
+
+
+class SkillContentPayload(BaseModel):
+    id: str
+    content: str
+    name: str = ""
+    tools: dict[str, object] | None = None
+    agent_id: str | None = None
+
+
 class AgentConfigUpdatePayload(BaseModel):
     default_model_id: str
     default_agent_id: str
     common_skill_tools: list[str] | None = None
     tools: dict[str, object] | None = None
+    skills: list[SkillDefinitionConfigPayload] | None = None
     models: list[AgentModelConfigPayload]
     agents: list[AgentDefinitionConfigPayload]
 
@@ -123,6 +139,19 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                 "allow": list(snapshot.tools_allow),
                 "deny": list(snapshot.tools_deny),
             },
+            "skills": [
+                {
+                    "id": skill.id,
+                    "name": skill.name,
+                    "tools": {
+                        "profile": skill.tools_profile,
+                        "allow": list(skill.tools_allow),
+                        "deny": list(skill.tools_deny),
+                    },
+                    "is_builtin": skill.is_builtin,
+                }
+                for skill in snapshot.skills
+            ],
             "models": [
                 {
                     "id": model.id,
@@ -144,11 +173,6 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                     "system_prompt": agent.system_prompt,
                     "skill_ids": list(agent.skill_ids),
                     "is_builtin": agent.is_builtin,
-                    "tools": {
-                        "profile": agent.tools_profile,
-                        "allow": list(agent.tools_allow),
-                        "deny": list(agent.tools_deny),
-                    },
                 }
                 for agent in snapshot.agents
             ],
@@ -173,6 +197,37 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                 detail=str(exc),
             ) from exc
         return {"ok": True, "message": "Agent 配置已保存"}
+
+    @router.get("/skills/content", dependencies=[Depends(require_agent_auth)])
+    def skill_content(
+        id: str = Query(...),
+        agent_id: str | None = Query(None),
+    ) -> dict[str, object]:
+        service = _agent_service(container)
+        try:
+            return service.read_skill_content(id, agent_id)
+        except AgentConfigError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+
+    @router.put("/skills/content", dependencies=[Depends(require_agent_auth)])
+    def update_skill_content(payload: SkillContentPayload) -> dict[str, object]:
+        service = _agent_service(container)
+        try:
+            return service.write_skill_content(
+                payload.id,
+                payload.content,
+                payload.agent_id,
+                name=payload.name,
+                tools=payload.tools,
+            )
+        except AgentConfigError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
 
     @router.websocket("/chat/connect")
     async def connect_chat(websocket: WebSocket) -> None:

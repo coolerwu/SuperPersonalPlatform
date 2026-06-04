@@ -9,6 +9,7 @@ from server.domain.agents import (
     AgentDefinition,
     AgentPlatformDefinition,
     ModelDefinition,
+    SkillDefinition,
     ToolAccessDefinition,
 )
 from server.domain.harness import (
@@ -76,6 +77,13 @@ class EditableAgent:
     model_id: str | None
     system_prompt: str
     skill_ids: tuple[str, ...]
+    is_builtin: bool = False
+
+
+@dataclass(frozen=True)
+class EditableSkill:
+    id: str
+    name: str
     tools_profile: str
     tools_allow: tuple[str, ...]
     tools_deny: tuple[str, ...]
@@ -91,6 +99,7 @@ class AgentConfigSnapshot:
     tools_profile: str
     tools_allow: tuple[str, ...]
     tools_deny: tuple[str, ...]
+    skills: tuple[EditableSkill, ...]
     models: tuple[EditableModel, ...]
     agents: tuple[EditableAgent, ...]
 
@@ -102,7 +111,7 @@ BUILTIN_AGENTS: tuple[dict[str, Any], ...] = (
         "id": "ai-investment-advisor",
         "name": "AI投资助手",
         "is_builtin": True,
-        "tools_profile": "portfolio",
+        "skill_ids": ("common:portfolio",),
         "system_prompt": (
             "你是一个专业的投资组合助手，帮助用户管理投资持仓。\n\n"
             "你可以做的操作：\n"
@@ -115,6 +124,14 @@ BUILTIN_AGENTS: tuple[dict[str, Any], ...] = (
             "如需获取当前行情信息，请结合你的知识或建议用户补充。\n"
             "请用中文回复，回答简洁专业。"
         ),
+    },
+)
+
+BUILTIN_SKILLS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "common:portfolio",
+        "name": "投资组合工具",
+        "tools_profile": "portfolio",
     },
 )
 
@@ -171,13 +188,6 @@ class AgentChatService:
                 model_id=agent.model_id,
                 system_prompt=agent.system_prompt,
                 skill_ids=agent.skill_ids,
-                tools_profile=(agent.tools or platform.tools).profile,
-                tools_allow=(agent.tools or ToolAccessDefinition()).allow
-                if agent.tools
-                else (),
-                tools_deny=(agent.tools or ToolAccessDefinition()).deny
-                if agent.tools
-                else (),
             )
             for agent in platform.agents
         )
@@ -190,10 +200,7 @@ class AgentChatService:
                 name=ba["name"],
                 model_id=ba.get("model_id") or platform.default_model_id or None,
                 system_prompt=ba.get("system_prompt", ""),
-                skill_ids=(),
-                tools_profile="default",
-                tools_allow=(),
-                tools_deny=(),
+                skill_ids=tuple(ba.get("skill_ids") or ()),
                 is_builtin=True,
             )
             for ba in self._builtin_with_overrides()
@@ -208,6 +215,17 @@ class AgentChatService:
             tools_profile=platform.tools.profile,
             tools_allow=platform.tools.allow,
             tools_deny=platform.tools.deny,
+            skills=tuple(
+                EditableSkill(
+                    id=skill.id,
+                    name=skill.name,
+                    tools_profile=skill.tools.profile,
+                    tools_allow=skill.tools.allow,
+                    tools_deny=skill.tools.deny,
+                    is_builtin=skill.id in {item["id"] for item in BUILTIN_SKILLS},
+                )
+                for skill in platform.skill_definitions
+            ),
             models=tuple(
                 EditableModel(
                     id=model.id,
@@ -230,12 +248,17 @@ class AgentChatService:
         old_settings = parse_settings(raw)
         models = payload.get("models") or []
         agents = payload.get("agents") or []
+        skills = payload.get("skills")
         common_skill_tools = payload.get("common_skill_tools")
         tools_payload = payload.get("tools")
         if not isinstance(models, list):
             raise AgentConfigError("models must be a list")
         if not isinstance(agents, list):
             raise AgentConfigError("agents must be a list")
+        if skills is None:
+            skills = raw.get("skills", {}).get("definitions", [])
+        if not isinstance(skills, list):
+            raise AgentConfigError("skills must be a list")
         if common_skill_tools is None:
             common_skill_tools = raw.get("common_skills", {}).get("tools", [])
         if not isinstance(common_skill_tools, list):
@@ -268,6 +291,17 @@ class AgentChatService:
                 }
             )
 
+        normalized_skills: list[dict[str, Any]] = []
+        for skill in skills:
+            if not isinstance(skill, dict):
+                raise AgentConfigError("skills[] must be an object")
+            skill_id = str(skill.get("id") or "").strip()
+            normalized_skills.append(
+                {
+                    "id": skill_id,
+                }
+            )
+
         builtin_ids = {ba["id"] for ba in BUILTIN_AGENTS}
         normalized_agents: list[dict[str, Any]] = []
         builtin_overrides: dict[str, dict[str, Any]] = {}
@@ -277,7 +311,6 @@ class AgentChatService:
             agent_id = str(agent.get("id") or "").strip()
             model_id = agent.get("model_id")
             raw_skill_ids = agent.get("skill_ids")
-            raw_tools = agent.get("tools")
 
             # Built-in agents: collect overrides, skip from definitions
             if agent_id in builtin_ids:
@@ -297,8 +330,6 @@ class AgentChatService:
                 skill_ids = raw_skill_ids
             if not isinstance(skill_ids, (list, tuple)):
                 raise AgentConfigError("agents[].skill_ids must be a list")
-            if raw_tools is not None and not isinstance(raw_tools, dict):
-                raise AgentConfigError("agents[].tools must be an object")
             normalized_agents.append(
                 {
                     "id": agent_id,
@@ -306,7 +337,6 @@ class AgentChatService:
                     "model_id": str(model_id).strip() if model_id is not None else "",
                     "system_prompt": str(agent.get("system_prompt") or "").strip(),
                     "skill_ids": [str(skill_id).strip() for skill_id in skill_ids if str(skill_id).strip()],
-                    **({"tools": self._normalize_tool_access(raw_tools)} if raw_tools is not None else {}),
                 }
             )
 
@@ -316,6 +346,7 @@ class AgentChatService:
             "models": normalized_models,
         }
         raw.setdefault("agents", {})
+        raw["skills"] = {"definitions": normalized_skills}
         raw["agents"]["default_agent_id"] = str(payload.get("default_agent_id") or "").strip()
         raw["agents"]["definitions"] = normalized_agents
         if builtin_overrides:
@@ -328,6 +359,38 @@ class AgentChatService:
         raw["tools"] = self._normalize_tool_access(tools_payload)
         parse_settings(raw)
         self._write_raw_config(raw)
+
+    def read_skill_content(self, skill_id: str, agent_id: str | None = None) -> dict[str, object]:
+        skill = self._skill_service.read_workspace_skill(skill_id, agent_id)
+        return {
+            "id": skill.id,
+            "name": skill.name,
+            "content": skill.content,
+            "tools": {
+                "profile": skill.tools.profile,
+                "allow": list(skill.tools.allow),
+                "deny": list(skill.tools.deny),
+            },
+            "truncated": skill.truncated,
+        }
+
+    def write_skill_content(
+        self,
+        skill_id: str,
+        content: str,
+        agent_id: str | None = None,
+        *,
+        name: str = "",
+        tools: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        path = self._skill_service.write_workspace_skill(
+            skill_id,
+            content,
+            agent_id,
+            name=name,
+            tools=self._tool_access_from_payload(tools or {}),
+        )
+        return {"ok": True, "path": str(path)}
 
     async def chat(
         self,
@@ -345,6 +408,7 @@ class AgentChatService:
             platform.tools,
             agent,
             platform.common_skill_tools,
+            platform.skill_definitions,
         )
         skill_context: SkillContext
         if tool_names:
@@ -418,6 +482,7 @@ class AgentChatService:
                     platform.tools,
                     agent,
                     platform.common_skill_tools,
+                    platform.skill_definitions,
                 ),
                 tool_registry=self._tool_registry,
                 tool_runtime=tool_runtime,
@@ -445,20 +510,57 @@ class AgentChatService:
 
     def _load_platform(self) -> AgentPlatformDefinition:
         platform = load_settings(self._config_path).agent_platform
+        platform = self._platform_with_skill_frontmatter(platform)
 
         # Merge built-in agents that aren't already in config definitions
         builtin_defs = self._builtin_agent_definitions(platform)
-        if builtin_defs:
+        builtin_skills = self._builtin_skill_definitions(platform)
+        if builtin_defs or builtin_skills:
             all_agents = platform.agents + tuple(builtin_defs)
+            all_skills = platform.skill_definitions + tuple(builtin_skills)
             return AgentPlatformDefinition(
                 models=platform.models,
                 default_model_id=platform.default_model_id,
                 agents=all_agents,
                 default_agent_id=platform.default_agent_id,
+                skill_definitions=all_skills,
                 common_skill_tools=platform.common_skill_tools,
                 tools=platform.tools,
             )
         return platform
+
+    def _platform_with_skill_frontmatter(
+        self, platform: AgentPlatformDefinition
+    ) -> AgentPlatformDefinition:
+        if not platform.skill_definitions:
+            return platform
+        skill_definitions: list[SkillDefinition] = []
+        builtin_skill_tools = {
+            skill["id"]: ToolAccessDefinition(profile=skill["tools_profile"])
+            for skill in BUILTIN_SKILLS
+        }
+        for skill in platform.skill_definitions:
+            metadata = self._skill_service.read_workspace_skill(skill.id)
+            metadata_name = metadata.name if metadata.content or metadata.name != skill.id else ""
+            tools = metadata.tools
+            if not metadata.content and skill.id in builtin_skill_tools:
+                tools = builtin_skill_tools[skill.id]
+            skill_definitions.append(
+                SkillDefinition(
+                    id=skill.id,
+                    name=metadata_name or skill.name,
+                    tools=tools,
+                )
+            )
+        return AgentPlatformDefinition(
+            models=platform.models,
+            default_model_id=platform.default_model_id,
+            agents=platform.agents,
+            default_agent_id=platform.default_agent_id,
+            skill_definitions=tuple(skill_definitions),
+            common_skill_tools=platform.common_skill_tools,
+            tools=platform.tools,
+        )
 
     def _builtin_agent_definitions(
         self, platform: AgentPlatformDefinition
@@ -470,16 +572,30 @@ class AgentChatService:
             if ba["id"] in config_ids:
                 continue  # already defined in config.yaml
             model_id = ba.get("model_id") or platform.default_model_id or ""
-            tools = None
-            if ba.get("tools_profile"):
-                tools = ToolAccessDefinition(profile=ba["tools_profile"])
             definitions.append(
                 AgentDefinition(
                     id=ba["id"],
                     name=ba["name"],
                     system_prompt=ba.get("system_prompt", ""),
                     model_id=model_id or None,
-                    tools=tools,
+                    skill_ids=tuple(ba.get("skill_ids") or ()),
+                )
+            )
+        return definitions
+
+    def _builtin_skill_definitions(
+        self, platform: AgentPlatformDefinition
+    ) -> list[SkillDefinition]:
+        config_ids = {skill.id for skill in platform.skill_definitions}
+        definitions: list[SkillDefinition] = []
+        for skill in BUILTIN_SKILLS:
+            if skill["id"] in config_ids:
+                continue
+            definitions.append(
+                SkillDefinition(
+                    id=skill["id"],
+                    name=skill.get("name", ""),
+                    tools=ToolAccessDefinition(profile=skill["tools_profile"]),
                 )
             )
         return definitions
@@ -564,3 +680,11 @@ class AgentChatService:
             "allow": [str(tool).strip() for tool in allow if str(tool).strip()],
             "deny": [str(tool).strip() for tool in deny if str(tool).strip()],
         }
+
+    def _tool_access_from_payload(self, raw: dict[str, object]) -> ToolAccessDefinition:
+        normalized = self._normalize_tool_access(raw)
+        return ToolAccessDefinition(
+            profile=str(normalized["profile"]),
+            allow=tuple(normalized["allow"]),
+            deny=tuple(normalized["deny"]),
+        )
