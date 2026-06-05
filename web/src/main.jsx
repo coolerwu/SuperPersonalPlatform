@@ -2922,7 +2922,7 @@ function ChannelsPage({ onUnauthorized }) {
     try {
       if (useMultiAccount) {
         const data = await api(`/api/channels/wechat/accounts/${id}/start`, { method: "POST" });
-        setAccounts(prev => prev.map(a => a.id === id ? data.account : a));
+        setAccounts(prev => prev.map(a => a.id === id ? { ...a, ...data.account, status: data.account.status || a.status } : a));
       } else {
         const data = await api("/api/channels/wechat/start", { method: "POST" });
         setAccounts([{ id: "default", name: "微信机器人", status: data.wechat }]);
@@ -2939,11 +2939,28 @@ function ChannelsPage({ onUnauthorized }) {
     try {
       if (useMultiAccount) {
         const data = await api(`/api/channels/wechat/accounts/${id}/stop`, { method: "POST" });
-        setAccounts(prev => prev.map(a => a.id === id ? data.account : a));
+        setAccounts(prev => prev.map(a => a.id === id ? { ...a, ...data.account, status: data.account.status || a.status } : a));
       } else {
         const data = await api("/api/channels/wechat/stop", { method: "POST" });
         setAccounts([{ id: "default", name: "微信机器人", status: data.wechat }]);
       }
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setError(err.message);
+    } finally { setLoading(false); }
+  }
+
+  async function updateAccountAgent(id, defaultAgentId) {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await api(`/api/channels/wechat/accounts/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ default_agent_id: defaultAgentId }),
+      });
+      setAccounts(prev => prev.map(a => (
+        a.id === id ? { ...a, ...data.account, status: data.account.status || a.status } : a
+      )));
     } catch (err) {
       if (err.status === 401) { onUnauthorized(); return; }
       setError(err.message);
@@ -3032,11 +3049,29 @@ function ChannelsPage({ onUnauthorized }) {
               <article className="channel-card primary-channel" key={acct.id}>
                 <div className="channel-card-heading">
                   <span className="channel-icon"><MessageSquare size={18} /></span>
-                  <div>
+                  <div className="channel-card-title">
                     <h3>{acct.name || acct.id}</h3>
                     <p>个人微信机器人 · {acct.id}</p>
                   </div>
-                  <strong>{s.login_state || "stopped"}</strong>
+                  <div className="channel-card-meta">
+                    <strong>{s.login_state || "stopped"}</strong>
+                    {useMultiAccount ? (
+                      <label className="channel-agent-select">
+                        <span>绑定 Agent</span>
+                        <select
+                          aria-label={`${acct.id} 绑定 Agent`}
+                          value={acct.default_agent_id || ""}
+                          onChange={e => updateAccountAgent(acct.id, e.target.value)}
+                          disabled={loading}
+                        >
+                          <option value="">使用全局默认</option>
+                          {agentOptions.map(a => (
+                            <option key={a.id} value={a.id}>{a.name || a.id}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="wechat-control">
                   <div>

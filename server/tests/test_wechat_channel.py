@@ -85,6 +85,7 @@ class FakeWechatManager:
         ]
         self._statuses: dict[str, FakeWechatService] = {}
         self.added: list[dict[str, Any]] = []
+        self.updated: list[tuple[str, dict[str, Any]]] = []
         self.removed: list[str] = []
 
     def _get(self, account_id: str) -> FakeWechatService:
@@ -129,6 +130,10 @@ class FakeWechatManager:
     async def add_account(self, config: dict[str, Any]) -> dict[str, Any]:
         self.added.append(config)
         return {"id": config["id"], "name": config.get("name", config["id"])}
+
+    async def update_account(self, account_id: str, config: dict[str, Any]) -> dict[str, Any]:
+        self.updated.append((account_id, config))
+        return {"id": account_id, "name": config.get("name", account_id), **config}
 
     async def remove_account(self, account_id: str) -> None:
         self.removed.append(account_id)
@@ -472,6 +477,18 @@ class TestWechatChannelMultiAccountRoutes:
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
 
+    def test_update_account_agent(self) -> None:
+        mgr = FakeWechatManager()
+        client = make_client(mgr)
+        resp = client.put(
+            "/api/channels/wechat/accounts/default",
+            json={"default_agent_id": "agent-2"},
+            headers=auth_headers(client),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["account"]["default_agent_id"] == "agent-2"
+        assert mgr.updated == [("default", {"default_agent_id": "agent-2"})]
+
     def test_get_account_status(self) -> None:
         mgr = FakeWechatManager()
         client = make_client(mgr)
@@ -619,6 +636,32 @@ channels:
         accounts = mgr.parse_accounts()
         assert len(accounts) == 1
         assert accounts[0]["id"] == "main"
+
+    @pytest.mark.asyncio
+    async def test_update_account_writes_agent_binding(self, tmp_path: Path) -> None:
+        config = tmp_path / "config.yaml"
+        config.write_text("""
+channels:
+  wechat_personal:
+    accounts:
+      - id: "main"
+        name: "主账号"
+        default_agent_id: "assistant"
+        auto_start: true
+        proxy: "http://127.0.0.1:7890"
+""", encoding="utf-8")
+        mgr = WechatChannelManager(tmp_path)
+        updated = await mgr.update_account("main", {"default_agent_id": "agent-2"})
+        assert updated["default_agent_id"] == "agent-2"
+        raw = mgr._read_raw_config()
+        saved = raw["channels"]["wechat_personal"]["accounts"][0]
+        assert saved == {
+            "id": "main",
+            "name": "主账号",
+            "default_agent_id": "agent-2",
+            "auto_start": True,
+            "proxy": "http://127.0.0.1:7890",
+        }
 
     def test_first_account_id(self, tmp_path: Path) -> None:
         config = tmp_path / "config.yaml"

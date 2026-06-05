@@ -3875,8 +3875,12 @@ button:disabled {
 
 .channel-card-heading {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
+}
+
+.channel-card-title {
+  min-width: 0;
 }
 
 .channel-icon {
@@ -3903,12 +3907,48 @@ button:disabled {
   margin: 2px 0 0;
 }
 
-.channel-card-heading strong {
+.channel-card-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
   margin-left: auto;
+  min-width: 176px;
+}
+
+.channel-card-meta strong {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.channel-agent-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.channel-agent-select span {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.channel-agent-select select {
+  min-width: 148px;
+  max-width: 100%;
+  background: rgba(15, 23, 42, 0.48);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  height: 32px;
+  padding: 0 9px;
 }
 
 .wechat-control {
@@ -4618,6 +4658,20 @@ button:disabled {
 
   .channel-grid {
     grid-template-columns: 1fr;
+  }
+
+  .channel-card-heading {
+    flex-wrap: wrap;
+  }
+
+  .channel-card-meta {
+    align-items: stretch;
+    flex-basis: 100%;
+    margin-left: 50px;
+  }
+
+  .channel-agent-select {
+    justify-content: space-between;
   }
 
   .config-actions,

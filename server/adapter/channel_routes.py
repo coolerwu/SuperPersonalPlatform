@@ -14,6 +14,13 @@ class CreateAccountRequest(BaseModel):
     proxy: str = ""
 
 
+class UpdateAccountRequest(BaseModel):
+    name: str | None = None
+    default_agent_id: str | None = None
+    auto_start: bool | None = None
+    proxy: str | None = None
+
+
 def create_channel_router(container: AppContainer) -> APIRouter:
     def require_channel_auth(request: Request) -> None:
         require_authenticated(request, container)
@@ -47,6 +54,14 @@ def create_channel_router(container: AppContainer) -> APIRouter:
             return {"ok": True, "account": result}
         except WechatChannelManagerError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    @router.put("/wechat/accounts/{account_id}")
+    async def update_account(account_id: str, body: UpdateAccountRequest):
+        try:
+            result = await manager().update_account(account_id, body.model_dump(exclude_unset=True))
+            return {"ok": True, "account": result}
+        except WechatChannelManagerError as e:
+            raise HTTPException(status_code=404, detail=str(e))
 
     @router.delete("/wechat/accounts/{account_id}")
     async def delete_account(account_id: str):

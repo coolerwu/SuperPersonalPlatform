@@ -91,30 +91,26 @@ class WechatChannelManager:
             account_id = acct.get("id", "default")
             instance = self._get_or_create_instance(acct)
             status = await instance.status()
-            result.append({
-                "id": account_id,
-                "name": acct.get("name", account_id),
-                "status": _status_dict(status),
-            })
+            result.append(self._account_payload(acct, status))
         return result
 
     async def account_status(self, account_id: str) -> dict[str, Any]:
         acct = self._find_account(account_id)
         instance = self._get_or_create_instance(acct)
         status = await instance.status()
-        return {"id": account_id, "name": acct.get("name", account_id), "status": _status_dict(status)}
+        return self._account_payload(acct, status)
 
     async def start_account(self, account_id: str) -> dict[str, Any]:
         acct = self._find_account(account_id)
         instance = self._get_or_create_instance(acct)
         status = await instance.start()
-        return {"id": account_id, "name": acct.get("name", account_id), "status": _status_dict(status)}
+        return self._account_payload(acct, status)
 
     async def stop_account(self, account_id: str) -> dict[str, Any]:
         acct = self._find_account(account_id)
         instance = self._get_or_create_instance(acct)
         status = await instance.stop()
-        return {"id": account_id, "name": acct.get("name", account_id), "status": _status_dict(status)}
+        return self._account_payload(acct, status)
 
     async def add_account(self, config: dict[str, Any]) -> dict[str, Any]:
         account_id = str(config.get("id") or "").strip()
@@ -129,7 +125,41 @@ class WechatChannelManager:
                     raise WechatChannelManagerError(f"账号 {account_id} 已存在")
             await self._write_account_list(existing, account_id, name, config)
 
-        return {"id": account_id, "name": name}
+        return self._account_metadata({"id": account_id, "name": name, **{
+            key: config[key] for key in ("default_agent_id", "auto_start", "proxy") if key in config
+        }})
+
+    async def update_account(self, account_id: str, config: dict[str, Any]) -> dict[str, Any]:
+        async with self._lock:
+            existing = self.parse_accounts()
+            found = False
+            updated_list: list[dict[str, Any]] = []
+            updated_account: dict[str, Any] | None = None
+            for acct in existing:
+                if acct.get("id") != account_id:
+                    updated_list.append(dict(acct))
+                    continue
+
+                found = True
+                next_acct = dict(acct)
+                if "name" in config:
+                    next_acct["name"] = str(config.get("name") or "").strip() or account_id
+                if "default_agent_id" in config:
+                    next_acct["default_agent_id"] = str(config.get("default_agent_id") or "").strip()
+                if "auto_start" in config:
+                    next_acct["auto_start"] = bool(config.get("auto_start"))
+                if "proxy" in config:
+                    next_acct["proxy"] = str(config.get("proxy") or "").strip()
+
+                updated_account = next_acct
+                updated_list.append(next_acct)
+
+            if not found or updated_account is None:
+                raise WechatChannelManagerError(f"账号 {account_id} 不存在")
+
+            self._write_accounts_to_config(updated_list)
+
+        return self._account_metadata(updated_account)
 
     async def remove_account(self, account_id: str) -> None:
         async with self._lock:
@@ -190,6 +220,19 @@ class WechatChannelManager:
             if acct.get("id") == account_id:
                 return acct
         raise WechatChannelManagerError(f"账号 {account_id} 不存在")
+
+    def _account_metadata(self, acct: dict[str, Any]) -> dict[str, Any]:
+        account_id = acct.get("id", "default")
+        return {
+            "id": account_id,
+            "name": acct.get("name", account_id),
+            "default_agent_id": acct.get("default_agent_id", ""),
+            "auto_start": acct.get("auto_start", False),
+            "proxy": acct.get("proxy", ""),
+        }
+
+    def _account_payload(self, acct: dict[str, Any], status: WechatChannelStatus) -> dict[str, Any]:
+        return {**self._account_metadata(acct), "status": _status_dict(status)}
 
     async def _write_account_list(
         self,

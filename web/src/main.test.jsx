@@ -839,6 +839,74 @@ describe("LoginPage", () => {
     expect(nameInput).toHaveValue("理财顾问");
   });
 
+  it("updates the Agent bound to a WeChat channel account", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/channels");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path, options) => {
+        if (path === "/api/auth/me") {
+          return { ok: true, json: async () => ({ authenticated: true }) };
+        }
+        if (path === "/api/agents/options") {
+          return {
+            ok: true,
+            json: async () => ({
+              default_agent_id: "assistant",
+              agents: [
+                { id: "assistant", name: "个人助理" },
+                { id: "wife-agent", name: "妻子助理" }
+              ]
+            })
+          };
+        }
+        if (path === "/api/channels/wechat/accounts") {
+          return {
+            ok: true,
+            json: async () => ({
+              accounts: [{
+                id: "wife",
+                name: "wife",
+                default_agent_id: "assistant",
+                status: { running: false, login_state: "stopped", user: "" }
+              }]
+            })
+          };
+        }
+        if (path === "/api/channels/wechat/accounts/wife" && options?.method === "PUT") {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              account: {
+                id: "wife",
+                name: "wife",
+                default_agent_id: "wife-agent",
+                status: { running: false, login_state: "stopped", user: "" }
+              }
+            })
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+      })
+    );
+
+    const user = userEvent.setup();
+    vi.resetModules();
+    await act(async () => {
+      await import("./main.jsx");
+    });
+
+    const select = await screen.findByLabelText("wife 绑定 Agent");
+    await user.selectOptions(select, "wife-agent");
+
+    const updateCall = fetch.mock.calls.find(
+      ([path, options]) => path === "/api/channels/wechat/accounts/wife" && options?.method === "PUT"
+    );
+    expect(JSON.parse(updateCall[1].body)).toEqual({ default_agent_id: "wife-agent" });
+    expect(select).toHaveValue("wife-agent");
+  });
+
   it("selects tools from the Skill management tab", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/agents");
