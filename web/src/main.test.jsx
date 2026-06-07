@@ -767,6 +767,80 @@ describe("LoginPage", () => {
     });
   });
 
+  it("keeps default Agent aligned when editing the default Agent ID", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/agents");
+    class ClosedWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      constructor() {
+        setTimeout(() => this.onclose?.(), 0);
+      }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", ClosedWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path, options) => {
+        if (path === "/api/auth/me") {
+          return { ok: true, json: async () => ({ authenticated: true }) };
+        }
+        if (path === "/api/agents/options") {
+          return {
+            ok: true,
+            json: async () => ({
+              default_agent_id: "agent-1",
+              agents: [{ id: "agent-1", name: "Agent", model: { has_api_key: true } }]
+            })
+          };
+        }
+        if (path === "/api/sessions") {
+          return { ok: true, json: async () => ({ sessions: [] }) };
+        }
+        if (path === "/api/agents/config") {
+          if (options?.method === "PUT") {
+            return { ok: true, json: async () => ({ ok: true }) };
+          }
+          return {
+            ok: true,
+            json: async () => ({
+              path: "/workspace/config.yaml",
+              common_skill_tools: [],
+              tools: { profile: "default", allow: [], deny: [] },
+              skills: [],
+              default_model_id: "fast",
+              default_agent_id: "agent-1",
+              models: [{ id: "fast", name: "快速模型", base_url: "", model: "fast-chat", temperature: 0.2, supports_images: false }],
+              agents: [
+                { id: "agent-1", name: "Agent", model_id: "fast", system_prompt: "You are terse.", skill_ids: [] }
+              ]
+            })
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+      })
+    );
+
+    const user = userEvent.setup();
+    vi.resetModules();
+    await act(async () => {
+      await import("./main.jsx");
+    });
+
+    await user.click(await screen.findByRole("button", { name: /Agent 管理/ }));
+    const idInput = await screen.findByDisplayValue("agent-1");
+    await user.clear(idInput);
+    await user.type(idInput, "agent-renamed");
+    await user.click(screen.getByRole("button", { name: /^保存$/ }));
+
+    const saveCall = fetch.mock.calls.find(
+      ([path, options]) => path === "/api/agents/config" && options?.method === "PUT"
+    );
+    const payload = JSON.parse(saveCall[1].body);
+    expect(payload.default_agent_id).toBe("agent-renamed");
+    expect(payload.agents[0].id).toBe("agent-renamed");
+  });
+
   it("keeps Agent ID and name editable during Chinese IME composition", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/agents");

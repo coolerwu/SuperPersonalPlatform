@@ -32,6 +32,18 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
 6. Stage all uncommitted code by running the exact command `git add .`.
 7. Commit with a concise imperative message.
 8. Push the current branch with `git push origin HEAD`.
+9. After a successful push, restart production on `qiuqiu@192.168.1.3`:
+   - SSH target: `qiuqiu@192.168.1.3`
+   - Remote repo: `SuperPersonalPlatform/`
+   - Remote command: `cd SuperPersonalPlatform/ && git pull && sudo systemctl restart super-personal-platform.service`
+   - Do not store the SSH/sudo password in repository files. Use an existing
+     authenticated SSH session, ask the user for the password, or read it from a
+     local uncommitted environment variable such as
+     `SUPER_PERSONAL_PROD_SSH_PASSWORD`.
+   - Prefer a non-interactive `expect` wrapper when a password prompt is
+     expected, and include a short production restart status in the final
+     response. If the restart fails, report the failure and do not claim the
+     deployment completed.
 
 ## Guardrails
 
@@ -44,4 +56,5 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
   as part of the task or deployment path.
 - If a user asks to adjust this commit workflow, update both `AGENTS.md` and
   this skill before continuing the commit.
-- Include the exact test commands and outcomes in the final response.
+- Include the exact test commands, push outcome, and production restart outcome
+  in the final response.

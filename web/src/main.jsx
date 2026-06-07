@@ -685,12 +685,20 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   }
 
   function updateAgent(index, field, value) {
-    setConfig((current) => ({
-      ...current,
-      agents: current.agents.map((agent, agentIndex) =>
+    setConfig((current) => {
+      const previousAgent = current.agents[index];
+      const nextAgents = current.agents.map((agent, agentIndex) =>
         agentIndex === index ? { ...agent, [field]: value } : agent
-      )
-    }));
+      );
+      return {
+        ...current,
+        default_agent_id:
+          field === "id" && previousAgent?.id === current.default_agent_id
+            ? value
+            : current.default_agent_id,
+        agents: nextAgents
+      };
+    });
   }
 
   function updateSkill(index, field, value) {
@@ -1268,7 +1276,21 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                             {expandedRow === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                           </button>
                           {!agent.is_builtin ? (
-                            <button className="icon-action danger" title="删除" onClick={() => setConfig((c) => ({ ...c, agents: c.agents.filter((_, i) => i !== index) }))}>
+                            <button
+                              className="icon-action danger"
+                              title="删除"
+                              onClick={() => setConfig((c) => {
+                                const nextAgents = c.agents.filter((_, i) => i !== index);
+                                return {
+                                  ...c,
+                                  default_agent_id:
+                                    c.default_agent_id === agent.id
+                                      ? nextAgents[0]?.id || ""
+                                      : c.default_agent_id,
+                                  agents: nextAgents
+                                };
+                              })}
+                            >
                               <Trash2 size={14} />
                             </button>
                           ) : null}

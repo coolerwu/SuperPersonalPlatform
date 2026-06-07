@@ -347,7 +347,13 @@ class AgentChatService:
         }
         raw.setdefault("agents", {})
         raw["skills"] = {"definitions": normalized_skills}
-        raw["agents"]["default_agent_id"] = str(payload.get("default_agent_id") or "").strip()
+        default_agent_id = str(payload.get("default_agent_id") or "").strip()
+        agent_ids = {agent["id"] for agent in normalized_agents}
+        if normalized_agents and default_agent_id not in agent_ids:
+            default_agent_id = normalized_agents[0]["id"]
+        elif not normalized_agents:
+            default_agent_id = ""
+        raw["agents"]["default_agent_id"] = default_agent_id
         raw["agents"]["definitions"] = normalized_agents
         if builtin_overrides:
             raw["agents"]["builtin_overrides"] = builtin_overrides

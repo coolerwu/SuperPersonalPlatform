@@ -350,6 +350,46 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
     assert "skills:\n  definitions:\n  - id: common:writing\n  - id: common:portfolio\n" in raw
 
 
+def test_agent_config_update_repairs_missing_default_agent(tmp_path) -> None:
+    write_config(tmp_path)
+    client = make_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    response = client.put(
+        "/api/agents/config",
+        json={
+            "default_model_id": "fast",
+            "default_agent_id": "assistant",
+            "common_skill_tools": [],
+            "skills": [],
+            "models": [
+                {
+                    "id": "fast",
+                    "name": "Fast Model",
+                    "base_url": "https://llm.example.test/v1",
+                    "model": "fast-chat",
+                    "api_key": "",
+                    "temperature": 0.2,
+                    "supports_images": True,
+                }
+            ],
+            "agents": [
+                {
+                    "id": "renamed-agent",
+                    "name": "Renamed Agent",
+                    "model_id": "fast",
+                    "system_prompt": "You are direct.",
+                    "skill_ids": [],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    settings = load_settings(tmp_path / "config.yaml")
+    assert settings.agent_platform.default_agent_id == "renamed-agent"
+
+
 def test_agent_skill_content_endpoint_reads_and_writes_markdown(tmp_path) -> None:
     write_config(tmp_path, skill_ids=("common:self-dev",))
     skill_dir = tmp_path / "skills" / "common" / "self-dev"
