@@ -39,7 +39,6 @@ class Settings:
             models=(),
             default_model_id="",
             agents=(),
-            default_agent_id="",
         )
     )
 
@@ -104,14 +103,10 @@ def parse_agent_platform(raw: dict[str, Any]) -> AgentPlatformDefinition:
     skill_definitions = tuple(parse_skill_definition(item) for item in skill_definitions_raw)
     common_skill_tools = tuple(str(tool).strip() for tool in tools_raw if str(tool).strip())
     default_model_id = str(llm_raw.get("default_model_id") or (models[0].id if models else "")).strip()
-    default_agent_id = str(
-        agents_raw.get("default_agent_id") or (agents[0].id if agents else "")
-    ).strip()
     return AgentPlatformDefinition(
         models=models,
         default_model_id=default_model_id,
         agents=agents,
-        default_agent_id=default_agent_id,
         skill_definitions=skill_definitions,
         common_skill_tools=common_skill_tools,
         tools=parse_tool_access(platform_tools_raw, "tools"),

@@ -109,7 +109,6 @@ class AgentPlatformDefinition:
     models: tuple[ModelDefinition, ...]
     default_model_id: str
     agents: tuple[AgentDefinition, ...]
-    default_agent_id: str
     skill_definitions: tuple[SkillDefinition, ...] = ()
     common_skill_tools: tuple[str, ...] = ()
     tools: ToolAccessDefinition = ToolAccessDefinition()
@@ -134,8 +133,6 @@ class AgentPlatformDefinition:
             )
         if self.models and self.default_model_id not in model_ids:
             raise AgentConfigError("llm.default_model_id must reference an existing model")
-        if self.agents and self.default_agent_id not in agent_ids:
-            raise AgentConfigError("agents.default_agent_id must reference an existing agent")
         for agent in self.agents:
             if agent.model_id and agent.model_id not in model_ids:
                 raise AgentConfigError(

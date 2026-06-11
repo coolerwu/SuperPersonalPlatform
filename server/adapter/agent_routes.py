@@ -72,7 +72,6 @@ class SkillContentPayload(BaseModel):
 
 class AgentConfigUpdatePayload(BaseModel):
     default_model_id: str
-    default_agent_id: str
     common_skill_tools: list[str] | None = None
     tools: dict[str, object] | None = None
     skills: list[SkillDefinitionConfigPayload] | None = None
@@ -98,7 +97,6 @@ def create_agent_router(container: AppContainer) -> APIRouter:
             ) from exc
 
         return {
-            "default_agent_id": agent_options.default_agent_id,
             "agents": [
                 {
                     "id": agent.id,
@@ -132,7 +130,6 @@ def create_agent_router(container: AppContainer) -> APIRouter:
         return {
             "path": snapshot.path,
             "default_model_id": snapshot.default_model_id,
-            "default_agent_id": snapshot.default_agent_id,
             "common_skill_tools": list(snapshot.common_skill_tools),
             "tools": {
                 "profile": snapshot.tools_profile,

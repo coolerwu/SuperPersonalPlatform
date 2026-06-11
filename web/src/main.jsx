@@ -39,7 +39,6 @@ import {
   Send,
   Settings,
   ShieldCheck,
-  Star,
   Terminal as TerminalIcon,
   TerminalSquare,
   Trash2,
@@ -422,7 +421,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     try {
       const data = await api("/api/agents/options");
       setOptions(data);
-      setAgentId(data.default_agent_id || data.agents?.[0]?.id || "");
+      setAgentId(data.agents?.[0]?.id || "");
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -685,20 +684,12 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   }
 
   function updateAgent(index, field, value) {
-    setConfig((current) => {
-      const previousAgent = current.agents[index];
-      const nextAgents = current.agents.map((agent, agentIndex) =>
+    setConfig((current) => ({
+      ...current,
+      agents: current.agents.map((agent, agentIndex) =>
         agentIndex === index ? { ...agent, [field]: value } : agent
-      );
-      return {
-        ...current,
-        default_agent_id:
-          field === "id" && previousAgent?.id === current.default_agent_id
-            ? value
-            : current.default_agent_id,
-        agents: nextAgents
-      };
-    });
+      )
+    }));
   }
 
   function updateSkill(index, field, value) {
@@ -819,7 +810,6 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     const id = `agent-${(config?.agents?.length || 0) + 1}`;
     setConfig((current) => ({
       ...current,
-      default_agent_id: current.default_agent_id || id,
       agents: [
         ...current.agents,
         {
@@ -894,7 +884,6 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         method: "PUT",
         body: JSON.stringify({
           default_model_id: config.default_model_id || config.models?.[0]?.id || "",
-          default_agent_id: config.default_agent_id || config.agents?.[0]?.id || "",
           common_skill_tools: config.common_skill_tools || [],
           tools: config.tools || { profile: "default", allow: [], deny: [] },
           skills: (config.skills || []).map((skill) => ({
@@ -1223,10 +1212,6 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                   <span>Agent</span>
                   <strong>{config.agents.length}</strong>
                 </div>
-                <div className="agent-metric">
-                  <span>默认</span>
-                  <strong>{config.agents.find((agent) => agent.id === config.default_agent_id)?.name || config.default_agent_id || "未设置"}</strong>
-                </div>
                 <div className="agent-metric compact">
                   <span>模型</span>
                   <strong>{config.models.length}</strong>
@@ -1262,35 +1247,17 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                           <div className="agent-name-cell">
                             <input value={agent.name} onChange={(e) => updateAgent(index, "name", e.target.value)} disabled={agent.is_builtin} />
                             <div className="agent-name-badges">
-                              {config.default_agent_id === agent.id ? <span className="badge-default">默认</span> : null}
                               {agent.is_builtin ? <span className="badge-builtin">内置</span> : null}
                             </div>
                           </div>
                         </td>
                         <td><select value={agent.model_id || ""} onChange={(e) => updateAgent(index, "model_id", e.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></td>
                         <td className="td-actions">
-                          <button className="icon-action" title="设为默认" onClick={() => setConfig((c) => ({ ...c, default_agent_id: agent.id }))}>
-                            <Star size={14} />
-                          </button>
                           <button className="icon-action" title={expandedRow === index ? "收起" : "展开"} onClick={() => setExpandedRow(expandedRow === index ? null : index)}>
                             {expandedRow === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                           </button>
                           {!agent.is_builtin ? (
-                            <button
-                              className="icon-action danger"
-                              title="删除"
-                              onClick={() => setConfig((c) => {
-                                const nextAgents = c.agents.filter((_, i) => i !== index);
-                                return {
-                                  ...c,
-                                  default_agent_id:
-                                    c.default_agent_id === agent.id
-                                      ? nextAgents[0]?.id || ""
-                                      : c.default_agent_id,
-                                  agents: nextAgents
-                                };
-                              })}
-                            >
+                            <button className="icon-action danger" title="删除" onClick={() => setConfig((c) => ({ ...c, agents: c.agents.filter((_, i) => i !== index) }))}>
                               <Trash2 size={14} />
                             </button>
                           ) : null}
@@ -2043,7 +2010,7 @@ function SelfDevPage({ onUnauthorized }) {
         api("/api/self-dev/tasks")
       ]);
       setAgents(options.agents || []);
-      setAgentId((current) => current || options.default_agent_id || options.agents?.[0]?.id || "");
+      setAgentId((current) => current || options.agents?.[0]?.id || "");
       setTasks(taskList.tasks || []);
     } catch (err) {
       handleApiError(err);
@@ -3086,7 +3053,7 @@ function ChannelsPage({ onUnauthorized }) {
                           onChange={e => updateAccountAgent(acct.id, e.target.value)}
                           disabled={loading}
                         >
-                          <option value="">使用全局默认</option>
+                      <option value="">未绑定 Agent</option>
                           {agentOptions.map(a => (
                             <option key={a.id} value={a.id}>{a.name || a.id}</option>
                           ))}
@@ -3168,13 +3135,13 @@ function ChannelsPage({ onUnauthorized }) {
                 />
               </label>
               <label className="form-label">
-                默认 Agent
+                绑定 Agent
                 <select
                   className="form-input"
                   value={addForm.default_agent_id}
                   onChange={e => setAddForm(f => ({ ...f, default_agent_id: e.target.value }))}
                 >
-                  <option value="">使用全局默认</option>
+                  <option value="">未绑定 Agent</option>
                   {agentOptions.map(a => (
                     <option key={a.id} value={a.id}>{a.name || a.id}</option>
                   ))}

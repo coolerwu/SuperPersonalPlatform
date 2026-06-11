@@ -236,7 +236,6 @@ def test_agent_config_defaults_without_permission_gate() -> None:
     ("overrides", "message"),
     [
         ({"default_model_id": "missing"}, "llm.default_model_id"),
-        ({"default_agent_id": "missing"}, "agents.default_agent_id"),
         ({"agent_model_id": "missing"}, "model_id"),
     ],
 )
@@ -258,7 +257,7 @@ def test_agent_options_require_auth_and_do_not_leak_api_key(tmp_path) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["default_agent_id"] == "assistant"
+    assert "default_agent_id" not in body
     assert "top-secret-key" not in str(body)
     assert body["agents"][0] == {
         "id": "assistant",
@@ -288,6 +287,7 @@ def test_agent_config_endpoint_masks_api_keys(tmp_path) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["path"].endswith("config.yaml")
+    assert "default_agent_id" not in body
     assert "top-secret-key" not in str(body)
     assert body["models"][0]["has_api_key"] is True
     assert body["models"][0]["api_key_mask"] == "********"
@@ -302,7 +302,6 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
         "/api/agents/config",
         json={
             "default_model_id": "fast",
-            "default_agent_id": "assistant",
             "common_skill_tools": ["list_skill", "read_skill"],
             "skills": [
                 {
@@ -346,11 +345,12 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
     assert settings.agent_platform.get_agent("assistant").skill_ids == ("common:writing",)
     raw = (tmp_path / "config.yaml").read_text(encoding="utf-8")
     assert "agents:\n" in raw
+    assert "default_agent_id" not in raw
     assert "skills:\n" in raw
     assert "skills:\n  definitions:\n  - id: common:writing\n  - id: common:portfolio\n" in raw
 
 
-def test_agent_config_update_repairs_missing_default_agent(tmp_path) -> None:
+def test_agent_config_update_removes_legacy_default_agent(tmp_path) -> None:
     write_config(tmp_path)
     client = make_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})
@@ -359,7 +359,6 @@ def test_agent_config_update_repairs_missing_default_agent(tmp_path) -> None:
         "/api/agents/config",
         json={
             "default_model_id": "fast",
-            "default_agent_id": "assistant",
             "common_skill_tools": [],
             "skills": [],
             "models": [
@@ -386,8 +385,10 @@ def test_agent_config_update_repairs_missing_default_agent(tmp_path) -> None:
     )
 
     assert response.status_code == 200
+    saved = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "default_agent_id" not in saved
     settings = load_settings(tmp_path / "config.yaml")
-    assert settings.agent_platform.default_agent_id == "renamed-agent"
+    assert settings.agent_platform.get_agent("renamed-agent").name == "Renamed Agent"
 
 
 def test_agent_skill_content_endpoint_reads_and_writes_markdown(tmp_path) -> None:

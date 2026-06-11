@@ -45,7 +45,6 @@ channels:
     # auto_start: false
     # proxy: ""
 agents:
-  default_agent_id: "assistant"
   definitions:
     - id: "assistant"
       name: "个人助理"

@@ -331,7 +331,8 @@ class WechatChannelService:
         channel_config = self._channel_config()
         agent_id = str(channel_config.get("default_agent_id") or "").strip()
         if not agent_id:
-            agent_id = str(self._workspace_config().get("agents", {}).get("default_agent_id") or "").strip()
+            await self._send_reply(from_user_id, to_user_id, context_token, "微信通道未绑定 Agent，请先在渠道设置中选择一个 Agent。")
+            return
 
         if self._agent_chat_service is None:
             await self._send_reply(from_user_id, to_user_id, context_token, "微信通道已收到消息，但 Agent 服务不可用。")

@@ -767,7 +767,7 @@ describe("LoginPage", () => {
     });
   });
 
-  it("keeps default Agent aligned when editing the default Agent ID", async () => {
+  it("does not save a global default Agent when editing Agent IDs", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/agents");
     class ClosedWebSocket {
@@ -837,7 +837,7 @@ describe("LoginPage", () => {
       ([path, options]) => path === "/api/agents/config" && options?.method === "PUT"
     );
     const payload = JSON.parse(saveCall[1].body);
-    expect(payload.default_agent_id).toBe("agent-renamed");
+    expect(payload).not.toHaveProperty("default_agent_id");
     expect(payload.agents[0].id).toBe("agent-renamed");
   });
 

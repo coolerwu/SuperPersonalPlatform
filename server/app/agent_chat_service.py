@@ -53,7 +53,6 @@ class AgentOption:
 
 @dataclass(frozen=True)
 class AgentOptions:
-    default_agent_id: str
     agents: tuple[AgentOption, ...]
 
 
@@ -94,7 +93,6 @@ class EditableSkill:
 class AgentConfigSnapshot:
     path: str
     default_model_id: str
-    default_agent_id: str
     common_skill_tools: tuple[str, ...]
     tools_profile: str
     tools_allow: tuple[str, ...]
@@ -173,7 +171,6 @@ class AgentChatService:
             if all(ba["id"] != ca.id for ca in config_agents)
         )
         return AgentOptions(
-            default_agent_id=platform.default_agent_id,
             agents=config_agents + builtin_agents,
         )
 
@@ -210,7 +207,6 @@ class AgentChatService:
         return AgentConfigSnapshot(
             path=str(self._config_path),
             default_model_id=platform.default_model_id,
-            default_agent_id=platform.default_agent_id,
             common_skill_tools=platform.common_skill_tools,
             tools_profile=platform.tools.profile,
             tools_allow=platform.tools.allow,
@@ -347,13 +343,7 @@ class AgentChatService:
         }
         raw.setdefault("agents", {})
         raw["skills"] = {"definitions": normalized_skills}
-        default_agent_id = str(payload.get("default_agent_id") or "").strip()
-        agent_ids = {agent["id"] for agent in normalized_agents}
-        if normalized_agents and default_agent_id not in agent_ids:
-            default_agent_id = normalized_agents[0]["id"]
-        elif not normalized_agents:
-            default_agent_id = ""
-        raw["agents"]["default_agent_id"] = default_agent_id
+        raw["agents"].pop("default_agent_id", None)
         raw["agents"]["definitions"] = normalized_agents
         if builtin_overrides:
             raw["agents"]["builtin_overrides"] = builtin_overrides
@@ -528,7 +518,6 @@ class AgentChatService:
                 models=platform.models,
                 default_model_id=platform.default_model_id,
                 agents=all_agents,
-                default_agent_id=platform.default_agent_id,
                 skill_definitions=all_skills,
                 common_skill_tools=platform.common_skill_tools,
                 tools=platform.tools,
@@ -562,7 +551,6 @@ class AgentChatService:
             models=platform.models,
             default_model_id=platform.default_model_id,
             agents=platform.agents,
-            default_agent_id=platform.default_agent_id,
             skill_definitions=tuple(skill_definitions),
             common_skill_tools=platform.common_skill_tools,
             tools=platform.tools,
