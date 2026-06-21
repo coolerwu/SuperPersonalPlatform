@@ -124,6 +124,52 @@ def test_prompt_mode_uses_only_prompt_runner() -> None:
     assert gateway.reason_calls == []
 
 
+def test_prompt_request_factory_omits_tool_context_and_trims_content() -> None:
+    request = HarnessRequest.for_prompt(
+        agent=make_agent(),
+        content="  challenge this  ",
+    )
+
+    assert request.content == "challenge this"
+    assert request.tool_names == ()
+    assert request.tool_registry is None
+    assert request.tool_runtime is None
+
+
+def test_agent_request_factory_requires_registry_for_tools() -> None:
+    with pytest.raises(ValueError, match="tool_registry"):
+        HarnessRequest.for_agent(
+            agent=make_agent(HarnessMode.AGENT),
+            content="inspect",
+            tool_names=("first",),
+        )
+
+
+def test_request_factories_reject_empty_content_without_images() -> None:
+    with pytest.raises(ValueError, match="消息内容不能为空"):
+        HarnessRequest.for_prompt(agent=make_agent(), content="  ")
+
+    with pytest.raises(ValueError, match="消息内容不能为空"):
+        HarnessRequest.for_agent(
+            agent=make_agent(HarnessMode.AGENT),
+            content="  ",
+        )
+
+
+def test_request_factories_reject_model_mode_mismatches() -> None:
+    with pytest.raises(ValueError, match="Prompt 模式"):
+        HarnessRequest.for_prompt(
+            agent=make_agent(HarnessMode.AGENT),
+            content="answer",
+        )
+
+    with pytest.raises(ValueError, match="Agent 模式"):
+        HarnessRequest.for_agent(
+            agent=make_agent(HarnessMode.PROMPT),
+            content="answer",
+        )
+
+
 def test_agent_mode_runs_goal_tools_observe_verify_and_finalize() -> None:
     first_messages = ("assistant tool request",)
     gateway = FakeGateway(

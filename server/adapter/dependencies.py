@@ -4,6 +4,7 @@ from server.app.agent_chat_service import AgentChatService
 from server.app.auth_service import AuthService
 from server.app.chat_session_service import ChatSessionService
 from server.app.config_file_service import ConfigFileService
+from server.app.critique_service import CritiqueService
 from server.app.portfolio_service import PortfolioService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
@@ -28,3 +29,4 @@ class AppContainer:
     job_service: JobService | None = None
     self_dev_service: SelfDevService | None = None
     wechat_channel_manager: WechatChannelManager | None = None
+    critique_service: CritiqueService | None = None

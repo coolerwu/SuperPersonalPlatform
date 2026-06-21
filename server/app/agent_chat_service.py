@@ -398,6 +398,8 @@ class AgentChatService:
         agent_id = agent_id.strip()
         if not agent_id:
             raise AgentConfigError("agent_id is required")
+        if not content.strip() and not images:
+            raise AgentConfigError("消息内容不能为空")
         platform = self._load_platform()
         agent = platform.get_agent(agent_id)
         model = self._model_for_agent(platform, agent)
@@ -410,9 +412,9 @@ class AgentChatService:
                 platform.common_skill_tools,
                 platform.skill_definitions,
             )
-            request = HarnessRequest(
+            request = HarnessRequest.for_agent(
                 agent=bound_agent,
-                content=content.strip(),
+                content=content,
                 images=images,
                 tool_names=tool_names,
                 tool_registry=self._tool_registry if tool_names else None,
@@ -420,15 +422,38 @@ class AgentChatService:
                 on_checkpoint=on_checkpoint,
             )
         else:
-            request = HarnessRequest(
+            request = HarnessRequest.for_prompt(
                 agent=bound_agent,
-                content=content.strip(),
+                content=content,
                 images=images,
                 on_checkpoint=on_checkpoint,
             )
-        if not request.content and not request.images:
-            raise AgentConfigError("消息内容不能为空")
         return await run_agent(request)
+
+    def bind_prompt_agent(
+        self,
+        *,
+        agent_id: str,
+        name: str,
+        system_prompt: str,
+        model_id: str | None = None,
+    ) -> Agent:
+        platform = self._load_platform()
+        resolved_model_id = (model_id or platform.default_model_id).strip()
+        if not resolved_model_id:
+            raise AgentConfigError("未配置默认模型")
+        model = platform.get_model(resolved_model_id)
+        if model.mode is not HarnessMode.PROMPT:
+            raise AgentConfigError("临时 Prompt Agent 必须绑定 Prompt 模式模型")
+        if not self._has_usable_api_key(model):
+            raise AgentChatUnavailableError("模型 API Key 不可用")
+        definition = AgentDefinition(
+            id=agent_id.strip(),
+            name=name.strip(),
+            system_prompt=system_prompt.strip(),
+            model_id=model.id,
+        )
+        return Agent(definition=definition, model=model)
 
     async def run_with_tool_runtime(
         self,
@@ -440,6 +465,8 @@ class AgentChatService:
         agent_id = agent_id.strip()
         if not agent_id:
             raise AgentConfigError("agent_id is required")
+        if not content.strip():
+            raise AgentConfigError("消息内容不能为空")
         platform = self._load_platform()
         agent = platform.get_agent(agent_id)
         model = self._model_for_agent(platform, agent)
@@ -452,22 +479,20 @@ class AgentChatService:
                 platform.common_skill_tools,
                 platform.skill_definitions,
             )
-            request = HarnessRequest(
+            request = HarnessRequest.for_agent(
                 agent=bound_agent,
-                content=content.strip(),
+                content=content,
                 tool_names=tool_names,
                 tool_registry=self._tool_registry if tool_names else None,
                 tool_runtime=tool_runtime if tool_names else None,
                 on_checkpoint=on_checkpoint,
             )
         else:
-            request = HarnessRequest(
+            request = HarnessRequest.for_prompt(
                 agent=bound_agent,
-                content=content.strip(),
+                content=content,
                 on_checkpoint=on_checkpoint,
             )
-        if not request.content:
-            raise AgentConfigError("消息内容不能为空")
         return await run_agent(request)
 
     def _validate_bound_model(

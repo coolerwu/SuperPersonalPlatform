@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol
 
-from server.domain.agents import AgentDefinition, ModelDefinition
+from server.domain.agents import AgentDefinition, HarnessMode, ModelDefinition
 
 
 class AgentChatUnavailableError(Exception):
@@ -111,6 +111,62 @@ class HarnessRequest:
     tool_runtime: object | None = None
     on_checkpoint: CheckpointCallback | None = None
     max_iterations: int = 60
+
+    @classmethod
+    def for_prompt(
+        cls,
+        *,
+        agent: Agent,
+        content: str,
+        images: tuple[ChatImage, ...] = (),
+        on_checkpoint: CheckpointCallback | None = None,
+    ) -> "HarnessRequest":
+        if agent.model.mode is not HarnessMode.PROMPT:
+            raise ValueError("Prompt 请求必须绑定 Prompt 模式模型")
+        normalized_content = content.strip()
+        if not normalized_content and not images:
+            raise ValueError("消息内容不能为空")
+        return cls(
+            agent=agent,
+            content=normalized_content,
+            images=images,
+            on_checkpoint=on_checkpoint,
+        )
+
+    @classmethod
+    def for_agent(
+        cls,
+        *,
+        agent: Agent,
+        content: str,
+        images: tuple[ChatImage, ...] = (),
+        tool_names: tuple[str, ...] = (),
+        tool_registry: AgentToolDispatcher | None = None,
+        tool_runtime: object | None = None,
+        on_checkpoint: CheckpointCallback | None = None,
+        max_iterations: int = 60,
+    ) -> "HarnessRequest":
+        if agent.model.mode is not HarnessMode.AGENT:
+            raise ValueError("Agent 请求必须绑定 Agent 模式模型")
+        normalized_content = content.strip()
+        if not normalized_content and not images:
+            raise ValueError("消息内容不能为空")
+        if max_iterations <= 0:
+            raise ValueError("max_iterations must be greater than zero")
+        if tool_names and tool_registry is None:
+            raise ValueError("tool_registry is required when tool_names are provided")
+        if not tool_names and (tool_registry is not None or tool_runtime is not None):
+            raise ValueError("tool context requires tool_names")
+        return cls(
+            agent=agent,
+            content=normalized_content,
+            images=images,
+            tool_names=tool_names,
+            tool_registry=tool_registry,
+            tool_runtime=tool_runtime,
+            on_checkpoint=on_checkpoint,
+            max_iterations=max_iterations,
+        )
 
 
 @dataclass(frozen=True)

@@ -203,6 +203,48 @@ describe("LoginPage", () => {
     expect(screen.queryByText("系统运维")).not.toBeInTheDocument();
   });
 
+  it("opens the multidisciplinary critique matrix from the sidebar", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/critique");
+    class MockWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      constructor() {
+        this.readyState = MockWebSocket.CONNECTING;
+        setTimeout(() => {
+          this.readyState = MockWebSocket.OPEN;
+          this.onopen?.();
+        }, 0);
+      }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path) => {
+        if (path === "/api/auth/me") {
+          return { ok: true, json: async () => ({ authenticated: true }) };
+        }
+        if (path === "/api/critique/disciplines") {
+          return { ok: true, json: async () => ({ disciplines: [] }) };
+        }
+        if (path === "/api/critique/runs") {
+          return { ok: true, json: async () => ({ runs: [] }) };
+        }
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+      })
+    );
+
+    vi.resetModules();
+    await act(async () => {
+      await import("./main.jsx");
+    });
+
+    expect(await screen.findByRole("button", { name: "多维批判" })).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("columnheader", { name: "核心假设" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "多维批判" })).not.toBeInTheDocument();
+  });
+
   it("renders the terminal menu and connects to the backend terminal", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/terminal");

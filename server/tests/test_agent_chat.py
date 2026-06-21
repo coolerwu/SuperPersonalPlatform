@@ -503,6 +503,35 @@ def test_prompt_model_does_not_switch_mode_when_tools_are_available(tmp_path) ->
     assert gateway.reason_calls == []
 
 
+def test_bind_prompt_agent_uses_configured_default_model(tmp_path) -> None:
+    write_config(tmp_path, mode="prompt")
+    service = AgentChatService(tmp_path / "config.yaml")
+
+    agent = service.bind_prompt_agent(
+        agent_id="critique-economics",
+        name="经济学",
+        system_prompt="从经济学角度批判。",
+    )
+
+    assert agent.definition.id == "critique-economics"
+    assert agent.definition.system_prompt == "从经济学角度批判。"
+    assert agent.definition.model_id == "fast"
+    assert agent.model.id == "fast"
+    assert agent.model.mode is HarnessMode.PROMPT
+
+
+def test_bind_prompt_agent_rejects_agent_mode_model(tmp_path) -> None:
+    write_config(tmp_path, mode="agent")
+    service = AgentChatService(tmp_path / "config.yaml")
+
+    with pytest.raises(AgentConfigError, match="Prompt 模式"):
+        service.bind_prompt_agent(
+            agent_id="critique-economics",
+            name="经济学",
+            system_prompt="从经济学角度批判。",
+        )
+
+
 def test_agent_model_runs_strict_loop_without_tools(tmp_path) -> None:
     write_config(tmp_path, mode="agent")
     gateway = FakeModelGateway()
@@ -572,6 +601,14 @@ def test_agent_chat_requires_agent_id(tmp_path) -> None:
                 "你好",
             )
         )
+
+
+def test_agent_chat_preserves_config_error_for_empty_content(tmp_path) -> None:
+    write_config(tmp_path, mode="prompt")
+    service = AgentChatService(tmp_path / "config.yaml")
+
+    with pytest.raises(AgentConfigError, match="消息内容不能为空"):
+        asyncio.run(service.chat("assistant", "   "))
 
 
 def test_agent_config_rejects_unknown_common_skill_tool(tmp_path) -> None:

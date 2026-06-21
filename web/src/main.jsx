@@ -5,6 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import {
   ArrowRight,
+  BrainCircuit,
   Bot,
   Check,
   CheckCircle,
@@ -47,6 +48,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
+import { CritiquePage } from "./CritiquePage.jsx";
 import "./styles.css";
 
 const AGENT_TOOL_OPTIONS = [
@@ -3721,6 +3723,7 @@ function AppShell({ onLogout }) {
     () => [
       { path: "/", label: "首页", icon: Home },
       { path: "/agents", label: "Agent", icon: Bot },
+      { path: "/critique", label: "多维批判", icon: BrainCircuit },
       { path: "/self-dev", label: "自开发", icon: Code2 },
       { path: "/channels", label: "渠道", icon: MessageSquare },
       { path: "/terminal", label: "终端", icon: TerminalSquare },
@@ -3772,6 +3775,9 @@ function AppShell({ onLogout }) {
     }
     if (path === "/portfolio") {
       return <PortfolioPage onUnauthorized={unauthorized} />;
+    }
+    if (path === "/critique") {
+      return <CritiquePage onUnauthorized={unauthorized} />;
     }
     if (path === "/system") {
       return <SystemPage onUnauthorized={unauthorized} />;
