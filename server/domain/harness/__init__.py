@@ -1,8 +1,8 @@
-from server.domain.harness.agent import (
+from server.domain.harness.agent import run_agent
+from server.domain.harness.contracts import (
     Agent,
     AgentChatCheckpoint,
     AgentChatUnavailableError,
-    AgentRunPhase,
     AgentToolCall,
     AgentToolCallingUnsupportedError,
     AgentToolReasoningResult,
@@ -11,8 +11,8 @@ from server.domain.harness.agent import (
     ChatOptions,
     HarnessMode,
     HarnessRequest,
-    run_agent,
 )
+from server.domain.harness.tools import AgentRunPhase
 
 __all__ = [
     "Agent",

@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 
 import pytest
 
@@ -14,6 +15,15 @@ from server.domain.harness import (
     HarnessRequest,
     run_agent,
 )
+
+
+def test_harness_modes_have_separate_modules() -> None:
+    prompt_module = importlib.import_module("server.domain.harness.prompt")
+    tools_module = importlib.import_module("server.domain.harness.tools")
+
+    assert callable(prompt_module.run_prompt_mode)
+    assert callable(tools_module.run_tools_mode)
+    assert tools_module.AgentRunPhase is AgentRunPhase
 
 
 class FakeGateway:
