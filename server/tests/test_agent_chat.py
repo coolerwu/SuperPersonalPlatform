@@ -25,8 +25,8 @@ from server.domain.harness import (
     AgentToolResult,
     ChatOptions,
     ChatImage,
-    PromptSkillContext,
-    ReactSkillContext,
+    HarnessMode,
+    HarnessRequest,
     run_agent,
 )
 from server.infrastructure.config import load_settings, parse_settings
@@ -502,26 +502,19 @@ def test_agent_chat_requires_agent_id(tmp_path) -> None:
     service = AgentChatService(tmp_path / "config.yaml", FakeModelGateway())
 
     with pytest.raises(AgentConfigError, match="agent_id is required"):
-        asyncio.run(service.run_agent("", PromptSkillContext(content="你好")))
+        asyncio.run(
+            service.run_agent(
+                "",
+                HarnessRequest(mode=HarnessMode.PROMPT, content="你好"),
+            )
+        )
 
 
-def test_agent_chat_falls_back_to_sequential_goal_confirmation_without_langgraph(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_agent_harness_prompt_mode_calls_model_without_tools(tmp_path) -> None:
     write_config(tmp_path)
     gateway = FakeModelGateway()
     service = AgentChatService(tmp_path / "config.yaml", gateway)
     platform = load_settings(tmp_path / "config.yaml").agent_platform
-
-    real_import = __import__
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "langgraph.graph":
-            raise ImportError("langgraph unavailable")
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr("builtins.__import__", fake_import)
 
     agent = platform.get_agent("assistant")
     result = asyncio.run(
@@ -531,10 +524,9 @@ def test_agent_chat_falls_back_to_sequential_goal_confirmation_without_langgraph
                 model=platform.get_model("fast"),
                 llm_client=gateway,
             ),
-            skill_context=ReactSkillContext(
+            request=HarnessRequest(
+                mode=HarnessMode.PROMPT,
                 content="整理今天任务",
-                tool_registry=service._tool_registry,
-                tool_runtime=AgentToolRuntime(skill_tools=AgentSkillService(tmp_path).toolbox(agent)),
             ),
             options=ChatOptions(),
         )
@@ -585,7 +577,8 @@ def test_agent_harness_limits_empty_tool_reasoning_turns(tmp_path) -> None:
                 model=platform.get_model("fast"),
                 llm_client=gateway,
             ),
-            skill_context=ReactSkillContext(
+            request=HarnessRequest(
+                mode=HarnessMode.TOOLS,
                 content="整理今天任务",
                 tool_names=("list_skill",),
                 tool_registry=service._tool_registry,

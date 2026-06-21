@@ -18,9 +18,8 @@ from server.domain.harness import (
     AgentChatUnavailableError,
     ChatOptions,
     ChatImage,
-    PromptSkillContext,
-    ReactSkillContext,
-    SkillContext,
+    HarnessMode,
+    HarnessRequest,
     run_agent,
 )
 from server.app.agent_skill_service import AgentSkillService
@@ -406,9 +405,9 @@ class AgentChatService:
             platform.common_skill_tools,
             platform.skill_definitions,
         )
-        skill_context: SkillContext
         if tool_names:
-            skill_context = ReactSkillContext(
+            request = HarnessRequest(
+                mode=HarnessMode.TOOLS,
                 content=content.strip(),
                 images=images,
                 tool_names=tool_names,
@@ -416,17 +415,21 @@ class AgentChatService:
                 tool_runtime=self._tool_runtime(agent, tool_names),
             )
         else:
-            skill_context = PromptSkillContext(content=content.strip(), images=images)
+            request = HarnessRequest(
+                mode=HarnessMode.PROMPT,
+                content=content.strip(),
+                images=images,
+            )
         return await self.run_agent(
             agent_id,
-            skill_context,
+            request,
             ChatOptions(on_checkpoint=on_checkpoint),
         )
 
     async def run_agent(
         self,
         agent_id: str,
-        skill_context: SkillContext,
+        request: HarnessRequest,
         options: ChatOptions | None = None,
     ) -> str:
         agent_id = agent_id.strip()
@@ -437,7 +440,7 @@ class AgentChatService:
             raise AgentChatUnavailableError("未配置 Agent")
         if not platform.models:
             raise AgentChatUnavailableError("未配置模型")
-        if not skill_context.content.strip() and not skill_context.images:
+        if not request.content.strip() and not request.images:
             raise AgentConfigError("消息内容不能为空")
 
         agent = platform.get_agent(agent_id)
@@ -446,7 +449,7 @@ class AgentChatService:
         model = platform.get_model(agent.model_id)
         if not self._has_usable_api_key(model):
             raise AgentChatUnavailableError("模型 API Key 不可用")
-        if skill_context.images and not model.supports_images:
+        if request.images and not model.supports_images:
             raise AgentChatUnavailableError("当前模型不支持图片输入")
         return await run_agent(
             Agent(
@@ -454,7 +457,7 @@ class AgentChatService:
                 model=model,
                 llm_client=self._llm_client,
             ),
-            skill_context=skill_context,
+            request=request,
             options=options,
         )
 
@@ -470,19 +473,29 @@ class AgentChatService:
             raise AgentConfigError("agent_id is required")
         platform = self._load_platform()
         agent = platform.get_agent(agent_id)
-        return await self.run_agent(
-            agent_id,
-            ReactSkillContext(
+        tool_names = self._tool_registry.resolve_tools(
+            platform.tools,
+            agent,
+            platform.common_skill_tools,
+            platform.skill_definitions,
+        )
+        request = (
+            HarnessRequest(
+                mode=HarnessMode.TOOLS,
                 content=content.strip(),
-                tool_names=self._tool_registry.resolve_tools(
-                    platform.tools,
-                    agent,
-                    platform.common_skill_tools,
-                    platform.skill_definitions,
-                ),
+                tool_names=tool_names,
                 tool_registry=self._tool_registry,
                 tool_runtime=tool_runtime,
-            ),
+            )
+            if tool_names
+            else HarnessRequest(
+                mode=HarnessMode.PROMPT,
+                content=content.strip(),
+            )
+        )
+        return await self.run_agent(
+            agent_id,
+            request,
             ChatOptions(on_checkpoint=on_checkpoint),
         )
 
