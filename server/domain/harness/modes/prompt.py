@@ -1,7 +1,5 @@
 from server.domain.harness.contracts import (
-    Agent,
     AgentModelRunner,
-    ChatOptions,
     CheckpointEmitter,
     HarnessRequest,
 )
@@ -13,9 +11,7 @@ class PromptRunner:
 
     async def run(
         self,
-        agent: Agent,
         request: HarnessRequest,
-        _options: ChatOptions,
         emit: CheckpointEmitter,
     ) -> str:
         if (
@@ -24,6 +20,7 @@ class PromptRunner:
             or request.tool_runtime is not None
         ):
             raise ValueError("prompt mode does not accept tools")
+        agent = request.agent
         await emit("answer", "生成最终回复", "")
         message = await self._model_runner.complete(
             agent.definition.system_prompt,

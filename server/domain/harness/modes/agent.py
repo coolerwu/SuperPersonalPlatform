@@ -10,7 +10,6 @@ from server.domain.harness.contracts import (
     AgentToolCall,
     AgentToolResult,
     AgentVerifier,
-    ChatOptions,
     CheckpointEmitter,
     EvidenceRecord,
     GoalContract,
@@ -94,12 +93,11 @@ class AgentRunner:
 
     async def run(
         self,
-        agent: Agent,
         request: HarnessRequest,
-        options: ChatOptions,
         emit: CheckpointEmitter,
     ) -> str:
         _validate_agent_request(request)
+        agent = request.agent
         state = AgentRunState()
 
         while state.phase not in {
@@ -111,14 +109,14 @@ class AgentRunner:
             if state.phase is AgentRunPhase.GOAL:
                 state = await self._goal(agent, request, state, emit)
             elif state.phase is AgentRunPhase.REASON:
-                state = await self._reason(agent, request, options, state, emit)
+                state = await self._reason(agent, request, state, emit)
             elif state.phase is AgentRunPhase.ACT:
                 state = await self._act(request, state, emit)
             elif state.phase is AgentRunPhase.OBSERVE:
                 state = self._observe(state)
                 await emit("observe", "工具结果已写入证据账本", "")
             elif state.phase is AgentRunPhase.VERIFY:
-                state = await self._verify(agent, options, state, emit)
+                state = await self._verify(agent, request, state, emit)
             elif state.phase is AgentRunPhase.FINALIZE:
                 state = await self._finalize(agent, state, emit)
 
@@ -175,7 +173,6 @@ class AgentRunner:
         self,
         agent: Agent,
         request: HarnessRequest,
-        options: ChatOptions,
         state: AgentRunState,
         emit: CheckpointEmitter,
     ) -> AgentRunState:
@@ -225,7 +222,7 @@ class AgentRunner:
             state,
             phase=(
                 AgentRunPhase.FAILED
-                if next_turn >= options.max_iterations
+                if next_turn >= request.max_iterations
                 else AgentRunPhase.REASON
             ),
             turn=next_turn,
@@ -289,7 +286,7 @@ class AgentRunner:
     async def _verify(
         self,
         agent: Agent,
-        options: ChatOptions,
+        request: HarnessRequest,
         state: AgentRunState,
         emit: CheckpointEmitter,
     ) -> AgentRunState:
@@ -322,7 +319,7 @@ class AgentRunner:
             state,
             phase=(
                 AgentRunPhase.FAILED
-                if state.turn >= options.max_iterations
+                if state.turn >= request.max_iterations
                 else AgentRunPhase.REASON
             ),
             verification=verification,

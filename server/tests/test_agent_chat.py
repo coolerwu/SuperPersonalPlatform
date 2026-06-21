@@ -25,7 +25,6 @@ from server.domain.harness import (
     AgentToolResult,
     ChatImage,
     HarnessMode,
-    HarnessRequest,
 )
 from server.infrastructure.config import load_settings, parse_settings
 from server.domain.harness import runner as harness_runner
@@ -568,9 +567,9 @@ def test_agent_chat_requires_agent_id(tmp_path) -> None:
 
     with pytest.raises(AgentConfigError, match="agent_id is required"):
         asyncio.run(
-            service.run_agent(
+            service.chat(
                 "",
-                HarnessRequest(content="你好"),
+                "你好",
             )
         )
 

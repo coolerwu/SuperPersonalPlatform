@@ -1,9 +1,7 @@
 from server.domain.agents import HarnessMode, ModelDefinition
 from server.domain.harness.contracts import (
-    Agent,
     AgentChatCheckpoint,
     AgentModelRunner,
-    ChatOptions,
     HarnessRequest,
 )
 from server.domain.harness.modes.agent import AgentRunner, LLMVerifier
@@ -17,20 +15,18 @@ def create_model_runner(model: ModelDefinition) -> AgentModelRunner:
 
 
 async def run_agent(
-    agent: Agent,
     request: HarnessRequest,
-    options: ChatOptions | None = None,
 ) -> str:
-    options = options or ChatOptions()
-    if options.max_iterations <= 0:
+    if request.max_iterations <= 0:
         raise ValueError("max_iterations must be greater than zero")
 
     async def emit(stage: str, title: str, detail: str = "") -> None:
-        if options.on_checkpoint is not None:
-            await options.on_checkpoint(
+        if request.on_checkpoint is not None:
+            await request.on_checkpoint(
                 AgentChatCheckpoint(stage=stage, title=title, detail=detail)
             )
 
+    agent = request.agent
     model_runner = create_model_runner(agent.model)
     if agent.model.mode is HarnessMode.PROMPT:
         runner = PromptRunner(model_runner)
@@ -38,4 +34,4 @@ async def run_agent(
         runner = AgentRunner(model_runner, LLMVerifier(model_runner))
     else:
         raise ValueError(f"unsupported harness mode: {agent.model.mode}")
-    return await runner.run(agent, request, options, emit)
+    return await runner.run(request, emit)

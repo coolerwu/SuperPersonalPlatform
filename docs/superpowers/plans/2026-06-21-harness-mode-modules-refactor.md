@@ -27,7 +27,7 @@
 - Modify: `server/domain/harness/agent.py`
 - Modify: `server/domain/harness/__init__.py`
 
-- [ ] Move shared errors, DTOs, protocols, `Agent`, `HarnessMode`, `HarnessRequest`, and `ChatOptions` to `contracts.py`.
+- [x] Move shared errors, DTOs, protocols, `Agent`, `HarnessMode`, and the complete `HarnessRequest` execution boundary to `contracts.py`.
 - [ ] Implement prompt-mode validation and completion in `prompt.py`.
 - [ ] Move `AgentRunPhase`, `AgentRunState`, sequential tool dispatch, and forced finalization to `tools.py`.
 - [ ] Reduce `agent.py` to common option validation, checkpoint emission, and a mode-runner dispatch table.

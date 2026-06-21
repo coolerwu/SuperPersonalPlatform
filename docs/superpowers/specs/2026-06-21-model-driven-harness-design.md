@@ -4,7 +4,7 @@
 
 Use the selected `ModelDefinition` as the single source of truth for choosing
 `PROMPT` or `AGENT` Harness execution. Remove mode selection from individual
-requests and reduce the public call shape to `run_agent(agent, request, options)`.
+requests and reduce the public call shape to `run_agent(request)`.
 
 ## Configuration
 
@@ -19,10 +19,12 @@ endpoint, credentials, and upstream model name.
 
 ## Domain Design
 
-`HarnessRequest` no longer contains `mode`. It carries only per-run input and tool
-context.
+`HarnessRequest` no longer contains `mode`. It is the complete execution boundary
+and carries the bound Agent, per-run input, tool context, checkpoint callback, and
+iteration limit.
 
-`run_agent(agent, request, options=None)` is stateless. It creates a
+`run_agent(request)` is stateless. The request contains the bound Agent and all
+per-run controls. The function creates a
 `ModelRunner` from `agent.model`, then creates `PromptRunner` or `AgentRunner`
 according to `agent.model.mode`. There is no runtime container, runner mapping,
 gateway argument, or model client stored on `Agent`.
@@ -34,7 +36,7 @@ provider internally. Mode runners call it without repeatedly passing the model.
 
 `AgentChatService` has no model-client constructor dependency. For each request it
 resolves the Agent, model and applicable tools, builds a mode-free
-`HarnessRequest`, and calls `run_agent(...)`.
+`HarnessRequest`, and calls `run_agent(request)`.
 
 Tool availability does not select the mode. A model configured with `mode=agent`
 uses the strict Agent loop even when no tools are available. A model configured

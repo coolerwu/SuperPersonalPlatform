@@ -57,12 +57,6 @@ CheckpointCallback = Callable[[AgentChatCheckpoint], Awaitable[None]]
 CheckpointEmitter = Callable[[str, str, str], Awaitable[None]]
 
 
-@dataclass(frozen=True)
-class ChatOptions:
-    on_checkpoint: CheckpointCallback | None = None
-    max_iterations: int = 60
-
-
 class AgentModelRunner(Protocol):
     async def complete(
         self,
@@ -109,11 +103,14 @@ class Agent:
 
 @dataclass(frozen=True)
 class HarnessRequest:
+    agent: Agent
     content: str
     images: tuple[ChatImage, ...] = ()
     tool_names: tuple[str, ...] = ()
     tool_registry: AgentToolDispatcher | None = None
     tool_runtime: object | None = None
+    on_checkpoint: CheckpointCallback | None = None
+    max_iterations: int = 60
 
 
 @dataclass(frozen=True)
@@ -164,8 +161,6 @@ class AgentVerifier(Protocol):
 class HarnessModeRunner(Protocol):
     async def run(
         self,
-        agent: Agent,
         request: HarnessRequest,
-        options: ChatOptions,
         emit: CheckpointEmitter,
     ) -> str: ...

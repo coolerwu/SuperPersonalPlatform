@@ -17,7 +17,6 @@ from server.domain.harness import (
     Agent,
     AgentChatCheckpoint,
     AgentChatUnavailableError,
-    ChatOptions,
     ChatImage,
     HarnessRequest,
     run_agent,
@@ -402,6 +401,8 @@ class AgentChatService:
         platform = self._load_platform()
         agent = platform.get_agent(agent_id)
         model = self._model_for_agent(platform, agent)
+        self._validate_bound_model(platform, model, images)
+        bound_agent = Agent(definition=agent, model=model)
         if model.mode is HarnessMode.AGENT:
             tool_names = self._tool_registry.resolve_tools(
                 platform.tools,
@@ -410,56 +411,24 @@ class AgentChatService:
                 platform.skill_definitions,
             )
             request = HarnessRequest(
+                agent=bound_agent,
                 content=content.strip(),
                 images=images,
                 tool_names=tool_names,
                 tool_registry=self._tool_registry if tool_names else None,
                 tool_runtime=self._tool_runtime(agent, tool_names) if tool_names else None,
+                on_checkpoint=on_checkpoint,
             )
         else:
             request = HarnessRequest(
+                agent=bound_agent,
                 content=content.strip(),
                 images=images,
+                on_checkpoint=on_checkpoint,
             )
-        return await self.run_agent(
-            agent_id,
-            request,
-            ChatOptions(on_checkpoint=on_checkpoint),
-        )
-
-    async def run_agent(
-        self,
-        agent_id: str,
-        request: HarnessRequest,
-        options: ChatOptions | None = None,
-    ) -> str:
-        agent_id = agent_id.strip()
-        if not agent_id:
-            raise AgentConfigError("agent_id is required")
-        platform = self._load_platform()
-        if not platform.agents:
-            raise AgentChatUnavailableError("未配置 Agent")
-        if not platform.models:
-            raise AgentChatUnavailableError("未配置模型")
-        if not request.content.strip() and not request.images:
+        if not request.content and not request.images:
             raise AgentConfigError("消息内容不能为空")
-
-        agent = platform.get_agent(agent_id)
-        if not agent.model_id:
-            raise AgentChatUnavailableError("Agent 未配置模型")
-        model = platform.get_model(agent.model_id)
-        if not self._has_usable_api_key(model):
-            raise AgentChatUnavailableError("模型 API Key 不可用")
-        if request.images and not model.supports_images:
-            raise AgentChatUnavailableError("当前模型不支持图片输入")
-        return await run_agent(
-            Agent(
-                definition=agent,
-                model=model,
-            ),
-            request=request,
-            options=options,
-        )
+        return await run_agent(request)
 
     async def run_with_tool_runtime(
         self,
@@ -474,6 +443,8 @@ class AgentChatService:
         platform = self._load_platform()
         agent = platform.get_agent(agent_id)
         model = self._model_for_agent(platform, agent)
+        self._validate_bound_model(platform, model)
+        bound_agent = Agent(definition=agent, model=model)
         if model.mode is HarnessMode.AGENT:
             tool_names = self._tool_registry.resolve_tools(
                 platform.tools,
@@ -482,18 +453,37 @@ class AgentChatService:
                 platform.skill_definitions,
             )
             request = HarnessRequest(
+                agent=bound_agent,
                 content=content.strip(),
                 tool_names=tool_names,
                 tool_registry=self._tool_registry if tool_names else None,
                 tool_runtime=tool_runtime if tool_names else None,
+                on_checkpoint=on_checkpoint,
             )
         else:
-            request = HarnessRequest(content=content.strip())
-        return await self.run_agent(
-            agent_id,
-            request,
-            ChatOptions(on_checkpoint=on_checkpoint),
-        )
+            request = HarnessRequest(
+                agent=bound_agent,
+                content=content.strip(),
+                on_checkpoint=on_checkpoint,
+            )
+        if not request.content:
+            raise AgentConfigError("消息内容不能为空")
+        return await run_agent(request)
+
+    def _validate_bound_model(
+        self,
+        platform: AgentPlatformDefinition,
+        model: ModelDefinition,
+        images: tuple[ChatImage, ...] = (),
+    ) -> None:
+        if not platform.agents:
+            raise AgentChatUnavailableError("未配置 Agent")
+        if not platform.models:
+            raise AgentChatUnavailableError("未配置模型")
+        if not self._has_usable_api_key(model):
+            raise AgentChatUnavailableError("模型 API Key 不可用")
+        if images and not model.supports_images:
+            raise AgentChatUnavailableError("当前模型不支持图片输入")
 
     def _tool_runtime(
         self,

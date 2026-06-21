@@ -76,13 +76,14 @@ Expected: failures because requests still require mode and stateless dispatch do
 Remove `HarnessRequest.mode` and runtime containers. Implement:
 
 ```python
-async def run_agent(agent, request, options=None):
+async def run_agent(request):
+    agent = request.agent
     model_runner = create_model_runner(agent.model)
     if agent.model.mode is HarnessMode.PROMPT:
         runner = PromptRunner(model_runner)
     else:
         runner = AgentRunner(model_runner, LLMVerifier(model_runner))
-    return await runner.run(agent, request, options)
+    return await runner.run(request, emit)
 ```
 
 Export `run_agent`; remove `create_harness_runtime`, `HarnessRuntime`,
