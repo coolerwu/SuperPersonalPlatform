@@ -1,23 +1,35 @@
-from server.domain.harness.agent import run_agent
 from server.domain.harness.contracts import (
     Agent,
     AgentChatCheckpoint,
     AgentChatUnavailableError,
+    AgentRunBlockedError,
+    AgentRunFailedError,
     AgentToolCall,
     AgentToolCallingUnsupportedError,
     AgentToolReasoningResult,
     AgentToolResult,
     ChatImage,
     ChatOptions,
+    EvidenceRecord,
+    GoalContract,
     HarnessMode,
     HarnessRequest,
+    OutputCandidate,
+    VerificationResult,
 )
-from server.domain.harness.tools import AgentRunPhase
+from server.domain.harness.modes.agent import AgentRunPhase
+from server.domain.harness.runner import (
+    HarnessRuntime,
+    create_harness_runtime,
+    run_agent,
+)
 
 __all__ = [
     "Agent",
     "AgentChatCheckpoint",
     "AgentChatUnavailableError",
+    "AgentRunBlockedError",
+    "AgentRunFailedError",
     "AgentRunPhase",
     "AgentToolCall",
     "AgentToolCallingUnsupportedError",
@@ -25,7 +37,13 @@ __all__ = [
     "AgentToolResult",
     "ChatImage",
     "ChatOptions",
+    "EvidenceRecord",
+    "GoalContract",
     "HarnessMode",
     "HarnessRequest",
+    "HarnessRuntime",
+    "OutputCandidate",
+    "VerificationResult",
+    "create_harness_runtime",
     "run_agent",
 ]

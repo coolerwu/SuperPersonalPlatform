@@ -1,11 +1,13 @@
 import asyncio
 import importlib
+from dataclasses import fields
 
 import pytest
 
 from server.domain.agents import AgentDefinition, ModelDefinition
 from server.domain.harness import (
     Agent,
+    AgentRunFailedError,
     AgentRunPhase,
     AgentToolCall,
     AgentToolReasoningResult,
@@ -13,30 +15,29 @@ from server.domain.harness import (
     ChatOptions,
     HarnessMode,
     HarnessRequest,
+    create_harness_runtime,
     run_agent,
 )
 
 
-def test_harness_modes_have_separate_modules() -> None:
-    prompt_module = importlib.import_module("server.domain.harness.prompt")
-    tools_module = importlib.import_module("server.domain.harness.tools")
-
-    assert callable(prompt_module.run_prompt_mode)
-    assert callable(tools_module.run_tools_mode)
-    assert tools_module.AgentRunPhase is AgentRunPhase
+GOAL_JSON = (
+    '{"goal":"use the tools","completion_criteria":["answer the request"],'
+    '"output_format":"plain text","required_evidence":["first"]}'
+)
+VERIFY_PASS_JSON = '{"passed":true,"blocked":false,"feedback":""}'
 
 
 class FakeGateway:
-    def __init__(self, reasoning_results=()) -> None:
+    def __init__(self, completions=(), reasoning_results=()) -> None:
+        self.completions = list(completions)
         self.reasoning_results = list(reasoning_results)
         self.complete_calls = []
         self.reason_calls = []
         self.append_calls = []
-        self.force_calls = []
 
     async def complete(self, model, system_prompt, content, images):
         self.complete_calls.append((model, system_prompt, content, images))
-        return "prompt answer"
+        return self.completions.pop(0)
 
     async def reason_with_tools(
         self,
@@ -47,7 +48,9 @@ class FakeGateway:
         messages,
         images,
     ):
-        self.reason_calls.append((model, system_prompt, content, tool_names, messages, images))
+        self.reason_calls.append(
+            (model, system_prompt, content, tool_names, messages, images)
+        )
         return self.reasoning_results.pop(0)
 
     def append_tool_results(self, messages, results):
@@ -55,8 +58,7 @@ class FakeGateway:
         return (*messages, *results)
 
     async def force_tool_final(self, model, messages):
-        self.force_calls.append((model, messages))
-        return "forced answer"
+        raise AssertionError("AGENT mode must not bypass VERIFY with force_tool_final")
 
 
 class FakeToolRegistry:
@@ -65,10 +67,10 @@ class FakeToolRegistry:
 
     async def dispatch(self, name, args, runtime):
         self.calls.append((name, args, runtime))
-        return f"result:{name}"
+        return f" evidence from {name} "
 
 
-def make_agent(gateway) -> Agent:
+def make_agent() -> Agent:
     return Agent(
         definition=AgentDefinition(
             id="assistant",
@@ -83,17 +85,33 @@ def make_agent(gateway) -> Agent:
             api_key="secret",
             model="fast-chat",
         ),
-        llm_client=gateway,
     )
 
 
-def test_prompt_mode_completes_without_tool_state() -> None:
-    gateway = FakeGateway()
+def test_harness_modes_have_separate_modules() -> None:
+    runner_module = importlib.import_module("server.domain.harness.runner")
+    prompt_module = importlib.import_module("server.domain.harness.modes.prompt")
+    agent_module = importlib.import_module("server.domain.harness.modes.agent")
+
+    assert callable(runner_module.run_agent)
+    assert prompt_module.PromptRunner
+    assert agent_module.AgentRunner
+    assert agent_module.AgentRunPhase is AgentRunPhase
+
+
+def test_agent_is_pure_configuration_without_model_gateway() -> None:
+    assert [field.name for field in fields(Agent)] == ["definition", "model"]
+
+
+def test_prompt_mode_uses_only_prompt_runner() -> None:
+    gateway = FakeGateway(completions=("prompt answer",))
+    runtime = create_harness_runtime(gateway)
 
     result = asyncio.run(
         run_agent(
-            make_agent(gateway),
+            make_agent(),
             HarnessRequest(mode=HarnessMode.PROMPT, content="hello"),
+            runtime,
         )
     )
 
@@ -102,55 +120,138 @@ def test_prompt_mode_completes_without_tool_state() -> None:
     assert gateway.reason_calls == []
 
 
-def test_tools_mode_dispatches_calls_in_order_and_completes() -> None:
+def test_agent_mode_runs_goal_tools_observe_verify_and_finalize() -> None:
     first_messages = ("assistant tool request",)
     gateway = FakeGateway(
-        (
+        completions=(GOAL_JSON, VERIFY_PASS_JSON, "verified final answer"),
+        reasoning_results=(
             AgentToolReasoningResult(
                 content="",
                 tool_calls=(
                     AgentToolCall(id="1", name="first", args={"value": 1}),
-                    AgentToolCall(id="2", name="second", args={"value": 2}),
                 ),
                 messages=first_messages,
             ),
             AgentToolReasoningResult(
-                content="tool answer",
+                content="candidate answer",
                 tool_calls=(),
-                messages=("final",),
+                messages=("candidate",),
             ),
-        )
+        ),
     )
     registry = FakeToolRegistry()
-    runtime = object()
+    runtime_value = object()
+    checkpoints = []
+
+    async def checkpoint(event):
+        checkpoints.append(event.stage)
 
     result = asyncio.run(
         run_agent(
-            make_agent(gateway),
+            make_agent(),
             HarnessRequest(
-                mode=HarnessMode.TOOLS,
+                mode=HarnessMode.AGENT,
                 content="use tools",
-                tool_names=("first", "second"),
+                tool_names=("first",),
                 tool_registry=registry,
-                tool_runtime=runtime,
+                tool_runtime=runtime_value,
             ),
+            create_harness_runtime(gateway),
+            ChatOptions(on_checkpoint=checkpoint),
         )
     )
 
-    assert result == "tool answer"
-    assert registry.calls == [
-        ("first", {"value": 1}, runtime),
-        ("second", {"value": 2}, runtime),
-    ]
+    assert result == "verified final answer"
+    assert registry.calls == [("first", {"value": 1}, runtime_value)]
     assert gateway.append_calls == [
         (
             first_messages,
-            (
-                AgentToolResult(tool_call_id="1", content="result:first"),
-                AgentToolResult(tool_call_id="2", content="result:second"),
-            ),
+            (AgentToolResult(tool_call_id="1", content="evidence from first"),),
         )
     ]
+    assert checkpoints == [
+        "goal",
+        "reason",
+        "reason",
+        "act",
+        "act",
+        "observe",
+        "reason",
+        "verify",
+        "finalize",
+        "completed",
+    ]
+    assert len(gateway.complete_calls) == 3
+
+
+def test_failed_verification_returns_to_reason() -> None:
+    gateway = FakeGateway(
+        completions=(
+            GOAL_JSON.replace('["first"]', "[]"),
+            '{"passed":false,"blocked":false,"feedback":"missing detail"}',
+            VERIFY_PASS_JSON,
+            "second candidate final",
+        ),
+        reasoning_results=(
+            AgentToolReasoningResult(
+                content="first candidate", tool_calls=(), messages=("first",)
+            ),
+            AgentToolReasoningResult(
+                content="second candidate", tool_calls=(), messages=("second",)
+            ),
+        ),
+    )
+
+    result = asyncio.run(
+        run_agent(
+            make_agent(),
+            HarnessRequest(
+                mode=HarnessMode.AGENT,
+                content="answer carefully",
+                tool_names=("first",),
+                tool_registry=FakeToolRegistry(),
+            ),
+            create_harness_runtime(gateway),
+            ChatOptions(max_iterations=2),
+        )
+    )
+
+    assert result == "second candidate final"
+    assert len(gateway.reason_calls) == 2
+
+
+def test_agent_mode_fails_instead_of_degrading_at_iteration_limit() -> None:
+    gateway = FakeGateway(
+        completions=(
+            GOAL_JSON.replace('["first"]', "[]"),
+            '{"passed":false,"blocked":false,"feedback":"not complete"}',
+        ),
+        reasoning_results=(
+            AgentToolReasoningResult(
+                content="weak candidate", tool_calls=(), messages=("weak",)
+            ),
+        ),
+    )
+    checkpoints = []
+
+    async def checkpoint(event):
+        checkpoints.append(event.stage)
+
+    with pytest.raises(AgentRunFailedError, match="not complete"):
+        asyncio.run(
+            run_agent(
+                make_agent(),
+                HarnessRequest(
+                    mode=HarnessMode.AGENT,
+                    content="finish",
+                    tool_names=("first",),
+                    tool_registry=FakeToolRegistry(),
+                ),
+                create_harness_runtime(gateway),
+                ChatOptions(max_iterations=1, on_checkpoint=checkpoint),
+            )
+        )
+    assert checkpoints[-1] == "failed"
 
 
 @pytest.mark.parametrize(
@@ -165,48 +266,29 @@ def test_tools_mode_dispatches_calls_in_order_and_completes() -> None:
             "prompt mode does not accept tools",
         ),
         (
-            HarnessRequest(mode=HarnessMode.TOOLS, content="hello"),
-            "tools mode requires tool_names",
+            HarnessRequest(mode=HarnessMode.AGENT, content="hello"),
+            "agent mode requires tool_names",
         ),
     ),
 )
 def test_mode_configuration_is_validated(harness_request, message) -> None:
     with pytest.raises(ValueError, match=message):
-        asyncio.run(run_agent(make_agent(FakeGateway()), harness_request))
-
-
-def test_tools_mode_forces_one_final_answer_at_iteration_limit() -> None:
-    gateway = FakeGateway(
-        (
-            AgentToolReasoningResult(content="", tool_calls=(), messages=("empty-1",)),
-            AgentToolReasoningResult(content="", tool_calls=(), messages=("empty-2",)),
+        asyncio.run(
+            run_agent(
+                make_agent(),
+                harness_request,
+                create_harness_runtime(FakeGateway()),
+            )
         )
-    )
-
-    result = asyncio.run(
-        run_agent(
-            make_agent(gateway),
-            HarnessRequest(
-                mode=HarnessMode.TOOLS,
-                content="finish",
-                tool_names=("first",),
-                tool_registry=FakeToolRegistry(),
-            ),
-            ChatOptions(max_iterations=2),
-        )
-    )
-
-    assert result == "forced answer"
-    assert len(gateway.reason_calls) == 2
-    assert len(gateway.force_calls) == 1
 
 
 def test_max_iterations_must_be_positive() -> None:
     with pytest.raises(ValueError, match="max_iterations must be greater than zero"):
         asyncio.run(
             run_agent(
-                make_agent(FakeGateway()),
+                make_agent(),
                 HarnessRequest(mode=HarnessMode.PROMPT, content="hello"),
+                create_harness_runtime(FakeGateway()),
                 ChatOptions(max_iterations=0),
             )
         )
@@ -214,8 +296,14 @@ def test_max_iterations_must_be_positive() -> None:
 
 def test_agent_run_phases_are_stable_public_values() -> None:
     assert [phase.value for phase in AgentRunPhase] == [
-        "reasoning",
-        "tool_running",
-        "finalizing",
+        "goal",
+        "reason",
+        "act",
+        "observe",
+        "verify",
+        "finalize",
         "completed",
+        "failed",
+        "blocked",
+        "cancelled",
     ]

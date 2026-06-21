@@ -18,6 +18,7 @@ from server.domain.harness import (
     AgentChatUnavailableError,
     ChatOptions,
     ChatImage,
+    create_harness_runtime,
     HarnessMode,
     HarnessRequest,
     run_agent,
@@ -142,6 +143,7 @@ class AgentChatService:
     ) -> None:
         self._config_path = Path(config_path)
         self._llm_client = llm_client
+        self._harness_runtime = create_harness_runtime(llm_client)
         self._skill_service = AgentSkillService(self._config_path.parent)
         self._tool_registry = tool_registry or DEFAULT_AGENT_TOOL_REGISTRY
 
@@ -407,7 +409,7 @@ class AgentChatService:
         )
         if tool_names:
             request = HarnessRequest(
-                mode=HarnessMode.TOOLS,
+                mode=HarnessMode.AGENT,
                 content=content.strip(),
                 images=images,
                 tool_names=tool_names,
@@ -455,9 +457,9 @@ class AgentChatService:
             Agent(
                 definition=agent,
                 model=model,
-                llm_client=self._llm_client,
             ),
             request=request,
+            runtime=self._harness_runtime,
             options=options,
         )
 
@@ -481,7 +483,7 @@ class AgentChatService:
         )
         request = (
             HarnessRequest(
-                mode=HarnessMode.TOOLS,
+                mode=HarnessMode.AGENT,
                 content=content.strip(),
                 tool_names=tool_names,
                 tool_registry=self._tool_registry,

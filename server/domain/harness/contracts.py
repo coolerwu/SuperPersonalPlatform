@@ -13,6 +13,14 @@ class AgentToolCallingUnsupportedError(AgentChatUnavailableError):
     pass
 
 
+class AgentRunFailedError(RuntimeError):
+    pass
+
+
+class AgentRunBlockedError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class ChatImage:
     mime_type: str
@@ -101,12 +109,11 @@ class AgentToolDispatcher(Protocol):
 class Agent:
     definition: AgentDefinition
     model: ModelDefinition
-    llm_client: AgentModelGateway
 
 
 class HarnessMode(StrEnum):
     PROMPT = "prompt"
-    TOOLS = "tools"
+    AGENT = "agent"
 
 
 @dataclass(frozen=True)
@@ -117,3 +124,58 @@ class HarnessRequest:
     tool_names: tuple[str, ...] = ()
     tool_registry: AgentToolDispatcher | None = None
     tool_runtime: object | None = None
+
+
+@dataclass(frozen=True)
+class GoalContract:
+    goal: str
+    completion_criteria: tuple[str, ...]
+    output_format: str
+    required_evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RawToolResult:
+    tool_call_id: str
+    tool_name: str
+    content: str
+    ok: bool
+
+
+@dataclass(frozen=True)
+class EvidenceRecord:
+    source: str
+    content: str
+    ok: bool
+
+
+@dataclass(frozen=True)
+class OutputCandidate:
+    content: str
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    passed: bool
+    blocked: bool
+    feedback: str
+
+
+class AgentVerifier(Protocol):
+    async def verify(
+        self,
+        agent: Agent,
+        goal: GoalContract,
+        evidence: tuple[EvidenceRecord, ...],
+        candidate: OutputCandidate,
+    ) -> VerificationResult: ...
+
+
+class HarnessModeRunner(Protocol):
+    async def run(
+        self,
+        agent: Agent,
+        request: HarnessRequest,
+        options: ChatOptions,
+        emit: CheckpointEmitter,
+    ) -> str: ...
