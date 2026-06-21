@@ -12,17 +12,13 @@ from server.domain.harness.contracts import (
     ChatOptions,
     EvidenceRecord,
     GoalContract,
-    HarnessMode,
     HarnessRequest,
     OutputCandidate,
     VerificationResult,
 )
+from server.domain.agents import HarnessMode
 from server.domain.harness.modes.agent import AgentRunPhase
-from server.domain.harness.runner import (
-    HarnessRuntime,
-    create_harness_runtime,
-    run_agent,
-)
+from server.domain.harness.runner import run_agent
 
 __all__ = [
     "Agent",
@@ -41,9 +37,7 @@ __all__ = [
     "GoalContract",
     "HarnessMode",
     "HarnessRequest",
-    "HarnessRuntime",
     "OutputCandidate",
     "VerificationResult",
-    "create_harness_runtime",
     "run_agent",
 ]

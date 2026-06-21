@@ -5,8 +5,10 @@ from typing import Any
 import yaml
 
 from server.domain.agents import (
+    AgentConfigError,
     AgentDefinition,
     AgentPlatformDefinition,
+    HarnessMode,
     ModelDefinition,
     SkillDefinition,
     ToolAccessDefinition,
@@ -118,8 +120,13 @@ def parse_model_definition(raw: Any) -> ModelDefinition:
         raise ValueError("llm.models[] must be an object")
     temperature_raw = raw.get("temperature")
     provider = str(raw.get("provider") or "openai_compatible").strip()
+    model_id = str(raw.get("id") or "").strip()
+    try:
+        mode = HarnessMode(str(raw.get("mode") or HarnessMode.PROMPT.value).strip())
+    except ValueError as exc:
+        raise AgentConfigError(f"llm.models[{model_id}].mode is unsupported") from exc
     return ModelDefinition(
-        id=str(raw.get("id") or "").strip(),
+        id=model_id,
         name=str(raw.get("name") or "").strip(),
         base_url=str(raw.get("base_url") or "").strip(),
         api_key=str(raw.get("api_key") or "").strip(),
@@ -127,6 +134,7 @@ def parse_model_definition(raw: Any) -> ModelDefinition:
         provider=provider or "openai_compatible",
         temperature=float(temperature_raw) if temperature_raw is not None else None,
         supports_images=bool(raw.get("supports_images", False)),
+        mode=mode,
     )
 
 

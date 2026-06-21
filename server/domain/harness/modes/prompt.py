@@ -1,6 +1,6 @@
 from server.domain.harness.contracts import (
     Agent,
-    AgentModelGateway,
+    AgentModelRunner,
     ChatOptions,
     CheckpointEmitter,
     HarnessRequest,
@@ -8,8 +8,8 @@ from server.domain.harness.contracts import (
 
 
 class PromptRunner:
-    def __init__(self, llm_client: AgentModelGateway) -> None:
-        self._llm_client = llm_client
+    def __init__(self, model_runner: AgentModelRunner) -> None:
+        self._model_runner = model_runner
 
     async def run(
         self,
@@ -25,8 +25,7 @@ class PromptRunner:
         ):
             raise ValueError("prompt mode does not accept tools")
         await emit("answer", "生成最终回复", "")
-        message = await self._llm_client.complete(
-            agent.model,
+        message = await self._model_runner.complete(
             agent.definition.system_prompt,
             request.content,
             request.images,

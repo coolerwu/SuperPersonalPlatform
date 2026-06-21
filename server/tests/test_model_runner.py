@@ -4,7 +4,7 @@ import pytest
 
 from server.domain.harness import AgentToolCallingUnsupportedError
 from server.domain.agents import ModelDefinition
-from server.infrastructure.llm_client import LLMClient
+from server.infrastructure.model_runner import ModelRunner
 
 
 class FakeSkillTools:
@@ -65,16 +65,15 @@ def model() -> ModelDefinition:
     )
 
 
-def test_llm_client_binds_tools_and_returns_final_answer(monkeypatch) -> None:
+def test_model_runner_binds_tools_and_returns_final_answer(monkeypatch) -> None:
     import langchain_openai
 
     FakeChatOpenAI.instances = []
     monkeypatch.setattr(langchain_openai, "ChatOpenAI", FakeChatOpenAI)
-    adapter = LLMClient()
+    adapter = ModelRunner(model())
 
     result = asyncio.run(
         adapter.complete_with_tools(
-            model(),
             "system",
             "user",
             ("list_skill", "read_skill"),
@@ -91,7 +90,7 @@ def test_llm_client_binds_tools_and_returns_final_answer(monkeypatch) -> None:
     assert len(FakeChatOpenAI.instances) == 2
 
 
-def test_llm_client_forces_final_answer_after_max_iterations(monkeypatch) -> None:
+def test_model_runner_forces_final_answer_after_max_iterations(monkeypatch) -> None:
     import langchain_openai
 
     class LoopingBoundModel:
@@ -109,11 +108,10 @@ def test_llm_client_forces_final_answer_after_max_iterations(monkeypatch) -> Non
 
     FakeChatOpenAI.instances = []
     monkeypatch.setattr(langchain_openai, "ChatOpenAI", LoopingChatOpenAI)
-    adapter = LLMClient()
+    adapter = ModelRunner(model())
 
     result = asyncio.run(
         adapter.complete_with_tools(
-            model(),
             "system",
             "user",
             ("list_skill",),
@@ -127,7 +125,7 @@ def test_llm_client_forces_final_answer_after_max_iterations(monkeypatch) -> Non
     assert "工具调用已达到 60 轮上限" in str(final_instance.final_calls[0][-1].content)
 
 
-def test_llm_client_reports_tool_calling_unsupported(monkeypatch) -> None:
+def test_model_runner_reports_tool_calling_unsupported(monkeypatch) -> None:
     import langchain_openai
 
     class UnsupportedChatOpenAI(FakeChatOpenAI):
@@ -135,12 +133,11 @@ def test_llm_client_reports_tool_calling_unsupported(monkeypatch) -> None:
             raise RuntimeError("unsupported")
 
     monkeypatch.setattr(langchain_openai, "ChatOpenAI", UnsupportedChatOpenAI)
-    adapter = LLMClient()
+    adapter = ModelRunner(model())
 
     with pytest.raises(AgentToolCallingUnsupportedError):
         asyncio.run(
             adapter.complete_with_tools(
-                model(),
                 "system",
                 "user",
                 ("list_skill",),

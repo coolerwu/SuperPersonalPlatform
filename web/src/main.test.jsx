@@ -633,6 +633,7 @@ describe("LoginPage", () => {
                   name: "快速模型",
                   base_url: "https://llm.example.test/v1",
                   model: "fast-chat",
+                  mode: "prompt",
                   temperature: 0.2,
                   supports_images: true,
                   has_api_key: true,
@@ -670,6 +671,7 @@ describe("LoginPage", () => {
     await user.click(await screen.findByTitle("展开"));
     await user.clear((await screen.findAllByDisplayValue("快速模型"))[0]);
     await user.type(screen.getByLabelText(/显示名/), "视觉模型");
+    await user.selectOptions(screen.getByLabelText(/运行模式/), "agent");
     await user.click(screen.getByRole("button", { name: /^保存$/ }));
 
     const saveCall = fetch.mock.calls.find(
@@ -678,6 +680,7 @@ describe("LoginPage", () => {
     const payload = JSON.parse(saveCall[1].body);
     expect(payload.common_skill_tools).toEqual(["list_skill", "read_skill"]);
     expect(payload.agents[0].skill_ids).toEqual(["common:writing"]);
+    expect(payload.models[0].mode).toBe("agent");
     expect(fetch).toHaveBeenCalledWith(
       "/api/agents/config",
       expect.objectContaining({

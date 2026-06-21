@@ -45,6 +45,7 @@ class AgentModelConfigPayload(BaseModel):
     api_key: str | None = None
     temperature: float | None = None
     supports_images: bool = False
+    mode: str = "prompt"
 
 
 class AgentDefinitionConfigPayload(BaseModel):
@@ -109,6 +110,7 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                         "name": agent.model.name,
                         "model": agent.model.model,
                         "base_url": agent.model.base_url,
+                        "mode": agent.model.mode.value,
                         "supports_images": agent.model.supports_images,
                         "has_api_key": agent.model.has_api_key,
                     },
@@ -157,6 +159,7 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                     "model": model.model,
                     "temperature": model.temperature,
                     "supports_images": model.supports_images,
+                    "mode": model.mode.value,
                     "has_api_key": model.has_api_key,
                     "api_key_mask": model.api_key_mask,
                 }

@@ -847,6 +847,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
           base_url: "https://api.openai.com/v1",
           model: "",
           api_key: "",
+          mode: "prompt",
           temperature: 0.7,
           supports_images: false,
           has_api_key: false,
@@ -897,6 +898,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
             base_url: model.base_url,
             model: model.model,
             api_key: model.api_key || "",
+            mode: model.mode || "prompt",
             temperature: model.temperature === "" ? null : Number(model.temperature),
             supports_images: Boolean(model.supports_images)
           })),
@@ -1541,6 +1543,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                           </div>
                           <div className="agent-config-card-controls">
                             {config.default_model_id === model.id ? <span className="badge-default">默认</span> : null}
+                            <span className="badge-builtin">{(model.mode || "prompt") === "agent" ? "Agent" : "Prompt"}</span>
                             {model.supports_images ? <span className="badge-builtin">图片</span> : null}
                             <button className="icon-action" title={expandedModelIndex === index ? "收起" : "展开"} onClick={() => setExpandedModelIndex((current) => current === index ? null : index)}>
                               {expandedModelIndex === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -1555,6 +1558,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                               <label>显示名<input value={model.name} onChange={(event) => { if (!composingRef.current) updateModel(index, "name", event.target.value); }} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={(event) => { composingRef.current = false; updateModel(index, "name", event.target.value); }} /></label>
                               <label>Base URL<input value={model.base_url} onChange={(event) => updateModel(index, "base_url", event.target.value)} placeholder={(model.provider || "openai_compatible") === "anthropic" ? "可选" : ""} /></label>
                               <label>模型名<input value={model.model} onChange={(event) => updateModel(index, "model", event.target.value)} /></label>
+                              <label>运行模式<select value={model.mode || "prompt"} onChange={(event) => updateModel(index, "mode", event.target.value)}><option value="prompt">Prompt</option><option value="agent">Agent</option></select></label>
                               <label>API Key<input type="password" placeholder={model.api_key_mask || "留空保留旧 key"} value={model.api_key || ""} onChange={(event) => updateModel(index, "api_key", event.target.value)} /></label>
                               <label>Temperature<input type="number" step="0.1" value={model.temperature ?? ""} onChange={(event) => updateModel(index, "temperature", event.target.value)} /></label>
                             </div>

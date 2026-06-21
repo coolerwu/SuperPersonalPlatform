@@ -4,7 +4,7 @@
 
 Use the selected `ModelDefinition` as the single source of truth for choosing
 `PROMPT` or `AGENT` Harness execution. Remove mode selection from individual
-requests and remove `HarnessRuntime` from the public `run_agent` call shape.
+requests and reduce the public call shape to `run_agent(agent, request, options)`.
 
 ## Configuration
 
@@ -22,22 +22,19 @@ endpoint, credentials, and upstream model name.
 `HarnessRequest` no longer contains `mode`. It carries only per-run input and tool
 context.
 
-`HarnessRuntime` is replaced by `AgentHarness`. `AgentHarness` is constructed once
-with `AgentModelGateway`, owns the prompt and agent runners, and exposes
-`run_agent(agent, request, options=None)`. It selects a runner from
-`agent.model.mode`, validates options, emits checkpoints, and delegates execution.
-Callers therefore do not pass a runtime object into `run_agent`.
+`run_agent(agent, request, options=None)` is stateless. It creates a
+`ModelRunner` from `agent.model`, then creates `PromptRunner` or `AgentRunner`
+according to `agent.model.mode`. There is no runtime container, runner mapping,
+gateway argument, or model client stored on `Agent`.
 
-The model gateway remains an injected dependency. It is owned indirectly by the
-runner instances inside `AgentHarness`; it is not added to the `Agent` domain
-object and is not created inside domain code.
+`ModelRunner` owns one `ModelDefinition` and resolves the concrete LangChain
+provider internally. Mode runners call it without repeatedly passing the model.
 
 ## Application Flow
 
-`AgentChatService` constructs one `AgentHarness` during service initialization.
-For each request it resolves the Agent, resolves the Agent's model and tools,
-builds a mode-free `HarnessRequest`, and calls
-`self._harness.run_agent(...)`.
+`AgentChatService` has no model-client constructor dependency. For each request it
+resolves the Agent, model and applicable tools, builds a mode-free
+`HarnessRequest`, and calls `run_agent(...)`.
 
 Tool availability does not select the mode. A model configured with `mode=agent`
 uses the strict Agent loop even when no tools are available. A model configured

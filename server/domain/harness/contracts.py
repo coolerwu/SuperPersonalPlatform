@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Awaitable, Callable, Protocol
 
 from server.domain.agents import AgentDefinition, ModelDefinition
@@ -64,10 +63,9 @@ class ChatOptions:
     max_iterations: int = 60
 
 
-class AgentModelGateway(Protocol):
+class AgentModelRunner(Protocol):
     async def complete(
         self,
-        model: ModelDefinition,
         system_prompt: str,
         user_message: str,
         images: tuple[ChatImage, ...],
@@ -75,7 +73,6 @@ class AgentModelGateway(Protocol):
 
     async def reason_with_tools(
         self,
-        model: ModelDefinition,
         system_prompt: str,
         user_message: str,
         tool_names: tuple[str, ...],
@@ -91,7 +88,6 @@ class AgentModelGateway(Protocol):
 
     async def force_tool_final(
         self,
-        model: ModelDefinition,
         messages: tuple[object, ...],
     ) -> str: ...
 
@@ -111,14 +107,8 @@ class Agent:
     model: ModelDefinition
 
 
-class HarnessMode(StrEnum):
-    PROMPT = "prompt"
-    AGENT = "agent"
-
-
 @dataclass(frozen=True)
 class HarnessRequest:
-    mode: HarnessMode
     content: str
     images: tuple[ChatImage, ...] = ()
     tool_names: tuple[str, ...] = ()

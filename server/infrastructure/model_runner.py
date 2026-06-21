@@ -11,17 +11,19 @@ from server.app.agent_tool_service import DEFAULT_AGENT_TOOL_REGISTRY
 from server.domain.agents import ModelDefinition
 
 
-class LLMClient:
+class ModelRunner:
+    def __init__(self, model: ModelDefinition) -> None:
+        self._model = model
+
     async def complete(
         self,
-        model: ModelDefinition,
         system_prompt: str,
         user_message: str,
         images: tuple[ChatImage, ...] = (),
     ) -> str:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        chat_model = self._chat_model(model)
+        chat_model = self._chat_model()
         human_content: str | list[dict[str, object]] = self._human_content(user_message, images)
         response = await chat_model.ainvoke(
             [SystemMessage(content=system_prompt), HumanMessage(content=human_content)]
@@ -30,7 +32,6 @@ class LLMClient:
 
     async def complete_with_tools(
         self,
-        model: ModelDefinition,
         system_prompt: str,
         user_message: str,
         tool_names: tuple[str, ...],
@@ -41,7 +42,6 @@ class LLMClient:
         messages: tuple[Any, ...] = ()
         for _ in range(max_iterations):
             reasoning = await self.reason_with_tools(
-                model,
                 system_prompt,
                 user_message,
                 tool_names,
@@ -61,11 +61,10 @@ class LLMClient:
                 )
             messages = self.append_tool_results(messages, tuple(tool_results))
 
-        return await self.force_tool_final(model, messages)
+        return await self.force_tool_final(messages)
 
     async def reason_with_tools(
         self,
-        model: ModelDefinition,
         system_prompt: str,
         user_message: str,
         tool_names: tuple[str, ...],
@@ -74,11 +73,11 @@ class LLMClient:
     ) -> AgentToolReasoningResult:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        chat_model = self._chat_model(model)
+        chat_model = self._chat_model()
         tools = self._tool_schemas(tool_names)
         if not tools:
             return AgentToolReasoningResult(
-                content=await self.complete(model, system_prompt, user_message, images),
+                content=await self.complete(system_prompt, user_message, images),
                 tool_calls=(),
                 messages=messages,
             )
@@ -129,12 +128,11 @@ class LLMClient:
 
     async def force_tool_final(
         self,
-        model: ModelDefinition,
         messages: tuple[Any, ...],
     ) -> str:
         from langchain_core.messages import HumanMessage
 
-        chat_model = self._chat_model(model)
+        chat_model = self._chat_model()
         final_messages = list(messages)
         final_messages.append(
             HumanMessage(
@@ -168,7 +166,8 @@ class LLMClient:
             )
         return human_content
 
-    def _chat_model(self, model: ModelDefinition):
+    def _chat_model(self):
+        model = self._model
         if model.provider == "anthropic":
             from langchain_anthropic import ChatAnthropic
 

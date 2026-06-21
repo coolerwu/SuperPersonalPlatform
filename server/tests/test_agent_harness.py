@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 from dataclasses import fields
+from unittest.mock import patch
 
 import pytest
 
@@ -15,7 +16,6 @@ from server.domain.harness import (
     ChatOptions,
     HarnessMode,
     HarnessRequest,
-    create_harness_runtime,
     run_agent,
 )
 
@@ -35,13 +35,12 @@ class FakeGateway:
         self.reason_calls = []
         self.append_calls = []
 
-    async def complete(self, model, system_prompt, content, images):
-        self.complete_calls.append((model, system_prompt, content, images))
+    async def complete(self, system_prompt, content, images):
+        self.complete_calls.append((system_prompt, content, images))
         return self.completions.pop(0)
 
     async def reason_with_tools(
         self,
-        model,
         system_prompt,
         content,
         tool_names,
@@ -49,7 +48,7 @@ class FakeGateway:
         images,
     ):
         self.reason_calls.append(
-            (model, system_prompt, content, tool_names, messages, images)
+            (system_prompt, content, tool_names, messages, images)
         )
         return self.reasoning_results.pop(0)
 
@@ -57,7 +56,7 @@ class FakeGateway:
         self.append_calls.append((messages, results))
         return (*messages, *results)
 
-    async def force_tool_final(self, model, messages):
+    async def force_tool_final(self, messages):
         raise AssertionError("AGENT mode must not bypass VERIFY with force_tool_final")
 
 
@@ -70,7 +69,7 @@ class FakeToolRegistry:
         return f" evidence from {name} "
 
 
-def make_agent() -> Agent:
+def make_agent(mode: HarnessMode = HarnessMode.PROMPT) -> Agent:
     return Agent(
         definition=AgentDefinition(
             id="assistant",
@@ -84,8 +83,17 @@ def make_agent() -> Agent:
             base_url="https://example.test/v1",
             api_key="secret",
             model="fast-chat",
+            mode=mode,
         ),
     )
+
+
+def execute(agent, request, gateway, options=None):
+    with patch(
+        "server.domain.harness.runner.create_model_runner",
+        return_value=gateway,
+    ):
+        return asyncio.run(run_agent(agent, request, options))
 
 
 def test_harness_modes_have_separate_modules() -> None:
@@ -105,15 +113,7 @@ def test_agent_is_pure_configuration_without_model_gateway() -> None:
 
 def test_prompt_mode_uses_only_prompt_runner() -> None:
     gateway = FakeGateway(completions=("prompt answer",))
-    runtime = create_harness_runtime(gateway)
-
-    result = asyncio.run(
-        run_agent(
-            make_agent(),
-            HarnessRequest(mode=HarnessMode.PROMPT, content="hello"),
-            runtime,
-        )
-    )
+    result = execute(make_agent(), HarnessRequest(content="hello"), gateway)
 
     assert result == "prompt answer"
     assert len(gateway.complete_calls) == 1
@@ -146,19 +146,16 @@ def test_agent_mode_runs_goal_tools_observe_verify_and_finalize() -> None:
     async def checkpoint(event):
         checkpoints.append(event.stage)
 
-    result = asyncio.run(
-        run_agent(
-            make_agent(),
+    result = execute(
+            make_agent(HarnessMode.AGENT),
             HarnessRequest(
-                mode=HarnessMode.AGENT,
                 content="use tools",
                 tool_names=("first",),
                 tool_registry=registry,
                 tool_runtime=runtime_value,
             ),
-            create_harness_runtime(gateway),
+            gateway,
             ChatOptions(on_checkpoint=checkpoint),
-        )
     )
 
     assert result == "verified final answer"
@@ -202,18 +199,15 @@ def test_failed_verification_returns_to_reason() -> None:
         ),
     )
 
-    result = asyncio.run(
-        run_agent(
-            make_agent(),
+    result = execute(
+            make_agent(HarnessMode.AGENT),
             HarnessRequest(
-                mode=HarnessMode.AGENT,
                 content="answer carefully",
                 tool_names=("first",),
                 tool_registry=FakeToolRegistry(),
             ),
-            create_harness_runtime(gateway),
+            gateway,
             ChatOptions(max_iterations=2),
-        )
     )
 
     assert result == "second candidate final"
@@ -238,59 +232,59 @@ def test_agent_mode_fails_instead_of_degrading_at_iteration_limit() -> None:
         checkpoints.append(event.stage)
 
     with pytest.raises(AgentRunFailedError, match="not complete"):
-        asyncio.run(
-            run_agent(
-                make_agent(),
+        execute(
+                make_agent(HarnessMode.AGENT),
                 HarnessRequest(
-                    mode=HarnessMode.AGENT,
                     content="finish",
                     tool_names=("first",),
                     tool_registry=FakeToolRegistry(),
                 ),
-                create_harness_runtime(gateway),
+                gateway,
                 ChatOptions(max_iterations=1, on_checkpoint=checkpoint),
-            )
         )
     assert checkpoints[-1] == "failed"
 
 
-@pytest.mark.parametrize(
-    ("harness_request", "message"),
-    (
-        (
-            HarnessRequest(
-                mode=HarnessMode.PROMPT,
-                content="hello",
-                tool_names=("first",),
-            ),
-            "prompt mode does not accept tools",
-        ),
-        (
-            HarnessRequest(mode=HarnessMode.AGENT, content="hello"),
-            "agent mode requires tool_names",
-        ),
-    ),
-)
-def test_mode_configuration_is_validated(harness_request, message) -> None:
-    with pytest.raises(ValueError, match=message):
-        asyncio.run(
-            run_agent(
+def test_prompt_mode_rejects_tool_context() -> None:
+    with pytest.raises(ValueError, match="prompt mode does not accept tools"):
+        execute(
                 make_agent(),
-                harness_request,
-                create_harness_runtime(FakeGateway()),
-            )
+                HarnessRequest(content="hello", tool_names=("first",)),
+                FakeGateway(),
         )
+
+
+def test_agent_mode_without_tools_can_complete() -> None:
+    gateway = FakeGateway(
+        completions=(
+            GOAL_JSON.replace('["first"]', "[]"),
+            VERIFY_PASS_JSON,
+            "final answer",
+        ),
+        reasoning_results=(
+            AgentToolReasoningResult(
+                content="candidate answer", tool_calls=(), messages=("candidate",)
+            ),
+        ),
+    )
+
+    result = execute(
+            make_agent(HarnessMode.AGENT),
+            HarnessRequest(content="answer without tools"),
+            gateway,
+    )
+
+    assert result == "final answer"
+    assert gateway.reason_calls[0][2] == ()
 
 
 def test_max_iterations_must_be_positive() -> None:
     with pytest.raises(ValueError, match="max_iterations must be greater than zero"):
-        asyncio.run(
-            run_agent(
+        execute(
                 make_agent(),
-                HarnessRequest(mode=HarnessMode.PROMPT, content="hello"),
-                create_harness_runtime(FakeGateway()),
+                HarnessRequest(content="hello"),
+                FakeGateway(),
                 ChatOptions(max_iterations=0),
-            )
         )
 
 

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import StrEnum
 import re
 
 
@@ -28,6 +29,11 @@ SUPPORTED_AGENT_TOOLS = {
 SKILL_ID_PATTERN = re.compile(r"^(common|private):[A-Za-z0-9_-]+$")
 
 
+class HarnessMode(StrEnum):
+    PROMPT = "prompt"
+    AGENT = "agent"
+
+
 @dataclass(frozen=True)
 class ToolAccessDefinition:
     profile: str = "default"
@@ -52,6 +58,7 @@ class ModelDefinition:
     provider: str = "openai_compatible"
     temperature: float | None = None
     supports_images: bool = False
+    mode: HarnessMode = HarnessMode.PROMPT
 
     def __post_init__(self) -> None:
         if not self.id.strip():
@@ -68,6 +75,11 @@ class ModelDefinition:
             raise AgentConfigError(f"llm.models[{self.id}].api_key is required")
         if not self.model.strip():
             raise AgentConfigError(f"llm.models[{self.id}].model is required")
+        if not isinstance(self.mode, HarnessMode):
+            raise AgentConfigError(
+                f"llm.models[{self.id}].mode must be one of "
+                f"{[mode.value for mode in HarnessMode]}"
+            )
 
 
 @dataclass(frozen=True)

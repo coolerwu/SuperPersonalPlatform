@@ -28,6 +28,7 @@ from server.domain.harness import (
     HarnessRequest,
 )
 from server.infrastructure.config import load_settings, parse_settings
+from server.domain.harness import runner as harness_runner
 from server.infrastructure.session import SessionCodec
 
 
@@ -37,17 +38,21 @@ class FakeModelGateway:
         self.reason_calls = []
         self.tool_results = []
         self.fail_tools = fail_tools
+        self.model = None
+
+    def bind(self, model: ModelDefinition):
+        self.model = model
+        return self
 
     async def complete(
         self,
-        model: ModelDefinition,
         system_prompt: str,
         user_message: str,
         images: tuple[ChatImage, ...] = (),
     ) -> str:
         self.calls.append(
             {
-                "model": model.id,
+                "model": self.model.id,
                 "system_prompt": system_prompt,
                 "user_message": user_message,
                 "images": images,
@@ -62,11 +67,10 @@ class FakeModelGateway:
             return '{"passed":true,"blocked":false,"feedback":""}'
         if "候选输出已经通过验证" in system_prompt:
             return str(json.loads(user_message)["candidate"])
-        return f"{model.model}: {system_prompt[:7]} / {user_message} / images={len(images)}"
+        return f"{self.model.model}: {system_prompt[:7]} / {user_message} / images={len(images)}"
 
     async def complete_with_tools(
         self,
-        model: ModelDefinition,
         system_prompt: str,
         user_message: str,
         tool_names,
@@ -77,7 +81,6 @@ class FakeModelGateway:
         messages = ()
         for _ in range(max_iterations):
             result = await self.reason_with_tools(
-                model,
                 system_prompt,
                 user_message,
                 tool_names,
@@ -97,11 +100,10 @@ class FakeModelGateway:
                     content = f"Unsupported tool: {tool_call.name}"
                 tool_results.append(AgentToolResult(tool_call.id, content))
             messages = self.append_tool_results(messages, tuple(tool_results))
-        return await self.force_tool_final(model, messages)
+        return await self.force_tool_final(messages)
 
     async def reason_with_tools(
         self,
-        model: ModelDefinition,
         system_prompt: str,
         user_message: str,
         tool_names,
@@ -112,7 +114,7 @@ class FakeModelGateway:
             raise AgentToolCallingUnsupportedError("当前模型不支持 LangChain tools")
         self.reason_calls.append(
             {
-                "model": model.id,
+                "model": self.model.id,
                 "system_prompt": system_prompt,
                 "user_message": user_message,
                 "tool_names": tool_names,
@@ -120,6 +122,12 @@ class FakeModelGateway:
                 "messages": messages,
             }
         )
+        if not tool_names:
+            return AgentToolReasoningResult(
+                content="candidate without tools",
+                tool_calls=(),
+                messages=tuple(messages) + ("candidate",),
+            )
         if self.tool_results:
             return AgentToolReasoningResult(
                 content=f"tool answer: {self.tool_results[-1].content}",
@@ -139,7 +147,7 @@ class FakeModelGateway:
         self.tool_results.extend(tool_results)
         return tuple(messages) + tuple(tool_results)
 
-    async def force_tool_final(self, model: ModelDefinition, messages) -> str:
+    async def force_tool_final(self, messages) -> str:
         return "forced final"
 
 
@@ -150,9 +158,11 @@ def write_config(
     default_agent_id: str = "assistant",
     agent_model_id: str = "fast",
     supports_images: bool = True,
+    mode: str | None = None,
     common_tools: tuple[str, ...] = (),
     skill_ids: tuple[str, ...] = (),
 ) -> None:
+    mode_line = f"\n      mode: {mode}" if mode is not None else ""
     common_tools_yaml = "\n".join(f"    - {tool}" for tool in common_tools)
     skill_ids_yaml = "\n".join(f"      - {skill_id}" for skill_id in skill_ids)
     common_skills_section = (
@@ -186,6 +196,7 @@ llm:
       base_url: https://llm.example.test/v1
       api_key: top-secret-key
       model: fast-chat
+{mode_line}
       temperature: 0.2
       supports_images: {str(supports_images).lower()}
 {common_skills_section.rstrip()}
@@ -203,6 +214,8 @@ agents:
 
 
 def make_client(workspace: Path, gateway: FakeModelGateway | None = None) -> TestClient:
+    gateway = gateway or FakeModelGateway()
+    harness_runner.create_model_runner = lambda model: gateway.bind(model)
     config_service = ConfigFileService(workspace)
     container = AppContainer(
         auth_service=AuthService(AuthToken("secret-token")),
@@ -211,7 +224,7 @@ def make_client(workspace: Path, gateway: FakeModelGateway | None = None) -> Tes
         system_log_service=None,
         system_update_service=None,
         session_codec=SessionCodec("secret-token"),
-        agent_chat_service=AgentChatService(config_service.config_path, gateway or FakeModelGateway()),
+        agent_chat_service=AgentChatService(config_service.config_path),
     )
     app = FastAPI()
     app.include_router(create_auth_router(container))
@@ -275,6 +288,7 @@ def test_agent_options_require_auth_and_do_not_leak_api_key(tmp_path) -> None:
             "name": "Fast Model",
             "model": "fast-chat",
             "base_url": "https://llm.example.test/v1",
+            "mode": "prompt",
             "supports_images": True,
             "has_api_key": True,
         },
@@ -298,6 +312,17 @@ def test_agent_config_endpoint_masks_api_keys(tmp_path) -> None:
     assert "top-secret-key" not in str(body)
     assert body["models"][0]["has_api_key"] is True
     assert body["models"][0]["api_key_mask"] == "********"
+    assert body["models"][0]["mode"] == "prompt"
+
+
+def test_agent_config_parses_agent_mode_and_rejects_unknown_mode(tmp_path) -> None:
+    write_config(tmp_path, mode="agent")
+
+    assert load_settings(tmp_path / "config.yaml").agent_platform.get_model("fast").mode is HarnessMode.AGENT
+
+    write_config(tmp_path, mode="automatic")
+    with pytest.raises(AgentConfigError, match=r"llm.models\[fast\].mode"):
+        load_settings(tmp_path / "config.yaml")
 
 
 def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
@@ -324,6 +349,7 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
                     "name": "Renamed Model",
                     "base_url": "https://llm.example.test/v1",
                     "model": "fast-chat",
+                    "mode": "agent",
                     "api_key": "",
                     "temperature": 0.4,
                     "supports_images": False,
@@ -346,6 +372,7 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
     assert settings.agent_platform.get_model("fast").api_key == "top-secret-key"
     assert settings.agent_platform.get_model("fast").name == "Renamed Model"
     assert settings.agent_platform.get_model("fast").supports_images is False
+    assert settings.agent_platform.get_model("fast").mode is HarnessMode.AGENT
     assert settings.agent_platform.common_skill_tools == ("list_skill", "read_skill")
     assert settings.agent_platform.skill_definitions[0].id == "common:writing"
     assert settings.agent_platform.skill_definitions[1].id == "common:portfolio"
@@ -460,6 +487,35 @@ def test_agent_chat_websocket_uses_agent_bound_model_without_model_id(tmp_path) 
     assert gateway.calls[0]["user_message"] == "你好"
 
 
+def test_prompt_model_does_not_switch_mode_when_tools_are_available(tmp_path) -> None:
+    write_config(
+        tmp_path,
+        mode="prompt",
+        common_tools=("list_skill",),
+        skill_ids=("common:writing",),
+    )
+    gateway = FakeModelGateway()
+    harness_runner.create_model_runner = lambda model: gateway.bind(model)
+    service = AgentChatService(tmp_path / "config.yaml")
+
+    result = asyncio.run(service.chat("assistant", "直接回答"))
+
+    assert result.endswith("/ 直接回答 / images=0")
+    assert gateway.reason_calls == []
+
+
+def test_agent_model_runs_strict_loop_without_tools(tmp_path) -> None:
+    write_config(tmp_path, mode="agent")
+    gateway = FakeModelGateway()
+    harness_runner.create_model_runner = lambda model: gateway.bind(model)
+    service = AgentChatService(tmp_path / "config.yaml")
+
+    result = asyncio.run(service.chat("assistant", "严格回答"))
+
+    assert result == "candidate without tools"
+    assert gateway.reason_calls[0]["tool_names"] == ()
+
+
 def test_agent_chat_websocket_passes_images_to_adapter(tmp_path) -> None:
     write_config(tmp_path, supports_images=True)
     gateway = FakeModelGateway()
@@ -506,13 +562,15 @@ def test_agent_chat_websocket_rejects_images_for_text_model(tmp_path) -> None:
 
 def test_agent_chat_requires_agent_id(tmp_path) -> None:
     write_config(tmp_path)
-    service = AgentChatService(tmp_path / "config.yaml", FakeModelGateway())
+    gateway = FakeModelGateway()
+    harness_runner.create_model_runner = lambda model: gateway.bind(model)
+    service = AgentChatService(tmp_path / "config.yaml")
 
     with pytest.raises(AgentConfigError, match="agent_id is required"):
         asyncio.run(
             service.run_agent(
                 "",
-                HarnessRequest(mode=HarnessMode.PROMPT, content="你好"),
+                HarnessRequest(content="你好"),
             )
         )
 
@@ -629,7 +687,7 @@ tools:
 """,
         encoding="utf-8",
     )
-    service = AgentChatService(tmp_path / "config.yaml", FakeModelGateway())
+    service = AgentChatService(tmp_path / "config.yaml")
     settings = service._load_platform()
     registry = AgentToolRegistry()
 
@@ -736,6 +794,7 @@ def test_agent_skill_service_rejects_unbound_or_unsafe_skill(tmp_path) -> None:
 def test_agent_chat_uses_langchain_skill_tools_when_configured(tmp_path) -> None:
     write_config(
         tmp_path,
+        mode="agent",
         common_tools=("list_skill", "read_skill"),
         skill_ids=("common:writing",),
     )
@@ -767,7 +826,12 @@ def test_agent_chat_uses_langchain_skill_tools_when_configured(tmp_path) -> None
 
 
 def test_agent_chat_returns_error_when_tool_calling_is_unsupported(tmp_path) -> None:
-    write_config(tmp_path, common_tools=("list_skill",), skill_ids=("common:writing",))
+    write_config(
+        tmp_path,
+        mode="agent",
+        common_tools=("list_skill",),
+        skill_ids=("common:writing",),
+    )
     gateway = FakeModelGateway(fail_tools=True)
     client = make_client(tmp_path, gateway)
     client.post("/api/auth/login", json={"token": "secret-token"})

@@ -8,6 +8,7 @@ from server.domain.agents import (
     AgentConfigError,
     AgentDefinition,
     AgentPlatformDefinition,
+    HarnessMode,
     ModelDefinition,
     SkillDefinition,
     ToolAccessDefinition,
@@ -18,8 +19,6 @@ from server.domain.harness import (
     AgentChatUnavailableError,
     ChatOptions,
     ChatImage,
-    create_harness_runtime,
-    HarnessMode,
     HarnessRequest,
     run_agent,
 )
@@ -39,6 +38,7 @@ class BoundModelOption:
     name: str
     model: str
     base_url: str
+    mode: HarnessMode
     supports_images: bool
     has_api_key: bool
 
@@ -65,6 +65,7 @@ class EditableModel:
     provider: str
     temperature: float | None
     supports_images: bool
+    mode: HarnessMode
     has_api_key: bool
     api_key_mask: str
 
@@ -138,12 +139,9 @@ class AgentChatService:
     def __init__(
         self,
         config_path: str | Path,
-        llm_client: Any,
         tool_registry: AgentToolRegistry | None = None,
     ) -> None:
         self._config_path = Path(config_path)
-        self._llm_client = llm_client
-        self._harness_runtime = create_harness_runtime(llm_client)
         self._skill_service = AgentSkillService(self._config_path.parent)
         self._tool_registry = tool_registry or DEFAULT_AGENT_TOOL_REGISTRY
 
@@ -232,6 +230,7 @@ class AgentChatService:
                     provider=model.provider,
                     temperature=model.temperature,
                     supports_images=model.supports_images,
+                    mode=model.mode,
                     has_api_key=self._has_usable_api_key(model),
                     api_key_mask="********" if self._has_usable_api_key(model) else "",
                 )
@@ -285,6 +284,7 @@ class AgentChatService:
                     "provider": str(model.get("provider") or "openai_compatible").strip() or "openai_compatible",
                     "temperature": self._optional_float(model.get("temperature")),
                     "supports_images": bool(model.get("supports_images", False)),
+                    "mode": str(model.get("mode") or HarnessMode.PROMPT.value).strip(),
                 }
             )
 
@@ -401,24 +401,23 @@ class AgentChatService:
             raise AgentConfigError("agent_id is required")
         platform = self._load_platform()
         agent = platform.get_agent(agent_id)
-        tool_names = self._tool_registry.resolve_tools(
-            platform.tools,
-            agent,
-            platform.common_skill_tools,
-            platform.skill_definitions,
-        )
-        if tool_names:
+        model = self._model_for_agent(platform, agent)
+        if model.mode is HarnessMode.AGENT:
+            tool_names = self._tool_registry.resolve_tools(
+                platform.tools,
+                agent,
+                platform.common_skill_tools,
+                platform.skill_definitions,
+            )
             request = HarnessRequest(
-                mode=HarnessMode.AGENT,
                 content=content.strip(),
                 images=images,
                 tool_names=tool_names,
-                tool_registry=self._tool_registry,
-                tool_runtime=self._tool_runtime(agent, tool_names),
+                tool_registry=self._tool_registry if tool_names else None,
+                tool_runtime=self._tool_runtime(agent, tool_names) if tool_names else None,
             )
         else:
             request = HarnessRequest(
-                mode=HarnessMode.PROMPT,
                 content=content.strip(),
                 images=images,
             )
@@ -459,7 +458,6 @@ class AgentChatService:
                 model=model,
             ),
             request=request,
-            runtime=self._harness_runtime,
             options=options,
         )
 
@@ -475,26 +473,22 @@ class AgentChatService:
             raise AgentConfigError("agent_id is required")
         platform = self._load_platform()
         agent = platform.get_agent(agent_id)
-        tool_names = self._tool_registry.resolve_tools(
-            platform.tools,
-            agent,
-            platform.common_skill_tools,
-            platform.skill_definitions,
-        )
-        request = (
-            HarnessRequest(
-                mode=HarnessMode.AGENT,
+        model = self._model_for_agent(platform, agent)
+        if model.mode is HarnessMode.AGENT:
+            tool_names = self._tool_registry.resolve_tools(
+                platform.tools,
+                agent,
+                platform.common_skill_tools,
+                platform.skill_definitions,
+            )
+            request = HarnessRequest(
                 content=content.strip(),
                 tool_names=tool_names,
-                tool_registry=self._tool_registry,
-                tool_runtime=tool_runtime,
+                tool_registry=self._tool_registry if tool_names else None,
+                tool_runtime=tool_runtime if tool_names else None,
             )
-            if tool_names
-            else HarnessRequest(
-                mode=HarnessMode.PROMPT,
-                content=content.strip(),
-            )
-        )
+        else:
+            request = HarnessRequest(content=content.strip())
         return await self.run_agent(
             agent_id,
             request,
@@ -648,9 +642,19 @@ class AgentChatService:
             name=model.name,
             model=model.model,
             base_url=model.base_url,
+            mode=model.mode,
             supports_images=model.supports_images,
             has_api_key=self._has_usable_api_key(model),
         )
+
+    @staticmethod
+    def _model_for_agent(
+        platform: AgentPlatformDefinition,
+        agent: AgentDefinition,
+    ) -> ModelDefinition:
+        if not agent.model_id:
+            raise AgentChatUnavailableError("Agent 未配置模型")
+        return platform.get_model(agent.model_id)
 
     def _builtin_with_overrides(self) -> list[dict[str, Any]]:
         """Return built-in agent definitions with config.yaml overrides applied."""

@@ -4,7 +4,7 @@ import json
 
 from server.domain.harness.contracts import (
     Agent,
-    AgentModelGateway,
+    AgentModelRunner,
     AgentRunBlockedError,
     AgentRunFailedError,
     AgentToolCall,
@@ -49,8 +49,8 @@ class AgentRunState:
 
 
 class LLMVerifier:
-    def __init__(self, llm_client: AgentModelGateway) -> None:
-        self._llm_client = llm_client
+    def __init__(self, model_runner: AgentModelRunner) -> None:
+        self._model_runner = model_runner
 
     async def verify(
         self,
@@ -66,8 +66,7 @@ class LLMVerifier:
             "evidence": [record.__dict__ for record in evidence],
             "candidate": candidate.content,
         }
-        response = await self._llm_client.complete(
-            agent.model,
+        response = await self._model_runner.complete(
             (
                 "你是独立验证器，不是任务执行者。严格判断候选输出是否满足全部目标、"
                 "完成条件且被证据支持。只返回 JSON："
@@ -87,10 +86,10 @@ class LLMVerifier:
 class AgentRunner:
     def __init__(
         self,
-        llm_client: AgentModelGateway,
+        model_runner: AgentModelRunner,
         verifier: AgentVerifier,
     ) -> None:
-        self._llm_client = llm_client
+        self._model_runner = model_runner
         self._verifier = verifier
 
     async def run(
@@ -144,8 +143,7 @@ class AgentRunner:
         emit: CheckpointEmitter,
     ) -> AgentRunState:
         await emit("goal", "生成目标契约", "")
-        response = await self._llm_client.complete(
-            agent.model,
+        response = await self._model_runner.complete(
             (
                 "把用户任务转换为严格目标契约。只返回 JSON："
                 '{"goal":"string","completion_criteria":["string"],'
@@ -191,8 +189,7 @@ class AgentRunner:
                 state.verification.feedback if state.verification else ""
             ),
         }
-        result = await self._llm_client.reason_with_tools(
-            agent.model,
+        result = await self._model_runner.reason_with_tools(
             (
                 f"{agent.definition.system_prompt}\n\n"
                 "严格执行目标契约。需要证据时调用工具；证据充分后直接给出候选输出。"
@@ -284,7 +281,7 @@ class AgentRunner:
         return replace(
             state,
             phase=AgentRunPhase.REASON,
-            messages=self._llm_client.append_tool_results(state.messages, tool_messages),
+            messages=self._model_runner.append_tool_results(state.messages, tool_messages),
             raw_tool_results=(),
             evidence=(*state.evidence, *records),
         )
@@ -346,8 +343,7 @@ class AgentRunner:
             "candidate": state.candidate.content,
             "evidence": [record.__dict__ for record in state.evidence],
         }
-        response = await self._llm_client.complete(
-            agent.model,
+        response = await self._model_runner.complete(
             "候选输出已经通过验证。只做格式化和总结，不新增未经证据支持的结论。",
             json.dumps(payload, ensure_ascii=False),
             (),
@@ -361,9 +357,7 @@ class AgentRunner:
 
 
 def _validate_agent_request(request: HarnessRequest) -> None:
-    if not request.tool_names:
-        raise ValueError("agent mode requires tool_names")
-    if request.tool_registry is None:
+    if request.tool_names and request.tool_registry is None:
         raise ValueError("agent mode requires tool_registry")
 
 
