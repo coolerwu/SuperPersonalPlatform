@@ -79,6 +79,7 @@ class AgentConfigUpdatePayload(StrictPayload):
     skills: list[SkillDefinitionConfigPayload] | None = None
     models: list[AgentModelConfigPayload]
     agents: list[AgentDefinitionConfigPayload]
+    portfolio_agent_id: str | None = None
 
 
 def create_agent_router(container: AppContainer) -> APIRouter:
@@ -99,6 +100,7 @@ def create_agent_router(container: AppContainer) -> APIRouter:
             ) from exc
 
         return {
+            "portfolio_agent_id": agent_options.portfolio_agent_id,
             "agents": [
                 {
                     "id": agent.id,
@@ -133,6 +135,7 @@ def create_agent_router(container: AppContainer) -> APIRouter:
         return {
             "path": snapshot.path,
             "default_model_id": snapshot.default_model_id,
+            "portfolio_agent_id": snapshot.portfolio_agent_id,
             "skills": [
                 {
                     "id": skill.id,
@@ -140,7 +143,6 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                     "tools": {
                         "allow": list(skill.tools_allow),
                     },
-                    "is_builtin": skill.is_builtin,
                 }
                 for skill in snapshot.skills
             ],
@@ -165,7 +167,6 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                     "model_id": agent.model_id,
                     "system_prompt": agent.system_prompt,
                     "skill_ids": list(agent.skill_ids),
-                    "is_builtin": agent.is_builtin,
                 }
                 for agent in snapshot.agents
             ],

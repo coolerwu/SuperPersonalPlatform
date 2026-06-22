@@ -1676,6 +1676,24 @@ button:disabled {
   border-bottom: 1px solid var(--border);
 }
 
+.agent-portfolio-binding {
+  display: grid;
+  grid-template-columns: 120px minmax(180px, 320px) 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-portfolio-binding > span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.agent-portfolio-binding small {
+  color: var(--text-subtle);
+}
+
 .agent-count {
   display: grid;
   gap: 2px;
@@ -1967,7 +1985,7 @@ button:disabled {
   padding: 1px 6px;
 }
 
-.badge-builtin {
+.badge-capability {
   background: var(--surface-raised);
   border: 1px solid var(--border-strong);
   border-radius: 999px;
@@ -3361,6 +3379,22 @@ button:disabled {
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+}
+
+.portfolio-agent-empty {
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.portfolio-agent-empty strong {
+  color: var(--text);
 }
 
 .portfolio-chat-header {
@@ -4945,7 +4979,7 @@ button:disabled {
     grid-template-columns: 28px minmax(0, 1fr);
   }
 
-  .skill-library-item .badge-builtin {
+  .skill-library-item .badge-capability {
     grid-column: 2;
     width: fit-content;
   }

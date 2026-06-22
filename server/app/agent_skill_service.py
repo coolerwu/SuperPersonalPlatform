@@ -84,10 +84,6 @@ class AgentSkillService:
             tools=self._parse_tool_access(metadata.get("tools")),
         )
 
-    def workspace_skill_exists(self, skill_id: str, agent_id: str | None = None) -> bool:
-        path = self._workspace_skill_path(skill_id, agent_id)
-        return path.exists() and path.is_file()
-
     def write_workspace_skill(
         self,
         skill_id: str,

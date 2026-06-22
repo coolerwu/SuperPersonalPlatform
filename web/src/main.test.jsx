@@ -193,6 +193,89 @@ describe("LoginPage", () => {
     expect(screen.queryByRole("heading", { name: "多维批判" })).not.toBeInTheDocument();
   });
 
+  it("uses the configured ordinary Agent for Portfolio chat", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/portfolio");
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const sockets = [];
+    class MockWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      constructor() {
+        this.readyState = MockWebSocket.CONNECTING;
+        this.sent = [];
+        sockets.push(this);
+        setTimeout(() => {
+          this.readyState = MockWebSocket.OPEN;
+          this.onopen?.();
+        }, 0);
+      }
+      send(payload) { this.sent.push(JSON.parse(payload)); }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    vi.stubGlobal("fetch", vi.fn(async (path, options) => {
+      if (path === "/api/auth/me") return { ok: true, json: async () => ({ authenticated: true }) };
+      if (path === "/api/agents/options") return {
+        ok: true,
+        json: async () => ({
+          portfolio_agent_id: "portfolio-agent",
+          agents: [{ id: "portfolio-agent", name: "投资 Agent", model: { has_api_key: true } }]
+        })
+      };
+      if (path === "/api/portfolio/holdings") return { ok: true, json: async () => ({ holdings: [] }) };
+      if (path === "/api/sessions?agent_id=portfolio-agent") return { ok: true, json: async () => ({ sessions: [] }) };
+      if (path === "/api/sessions" && options?.method === "POST") return {
+        ok: true,
+        json: async () => ({ session: { id: "session-1", agent_id: "portfolio-agent", messages: [] } })
+      };
+      return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+    }));
+
+    const user = userEvent.setup();
+    vi.resetModules();
+    await act(async () => { await import("./main.jsx"); });
+
+    const input = await screen.findByPlaceholderText("输入指令管理持仓...");
+    await waitFor(() => expect(input).toBeEnabled());
+    await user.type(input, "列出持仓{enter}");
+
+    await waitFor(() => expect(sockets[0].sent).toHaveLength(1));
+    expect(sockets[0].sent[0]).toMatchObject({
+      type: "message",
+      agent_id: "portfolio-agent",
+      session_id: "session-1"
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions",
+      expect.objectContaining({ body: JSON.stringify({ agent_id: "portfolio-agent" }) })
+    );
+  });
+
+  it("keeps Portfolio holdings available when no Agent is configured", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/portfolio");
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const socketFactory = vi.fn();
+    vi.stubGlobal("WebSocket", socketFactory);
+    vi.stubGlobal("fetch", vi.fn(async (path) => {
+      if (path === "/api/auth/me") return { ok: true, json: async () => ({ authenticated: true }) };
+      if (path === "/api/agents/options") return {
+        ok: true,
+        json: async () => ({ portfolio_agent_id: "", agents: [] })
+      };
+      if (path === "/api/portfolio/holdings") return { ok: true, json: async () => ({ holdings: [] }) };
+      return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+    }));
+
+    vi.resetModules();
+    await act(async () => { await import("./main.jsx"); });
+
+    expect(await screen.findByText("请先在 Agent 管理中配置资产组合 Agent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "添加持仓" })).toBeInTheDocument();
+    expect(socketFactory).not.toHaveBeenCalled();
+  });
+
   it("removes self-development and terminal navigation", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/");
@@ -592,6 +675,7 @@ describe("LoginPage", () => {
                 { id: "common:research", name: "研究", tools: { allow: [] } },
                 { id: "common:writing", name: "写作", tools: { allow: [] } }
               ],
+              portfolio_agent_id: "agent-2",
               default_model_id: "fast",
               default_agent_id: "agent-1",
               models: [{ id: "fast", name: "快速模型", base_url: "", model: "fast-chat", temperature: 0.2, supports_images: false }],
@@ -616,7 +700,7 @@ describe("LoginPage", () => {
     const idInput = await screen.findByDisplayValue("agent-2");
     await user.clear(idInput);
     await user.type(idInput, "agent-renamed");
-    const nameInput = screen.getByDisplayValue("Second");
+    const nameInput = screen.getAllByDisplayValue("Second").find((element) => element.tagName === "INPUT");
     await user.clear(nameInput);
     await user.type(nameInput, "Renamed Agent");
     await user.click(screen.getAllByTitle("展开")[1]);
@@ -633,6 +717,7 @@ describe("LoginPage", () => {
       name: "Renamed Agent",
       skill_ids: ["common:research"]
     });
+    expect(payload.portfolio_agent_id).toBe("agent-renamed");
   });
 
   it("does not save a global default Agent when editing Agent IDs", async () => {

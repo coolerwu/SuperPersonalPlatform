@@ -19,15 +19,17 @@ llm:
       supports_images: true
 skills:
   definitions: []
+portfolio:
+  agent_id: ""
 channels:
   wechat_personal:
-    enabled: true
-    default_agent_id: "assistant"
+    enabled: false
+    default_agent_id: ""
     # Multi-account format (preferred):
     accounts:
       - id: "main"
         name: "主账号"
-        default_agent_id: "assistant"
+        default_agent_id: ""
         auto_start: false
         # Optional explicit proxy for iLink HTTP client.
         proxy: ""
@@ -37,9 +39,4 @@ channels:
     # auto_start: false
     # proxy: ""
 agents:
-  definitions:
-    - id: "assistant"
-      name: "个人助理"
-      system_prompt: "你是一个直接、可靠的个人助理。用中文简洁回答。"
-      model_id: "default"
-      skill_ids: []
+  definitions: []

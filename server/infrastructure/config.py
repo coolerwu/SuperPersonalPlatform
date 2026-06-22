@@ -32,10 +32,16 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class PortfolioConfig:
+    agent_id: str = ""
+
+
+@dataclass(frozen=True)
 class Settings:
     auth: AuthConfig
     proxy: ProxyConfig
     server: ServerConfig
+    portfolio: PortfolioConfig = field(default_factory=PortfolioConfig)
     agent_platform: AgentPlatformDefinition = field(
         default_factory=lambda: AgentPlatformDefinition(
             models=(),
@@ -60,6 +66,7 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
     auth_raw = raw.get("auth") or {}
     proxy_raw = raw.get("proxy") or {}
     server_raw = raw.get("server") or {}
+    portfolio_raw = raw.get("portfolio") or {}
 
     token = str(auth_raw.get("token") or "").strip()
     upstream_base_url = str(proxy_raw.get("upstream_base_url") or "").strip()
@@ -68,6 +75,11 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
     if not upstream_base_url:
         raise ValueError("proxy.upstream_base_url is required")
 
+    agent_platform = parse_agent_platform(raw)
+    portfolio_agent_id = str(portfolio_raw.get("agent_id") or "").strip()
+    if portfolio_agent_id and portfolio_agent_id not in {agent.id for agent in agent_platform.agents}:
+        raise AgentConfigError("portfolio.agent_id must reference an existing Agent")
+
     return Settings(
         auth=AuthConfig(token=token),
         proxy=ProxyConfig(upstream_base_url=upstream_base_url),
@@ -75,7 +87,8 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
             host=str(server_raw.get("host") or "0.0.0.0"),
             port=int(server_raw.get("port") or 8888),
         ),
-        agent_platform=parse_agent_platform(raw),
+        portfolio=PortfolioConfig(agent_id=portfolio_agent_id),
+        agent_platform=agent_platform,
     )
 
 
@@ -85,6 +98,8 @@ def parse_agent_platform(raw: dict[str, Any]) -> AgentPlatformDefinition:
     skills_raw = raw.get("skills") or {}
     if "common_skills" in raw or "tools" in raw:
         raise AgentConfigError("legacy common_skills/tools configuration is not supported")
+    if "builtin_overrides" in agents_raw:
+        raise AgentConfigError("legacy agents.builtin_overrides is not supported")
     models_raw = llm_raw.get("models") or []
     definitions_raw = agents_raw.get("definitions") or []
     skill_definitions_raw = skills_raw.get("definitions") or []

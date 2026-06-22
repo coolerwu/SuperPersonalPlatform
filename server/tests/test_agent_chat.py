@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -162,6 +163,7 @@ def write_config(
     mode: str | None = None,
     common_tools: tuple[str, ...] = (),
     skill_ids: tuple[str, ...] = (),
+    portfolio_agent_id: str = "",
 ) -> None:
     mode_line = f"\n      mode: {mode}" if mode is not None else ""
     skill_ids_yaml = "\n".join(f"      - {skill_id}" for skill_id in skill_ids)
@@ -189,6 +191,8 @@ auth:
   token: secret-token
 proxy:
   upstream_base_url: http://example.test/
+portfolio:
+  agent_id: {portfolio_agent_id}
 llm:
   default_model_id: {default_model_id}
   models:
@@ -296,8 +300,8 @@ def test_agent_options_require_auth_and_do_not_leak_api_key(tmp_path) -> None:
             "has_api_key": True,
         },
     }
-    # Built-in agents are appended
-    assert body["agents"][1]["id"] == "ai-investment-advisor"
+    assert len(body["agents"]) == 1
+    assert body["portfolio_agent_id"] == ""
     assert "top-secret-key" not in str(body)
 
 
@@ -316,6 +320,9 @@ def test_agent_config_endpoint_masks_api_keys(tmp_path) -> None:
     assert body["models"][0]["has_api_key"] is True
     assert body["models"][0]["api_key_mask"] == "********"
     assert body["models"][0]["mode"] == "prompt"
+    assert body["portfolio_agent_id"] == ""
+    assert all("is_builtin" not in agent for agent in body["agents"])
+    assert all("is_builtin" not in skill for skill in body["skills"])
 
     tools_response = client.get("/api/agents/tools")
     assert tools_response.status_code == 200
@@ -343,6 +350,7 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
         "/api/agents/config",
         json={
             "default_model_id": "fast",
+            "portfolio_agent_id": "assistant",
             "skills": [
                 {
                     "id": "common:writing",
@@ -384,6 +392,7 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
     assert settings.agent_platform.skill_definitions[0].id == "common:writing"
     assert settings.agent_platform.skill_definitions[1].id == "common:portfolio"
     assert settings.agent_platform.get_agent("assistant").skill_ids == ("common:writing",)
+    assert settings.portfolio.agent_id == "assistant"
     raw = (tmp_path / "config.yaml").read_text(encoding="utf-8")
     assert "agents:\n" in raw
     assert "default_agent_id" not in raw
@@ -527,18 +536,54 @@ def test_bind_prompt_agent_uses_configured_default_model(tmp_path) -> None:
     assert agent.model.mode is HarnessMode.PROMPT
 
 
-def test_builtin_skill_content_keeps_default_tool_allowlist(tmp_path) -> None:
+def test_missing_workspace_skill_has_no_implicit_tool_allowlist(tmp_path) -> None:
     write_config(tmp_path, mode="prompt")
     service = AgentChatService(tmp_path / "config.yaml")
 
     content = service.read_skill_content("common:portfolio")
 
-    assert content["tools"]["allow"] == [
-        "list_portfolio_holdings",
-        "add_portfolio_holding",
-        "update_portfolio_holding",
-        "delete_portfolio_holding",
-    ]
+    assert content["tools"]["allow"] == []
+
+
+def test_agent_service_does_not_inject_agents_or_skills(tmp_path) -> None:
+    write_config(tmp_path, mode="prompt")
+    raw = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    raw["agents"]["definitions"] = []
+    raw["skills"] = {"definitions": []}
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    service = AgentChatService(tmp_path / "config.yaml")
+
+    assert service.options().agents == ()
+    snapshot = service.config_snapshot()
+    assert snapshot.agents == ()
+    assert snapshot.skills == ()
+
+
+def test_agent_config_rejects_builtin_overrides() -> None:
+    with pytest.raises(AgentConfigError, match="builtin_overrides"):
+        parse_settings(
+            {
+                "auth": {"token": "secret-token"},
+                "proxy": {"upstream_base_url": "http://example.test/"},
+                "agents": {"definitions": [], "builtin_overrides": {}},
+            }
+        )
+
+
+def test_portfolio_agent_binding_is_validated_and_exposed(tmp_path) -> None:
+    write_config(tmp_path, portfolio_agent_id="assistant")
+    settings = load_settings(tmp_path / "config.yaml")
+
+    assert settings.portfolio.agent_id == "assistant"
+
+    client = make_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    assert client.get("/api/agents/options").json()["portfolio_agent_id"] == "assistant"
+    assert client.get("/api/agents/config").json()["portfolio_agent_id"] == "assistant"
+
+    write_config(tmp_path, portfolio_agent_id="missing")
+    with pytest.raises(AgentConfigError, match="portfolio.agent_id"):
+        load_settings(tmp_path / "config.yaml")
 
 
 def test_bind_prompt_agent_rejects_agent_mode_model(tmp_path) -> None:

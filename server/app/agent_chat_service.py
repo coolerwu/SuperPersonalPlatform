@@ -53,6 +53,7 @@ class AgentOption:
 @dataclass(frozen=True)
 class AgentOptions:
     agents: tuple[AgentOption, ...]
+    portfolio_agent_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -76,7 +77,6 @@ class EditableAgent:
     model_id: str | None
     system_prompt: str
     skill_ids: tuple[str, ...]
-    is_builtin: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,7 +84,6 @@ class EditableSkill:
     id: str
     name: str
     tools_allow: tuple[str, ...]
-    is_builtin: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,43 +93,7 @@ class AgentConfigSnapshot:
     skills: tuple[EditableSkill, ...]
     models: tuple[EditableModel, ...]
     agents: tuple[EditableAgent, ...]
-
-
-# ── Built-in agents ───────────────────────────────────────────────────
-
-BUILTIN_AGENTS: tuple[dict[str, Any], ...] = (
-    {
-        "id": "ai-investment-advisor",
-        "name": "AI投资助手",
-        "is_builtin": True,
-        "skill_ids": ("common:portfolio",),
-        "system_prompt": (
-            "你是一个专业的投资组合助手，帮助用户管理投资持仓。\n\n"
-            "你可以做的操作：\n"
-            "1. 查看当前所有持仓\n"
-            "2. 添加新的持仓（股票、基金、加密货币）\n"
-            "3. 修改现有持仓\n"
-            "4. 删除持仓\n\n"
-            "持仓数据包含：类型、代码、名称、数量、均价、货币。\n"
-            "用户可以用自然语言描述要做的操作，你需要解析并执行。\n"
-            "如需获取当前行情信息，请结合你的知识或建议用户补充。\n"
-            "请用中文回复，回答简洁专业。"
-        ),
-    },
-)
-
-BUILTIN_SKILLS: tuple[dict[str, Any], ...] = (
-    {
-        "id": "common:portfolio",
-        "name": "投资组合工具",
-        "tools_allow": (
-            "list_portfolio_holdings",
-            "add_portfolio_holding",
-            "update_portfolio_holding",
-            "delete_portfolio_holding",
-        ),
-    },
-)
+    portfolio_agent_id: str = ""
 
 
 class AgentChatService:
@@ -145,7 +108,7 @@ class AgentChatService:
 
     def options(self) -> AgentOptions:
         platform = self._load_platform()
-        config_agents = tuple(
+        agents = tuple(
             AgentOption(
                 id=agent.id,
                 name=agent.name,
@@ -154,21 +117,9 @@ class AgentChatService:
             )
             for agent in platform.agents
         )
-        # Append built-in agents
-        builtin_agents = tuple(
-            AgentOption(
-                id=ba["id"],
-                name=ba["name"],
-                model_id=ba.get("model_id") or platform.default_model_id or None,
-                model=self._bound_model_option_by_id(
-                    platform, ba.get("model_id") or platform.default_model_id or ""
-                ),
-            )
-            for ba in self._builtin_with_overrides()
-            if all(ba["id"] != ca.id for ca in config_agents)
-        )
         return AgentOptions(
-            agents=config_agents + builtin_agents,
+            agents=agents,
+            portfolio_agent_id=load_settings(self._config_path).portfolio.agent_id,
         )
 
     def tool_definitions(self) -> tuple[dict[str, object], ...]:
@@ -177,8 +128,7 @@ class AgentChatService:
     def config_snapshot(self) -> AgentConfigSnapshot:
         platform = self._load_platform()
 
-        # Config-defined agents
-        config_agents = tuple(
+        agents = tuple(
             EditableAgent(
                 id=agent.id,
                 name=agent.name,
@@ -189,21 +139,6 @@ class AgentChatService:
             for agent in platform.agents
         )
 
-        # Append built-in agents (only if not already in config)
-        config_ids = {a.id for a in config_agents}
-        builtin_agents = tuple(
-            EditableAgent(
-                id=ba["id"],
-                name=ba["name"],
-                model_id=ba.get("model_id") or platform.default_model_id or None,
-                system_prompt=ba.get("system_prompt", ""),
-                skill_ids=tuple(ba.get("skill_ids") or ()),
-                is_builtin=True,
-            )
-            for ba in self._builtin_with_overrides()
-            if ba["id"] not in config_ids
-        )
-
         return AgentConfigSnapshot(
             path=str(self._config_path),
             default_model_id=platform.default_model_id,
@@ -212,7 +147,6 @@ class AgentChatService:
                     id=skill.id,
                     name=skill.name,
                     tools_allow=skill.tools.allow,
-                    is_builtin=skill.id in {item["id"] for item in BUILTIN_SKILLS},
                 )
                 for skill in platform.skill_definitions
             ),
@@ -231,7 +165,8 @@ class AgentChatService:
                 )
                 for model in platform.models
             ),
-            agents=config_agents + builtin_agents,
+            agents=agents,
+            portfolio_agent_id=load_settings(self._config_path).portfolio.agent_id,
         )
 
     def update_config(self, payload: dict[str, Any]) -> None:
@@ -286,27 +221,13 @@ class AgentChatService:
                 }
             )
 
-        builtin_ids = {ba["id"] for ba in BUILTIN_AGENTS}
         normalized_agents: list[dict[str, Any]] = []
-        builtin_overrides: dict[str, dict[str, Any]] = {}
         for agent in agents:
             if not isinstance(agent, dict):
                 raise AgentConfigError("agents[] must be an object")
             agent_id = str(agent.get("id") or "").strip()
             model_id = agent.get("model_id")
             raw_skill_ids = agent.get("skill_ids")
-
-            # Built-in agents: collect overrides, skip from definitions
-            if agent_id in builtin_ids:
-                override: dict[str, Any] = {}
-                system_prompt = str(agent.get("system_prompt") or "").strip()
-                if system_prompt:
-                    override["system_prompt"] = system_prompt
-                if model_id is not None:
-                    override["model_id"] = str(model_id).strip() or ""
-                if override:
-                    builtin_overrides[agent_id] = override
-                continue
 
             if raw_skill_ids is None:
                 skill_ids = old_agent_skill_ids.get(agent_id, ())
@@ -332,11 +253,12 @@ class AgentChatService:
         raw.setdefault("agents", {})
         raw["skills"] = {"definitions": normalized_skills}
         raw["agents"].pop("default_agent_id", None)
+        raw["agents"].pop("builtin_overrides", None)
         raw["agents"]["definitions"] = normalized_agents
-        if builtin_overrides:
-            raw["agents"]["builtin_overrides"] = builtin_overrides
-        elif "builtin_overrides" in raw.get("agents", {}):
-            del raw["agents"]["builtin_overrides"]
+        portfolio_agent_id = payload.get("portfolio_agent_id")
+        if portfolio_agent_id is None:
+            portfolio_agent_id = old_settings.portfolio.agent_id
+        raw["portfolio"] = {"agent_id": str(portfolio_agent_id or "").strip()}
         raw.pop("common_skills", None)
         raw.pop("tools", None)
         parse_settings(raw)
@@ -344,17 +266,12 @@ class AgentChatService:
 
     def read_skill_content(self, skill_id: str, agent_id: str | None = None) -> dict[str, object]:
         skill = self._skill_service.read_workspace_skill(skill_id, agent_id)
-        tools = skill.tools
-        if not self._skill_service.workspace_skill_exists(skill_id, agent_id):
-            builtin = next((item for item in BUILTIN_SKILLS if item["id"] == skill_id), None)
-            if builtin is not None:
-                tools = ToolAccessDefinition(allow=tuple(builtin["tools_allow"]))
         return {
             "id": skill.id,
             "name": skill.name,
             "content": skill.content,
             "tools": {
-                "allow": list(tools.allow),
+                "allow": list(skill.tools.allow),
             },
             "truncated": skill.truncated,
         }
@@ -517,21 +434,7 @@ class AgentChatService:
 
     def _load_platform(self) -> AgentPlatformDefinition:
         platform = load_settings(self._config_path).agent_platform
-        platform = self._platform_with_skill_frontmatter(platform)
-
-        # Merge built-in agents that aren't already in config definitions
-        builtin_defs = self._builtin_agent_definitions(platform)
-        builtin_skills = self._builtin_skill_definitions(platform)
-        if builtin_defs or builtin_skills:
-            all_agents = platform.agents + tuple(builtin_defs)
-            all_skills = platform.skill_definitions + tuple(builtin_skills)
-            return AgentPlatformDefinition(
-                models=platform.models,
-                default_model_id=platform.default_model_id,
-                agents=all_agents,
-                skill_definitions=all_skills,
-            )
-        return platform
+        return self._platform_with_skill_frontmatter(platform)
 
     def _platform_with_skill_frontmatter(
         self, platform: AgentPlatformDefinition
@@ -539,16 +442,10 @@ class AgentChatService:
         if not platform.skill_definitions:
             return platform
         skill_definitions: list[SkillDefinition] = []
-        builtin_skill_tools = {
-            skill["id"]: ToolAccessDefinition(allow=tuple(skill["tools_allow"]))
-            for skill in BUILTIN_SKILLS
-        }
         for skill in platform.skill_definitions:
             metadata = self._skill_service.read_workspace_skill(skill.id)
             metadata_name = metadata.name if metadata.content or metadata.name != skill.id else ""
             tools = metadata.tools
-            if not metadata.content and skill.id in builtin_skill_tools:
-                tools = builtin_skill_tools[skill.id]
             skill_definitions.append(
                 SkillDefinition(
                     id=skill.id,
@@ -562,44 +459,6 @@ class AgentChatService:
             agents=platform.agents,
             skill_definitions=tuple(skill_definitions),
         )
-
-    def _builtin_agent_definitions(
-        self, platform: AgentPlatformDefinition
-    ) -> list[AgentDefinition]:
-        """Convert built-in agents (with overrides) to AgentDefinition objects."""
-        config_ids = {a.id for a in platform.agents}
-        definitions: list[AgentDefinition] = []
-        for ba in self._builtin_with_overrides():
-            if ba["id"] in config_ids:
-                continue  # already defined in config.yaml
-            model_id = ba.get("model_id") or platform.default_model_id or ""
-            definitions.append(
-                AgentDefinition(
-                    id=ba["id"],
-                    name=ba["name"],
-                    system_prompt=ba.get("system_prompt", ""),
-                    model_id=model_id or None,
-                    skill_ids=tuple(ba.get("skill_ids") or ()),
-                )
-            )
-        return definitions
-
-    def _builtin_skill_definitions(
-        self, platform: AgentPlatformDefinition
-    ) -> list[SkillDefinition]:
-        config_ids = {skill.id for skill in platform.skill_definitions}
-        definitions: list[SkillDefinition] = []
-        for skill in BUILTIN_SKILLS:
-            if skill["id"] in config_ids:
-                continue
-            definitions.append(
-                SkillDefinition(
-                    id=skill["id"],
-                    name=skill.get("name", ""),
-                    tools=ToolAccessDefinition(allow=tuple(skill["tools_allow"])),
-                )
-            )
-        return definitions
 
     def _read_raw_config(self) -> dict[str, Any]:
         raw = yaml.safe_load(self._config_path.read_text(encoding="utf-8")) or {}
@@ -653,23 +512,6 @@ class AgentChatService:
         if not agent.model_id:
             raise AgentChatUnavailableError("Agent 未配置模型")
         return platform.get_model(agent.model_id)
-
-    def _builtin_with_overrides(self) -> list[dict[str, Any]]:
-        """Return built-in agent definitions with config.yaml overrides applied."""
-        raw = self._read_raw_config()
-        overrides = raw.get("agents", {}).get("builtin_overrides", {})
-        result: list[dict[str, Any]] = []
-        for template in BUILTIN_AGENTS:
-            agent = dict(template)  # shallow copy
-            aid = agent["id"]
-            if aid in overrides:
-                override = overrides[aid]
-                if "system_prompt" in override:
-                    agent["system_prompt"] = override["system_prompt"]
-                if "model_id" in override:
-                    agent["model_id"] = override["model_id"]
-            result.append(agent)
-        return result
 
     def _has_usable_api_key(self, model: ModelDefinition) -> bool:
         return bool(model.api_key.strip()) and model.api_key.strip() != "change-me"

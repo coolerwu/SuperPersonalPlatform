@@ -691,12 +691,19 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   }
 
   function updateAgent(index, field, value) {
-    setConfig((current) => ({
-      ...current,
-      agents: current.agents.map((agent, agentIndex) =>
-        agentIndex === index ? { ...agent, [field]: value } : agent
-      )
-    }));
+    setConfig((current) => {
+      const previousId = current.agents[index]?.id;
+      return {
+        ...current,
+        portfolio_agent_id:
+          field === "id" && current.portfolio_agent_id === previousId
+            ? value
+            : current.portfolio_agent_id,
+        agents: current.agents.map((agent, agentIndex) =>
+          agentIndex === index ? { ...agent, [field]: value } : agent
+        )
+      };
+    });
   }
 
   function updateSkill(index, field, value) {
@@ -831,6 +838,17 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     }));
   }
 
+  function removeAgent(index) {
+    setConfig((current) => {
+      const removedId = current.agents[index]?.id;
+      return {
+        ...current,
+        portfolio_agent_id: current.portfolio_agent_id === removedId ? "" : current.portfolio_agent_id,
+        agents: current.agents.filter((_, agentIndex) => agentIndex !== index)
+      };
+    });
+  }
+
   function updateModel(index, field, value) {
     setConfig((current) => ({
       ...current,
@@ -891,6 +909,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         method: "PUT",
         body: JSON.stringify({
           default_model_id: config.default_model_id || config.models?.[0]?.id || "",
+          portfolio_agent_id: config.portfolio_agent_id || "",
           skills: (config.skills || []).map((skill) => ({
             id: skill.id,
             name: skill.id
@@ -1241,6 +1260,20 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                   添加
                 </button>
               </div>
+              <label className="agent-portfolio-binding">
+                <span>资产组合 Agent</span>
+                <select
+                  aria-label="资产组合 Agent"
+                  value={config.portfolio_agent_id || ""}
+                  onChange={(event) => setConfig((current) => ({ ...current, portfolio_agent_id: event.target.value }))}
+                >
+                  <option value="">未配置</option>
+                  {config.agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>
+                  ))}
+                </select>
+                <small>资产页只绑定 Agent；工具能力由该 Agent 选择的 Skills 决定。</small>
+              </label>
               <div className="agent-table-wrap">
                 <table className="agent-table">
                 <thead>
@@ -1255,13 +1288,10 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                   {config.agents.map((agent, index) => (
                     <React.Fragment key={`agent-row-${index}`}>
                       <tr className={expandedRow === index ? "row-active" : ""}>
-                        <td><input value={agent.id} onChange={(e) => updateAgent(index, "id", e.target.value)} disabled={agent.is_builtin} /></td>
+                        <td><input value={agent.id} onChange={(e) => updateAgent(index, "id", e.target.value)} /></td>
                         <td>
                           <div className="agent-name-cell">
-                            <input value={agent.name} onChange={(e) => updateAgent(index, "name", e.target.value)} disabled={agent.is_builtin} />
-                            <div className="agent-name-badges">
-                              {agent.is_builtin ? <span className="badge-builtin">内置</span> : null}
-                            </div>
+                            <input value={agent.name} onChange={(e) => updateAgent(index, "name", e.target.value)} />
                           </div>
                         </td>
                         <td><select value={agent.model_id || ""} onChange={(e) => updateAgent(index, "model_id", e.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></td>
@@ -1269,11 +1299,9 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                           <button className="icon-action" title={expandedRow === index ? "收起" : "展开"} onClick={() => setExpandedRow(expandedRow === index ? null : index)}>
                             {expandedRow === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                           </button>
-                          {!agent.is_builtin ? (
-                            <button className="icon-action danger" title="删除" onClick={() => setConfig((c) => ({ ...c, agents: c.agents.filter((_, i) => i !== index) }))}>
-                              <Trash2 size={14} />
-                            </button>
-                          ) : null}
+                          <button className="icon-action danger" title="删除" onClick={() => removeAgent(index)}>
+                            <Trash2 size={14} />
+                          </button>
                         </td>
                       </tr>
                       {expandedRow === index ? (
@@ -1284,8 +1312,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                                 <span>系统提示词</span>
                                 <textarea value={agent.system_prompt} onChange={(e) => updateAgent(index, "system_prompt", e.target.value)} />
                               </label>
-                              {!agent.is_builtin ? (
-                                <div className="agent-detail-field">
+                              <div className="agent-detail-field">
                                   <span>Skills（可选）</span>
                                   <div className="agent-skill-picker">
                                     {(config.skills || [])
@@ -1302,8 +1329,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                                       ))}
                                     {(config.skills || []).length === 0 ? <small>暂无可选 Skill</small> : null}
                                   </div>
-                                </div>
-                              ) : null}
+                              </div>
                             </div>
                           </td>
                         </tr>
@@ -1364,7 +1390,6 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                         <strong>{skill.id || "未命名 Skill"}</strong>
                         <small>{skill.id || "未填写 ID"}</small>
                       </span>
-                      {skill.is_builtin ? <span className="badge-builtin">内置</span> : null}
                     </button>
                   ))}
                 </div>
@@ -1384,12 +1409,11 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                       </div>
                     </div>
                     <div className="skill-editor-status">
-                      {selectedSkill.is_builtin ? <span>内置</span> : <span>自定义</span>}
+                      <span>Workspace</span>
                           <span>{selectedSkillAllow.length} tools</span>
                     </div>
                     <div className="skill-editor-actions">
-                      {!selectedSkill.is_builtin ? (
-                        <button
+                      <button
                           className="icon-action danger"
                           title="删除 Skill"
                           onClick={() => {
@@ -1407,14 +1431,13 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                           }}
                         >
                           <Trash2 size={14} />
-                        </button>
-                      ) : null}
+                      </button>
                     </div>
                   </div>
                   <div className="skill-editor-fields">
                     <label>
                       <span>Skill ID</span>
-                      <input value={selectedSkill.id} onChange={(event) => updateSkill(selectedSkillIndex, "id", event.target.value)} disabled={selectedSkill.is_builtin} />
+                      <input value={selectedSkill.id} onChange={(event) => updateSkill(selectedSkillIndex, "id", event.target.value)} />
                     </label>
                   </div>
                   <div className="skill-editor-grid">
@@ -1576,8 +1599,8 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                           </div>
                           <div className="agent-config-card-controls">
                             {config.default_model_id === model.id ? <span className="badge-default">默认</span> : null}
-                            <span className="badge-builtin">{(model.mode || "prompt") === "agent" ? "Agent" : "Prompt"}</span>
-                            {model.supports_images ? <span className="badge-builtin">图片</span> : null}
+                            <span className="badge-capability">{(model.mode || "prompt") === "agent" ? "Agent" : "Prompt"}</span>
+                            {model.supports_images ? <span className="badge-capability">图片</span> : null}
                             <button className="icon-action" title={expandedModelIndex === index ? "收起" : "展开"} onClick={() => setExpandedModelIndex((current) => current === index ? null : index)}>
                               {expandedModelIndex === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                             </button>
@@ -2270,6 +2293,9 @@ function PortfolioPage({ onUnauthorized }) {
   const [chatSessions, setChatSessions] = useState([]);
   const [activeChatSessionId, setActiveChatSessionId] = useState(null);
   const [chatSessionLoading, setChatSessionLoading] = useState(false);
+  const [portfolioAgentId, setPortfolioAgentId] = useState("");
+  const [portfolioAgent, setPortfolioAgent] = useState(null);
+  const [portfolioConfigLoading, setPortfolioConfigLoading] = useState(true);
   const chatEndRef = useRef(null);
   const wsRef = useRef(null);
 
@@ -2283,6 +2309,7 @@ function PortfolioPage({ onUnauthorized }) {
   }
 
   function connectChat() {
+    if (!portfolioAgentId) return;
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
     setChatError("");
     setChatStatus("connecting");
@@ -2355,15 +2382,40 @@ function PortfolioPage({ onUnauthorized }) {
     };
   }
 
+  async function loadPortfolioAgent() {
+    setPortfolioConfigLoading(true);
+    try {
+      const data = await api("/api/agents/options");
+      const agentId = data.portfolio_agent_id || "";
+      const agent = (data.agents || []).find((item) => item.id === agentId) || null;
+      setPortfolioAgentId(agent ? agentId : "");
+      setPortfolioAgent(agent);
+      if (agentId && !agent) {
+        setChatError("资产组合 Agent 配置无效，请在 Agent 管理中重新选择");
+      }
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(); return; }
+      setChatError(err.message);
+    } finally {
+      setPortfolioConfigLoading(false);
+    }
+  }
+
   useEffect(() => {
+    if (!portfolioAgentId) return undefined;
     connectChat();
-    return () => wsRef.current?.close();
-  }, []);
+    loadPortfolioSessions();
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, [portfolioAgentId]);
 
   async function loadPortfolioSessions() {
+    if (!portfolioAgentId) return;
     setChatSessionLoading(true);
     try {
-      const data = await api("/api/sessions?agent_id=ai-investment-advisor");
+      const data = await api(`/api/sessions?agent_id=${encodeURIComponent(portfolioAgentId)}`);
       setChatSessions(data.sessions || []);
     } catch (err) {
       if (err.status === 401) { onUnauthorized(); return; }
@@ -2373,11 +2425,12 @@ function PortfolioPage({ onUnauthorized }) {
   }
 
   async function createPortfolioSession() {
+    if (!portfolioAgentId) return null;
     setChatSessionLoading(true);
     try {
       const data = await api("/api/sessions", {
         method: "POST",
-        body: JSON.stringify({ agent_id: "ai-investment-advisor" })
+        body: JSON.stringify({ agent_id: portfolioAgentId })
       });
       const session = data.session;
       setChatSessions((items) => [session, ...items]);
@@ -2394,10 +2447,11 @@ function PortfolioPage({ onUnauthorized }) {
   }
 
   async function switchPortfolioSession(sessionId) {
+    if (!portfolioAgentId) return;
     setChatSessionLoading(true);
     setChatError("");
     try {
-      const data = await api(`/api/sessions/${sessionId}?agent_id=ai-investment-advisor`);
+      const data = await api(`/api/sessions/${sessionId}?agent_id=${encodeURIComponent(portfolioAgentId)}`);
       const session = data.session;
       setActiveChatSessionId(session.id);
       setChatMessages((session.messages || []).map((msg) => ({
@@ -2428,7 +2482,7 @@ function PortfolioPage({ onUnauthorized }) {
 
   useEffect(() => {
     loadHoldings();
-    loadPortfolioSessions();
+    loadPortfolioAgent();
   }, []);
 
   function resetForm() {
@@ -2497,7 +2551,7 @@ function PortfolioPage({ onUnauthorized }) {
 
   async function sendChat() {
     const msg = chatInput.trim();
-    if (!msg || chatSending) return;
+    if (!msg || chatSending || !portfolioAgentId) return;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       connectChat();
       setChatError("连接未就绪，请稍后重试");
@@ -2519,7 +2573,7 @@ function PortfolioPage({ onUnauthorized }) {
     wsRef.current.send(
       JSON.stringify({
         type: "message",
-        agent_id: "ai-investment-advisor",
+        agent_id: portfolioAgentId,
         content: msg,
         session_id: sessionId
       })
@@ -2665,8 +2719,8 @@ function PortfolioPage({ onUnauthorized }) {
         <div className="portfolio-chat-panel">
           <div className="portfolio-chat-header">
             <Bot size={16} />
-            <strong>AI 投资助手</strong>
-            <button className="secondary-button small" onClick={createPortfolioSession} disabled={chatSessionLoading}>
+            <strong>{portfolioAgent?.name || "资产组合 Agent"}</strong>
+            <button className="secondary-button small" onClick={createPortfolioSession} disabled={chatSessionLoading || !portfolioAgentId}>
               <Plus size={14} />
               新对话
             </button>
@@ -2674,6 +2728,13 @@ function PortfolioPage({ onUnauthorized }) {
               {chatStatus === "running" ? "生成中" : chatStatus === "connected" ? "已连接" : "未连接"}
             </span>
           </div>
+          {!portfolioConfigLoading && !portfolioAgentId ? (
+            <div className="portfolio-agent-empty">
+              <Bot size={28} />
+              <strong>请先在 Agent 管理中配置资产组合 Agent</strong>
+              <span>Agent 通过自身的 Skills 决定可用工具，资产页不会选择或注入 Skill。</span>
+            </div>
+          ) : (
           <div className="portfolio-chat-body">
             <aside className="portfolio-chat-history">
               <div className="portfolio-chat-history-heading">
@@ -2756,14 +2817,15 @@ function PortfolioPage({ onUnauthorized }) {
                   onChange={e => setChatInput(e.target.value)}
                   onKeyDown={handleChatKey}
                   placeholder="输入指令管理持仓..."
-                  disabled={chatSending || chatStatus === "disconnected"}
+                  disabled={chatSending || chatStatus === "disconnected" || !portfolioAgentId}
                 />
-                <button className="secondary-button primary-action send-btn" onClick={sendChat} disabled={!chatInput.trim() || chatSending || chatStatus === "disconnected"}>
+                <button className="secondary-button primary-action send-btn" onClick={sendChat} disabled={!chatInput.trim() || chatSending || chatStatus === "disconnected" || !portfolioAgentId}>
                   <Send size={16} />
                 </button>
               </div>
             </div>
           </div>
+          )}
         </div>
       </div>
     </section>
