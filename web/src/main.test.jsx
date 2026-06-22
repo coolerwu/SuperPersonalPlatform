@@ -216,7 +216,7 @@ describe("LoginPage", () => {
     expect(screen.queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
   });
 
-   it("shows the Agent chat without model controls and sends text plus images", async () => {
+  it("renders Agent features as sidebar submenus and sends text plus images", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/agents");
     const sockets = [];
@@ -320,8 +320,12 @@ describe("LoginPage", () => {
 
     expect(await screen.findByRole("button", { name: "Agent" })).toBeInTheDocument();
     expect(document.querySelector("main.content")).toHaveClass("content-agents");
-    expect(screen.getByRole("navigation", { name: "Agent 工作区" })).toHaveClass("agent-mode-rail");
+    expect(screen.getByRole("navigation", { name: "Agent 功能" })).toHaveClass("sidebar-subnav");
     expect(screen.getByRole("button", { name: "对话" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Agent 管理" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Skill 管理" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "模型配置" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Agent 工作区" })).not.toBeInTheDocument();
     expect(screen.getByText("运行信息")).toBeInTheDocument();
     expect(screen.queryByText("模型")).not.toBeInTheDocument();
     expect(screen.queryByText("你是一个直接、可靠的个人助理。")).not.toBeInTheDocument();
@@ -343,6 +347,9 @@ describe("LoginPage", () => {
     expect(await screen.findByText("重点")).toBeInTheDocument();
     expect(screen.getByText("重点").tagName).toBe("STRONG");
     expect(screen.getAllByText("Agent").some((node) => node.tagName === "CODE")).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Agent 管理" }));
+    expect(window.location.pathname).toBe("/agents/manage");
   });
 
   it("keeps the Agent menu available and shows an empty state without agents", async () => {

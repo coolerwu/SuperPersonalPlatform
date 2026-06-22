@@ -48,6 +48,19 @@ const AGENT_TOOL_OPTIONS = [
   { id: "delete_portfolio_holding", label: "删除持仓", group: "资产组合" }
 ];
 const AGENT_TOOL_GROUPS = ["Skills", "资产组合"];
+const AGENT_NAV_ITEMS = [
+  { path: "/agents", label: "对话", icon: MessageSquare, tab: "chat" },
+  { path: "/agents/manage", label: "Agent 管理", icon: List, tab: "agents" },
+  { path: "/agents/skills", label: "Skill 管理", icon: FileText, tab: "skills" },
+  { path: "/agents/models", label: "模型配置", icon: Cpu, tab: "models" }
+];
+
+function agentTabForPath(path) {
+  if (path === "/models") {
+    return "models";
+  }
+  return AGENT_NAV_ITEMS.find((item) => item.path === path)?.tab || "chat";
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -894,25 +907,6 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
 
   return (
     <section className={`page-section agent-section${activeTab === "agents" || activeTab === "skills" || activeTab === "models" ? " agent-section-config" : ""}`}>
-      <nav className="agent-mode-rail" aria-label="Agent 工作区">
-        <div className="agent-mode-mark"><Bot size={18} /></div>
-        <button type="button" className={activeTab === "chat" ? "active" : ""} aria-current={activeTab === "chat" ? "page" : undefined} onClick={() => setActiveTab("chat")}>
-          <Bot size={16} />
-          <span>对话</span>
-        </button>
-        <button type="button" className={activeTab === "agents" ? "active" : ""} aria-current={activeTab === "agents" ? "page" : undefined} onClick={() => setActiveTab("agents")}>
-          <List size={16} />
-          <span>Agent 管理</span>
-        </button>
-        <button type="button" className={activeTab === "skills" ? "active" : ""} aria-current={activeTab === "skills" ? "page" : undefined} onClick={() => setActiveTab("skills")}>
-          <FileText size={16} />
-          <span>Skill 管理</span>
-        </button>
-        <button type="button" className={activeTab === "models" ? "active" : ""} aria-current={activeTab === "models" ? "page" : undefined} onClick={() => setActiveTab("models")}>
-          <Cpu size={16} />
-          <span>模型配置</span>
-        </button>
-      </nav>
       <div className="agent-command-stage">
       {activeTab === "chat" ? (
         <div className="agent-chat-shell ai-chat-workspace">
@@ -2749,6 +2743,7 @@ function PortfolioPage({ onUnauthorized }) {
 
 function AppShell({ onLogout }) {
   const [path, setPath] = useState(window.location.pathname);
+  const isAgentPath = path === "/models" || path === "/agents" || path.startsWith("/agents/");
   const navItems = useMemo(
     () => [
       { path: "/", label: "首页", icon: Home },
@@ -2795,11 +2790,8 @@ function AppShell({ onLogout }) {
   }
 
   function renderPage() {
-    if (path === "/agents") {
-      return <AgentPage onUnauthorized={unauthorized} />;
-    }
-    if (path === "/models") {
-      return <AgentPage onUnauthorized={unauthorized} initialTab="models" />;
+    if (isAgentPath) {
+      return <AgentPage onUnauthorized={unauthorized} initialTab={agentTabForPath(path)} />;
     }
     if (path === "/portfolio") {
       return <PortfolioPage onUnauthorized={unauthorized} />;
@@ -2826,6 +2818,39 @@ function AppShell({ onLogout }) {
         <nav>
           {navItems.map((item) => {
             const Icon = item.icon;
+            if (item.path === "/agents") {
+              return (
+                <div className="sidebar-nav-group" key={item.path}>
+                  <button
+                    type="button"
+                    className={isAgentPath ? "active" : ""}
+                    aria-current={isAgentPath ? "page" : undefined}
+                    onClick={() => navigate(item.path)}
+                  >
+                    <Icon size={18} />
+                    <span>{item.label}</span>
+                  </button>
+                  <div className="sidebar-subnav" role="navigation" aria-label="Agent 功能">
+                    {AGENT_NAV_ITEMS.map((child) => {
+                      const ChildIcon = child.icon;
+                      const active = child.tab === agentTabForPath(path) && isAgentPath;
+                      return (
+                        <button
+                          key={child.path}
+                          type="button"
+                          className={active ? "active" : ""}
+                          aria-current={active ? "page" : undefined}
+                          onClick={() => navigate(child.path)}
+                        >
+                          <ChildIcon size={15} />
+                          <span>{child.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
             return (
               <button
                 key={item.path}
@@ -2845,7 +2870,7 @@ function AppShell({ onLogout }) {
           退出
         </button>
       </aside>
-      <main className={`content${path === "/agents" || path === "/models" ? " content-agents" : ""}`}>{renderPage()}</main>
+      <main className={`content${isAgentPath ? " content-agents" : ""}`}>{renderPage()}</main>
     </div>
   );
 }
