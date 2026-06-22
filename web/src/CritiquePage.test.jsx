@@ -81,7 +81,7 @@ function installWebSocketMock() {
     send(data) {
       const payload = JSON.parse(data);
       this.sent.push(payload);
-      if (payload.type !== "run") return;
+      if (!["run", "follow_up"].includes(payload.type)) return;
       const result = {
         discipline_id: "d-economics",
         discipline_name: "经济学",
@@ -94,17 +94,42 @@ function installWebSocketMock() {
         },
         error: ""
       };
-      const run = {
-        id: "r-1",
-        question: payload.question,
-        model_id: "fast",
-        disciplines: [disciplines[0]],
+      const firstTurn = {
+        id: "t-1",
+        question: payload.type === "run" ? payload.question : "我是否应该辞职？",
         results: [result],
         judgment: {
           weakest_assumption: "没有付费证据",
           largest_disagreement: "动机与收益解释冲突",
           recommended_validation: "先验证十个付费用户"
         },
+        status: "completed",
+        created_at: "2026-06-21T00:00:00Z",
+        updated_at: "2026-06-21T00:01:00Z"
+      };
+      const followUpTurn = payload.type === "follow_up" ? {
+        ...firstTurn,
+        id: "t-2",
+        question: payload.question,
+        judgment: {
+          weakest_assumption: "预算不足以同时验证所有渠道",
+          largest_disagreement: "速度与现金流安全冲突",
+          recommended_validation: "先验证单一付费场景"
+        },
+        created_at: "2026-06-21T00:02:00Z",
+        updated_at: "2026-06-21T00:03:00Z"
+      } : null;
+      const turns = followUpTurn ? [firstTurn, followUpTurn] : [firstTurn];
+      const latestTurn = turns.at(-1);
+      const run = {
+        id: "r-1",
+        title: "我是否应该辞职？",
+        question: latestTurn.question,
+        model_id: "fast",
+        disciplines: [disciplines[0]],
+        results: latestTurn.results,
+        judgment: latestTurn.judgment,
+        turns,
         status: "completed",
         created_at: "2026-06-21T00:00:00Z",
         updated_at: "2026-06-21T00:01:00Z"
@@ -133,16 +158,13 @@ describe("CritiquePage", () => {
     vi.restoreAllMocks();
   });
 
-  it("runs default disciplines and renders the matrix plus judgment", async () => {
+  it("starts a conversation, renders the critique thread, and sends a follow-up", async () => {
     installApiMock();
     const sockets = installWebSocketMock();
     const user = userEvent.setup();
     render(<CritiquePage onUnauthorized={vi.fn()} />);
 
-    expect(await screen.findByRole("columnheader", { name: "核心假设" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "反证" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "机会成本" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "关键追问" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "新建对话" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /经济学/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /心理学/ })).not.toBeChecked();
 
@@ -154,9 +176,23 @@ describe("CritiquePage", () => {
       question: "我是否应该辞职？",
       discipline_ids: ["d-economics"]
     });
-    expect(await screen.findByText("需求真实存在")).toBeInTheDocument();
+    expect((await screen.findAllByText("我是否应该辞职？")).length).toBeGreaterThan(0);
+    expect(screen.getByText("需求真实存在")).toBeInTheDocument();
     expect(screen.getByText("没有付费证据")).toBeInTheDocument();
     expect(screen.getByText("先验证十个付费用户")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /我是否应该辞职/ })).toBeInTheDocument();
+
+    const followUpInput = screen.getByPlaceholderText("继续追问，或要求某个学科深入...");
+    await user.type(followUpInput, "预算有限时先验证什么？");
+    await user.click(screen.getByRole("button", { name: "继续追问" }));
+
+    expect(sockets[0].sent.at(-1)).toEqual({
+      type: "follow_up",
+      run_id: "r-1",
+      question: "预算有限时先验证什么？"
+    });
+    expect((await screen.findAllByText("预算有限时先验证什么？")).length).toBeGreaterThan(0);
+    expect(screen.getByText("先验证单一付费场景")).toBeInTheDocument();
   });
 
   it("adds a discipline with the user's known scope and critique focus", async () => {
@@ -165,7 +201,7 @@ describe("CritiquePage", () => {
     const user = userEvent.setup();
     render(<CritiquePage onUnauthorized={vi.fn()} />);
 
-    await user.click(await screen.findByRole("button", { name: "添加学科" }));
+    await user.click(await screen.findByRole("button", { name: "添加" }));
     await user.type(screen.getByLabelText("学科名称"), "哲学");
     await user.type(screen.getByLabelText("我了解的范围"), "伦理与价值判断");
     await user.type(screen.getByLabelText("重点批判方向"), "价值一致性");

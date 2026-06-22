@@ -256,3 +256,100 @@ def test_retry_failed_discipline_uses_saved_snapshot_and_reruns_judge(
     assert retried.results[0].analysis.key_question == "谁已经付费？"
     assert retried.judgment is not None
     assert retried.disciplines == (economics,)
+
+
+def test_follow_up_reuses_saved_disciplines_and_persists_context(
+    tmp_path, monkeypatch
+) -> None:
+    service = CritiqueService(tmp_path, FakeAgentChatService())
+    economics, psychology = create_disciplines(service)
+    prompts: list[tuple[str, str]] = []
+
+    async def fake_run_agent(request):
+        prompts.append((request.agent.definition.id, request.content))
+        if request.agent.definition.id == "critique-judge":
+            return json.dumps(
+                {
+                    "weakest_assumption": "付费需求仍未得到验证",
+                    "largest_disagreement": "收益潜力与风险承受能力冲突",
+                    "recommended_validation": "先完成小额预售",
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "core_assumption": "预算足以完成核心验证",
+                "counterevidence": "获客成本可能快速耗尽预算",
+                "opportunity_cost": "两万元也可用于延长现金流",
+                "key_question": "哪个实验最能改变当前判断？",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("server.app.critique_service.run_agent", fake_run_agent)
+    initial = asyncio.run(
+        service.run_critique(
+            "我是否应该辞职做自己的产品？",
+            (economics.id, psychology.id),
+        )
+    )
+    prompts.clear()
+
+    conversation = asyncio.run(
+        service.follow_up(initial.id, "如果预算只有两万元，先验证什么？")
+    )
+
+    assert conversation.title == "我是否应该辞职做自己的产品？"
+    assert [turn.question for turn in conversation.turns] == [
+        "我是否应该辞职做自己的产品？",
+        "如果预算只有两万元，先验证什么？",
+    ]
+    assert conversation.disciplines == (economics, psychology)
+    assert service.get_run(conversation.id) == conversation
+    discipline_prompts = [
+        content for agent_id, content in prompts if agent_id.startswith("critique-discipline-")
+    ]
+    assert len(discipline_prompts) == 2
+    assert all("我是否应该辞职做自己的产品？" in content for content in discipline_prompts)
+    assert all("付费需求仍未得到验证" in content for content in discipline_prompts)
+    assert all("如果预算只有两万元，先验证什么？" in content for content in discipline_prompts)
+
+
+def test_get_run_synthesizes_turn_for_legacy_single_run_file(tmp_path) -> None:
+    service = CritiqueService(tmp_path, FakeAgentChatService())
+    economics = service.create_discipline("经济学", "微观决策", "机会成本", True)
+    runs_dir = tmp_path / "critique" / "runs"
+    runs_dir.mkdir(parents=True)
+    runs_dir.joinpath("r-legacy.json").write_text(
+        json.dumps(
+            {
+                "id": "r-legacy",
+                "question": "旧问题",
+                "model_id": "fast",
+                "disciplines": [
+                    {
+                        "id": economics.id,
+                        "name": economics.name,
+                        "known_scope": economics.known_scope,
+                        "critique_focus": economics.critique_focus,
+                        "default_enabled": economics.default_enabled,
+                        "created_at": economics.created_at,
+                        "updated_at": economics.updated_at,
+                    }
+                ],
+                "results": [],
+                "judgment": None,
+                "status": "completed",
+                "created_at": "2026-06-21T00:00:00Z",
+                "updated_at": "2026-06-21T00:01:00Z",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    conversation = service.get_run("r-legacy")
+
+    assert conversation.title == "旧问题"
+    assert len(conversation.turns) == 1
+    assert conversation.turns[0].question == "旧问题"

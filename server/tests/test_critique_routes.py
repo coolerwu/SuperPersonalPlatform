@@ -220,3 +220,67 @@ def test_critique_run_websocket_retries_failed_discipline(tmp_path, monkeypatch)
 
     assert retried["run"]["status"] == "completed"
     assert retried["run"]["results"][0]["analysis"]["key_question"] == "谁已付费？"
+
+
+def test_critique_run_websocket_supports_contextual_follow_up(
+    tmp_path, monkeypatch
+) -> None:
+    async def fake_run_agent(request):
+        if request.agent.definition.id == "critique-judge":
+            return json.dumps(
+                {
+                    "weakest_assumption": "预算与验证目标不匹配",
+                    "largest_disagreement": "增长速度与现金流安全冲突",
+                    "recommended_validation": "先验证一个付费场景",
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "core_assumption": "两万元足够验证需求",
+                "counterevidence": "获客可能快速耗尽预算",
+                "opportunity_cost": "预算也可延长现金流",
+                "key_question": "哪个实验最能改变判断？",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("server.app.critique_service.run_agent", fake_run_agent)
+    client = make_client(tmp_path)
+    login(client)
+    discipline = client.post(
+        "/api/critique/disciplines", json=DISCIPLINE_PAYLOAD
+    ).json()["discipline"]
+
+    with client.websocket_connect("/api/critique/runs/connect") as websocket:
+        websocket.receive_json()
+        websocket.send_json(
+            {
+                "type": "run",
+                "question": "我是否应该辞职做自己的产品？",
+                "discipline_ids": [discipline["id"]],
+            }
+        )
+        while True:
+            completed = websocket.receive_json()
+            if completed["type"] == "run_completed":
+                break
+
+        websocket.send_json(
+            {
+                "type": "follow_up",
+                "run_id": completed["run"]["id"],
+                "question": "预算有限时先验证哪一个假设？",
+            }
+        )
+        while True:
+            followed_up = websocket.receive_json()
+            if followed_up["type"] in {"run_completed", "error"}:
+                break
+
+    assert followed_up["type"] == "run_completed"
+    assert followed_up["run"]["title"] == "我是否应该辞职做自己的产品？"
+    assert [turn["question"] for turn in followed_up["run"]["turns"]] == [
+        "我是否应该辞职做自己的产品？",
+        "预算有限时先验证哪一个假设？",
+    ]

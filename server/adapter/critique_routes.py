@@ -94,7 +94,7 @@ def create_critique_router(container: AppContainer) -> APIRouter:
             while True:
                 raw = await websocket.receive_json()
                 message_type = raw.get("type")
-                if message_type not in {"run", "retry"}:
+                if message_type not in {"run", "follow_up", "retry"}:
                     await websocket.send_json({"type": "error", "message": "不支持的消息类型"})
                     continue
 
@@ -106,6 +106,13 @@ def create_critique_router(container: AppContainer) -> APIRouter:
                         await service.retry_discipline(
                             str(raw.get("run_id") or ""),
                             str(raw.get("discipline_id") or ""),
+                            turn_id=str(raw.get("turn_id") or "").strip() or None,
+                            on_event=send_event,
+                        )
+                    elif message_type == "follow_up":
+                        await service.follow_up(
+                            str(raw.get("run_id") or ""),
+                            str(raw.get("question") or ""),
                             on_event=send_event,
                         )
                     else:

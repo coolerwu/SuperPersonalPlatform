@@ -83,35 +83,27 @@ def parse_agent_platform(raw: dict[str, Any]) -> AgentPlatformDefinition:
     llm_raw = raw.get("llm") or {}
     agents_raw = raw.get("agents") or {}
     skills_raw = raw.get("skills") or {}
-    common_skills_raw = raw.get("common_skills") or {}
-    platform_tools_raw = raw.get("tools") or {}
+    if "common_skills" in raw or "tools" in raw:
+        raise AgentConfigError("legacy common_skills/tools configuration is not supported")
     models_raw = llm_raw.get("models") or []
     definitions_raw = agents_raw.get("definitions") or []
     skill_definitions_raw = skills_raw.get("definitions") or []
-    tools_raw = common_skills_raw.get("tools") or []
     if not isinstance(models_raw, list):
         raise ValueError("llm.models must be a list")
     if not isinstance(definitions_raw, list):
         raise ValueError("agents.definitions must be a list")
     if not isinstance(skill_definitions_raw, list):
         raise ValueError("skills.definitions must be a list")
-    if not isinstance(tools_raw, list):
-        raise ValueError("common_skills.tools must be a list")
-    if not isinstance(platform_tools_raw, dict):
-        raise ValueError("tools must be an object")
 
     models = tuple(parse_model_definition(item) for item in models_raw)
     agents = tuple(parse_agent_definition(item) for item in definitions_raw)
     skill_definitions = tuple(parse_skill_definition(item) for item in skill_definitions_raw)
-    common_skill_tools = tuple(str(tool).strip() for tool in tools_raw if str(tool).strip())
     default_model_id = str(llm_raw.get("default_model_id") or (models[0].id if models else "")).strip()
     return AgentPlatformDefinition(
         models=models,
         default_model_id=default_model_id,
         agents=agents,
         skill_definitions=skill_definitions,
-        common_skill_tools=common_skill_tools,
-        tools=parse_tool_access(platform_tools_raw, "tools"),
     )
 
 
@@ -143,18 +135,16 @@ def parse_agent_definition(raw: Any) -> AgentDefinition:
         raise ValueError("agents.definitions[] must be an object")
     model_id = raw.get("model_id")
     skill_ids_raw = raw.get("skill_ids") or []
-    tools_raw = raw.get("tools")
+    if "tools" in raw:
+        raise AgentConfigError("legacy agents.definitions[].tools is not supported")
     if not isinstance(skill_ids_raw, list):
         raise ValueError("agents.definitions[].skill_ids must be a list")
-    if tools_raw is not None and not isinstance(tools_raw, dict):
-        raise ValueError("agents.definitions[].tools must be an object")
     return AgentDefinition(
         id=str(raw.get("id") or "").strip(),
         name=str(raw.get("name") or "").strip(),
         system_prompt=str(raw.get("system_prompt") or "").strip(),
         model_id=str(model_id).strip() if model_id is not None else None,
         skill_ids=tuple(str(skill_id).strip() for skill_id in skill_ids_raw if str(skill_id).strip()),
-        tools=parse_tool_access(tools_raw, "agents.definitions[].tools") if tools_raw is not None else None,
     )
 
 
@@ -172,14 +162,12 @@ def parse_skill_definition(raw: Any) -> SkillDefinition:
 
 
 def parse_tool_access(raw: dict[str, Any], path: str) -> ToolAccessDefinition:
+    unsupported = set(raw) - {"allow"}
+    if unsupported:
+        raise AgentConfigError(f"legacy {path}.{sorted(unsupported)[0]} is not supported")
     allow_raw = raw.get("allow") or []
-    deny_raw = raw.get("deny") or []
     if not isinstance(allow_raw, list):
         raise ValueError(f"{path}.allow must be a list")
-    if not isinstance(deny_raw, list):
-        raise ValueError(f"{path}.deny must be a list")
     return ToolAccessDefinition(
-        profile=str(raw.get("profile") or "default").strip() or "default",
         allow=tuple(str(tool).strip() for tool in allow_raw if str(tool).strip()),
-        deny=tuple(str(tool).strip() for tool in deny_raw if str(tool).strip()),
     )

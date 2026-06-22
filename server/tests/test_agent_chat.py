@@ -8,11 +8,13 @@ from fastapi.testclient import TestClient
 
 from server.adapter.agent_routes import create_agent_router
 from server.adapter.auth_routes import create_auth_router
+from server.adapter.session_routes import create_session_router
 from server.adapter.dependencies import AppContainer
 from server.app.agent_chat_service import (
     AgentChatService,
 )
 from server.app.agent_skill_service import AgentSkillService
+from server.app.chat_session_service import ChatSessionService
 from server.app.agent_tool_service import AgentToolRegistry, AgentToolRuntime
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
@@ -162,17 +164,17 @@ def write_config(
     skill_ids: tuple[str, ...] = (),
 ) -> None:
     mode_line = f"\n      mode: {mode}" if mode is not None else ""
-    common_tools_yaml = "\n".join(f"    - {tool}" for tool in common_tools)
     skill_ids_yaml = "\n".join(f"      - {skill_id}" for skill_id in skill_ids)
-    common_skills_section = (
-        f"""
-common_skills:
-  tools:
-{common_tools_yaml}
-"""
-        if common_tools_yaml
-        else ""
-    )
+    skill_definitions = ""
+    if skill_ids:
+        rows = []
+        for skill_id in skill_ids:
+            rows.append(f"    - id: {skill_id}")
+            if common_tools:
+                rows.append("      tools:")
+                rows.append("        allow:")
+                rows.extend(f"          - {tool}" for tool in common_tools)
+        skill_definitions = "\nskills:\n  definitions:\n" + "\n".join(rows)
     skill_ids_section = (
         f"""
       skill_ids:
@@ -198,7 +200,7 @@ llm:
 {mode_line}
       temperature: 0.2
       supports_images: {str(supports_images).lower()}
-{common_skills_section.rstrip()}
+{skill_definitions.rstrip()}
 agents:
   default_agent_id: {default_agent_id}
   definitions:
@@ -224,10 +226,12 @@ def make_client(workspace: Path, gateway: FakeModelGateway | None = None) -> Tes
         system_update_service=None,
         session_codec=SessionCodec("secret-token"),
         agent_chat_service=AgentChatService(config_service.config_path),
+        chat_session_service=ChatSessionService(workspace),
     )
     app = FastAPI()
     app.include_router(create_auth_router(container))
     app.include_router(create_agent_router(container))
+    app.include_router(create_session_router(container))
     return TestClient(app)
 
 
@@ -248,7 +252,7 @@ def test_agent_config_defaults_without_permission_gate() -> None:
 
     assert settings.agent_platform.models == ()
     assert settings.agent_platform.agents == ()
-    assert settings.agent_platform.common_skill_tools == ()
+    assert not hasattr(settings.agent_platform, "common_skill_tools")
 
 
 @pytest.mark.parametrize(
@@ -313,6 +317,12 @@ def test_agent_config_endpoint_masks_api_keys(tmp_path) -> None:
     assert body["models"][0]["api_key_mask"] == "********"
     assert body["models"][0]["mode"] == "prompt"
 
+    tools_response = client.get("/api/agents/tools")
+    assert tools_response.status_code == 200
+    tool = next(item for item in tools_response.json()["tools"] if item["name"] == "list_skill")
+    assert set(tool) == {"name", "display_name", "description", "input", "output", "support_scene"}
+    assert tool["support_scene"] == ["agent"]
+
 
 def test_agent_config_parses_agent_mode_and_rejects_unknown_mode(tmp_path) -> None:
     write_config(tmp_path, mode="agent")
@@ -325,7 +335,7 @@ def test_agent_config_parses_agent_mode_and_rejects_unknown_mode(tmp_path) -> No
 
 
 def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
-    write_config(tmp_path, common_tools=("list_skill", "read_skill"), skill_ids=("common:writing",))
+    write_config(tmp_path, skill_ids=("common:writing",))
     client = make_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})
 
@@ -333,7 +343,6 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
         "/api/agents/config",
         json={
             "default_model_id": "fast",
-            "common_skill_tools": ["list_skill", "read_skill"],
             "skills": [
                 {
                     "id": "common:writing",
@@ -372,7 +381,6 @@ def test_agent_config_update_preserves_existing_api_key(tmp_path) -> None:
     assert settings.agent_platform.get_model("fast").name == "Renamed Model"
     assert settings.agent_platform.get_model("fast").supports_images is False
     assert settings.agent_platform.get_model("fast").mode is HarnessMode.AGENT
-    assert settings.agent_platform.common_skill_tools == ("list_skill", "read_skill")
     assert settings.agent_platform.skill_definitions[0].id == "common:writing"
     assert settings.agent_platform.skill_definitions[1].id == "common:portfolio"
     assert settings.agent_platform.get_agent("assistant").skill_ids == ("common:writing",)
@@ -392,7 +400,6 @@ def test_agent_config_update_removes_legacy_default_agent(tmp_path) -> None:
         "/api/agents/config",
         json={
             "default_model_id": "fast",
-            "common_skill_tools": [],
             "skills": [],
             "models": [
                 {
@@ -444,14 +451,14 @@ def test_agent_skill_content_endpoint_reads_and_writes_markdown(tmp_path) -> Non
             "id": "common:research",
             "name": "common:research",
             "content": "# 研究\n新内容",
-            "tools": {"profile": "default", "allow": ["list_skill"], "deny": []},
+            "tools": {"allow": ["list_skill"]},
         },
     )
 
     assert write_response.status_code == 200
     saved = skill_path.read_text(encoding="utf-8")
     assert saved.startswith("---\n")
-    assert "profile: default" in saved
+    assert "profile:" not in saved
     assert "- list_skill" in saved
     assert saved.endswith("# 研究\n新内容")
 
@@ -518,6 +525,20 @@ def test_bind_prompt_agent_uses_configured_default_model(tmp_path) -> None:
     assert agent.definition.model_id == "fast"
     assert agent.model.id == "fast"
     assert agent.model.mode is HarnessMode.PROMPT
+
+
+def test_builtin_skill_content_keeps_default_tool_allowlist(tmp_path) -> None:
+    write_config(tmp_path, mode="prompt")
+    service = AgentChatService(tmp_path / "config.yaml")
+
+    content = service.read_skill_content("common:portfolio")
+
+    assert content["tools"]["allow"] == [
+        "list_portfolio_holdings",
+        "add_portfolio_holding",
+        "update_portfolio_holding",
+        "delete_portfolio_holding",
+    ]
 
 
 def test_bind_prompt_agent_rejects_agent_mode_model(tmp_path) -> None:
@@ -612,14 +633,18 @@ def test_agent_chat_preserves_config_error_for_empty_content(tmp_path) -> None:
 
 
 def test_agent_config_rejects_unknown_common_skill_tool(tmp_path) -> None:
-    write_config(tmp_path, common_tools=("list_skill", "shell"))
-
-    with pytest.raises(ValueError, match="common_skills.tools"):
-        load_settings(tmp_path / "config.yaml")
+    with pytest.raises(ValueError, match="legacy common_skills/tools"):
+        parse_settings(
+            {
+                "auth": {"token": "secret-token"},
+                "proxy": {"upstream_base_url": "http://example.test/"},
+                "common_skills": {"tools": ["list_skill"]},
+            }
+        )
 
 
 def test_agent_tool_config_rejects_removed_self_dev_profile() -> None:
-    with pytest.raises(ValueError, match="tools.profile is unsupported"):
+    with pytest.raises(ValueError, match="legacy common_skills/tools"):
         parse_settings(
         {
             "auth": {"token": "secret-token"},
@@ -661,10 +686,6 @@ auth:
   token: secret-token
 proxy:
   upstream_base_url: http://example.test/
-tools:
-  profile: default
-  allow: []
-  deny: []
 skills:
   definitions:
     - id: common:portfolio
@@ -684,10 +705,6 @@ agents:
       model_id: fast
       skill_ids:
         - common:portfolio
-      tools:
-        profile: portfolio
-        allow: []
-        deny: []
 """.strip(),
         encoding="utf-8",
     )
@@ -697,10 +714,9 @@ agents:
         """---
 name: 资产组合
 tools:
-  profile: portfolio
-  allow: []
-  deny:
-    - delete_portfolio_holding
+  allow:
+    - list_portfolio_holdings
+    - add_portfolio_holding
 ---
 # 资产组合
 """,
@@ -711,9 +727,7 @@ tools:
     registry = AgentToolRegistry()
 
     tool_names = registry.resolve_tools(
-        settings.tools,
         settings.get_agent("assistant"),
-        settings.common_skill_tools,
         settings.skill_definitions,
     )
 
@@ -723,7 +737,7 @@ tools:
 
 
 def test_agent_tool_config_rejects_unknown_tool() -> None:
-    with pytest.raises(ValueError, match="unsupported tool"):
+    with pytest.raises(ValueError, match="legacy common_skills/tools"):
         parse_settings(
             {
                 "auth": {"token": "secret-token"},
@@ -804,7 +818,10 @@ def test_agent_chat_uses_langchain_skill_tools_when_configured(tmp_path) -> None
     )
     skills_dir = tmp_path / "skills" / "common"
     skills_dir.mkdir(parents=True)
-    (skills_dir / "writing.md").write_text("# 写作\n用中文润色。", encoding="utf-8")
+    (skills_dir / "writing.md").write_text(
+        "---\ntools:\n  allow:\n    - list_skill\n    - read_skill\n---\n# 写作\n用中文润色。",
+        encoding="utf-8",
+    )
     gateway = FakeModelGateway()
     client = make_client(tmp_path, gateway)
     client.post("/api/auth/login", json={"token": "secret-token"})
@@ -837,6 +854,12 @@ def test_agent_chat_returns_error_when_tool_calling_is_unsupported(tmp_path) -> 
         skill_ids=("common:writing",),
     )
     gateway = FakeModelGateway(fail_tools=True)
+    skills_dir = tmp_path / "skills" / "common"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "writing.md").write_text(
+        "---\ntools:\n  allow:\n    - list_skill\n---\n# 写作",
+        encoding="utf-8",
+    )
     client = make_client(tmp_path, gateway)
     client.post("/api/auth/login", json={"token": "secret-token"})
 
@@ -854,3 +877,33 @@ def test_agent_chat_returns_error_when_tool_calling_is_unsupported(tmp_path) -> 
             "type": "error",
             "message": "当前模型不支持 LangChain tools",
         }
+
+
+def test_session_routes_and_websocket_enforce_agent_ownership(tmp_path) -> None:
+    write_config(tmp_path)
+    gateway = FakeModelGateway()
+    client = make_client(tmp_path, gateway)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    own = client.post("/api/sessions", json={"agent_id": "assistant", "title": "我的会话"}).json()["session"]
+    other = client.post("/api/sessions", json={"agent_id": "other", "title": "其他会话"}).json()["session"]
+
+    response = client.get("/api/sessions", params={"agent_id": "assistant"})
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["sessions"]] == [own["id"]]
+    assert client.get(
+        f"/api/sessions/{other['id']}", params={"agent_id": "assistant"}
+    ).status_code == 404
+
+    with client.websocket_connect("/api/agents/chat/connect") as websocket:
+        websocket.receive_json()
+        websocket.send_json(
+            {
+                "type": "message",
+                "agent_id": "assistant",
+                "content": "不能串话",
+                "session_id": other["id"],
+            }
+        )
+        error = receive_until(websocket, "error")
+        assert "does not belong" in error["message"]
+    assert gateway.calls == []

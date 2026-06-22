@@ -38,12 +38,14 @@ class ChatSessionService:
     def _session_path(self, session_id: str) -> Path:
         return self._sessions_dir() / f"{session_id}.json"
 
-    def list_sessions(self) -> list[ChatSessionSummary]:
+    def list_sessions(self, agent_id: str | None = None) -> list[ChatSessionSummary]:
         summaries: list[ChatSessionSummary] = []
         for path in sorted(self._sessions_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
+                continue
+            if agent_id is not None and str(raw.get("agent_id") or "") != agent_id:
                 continue
             summaries.append(
                 ChatSessionSummary(
@@ -57,11 +59,14 @@ class ChatSessionService:
             )
         return summaries
 
-    def get_session(self, session_id: str) -> ChatSession:
+    def get_session(self, session_id: str, agent_id: str | None = None) -> ChatSession:
         path = self._session_path(session_id)
         if not path.exists():
             raise ChatSessionNotFoundError(f"session {session_id} not found")
-        return self._parse_session(json.loads(path.read_text(encoding="utf-8")))
+        session = self._parse_session(json.loads(path.read_text(encoding="utf-8")))
+        if agent_id is not None and session.agent_id != agent_id:
+            raise ChatSessionNotFoundError(f"session {session_id} does not belong to agent {agent_id}")
+        return session
 
     def create_session(self, agent_id: str, title: str = "") -> ChatSession:
         session_id = f"session-{uuid.uuid4().hex[:12]}"

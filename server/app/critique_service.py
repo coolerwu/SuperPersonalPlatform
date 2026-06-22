@@ -15,6 +15,7 @@ from server.domain.critique import (
     CritiqueJudgment,
     CritiqueRun,
     CritiqueRunNotFoundError,
+    CritiqueTurn,
 )
 from server.domain.harness import HarnessRequest, run_agent
 
@@ -125,12 +126,94 @@ class CritiqueService:
 
         run_id = f"r-{uuid.uuid4().hex}"
         created_at = _now_iso()
-        await self._emit(on_event, {"type": "run_started", "run_id": run_id})
+        turn, resolved_model_id = await self._execute_turn(
+            run_id=run_id,
+            question=normalized_question,
+            disciplines=tuple(disciplines),
+            model_id=model_id,
+            prior_turns=(),
+            on_event=on_event,
+        )
+        run = CritiqueRun(
+            id=run_id,
+            title=normalized_question,
+            question=turn.question,
+            model_id=resolved_model_id,
+            disciplines=tuple(disciplines),
+            results=turn.results,
+            judgment=turn.judgment,
+            turns=(turn,),
+            status=turn.status,
+            created_at=created_at,
+            updated_at=turn.updated_at,
+        )
+        self._write_json(self._run_path(run.id), self._run_to_dict(run))
+        await self._emit(on_event, {"type": "run_completed", "run": self._run_to_dict(run)})
+        return run
+
+    async def follow_up(
+        self,
+        run_id: str,
+        question: str,
+        *,
+        on_event: CritiqueEventCallback | None = None,
+    ) -> CritiqueRun:
+        current = self.get_run(run_id)
+        normalized_question = question.strip()
+        if not normalized_question:
+            raise ValueError("问题不能为空")
+        turn, resolved_model_id = await self._execute_turn(
+            run_id=current.id,
+            question=normalized_question,
+            disciplines=current.disciplines,
+            model_id=current.model_id or None,
+            prior_turns=current.turns,
+            on_event=on_event,
+        )
+        updated = CritiqueRun(
+            id=current.id,
+            title=current.title,
+            question=turn.question,
+            model_id=resolved_model_id,
+            disciplines=current.disciplines,
+            results=turn.results,
+            judgment=turn.judgment,
+            turns=(*current.turns, turn),
+            status=turn.status,
+            created_at=current.created_at,
+            updated_at=turn.updated_at,
+        )
+        self._write_json(self._run_path(updated.id), self._run_to_dict(updated))
+        await self._emit(on_event, {"type": "run_completed", "run": self._run_to_dict(updated)})
+        return updated
+
+    async def _execute_turn(
+        self,
+        *,
+        run_id: str,
+        question: str,
+        disciplines: tuple[CritiqueDiscipline, ...],
+        model_id: str | None,
+        prior_turns: tuple[CritiqueTurn, ...],
+        on_event: CritiqueEventCallback | None,
+    ) -> tuple[CritiqueTurn, str]:
+        turn_id = f"t-{uuid.uuid4().hex}"
+        created_at = _now_iso()
+        await self._emit(
+            on_event,
+            {"type": "run_started", "run_id": run_id, "turn_id": turn_id},
+        )
 
         async def execute_discipline(discipline: CritiqueDiscipline) -> tuple[CritiqueDisciplineResult, str]:
             await self._emit(
                 on_event,
-                {"type": "discipline_status", "run_id": run_id, "discipline_id": discipline.id, "status": "running"},
+                {
+                    "type": "discipline_status",
+                    "run_id": run_id,
+                    "turn_id": turn_id,
+                    "discipline_id": discipline.id,
+                    "status": "running",
+                },
             )
             try:
                 agent = self._agent_chat_service.bind_prompt_agent(
@@ -140,7 +223,10 @@ class CritiqueService:
                     model_id=model_id,
                 )
                 response = await run_agent(
-                    HarnessRequest.for_prompt(agent=agent, content=normalized_question)
+                    HarnessRequest.for_prompt(
+                        agent=agent,
+                        content=self._discipline_request(question, prior_turns),
+                    )
                 )
                 analysis = self._parse_analysis(response)
                 result = CritiqueDisciplineResult(
@@ -163,6 +249,7 @@ class CritiqueService:
                 {
                     "type": "discipline_status",
                     "run_id": run_id,
+                    "turn_id": turn_id,
                     "discipline_id": discipline.id,
                     "status": result.status,
                     "result": self._result_to_dict(result),
@@ -180,7 +267,10 @@ class CritiqueService:
         judgment: CritiqueJudgment | None = None
         judge_failed = False
         if successful:
-            await self._emit(on_event, {"type": "judgment_status", "run_id": run_id, "status": "running"})
+            await self._emit(
+                on_event,
+                {"type": "judgment_status", "run_id": run_id, "turn_id": turn_id, "status": "running"},
+            )
             try:
                 judge = self._agent_chat_service.bind_prompt_agent(
                     agent_id="critique-judge",
@@ -194,7 +284,8 @@ class CritiqueService:
                         agent=judge,
                         content=json.dumps(
                             {
-                                "question": normalized_question,
+                                "conversation": self._conversation_context(prior_turns),
+                                "question": question,
                                 "critiques": [self._result_to_dict(item) for item in successful],
                             },
                             ensure_ascii=False,
@@ -204,13 +295,25 @@ class CritiqueService:
                 judgment = self._parse_judgment(judge_response)
                 await self._emit(
                     on_event,
-                    {"type": "judgment_status", "run_id": run_id, "status": "completed", "judgment": asdict(judgment)},
+                    {
+                        "type": "judgment_status",
+                        "run_id": run_id,
+                        "turn_id": turn_id,
+                        "status": "completed",
+                        "judgment": asdict(judgment),
+                    },
                 )
             except Exception as exc:
                 judge_failed = True
                 await self._emit(
                     on_event,
-                    {"type": "judgment_status", "run_id": run_id, "status": "failed", "error": self._safe_error(exc)},
+                    {
+                        "type": "judgment_status",
+                        "run_id": run_id,
+                        "turn_id": turn_id,
+                        "status": "failed",
+                        "error": self._safe_error(exc),
+                    },
                 )
 
         if not successful:
@@ -220,35 +323,43 @@ class CritiqueService:
         else:
             status = "completed"
         completed_at = _now_iso()
-        run = CritiqueRun(
-            id=run_id,
-            question=normalized_question,
-            model_id=resolved_model_id,
-            disciplines=tuple(disciplines),
+        turn = CritiqueTurn(
+            id=turn_id,
+            question=question,
             results=results,
             judgment=judgment,
             status=status,
             created_at=created_at,
             updated_at=completed_at,
         )
-        self._write_json(self._run_path(run.id), self._run_to_dict(run))
-        await self._emit(on_event, {"type": "run_completed", "run": self._run_to_dict(run)})
-        return run
+        return turn, resolved_model_id
 
     async def retry_discipline(
         self,
         run_id: str,
         discipline_id: str,
         *,
+        turn_id: str | None = None,
         on_event: CritiqueEventCallback | None = None,
     ) -> CritiqueRun:
         current = self.get_run(run_id)
+        target_index = next(
+            (
+                index
+                for index, item in enumerate(current.turns)
+                if item.id == turn_id
+            ),
+            len(current.turns) - 1 if turn_id is None else -1,
+        )
+        if target_index < 0:
+            raise CritiqueRunNotFoundError("批判轮次不存在")
+        target_turn = current.turns[target_index]
         discipline = next(
             (item for item in current.disciplines if item.id == discipline_id),
             None,
         )
         existing = next(
-            (item for item in current.results if item.discipline_id == discipline_id),
+            (item for item in target_turn.results if item.discipline_id == discipline_id),
             None,
         )
         if discipline is None or existing is None:
@@ -258,7 +369,13 @@ class CritiqueService:
 
         await self._emit(
             on_event,
-            {"type": "discipline_status", "run_id": run_id, "discipline_id": discipline_id, "status": "running"},
+            {
+                "type": "discipline_status",
+                "run_id": run_id,
+                "turn_id": target_turn.id,
+                "discipline_id": discipline_id,
+                "status": "running",
+            },
         )
         resolved_model_id = current.model_id
         try:
@@ -269,7 +386,13 @@ class CritiqueService:
                 model_id=current.model_id or None,
             )
             response = await run_agent(
-                HarnessRequest.for_prompt(agent=agent, content=current.question)
+                HarnessRequest.for_prompt(
+                    agent=agent,
+                    content=self._discipline_request(
+                        target_turn.question,
+                        current.turns[:target_index],
+                    ),
+                )
             )
             replacement = CritiqueDisciplineResult(
                 discipline_id=discipline.id,
@@ -287,13 +410,14 @@ class CritiqueService:
             )
         results = tuple(
             replacement if item.discipline_id == discipline_id else item
-            for item in current.results
+            for item in target_turn.results
         )
         await self._emit(
             on_event,
             {
                 "type": "discipline_status",
                 "run_id": run_id,
+                "turn_id": target_turn.id,
                 "discipline_id": discipline_id,
                 "status": replacement.status,
                 "result": self._result_to_dict(replacement),
@@ -304,7 +428,15 @@ class CritiqueService:
         judgment: CritiqueJudgment | None = None
         judge_failed = False
         if successful:
-            await self._emit(on_event, {"type": "judgment_status", "run_id": run_id, "status": "running"})
+            await self._emit(
+                on_event,
+                {
+                    "type": "judgment_status",
+                    "run_id": run_id,
+                    "turn_id": target_turn.id,
+                    "status": "running",
+                },
+            )
             try:
                 judge = self._agent_chat_service.bind_prompt_agent(
                     agent_id="critique-judge",
@@ -318,7 +450,8 @@ class CritiqueService:
                         agent=judge,
                         content=json.dumps(
                             {
-                                "question": current.question,
+                                "conversation": self._conversation_context(current.turns[:target_index]),
+                                "question": target_turn.question,
                                 "critiques": [self._result_to_dict(item) for item in successful],
                             },
                             ensure_ascii=False,
@@ -328,13 +461,25 @@ class CritiqueService:
                 judgment = self._parse_judgment(response)
                 await self._emit(
                     on_event,
-                    {"type": "judgment_status", "run_id": run_id, "status": "completed", "judgment": asdict(judgment)},
+                    {
+                        "type": "judgment_status",
+                        "run_id": run_id,
+                        "turn_id": target_turn.id,
+                        "status": "completed",
+                        "judgment": asdict(judgment),
+                    },
                 )
             except Exception as exc:
                 judge_failed = True
                 await self._emit(
                     on_event,
-                    {"type": "judgment_status", "run_id": run_id, "status": "failed", "error": self._safe_error(exc)},
+                    {
+                        "type": "judgment_status",
+                        "run_id": run_id,
+                        "turn_id": target_turn.id,
+                        "status": "failed",
+                        "error": self._safe_error(exc),
+                    },
                 )
 
         if not successful:
@@ -343,16 +488,32 @@ class CritiqueService:
             status = "partial"
         else:
             status = "completed"
-        updated = CritiqueRun(
-            id=current.id,
-            question=current.question,
-            model_id=resolved_model_id,
-            disciplines=current.disciplines,
+        updated_turn = CritiqueTurn(
+            id=target_turn.id,
+            question=target_turn.question,
             results=results,
             judgment=judgment,
             status=status,
-            created_at=current.created_at,
+            created_at=target_turn.created_at,
             updated_at=_now_iso(),
+        )
+        turns = tuple(
+            updated_turn if index == target_index else item
+            for index, item in enumerate(current.turns)
+        )
+        latest_turn = turns[-1]
+        updated = CritiqueRun(
+            id=current.id,
+            title=current.title,
+            question=latest_turn.question,
+            model_id=resolved_model_id,
+            disciplines=current.disciplines,
+            results=latest_turn.results,
+            judgment=latest_turn.judgment,
+            turns=turns,
+            status=latest_turn.status,
+            created_at=current.created_at,
+            updated_at=updated_turn.updated_at,
         )
         self._write_json(self._run_path(updated.id), self._run_to_dict(updated))
         await self._emit(on_event, {"type": "run_completed", "run": self._run_to_dict(updated)})
@@ -372,6 +533,39 @@ class CritiqueService:
             "opportunity_cost、key_question。每个字段使用 30-60 个汉字，直接给出一个核心判断，"
             "不要重复问题或输出其他文字。"
         )
+
+    def _discipline_request(
+        self,
+        question: str,
+        prior_turns: tuple[CritiqueTurn, ...],
+    ) -> str:
+        if not prior_turns:
+            return question
+        return json.dumps(
+            {
+                "conversation": self._conversation_context(prior_turns),
+                "question": question,
+                "instruction": "结合此前对话继续批判，不要把追问当作孤立的新问题。",
+            },
+            ensure_ascii=False,
+        )
+
+    def _conversation_context(
+        self,
+        turns: tuple[CritiqueTurn, ...],
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "question": turn.question,
+                "critiques": [
+                    self._result_to_dict(result)
+                    for result in turn.results
+                    if result.status == "completed"
+                ],
+                "judgment": asdict(turn.judgment) if turn.judgment else None,
+            }
+            for turn in turns
+        ]
 
     @staticmethod
     def _judge_prompt() -> str:
@@ -489,19 +683,83 @@ class CritiqueService:
     def _run_to_dict(self, run: CritiqueRun) -> dict[str, object]:
         return {
             "id": run.id,
+            "title": run.title,
             "question": run.question,
             "model_id": run.model_id,
             "disciplines": [asdict(item) for item in run.disciplines],
             "results": [self._result_to_dict(item) for item in run.results],
             "judgment": asdict(run.judgment) if run.judgment else None,
+            "turns": [self._turn_to_dict(item) for item in run.turns],
             "status": run.status,
             "created_at": run.created_at,
             "updated_at": run.updated_at,
         }
 
     def _run_from_dict(self, raw: dict[str, object]) -> CritiqueRun:
+        results = self._results_from_raw(raw.get("results", []))
+        judgment_raw = raw.get("judgment")
+        judgment = CritiqueJudgment(**judgment_raw) if isinstance(judgment_raw, dict) else None
+        raw_turns = raw.get("turns")
+        if isinstance(raw_turns, list) and raw_turns:
+            turns = tuple(self._turn_from_dict(item) for item in raw_turns)
+        else:
+            turns = (
+                CritiqueTurn(
+                    id=f"t-legacy-{str(raw['id']).removeprefix('r-')}",
+                    question=str(raw["question"]),
+                    results=results,
+                    judgment=judgment,
+                    status=str(raw["status"]),
+                    created_at=str(raw["created_at"]),
+                    updated_at=str(raw["updated_at"]),
+                ),
+            )
+        latest_turn = turns[-1]
+        return CritiqueRun(
+            id=str(raw["id"]),
+            title=str(raw.get("title") or turns[0].question),
+            question=latest_turn.question,
+            model_id=str(raw.get("model_id", "")),
+            disciplines=tuple(self._discipline_from_dict(item) for item in raw.get("disciplines", [])),
+            results=latest_turn.results,
+            judgment=latest_turn.judgment,
+            turns=turns,
+            status=latest_turn.status,
+            created_at=str(raw["created_at"]),
+            updated_at=str(raw["updated_at"]),
+        )
+
+    def _turn_to_dict(self, turn: CritiqueTurn) -> dict[str, object]:
+        return {
+            "id": turn.id,
+            "question": turn.question,
+            "results": [self._result_to_dict(item) for item in turn.results],
+            "judgment": asdict(turn.judgment) if turn.judgment else None,
+            "status": turn.status,
+            "created_at": turn.created_at,
+            "updated_at": turn.updated_at,
+        }
+
+    def _turn_from_dict(self, raw: dict[str, object]) -> CritiqueTurn:
+        judgment_raw = raw.get("judgment")
+        return CritiqueTurn(
+            id=str(raw["id"]),
+            question=str(raw["question"]),
+            results=self._results_from_raw(raw.get("results", [])),
+            judgment=CritiqueJudgment(**judgment_raw) if isinstance(judgment_raw, dict) else None,
+            status=str(raw["status"]),
+            created_at=str(raw["created_at"]),
+            updated_at=str(raw["updated_at"]),
+        )
+
+    @staticmethod
+    def _results_from_raw(raw_results: object) -> tuple[CritiqueDisciplineResult, ...]:
+        if not isinstance(raw_results, list):
+            return ()
         result_items = []
-        for item in raw.get("results", []):
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
             analysis_raw = item.get("analysis")
             analysis = CritiqueAnalysis(**analysis_raw) if isinstance(analysis_raw, dict) else None
             result_items.append(
@@ -513,16 +771,4 @@ class CritiqueService:
                     error=str(item.get("error", "")),
                 )
             )
-        judgment_raw = raw.get("judgment")
-        judgment = CritiqueJudgment(**judgment_raw) if isinstance(judgment_raw, dict) else None
-        return CritiqueRun(
-            id=str(raw["id"]),
-            question=str(raw["question"]),
-            model_id=str(raw.get("model_id", "")),
-            disciplines=tuple(self._discipline_from_dict(item) for item in raw.get("disciplines", [])),
-            results=tuple(result_items),
-            judgment=judgment,
-            status=str(raw["status"]),
-            created_at=str(raw["created_at"]),
-            updated_at=str(raw["updated_at"]),
-        )
+        return tuple(result_items)

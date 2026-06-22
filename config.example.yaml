@@ -17,14 +17,6 @@ llm:
       mode: "prompt"
       temperature: 0.7
       supports_images: true
-common_skills:
-  tools:
-    - "list_skill"
-    - "read_skill"
-tools:
-  profile: "default"
-  allow: []
-  deny: []
 skills:
   definitions: []
 channels:

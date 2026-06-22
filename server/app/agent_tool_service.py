@@ -3,30 +3,44 @@ import json
 from typing import Any, Awaitable, Callable
 
 from server.app.agent_skill_service import AgentSkillToolbox
-from server.domain.agents import AgentConfigError, AgentDefinition, SkillDefinition, ToolAccessDefinition
+from server.domain.agents import AgentConfigError, AgentDefinition, SkillDefinition
 
 
 ToolHandler = Callable[[dict[str, Any], "AgentToolRuntime"], Awaitable[str]]
-
-
-PROFILE_TOOLS = {
-    "default": (),
-    "portfolio": (
-        "list_portfolio_holdings",
-        "add_portfolio_holding",
-        "update_portfolio_holding",
-        "delete_portfolio_holding",
-    ),
-}
+SUPPORTED_SCENES = {"mcp", "dag", "agent"}
+EMPTY_OBJECT_SCHEMA = {"type": "object", "properties": {}}
 
 
 @dataclass(frozen=True)
 class AgentToolDefinition:
     name: str
-    group: str
+    display_name: str
     description: str
-    parameters: dict[str, Any]
+    input: dict[str, Any]
     handler: ToolHandler
+    output: dict[str, Any] | None = None
+    support_scene: tuple[str, ...] = ("agent",)
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise AgentConfigError("tool name is required")
+        if not self.display_name.strip():
+            raise AgentConfigError(f"tool {self.name} display_name is required")
+        if not self.description.strip():
+            raise AgentConfigError(f"tool {self.name} description is required")
+        self._validate_schema(self.input, "input")
+        output = self.output or EMPTY_OBJECT_SCHEMA
+        object.__setattr__(self, "output", output)
+        self._validate_schema(output, "output")
+        if not self.support_scene or len(set(self.support_scene)) != len(self.support_scene):
+            raise AgentConfigError(f"tool {self.name} support_scene must be non-empty and unique")
+        unknown = set(self.support_scene) - SUPPORTED_SCENES
+        if unknown:
+            raise AgentConfigError(f"tool {self.name} support_scene is unsupported: {sorted(unknown)[0]}")
+
+    def _validate_schema(self, schema: dict[str, Any], field: str) -> None:
+        if not isinstance(schema, dict) or schema.get("type") not in {"object", "array", "string", "number", "integer", "boolean"}:
+            raise AgentConfigError(f"tool {self.name} {field} must be a JSON Schema object")
 
     def schema(self) -> dict[str, object]:
         return {
@@ -34,8 +48,18 @@ class AgentToolDefinition:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters,
+                "parameters": self.input,
             },
+        }
+
+    def public_definition(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "display_name": self.display_name,
+            "description": self.description,
+            "input": self.input,
+            "output": self.output,
+            "support_scene": list(self.support_scene),
         }
 
 
@@ -46,20 +70,18 @@ class AgentToolRuntime:
 
 
 class AgentToolRegistry:
-    def __init__(self) -> None:
-        self._tools = {
-            definition.name: definition
-            for definition in (
+    def __init__(self, definitions: tuple[AgentToolDefinition, ...] | None = None) -> None:
+        definitions = definitions if definitions is not None else (
                 AgentToolDefinition(
                     "list_skill",
-                    "skills",
+                    "列出 Skill",
                     "列出当前 Agent 显式绑定且存在的 skills。",
                     {"type": "object", "properties": {}, "additionalProperties": False},
                     self._list_skill,
                 ),
                 AgentToolDefinition(
                     "read_skill",
-                    "skills",
+                    "读取 Skill",
                     "读取当前 Agent 显式绑定的某个 skill 内容。",
                     {
                         "type": "object",
@@ -76,14 +98,14 @@ class AgentToolRegistry:
                 ),
                 AgentToolDefinition(
                     "list_portfolio_holdings",
-                    "portfolio",
+                    "查看持仓",
                     "查看当前所有投资持仓列表。",
                     {"type": "object", "properties": {}, "additionalProperties": False},
                     self._list_portfolio_holdings,
                 ),
                 AgentToolDefinition(
                     "add_portfolio_holding",
-                    "portfolio",
+                    "添加持仓",
                     "添加新的投资持仓。",
                     {
                         "type": "object",
@@ -103,7 +125,7 @@ class AgentToolRegistry:
                 ),
                 AgentToolDefinition(
                     "update_portfolio_holding",
-                    "portfolio",
+                    "修改持仓",
                     "修改已有投资持仓的信息。",
                     {
                         "type": "object",
@@ -124,7 +146,7 @@ class AgentToolRegistry:
                 ),
                 AgentToolDefinition(
                     "delete_portfolio_holding",
-                    "portfolio",
+                    "删除持仓",
                     "删除指定的投资持仓。",
                     {
                         "type": "object",
@@ -134,33 +156,36 @@ class AgentToolRegistry:
                     },
                     self._delete_portfolio_holding,
                 ),
-            )
-        }
+        )
+        names = [definition.name for definition in definitions]
+        if len(set(names)) != len(names):
+            raise AgentConfigError("duplicate tool name")
+        self._tools = {definition.name: definition for definition in definitions}
 
     def resolve_tools(
         self,
-        platform_tools: ToolAccessDefinition,
         agent: AgentDefinition,
-        legacy_common_tools: tuple[str, ...],
         skill_definitions: tuple[SkillDefinition, ...] = (),
     ) -> tuple[str, ...]:
-        names = set(PROFILE_TOOLS[platform_tools.profile])
-        denied = set(platform_tools.deny)
-        names.update(legacy_common_tools)
-        names.update(platform_tools.allow)
+        names: set[str] = set()
         skill_by_id = {skill.id: skill for skill in skill_definitions}
         for skill_id in agent.skill_ids:
             skill = skill_by_id.get(skill_id)
             if skill is None:
                 continue
-            names.update(PROFILE_TOOLS[skill.tools.profile])
             names.update(skill.tools.allow)
-            denied.update(skill.tools.deny)
-        names.difference_update(denied)
         unknown = sorted(name for name in names if name not in self._tools)
         if unknown:
             raise AgentConfigError(f"tools contains unsupported tool: {unknown[0]}")
         return tuple(name for name in self._tools if name in names)
+
+    def public_definitions(self) -> tuple[dict[str, object], ...]:
+        return tuple(self._tools[name].public_definition() for name in sorted(self._tools))
+
+    def validate_tool_names(self, names: tuple[str, ...]) -> None:
+        unknown = sorted(name for name in names if name not in self._tools)
+        if unknown:
+            raise AgentConfigError(f"tools contains unsupported tool: {unknown[0]}")
 
     def schemas(self, tool_names: tuple[str, ...]) -> list[dict[str, object]]:
         return [self._tools[name].schema() for name in tool_names if name in self._tools]

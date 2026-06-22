@@ -39,15 +39,6 @@ import {
 import { CritiquePage } from "./CritiquePage.jsx";
 import "./styles.css";
 
-const AGENT_TOOL_OPTIONS = [
-  { id: "list_skill", label: "列出 Skill", group: "Skills" },
-  { id: "read_skill", label: "读取 Skill", group: "Skills" },
-  { id: "list_portfolio_holdings", label: "查看持仓", group: "资产组合" },
-  { id: "add_portfolio_holding", label: "添加持仓", group: "资产组合" },
-  { id: "update_portfolio_holding", label: "修改持仓", group: "资产组合" },
-  { id: "delete_portfolio_holding", label: "删除持仓", group: "资产组合" }
-];
-const AGENT_TOOL_GROUPS = ["Skills", "资产组合"];
 const AGENT_NAV_ITEMS = [
   { path: "/agents", label: "对话", icon: MessageSquare, tab: "chat" },
   { path: "/agents/manage", label: "Agent 管理", icon: List, tab: "agents" },
@@ -294,6 +285,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   const [configStatus, setConfigStatus] = useState("");
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
+  const [activeSessionIds, setActiveSessionIds] = useState({});
   const [sessionLoading, setSessionLoading] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
   const [expandedSkillIndex, setExpandedSkillIndex] = useState(null);
@@ -301,11 +293,14 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   const [skillContentLoading, setSkillContentLoading] = useState(null);
   const [skillToolQuery, setSkillToolQuery] = useState("");
   const [skillToolFilter, setSkillToolFilter] = useState("all");
+  const [toolDefinitions, setToolDefinitions] = useState([]);
+  const [toolDefinitionsError, setToolDefinitionsError] = useState("");
   const [expandedModelIndex, setExpandedModelIndex] = useState(null);
   const socketRef = useRef(null);
   const messageListRef = useRef(null);
   const fileInputRef = useRef(null);
   const composingRef = useRef(false);
+  const sessionRequestRef = useRef(0);
 
   function handleApiError(err) {
     if (err.status === 401 || err.message === "Authentication required") {
@@ -321,14 +316,38 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     return `${protocol}//${window.location.host}/api/agents/chat/connect`;
   }
 
-  async function loadSessions() {
+  async function loadSessions(selectedAgentId) {
+    if (!selectedAgentId) return;
+    const requestId = ++sessionRequestRef.current;
+    setSessionLoading(true);
     try {
-      const data = await api("/api/sessions");
-      setSessions(data.sessions || []);
+      const data = await api(`/api/sessions?agent_id=${encodeURIComponent(selectedAgentId)}`);
+      if (requestId !== sessionRequestRef.current) return;
+      const nextSessions = data.sessions || [];
+      setSessions(nextSessions);
+      const rememberedId = activeSessionIds[selectedAgentId];
+      if (rememberedId && nextSessions.some((session) => session.id === rememberedId)) {
+        await switchSession(rememberedId, selectedAgentId);
+      } else {
+        setActiveSessionId(null);
+        setMessages([]);
+      }
     } catch (err) {
       if (err.status !== 404) {
         handleApiError(err);
       }
+    } finally {
+      if (requestId === sessionRequestRef.current) setSessionLoading(false);
+    }
+  }
+
+  async function loadToolDefinitions() {
+    setToolDefinitionsError("");
+    try {
+      const data = await api("/api/agents/tools");
+      setToolDefinitions(data.tools || []);
+    } catch (err) {
+      setToolDefinitionsError(err.message);
     }
   }
 
@@ -342,6 +361,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
       const session = data.session;
       setSessions((prev) => [session, ...prev]);
       setActiveSessionId(session.id);
+      setActiveSessionIds((current) => ({ ...current, [session.agent_id]: session.id }));
       setMessages([]);
       return session;
     } catch (err) {
@@ -354,10 +374,11 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
 
   async function deleteSessionItem(sessionId) {
     try {
-      await api(`/api/sessions/${sessionId}`, { method: "DELETE" });
+      await api(`/api/sessions/${sessionId}?agent_id=${encodeURIComponent(agentId)}`, { method: "DELETE" });
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       if (activeSessionId === sessionId) {
         setActiveSessionId(null);
+        setActiveSessionIds((current) => ({ ...current, [agentId]: null }));
         setMessages([]);
       }
     } catch (err) {
@@ -365,13 +386,15 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     }
   }
 
-  async function switchSession(sessionId) {
+  async function switchSession(sessionId, selectedAgentId = agentId) {
     setSessionLoading(true);
     setError("");
     try {
-      const data = await api(`/api/sessions/${sessionId}`);
+      const data = await api(`/api/sessions/${sessionId}?agent_id=${encodeURIComponent(selectedAgentId)}`);
       const session = data.session;
+      if (session.agent_id !== selectedAgentId) throw new Error("会话不属于当前 Agent");
       setActiveSessionId(session.id);
+      setActiveSessionIds((current) => ({ ...current, [selectedAgentId]: session.id }));
       const historyMessages = (session.messages || []).map((msg) => ({
         role: msg.role,
         content: msg.content,
@@ -386,9 +409,6 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         checkpointsCollapsed: true
       }));
       setMessages(historyMessages);
-      if (session.agent_id && session.agent_id !== agentId) {
-        setAgentId(session.agent_id);
-      }
     } catch (err) {
       handleApiError(err);
     } finally {
@@ -463,7 +483,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         });
         setSending(false);
         setStatus("connected");
-        loadSessions();
+        loadSessions(agentId);
       }
       if (message.type === "checkpoint") {
         setMessages((items) =>
@@ -566,10 +586,18 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   useEffect(() => {
     loadOptions();
     loadAgentConfig();
-    loadSessions();
+    loadToolDefinitions();
     connect();
     return () => socketRef.current?.close();
   }, []);
+
+  useEffect(() => {
+    if (!agentId) return;
+    setMessages([]);
+    setSessions([]);
+    setActiveSessionId(activeSessionIds[agentId] || null);
+    loadSessions(agentId);
+  }, [agentId]);
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -617,20 +645,16 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
       : skillContents[selectedSkill.id] ?? ""
     : "";
   const normalizedToolQuery = skillToolQuery.trim().toLowerCase();
-  const filteredSkillToolGroups = AGENT_TOOL_GROUPS.map((group) => {
-    const tools = AGENT_TOOL_OPTIONS.filter((tool) => {
-      const selected = selectedSkillAllow.includes(tool.id);
-      const matchesQuery = !normalizedToolQuery || [tool.label, tool.id, tool.group].some((value) =>
+  const filteredSkillTools = toolDefinitions.filter((tool) => {
+      const matchesQuery = !normalizedToolQuery || [tool.display_name, tool.name, tool.description].some((value) =>
         String(value).toLowerCase().includes(normalizedToolQuery)
       );
-      const matchesFilter =
-        skillToolFilter === "all" ||
-        (skillToolFilter === "selected" && selected) ||
-        (skillToolFilter === "unselected" && !selected);
-      return tool.group === group && matchesQuery && matchesFilter;
+      const matchesFilter = skillToolFilter === "all" || (tool.support_scene || []).includes(skillToolFilter);
+      return matchesQuery && matchesFilter;
     });
-    return { group, tools };
-  }).filter((item) => item.tools.length);
+  const missingSkillTools = selectedSkillAllow.filter(
+    (name) => !toolDefinitions.some((tool) => tool.name === name)
+  );
 
   async function addFiles(fileList) {
     const imageFiles = Array.from(fileList || []).filter((file) =>
@@ -711,7 +735,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
             ? {
                 ...item,
                 name: item.id,
-                tools: { ...(data.tools || item.tools || { profile: "default", allow: [], deny: [] }), profile: "default", deny: [] }
+                tools: data.tools || item.tools || { allow: [] }
               }
             : item
         )
@@ -742,8 +766,11 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     setSkillContents((current) => ({ ...current, [skillId]: content }));
   }
 
-  function updateAgentSkillIds(index, value) {
-    updateAgent(index, "skill_ids", value.split(/\s+/).map((item) => item.trim()).filter(Boolean));
+  function toggleAgentSkill(index, skillId) {
+    const current = config.agents[index].skill_ids || [];
+    updateAgent(index, "skill_ids", current.includes(skillId)
+      ? current.filter((id) => id !== skillId)
+      : [...current, skillId]);
   }
 
   function toggleSkillTool(index, toolId) {
@@ -753,7 +780,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         if (skillIndex !== index) {
           return skill;
         }
-        const tools = skill.tools || { profile: "default", allow: [], deny: [] };
+        const tools = skill.tools || { allow: [] };
         const allow = new Set(tools.allow || []);
         if (allow.has(toolId)) {
           allow.delete(toolId);
@@ -763,9 +790,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         return {
           ...skill,
           tools: {
-            ...tools,
-            allow: Array.from(allow),
-            deny: []
+            allow: Array.from(allow)
           }
         };
       })
@@ -782,7 +807,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         {
           id,
           name: id,
-          tools: { profile: "default", allow: [], deny: [] }
+          tools: { allow: [] }
         }
       ]
     }));
@@ -855,9 +880,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
               content,
               name: skillId,
               tools: {
-                ...((config.skills || []).find((skill) => skill.id === skillId)?.tools || { allow: [], deny: [] }),
-                profile: "default",
-                deny: []
+                allow: ((config.skills || []).find((skill) => skill.id === skillId)?.tools?.allow || [])
               },
               agent_id: skillAgentId(skillId) || null
             })
@@ -868,8 +891,6 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         method: "PUT",
         body: JSON.stringify({
           default_model_id: config.default_model_id || config.models?.[0]?.id || "",
-          common_skill_tools: config.common_skill_tools || [],
-          tools: config.tools || { profile: "default", allow: [], deny: [] },
           skills: (config.skills || []).map((skill) => ({
             id: skill.id,
             name: skill.id
@@ -927,7 +948,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                 aria-label="Agent"
                 value={agentId}
                 onChange={(event) => setAgentId(event.target.value)}
-                disabled={loading || !canChat}
+                disabled={loading || !canChat || sending}
               >
                 {(options?.agents || []).map((agent) => (
                   <option key={agent.id} value={agent.id}>
@@ -955,30 +976,16 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                 <div className="session-empty">暂无对话记录</div>
               ) : (
                 sessions.map((session) => (
-                  <button
+                  <div
                     key={session.id}
-                    type="button"
                     className={`session-item${activeSessionId === session.id ? " active" : ""}`}
-                    onClick={() => switchSession(session.id)}
                   >
-                    <span className="session-item-title">
-                      <MessageSquare size={14} />
-                      {session.title || "新对话"}
-                    </span>
-                    <span className="session-item-meta">
-                      <span>{session.message_count} 条消息</span>
-                      <button
-                        className="session-delete-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteSessionItem(session.id);
-                        }}
-                        title="删除对话"
-                      >
-                        <X size={12} />
-                      </button>
-                    </span>
-                  </button>
+                    <button className="session-item-open" onClick={() => switchSession(session.id)} disabled={sending}>
+                      <span className="session-item-title"><MessageSquare size={14} />{session.title || "新对话"}</span>
+                      <span className="session-item-meta"><span>{session.message_count} 条消息</span></span>
+                    </button>
+                    <button className="session-delete-btn" onClick={() => deleteSessionItem(session.id)} title="删除对话"><X size={12} /></button>
+                  </div>
                 ))
               )}
             </div>
@@ -1278,12 +1285,24 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                                 <textarea value={agent.system_prompt} onChange={(e) => updateAgent(index, "system_prompt", e.target.value)} />
                               </label>
                               {!agent.is_builtin ? (
-                                <>
-                                  <label className="agent-detail-field">
-                                    <span>Skill IDs</span>
-                                    <textarea placeholder="每行一个 skill id，如 common:xxx" value={(agent.skill_ids || []).join("\n")} onChange={(e) => updateAgentSkillIds(index, e.target.value)} />
-                                  </label>
-                                </>
+                                <div className="agent-detail-field">
+                                  <span>Skills（可选）</span>
+                                  <div className="agent-skill-picker">
+                                    {(config.skills || [])
+                                      .filter((skill) => skill.id.startsWith("common:") || (agent.skill_ids || []).includes(skill.id))
+                                      .map((skill) => (
+                                        <label key={skill.id} className={(agent.skill_ids || []).includes(skill.id) ? "selected" : ""}>
+                                          <input
+                                            type="checkbox"
+                                            checked={(agent.skill_ids || []).includes(skill.id)}
+                                            onChange={() => toggleAgentSkill(index, skill.id)}
+                                          />
+                                          <span>{skill.name || skill.id} ({skill.id})</span>
+                                        </label>
+                                      ))}
+                                    {(config.skills || []).length === 0 ? <small>暂无可选 Skill</small> : null}
+                                  </div>
+                                </div>
                               ) : null}
                             </div>
                           </td>
@@ -1351,7 +1370,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                 </div>
                 <div className="skill-library-stats">
                   <span>{config.agents.reduce((sum, agent) => sum + (agent.skill_ids || []).length, 0)} 次绑定</span>
-                  <span>{AGENT_TOOL_OPTIONS.length} 个工具项</span>
+                  <span>{toolDefinitions.length} 个工具项</span>
                 </div>
               </aside>
               {selectedSkill ? (
@@ -1366,7 +1385,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                     </div>
                     <div className="skill-editor-status">
                       {selectedSkill.is_builtin ? <span>内置</span> : <span>自定义</span>}
-                      <span>{selectedSkillAllow.length} tools</span>
+                          <span>{selectedSkillAllow.length} tools</span>
                     </div>
                     <div className="skill-editor-actions">
                       {!selectedSkill.is_builtin ? (
@@ -1441,38 +1460,48 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                         </label>
                         <div className="skill-tool-filter" aria-label="工具过滤">
                           <button className={skillToolFilter === "all" ? "active" : ""} onClick={() => setSkillToolFilter("all")}>全部</button>
-                          <button className={skillToolFilter === "selected" ? "active" : ""} onClick={() => setSkillToolFilter("selected")}>已选</button>
-                          <button className={skillToolFilter === "unselected" ? "active" : ""} onClick={() => setSkillToolFilter("unselected")}>未选</button>
+                          <button className={skillToolFilter === "mcp" ? "active" : ""} onClick={() => setSkillToolFilter("mcp")}>MCP</button>
+                          <button className={skillToolFilter === "dag" ? "active" : ""} onClick={() => setSkillToolFilter("dag")}>DAG</button>
+                          <button className={skillToolFilter === "agent" ? "active" : ""} onClick={() => setSkillToolFilter("agent")}>AGENT</button>
                         </div>
                       </div>
                       <div className="skill-tool-groups">
-                        {filteredSkillToolGroups.length ? (
-                          filteredSkillToolGroups.map(({ group, tools }) => (
-                            <div className="skill-tool-group" key={group}>
-                              <div className="skill-tool-group-title">
-                                <span>{group}</span>
-                              </div>
-                              <div className="skill-tool-list">
-                                {tools.map((tool) => {
-                                  const selected = selectedSkillAllow.includes(tool.id);
+                        {missingSkillTools.map((name) => (
+                          <label key={name} className="skill-tool-row selected unavailable">
+                            <input type="checkbox" checked onChange={() => toggleSkillTool(selectedSkillIndex, name)} />
+                            <span className="agent-tool-check"><X size={12} /></span>
+                            <span>能力不可用</span>
+                            <small>{name}</small>
+                          </label>
+                        ))}
+                        {toolDefinitionsError ? (
+                          <div className="skill-tool-empty">工具目录加载失败：{toolDefinitionsError}</div>
+                        ) : filteredSkillTools.length ? (
+                            <div className="skill-tool-list">
+                                {filteredSkillTools.map((tool) => {
+                                  const selected = selectedSkillAllow.includes(tool.name);
                                   return (
-                                    <label key={tool.id} className={`skill-tool-row${selected ? " selected" : ""}`}>
+                                    <label key={tool.name} className={`skill-tool-row${selected ? " selected" : ""}`}>
                                       <input
                                         type="checkbox"
                                         checked={selected}
-                                        onChange={() => toggleSkillTool(selectedSkillIndex, tool.id)}
+                                        onChange={() => toggleSkillTool(selectedSkillIndex, tool.name)}
                                       />
                                       <span className="agent-tool-check" aria-hidden="true">
                                         {selected ? <Check size={12} /> : null}
                                       </span>
-                                      <span>{tool.label}</span>
-                                      <small>{tool.id}</small>
+                                      <span>{tool.display_name}</span>
+                                      <small>{tool.name}</small>
+                                      <small>{tool.description}</small>
+                                      <span className="skill-tool-scenes">{(tool.support_scene || []).map((scene) => <em key={scene}>{scene.toUpperCase()}</em>)}</span>
+                                      <details className="skill-tool-schema">
+                                        <summary>Input / Output</summary>
+                                        <pre>{JSON.stringify({ input: tool.input, output: tool.output }, null, 2)}</pre>
+                                      </details>
                                     </label>
                                   );
                                 })}
-                              </div>
                             </div>
-                          ))
                         ) : (
                           <div className="skill-tool-empty">没有匹配的工具能力</div>
                         )}
@@ -2334,8 +2363,8 @@ function PortfolioPage({ onUnauthorized }) {
   async function loadPortfolioSessions() {
     setChatSessionLoading(true);
     try {
-      const data = await api("/api/sessions");
-      setChatSessions((data.sessions || []).filter((session) => session.agent_id === "ai-investment-advisor"));
+      const data = await api("/api/sessions?agent_id=ai-investment-advisor");
+      setChatSessions(data.sessions || []);
     } catch (err) {
       if (err.status === 401) { onUnauthorized(); return; }
     } finally {
@@ -2368,7 +2397,7 @@ function PortfolioPage({ onUnauthorized }) {
     setChatSessionLoading(true);
     setChatError("");
     try {
-      const data = await api(`/api/sessions/${sessionId}`);
+      const data = await api(`/api/sessions/${sessionId}?agent_id=ai-investment-advisor`);
       const session = data.session;
       setActiveChatSessionId(session.id);
       setChatMessages((session.messages || []).map((msg) => ({

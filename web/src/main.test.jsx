@@ -189,7 +189,7 @@ describe("LoginPage", () => {
     });
 
     expect(await screen.findByRole("button", { name: "多维批判" })).toHaveAttribute("aria-current", "page");
-    expect(await screen.findByRole("columnheader", { name: "核心假设" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "新建对话" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "多维批判" })).not.toBeInTheDocument();
   });
 
@@ -470,7 +470,6 @@ describe("LoginPage", () => {
             ok: true,
             json: async () => ({
               path: "/workspace/config.yaml",
-              common_skill_tools: ["list_skill", "read_skill"],
               default_model_id: "fast",
               default_agent_id: "assistant",
               models: [
@@ -524,7 +523,7 @@ describe("LoginPage", () => {
       ([path, options]) => path === "/api/agents/config" && options?.method === "PUT"
     );
     const payload = JSON.parse(saveCall[1].body);
-    expect(payload.common_skill_tools).toEqual(["list_skill", "read_skill"]);
+    expect(payload).not.toHaveProperty("common_skill_tools");
     expect(payload.agents[0].skill_ids).toEqual(["common:writing"]);
     expect(payload.models[0].mode).toBe("agent");
     expect(fetch).toHaveBeenCalledWith(
@@ -563,8 +562,23 @@ describe("LoginPage", () => {
             })
           };
         }
-        if (path === "/api/sessions") {
+        if (String(path).startsWith("/api/sessions?agent_id=")) {
           return { ok: true, json: async () => ({ sessions: [] }) };
+        }
+        if (path === "/api/agents/tools") {
+          return {
+            ok: true,
+            json: async () => ({
+              tools: [{
+                name: "list_portfolio_holdings",
+                display_name: "查看持仓",
+                description: "查看当前投资持仓。",
+                input: { type: "object", properties: {} },
+                output: { type: "array", items: { type: "object" } },
+                support_scene: ["agent", "mcp"]
+              }]
+            })
+          };
         }
         if (path === "/api/agents/config") {
           if (options?.method === "PUT") {
@@ -574,9 +588,10 @@ describe("LoginPage", () => {
             ok: true,
             json: async () => ({
               path: "/workspace/config.yaml",
-              common_skill_tools: [],
-              tools: { profile: "default", allow: [], deny: [] },
-              skills: [],
+              skills: [
+                { id: "common:research", name: "研究", tools: { allow: [] } },
+                { id: "common:writing", name: "写作", tools: { allow: [] } }
+              ],
               default_model_id: "fast",
               default_agent_id: "agent-1",
               models: [{ id: "fast", name: "快速模型", base_url: "", model: "fast-chat", temperature: 0.2, supports_images: false }],
@@ -604,6 +619,9 @@ describe("LoginPage", () => {
     const nameInput = screen.getByDisplayValue("Second");
     await user.clear(nameInput);
     await user.type(nameInput, "Renamed Agent");
+    await user.click(screen.getAllByTitle("展开")[1]);
+    expect(screen.queryByText("Skill IDs")).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText("研究 (common:research)"));
     await user.click(screen.getByRole("button", { name: /^保存$/ }));
 
     const saveCall = fetch.mock.calls.find(
@@ -612,7 +630,8 @@ describe("LoginPage", () => {
     const payload = JSON.parse(saveCall[1].body);
     expect(payload.agents[1]).toMatchObject({
       id: "agent-renamed",
-      name: "Renamed Agent"
+      name: "Renamed Agent",
+      skill_ids: ["common:research"]
     });
   });
 
@@ -643,8 +662,23 @@ describe("LoginPage", () => {
             })
           };
         }
-        if (path === "/api/sessions") {
+        if (String(path).startsWith("/api/sessions?agent_id=")) {
           return { ok: true, json: async () => ({ sessions: [] }) };
+        }
+        if (path === "/api/agents/tools") {
+          return {
+            ok: true,
+            json: async () => ({
+              tools: [{
+                name: "list_portfolio_holdings",
+                display_name: "查看持仓",
+                description: "查看当前投资持仓。",
+                input: { type: "object", properties: {} },
+                output: { type: "array", items: { type: "object" } },
+                support_scene: ["agent", "mcp"]
+              }]
+            })
+          };
         }
         if (path === "/api/agents/config") {
           if (options?.method === "PUT") {
@@ -654,8 +688,6 @@ describe("LoginPage", () => {
             ok: true,
             json: async () => ({
               path: "/workspace/config.yaml",
-              common_skill_tools: [],
-              tools: { profile: "default", allow: [], deny: [] },
               skills: [],
               default_model_id: "fast",
               default_agent_id: "agent-1",
@@ -728,8 +760,6 @@ describe("LoginPage", () => {
             ok: true,
             json: async () => ({
               path: "/workspace/config.yaml",
-              common_skill_tools: [],
-              tools: { profile: "default", allow: [], deny: [] },
               skills: [],
               default_model_id: "fast",
               default_agent_id: "agent-1",
@@ -830,6 +860,51 @@ describe("LoginPage", () => {
     expect(select).toHaveValue("wife-agent");
   });
 
+  it("isolates conversation history when switching Agents", async () => {
+    document.body.innerHTML = '<div id="root"></div>';
+    window.history.replaceState({}, "", "/agents");
+    class ClosedWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      constructor() { setTimeout(() => this.onclose?.(), 0); }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", ClosedWebSocket);
+    vi.stubGlobal("fetch", vi.fn(async (path) => {
+      if (path === "/api/auth/me") return { ok: true, json: async () => ({ authenticated: true }) };
+      if (path === "/api/agents/options") return {
+        ok: true,
+        json: async () => ({ agents: [
+          { id: "agent-a", name: "Agent A", model: { name: "Model", has_api_key: true } },
+          { id: "agent-b", name: "Agent B", model: { name: "Model", has_api_key: true } }
+        ] })
+      };
+      if (path === "/api/agents/config") return {
+        ok: true,
+        json: async () => ({ path: "/workspace/config.yaml", skills: [], models: [], agents: [] })
+      };
+      if (path === "/api/agents/tools") return { ok: true, json: async () => ({ tools: [] }) };
+      if (path === "/api/sessions?agent_id=agent-a") return {
+        ok: true,
+        json: async () => ({ sessions: [{ id: "a-1", agent_id: "agent-a", title: "Agent A session", message_count: 1 }] })
+      };
+      if (path === "/api/sessions?agent_id=agent-b") return {
+        ok: true,
+        json: async () => ({ sessions: [{ id: "b-1", agent_id: "agent-b", title: "Agent B session", message_count: 2 }] })
+      };
+      return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
+    }));
+
+    const user = userEvent.setup();
+    vi.resetModules();
+    await act(async () => { await import("./main.jsx"); });
+
+    expect(await screen.findByText("Agent A session")).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Agent"), "agent-b");
+    expect(await screen.findByText("Agent B session")).toBeInTheDocument();
+    expect(screen.queryByText("Agent A session")).not.toBeInTheDocument();
+  });
+
   it("selects tools from the Skill management tab", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/agents");
@@ -857,8 +932,21 @@ describe("LoginPage", () => {
             })
           };
         }
-        if (path === "/api/sessions") {
+        if (String(path).startsWith("/api/sessions?agent_id=")) {
           return { ok: true, json: async () => ({ sessions: [] }) };
+        }
+        if (path === "/api/agents/tools") {
+          return {
+            ok: true,
+            json: async () => ({ tools: [{
+              name: "list_portfolio_holdings",
+              display_name: "查看持仓",
+              description: "查看当前投资持仓。",
+              input: { type: "object", properties: {} },
+              output: { type: "array", items: { type: "object" } },
+              support_scene: ["agent", "mcp"]
+            }] })
+          };
         }
         if (path === "/api/agents/config") {
           if (options?.method === "PUT") {
@@ -868,12 +956,10 @@ describe("LoginPage", () => {
             ok: true,
             json: async () => ({
               path: "/workspace/config.yaml",
-              common_skill_tools: [],
-              tools: { profile: "default", allow: [], deny: [] },
               skills: [{
                 id: "common:research",
                 name: "研究",
-                tools: { profile: "default", allow: [], deny: [] }
+                tools: { allow: [] }
               }],
               default_model_id: "fast",
               default_agent_id: "assistant",
@@ -892,7 +978,7 @@ describe("LoginPage", () => {
           if (options?.method === "PUT") {
             return { ok: true, json: async () => ({ ok: true }) };
           }
-          return { ok: true, json: async () => ({ id: "common:research", content: "# 研究\n旧内容" }) };
+          return { ok: true, json: async () => ({ id: "common:research", content: "# 研究\n旧内容", tools: { allow: [] } }) };
         }
         return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
       })
@@ -907,6 +993,8 @@ describe("LoginPage", () => {
     await user.click(await screen.findByRole("button", { name: /Skill 管理/ }));
     expect(await screen.findByText("Skill 文件")).toBeInTheDocument();
     expect(screen.queryByText(/禁用工具/)).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith("/api/agents/tools", expect.anything());
+    expect(screen.getByRole("button", { name: "MCP" })).toBeInTheDocument();
     const markdownEditor = await screen.findByLabelText(/Markdown 内容/);
     await waitFor(() => expect(markdownEditor).toHaveValue("# 研究\n旧内容"));
     await user.clear(markdownEditor);
@@ -927,7 +1015,7 @@ describe("LoginPage", () => {
       id: "common:research",
       content: "# 研究\n新内容",
       name: "common:research",
-      tools: { profile: "default", allow: ["list_portfolio_holdings"], deny: [] },
+      tools: { allow: ["list_portfolio_holdings"] },
       agent_id: null
     });
   });

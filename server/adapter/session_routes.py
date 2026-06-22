@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
@@ -60,8 +60,8 @@ def create_session_router(container: AppContainer) -> APIRouter:
         return router
 
     @router.get("", dependencies=[Depends(require_auth)])
-    def list_sessions() -> dict:
-        sessions = service.list_sessions()
+    def list_sessions(agent_id: str = Query(...)) -> dict:
+        sessions = service.list_sessions(agent_id)
         return {"sessions": [_summary_to_response(s) for s in sessions]}
 
     @router.post("", dependencies=[Depends(require_auth)])
@@ -78,27 +78,29 @@ def create_session_router(container: AppContainer) -> APIRouter:
         return {"session": _session_to_response(session)}
 
     @router.get("/{session_id}", dependencies=[Depends(require_auth)])
-    def get_session(session_id: str) -> dict:
+    def get_session(session_id: str, agent_id: str = Query(...)) -> dict:
         try:
-            session = service.get_session(session_id)
+            session = service.get_session(session_id, agent_id)
         except ChatSessionNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
         return {"session": _session_to_response(session)}
 
     @router.put("/{session_id}", dependencies=[Depends(require_auth)])
-    def update_session(session_id: str, payload: UpdateSessionPayload) -> dict:
+    def update_session(session_id: str, payload: UpdateSessionPayload, agent_id: str = Query(...)) -> dict:
         try:
+            service.get_session(session_id, agent_id)
             if payload.title is not None:
                 session = service.update_title(session_id, payload.title)
             else:
-                session = service.get_session(session_id)
+                session = service.get_session(session_id, agent_id)
         except ChatSessionNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
         return {"session": _session_to_response(session)}
 
     @router.delete("/{session_id}", dependencies=[Depends(require_auth)])
-    def delete_session(session_id: str) -> dict:
+    def delete_session(session_id: str, agent_id: str = Query(...)) -> dict:
         try:
+            service.get_session(session_id, agent_id)
             service.delete_session(session_id)
         except ChatSessionNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))

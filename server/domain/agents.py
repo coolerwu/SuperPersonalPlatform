@@ -8,16 +8,6 @@ class AgentConfigError(ValueError):
 
 
 SUPPORTED_PROVIDERS = {"openai_compatible", "anthropic"}
-SUPPORTED_COMMON_SKILL_TOOLS = {"list_skill", "read_skill"}
-SUPPORTED_TOOL_PROFILES = {"default", "portfolio"}
-SUPPORTED_AGENT_TOOLS = {
-    "list_skill",
-    "read_skill",
-    "list_portfolio_holdings",
-    "add_portfolio_holding",
-    "update_portfolio_holding",
-    "delete_portfolio_holding",
-}
 SKILL_ID_PATTERN = re.compile(r"^(common|private):[A-Za-z0-9_-]+$")
 
 
@@ -28,16 +18,7 @@ class HarnessMode(StrEnum):
 
 @dataclass(frozen=True)
 class ToolAccessDefinition:
-    profile: str = "default"
     allow: tuple[str, ...] = ()
-    deny: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        if self.profile not in SUPPORTED_TOOL_PROFILES:
-            raise AgentConfigError(f"tools.profile is unsupported: {self.profile}")
-        for tool_id in (*self.allow, *self.deny):
-            if tool_id not in SUPPORTED_AGENT_TOOLS:
-                raise AgentConfigError(f"tools contains unsupported tool: {tool_id}")
 
 
 @dataclass(frozen=True)
@@ -81,7 +62,6 @@ class AgentDefinition:
     system_prompt: str
     model_id: str | None = None
     skill_ids: tuple[str, ...] = ()
-    tools: ToolAccessDefinition | None = None
 
     def __post_init__(self) -> None:
         if not self.id.strip():
@@ -114,27 +94,17 @@ class AgentPlatformDefinition:
     default_model_id: str
     agents: tuple[AgentDefinition, ...]
     skill_definitions: tuple[SkillDefinition, ...] = ()
-    common_skill_tools: tuple[str, ...] = ()
-    tools: ToolAccessDefinition = ToolAccessDefinition()
 
     def __post_init__(self) -> None:
         model_ids = {model.id for model in self.models}
         agent_ids = {agent.id for agent in self.agents}
         skill_ids = {skill.id for skill in self.skill_definitions}
-        tool_ids = set(self.common_skill_tools)
         if len(model_ids) != len(self.models):
             raise AgentConfigError("llm.models[].id must be unique")
         if len(agent_ids) != len(self.agents):
             raise AgentConfigError("agents.definitions[].id must be unique")
         if len(skill_ids) != len(self.skill_definitions):
             raise AgentConfigError("skills.definitions[].id must be unique")
-        if len(tool_ids) != len(self.common_skill_tools):
-            raise AgentConfigError("common_skills.tools must be unique")
-        unsupported_tools = tool_ids - SUPPORTED_COMMON_SKILL_TOOLS
-        if unsupported_tools:
-            raise AgentConfigError(
-                f"common_skills.tools contains unsupported tool: {sorted(unsupported_tools)[0]}"
-            )
         if self.models and self.default_model_id not in model_ids:
             raise AgentConfigError("llm.default_model_id must reference an existing model")
         for agent in self.agents:

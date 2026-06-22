@@ -84,6 +84,10 @@ class AgentSkillService:
             tools=self._parse_tool_access(metadata.get("tools")),
         )
 
+    def workspace_skill_exists(self, skill_id: str, agent_id: str | None = None) -> bool:
+        path = self._workspace_skill_path(skill_id, agent_id)
+        return path.exists() and path.is_file()
+
     def write_workspace_skill(
         self,
         skill_id: str,
@@ -100,9 +104,7 @@ class AgentSkillService:
         metadata: dict[str, Any] = {}
         if tools is not None:
             metadata["tools"] = {
-                "profile": tools.profile,
                 "allow": list(tools.allow),
-                "deny": list(tools.deny),
             }
         path.write_text(self._join_frontmatter(metadata, content), encoding="utf-8")
         return path
@@ -188,15 +190,15 @@ class AgentSkillService:
         if not isinstance(raw, dict):
             raise AgentConfigError("Skill frontmatter tools must be an object")
         allow_raw = raw.get("allow") or []
-        deny_raw = raw.get("deny") or []
+        unsupported = set(raw) - {"allow"}
+        if unsupported:
+            raise AgentConfigError(
+                f"legacy Skill frontmatter tools.{sorted(unsupported)[0]} is not supported"
+            )
         if not isinstance(allow_raw, list):
             raise AgentConfigError("Skill frontmatter tools.allow must be a list")
-        if not isinstance(deny_raw, list):
-            raise AgentConfigError("Skill frontmatter tools.deny must be a list")
         return ToolAccessDefinition(
-            profile=str(raw.get("profile") or "default").strip() or "default",
             allow=tuple(str(tool).strip() for tool in allow_raw if str(tool).strip()),
-            deny=tuple(str(tool).strip() for tool in deny_raw if str(tool).strip()),
         )
 
 

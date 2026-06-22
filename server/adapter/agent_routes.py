@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from fastapi import (
     APIRouter,
     Depends,
@@ -24,12 +24,16 @@ from server.domain.sessions import ChatImageData, ChatMessageData
 SUPPORTED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
 
-class AgentChatImagePayload(BaseModel):
+class StrictPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class AgentChatImagePayload(StrictPayload):
     mime_type: str
     data: str
 
 
-class AgentChatMessage(BaseModel):
+class AgentChatMessage(StrictPayload):
     type: str
     agent_id: str | None = None
     content: str | None = None
@@ -37,7 +41,7 @@ class AgentChatMessage(BaseModel):
     session_id: str | None = None
 
 
-class AgentModelConfigPayload(BaseModel):
+class AgentModelConfigPayload(StrictPayload):
     id: str
     name: str
     base_url: str
@@ -48,22 +52,21 @@ class AgentModelConfigPayload(BaseModel):
     mode: str = "prompt"
 
 
-class AgentDefinitionConfigPayload(BaseModel):
+class AgentDefinitionConfigPayload(StrictPayload):
     id: str
     name: str
     model_id: str
     system_prompt: str
     skill_ids: list[str] | None = None
-    tools: dict[str, object] | None = None
 
 
-class SkillDefinitionConfigPayload(BaseModel):
+class SkillDefinitionConfigPayload(StrictPayload):
     id: str
     name: str = ""
     tools: dict[str, object] | None = None
 
 
-class SkillContentPayload(BaseModel):
+class SkillContentPayload(StrictPayload):
     id: str
     content: str
     name: str = ""
@@ -71,10 +74,8 @@ class SkillContentPayload(BaseModel):
     agent_id: str | None = None
 
 
-class AgentConfigUpdatePayload(BaseModel):
+class AgentConfigUpdatePayload(StrictPayload):
     default_model_id: str
-    common_skill_tools: list[str] | None = None
-    tools: dict[str, object] | None = None
     skills: list[SkillDefinitionConfigPayload] | None = None
     models: list[AgentModelConfigPayload]
     agents: list[AgentDefinitionConfigPayload]
@@ -132,20 +133,12 @@ def create_agent_router(container: AppContainer) -> APIRouter:
         return {
             "path": snapshot.path,
             "default_model_id": snapshot.default_model_id,
-            "common_skill_tools": list(snapshot.common_skill_tools),
-            "tools": {
-                "profile": snapshot.tools_profile,
-                "allow": list(snapshot.tools_allow),
-                "deny": list(snapshot.tools_deny),
-            },
             "skills": [
                 {
                     "id": skill.id,
                     "name": skill.name,
                     "tools": {
-                        "profile": skill.tools_profile,
                         "allow": list(skill.tools_allow),
-                        "deny": list(skill.tools_deny),
                     },
                     "is_builtin": skill.is_builtin,
                 }
@@ -177,6 +170,10 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                 for agent in snapshot.agents
             ],
         }
+
+    @router.get("/tools", dependencies=[Depends(require_agent_auth)])
+    def tools() -> dict[str, object]:
+        return {"tools": list(_agent_service(container).tool_definitions())}
 
     @router.put("/config", dependencies=[Depends(require_agent_auth)])
     def update_config(payload: AgentConfigUpdatePayload) -> dict[str, str | bool]:
@@ -258,6 +255,16 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                 if not (payload.content or "").strip() and not images:
                     await websocket.send_json({"type": "error", "message": "消息内容不能为空"})
                     continue
+
+                if payload.session_id and container.chat_session_service is not None:
+                    try:
+                        container.chat_session_service.get_session(
+                            payload.session_id,
+                            (payload.agent_id or "").strip(),
+                        )
+                    except Exception as exc:
+                        await websocket.send_json({"type": "error", "message": str(exc)})
+                        continue
 
                 await websocket.send_json({"type": "status", "status": "running"})
                 try:

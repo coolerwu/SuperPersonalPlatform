@@ -55,13 +55,26 @@ class CritiqueJudgment:
 
 
 @dataclass(frozen=True)
+class CritiqueTurn:
+    id: str
+    question: str
+    results: tuple[CritiqueDisciplineResult, ...]
+    judgment: CritiqueJudgment | None
+    status: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class CritiqueRun:
     id: str
+    title: str
     question: str
     model_id: str
     disciplines: tuple[CritiqueDiscipline, ...]
     results: tuple[CritiqueDisciplineResult, ...]
     judgment: CritiqueJudgment | None
+    turns: tuple[CritiqueTurn, ...]
     status: str
     created_at: str
     updated_at: str
