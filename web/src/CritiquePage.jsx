@@ -314,7 +314,7 @@ export function CritiquePage({ onUnauthorized }) {
           <History size={15} />运行历史<span className="toolbar-count">{runs.length}</span>
         </button>
         <span>{selectedIds.size}/{disciplines.length} 个学科参与</span>
-        <span className={`terminal-status ${connection === "connected" ? "connected" : ""}`}>
+        <span className={`runtime-status ${connection === "connected" ? "connected" : ""}`}>
           {connection === "connected" ? "已连接" : "未连接"}
         </span>
         <button type="button" className="secondary-button" onClick={() => setLibraryOpen((value) => !value)}>

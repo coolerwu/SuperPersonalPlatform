@@ -9,8 +9,6 @@ from server.app.portfolio_service import PortfolioService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
-from server.app.self_dev_service import SelfDevService
-from server.app.job_service import JobService
 from server.app.wechat_channel_manager import WechatChannelManager
 from server.infrastructure.session import SessionCodec
 
@@ -26,7 +24,5 @@ class AppContainer:
     agent_chat_service: AgentChatService | None = None
     chat_session_service: ChatSessionService | None = None
     portfolio_service: PortfolioService | None = None
-    job_service: JobService | None = None
-    self_dev_service: SelfDevService | None = None
     wechat_channel_manager: WechatChannelManager | None = None
     critique_service: CritiqueService | None = None

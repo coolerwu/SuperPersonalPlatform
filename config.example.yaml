@@ -26,8 +26,7 @@ tools:
   allow: []
   deny: []
 skills:
-  definitions:
-    - id: "common:self-dev"
+  definitions: []
 channels:
   wechat_personal:
     enabled: true

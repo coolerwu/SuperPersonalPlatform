@@ -1,8 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
 import {
   ArrowRight,
   BrainCircuit,
@@ -14,22 +11,15 @@ import {
   Circle,
   Clock,
   Cpu,
-  Code2,
-  Eye,
   FileCode,
   FileEdit,
-  FileMinus,
-  FilePlus,
   FileText,
-  GitBranch,
-  HelpCircle,
   Home,
   Image as ImageIcon,
   List,
   Loader2,
   LogOut,
   MessageSquare,
-  PauseCircle,
   Play,
   PlugZap,
   Plus,
@@ -40,8 +30,6 @@ import {
   Send,
   Settings,
   ShieldCheck,
-  Terminal as TerminalIcon,
-  TerminalSquare,
   Trash2,
   TrendingUp,
   User,
@@ -54,20 +42,12 @@ import "./styles.css";
 const AGENT_TOOL_OPTIONS = [
   { id: "list_skill", label: "列出 Skill", group: "Skills" },
   { id: "read_skill", label: "读取 Skill", group: "Skills" },
-  { id: "repo_search", label: "仓库搜索", group: "自开发" },
-  { id: "repo_read_file", label: "读取文件", group: "自开发" },
-  { id: "repo_write_file", label: "写入文件", group: "自开发" },
-  { id: "repo_run_command", label: "运行命令", group: "自开发" },
-  { id: "repo_status", label: "Git 状态", group: "自开发" },
-  { id: "repo_diff", label: "Git Diff", group: "自开发" },
-  { id: "repo_commit", label: "Git 提交", group: "自开发" },
-  { id: "repo_push", label: "Git 推送", group: "自开发" },
   { id: "list_portfolio_holdings", label: "查看持仓", group: "资产组合" },
   { id: "add_portfolio_holding", label: "添加持仓", group: "资产组合" },
   { id: "update_portfolio_holding", label: "修改持仓", group: "资产组合" },
   { id: "delete_portfolio_holding", label: "删除持仓", group: "资产组合" }
 ];
-const AGENT_TOOL_GROUPS = ["Skills", "自开发", "资产组合"];
+const AGENT_TOOL_GROUPS = ["Skills", "资产组合"];
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -144,20 +124,6 @@ function HomePage({ onNavigate }) {
       title: "Agent 对话",
       desc: "处理问题、上传截图、跟进上下文。",
       meta: "默认入口"
-    },
-    {
-      path: "/self-dev",
-      icon: Code2,
-      title: "自开发",
-      desc: "创建任务、查看变更、审查推送。",
-      meta: "任务队列"
-    },
-    {
-      path: "/terminal",
-      icon: TerminalSquare,
-      title: "终端",
-      desc: "认证 PTY，会话不落盘。",
-      meta: "本机命令"
     }
   ];
   const secondaryItems = [
@@ -182,7 +148,7 @@ function HomePage({ onNavigate }) {
       <div className="home-hero">
         <span>Workspace</span>
         <h2>控制台</h2>
-        <p>超级个人平台统一控制台，管理 Agent、终端、渠道与系统配置。</p>
+        <p>超级个人平台统一控制台，管理 Agent、渠道与系统配置。</p>
       </div>
 
       <div className="home-status-strip" aria-label="运行状态">
@@ -614,6 +580,8 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   }, [messages]);
 
   const selectedAgent = options?.agents?.find((agent) => agent.id === agentId);
+  const selectedAgentConfig = config?.agents?.find((agent) => agent.id === agentId);
+  const selectedAgentSkills = selectedAgentConfig?.skill_ids || [];
   const canChat = Boolean(options?.agents?.length);
   const blocked = !loading && (!canChat || !selectedAgent?.model || !selectedAgent?.model?.has_api_key);
   const quickPrompts = [
@@ -926,24 +894,26 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
 
   return (
     <section className={`page-section agent-section${activeTab === "agents" || activeTab === "skills" || activeTab === "models" ? " agent-section-config" : ""}`}>
-      <div className="tab-bar" role="tablist" aria-label="Agent">
-        <button className={activeTab === "chat" ? "active" : ""} onClick={() => setActiveTab("chat")}>
+      <nav className="agent-mode-rail" aria-label="Agent 工作区">
+        <div className="agent-mode-mark"><Bot size={18} /></div>
+        <button type="button" className={activeTab === "chat" ? "active" : ""} aria-current={activeTab === "chat" ? "page" : undefined} onClick={() => setActiveTab("chat")}>
           <Bot size={16} />
-          对话
+          <span>对话</span>
         </button>
-        <button className={activeTab === "agents" ? "active" : ""} onClick={() => setActiveTab("agents")}>
+        <button type="button" className={activeTab === "agents" ? "active" : ""} aria-current={activeTab === "agents" ? "page" : undefined} onClick={() => setActiveTab("agents")}>
           <List size={16} />
-          Agent 管理
+          <span>Agent 管理</span>
         </button>
-        <button className={activeTab === "skills" ? "active" : ""} onClick={() => setActiveTab("skills")}>
+        <button type="button" className={activeTab === "skills" ? "active" : ""} aria-current={activeTab === "skills" ? "page" : undefined} onClick={() => setActiveTab("skills")}>
           <FileText size={16} />
-          Skill 管理
+          <span>Skill 管理</span>
         </button>
-        <button className={activeTab === "models" ? "active" : ""} onClick={() => setActiveTab("models")}>
+        <button type="button" className={activeTab === "models" ? "active" : ""} aria-current={activeTab === "models" ? "page" : undefined} onClick={() => setActiveTab("models")}>
           <Cpu size={16} />
-          模型配置
+          <span>模型配置</span>
         </button>
-      </div>
+      </nav>
+      <div className="agent-command-stage">
       {activeTab === "chat" ? (
         <div className="agent-chat-shell ai-chat-workspace">
           <aside className="ai-chat-sidebar">
@@ -1019,7 +989,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
               )}
             </div>
             <div className="ai-agent-health">
-              <span className={`terminal-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
+              <span className={`runtime-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
                 {connectionLabel}
               </span>
               <button className="secondary-button" onClick={connect} disabled={status === "connected" || loading}>
@@ -1038,7 +1008,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                 </span>
               </div>
               <div className="ai-chat-badges">
-                <span className={`terminal-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
+                <span className={`runtime-status ${status === "connected" || status === "running" ? "connected" : ""}`}>
                   {connectionLabel}
                 </span>
                 {selectedAgent?.model?.has_api_key ? <span>key ready</span> : <span>key missing</span>}
@@ -1187,6 +1157,44 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
               </div>
             </div>
           </main>
+          <aside className="agent-runtime-inspector" aria-label="Agent 运行信息">
+            <div className="runtime-inspector-heading">
+              <span>运行信息</span>
+              <span className={`ai-agent-dot ${status === "connected" || status === "running" ? "online" : ""}`} />
+            </div>
+            <div className="runtime-agent-identity">
+              <span className="ai-agent-orb"><Bot size={18} /></span>
+              <div>
+                <strong>{selectedAgent?.name || "未选择 Agent"}</strong>
+                <small>{connectionLabel}</small>
+              </div>
+            </div>
+            <section className="runtime-inspector-section">
+              <span>绑定模型</span>
+              <strong>{selectedAgent?.model?.name || "未配置"}</strong>
+              <small>{selectedAgent?.model?.model || "等待模型配置"}</small>
+            </section>
+            <section className="runtime-inspector-section">
+              <div className="runtime-inspector-row">
+                <span>Skills</span>
+                <strong>{selectedAgentSkills.length}</strong>
+              </div>
+              {selectedAgentSkills.length ? (
+                <div className="runtime-skill-list">
+                  {selectedAgentSkills.slice(0, 5).map((skillId) => <span key={skillId}>{skillId}</span>)}
+                </div>
+              ) : <small>当前 Agent 未绑定 Skill</small>}
+            </section>
+            <section className="runtime-inspector-section runtime-readiness">
+              <div><CheckCircle size={14} /><span>连接状态</span><strong>{connectionLabel}</strong></div>
+              <div><Cpu size={14} /><span>API Key</span><strong>{selectedAgent?.model?.has_api_key ? "就绪" : "缺失"}</strong></div>
+              <div><ImageIcon size={14} /><span>输入能力</span><strong>{modelCapabilityLabel}</strong></div>
+            </section>
+            <button className="secondary-button runtime-reconnect" onClick={connect} disabled={status === "connected" || loading}>
+              <PlugZap size={15} />
+              重新连接
+            </button>
+          </aside>
         </div>
       ) : null}
       {activeTab === "agents" ? (
@@ -1590,6 +1598,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
           )}
         </div>
       ) : null}
+      </div>
     </section>
   );
 }
@@ -1886,986 +1895,7 @@ function SystemPage({ onUnauthorized }) {
   );
 }
 
-function SelfDevPage({ onUnauthorized }) {
-  const [agents, setAgents] = useState([]);
-  const [agentId, setAgentId] = useState("");
-  const [goal, setGoal] = useState("");
-  const [repoUrl, setRepoUrl] = useState("https://github.com/coolerwu/SuperPersonalPlatform.git");
-  const [tasks, setTasks] = useState([]);
-  const [selectedTask, setSelectedTask] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState("");
-  const [reviewNote, setReviewNote] = useState("");
-  const [taskChatInput, setTaskChatInput] = useState("");
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [taskTab, setTaskTab] = useState("chat");
-
-  const taskActions = useMemo(() => ({
-    createAndRun: {
-      requireTask: false,
-      run: async () => {
-        const created = await api("/api/self-dev/tasks", {
-          method: "POST",
-          body: JSON.stringify({ goal, agent_id: agentId, repo_url: repoUrl })
-        });
-        const runData = await api(`/api/self-dev/tasks/${created.task.id}/run`, {
-          method: "POST",
-          body: JSON.stringify({ instruction: goal })
-        });
-        setGoal("");
-        return runData.task;
-      }
-    },
-    chat: {
-      requireTask: true,
-      run: async (task) => {
-        const data = await api(`/api/self-dev/tasks/${task.id}/run`, {
-          method: "POST",
-          body: JSON.stringify({ instruction: taskChatInput })
-        });
-        setTaskChatInput("");
-        return data.task;
-      }
-    },
-    accept: {
-      requireTask: true,
-      run: async (task) => {
-        const data = await api(`/api/self-dev/tasks/${task.id}/accept`, {
-          method: "POST",
-          body: JSON.stringify({ note: reviewNote })
-        });
-        setReviewNote("");
-        return data.task;
-      }
-    },
-    reject: {
-      requireTask: true,
-      run: async (task) => {
-        const data = await api(`/api/self-dev/tasks/${task.id}/reject`, {
-          method: "POST",
-          body: JSON.stringify({ reason: reviewNote })
-        });
-        setReviewNote("");
-        return data.task;
-      }
-    },
-    cancel: {
-      requireTask: true,
-      run: async (task) => {
-        const data = await api(`/api/self-dev/tasks/${task.id}/cancel`, {
-          method: "POST",
-          body: JSON.stringify({ reason: "user cancelled from UI" })
-        });
-        return data.task;
-      }
-    }
-  }), [agentId, goal, repoUrl, reviewNote, taskChatInput]);
-
-  function statusLabel(value) {
-    return {
-      created: "已创建",
-      running: "运行中",
-      needs_review: "待确认",
-      pushed: "已 Push",
-      accepted: "已接受",
-      cancelled: "已终止",
-      failed: "失败"
-    }[value] || value || "未选择任务";
-  }
-
-  function statusColor(value) {
-    return {
-      created: "var(--text-muted)",
-      running: "var(--primary)",
-      needs_review: "var(--warning)",
-      pushed: "var(--success)",
-      accepted: "var(--success)",
-      cancelled: "var(--text-muted)",
-      failed: "var(--danger)"
-    }[value] || "var(--text-muted)";
-  }
-
-  function statusIcon(value) {
-    return {
-      created: Circle,
-      running: Loader2,
-      needs_review: Eye,
-      pushed: GitBranch,
-      accepted: CheckCircle,
-      cancelled: XCircle,
-      failed: XCircle
-    }[value] || Circle;
-  }
-
-  function handleApiError(err) {
-    if (err.status === 401 || err.message === "Authentication required") {
-      onUnauthorized();
-      return true;
-    }
-    setError(err.message);
-    return false;
-  }
-
-  async function loadSelfDev() {
-    setLoading(true);
-    setError("");
-    try {
-      const [options, taskList] = await Promise.all([
-        api("/api/agents/options"),
-        api("/api/self-dev/tasks")
-      ]);
-      setAgents(options.agents || []);
-      setAgentId((current) => current || options.agents?.[0]?.id || "");
-      setTasks(taskList.tasks || []);
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function refreshTask(taskId = selectedTask?.id) {
-    if (!taskId) return;
-    try {
-      const data = await api(`/api/self-dev/tasks/${taskId}`);
-      setSelectedTask(data.task);
-      setSelectedFile(null);
-      setTaskTab((current) => current || "chat");
-      return data.task;
-    } catch (err) {
-      handleApiError(err);
-    }
-  }
-
-  async function performTaskAction(actionName) {
-    const action = taskActions[actionName];
-    if (!action) return;
-    if (action.requireTask && !selectedTask?.id) return;
-    setRunning(true);
-    setError("");
-    try {
-      const nextTask = await action.run(selectedTask);
-      if (nextTask) {
-        setSelectedTask(nextTask);
-        await refreshTask(nextTask.id);
-      }
-      await loadSelfDev();
-    } catch (err) {
-      handleApiError(err);
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  useEffect(() => {
-    loadSelfDev();
-  }, []);
-
-  useEffect(() => {
-    if (selectedTask?.status === "running") {
-      const interval = setInterval(() => {
-        refreshTask(selectedTask.id);
-      }, 3000);
-      return () => clearInterval(interval);
-    }
-  }, [selectedTask?.status, selectedTask?.id]);
-
-  function formatTime(isoString) {
-    if (!isoString) return "";
-    const date = new Date(isoString);
-    const now = new Date();
-    const diff = (now - date) / 1000;
-    if (diff < 60) return "刚刚";
-    if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`;
-    return date.toLocaleDateString("zh-CN");
-  }
-
-  function formatDuration(start, end) {
-    if (!start) return "未知";
-    const startedAt = new Date(start).getTime();
-    const endedAt = end ? new Date(end).getTime() : Date.now();
-    if (Number.isNaN(startedAt) || Number.isNaN(endedAt)) return "未知";
-    const totalSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    if (minutes < 1) return `${seconds} 秒`;
-    return `${minutes} 分 ${seconds} 秒`;
-  }
-
-  function parseDiffToFiles(diff) {
-    if (!diff) return [];
-    const files = [];
-    const lines = diff.split("\n");
-    let currentFile = null;
-    let currentContent = [];
-    
-    for (const line of lines) {
-      if (line.startsWith("diff --git")) {
-        if (currentFile) {
-          currentFile.content = currentContent.join("\n");
-          files.push(currentFile);
-        }
-        const match = line.match(/diff --git a\/(.+) b\/(.+)/);
-        if (match) {
-          currentFile = { path: match[2], status: "modified", additions: 0, deletions: 0, content: "" };
-          currentContent = [];
-        }
-      } else if (line.startsWith("new file")) {
-        if (currentFile) currentFile.status = "added";
-      } else if (line.startsWith("deleted file")) {
-        if (currentFile) currentFile.status = "deleted";
-      } else if (line.startsWith("+") && !line.startsWith("+++")) {
-        if (currentFile) currentFile.additions++;
-      } else if (line.startsWith("-") && !line.startsWith("---")) {
-        if (currentFile) currentFile.deletions++;
-      }
-      if (currentFile) currentContent.push(line);
-    }
-    if (currentFile) {
-      currentFile.content = currentContent.join("\n");
-      files.push(currentFile);
-    }
-    return files;
-  }
-
-  function parseEvents(events) {
-    if (!events || !Array.isArray(events)) return [];
-    return events.map(e => {
-      try {
-        return typeof e === "string" ? JSON.parse(e) : e;
-      } catch {
-        return { type: "unknown", content: String(e) };
-      }
-    });
-  }
-
-  const fileChanges = useMemo(() => parseDiffToFiles(selectedTask?.diff), [selectedTask?.diff]);
-  const parsedEvents = useMemo(() => parseEvents(selectedTask?.events), [selectedTask?.events]);
-
-  function handleNewTask() {
-    setSelectedTask(null);
-    setSelectedFile(null);
-    setTaskTab("chat");
-    setGoal("");
-  }
-
-  function truncate(str, len) {
-    if (!str) return "";
-    return str.length > len ? str.slice(0, len) + "..." : str;
-  }
-
-  return (
-    <section className="page-section self-dev-section">
-      <div className="self-dev-layout">
-        <TaskListSidebar
-          tasks={tasks}
-          selectedTask={selectedTask}
-          onSelectTask={refreshTask}
-          onNewTask={handleNewTask}
-          statusLabel={statusLabel}
-          statusColor={statusColor}
-          statusIcon={statusIcon}
-          formatTime={formatTime}
-          truncate={truncate}
-          loading={loading}
-        />
-        
-        <MainWorkbench
-          selectedTask={selectedTask}
-          agents={agents}
-          agentId={agentId}
-          setAgentId={setAgentId}
-          repoUrl={repoUrl}
-          setRepoUrl={setRepoUrl}
-          goal={goal}
-          setGoal={setGoal}
-          createTask={() => performTaskAction("createAndRun")}
-          running={running}
-          error={error}
-          reviewNote={reviewNote}
-          setReviewNote={setReviewNote}
-          onAccept={() => performTaskAction("accept")}
-          onReject={() => performTaskAction("reject")}
-          taskChatInput={taskChatInput}
-          setTaskChatInput={setTaskChatInput}
-          onSendChat={() => performTaskAction("chat")}
-          fileChanges={fileChanges}
-          selectedFile={selectedFile}
-          onSelectFile={setSelectedFile}
-          parsedEvents={parsedEvents}
-          statusLabel={statusLabel}
-          statusColor={statusColor}
-          statusIcon={statusIcon}
-          formatDuration={formatDuration}
-          taskTab={taskTab}
-          setTaskTab={setTaskTab}
-          onRefresh={() => refreshTask()}
-          onCancel={() => performTaskAction("cancel")}
-        />
-      </div>
-    </section>
-  );
-}
-
-function TaskListSidebar({ tasks, selectedTask, onSelectTask, onNewTask, statusLabel, statusColor, statusIcon, formatTime, truncate, loading }) {
-  return (
-    <aside className="self-dev-task-sidebar">
-      <div className="task-sidebar-header">
-        <h3>任务列表</h3>
-        <span className="task-count">{loading ? "加载中" : `${tasks.length} 个任务`}</span>
-      </div>
-      
-      <div className="self-dev-task-list">
-        {tasks.length ? tasks.map((task) => {
-          const StatusIcon = statusIcon(task.status);
-          const isActive = selectedTask?.id === task.id;
-          
-          return (
-            <button
-              key={task.id}
-              className={`task-list-item ${isActive ? "active" : ""}`}
-              onClick={() => onSelectTask(task.id)}
-            >
-              <div className="task-item-header">
-                <StatusIcon
-                  size={14}
-                  className={`task-status-icon ${task.status === "running" ? "spin" : ""}`}
-                  style={{ color: statusColor(task.status) }}
-                />
-                <span className="task-status-label" style={{ color: statusColor(task.status) }}>
-                  {statusLabel(task.status)}
-                </span>
-                <time className="task-time">{formatTime(task.updated_at)}</time>
-              </div>
-              <p className="task-goal">{truncate(task.goal, 72)}</p>
-              <div className="task-branch">
-                <GitBranch size={12} />
-                <span>{task.branch}</span>
-              </div>
-            </button>
-          );
-        }) : <div className="empty-state">暂无自开发任务，右侧可直接创建</div>}
-      </div>
-      
-      <button className="self-dev-new-task-btn" onClick={onNewTask}>
-        <Plus size={16} /> 新建任务
-      </button>
-    </aside>
-  );
-}
-
-function MainWorkbench({
-  selectedTask, agents, agentId, setAgentId, repoUrl, setRepoUrl, goal, setGoal,
-  createTask, running, error, reviewNote, setReviewNote, onAccept, onReject,
-  taskChatInput, setTaskChatInput, onSendChat, fileChanges, selectedFile, onSelectFile,
-  parsedEvents, statusLabel, statusColor, statusIcon, formatDuration, taskTab, setTaskTab, onRefresh, onCancel
-}) {
-  if (!selectedTask) {
-    return (
-      <main className="self-dev-workbench create-mode">
-        <CreateTaskView
-          agents={agents}
-          agentId={agentId}
-          setAgentId={setAgentId}
-          repoUrl={repoUrl}
-          setRepoUrl={setRepoUrl}
-          goal={goal}
-          setGoal={setGoal}
-          onCreate={createTask}
-          running={running}
-          error={error}
-        />
-      </main>
-    );
-  }
-
-  return (
-    <main className="self-dev-workbench task-mode">
-      {error ? <div className="form-error">{error}</div> : null}
-      <TaskOverviewBar
-        task={selectedTask}
-        statusLabel={statusLabel}
-        statusColor={statusColor}
-        statusIcon={statusIcon}
-        formatDuration={formatDuration}
-        onRefresh={onRefresh}
-        onCancel={onCancel}
-        running={running}
-      />
-      {selectedTask.status === "needs_review" ? (
-        <ReviewTaskView
-          task={selectedTask}
-          reviewNote={reviewNote}
-          setReviewNote={setReviewNote}
-          onAccept={onAccept}
-          onReject={onReject}
-          running={running}
-          fileChanges={fileChanges}
-        />
-      ) : null}
-      <TaskTabs
-        task={selectedTask}
-        activeTab={taskTab}
-        setActiveTab={setTaskTab}
-        fileChanges={fileChanges}
-        selectedFile={selectedFile}
-        onSelectFile={onSelectFile}
-        parsedEvents={parsedEvents}
-        taskChatInput={taskChatInput}
-        setTaskChatInput={setTaskChatInput}
-        onSendChat={onSendChat}
-        running={running}
-      />
-    </main>
-  );
-}
-
-function CreateTaskView({ agents, agentId, setAgentId, repoUrl, setRepoUrl, goal, setGoal, onCreate, running, error }) {
-  return (
-    <div className="create-task-view">
-      <div className="create-task-header">
-        <div className="create-task-icon">
-          <Plus size={32} />
-        </div>
-        <h2>新建开发任务</h2>
-        <p>描述你的开发目标，AI Agent 将自动完成代码修改</p>
-      </div>
-      
-      <div className="create-task-form">
-        <label className="form-field">
-          <span>选择 Agent</span>
-          <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-            {agents.map((agent) => (
-              <option key={agent.id} value={agent.id}>{agent.name}</option>
-            ))}
-          </select>
-        </label>
-        
-        <label className="form-field">
-          <span>仓库地址</span>
-          <input value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://github.com/..." />
-        </label>
-        
-        <label className="form-field">
-          <span>开发目标</span>
-          <textarea
-            value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-            placeholder="描述你想要实现的功能或修改，例如：优化登录页面的UI，添加用户注册表单..."
-            rows={5}
-          />
-        </label>
-        {error ? <div className="form-error">{error}</div> : null}
-        
-        <button
-          className="secondary-button primary-action create-task-btn"
-          onClick={onCreate}
-          disabled={running || !goal.trim() || !agentId}
-        >
-          {running ? <><RefreshCw size={18} className="spin" /> 创建中...</> : <><Play size={18} /> 开始执行</>}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function TaskOverviewBar({ task, statusLabel, statusColor, statusIcon, formatDuration, onRefresh, onCancel, running }) {
-  const StatusIcon = statusIcon(task.status);
-  const finishedAt = ["pushed", "accepted", "failed", "needs_review", "cancelled"].includes(task.status) ? task.updated_at : null;
-  const outcome = {
-    pushed: "已推送到远程仓库，请前往 GitHub 合并该分支。",
-    accepted: "已接受 AI 建议，可继续通过对话补充修改。",
-    cancelled: "任务已终止，不会继续占用执行队列。",
-    failed: task.error || "任务执行失败，请查看执行日志。"
-  }[task.status];
-
-  return (
-    <section className={`task-overview-bar ${task.status}`}>
-      <div className="task-overview-main">
-        <StatusBadge task={task} label={statusLabel(task.status)} color={statusColor(task.status)} icon={StatusIcon} />
-        <div className="task-overview-title">
-          <h2>{task.goal}</h2>
-          <p>
-            <GitBranch size={13} />
-            <span>{task.branch}</span>
-          </p>
-        </div>
-      </div>
-      <div className="task-overview-meta">
-        <span>实际状态：{statusLabel(task.status)}</span>
-        <span>运行时间：{formatDuration(task.created_at, finishedAt)}</span>
-        {outcome ? <strong>{outcome}</strong> : null}
-      </div>
-      <div className="task-overview-actions">
-        {task.status === "running" ? (
-          <button className="secondary-button danger-button" onClick={onCancel} disabled={running}>
-            <XCircle size={16} />
-            终止
-          </button>
-        ) : null}
-        <button className="secondary-button icon-btn" onClick={onRefresh} aria-label="刷新任务">
-          <RefreshCw size={16} />
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function StatusBadge({ task, label, color, icon: StatusIcon }) {
-  return (
-    <span className="task-status-badge" style={{ color }}>
-      <StatusIcon size={15} className={task.status === "running" ? "spin" : ""} />
-      {label}
-    </span>
-  );
-}
-
-function TaskTabs({
-  task, activeTab, setActiveTab, fileChanges, selectedFile, onSelectFile, parsedEvents,
-  taskChatInput, setTaskChatInput, onSendChat, running
-}) {
-  const tabs = [
-    { key: "chat", label: "对话", icon: MessageSquare, count: null },
-    { key: "files", label: "文件变更", icon: FileCode, count: fileChanges.length || null },
-    { key: "logs", label: "执行日志", icon: TerminalIcon, count: parsedEvents.length || null }
-  ];
-
-  return (
-    <section className="task-detail-tabs-shell">
-      <div className="task-detail-tabs" role="tablist" aria-label="任务详情">
-        {tabs.map((tab) => {
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.key}
-              role="tab"
-              type="button"
-              aria-selected={activeTab === tab.key}
-              className={activeTab === tab.key ? "active" : ""}
-              onClick={() => setActiveTab(tab.key)}
-            >
-              <Icon size={15} />
-              {tab.label}
-              {tab.count ? <span className="tab-badge">{tab.count}</span> : null}
-            </button>
-          );
-        })}
-      </div>
-      <div className="task-tab-panel">
-        {activeTab === "chat" ? (
-          <ChatPanel
-            task={task}
-            input={taskChatInput}
-            setInput={setTaskChatInput}
-            onSend={onSendChat}
-            running={running}
-            parsedEvents={parsedEvents}
-          />
-        ) : null}
-        {activeTab === "files" ? (
-          <FileChangesPanel fileChanges={fileChanges} selectedFile={selectedFile} onSelectFile={onSelectFile} />
-        ) : null}
-        {activeTab === "logs" ? <ExecutionLogsPanel parsedEvents={parsedEvents} /> : null}
-      </div>
-    </section>
-  );
-}
-
-function ReviewTaskView({ task, reviewNote, setReviewNote, onAccept, onReject, running, fileChanges }) {
-  const recommendationConfig = {
-    push: { icon: CheckCircle, color: "var(--success)", bg: "var(--success-soft)", border: "#bce5cf", title: "AI 建议：可以 Push", desc: "代码修改已完成，建议推送到远程仓库" },
-    hold: { icon: PauseCircle, color: "var(--warning)", bg: "#fff8e8", border: "#f1d28b", title: "AI 建议：暂不 Push", desc: "代码有潜在问题，建议继续修改后再推送" },
-    review: { icon: HelpCircle, color: "var(--primary)", bg: "var(--primary-soft)", border: "#cfe0ff", title: "AI 建议：需要人工判断", desc: "请仔细审查代码变更后决定" }
-  };
-  
-  const config = recommendationConfig[task.recommendation] || recommendationConfig.review;
-  const RecIcon = config.icon;
-  
-  return (
-    <section className="review-task-view">
-      <div className="review-header">
-        <Eye size={22} style={{ color: "var(--warning)" }} />
-        <div>
-          <h3>审查 AI 建议</h3>
-          <p>请查看代码变更，决定是否接受 AI 的建议。</p>
-        </div>
-      </div>
-      
-      <div className="recommendation-card" style={{ background: config.bg, borderColor: config.border }}>
-        <RecIcon size={30} style={{ color: config.color }} />
-        <div className="recommendation-content">
-          <h3 style={{ color: config.color }}>{config.title}</h3>
-          <p>{task.result || config.desc}</p>
-        </div>
-      </div>
-      
-      {fileChanges.length > 0 && (
-        <div className="review-file-summary">
-          <h4>Diff 摘要</h4>
-          <div className="file-summary-list">
-            {fileChanges.slice(0, 5).map((file, idx) => (
-              <div key={idx} className={`file-summary-item ${file.status}`}>
-                <FileCode size={14} />
-                <span className="file-path">{file.path}</span>
-                <span className="file-stats">
-                  {file.additions > 0 && <span className="add">+{file.additions}</span>}
-                  {file.deletions > 0 && <span className="del">-{file.deletions}</span>}
-                </span>
-              </div>
-            ))}
-            {fileChanges.length > 5 && (
-              <div className="file-summary-more">还有 {fileChanges.length - 5} 个文件...</div>
-            )}
-          </div>
-        </div>
-      )}
-      
-      <label className="review-note-field">
-        <span>补充说明（可选）</span>
-        <textarea
-          value={reviewNote}
-          onChange={(e) => setReviewNote(e.target.value)}
-          placeholder="接受或拒绝时都可以留下说明，帮助 AI 理解你的决策..."
-          rows={3}
-        />
-      </label>
-      
-      <div className="review-actions">
-        <button className="secondary-button reject-btn" onClick={onReject} disabled={running}>
-          <X size={18} />
-          拒绝并继续修改
-        </button>
-        <button className="secondary-button primary-action accept-btn" onClick={onAccept} disabled={running}>
-          <Check size={18} />
-          接受 AI 建议
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function ChatPanel({ task, input, setInput, onSend, running, parsedEvents }) {
-  const messagesEndRef = useRef(null);
-  
-  const messages = useMemo(() => {
-    const msgs = [];
-    parsedEvents.forEach(event => {
-      if (event.goal) {
-        msgs.push({ role: "user", content: event.goal, timestamp: event.timestamp });
-      }
-      if (event.result && event.type === "result") {
-        msgs.push({ role: "assistant", content: event.result, timestamp: event.timestamp });
-      }
-    });
-    return msgs;
-  }, [parsedEvents]);
-  
-  useEffect(() => {
-    if (typeof messagesEndRef.current?.scrollIntoView === "function") {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages]);
-  
-  const canChat = task.status !== "running" && task.status !== "pushed";
-  
-  return (
-    <div className="chat-panel">
-      <div className="chat-panel-header">
-        <MessageSquare size={16} />
-        <span>任务对话</span>
-        <small>{messages.length} 条消息</small>
-      </div>
-      
-      <div className="chat-messages">
-        {messages.length === 0 ? (
-          <div className="chat-empty">
-            <Bot size={32} />
-            <p>暂无对话记录</p>
-          </div>
-        ) : messages.map((msg, idx) => (
-          <div key={idx} className={`chat-message ${msg.role}`}>
-            <div className="message-avatar">
-              {msg.role === "user" ? <User size={14} /> : <Bot size={14} />}
-            </div>
-            <div className="message-content">
-              <div className="message-text">{msg.content}</div>
-            </div>
-          </div>
-        ))}
-        <div ref={messagesEndRef} />
-      </div>
-      
-      {canChat && (
-        <div className="chat-input-row">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="继续对话，补充要求或追问..."
-            rows={2}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                onSend();
-              }
-            }}
-          />
-          <button
-            className="secondary-button primary-action"
-            onClick={onSend}
-            disabled={running || !input.trim()}
-          >
-            <Send size={16} />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FileChangesPanel({ fileChanges, selectedFile, onSelectFile }) {
-  const selectedFileContent = selectedFile ? fileChanges.find(f => f.path === selectedFile)?.content : "";
-
-  if (fileChanges.length === 0) {
-    return <div className="panel-empty">暂无文件变更</div>;
-  }
-
-  return (
-    <div className="files-panel">
-      <div className="file-change-tree">
-        {fileChanges.map((file, idx) => (
-          <button
-            type="button"
-            key={idx}
-            className={`file-change-item ${file.status} ${selectedFile === file.path ? "selected" : ""}`}
-            onClick={() => onSelectFile(file.path)}
-          >
-            {file.status === "added" && <FilePlus size={14} className="file-icon added" />}
-            {file.status === "deleted" && <FileMinus size={14} className="file-icon deleted" />}
-            {file.status === "modified" && <FileCode size={14} className="file-icon modified" />}
-            <span className="file-path">{file.path}</span>
-            <span className="file-stats">
-              {file.additions > 0 && <span className="stat-add">+{file.additions}</span>}
-              {file.deletions > 0 && <span className="stat-del">-{file.deletions}</span>}
-            </span>
-          </button>
-        ))}
-      </div>
-      <div className="diff-viewer">
-        {selectedFileContent ? (
-          <pre>{selectedFileContent}</pre>
-        ) : (
-          <div className="diff-placeholder">选择文件查看变更详情</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ExecutionLogsPanel({ parsedEvents }) {
-  if (parsedEvents.length === 0) {
-    return <div className="panel-empty">暂无执行日志</div>;
-  }
-
-  return (
-    <div className="logs-panel">
-      <div className="execution-logs">
-        {parsedEvents.map((event, idx) => (
-          <div key={idx} className={`log-entry ${event.type} ${event.level || ''}`}>
-            {event.type === 'log' ? (
-              <div className="log-line">
-                <span className={`log-level ${event.level || 'info'}`}></span>
-                <span className="log-message">{event.message}</span>
-              </div>
-            ) : (
-              <>
-                <div className="log-header">
-                  <span className="log-type">{event.type}</span>
-                  {event.timestamp && <time>{new Date(event.timestamp).toLocaleTimeString()}</time>}
-                </div>
-                <div className="log-content">
-                  {event.goal && <p className="log-goal">{event.goal}</p>}
-                  {event.status && <p className="log-status">状态: {event.status}</p>}
-                  {event.result && <p className="log-result">{event.result}</p>}
-                  {event.error && <p className="log-error">{event.error}</p>}
-                </div>
-              </>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-function TerminalPage({ onUnauthorized }) {
-  const [status, setStatus] = useState("disconnected");
-  const [error, setError] = useState("");
-  const [mobileInput, setMobileInput] = useState("");
-  const [mobileSecret, setMobileSecret] = useState(true);
-  const socketRef = useRef(null);
-  const terminalRef = useRef(null);
-  const terminalContainerRef = useRef(null);
-  const fitAddonRef = useRef(null);
-  const resizeObserverRef = useRef(null);
-
-  function handleApiError(err) {
-    if (err.status === 401 || err.message === "Authentication required") {
-      onUnauthorized();
-      return true;
-    }
-    setError(err.message);
-    return false;
-  }
-
-  function websocketUrl() {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${window.location.host}/api/system/terminal/connect`;
-  }
-
-  function connect() {
-    if (socketRef.current && socketRef.current.readyState <= WebSocket.OPEN) {
-      return;
-    }
-    setError("");
-    setStatus("connecting");
-    const socket = new WebSocket(websocketUrl());
-    socketRef.current = socket;
-    socket.onopen = () => {
-      setStatus("connected");
-      terminalRef.current?.focus();
-      fitAndSendSize();
-    };
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === "output") {
-        terminalRef.current?.write(message.data || "");
-      }
-    };
-    socket.onerror = () => {
-      setError("终端连接失败");
-      setStatus("disconnected");
-    };
-    socket.onclose = () => {
-      setStatus("disconnected");
-    };
-  }
-
-  function disconnect() {
-    socketRef.current?.close();
-  }
-
-  function sendTerminalMessage(message) {
-    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    socketRef.current.send(JSON.stringify(message));
-  }
-
-  function fitAndSendSize() {
-    if (!fitAddonRef.current || !terminalRef.current) {
-      return;
-    }
-    fitAddonRef.current.fit();
-    sendTerminalMessage({
-      type: "resize",
-      cols: terminalRef.current.cols,
-      rows: terminalRef.current.rows
-    });
-  }
-
-  function sendMobileInput(event) {
-    event.preventDefault();
-    if (!mobileInput) {
-      sendTerminalMessage({ type: "input", data: "\r" });
-      return;
-    }
-    sendTerminalMessage({ type: "input", data: mobileInput });
-    sendTerminalMessage({ type: "input", data: "\r" });
-    setMobileInput("");
-  }
-
-  useEffect(() => {
-    const terminal = new Terminal({
-      cursorBlink: true,
-      convertEol: false,
-      fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
-      theme: {
-        background: "#101820",
-        foreground: "#f7f2e8",
-        cursor: "#f7f2e8",
-        selectionBackground: "#3f5f67"
-      }
-    });
-    const fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.open(terminalContainerRef.current);
-    terminal.onData((data) => sendTerminalMessage({ type: "input", data }));
-    terminalRef.current = terminal;
-    fitAddonRef.current = fitAddon;
-    resizeObserverRef.current = new ResizeObserver(() => fitAndSendSize());
-    resizeObserverRef.current.observe(terminalContainerRef.current);
-
-    connect();
-    return () => {
-      resizeObserverRef.current?.disconnect();
-      socketRef.current?.close();
-      terminal.dispose();
-    };
-  }, []);
-
-  return (
-    <section className="page-section terminal-section">
-      <div className="terminal-shell">
-        <div className="terminal-toolbar">
-          <span className={`terminal-status ${status}`}>{status === "connected" ? "已连接" : "未连接"}</span>
-          <div className="terminal-actions">
-            <button className="secondary-button" onClick={connect} disabled={status === "connected"}>
-              <PlugZap size={17} />
-              连接
-            </button>
-            <button className="secondary-button" onClick={disconnect} disabled={status !== "connected"}>
-              断开
-            </button>
-          </div>
-        </div>
-        <div className="terminal-output" ref={terminalContainerRef} data-testid="terminal-output" />
-        <form className="terminal-mobile-input" onSubmit={sendMobileInput}>
-          <label htmlFor="terminal-mobile-input">移动端输入（密码场景可用）</label>
-          <div className="terminal-mobile-input-row">
-            <input
-              id="terminal-mobile-input"
-              type={mobileSecret ? "password" : "text"}
-              value={mobileInput}
-              onChange={(event) => setMobileInput(event.target.value)}
-              placeholder="输入后发送到终端"
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              disabled={status !== "connected"}
-            />
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => setMobileSecret((value) => !value)}
-              disabled={status !== "connected"}
-            >
-              {mobileSecret ? "显示" : "隐藏"}
-            </button>
-            <button className="secondary-button primary-action" type="submit" disabled={status !== "connected"}>
-              发送
-            </button>
-          </div>
-        </form>
-        {error ? <div className="form-error">{error}</div> : null}
-      </div>
-    </section>
-  );
-}
-
-function ChannelsPage({ onUnauthorized }) {
+ function ChannelsPage({ onUnauthorized }) {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -3070,7 +2100,7 @@ function ChannelsPage({ onUnauthorized }) {
                 </div>
                 <div className="wechat-control">
                   <div>
-                    <span className={`terminal-status ${s.running ? "connected" : ""}`}>
+                    <span className={`runtime-status ${s.running ? "connected" : ""}`}>
                       {s.running ? "运行中" : "未启动"}
                     </span>
                     {s.user ? <strong>{s.user}</strong> : null}
@@ -3617,7 +2647,7 @@ function PortfolioPage({ onUnauthorized }) {
               <Plus size={14} />
               新对话
             </button>
-            <span className={`terminal-status ${chatStatus === "connected" || chatStatus === "running" ? "connected" : ""}`}>
+            <span className={`runtime-status ${chatStatus === "connected" || chatStatus === "running" ? "connected" : ""}`}>
               {chatStatus === "running" ? "生成中" : chatStatus === "connected" ? "已连接" : "未连接"}
             </span>
           </div>
@@ -3724,9 +2754,7 @@ function AppShell({ onLogout }) {
       { path: "/", label: "首页", icon: Home },
       { path: "/agents", label: "Agent", icon: Bot },
       { path: "/critique", label: "多维批判", icon: BrainCircuit },
-      { path: "/self-dev", label: "自开发", icon: Code2 },
       { path: "/channels", label: "渠道", icon: MessageSquare },
-      { path: "/terminal", label: "终端", icon: TerminalSquare },
       { path: "/portfolio", label: "资产组合", icon: TrendingUp },
       { path: "/system", label: "系统", icon: Settings }
     ],
@@ -3782,12 +2810,6 @@ function AppShell({ onLogout }) {
     if (path === "/system") {
       return <SystemPage onUnauthorized={unauthorized} />;
     }
-    if (path === "/self-dev") {
-      return <SelfDevPage onUnauthorized={unauthorized} />;
-    }
-    if (path === "/terminal") {
-      return <TerminalPage onUnauthorized={unauthorized} />;
-    }
     if (path === "/channels") {
       return <ChannelsPage onUnauthorized={unauthorized} />;
     }
@@ -3798,7 +2820,7 @@ function AppShell({ onLogout }) {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-title">
-          <TerminalSquare size={24} />
+          <Bot size={24} />
           <span>超级个人平台</span>
         </div>
         <nav>

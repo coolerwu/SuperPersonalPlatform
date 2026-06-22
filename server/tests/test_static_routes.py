@@ -11,6 +11,8 @@ from server.app.system_update_service import SystemUpdateService
 from server.domain.auth import AuthToken
 from server.domain.proxy import ProxyRequest, ProxyResponse
 from server.infrastructure.session import SessionCodec
+from server.infrastructure.fastapi_app import create_app
+from server.infrastructure.config import load_settings
 
 
 class StaticProxyGateway:
@@ -76,3 +78,16 @@ def test_frontend_route_serves_index_when_authenticated(tmp_path) -> None:
 
     assert response.status_code == 200
     assert "root" in response.text
+
+
+def test_removed_self_dev_and_terminal_routes_are_not_registered(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(
+        "auth:\n  token: secret-token\nproxy:\n  upstream_base_url: http://example.test/\n",
+        encoding="utf-8",
+    )
+
+    app = create_app(load_settings(tmp_path / "config.yaml"), tmp_path)
+    paths = {route.path for route in app.routes}
+
+    assert not any(path.startswith("/api/self-dev") for path in paths)
+    assert "/api/system/terminal/connect" not in paths

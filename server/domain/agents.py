@@ -9,18 +9,10 @@ class AgentConfigError(ValueError):
 
 SUPPORTED_PROVIDERS = {"openai_compatible", "anthropic"}
 SUPPORTED_COMMON_SKILL_TOOLS = {"list_skill", "read_skill"}
-SUPPORTED_TOOL_PROFILES = {"default", "self-dev", "portfolio"}
+SUPPORTED_TOOL_PROFILES = {"default", "portfolio"}
 SUPPORTED_AGENT_TOOLS = {
     "list_skill",
     "read_skill",
-    "repo_search",
-    "repo_read_file",
-    "repo_write_file",
-    "repo_run_command",
-    "repo_status",
-    "repo_diff",
-    "repo_commit",
-    "repo_push",
     "list_portfolio_holdings",
     "add_portfolio_holding",
     "update_portfolio_holding",

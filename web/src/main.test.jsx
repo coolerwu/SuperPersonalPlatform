@@ -4,61 +4,9 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const xtermState = vi.hoisted(() => ({
-  terminals: [],
-  fitAddons: []
-}));
-
-vi.mock("@xterm/xterm", () => ({
-  Terminal: class MockTerminal {
-    constructor() {
-      this.cols = 120;
-      this.rows = 34;
-      this._dataHandler = null;
-      xtermState.terminals.push(this);
-    }
-
-    loadAddon() {}
-
-    open(element) {
-      this.element = element;
-    }
-
-    onData(handler) {
-      this._dataHandler = handler;
-    }
-
-    write(data) {
-      this.element.textContent = `${this.element.textContent}${data}`;
-    }
-
-    focus() {}
-
-    dispose() {}
-
-    emitData(data) {
-      this._dataHandler?.(data);
-    }
-  }
-}));
-
-vi.mock("@xterm/addon-fit", () => ({
-  FitAddon: class MockFitAddon {
-    constructor() {
-      xtermState.fitAddons.push(this);
-    }
-
-    fit() {
-      this.fitted = true;
-    }
-  }
-}));
-
 describe("LoginPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    xtermState.terminals.length = 0;
-    xtermState.fitAddons.length = 0;
     document.body.innerHTML = "";
     window.history.replaceState({}, "", "/");
   });
@@ -245,59 +193,16 @@ describe("LoginPage", () => {
     expect(screen.queryByRole("heading", { name: "多维批判" })).not.toBeInTheDocument();
   });
 
-  it("renders the terminal menu and connects to the backend terminal", async () => {
+  it("removes self-development and terminal navigation", async () => {
     document.body.innerHTML = '<div id="root"></div>';
-    window.history.replaceState({}, "", "/terminal");
-    const sockets = [];
-    class MockWebSocket {
-      static CONNECTING = 0;
-      static OPEN = 1;
-      static CLOSING = 2;
-      static CLOSED = 3;
-
-      constructor(url) {
-        this.url = url;
-        this.readyState = MockWebSocket.CONNECTING;
-        this.sent = [];
-        sockets.push(this);
-        setTimeout(() => {
-          this.readyState = MockWebSocket.OPEN;
-          this.onopen?.();
-          this.onmessage?.({ data: JSON.stringify({ type: "output", data: "terminal ready\n" }) });
-        }, 0);
-      }
-
-      send(data) {
-        this.sent.push(data);
-      }
-
-      close() {
-        this.readyState = MockWebSocket.CLOSED;
-        this.onclose?.();
-      }
-    }
-    vi.stubGlobal("WebSocket", MockWebSocket);
-    vi.stubGlobal(
-      "ResizeObserver",
-      class MockResizeObserver {
-        observe() {}
-        disconnect() {}
-      }
-    );
+    window.history.replaceState({}, "", "/");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (path, options) => {
+      vi.fn(async (path) => {
         if (path === "/api/auth/me") {
-          return {
-            ok: true,
-            json: async () => ({ authenticated: true })
-          };
+          return { ok: true, json: async () => ({ authenticated: true }) };
         }
-        return {
-          ok: false,
-          status: 404,
-          json: async () => ({ detail: "not found" })
-        };
+        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
       })
     );
 
@@ -306,24 +211,12 @@ describe("LoginPage", () => {
       await import("./main.jsx");
     });
 
-    expect(await screen.findByRole("button", { name: "终端" })).toBeInTheDocument();
-    expect(await screen.findByText("terminal ready")).toBeInTheDocument();
-    expect(sockets[0].url).toContain("/api/system/terminal/connect");
-    expect(JSON.parse(sockets[0].sent[0])).toEqual({ type: "resize", cols: 120, rows: 34 });
-
-    xtermState.terminals[0].emitData("ls\r");
-
-    expect(JSON.parse(sockets[0].sent.at(-1))).toEqual({ type: "input", data: "ls\r" });
-    const navButtons = screen.getAllByRole("button").map((button) => button.textContent);
-    expect(navButtons.indexOf("终端")).toBeLessThan(navButtons.indexOf("系统"));
-    expect(screen.queryByText("历史会话")).not.toBeInTheDocument();
-    expect(fetch).not.toHaveBeenCalledWith(
-      "/api/system/terminal/sessions/list",
-      expect.anything()
-    );
+    expect(await screen.findByRole("button", { name: "Agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "自开发" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
   });
 
-  it("shows the Agent chat without model controls and sends text plus images", async () => {
+   it("shows the Agent chat without model controls and sends text plus images", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/agents");
     const sockets = [];
@@ -427,6 +320,9 @@ describe("LoginPage", () => {
 
     expect(await screen.findByRole("button", { name: "Agent" })).toBeInTheDocument();
     expect(document.querySelector("main.content")).toHaveClass("content-agents");
+    expect(screen.getByRole("navigation", { name: "Agent 工作区" })).toHaveClass("agent-mode-rail");
+    expect(screen.getByRole("button", { name: "对话" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByText("运行信息")).toBeInTheDocument();
     expect(screen.queryByText("模型")).not.toBeInTheDocument();
     expect(screen.queryByText("你是一个直接、可靠的个人助理。")).not.toBeInTheDocument();
 
@@ -508,106 +404,7 @@ describe("LoginPage", () => {
     expect(await screen.findByText("请先在 Agent 管理中添加 Agent")).toBeInTheDocument();
   });
 
-  it("shows self-dev create form by default without the old step indicator", async () => {
-    document.body.innerHTML = '<div id="root"></div>';
-    window.history.replaceState({}, "", "/self-dev");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (path) => {
-        if (path === "/api/auth/me") {
-          return { ok: true, json: async () => ({ authenticated: true }) };
-        }
-        if (path === "/api/agents/options") {
-          return {
-            ok: true,
-            json: async () => ({
-              default_agent_id: "coder",
-              agents: [{ id: "coder", name: "编码 Agent" }]
-            })
-          };
-        }
-        if (path === "/api/self-dev/tasks") {
-          return { ok: true, json: async () => ({ tasks: [] }) };
-        }
-        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
-      })
-    );
-
-    vi.resetModules();
-    await act(async () => {
-      await import("./main.jsx");
-    });
-
-    expect(await screen.findByRole("button", { name: "自开发" })).toBeInTheDocument();
-    expect(await screen.findByText("新建开发任务")).toBeInTheDocument();
-    expect(screen.queryByText("选择或创建一个任务")).not.toBeInTheDocument();
-    expect(screen.queryByText("创建")).not.toBeInTheDocument();
-    expect(screen.queryByText("审查")).not.toBeInTheDocument();
-  });
-
-  it("opens selected self-dev task in tabs with real status instead of fake progress", async () => {
-    document.body.innerHTML = '<div id="root"></div>';
-    window.history.replaceState({}, "", "/self-dev");
-    const task = {
-      id: "task-1",
-      status: "running",
-      goal: "重构自开发页面",
-      branch: "agent/self-dev-task-1",
-      created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-      updated_at: new Date().toISOString(),
-      events: [
-        { type: "run", goal: "重构自开发页面", timestamp: "2026-05-06T09:00:00" },
-        { type: "log", level: "info", message: "正在执行真实任务" }
-      ],
-      diff: "diff --git a/web/src/main.jsx b/web/src/main.jsx\n--- a/web/src/main.jsx\n+++ b/web/src/main.jsx\n@@ -1 +1 @@\n-old\n+new\n"
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (path) => {
-        if (path === "/api/auth/me") {
-          return { ok: true, json: async () => ({ authenticated: true }) };
-        }
-        if (path === "/api/agents/options") {
-          return {
-            ok: true,
-            json: async () => ({ default_agent_id: "coder", agents: [{ id: "coder", name: "编码 Agent" }] })
-          };
-        }
-        if (path === "/api/self-dev/tasks") {
-          return { ok: true, json: async () => ({ tasks: [task] }) };
-        }
-        if (path === "/api/self-dev/tasks/task-1") {
-          return { ok: true, json: async () => ({ task }) };
-        }
-        return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
-      })
-    );
-
-    const user = userEvent.setup();
-    vi.resetModules();
-    await act(async () => {
-      await import("./main.jsx");
-    });
-
-    await user.click(await screen.findByRole("button", { name: /重构自开发页面/ }));
-
-    expect((await screen.findAllByText("运行中")).length).toBeGreaterThan(0);
-    expect(screen.getByRole("tab", { name: /对话/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /文件变更/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /执行日志/ })).toBeInTheDocument();
-    expect(screen.getByText(/实际状态/)).toBeInTheDocument();
-    expect(screen.getByText(/运行时间/)).toBeInTheDocument();
-    expect(screen.queryByText("分析需求")).not.toBeInTheDocument();
-    expect(screen.queryByText("生成报告")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: /文件变更/ }));
-    expect(await screen.findByText("web/src/main.jsx")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: /执行日志/ }));
-    expect(await screen.findByText("正在执行真实任务")).toBeInTheDocument();
-  });
-
-  it("edits model config from the Agent model tab", async () => {
+   it("edits model config from the Agent model tab", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/agents");
     class ClosedWebSocket {
@@ -1067,8 +864,8 @@ describe("LoginPage", () => {
               common_skill_tools: [],
               tools: { profile: "default", allow: [], deny: [] },
               skills: [{
-                id: "common:self-dev",
-                name: "自开发",
+                id: "common:research",
+                name: "研究",
                 tools: { profile: "default", allow: [], deny: [] }
               }],
               default_model_id: "fast",
@@ -1079,7 +876,7 @@ describe("LoginPage", () => {
                 name: "个人助理",
                 model_id: "fast",
                 system_prompt: "You are concise.",
-                skill_ids: ["common:self-dev"]
+                skill_ids: ["common:research"]
               }]
             })
           };
@@ -1088,7 +885,7 @@ describe("LoginPage", () => {
           if (options?.method === "PUT") {
             return { ok: true, json: async () => ({ ok: true }) };
           }
-          return { ok: true, json: async () => ({ id: "common:self-dev", content: "# 自开发\n旧内容" }) };
+          return { ok: true, json: async () => ({ id: "common:research", content: "# 研究\n旧内容" }) };
         }
         return { ok: false, status: 404, json: async () => ({ detail: "not found" }) };
       })
@@ -1104,10 +901,10 @@ describe("LoginPage", () => {
     expect(await screen.findByText("Skill 文件")).toBeInTheDocument();
     expect(screen.queryByText(/禁用工具/)).not.toBeInTheDocument();
     const markdownEditor = await screen.findByLabelText(/Markdown 内容/);
-    await waitFor(() => expect(markdownEditor).toHaveValue("# 自开发\n旧内容"));
+    await waitFor(() => expect(markdownEditor).toHaveValue("# 研究\n旧内容"));
     await user.clear(markdownEditor);
-    await user.type(markdownEditor, "# 自开发\n新内容");
-    await user.click(await screen.findByLabelText(/仓库搜索/));
+    await user.type(markdownEditor, "# 研究\n新内容");
+    await user.click(await screen.findByLabelText(/查看持仓/));
     await user.click(screen.getByRole("button", { name: /^保存$/ }));
 
     const saveCall = fetch.mock.calls.find(
@@ -1120,10 +917,10 @@ describe("LoginPage", () => {
       ([path, options]) => path === "/api/agents/skills/content" && options?.method === "PUT"
     );
     expect(JSON.parse(skillContentCall[1].body)).toEqual({
-      id: "common:self-dev",
-      content: "# 自开发\n新内容",
-      name: "common:self-dev",
-      tools: { profile: "default", allow: ["repo_search"], deny: [] },
+      id: "common:research",
+      content: "# 研究\n新内容",
+      name: "common:research",
+      tools: { profile: "default", allow: ["list_portfolio_holdings"], deny: [] },
       agent_id: null
     });
   });

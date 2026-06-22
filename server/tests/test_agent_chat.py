@@ -425,26 +425,26 @@ def test_agent_config_update_removes_legacy_default_agent(tmp_path) -> None:
 
 
 def test_agent_skill_content_endpoint_reads_and_writes_markdown(tmp_path) -> None:
-    write_config(tmp_path, skill_ids=("common:self-dev",))
-    skill_dir = tmp_path / "skills" / "common" / "self-dev"
+    write_config(tmp_path, skill_ids=("common:research",))
+    skill_dir = tmp_path / "skills" / "common" / "research"
     skill_dir.mkdir(parents=True)
     skill_path = skill_dir / "SKILL.md"
-    skill_path.write_text("# 自开发\n旧内容", encoding="utf-8")
+    skill_path.write_text("# 研究\n旧内容", encoding="utf-8")
     client = make_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})
 
-    read_response = client.get("/api/agents/skills/content", params={"id": "common:self-dev"})
+    read_response = client.get("/api/agents/skills/content", params={"id": "common:research"})
 
     assert read_response.status_code == 200
-    assert read_response.json()["content"] == "# 自开发\n旧内容"
+    assert read_response.json()["content"] == "# 研究\n旧内容"
 
     write_response = client.put(
         "/api/agents/skills/content",
         json={
-            "id": "common:self-dev",
-            "name": "common:self-dev",
-            "content": "# 自开发\n新内容",
-            "tools": {"profile": "default", "allow": ["repo_search"], "deny": []},
+            "id": "common:research",
+            "name": "common:research",
+            "content": "# 研究\n新内容",
+            "tools": {"profile": "default", "allow": ["list_skill"], "deny": []},
         },
     )
 
@@ -452,8 +452,8 @@ def test_agent_skill_content_endpoint_reads_and_writes_markdown(tmp_path) -> Non
     saved = skill_path.read_text(encoding="utf-8")
     assert saved.startswith("---\n")
     assert "profile: default" in saved
-    assert "- repo_search" in saved
-    assert saved.endswith("# 自开发\n新内容")
+    assert "- list_skill" in saved
+    assert saved.endswith("# 研究\n新内容")
 
 
 def test_agent_chat_websocket_uses_agent_bound_model_without_model_id(tmp_path) -> None:
@@ -618,20 +618,16 @@ def test_agent_config_rejects_unknown_common_skill_tool(tmp_path) -> None:
         load_settings(tmp_path / "config.yaml")
 
 
-def test_agent_tool_config_resolves_profile_allow_and_deny(tmp_path) -> None:
-    write_config(tmp_path)
-    raw = load_settings(tmp_path / "config.yaml")
-    agent = raw.agent_platform.get_agent("assistant")
-    registry = AgentToolRegistry()
-
-    settings = parse_settings(
+def test_agent_tool_config_rejects_removed_self_dev_profile() -> None:
+    with pytest.raises(ValueError, match="tools.profile is unsupported"):
+        parse_settings(
         {
             "auth": {"token": "secret-token"},
             "proxy": {"upstream_base_url": "http://example.test/"},
             "tools": {
                 "profile": "self-dev",
-                "allow": ["repo_push"],
-                "deny": ["repo_push", "repo_write_file"],
+                "allow": [],
+                "deny": [],
             },
             "llm": {
                 "models": [
@@ -655,18 +651,7 @@ def test_agent_tool_config_resolves_profile_allow_and_deny(tmp_path) -> None:
                 ]
             },
         }
-    )
-
-    tool_names = registry.resolve_tools(
-        settings.agent_platform.tools,
-        settings.agent_platform.get_agent("assistant"),
-        (),
-    )
-
-    assert "repo_read_file" in tool_names
-    assert "repo_push" not in tool_names
-    assert "repo_write_file" not in tool_names
-    assert registry.resolve_tools(raw.agent_platform.tools, agent, ("list_skill",)) == ("list_skill",)
+        )
 
 
 def test_agent_tools_are_resolved_from_bound_skill_frontmatter(tmp_path) -> None:
@@ -677,14 +662,13 @@ auth:
 proxy:
   upstream_base_url: http://example.test/
 tools:
-  profile: self-dev
-  allow:
-    - repo_push
+  profile: default
+  allow: []
   deny: []
 skills:
   definitions:
-    - id: common:self-dev
-      name: 自开发
+    - id: common:portfolio
+      name: 资产组合
 llm:
   models:
     - id: fast
@@ -699,7 +683,7 @@ agents:
       system_prompt: You are concise.
       model_id: fast
       skill_ids:
-        - common:self-dev
+        - common:portfolio
       tools:
         profile: portfolio
         allow: []
@@ -707,19 +691,18 @@ agents:
 """.strip(),
         encoding="utf-8",
     )
-    skill_dir = tmp_path / "skills" / "common" / "self-dev"
+    skill_dir = tmp_path / "skills" / "common" / "portfolio"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         """---
-name: 自开发
+name: 资产组合
 tools:
-  profile: self-dev
-  allow:
-    - repo_push
+  profile: portfolio
+  allow: []
   deny:
-    - repo_write_file
+    - delete_portfolio_holding
 ---
-# 自开发
+# 资产组合
 """,
         encoding="utf-8",
     )
@@ -734,10 +717,9 @@ tools:
         settings.skill_definitions,
     )
 
-    assert "repo_read_file" in tool_names
-    assert "repo_push" in tool_names
-    assert "repo_write_file" not in tool_names
-    assert "list_portfolio_holdings" not in tool_names
+    assert "list_portfolio_holdings" in tool_names
+    assert "add_portfolio_holding" in tool_names
+    assert "delete_portfolio_holding" not in tool_names
 
 
 def test_agent_tool_config_rejects_unknown_tool() -> None:
@@ -780,40 +762,26 @@ def test_agent_skill_service_lists_and_reads_bound_common_and_private_skills(tmp
 
 
 def test_agent_skill_service_reads_directory_skill_md(tmp_path) -> None:
-    write_config(tmp_path, skill_ids=("common:writing", "private:self-dev"))
+    write_config(tmp_path, skill_ids=("common:writing", "private:daily"))
     (tmp_path / "skills" / "common" / "writing").mkdir(parents=True)
     (tmp_path / "skills" / "common" / "writing" / "SKILL.md").write_text(
         "# 写作目录技能\n目录式 skill。",
         encoding="utf-8",
     )
-    (tmp_path / "skills" / "agents" / "assistant" / "self-dev").mkdir(parents=True)
-    (tmp_path / "skills" / "agents" / "assistant" / "self-dev" / "SKILL.md").write_text(
-        "# 自开发\n按流程开发。",
+    (tmp_path / "skills" / "agents" / "assistant" / "daily").mkdir(parents=True)
+    (tmp_path / "skills" / "agents" / "assistant" / "daily" / "SKILL.md").write_text(
+        "# 日常技能\n处理每日任务。",
         encoding="utf-8",
     )
     platform = load_settings(tmp_path / "config.yaml").agent_platform
     service = AgentSkillService(tmp_path)
 
     common = service.read_skill(platform.get_agent("assistant"), "common:writing")
-    private = service.read_skill(platform.get_agent("assistant"), "private:self-dev")
+    private = service.read_skill(platform.get_agent("assistant"), "private:daily")
 
     assert common.name == "写作目录技能"
     assert "目录式 skill" in common.content
-    assert private.name == "自开发"
-
-
-def test_repo_tools_reject_paths_outside_task_repo(tmp_path) -> None:
-    write_config(tmp_path, skill_ids=("common:writing",))
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    platform = load_settings(tmp_path / "config.yaml").agent_platform
-    runtime = AgentToolRuntime(
-        skill_tools=AgentSkillService(tmp_path).toolbox(platform.get_agent("assistant")),
-        repo_root=repo,
-    )
-
-    with pytest.raises(ValueError, match="escapes task repo"):
-        runtime.resolve_repo_path("../config.yaml")
+    assert private.name == "日常技能"
 
 
 def test_agent_skill_service_rejects_unbound_or_unsafe_skill(tmp_path) -> None:

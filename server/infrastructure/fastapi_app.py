@@ -17,8 +17,6 @@ from server.adapter.proxy_routes import (
 from server.adapter.session_routes import create_session_router
 from server.adapter.static_routes import mount_frontend
 from server.adapter.system_routes import create_system_router
-from server.adapter.terminal_routes import create_terminal_router
-from server.adapter.self_dev_routes import create_self_dev_router
 from server.adapter.channel_routes import create_channel_router
 from server.adapter.critique_routes import create_critique_router
 from server.app.auth_service import AuthService
@@ -30,9 +28,6 @@ from server.app.portfolio_service import PortfolioService
 from server.app.proxy_service import ProxyService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
-from server.app.self_dev_service import SelfDevService
-from server.app.job_service import JobService
-from server.app.job_worker import JobWorker
 from server.app.wechat_channel_manager import WechatChannelManager
 from server.domain.auth import AuthToken
 from server.infrastructure.config import Settings, load_settings
@@ -48,11 +43,9 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     project_root = Path(__file__).resolve().parents[2]
     active_workspace = workspace or current_workspace()
     system_log_service = SystemLogService(active_workspace)
-    job_service = JobService(active_workspace)
     agent_chat_service = AgentChatService(active_workspace / "config.yaml")
     chat_session_service = ChatSessionService(active_workspace)
     critique_service = CritiqueService(active_workspace, agent_chat_service)
-    self_dev_service = SelfDevService(active_workspace, agent_chat_service, job_service)
     wechat_channel_manager = WechatChannelManager(
         workspace=active_workspace,
         agent_chat_service=agent_chat_service,
@@ -73,8 +66,6 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         agent_chat_service=agent_chat_service,
         chat_session_service=chat_session_service,
         portfolio_service=PortfolioService(active_workspace),
-        job_service=job_service,
-        self_dev_service=self_dev_service,
         wechat_channel_manager=wechat_channel_manager,
         critique_service=critique_service,
     )
@@ -110,24 +101,13 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
         settings = load_settings(active_workspace / "config.yaml")
 
     container = create_container(settings, workspace)
-    worker = (
-        JobWorker(container.job_service, container.self_dev_service)
-        if container.job_service is not None and container.self_dev_service is not None
-        else None
-    )
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        if worker is not None:
-            app.state.job_worker = worker
-            await worker.start()
         if container.wechat_channel_manager is not None:
             await container.wechat_channel_manager.auto_start_all()
         try:
             yield
         finally:
-            if worker is not None:
-                await worker.stop()
             if container.wechat_channel_manager is not None:
                 await container.wechat_channel_manager.stop_all()
 
@@ -138,8 +118,6 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     app.include_router(create_proxy_router(container))
     app.include_router(create_system_router(container))
     project_root = Path(__file__).resolve().parents[2]
-    app.include_router(create_terminal_router(container, project_root))
-    app.include_router(create_self_dev_router(container))
     app.include_router(create_channel_router(container))
     app.include_router(create_portfolio_router(container))
     app.include_router(create_session_router(container))
