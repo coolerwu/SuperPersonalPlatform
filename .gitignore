@@ -2,6 +2,7 @@
 config.yaml
 .run/
 .super-personal-platform/
+.superpowers/
 
 # Local Python environment and packaging output.
 .venv/
