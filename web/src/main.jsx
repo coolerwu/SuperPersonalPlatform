@@ -638,6 +638,11 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
   const skillItems = config?.skills || [];
   const selectedSkillIndex = skillItems.length ? Math.min(expandedSkillIndex ?? 0, skillItems.length - 1) : -1;
   const selectedSkill = selectedSkillIndex >= 0 ? skillItems[selectedSkillIndex] : null;
+  const selectedConfigAgentIndex = config?.agents?.length ? Math.min(expandedRow ?? 0, config.agents.length - 1) : -1;
+  const selectedConfigAgent = selectedConfigAgentIndex >= 0 ? config.agents[selectedConfigAgentIndex] : null;
+  const selectedConfigAgentModel = selectedConfigAgent
+    ? config.models.find((model) => model.id === selectedConfigAgent.model_id)
+    : null;
   const selectedSkillAllow = selectedSkill?.tools?.allow || [];
   const selectedSkillMarkdown = selectedSkill
     ? skillContentLoading === selectedSkill.id && skillContents[selectedSkill.id] === undefined
@@ -804,6 +809,36 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
     }));
   }
 
+  function insertSkillEvolutionTemplate() {
+    if (!selectedSkill) return;
+    const currentContent = selectedSkillMarkdown.trim();
+    const template = `# ${selectedSkill.id}
+
+## 自进化目标
+
+- 记录这个 Skill 要持续改进的工作边界、质量标准和禁区。
+- 每次使用后，把可复用经验沉淀到本文件，不把临时任务细节写进长期规则。
+
+## 使用流程
+
+1. 先读取当前任务和已绑定工具能力。
+2. 执行任务时保留可验证证据。
+3. 任务结束后，只在发现稳定模式、常见错误或新约束时更新本 Skill。
+4. 更新前确认不会覆盖用户偏好、项目约定或安全边界。
+
+## 可改进内容
+
+- 更清晰的判断标准。
+- 更可靠的工具选择规则。
+- 常见失败案例与规避方式。
+- 与项目架构、Agent 分工有关的长期约定。
+`;
+    updateSkillContent(
+      selectedSkill.id,
+      currentContent ? `${currentContent}\n\n${template}` : template
+    );
+  }
+
   function addSkill() {
     const id = `common:skill-${(config?.skills?.length || 0) + 1}`;
     const nextIndex = config?.skills?.length || 0;
@@ -823,6 +858,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
 
   function addAgent() {
     const id = `agent-${(config?.agents?.length || 0) + 1}`;
+    const nextIndex = config?.agents?.length || 0;
     setConfig((current) => ({
       ...current,
       agents: [
@@ -836,6 +872,7 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
         }
       ]
     }));
+    setExpandedRow(nextIndex);
   }
 
   function removeAgent(index) {
@@ -1239,107 +1276,140 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
           {configStatus ? <div className="status-message">{configStatus}</div> : null}
           {config ? (
             <div className="agent-management-workspace">
-              <aside className="agent-management-rail">
-                <div className="agent-metric">
-                  <span>Agent</span>
-                  <strong>{config.agents.length}</strong>
+              <aside className="agent-management-rail" role="navigation" aria-label="Agent 列表">
+                <div className="agent-rail-heading">
+                  <div>
+                    <strong>Agent 列表</strong>
+                    <span>{config.agents.length} 个定义</span>
+                  </div>
+                  <button className="icon-action" title="添加 Agent" onClick={addAgent}>
+                    <Plus size={15} />
+                  </button>
                 </div>
-                <div className="agent-metric compact">
-                  <span>模型</span>
-                  <strong>{config.models.length}</strong>
+                <div className="agent-rail-list">
+                  {config.agents.map((agent, index) => {
+                    const model = config.models.find((item) => item.id === agent.model_id);
+                    const active = selectedConfigAgentIndex === index;
+                    return (
+                      <button
+                        key={`${agent.id}-${index}`}
+                        type="button"
+                        className={`agent-rail-item${active ? " active" : ""}`}
+                        onClick={() => setExpandedRow(index)}
+                      >
+                        <span className="agent-rail-icon"><Bot size={15} /></span>
+                        <span className="agent-rail-copy">
+                          <strong>{agent.name || agent.id || "未命名 Agent"}</strong>
+                          <small>{agent.id || "未填写 ID"} · {model?.name || "未绑定模型"}</small>
+                        </span>
+                        <span className="agent-rail-count">{(agent.skill_ids || []).length}</span>
+                      </button>
+                    );
+                  })}
                 </div>
+                <label className="agent-portfolio-binding">
+                  <span>资产组合 Agent</span>
+                  <select
+                    aria-label="资产组合 Agent"
+                    value={config.portfolio_agent_id || ""}
+                    onChange={(event) => setConfig((current) => ({ ...current, portfolio_agent_id: event.target.value }))}
+                  >
+                    <option value="">未配置</option>
+                    {config.agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>
+                    ))}
+                  </select>
+                  <small>资产页只绑定 Agent；工具能力由该 Agent 选择的 Skills 决定。</small>
+                </label>
               </aside>
-              <section className="agent-config-section">
-              <div className="agent-config-section-heading">
-                <div className="agent-count">
-                  <strong>Agent 定义</strong>
-                  <span>{config.agents.length} 个 Agent</span>
-                </div>
-                <button className="secondary-button small" onClick={addAgent}>
-                  <Plus size={15} />
-                  添加
-                </button>
-              </div>
-              <label className="agent-portfolio-binding">
-                <span>资产组合 Agent</span>
-                <select
-                  aria-label="资产组合 Agent"
-                  value={config.portfolio_agent_id || ""}
-                  onChange={(event) => setConfig((current) => ({ ...current, portfolio_agent_id: event.target.value }))}
-                >
-                  <option value="">未配置</option>
-                  {config.agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>
-                  ))}
-                </select>
-                <small>资产页只绑定 Agent；工具能力由该 Agent 选择的 Skills 决定。</small>
-              </label>
-              <div className="agent-table-wrap">
-                <table className="agent-table">
-                <thead>
-                  <tr>
-                    <th className="th-id">ID</th>
-                    <th className="th-name">名称</th>
-                    <th className="th-model">绑定模型</th>
-                    <th className="th-actions">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {config.agents.map((agent, index) => (
-                    <React.Fragment key={`agent-row-${index}`}>
-                      <tr className={expandedRow === index ? "row-active" : ""}>
-                        <td><input value={agent.id} onChange={(e) => updateAgent(index, "id", e.target.value)} /></td>
-                        <td>
-                          <div className="agent-name-cell">
-                            <input value={agent.name} onChange={(e) => updateAgent(index, "name", e.target.value)} />
-                          </div>
-                        </td>
-                        <td><select value={agent.model_id || ""} onChange={(e) => updateAgent(index, "model_id", e.target.value)}>{config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}</select></td>
-                        <td className="td-actions">
-                          <button className="icon-action" title={expandedRow === index ? "收起" : "展开"} onClick={() => setExpandedRow(expandedRow === index ? null : index)}>
-                            {expandedRow === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          </button>
-                          <button className="icon-action danger" title="删除" onClick={() => removeAgent(index)}>
-                            <Trash2 size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                      {expandedRow === index ? (
-                        <tr className="agent-detail-row">
-                          <td colSpan={4}>
-                            <div className="agent-detail-content">
-                              <label className="agent-detail-field">
-                                <span>系统提示词</span>
-                                <textarea value={agent.system_prompt} onChange={(e) => updateAgent(index, "system_prompt", e.target.value)} />
-                              </label>
-                              <div className="agent-detail-field">
-                                  <span>Skills（可选）</span>
-                                  <div className="agent-skill-picker">
-                                    {(config.skills || [])
-                                      .filter((skill) => skill.id.startsWith("common:") || (agent.skill_ids || []).includes(skill.id))
-                                      .map((skill) => (
-                                        <label key={skill.id} className={(agent.skill_ids || []).includes(skill.id) ? "selected" : ""}>
-                                          <input
-                                            type="checkbox"
-                                            checked={(agent.skill_ids || []).includes(skill.id)}
-                                            onChange={() => toggleAgentSkill(index, skill.id)}
-                                          />
-                                          <span>{skill.name || skill.id} ({skill.id})</span>
-                                        </label>
-                                      ))}
-                                    {(config.skills || []).length === 0 ? <small>暂无可选 Skill</small> : null}
-                                  </div>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      ) : null}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-                </table>
-              </div>
-              </section>
+              {selectedConfigAgent ? (
+                <section className="agent-detail-workspace">
+                  <div className="agent-detail-editor">
+                    <div className="agent-detail-topbar">
+                      <div className="agent-detail-title">
+                        <span className="ai-agent-orb"><Bot size={17} /></span>
+                        <div>
+                          <strong>{selectedConfigAgent.name || selectedConfigAgent.id || "未命名 Agent"}</strong>
+                          <small>{selectedConfigAgent.id || "未填写 ID"}</small>
+                        </div>
+                      </div>
+                      <div className="agent-detail-actions">
+                        <button className="icon-action" title={expandedRow === selectedConfigAgentIndex ? "收起" : "展开"} onClick={() => setExpandedRow(selectedConfigAgentIndex)}>
+                          <ChevronDown size={14} />
+                        </button>
+                        <button className="icon-action danger" title="删除" onClick={() => removeAgent(selectedConfigAgentIndex)}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="agent-identity-grid">
+                      <label>
+                        <span>Agent ID</span>
+                        <input value={selectedConfigAgent.id} onChange={(event) => updateAgent(selectedConfigAgentIndex, "id", event.target.value)} />
+                      </label>
+                      <label>
+                        <span>显示名称</span>
+                        <input value={selectedConfigAgent.name} onChange={(event) => updateAgent(selectedConfigAgentIndex, "name", event.target.value)} />
+                      </label>
+                      <label>
+                        <span>绑定模型</span>
+                        <select value={selectedConfigAgent.model_id || ""} onChange={(event) => updateAgent(selectedConfigAgentIndex, "model_id", event.target.value)}>
+                          {config.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <label className="agent-prompt-editor">
+                      <span>系统提示词</span>
+                      <textarea value={selectedConfigAgent.system_prompt} onChange={(event) => updateAgent(selectedConfigAgentIndex, "system_prompt", event.target.value)} />
+                    </label>
+                    <div className="agent-detail-field">
+                      <span>Skills（可选）</span>
+                      <div className="agent-skill-picker">
+                        {(config.skills || [])
+                          .filter((skill) => skill.id.startsWith("common:") || (selectedConfigAgent.skill_ids || []).includes(skill.id))
+                          .map((skill) => (
+                            <label key={skill.id} className={(selectedConfigAgent.skill_ids || []).includes(skill.id) ? "selected" : ""}>
+                              <input
+                                type="checkbox"
+                                checked={(selectedConfigAgent.skill_ids || []).includes(skill.id)}
+                                onChange={() => toggleAgentSkill(selectedConfigAgentIndex, skill.id)}
+                              />
+                              <span>{skill.name || skill.id} ({skill.id})</span>
+                            </label>
+                          ))}
+                        {(config.skills || []).length === 0 ? <small>暂无可选 Skill</small> : null}
+                      </div>
+                    </div>
+                  </div>
+                  <aside className="agent-profile-panel">
+                    <div className="agent-profile-heading">
+                      <span>运行画像</span>
+                      <strong>{selectedConfigAgentModel?.name || "未绑定模型"}</strong>
+                    </div>
+                    <div className="agent-profile-row">
+                      <span>模型模式</span>
+                      <strong>{(selectedConfigAgentModel?.mode || "prompt") === "agent" ? "Agent" : "Prompt"}</strong>
+                    </div>
+                    <div className="agent-profile-row">
+                      <span>输入能力</span>
+                      <strong>{selectedConfigAgentModel?.supports_images ? "文本 + 图片" : "文本"}</strong>
+                    </div>
+                    <div className="agent-profile-row">
+                      <span>已绑定 Skills</span>
+                      <strong>{(selectedConfigAgent.skill_ids || []).length}</strong>
+                    </div>
+                    <div className="agent-profile-skills">
+                      {(selectedConfigAgent.skill_ids || []).length ? (
+                        selectedConfigAgent.skill_ids.map((skillId) => <span key={skillId}>{skillId}</span>)
+                      ) : (
+                        <small>未绑定 Skill；该 Agent 不会获得 Skill 暴露的工具。</small>
+                      )}
+                    </div>
+                  </aside>
+                </section>
+              ) : (
+                <div className="empty-state">还没有 Agent，点击添加创建一个工作代理。</div>
+              )}
             </div>
           ) : (
             <div className="empty-state">正在加载 Agent 配置</div>
@@ -1444,7 +1514,13 @@ function AgentPage({ onUnauthorized, initialTab = "chat" }) {
                     <div className="skill-markdown-pane">
                       <div className="skill-markdown-toolbar">
                         <span>Markdown 内容</span>
-                        <small>实时预览</small>
+                        <div>
+                          <button className="secondary-button small" type="button" onClick={insertSkillEvolutionTemplate}>
+                            <BrainCircuit size={14} />
+                            插入自进化模板
+                          </button>
+                          <small>实时预览</small>
+                        </div>
                       </div>
                       <div className="skill-markdown-split">
                         <textarea
@@ -2921,24 +2997,26 @@ function AppShell({ onLogout }) {
                     <Icon size={18} />
                     <span>{item.label}</span>
                   </button>
-                  <div className="sidebar-subnav" role="navigation" aria-label="Agent 功能">
-                    {AGENT_NAV_ITEMS.map((child) => {
-                      const ChildIcon = child.icon;
-                      const active = child.tab === agentTabForPath(path) && isAgentPath;
-                      return (
-                        <button
-                          key={child.path}
-                          type="button"
-                          className={active ? "active" : ""}
-                          aria-current={active ? "page" : undefined}
-                          onClick={() => navigate(child.path)}
-                        >
-                          <ChildIcon size={15} />
-                          <span>{child.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {isAgentPath ? (
+                    <div className="sidebar-subnav" role="navigation" aria-label="Agent 功能">
+                      {AGENT_NAV_ITEMS.map((child) => {
+                        const ChildIcon = child.icon;
+                        const active = child.tab === agentTabForPath(path);
+                        return (
+                          <button
+                            key={child.path}
+                            type="button"
+                            className={active ? "active" : ""}
+                            aria-current={active ? "page" : undefined}
+                            onClick={() => navigate(child.path)}
+                          >
+                            <ChildIcon size={15} />
+                            <span>{child.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </div>
               );
             }

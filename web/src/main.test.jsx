@@ -295,6 +295,7 @@ describe("LoginPage", () => {
     });
 
     expect(await screen.findByRole("button", { name: "Agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Agent 功能" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "自开发" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
   });
@@ -697,13 +698,15 @@ describe("LoginPage", () => {
     });
 
     await user.click(await screen.findByRole("button", { name: /Agent 管理/ }));
+    expect(await screen.findByRole("navigation", { name: "Agent 列表" })).toBeInTheDocument();
+    expect(screen.getByText("运行画像")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Second/ }));
     const idInput = await screen.findByDisplayValue("agent-2");
     await user.clear(idInput);
     await user.type(idInput, "agent-renamed");
     const nameInput = screen.getAllByDisplayValue("Second").find((element) => element.tagName === "INPUT");
     await user.clear(nameInput);
     await user.type(nameInput, "Renamed Agent");
-    await user.click(screen.getAllByTitle("展开")[1]);
     expect(screen.queryByText("Skill IDs")).not.toBeInTheDocument();
     await user.click(screen.getByLabelText("研究 (common:research)"));
     await user.click(screen.getByRole("button", { name: /^保存$/ }));
