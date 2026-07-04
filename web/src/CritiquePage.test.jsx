@@ -168,8 +168,8 @@ describe("CritiquePage", () => {
     expect(screen.getByRole("checkbox", { name: /经济学/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /心理学/ })).not.toBeChecked();
 
-    await user.type(screen.getByPlaceholderText("输入你想被质疑的问题..."), "我是否应该辞职？");
-    await user.click(screen.getByRole("button", { name: "开始压榨" }));
+    await user.type(screen.getByPlaceholderText(/@经济学/), "我是否应该辞职？");
+    await user.click(screen.getByRole("button", { name: "发送" }));
 
     expect(sockets[0].sent[0]).toEqual({
       type: "run",
@@ -182,17 +182,35 @@ describe("CritiquePage", () => {
     expect(screen.getByText("先验证十个付费用户")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /我是否应该辞职/ })).toBeInTheDocument();
 
-    const followUpInput = screen.getByPlaceholderText("继续追问，或要求某个学科深入...");
+    const followUpInput = screen.getByPlaceholderText(/继续输入/);
     await user.type(followUpInput, "预算有限时先验证什么？");
-    await user.click(screen.getByRole("button", { name: "继续追问" }));
+    await user.click(screen.getByRole("button", { name: "发送" }));
 
     expect(sockets[0].sent.at(-1)).toEqual({
       type: "follow_up",
       run_id: "r-1",
-      question: "预算有限时先验证什么？"
+      question: "预算有限时先验证什么？",
+      discipline_ids: ["d-economics"]
     });
     expect((await screen.findAllByText("预算有限时先验证什么？")).length).toBeGreaterThan(0);
     expect(screen.getByText("先验证单一付费场景")).toBeInTheDocument();
+  });
+
+  it("routes an at-mention to the mentioned dimension agent", async () => {
+    installApiMock();
+    const sockets = installWebSocketMock();
+    const user = userEvent.setup();
+    render(<CritiquePage onUnauthorized={vi.fn()} />);
+
+    await screen.findByRole("button", { name: "新建对话" });
+    await user.type(screen.getByPlaceholderText(/@经济学/), "@心理学 我是否在逃避风险？");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(sockets[0].sent[0]).toEqual({
+      type: "run",
+      question: "@心理学 我是否在逃避风险？",
+      discipline_ids: ["d-psychology"]
+    });
   });
 
   it("adds a discipline with the user's known scope and critique focus", async () => {
@@ -202,11 +220,11 @@ describe("CritiquePage", () => {
     render(<CritiquePage onUnauthorized={vi.fn()} />);
 
     await user.click(await screen.findByRole("button", { name: "添加" }));
-    await user.type(screen.getByLabelText("学科名称"), "哲学");
-    await user.type(screen.getByLabelText("我了解的范围"), "伦理与价值判断");
-    await user.type(screen.getByLabelText("重点批判方向"), "价值一致性");
+    await user.type(screen.getByLabelText("维度名称"), "哲学");
+    await user.type(screen.getByLabelText("Agent 能力边界"), "伦理与价值判断");
+    await user.type(screen.getByLabelText("回答重点"), "价值一致性");
     fireEvent.click(screen.getByRole("checkbox", { name: "默认参与" }));
-    await user.click(screen.getByRole("button", { name: "保存学科" }));
+    await user.click(screen.getByRole("button", { name: "保存维度" }));
 
     await waitFor(() => expect(screen.getByText("哲学")).toBeInTheDocument());
     const saveCall = fetch.mock.calls.find(

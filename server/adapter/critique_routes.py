@@ -110,9 +110,13 @@ def create_critique_router(container: AppContainer) -> APIRouter:
                             on_event=send_event,
                         )
                     elif message_type == "follow_up":
+                        discipline_ids_raw = raw.get("discipline_ids")
+                        if discipline_ids_raw is not None and not isinstance(discipline_ids_raw, list):
+                            raise ValueError("discipline_ids 必须是数组")
                         await service.follow_up(
                             str(raw.get("run_id") or ""),
                             str(raw.get("question") or ""),
+                            discipline_ids=tuple(str(item) for item in discipline_ids_raw) if discipline_ids_raw is not None else None,
                             on_event=send_event,
                         )
                     else:

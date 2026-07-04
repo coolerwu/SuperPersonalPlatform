@@ -151,7 +151,7 @@ describe("LoginPage", () => {
     expect(screen.queryByText("系统运维")).not.toBeInTheDocument();
   });
 
-  it("opens the multidisciplinary critique matrix from the sidebar", async () => {
+  it("opens the dimension agent room from the sidebar", async () => {
     document.body.innerHTML = '<div id="root"></div>';
     window.history.replaceState({}, "", "/critique");
     class MockWebSocket {
@@ -188,9 +188,10 @@ describe("LoginPage", () => {
       await import("./main.jsx");
     });
 
-    expect(await screen.findByRole("button", { name: "多维批判" })).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("button", { name: "维度聊天室" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("button", { name: "新建对话" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "多维批判" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "首页" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "维度聊天室" })).not.toBeInTheDocument();
   });
 
   it("uses the configured ordinary Agent for Portfolio chat", async () => {
@@ -294,8 +295,9 @@ describe("LoginPage", () => {
       await import("./main.jsx");
     });
 
-    expect(await screen.findByRole("button", { name: "Agent" })).toBeInTheDocument();
-    expect(screen.queryByRole("navigation", { name: "Agent 功能" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Agent" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("navigation", { name: "Agent 功能" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "首页" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "自开发" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
   });

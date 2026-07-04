@@ -9,12 +9,10 @@ import {
   ChevronDown,
   ChevronUp,
   Circle,
-  Clock,
   Cpu,
   FileCode,
   FileEdit,
   FileText,
-  Home,
   Image as ImageIcon,
   List,
   Loader2,
@@ -83,7 +81,7 @@ function LoginPage({ onLogin }) {
         body: JSON.stringify({ token })
       });
       onLogin();
-      window.history.replaceState({}, "", "/");
+      window.history.replaceState({}, "", "/agents");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -117,89 +115,6 @@ function LoginPage({ onLogin }) {
         </form>
       </section>
     </main>
-  );
-}
-
-function HomePage({ onNavigate }) {
-  const primaryItems = [
-    {
-      path: "/agents",
-      icon: Bot,
-      title: "Agent 对话",
-      desc: "处理问题、上传截图、跟进上下文。",
-      meta: "默认入口"
-    }
-  ];
-  const secondaryItems = [
-    {
-      path: "/channels",
-      icon: MessageSquare,
-      title: "渠道",
-      desc: "个人微信扫码机器人、Webhook。",
-      meta: "QR"
-    },
-    {
-      path: "/system",
-      icon: Settings,
-      title: "系统",
-      desc: "配置、日志、更新。",
-      meta: "ops"
-    }
-  ];
-
-  return (
-    <section className="page-section home-workspace">
-      <div className="home-hero">
-        <span>Workspace</span>
-        <h2>控制台</h2>
-        <p>超级个人平台统一控制台，管理 Agent、渠道与系统配置。</p>
-      </div>
-
-      <div className="home-status-strip" aria-label="运行状态">
-        <span><ShieldCheck size={14} /> Token 会话</span>
-        <span><PlugZap size={14} /> localhost:8888</span>
-        <span><Clock size={14} /> FastAPI 同源</span>
-      </div>
-
-      <button className="home-agent-command" onClick={() => onNavigate("/agents")}>
-        <span><Bot size={18} /></span>
-        <strong>今天想处理什么？</strong>
-        <small>打开 Agent 对话，直接输入任务或上传截图</small>
-        <ArrowRight size={16} />
-      </button>
-
-      <div className="home-grid">
-        <div className="home-primary-grid">
-          {primaryItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button key={item.path} className="home-tool-card" onClick={() => onNavigate(item.path)}>
-                <span className="workspace-row-icon"><Icon size={18} /></span>
-                <strong>{item.title}</strong>
-                <small>{item.desc}</small>
-                <em>{item.meta}</em>
-              </button>
-            );
-          })}
-        </div>
-        <div className="workspace-list" aria-label="辅助入口">
-          {secondaryItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button key={item.path} className="workspace-row" onClick={() => onNavigate(item.path)}>
-                <span className="workspace-row-icon"><Icon size={17} /></span>
-                <span className="workspace-row-copy">
-                  <strong>{item.title}</strong>
-                  <small>{item.desc}</small>
-                </span>
-                <span className="workspace-row-meta">{item.meta}</span>
-                <ArrowRight size={15} />
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -2909,13 +2824,13 @@ function PortfolioPage({ onUnauthorized }) {
 }
 
 function AppShell({ onLogout }) {
-  const [path, setPath] = useState(window.location.pathname);
+  const initialPath = window.location.pathname === "/" ? "/agents" : window.location.pathname;
+  const [path, setPath] = useState(initialPath);
   const isAgentPath = path === "/models" || path === "/agents" || path.startsWith("/agents/");
   const navItems = useMemo(
     () => [
-      { path: "/", label: "首页", icon: Home },
       { path: "/agents", label: "Agent", icon: Bot },
-      { path: "/critique", label: "多维批判", icon: BrainCircuit },
+      { path: "/critique", label: "维度聊天室", icon: BrainCircuit },
       { path: "/channels", label: "渠道", icon: MessageSquare },
       { path: "/portfolio", label: "资产组合", icon: TrendingUp },
       { path: "/system", label: "系统", icon: Settings }
@@ -2929,7 +2844,10 @@ function AppShell({ onLogout }) {
   }
 
   useEffect(() => {
-    const handler = () => setPath(window.location.pathname);
+    if (window.location.pathname === "/") {
+      window.history.replaceState({}, "", "/agents");
+    }
+    const handler = () => setPath(window.location.pathname === "/" ? "/agents" : window.location.pathname);
     window.addEventListener("popstate", handler);
     return () => window.removeEventListener("popstate", handler);
   }, []);
@@ -2972,7 +2890,7 @@ function AppShell({ onLogout }) {
     if (path === "/channels") {
       return <ChannelsPage onUnauthorized={unauthorized} />;
     }
-    return <HomePage onNavigate={navigate} />;
+    return <AgentPage onUnauthorized={unauthorized} initialTab="chat" />;
   }
 
   return (

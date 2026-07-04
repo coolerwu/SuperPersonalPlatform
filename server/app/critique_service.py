@@ -156,16 +156,26 @@ class CritiqueService:
         run_id: str,
         question: str,
         *,
+        discipline_ids: tuple[str, ...] | None = None,
         on_event: CritiqueEventCallback | None = None,
     ) -> CritiqueRun:
         current = self.get_run(run_id)
         normalized_question = question.strip()
         if not normalized_question:
             raise ValueError("问题不能为空")
+        disciplines = current.disciplines
+        if discipline_ids is not None:
+            if not discipline_ids:
+                raise ValueError("至少选择一个学科")
+            discipline_map = {item.id: item for item in current.disciplines}
+            try:
+                disciplines = tuple(discipline_map[discipline_id] for discipline_id in discipline_ids)
+            except KeyError as exc:
+                raise CritiqueDisciplineNotFoundError("学科不存在") from exc
         turn, resolved_model_id = await self._execute_turn(
             run_id=current.id,
             question=normalized_question,
-            disciplines=current.disciplines,
+            disciplines=disciplines,
             model_id=current.model_id or None,
             prior_turns=current.turns,
             on_event=on_event,

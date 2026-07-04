@@ -315,6 +315,55 @@ def test_follow_up_reuses_saved_disciplines_and_persists_context(
     assert all("如果预算只有两万元，先验证什么？" in content for content in discipline_prompts)
 
 
+def test_follow_up_can_target_a_saved_discipline_subset(tmp_path, monkeypatch) -> None:
+    agent_service = FakeAgentChatService()
+    service = CritiqueService(tmp_path, agent_service)
+    economics, psychology = create_disciplines(service)
+
+    async def fake_run_agent(request):
+        if request.agent.definition.id == "critique-judge":
+            return json.dumps(
+                {
+                    "weakest_assumption": "心理动机未经验证",
+                    "largest_disagreement": "暂无",
+                    "recommended_validation": "先记录一周决策触发点",
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "core_assumption": "恐惧正在主导决策",
+                "counterevidence": "缺少行为日志",
+                "opportunity_cost": "继续拖延会消耗注意力",
+                "key_question": "你具体害怕失去什么？",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("server.app.critique_service.run_agent", fake_run_agent)
+    initial = asyncio.run(
+        service.run_critique(
+            "我是否应该辞职做自己的产品？",
+            (economics.id, psychology.id),
+        )
+    )
+    agent_service.bind_calls.clear()
+
+    conversation = asyncio.run(
+        service.follow_up(
+            initial.id,
+            "@心理学 我是否在逃避风险？",
+            discipline_ids=(psychology.id,),
+        )
+    )
+
+    assert conversation.disciplines == (economics, psychology)
+    assert [result.discipline_id for result in conversation.turns[-1].results] == [psychology.id]
+    assert [
+        call["agent_id"] for call in agent_service.bind_calls
+    ] == [f"critique-discipline-{psychology.id}", "critique-judge"]
+
+
 def test_get_run_synthesizes_turn_for_legacy_single_run_file(tmp_path) -> None:
     service = CritiqueService(tmp_path, FakeAgentChatService())
     economics = service.create_discipline("经济学", "微观决策", "机会成本", True)

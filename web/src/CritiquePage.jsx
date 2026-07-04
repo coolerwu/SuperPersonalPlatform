@@ -38,6 +38,17 @@ const EMPTY_FORM = {
 };
 
 
+function mentionedDisciplines(content, disciplines) {
+  const names = new Set(
+    Array.from(String(content || "").matchAll(/@([^\s@，,。；;：:]+)/g))
+      .map((match) => match[1]?.trim())
+      .filter(Boolean)
+  );
+  if (!names.size) return [];
+  return disciplines.filter((discipline) => names.has(discipline.name) || names.has(discipline.id));
+}
+
+
 function CritiqueStatus({ status }) {
   const labels = {
     queued: "排队中",
@@ -130,29 +141,29 @@ function DisciplineEditor({ discipline, onClose, onSave }) {
 
   return (
     <div className="critique-dialog-backdrop" role="presentation">
-      <section className="critique-dialog" role="dialog" aria-modal="true" aria-label={discipline ? "编辑学科" : "添加学科"}>
+      <section className="critique-dialog" role="dialog" aria-modal="true" aria-label={discipline ? "编辑维度 Agent" : "添加维度 Agent"}>
         <header>
           <div>
-            <strong>{discipline ? "编辑学科" : "添加学科"}</strong>
-            <span>只添加你能理解和判断的批判视角</span>
+            <strong>{discipline ? "编辑维度 Agent" : "添加维度 Agent"}</strong>
+            <span>定义一个可被 @ 的回答维度</span>
           </div>
           <button type="button" className="icon-button" aria-label="关闭" onClick={onClose}><X size={17} /></button>
         </header>
         <form onSubmit={submit}>
           <label>
-            <span>学科名称</span>
+            <span>维度名称</span>
             <input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
           </label>
           <label>
-            <span>我了解的范围</span>
+            <span>Agent 能力边界</span>
             <textarea rows={4} value={form.known_scope} onChange={(event) => setForm((current) => ({ ...current, known_scope: event.target.value }))} />
           </label>
           <label>
-            <span>重点批判方向</span>
+            <span>回答重点</span>
             <textarea rows={4} value={form.critique_focus} onChange={(event) => setForm((current) => ({ ...current, critique_focus: event.target.value }))} />
           </label>
           <label className="critique-toggle-row">
-            <span><strong>默认参与</strong><small>后续新问题自动启用这个学科</small></span>
+            <span><strong>默认参与</strong><small>没有 @ 时默认让这个 Agent 回答</small></span>
             <input
               type="checkbox"
               aria-label="默认参与"
@@ -164,7 +175,7 @@ function DisciplineEditor({ discipline, onClose, onSave }) {
           <footer>
             <button type="button" className="secondary-button" onClick={onClose}>取消</button>
             <button type="submit" className="secondary-button primary-action" disabled={saving || !form.name.trim() || !form.known_scope.trim() || !form.critique_focus.trim()}>
-              {saving ? "保存中" : "保存学科"}
+              {saving ? "保存中" : "保存维度"}
             </button>
           </footer>
         </form>
@@ -177,7 +188,7 @@ function DisciplineEditor({ discipline, onClose, onSave }) {
 function CritiqueTurnView({ turn, index, sending, onRetry }) {
   const completedResults = (turn.results || []).filter((item) => item.status === "completed");
   return (
-    <article className="critique-turn" aria-label={`第 ${index + 1} 轮批判`}>
+    <article className="critique-turn" aria-label={`第 ${index + 1} 轮对话`}>
       <div className="critique-user-message">
         <span className="critique-avatar">你</span>
         <div><strong>你</strong><p>{turn.question}</p></div>
@@ -185,11 +196,11 @@ function CritiqueTurnView({ turn, index, sending, onRetry }) {
       <div className="critique-assistant-message">
         <div className="critique-assistant-heading">
           <Scale size={18} />
-          <strong>多维批判</strong>
+          <strong>维度 Agent 回复</strong>
           <span>第 {index + 1} 轮</span>
         </div>
         {turn.status === "running" && !completedResults.length ? (
-          <div className="critique-thinking"><RefreshCw size={15} className="spin" />各学科正在并行分析...</div>
+          <div className="critique-thinking"><RefreshCw size={15} className="spin" />相关维度 Agent 正在回答...</div>
         ) : null}
         <div className="critique-expert-responses">
           {(turn.results || []).map((result) => (
@@ -211,7 +222,7 @@ function CritiqueTurnView({ turn, index, sending, onRetry }) {
                 </div>
               ) : result.status === "failed" ? (
                 <div className="critique-result-error">
-                  <span>{result.error || "学科分析失败"}</span>
+                  <span>{result.error || "维度 Agent 回答失败"}</span>
                   <button type="button" className="critique-retry" onClick={() => onRetry(turn.id, result.discipline_id)} disabled={sending}>
                     <RefreshCw size={12} />重试
                   </button>
@@ -222,7 +233,7 @@ function CritiqueTurnView({ turn, index, sending, onRetry }) {
         </div>
         {turn.judgment ? (
           <section className="critique-judgment-inline">
-            <header><Scale size={16} /><strong>综合裁判</strong></header>
+            <header><Scale size={16} /><strong>综合整理</strong></header>
             <div>
               <p><span>最薄弱假设</span>{turn.judgment.weakest_assumption}</p>
               <p><span>最大分歧</span>{turn.judgment.largest_disagreement}</p>
@@ -284,7 +295,7 @@ export function CritiquePage({ onUnauthorized }) {
     socketRef.current = socket;
     socket.onopen = () => setConnection("connected");
     socket.onclose = () => setConnection("disconnected");
-    socket.onerror = () => setError("多维批判连接失败");
+    socket.onerror = () => setError("维度聊天室连接失败");
     socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
       if (message.type === "status") {
@@ -303,7 +314,7 @@ export function CritiquePage({ onUnauthorized }) {
           const discipline = (current?.disciplines || []).find((item) => item.id === message.discipline_id);
           const nextResult = message.result || {
             discipline_id: message.discipline_id,
-            discipline_name: discipline?.name || "学科",
+            discipline_name: discipline?.name || "维度 Agent",
             status: message.status,
             analysis: null,
             error: ""
@@ -329,7 +340,7 @@ export function CritiquePage({ onUnauthorized }) {
         return;
       }
       if (message.type === "error") {
-        setError(message.message || "多维批判运行失败");
+        setError(message.message || "维度 Agent 运行失败");
         setSending(false);
       }
     };
@@ -341,7 +352,13 @@ export function CritiquePage({ onUnauthorized }) {
   }, [activeRun?.turns, sending]);
 
   const activeTurns = activeRun?.turns || [];
-  const activeDisciplines = activeRun?.disciplines || disciplines.filter((item) => selectedIds.has(item.id));
+  const baseDisciplines = activeRun?.disciplines || disciplines.filter((item) => selectedIds.has(item.id));
+  const mentionableDisciplines = activeRun?.disciplines || disciplines;
+  const targetedDisciplines = useMemo(
+    () => mentionedDisciplines(question, mentionableDisciplines),
+    [question, mentionableDisciplines]
+  );
+  const activeDisciplines = targetedDisciplines.length ? targetedDisciplines : baseDisciplines;
   const activeDisciplineNames = useMemo(
     () => activeDisciplines.map((item) => item.name).join("、"),
     [activeDisciplines]
@@ -382,9 +399,7 @@ export function CritiquePage({ onUnauthorized }) {
       return;
     }
     const isFollowUp = Boolean(activeRun?.id && activeRun.id !== "pending");
-    const selectedDisciplines = isFollowUp
-      ? activeRun.disciplines
-      : disciplines.filter((item) => selectedIds.has(item.id));
+    const selectedDisciplines = activeDisciplines;
     if (!selectedDisciplines.length) return;
     const now = new Date().toISOString();
     const pendingTurn = {
@@ -415,7 +430,12 @@ export function CritiquePage({ onUnauthorized }) {
         updated_at: now,
         turns: [...current.turns, pendingTurn]
       }));
-      socketRef.current.send(JSON.stringify({ type: "follow_up", run_id: activeRun.id, question: content }));
+      socketRef.current.send(JSON.stringify({
+        type: "follow_up",
+        run_id: activeRun.id,
+        question: content,
+        discipline_ids: selectedDisciplines.map((item) => item.id)
+      }));
       return;
     }
     setActiveRun({
@@ -475,7 +495,7 @@ export function CritiquePage({ onUnauthorized }) {
   }
 
   async function deleteDiscipline(discipline) {
-    if (!window.confirm(`删除学科“${discipline.name}”？历史记录不会受影响。`)) return;
+    if (!window.confirm(`删除维度 Agent“${discipline.name}”？历史记录不会受影响。`)) return;
     try {
       await requestJson(`/api/critique/disciplines/${discipline.id}`, { method: "DELETE" });
       setDisciplines((items) => items.filter((item) => item.id !== discipline.id));
@@ -494,19 +514,19 @@ export function CritiquePage({ onUnauthorized }) {
       <div className="critique-topbar">
         <div className="critique-topbar-context">
           <MessageSquareText size={16} />
-          <strong>{activeRun?.title || "新批判对话"}</strong>
+          <strong>{activeRun?.title || "新维度对话"}</strong>
           {activeTurns.length ? <span>第 {activeTurns.length} 轮</span> : <span>等待提问</span>}
         </div>
         <span className={`runtime-status ${connection === "connected" ? "connected" : ""}`}>
           {connection === "connected" ? "已连接" : "未连接"}
         </span>
         <button type="button" className="secondary-button" onClick={() => setLibraryOpen((value) => !value)}>
-          <BrainCircuit size={15} />管理学科
+          <BrainCircuit size={15} />管理维度
         </button>
       </div>
 
       <div className="critique-chat-workspace">
-        <aside className="critique-conversation-rail" aria-label="批判对话历史">
+        <aside className="critique-conversation-rail" aria-label="维度聊天室历史">
           <button type="button" className="secondary-button critique-new-conversation" onClick={newConversation} disabled={sending}>
             <Plus size={15} />新建对话
           </button>
@@ -541,8 +561,8 @@ export function CritiquePage({ onUnauthorized }) {
             )) : (
               <div className="critique-chat-empty">
                 <Scale size={24} />
-                <strong>提出一个值得被质疑的问题</strong>
-                <p>已选学科会并行拆解假设，综合裁判给出验证方向；之后可以在同一上下文中继续追问。</p>
+                <strong>在一个聊天室里 @ 不同维度 Agent</strong>
+                <p>输入 @经济学、@心理学 这样的维度名即可指定谁回答；不写 @ 时由默认启用的维度一起回答。</p>
               </div>
             )}
           </div>
@@ -554,12 +574,12 @@ export function CritiquePage({ onUnauthorized }) {
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder={activeRun ? "继续追问，或要求某个学科深入..." : "输入你想被质疑的问题..."}
-              aria-label={activeRun ? "继续追问" : "开始提问"}
+              placeholder={activeRun ? "继续输入，例：@经济学 只从机会成本回答..." : "输入消息，例：@经济学 @心理学 我该怎么判断？"}
+              aria-label={activeRun ? "继续输入" : "输入消息"}
             />
             <div>
               <span className="critique-active-experts">
-                <span />{activeDisciplines.length ? `已选学科：${activeDisciplineNames}` : "请选择至少一个学科"}
+                <span />{activeDisciplines.length ? `${targetedDisciplines.length ? "本次 @ " : "默认参与："}${activeDisciplineNames}` : "请选择至少一个维度 Agent"}
               </span>
               <button
                 type="button"
@@ -568,7 +588,7 @@ export function CritiquePage({ onUnauthorized }) {
                 disabled={!question.trim() || !activeDisciplines.length || sending || loading}
               >
                 {sending ? <RefreshCw size={16} className="spin" /> : <Send size={16} />}
-                {sending ? "分析中" : activeRun ? "继续追问" : "开始压榨"}
+                {sending ? "发送中" : "发送"}
               </button>
             </div>
           </section>
@@ -576,7 +596,7 @@ export function CritiquePage({ onUnauthorized }) {
 
         <aside className="critique-context-inspector">
           <header>
-            <div><strong>{activeRun ? "已选学科" : "选择学科"}</strong><span>{activeDisciplines.length}/{disciplines.length}</span></div>
+            <div><strong>{activeRun ? "会话维度" : "选择维度"}</strong><span>{activeDisciplines.length}/{disciplines.length}</span></div>
             <button type="button" className="secondary-button small" onClick={() => setEditingDiscipline(null)}><Plus size={14} />添加</button>
           </header>
           <div className="critique-discipline-list">
@@ -606,16 +626,16 @@ export function CritiquePage({ onUnauthorized }) {
                 </div>
               );
             })}
-            {!loading && disciplines.length === 0 ? <div className="critique-empty">暂无学科</div> : null}
+            {!loading && disciplines.length === 0 ? <div className="critique-empty">暂无维度 Agent</div> : null}
           </div>
           <section className="critique-context-summary">
             <strong>对话上下文</strong>
             <dl>
               <div><dt>主题</dt><dd>{activeRun?.title || "尚未创建"}</dd></div>
               <div><dt>当前轮次</dt><dd>{activeTurns.length || 0}</dd></div>
-              <div><dt>参与学科</dt><dd>{activeDisciplines.length}</dd></div>
+              <div><dt>本次回答</dt><dd>{activeDisciplines.length}</dd></div>
             </dl>
-            {activeRun ? <p>本会话沿用首轮选择的学科与历史结论。</p> : <p>首轮开始后，学科组合会锁定到这段对话。</p>}
+            {activeRun ? <p>可继续用 @ 指定本轮由哪个维度 Agent 回答。</p> : <p>不写 @ 时使用右侧默认启用的维度 Agent。</p>}
           </section>
         </aside>
       </div>
