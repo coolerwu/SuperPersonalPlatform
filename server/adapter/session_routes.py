@@ -32,6 +32,7 @@ def _session_to_response(session) -> dict:
                     {"stage": cp.stage, "title": cp.title, "detail": cp.detail}
                     for cp in msg.checkpoints
                 ],
+                "run_id": msg.run_id,
                 "created_at": msg.created_at,
             }
             for msg in session.messages

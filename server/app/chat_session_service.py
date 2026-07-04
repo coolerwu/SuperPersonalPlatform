@@ -103,6 +103,7 @@ class ChatSessionService:
             content=message.content,
             images=message.images,
             checkpoints=message.checkpoints,
+            run_id=message.run_id,
             created_at=now,
         )
         updated = ChatSession(
@@ -152,6 +153,7 @@ class ChatSessionService:
                         )
                         for cp in msg.get("checkpoints", [])
                     ),
+                    run_id=msg.get("run_id", ""),
                     created_at=msg.get("created_at", ""),
                 )
             )
@@ -182,6 +184,7 @@ class ChatSessionService:
                         {"stage": cp.stage, "title": cp.title, "detail": cp.detail}
                         for cp in msg.checkpoints
                     ],
+                    "run_id": msg.run_id,
                     "created_at": msg.created_at,
                 }
                 for msg in session.messages

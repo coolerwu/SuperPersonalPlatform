@@ -16,6 +16,7 @@ from server.domain.agents import (
 from server.domain.harness import (
     Agent,
     AgentChatCheckpoint,
+    AgentRunArtifactEvent,
     AgentChatUnavailableError,
     ChatImage,
     HarnessRequest,
@@ -302,6 +303,7 @@ class AgentChatService:
         content: str,
         images: tuple[ChatImage, ...] = (),
         on_checkpoint: Callable[[AgentChatCheckpoint], Awaitable[None]] | None = None,
+        on_run_artifact: Callable[[AgentRunArtifactEvent], Awaitable[None]] | None = None,
     ) -> str:
         agent_id = agent_id.strip()
         if not agent_id:
@@ -326,6 +328,7 @@ class AgentChatService:
                 tool_registry=self._tool_registry if tool_names else None,
                 tool_runtime=self._tool_runtime(agent, tool_names) if tool_names else None,
                 on_checkpoint=on_checkpoint,
+                on_run_artifact=on_run_artifact,
             )
         else:
             request = HarnessRequest.for_prompt(
@@ -333,6 +336,7 @@ class AgentChatService:
                 content=content,
                 images=images,
                 on_checkpoint=on_checkpoint,
+                on_run_artifact=on_run_artifact,
             )
         return await run_agent(request)
 
@@ -367,6 +371,7 @@ class AgentChatService:
         content: str,
         tool_runtime: AgentToolRuntime,
         on_checkpoint: Callable[[AgentChatCheckpoint], Awaitable[None]] | None = None,
+        on_run_artifact: Callable[[AgentRunArtifactEvent], Awaitable[None]] | None = None,
     ) -> str:
         agent_id = agent_id.strip()
         if not agent_id:
@@ -390,12 +395,14 @@ class AgentChatService:
                 tool_registry=self._tool_registry if tool_names else None,
                 tool_runtime=tool_runtime if tool_names else None,
                 on_checkpoint=on_checkpoint,
+                on_run_artifact=on_run_artifact,
             )
         else:
             request = HarnessRequest.for_prompt(
                 agent=bound_agent,
                 content=content,
                 on_checkpoint=on_checkpoint,
+                on_run_artifact=on_run_artifact,
             )
         return await run_agent(request)
 

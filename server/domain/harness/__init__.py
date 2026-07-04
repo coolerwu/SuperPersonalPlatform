@@ -3,6 +3,7 @@ from server.domain.harness.contracts import (
     AgentChatCheckpoint,
     AgentChatUnavailableError,
     AgentRunBlockedError,
+    AgentRunArtifactEvent,
     AgentRunFailedError,
     AgentToolCall,
     AgentToolCallingUnsupportedError,
@@ -16,7 +17,7 @@ from server.domain.harness.contracts import (
     VerificationResult,
 )
 from server.domain.agents import HarnessMode
-from server.domain.harness.modes.agent import AgentRunPhase
+from server.domain.harness.modes.agent import AgentRunPhase, AgentRunStatus
 from server.domain.harness.runner import run_agent
 
 __all__ = [
@@ -24,8 +25,10 @@ __all__ = [
     "AgentChatCheckpoint",
     "AgentChatUnavailableError",
     "AgentRunBlockedError",
+    "AgentRunArtifactEvent",
     "AgentRunFailedError",
     "AgentRunPhase",
+    "AgentRunStatus",
     "AgentToolCall",
     "AgentToolCallingUnsupportedError",
     "AgentToolReasoningResult",

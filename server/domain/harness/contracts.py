@@ -53,8 +53,15 @@ class AgentChatCheckpoint:
     detail: str = ""
 
 
+@dataclass(frozen=True)
+class AgentRunArtifactEvent:
+    field: str
+    payload: object
+
+
 CheckpointCallback = Callable[[AgentChatCheckpoint], Awaitable[None]]
 CheckpointEmitter = Callable[[str, str, str], Awaitable[None]]
+AgentRunArtifactCallback = Callable[[AgentRunArtifactEvent], Awaitable[None]]
 
 
 class AgentModelRunner(Protocol):
@@ -110,6 +117,7 @@ class HarnessRequest:
     tool_registry: AgentToolDispatcher | None = None
     tool_runtime: object | None = None
     on_checkpoint: CheckpointCallback | None = None
+    on_run_artifact: AgentRunArtifactCallback | None = None
     max_iterations: int = 60
 
     @classmethod
@@ -120,6 +128,7 @@ class HarnessRequest:
         content: str,
         images: tuple[ChatImage, ...] = (),
         on_checkpoint: CheckpointCallback | None = None,
+        on_run_artifact: AgentRunArtifactCallback | None = None,
     ) -> "HarnessRequest":
         if agent.model.mode is not HarnessMode.PROMPT:
             raise ValueError("Prompt 请求必须绑定 Prompt 模式模型")
@@ -131,6 +140,7 @@ class HarnessRequest:
             content=normalized_content,
             images=images,
             on_checkpoint=on_checkpoint,
+            on_run_artifact=on_run_artifact,
         )
 
     @classmethod
@@ -144,6 +154,7 @@ class HarnessRequest:
         tool_registry: AgentToolDispatcher | None = None,
         tool_runtime: object | None = None,
         on_checkpoint: CheckpointCallback | None = None,
+        on_run_artifact: AgentRunArtifactCallback | None = None,
         max_iterations: int = 60,
     ) -> "HarnessRequest":
         if agent.model.mode is not HarnessMode.AGENT:
@@ -165,6 +176,7 @@ class HarnessRequest:
             tool_registry=tool_registry,
             tool_runtime=tool_runtime,
             on_checkpoint=on_checkpoint,
+            on_run_artifact=on_run_artifact,
             max_iterations=max_iterations,
         )
 

@@ -5,6 +5,7 @@ import json
 from server.domain.harness.contracts import (
     Agent,
     AgentModelRunner,
+    AgentRunArtifactEvent,
     AgentRunBlockedError,
     AgentRunFailedError,
     AgentToolCall,
@@ -27,15 +28,17 @@ class AgentRunPhase(StrEnum):
     OBSERVE = "observe"
     VERIFY = "verify"
     FINALIZE = "finalize"
+
+
+class AgentRunStatus(StrEnum):
+    RUNNING = "running"
     COMPLETED = "completed"
-    FAILED = "failed"
-    BLOCKED = "blocked"
-    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
 class AgentRunState:
     phase: AgentRunPhase = AgentRunPhase.GOAL
+    status: AgentRunStatus = AgentRunStatus.RUNNING
     turn: int = 0
     goal: GoalContract | None = None
     messages: tuple[object, ...] = ()
@@ -100,12 +103,8 @@ class AgentRunner:
         agent = request.agent
         state = AgentRunState()
 
-        while state.phase not in {
-            AgentRunPhase.COMPLETED,
-            AgentRunPhase.FAILED,
-            AgentRunPhase.BLOCKED,
-            AgentRunPhase.CANCELLED,
-        }:
+        while state.status is AgentRunStatus.RUNNING:
+            await _record(request, "phase", state.phase.value)
             if state.phase is AgentRunPhase.GOAL:
                 state = await self._goal(agent, request, state, emit)
             elif state.phase is AgentRunPhase.REASON:
@@ -114,23 +113,13 @@ class AgentRunner:
                 state = await self._act(request, state, emit)
             elif state.phase is AgentRunPhase.OBSERVE:
                 state = self._observe(state)
+                await _record(request, "evidence", _evidence_payload(state.evidence))
                 await emit("observe", "工具结果已写入证据账本", "")
             elif state.phase is AgentRunPhase.VERIFY:
                 state = await self._verify(agent, request, state, emit)
             elif state.phase is AgentRunPhase.FINALIZE:
-                state = await self._finalize(agent, state, emit)
+                state = await self._finalize(agent, request, state, emit)
 
-        if state.phase is AgentRunPhase.FAILED:
-            feedback = state.verification.feedback if state.verification else "Agent run failed"
-            await emit("failed", "任务失败", feedback)
-            raise AgentRunFailedError(feedback)
-        if state.phase is AgentRunPhase.BLOCKED:
-            feedback = state.verification.feedback if state.verification else "Agent run blocked"
-            await emit("blocked", "任务阻塞", feedback)
-            raise AgentRunBlockedError(feedback)
-        if state.phase is AgentRunPhase.CANCELLED:
-            await emit("cancelled", "任务已取消", "")
-            raise AgentRunFailedError("Agent run cancelled")
         return state.final_response
 
     async def _goal(
@@ -167,6 +156,7 @@ class AgentRunner:
         )
         if not goal.goal or not goal.completion_criteria:
             raise AgentRunFailedError("goal contract is incomplete")
+        await _record(request, "goal", _goal_payload(goal))
         return replace(state, phase=AgentRunPhase.REASON, goal=goal)
 
     async def _reason(
@@ -218,16 +208,21 @@ class AgentRunner:
                 messages=result.messages,
                 candidate=OutputCandidate(result.content.strip()),
             )
+        verification = VerificationResult(False, False, "model produced no candidate")
+        if next_turn >= request.max_iterations:
+            await _record(
+                request,
+                "error",
+                {"kind": "failed", "message": verification.feedback},
+            )
+            await emit("failed", "任务失败", verification.feedback)
+            raise AgentRunFailedError(verification.feedback)
         return replace(
             state,
-            phase=(
-                AgentRunPhase.FAILED
-                if next_turn >= request.max_iterations
-                else AgentRunPhase.REASON
-            ),
+            phase=AgentRunPhase.REASON,
             turn=next_turn,
             messages=result.messages,
-            verification=VerificationResult(False, False, "model produced no candidate"),
+            verification=verification,
         )
 
     async def _act(
@@ -275,13 +270,14 @@ class AgentRunner:
             )
             for result in state.raw_tool_results
         )
-        return replace(
+        next_state = replace(
             state,
             phase=AgentRunPhase.REASON,
             messages=self._model_runner.append_tool_results(state.messages, tool_messages),
             raw_tool_results=(),
             evidence=(*state.evidence, *records),
         )
+        return next_state
 
     async def _verify(
         self,
@@ -303,6 +299,7 @@ class AgentRunner:
             verification = await self._verifier.verify(
                 agent, state.goal, state.evidence, state.candidate
             )
+        await _record(request, "verification", _verification_payload(verification))
         if verification.passed:
             return replace(
                 state,
@@ -310,18 +307,24 @@ class AgentRunner:
                 verification=verification,
             )
         if verification.blocked:
-            return replace(
-                state,
-                phase=AgentRunPhase.BLOCKED,
-                verification=verification,
+            await _record(
+                request,
+                "error",
+                {"kind": "blocked", "message": verification.feedback},
             )
+            await emit("blocked", "任务阻塞", verification.feedback)
+            raise AgentRunBlockedError(verification.feedback)
+        if state.turn >= request.max_iterations:
+            await _record(
+                request,
+                "error",
+                {"kind": "failed", "message": verification.feedback},
+            )
+            await emit("failed", "任务失败", verification.feedback)
+            raise AgentRunFailedError(verification.feedback)
         return replace(
             state,
-            phase=(
-                AgentRunPhase.FAILED
-                if state.turn >= request.max_iterations
-                else AgentRunPhase.REASON
-            ),
+            phase=AgentRunPhase.REASON,
             verification=verification,
             candidate=None,
         )
@@ -329,6 +332,7 @@ class AgentRunner:
     async def _finalize(
         self,
         agent: Agent,
+        request: HarnessRequest,
         state: AgentRunState,
         emit: CheckpointEmitter,
     ) -> AgentRunState:
@@ -345,10 +349,12 @@ class AgentRunner:
             json.dumps(payload, ensure_ascii=False),
             (),
         )
+        await _record(request, "final_response", response)
+        await _record(request, "status", AgentRunStatus.COMPLETED.value)
         await emit("completed", "任务已完成", "")
         return replace(
             state,
-            phase=AgentRunPhase.COMPLETED,
+            status=AgentRunStatus.COMPLETED,
             final_response=response,
         )
 
@@ -356,6 +362,39 @@ class AgentRunner:
 def _validate_agent_request(request: HarnessRequest) -> None:
     if request.tool_names and request.tool_registry is None:
         raise ValueError("agent mode requires tool_registry")
+
+
+async def _record(request: HarnessRequest, field: str, payload: object) -> None:
+    if request.on_run_artifact is not None:
+        await request.on_run_artifact(AgentRunArtifactEvent(field, payload))
+
+
+def _goal_payload(goal: GoalContract) -> dict[str, object]:
+    return {
+        "goal": goal.goal,
+        "completion_criteria": list(goal.completion_criteria),
+        "output_format": goal.output_format,
+        "required_evidence": list(goal.required_evidence),
+    }
+
+
+def _evidence_payload(evidence: tuple[EvidenceRecord, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "source": record.source,
+            "content": record.content,
+            "ok": record.ok,
+        }
+        for record in evidence
+    ]
+
+
+def _verification_payload(verification: VerificationResult) -> dict[str, object]:
+    return {
+        "passed": verification.passed,
+        "blocked": verification.blocked,
+        "feedback": verification.feedback,
+    }
 
 
 def _parse_json_object(content: str, label: str) -> dict[str, object]:

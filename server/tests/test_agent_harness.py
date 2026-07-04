@@ -8,8 +8,10 @@ import pytest
 from server.domain.agents import AgentDefinition, ModelDefinition
 from server.domain.harness import (
     Agent,
+    AgentRunBlockedError,
     AgentRunFailedError,
     AgentRunPhase,
+    AgentRunStatus,
     AgentToolCall,
     AgentToolReasoningResult,
     AgentToolResult,
@@ -104,6 +106,7 @@ def test_harness_modes_have_separate_modules() -> None:
     assert prompt_module.PromptRunner
     assert agent_module.AgentRunner
     assert agent_module.AgentRunPhase is AgentRunPhase
+    assert agent_module.AgentRunStatus is AgentRunStatus
 
 
 def test_agent_is_pure_configuration_without_model_gateway() -> None:
@@ -296,6 +299,38 @@ def test_agent_mode_fails_instead_of_degrading_at_iteration_limit() -> None:
     assert checkpoints[-1] == "failed"
 
 
+def test_agent_mode_reports_blocked_verification() -> None:
+    gateway = FakeGateway(
+        completions=(
+            GOAL_JSON.replace('["first"]', "[]"),
+            '{"passed":false,"blocked":true,"feedback":"need human input"}',
+        ),
+        reasoning_results=(
+            AgentToolReasoningResult(
+                content="candidate", tool_calls=(), messages=("candidate",)
+            ),
+        ),
+    )
+    checkpoints = []
+
+    async def checkpoint(event):
+        checkpoints.append(event.stage)
+
+    with pytest.raises(AgentRunBlockedError, match="need human input"):
+        execute(
+            HarnessRequest(
+                agent=make_agent(HarnessMode.AGENT),
+                content="finish",
+                tool_names=("first",),
+                tool_registry=FakeToolRegistry(),
+                on_checkpoint=checkpoint,
+            ),
+            gateway,
+        )
+
+    assert checkpoints[-1] == "blocked"
+
+
 def test_prompt_mode_rejects_tool_context() -> None:
     with pytest.raises(ValueError, match="prompt mode does not accept tools"):
         execute(
@@ -348,8 +383,11 @@ def test_agent_run_phases_are_stable_public_values() -> None:
         "observe",
         "verify",
         "finalize",
+    ]
+
+
+def test_agent_run_statuses_are_stable_public_values() -> None:
+    assert [status.value for status in AgentRunStatus] == [
+        "running",
         "completed",
-        "failed",
-        "blocked",
-        "cancelled",
     ]

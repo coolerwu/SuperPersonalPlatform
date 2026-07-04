@@ -14,6 +14,7 @@ from server.adapter.dependencies import AppContainer
 from server.app.agent_chat_service import (
     AgentChatService,
 )
+from server.app.agent_run_state_service import AgentRunStateService
 from server.app.agent_skill_service import AgentSkillService
 from server.app.chat_session_service import ChatSessionService
 from server.app.agent_tool_service import AgentToolRegistry, AgentToolRuntime
@@ -231,6 +232,7 @@ def make_client(workspace: Path, gateway: FakeModelGateway | None = None) -> Tes
         session_codec=SessionCodec("secret-token"),
         agent_chat_service=AgentChatService(config_service.config_path),
         chat_session_service=ChatSessionService(workspace),
+        agent_run_state_service=AgentRunStateService(workspace),
     )
     app = FastAPI()
     app.include_router(create_auth_router(container))
@@ -244,6 +246,16 @@ def receive_until(websocket, message_type: str):
         message = websocket.receive_json()
         if message["type"] == message_type:
             return message
+
+
+def receive_until_or_fail(websocket, message_type: str):
+    for _ in range(12):
+        message = websocket.receive_json()
+        if message["type"] == "error":
+            pytest.fail(message["message"])
+        if message["type"] == message_type:
+            return message
+    pytest.fail(f"did not receive {message_type}")
 
 
 def test_agent_config_defaults_without_permission_gate() -> None:
@@ -500,6 +512,50 @@ def test_agent_chat_websocket_uses_agent_bound_model_without_model_id(tmp_path) 
     assert [call["model"] for call in gateway.calls] == ["fast"]
     assert gateway.calls[0]["system_prompt"] == "You are concise."
     assert gateway.calls[0]["user_message"] == "你好"
+
+
+def test_agent_chat_websocket_persists_run_artifact_for_session_message(tmp_path) -> None:
+    write_config(tmp_path, mode="agent")
+    gateway = FakeModelGateway()
+    client = make_client(tmp_path, gateway)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    session = client.post("/api/sessions", json={"agent_id": "assistant"}).json()["session"]
+
+    with client.websocket_connect("/api/agents/chat/connect") as websocket:
+        websocket.receive_json()
+        websocket.send_json(
+            {
+                "type": "message",
+                "agent_id": "assistant",
+                "session_id": session["id"],
+                "content": "严格回答",
+            }
+        )
+        assert receive_until_or_fail(websocket, "assistant_message") == {
+            "type": "assistant_message",
+            "content": "candidate without tools",
+        }
+        assert websocket.receive_json() == {"type": "status", "status": "idle"}
+
+    saved_session = client.get(
+        f"/api/sessions/{session['id']}",
+        params={"agent_id": "assistant"},
+    ).json()["session"]
+    assert saved_session["messages"][0]["run_id"]
+    assert saved_session["messages"][0]["run_id"] == saved_session["messages"][1]["run_id"]
+
+    run_id = saved_session["messages"][0]["run_id"]
+    run_path = tmp_path / "agent_runs" / session["id"] / f"{run_id}.json"
+    data = json.loads(run_path.read_text(encoding="utf-8"))
+    assert data["id"] == run_id
+    assert data["session_id"] == session["id"]
+    assert data["agent_id"] == "assistant"
+    assert data["status"] == "completed"
+    assert data["goal"]["goal"] == "完成用户请求"
+    assert data["evidence"] == []
+    assert data["verification"]["passed"] is True
+    assert data["final_response"] == "candidate without tools"
+    assert data["error"] is None
 
 
 def test_prompt_model_does_not_switch_mode_when_tools_are_available(tmp_path) -> None:

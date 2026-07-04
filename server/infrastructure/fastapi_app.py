@@ -21,6 +21,7 @@ from server.adapter.channel_routes import create_channel_router
 from server.adapter.critique_routes import create_critique_router
 from server.app.auth_service import AuthService
 from server.app.agent_chat_service import AgentChatService
+from server.app.agent_run_state_service import AgentRunStateService
 from server.app.chat_session_service import ChatSessionService
 from server.app.config_file_service import ConfigFileService
 from server.app.critique_service import CritiqueService
@@ -45,6 +46,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     system_log_service = SystemLogService(active_workspace)
     agent_chat_service = AgentChatService(active_workspace / "config.yaml")
     chat_session_service = ChatSessionService(active_workspace)
+    agent_run_state_service = AgentRunStateService(active_workspace)
     critique_service = CritiqueService(active_workspace, agent_chat_service)
     wechat_channel_manager = WechatChannelManager(
         workspace=active_workspace,
@@ -65,6 +67,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         session_codec=SessionCodec(settings.auth.token),
         agent_chat_service=agent_chat_service,
         chat_session_service=chat_session_service,
+        agent_run_state_service=agent_run_state_service,
         portfolio_service=PortfolioService(active_workspace),
         wechat_channel_manager=wechat_channel_manager,
         critique_service=critique_service,

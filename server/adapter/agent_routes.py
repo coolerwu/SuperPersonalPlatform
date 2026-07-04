@@ -15,6 +15,8 @@ from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
 from server.domain.harness import (
     AgentChatUnavailableError,
+    AgentRunBlockedError,
+    AgentRunFailedError,
     ChatImage,
 )
 from server.domain.agents import AgentConfigError
@@ -267,6 +269,18 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                         await websocket.send_json({"type": "error", "message": str(exc)})
                         continue
 
+                run_id = ""
+                if (
+                    payload.session_id
+                    and container.agent_run_state_service is not None
+                ):
+                    run_id = container.agent_run_state_service.new_run_id()
+                    container.agent_run_state_service.start_run(
+                        session_id=payload.session_id,
+                        run_id=run_id,
+                        agent_id=(payload.agent_id or "").strip(),
+                    )
+
                 await websocket.send_json({"type": "status", "status": "running"})
                 try:
                     async def send_checkpoint(checkpoint) -> None:
@@ -279,21 +293,79 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                             }
                         )
 
+                    async def save_run_artifact(event) -> None:
+                        if (
+                            not run_id
+                            or not payload.session_id
+                            or container.agent_run_state_service is None
+                        ):
+                            return
+                        container.agent_run_state_service.update_run(
+                            session_id=payload.session_id,
+                            run_id=run_id,
+                            **{event.field: event.payload},
+                        )
+
                     message = await service.chat(
                         payload.agent_id or "",
                         payload.content or "",
                         images,
                         on_checkpoint=send_checkpoint,
+                        on_run_artifact=save_run_artifact,
                     )
                 except (AgentConfigError, AgentChatUnavailableError) as exc:
+                    _save_run_error(
+                        container,
+                        payload.session_id,
+                        run_id,
+                        "failed",
+                        str(exc),
+                    )
+                    await websocket.send_json({"type": "error", "message": str(exc)})
+                    await websocket.send_json({"type": "status", "status": "idle"})
+                    continue
+                except AgentRunBlockedError as exc:
+                    _save_run_error(
+                        container,
+                        payload.session_id,
+                        run_id,
+                        "blocked",
+                        str(exc),
+                    )
+                    await websocket.send_json({"type": "error", "message": str(exc)})
+                    await websocket.send_json({"type": "status", "status": "idle"})
+                    continue
+                except AgentRunFailedError as exc:
+                    _save_run_error(
+                        container,
+                        payload.session_id,
+                        run_id,
+                        "failed",
+                        str(exc),
+                    )
                     await websocket.send_json({"type": "error", "message": str(exc)})
                     await websocket.send_json({"type": "status", "status": "idle"})
                     continue
                 except Exception:
+                    _save_run_error(
+                        container,
+                        payload.session_id,
+                        run_id,
+                        "failed",
+                        "Agent 回复失败",
+                    )
                     await websocket.send_json({"type": "error", "message": "Agent 回复失败"})
                     await websocket.send_json({"type": "status", "status": "idle"})
                     continue
 
+                if run_id and payload.session_id and container.agent_run_state_service is not None:
+                    container.agent_run_state_service.update_run(
+                        session_id=payload.session_id,
+                        run_id=run_id,
+                        status="completed",
+                        final_response=message,
+                        error=None,
+                    )
                 await websocket.send_json({"type": "assistant_message", "content": message})
                 await websocket.send_json({"type": "status", "status": "idle"})
 
@@ -304,6 +376,7 @@ def create_agent_router(container: AppContainer) -> APIRouter:
                         payload.content or "",
                         images,
                         message,
+                        run_id,
                     )
         except WebSocketDisconnect:
             return
@@ -321,18 +394,48 @@ def _agent_service(container: AppContainer):
     return service
 
 
-def _save_session_messages(session_service, session_id: str, user_content: str, images: tuple[ChatImage, ...], assistant_content: str) -> None:
+def _save_run_error(container: AppContainer, session_id: str | None, run_id: str, kind: str, message: str) -> None:
+    if not session_id or not run_id or container.agent_run_state_service is None:
+        return
+    try:
+        container.agent_run_state_service.update_run(
+            session_id=session_id,
+            run_id=run_id,
+            status="completed",
+            error={"kind": kind, "message": message},
+        )
+    except Exception:
+        pass
+
+
+def _save_session_messages(
+    session_service,
+    session_id: str,
+    user_content: str,
+    images: tuple[ChatImage, ...],
+    assistant_content: str,
+    run_id: str = "",
+) -> None:
     try:
         image_data = tuple(
             ChatImageData(mime_type=img.mime_type, data=img.data) for img in images
         )
         session_service.append_message(
             session_id,
-            ChatMessageData(role="user", content=user_content, images=image_data),
+            ChatMessageData(
+                role="user",
+                content=user_content,
+                images=image_data,
+                run_id=run_id,
+            ),
         )
         session_service.append_message(
             session_id,
-            ChatMessageData(role="assistant", content=assistant_content),
+            ChatMessageData(
+                role="assistant",
+                content=assistant_content,
+                run_id=run_id,
+            ),
         )
     except Exception:
         pass

@@ -30,6 +30,7 @@ class ChatMessageData:
     content: str
     images: tuple[ChatImageData, ...] = ()
     checkpoints: tuple[ChatCheckpointData, ...] = ()
+    run_id: str = ""
     created_at: str = ""
 
     def __post_init__(self) -> None:
