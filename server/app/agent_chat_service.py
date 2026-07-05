@@ -23,6 +23,7 @@ from server.domain.harness import (
     run_agent,
 )
 from server.app.agent_skill_service import AgentSkillService
+from server.app.agent_capability_search_service import AgentCapabilitySearchService
 from server.app.agent_tool_service import (
     AgentToolRegistry,
     AgentToolRuntime,
@@ -125,6 +126,27 @@ class AgentChatService:
 
     def tool_definitions(self) -> tuple[dict[str, object], ...]:
         return self._tool_registry.public_definitions()
+
+    def search_capabilities(
+        self,
+        *,
+        query: str,
+        types: tuple[str, ...] = ("skill", "tool"),
+        agent_id: str = "",
+        limit: int = 20,
+    ) -> tuple[dict[str, object], ...]:
+        platform = self._load_platform()
+        search_service = AgentCapabilitySearchService(self._tool_registry)
+        return tuple(
+            result.public_dict()
+            for result in search_service.search(
+                platform=platform,
+                query=query,
+                types=types,
+                agent_id=agent_id,
+                limit=limit,
+            )
+        )
 
     def config_snapshot(self) -> AgentConfigSnapshot:
         platform = self._load_platform()

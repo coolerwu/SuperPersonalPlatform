@@ -343,6 +343,43 @@ def test_agent_config_endpoint_masks_api_keys(tmp_path) -> None:
     assert tool["support_scene"] == ["agent"]
 
 
+def test_agent_capability_search_endpoint_requires_auth_and_marks_callable_tools(tmp_path) -> None:
+    write_config(
+        tmp_path,
+        mode="agent",
+        common_tools=("list_skill",),
+        skill_ids=("common:writing",),
+    )
+    skill_dir = tmp_path / "skills" / "common" / "writing"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\ntools:\n  allow:\n    - list_skill\n---\n# 写作\n列出和读取技能。",
+        encoding="utf-8",
+    )
+    client = make_client(tmp_path)
+
+    assert client.post("/api/agents/search", json={"q": "列出技能"}).status_code == 401
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    response = client.post(
+        "/api/agents/search",
+        json={
+            "q": "列出技能",
+            "types": ["tool", "skill"],
+            "agent_id": "assistant",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    list_skill = next(item for item in body["results"] if item["id"] == "list_skill")
+    assert list_skill["type"] == "tool"
+    assert list_skill["discoverable"] is True
+    assert list_skill["loadable"] is True
+    assert list_skill["callable"] is True
+    assert list_skill["required_skills"] == ["common:writing"]
+
+
 def test_agent_config_parses_agent_mode_and_rejects_unknown_mode(tmp_path) -> None:
     write_config(tmp_path, mode="agent")
 

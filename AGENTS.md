@@ -10,9 +10,12 @@
 - 执行 `git status --short`，确认当前未提交代码状态。
 - 按用户当前偏好，本项目提交流程会提交所有未提交代码。
 - 按用户当前偏好，提交并 push 成功后，需要重启生产：通过
-  `ssh qiuqiu@192.168.1.3` 进入远端 `SuperPersonalPlatform/`，执行
-  `git pull && sudo systemctl restart super-personal-platform.service`。不要把
-  SSH/sudo 密码写入仓库文件；运行时使用用户输入、已认证 SSH 会话或本地未提交环境变量。
+  `ssh qiuqiu@192.168.1.3` 进入远端 `SuperPersonalPlatform/`，使用
+  `git -c http.version=HTTP/1.1 pull` 拉取 `main`（瞬时网络/TLS 失败最多重试
+  3 次），确认远端 `git rev-parse HEAD` 等于本地刚 push 的 HEAD，再执行
+  `sudo -n systemctl restart super-personal-platform.service`，最后用非 sudo
+  `systemctl is-active/status super-personal-platform.service` 验证。不要把
+  SSH/sudo 密码写入仓库文件或命令文本；运行时使用用户输入、已认证 SSH 会话或本地未提交环境变量。
 
 如果实现改变了架构、行为、命令、依赖、配置、公共接口或运维方式，必须同步更新 `docs/project-architecture.md`。
 

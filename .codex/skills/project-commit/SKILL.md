@@ -35,15 +35,32 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
 9. After a successful push, restart production on `qiuqiu@192.168.1.3`:
    - SSH target: `qiuqiu@192.168.1.3`
    - Remote repo: `SuperPersonalPlatform/`
-   - Remote command: `cd SuperPersonalPlatform/ && git pull && sudo systemctl restart super-personal-platform.service`
+   - Before SSH, record the pushed target SHA with `git rev-parse HEAD`.
+   - On the remote host, run from `SuperPersonalPlatform/` and make each phase
+     observable: pull, HEAD check, restart, active/status check.
+   - Pull with `git -c http.version=HTTP/1.1 pull`; retry transient network/TLS
+     failures up to 3 times with a short sleep before declaring pull failed.
+   - After pull, verify remote `git rev-parse HEAD` exactly equals the local
+     target SHA recorded before SSH. Do not restart or claim deployment success
+     if the remote HEAD is different.
+   - Restart with `sudo -n systemctl restart super-personal-platform.service`.
+     Check service health with non-sudo
+     `systemctl is-active super-personal-platform.service` and
+     `systemctl status super-personal-platform.service --no-pager --lines=12`.
+     If a sudo status check fails after restart, rerun the non-sudo checks
+     before treating the deployment as failed.
    - Do not store the SSH/sudo password in repository files. Use an existing
      authenticated SSH session, ask the user for the password, or read it from a
      local uncommitted environment variable such as
      `SUPER_PERSONAL_PROD_SSH_PASSWORD`.
    - Prefer a non-interactive `expect` wrapper when a password prompt is
-     expected, and include a short production restart status in the final
-     response. If the restart fails, report the failure and do not claim the
-     deployment completed.
+     expected, but never embed a literal password in the command string or saved
+     shell history. Read it from process environment or prompt at runtime. If an
+     `expect`/`ssh` attempt hangs at a password prompt, terminate the stale local
+     process before retrying.
+   - The final response must separately report push outcome, remote pull/HEAD
+     outcome, restart outcome, and service active/status outcome. If any phase
+     fails, report that phase and do not claim deployment completed.
 
 ## Guardrails
 

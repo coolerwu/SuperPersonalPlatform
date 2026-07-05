@@ -76,6 +76,13 @@ class SkillContentPayload(StrictPayload):
     agent_id: str | None = None
 
 
+class AgentCapabilitySearchPayload(StrictPayload):
+    q: str
+    types: list[str] | None = None
+    agent_id: str | None = None
+    limit: int = 20
+
+
 class AgentConfigUpdatePayload(StrictPayload):
     default_model_id: str
     skills: list[SkillDefinitionConfigPayload] | None = None
@@ -177,6 +184,26 @@ def create_agent_router(container: AppContainer) -> APIRouter:
     @router.get("/tools", dependencies=[Depends(require_agent_auth)])
     def tools() -> dict[str, object]:
         return {"tools": list(_agent_service(container).tool_definitions())}
+
+    @router.post("/search", dependencies=[Depends(require_agent_auth)])
+    def search(payload: AgentCapabilitySearchPayload) -> dict[str, object]:
+        service = _agent_service(container)
+        try:
+            return {
+                "results": list(
+                    service.search_capabilities(
+                        query=payload.q,
+                        types=tuple(payload.types or ("skill", "tool")),
+                        agent_id=payload.agent_id or "",
+                        limit=payload.limit,
+                    )
+                )
+            }
+        except AgentConfigError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
 
     @router.put("/config", dependencies=[Depends(require_agent_auth)])
     def update_config(payload: AgentConfigUpdatePayload) -> dict[str, str | bool]:
