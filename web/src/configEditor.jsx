@@ -279,7 +279,7 @@ export function ProviderConfigEditor({ draft, onChange, readOnly }) {
         }
       >
         {models.map((model, index) => (
-          <div className="config-item" key={`${model.id}-${index}`}>
+          <div className="config-item" key={`model-${index}`}>
             <div className="config-item-title">
               <strong>{model.id || `model_${index + 1}`}</strong>
               <button
@@ -395,7 +395,7 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
         }
       >
         {agents.map((agent, index) => (
-          <div className="config-item" key={`${agent.id}-${index}`}>
+          <div className="config-item" key={`agent-${index}`}>
             <div className="config-item-title">
               <strong>{agent.id || `agent_${index + 1}`}</strong>
               <button

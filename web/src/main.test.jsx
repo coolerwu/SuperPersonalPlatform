@@ -370,6 +370,58 @@ test("saves provider config from the provider menu", async () => {
   });
 });
 
+test("keeps focus while editing provider id", async () => {
+  window.history.replaceState({}, "", "/providers");
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", size: 128, editable: true, content: CONFIG_YAML });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  const idInput = await screen.findByLabelText("ID");
+  idInput.focus();
+  fireEvent.change(idInput, { target: { value: "defaultx" } });
+  expect(document.activeElement).toBe(idInput);
+});
+
+test("keeps focus while editing agent id", async () => {
+  window.history.replaceState({}, "", "/agent-config");
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", size: 128, editable: true, content: CONFIG_YAML });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  const idInput = await screen.findByLabelText("ID");
+  idInput.focus();
+  fireEvent.change(idInput, { target: { value: "assistantx" } });
+  expect(document.activeElement).toBe(idInput);
+});
+
 test("loads provider config with yaml indentless sequences", async () => {
   window.history.replaceState({}, "", "/providers");
   global.fetch = vi.fn(async (url, options = {}) => {
