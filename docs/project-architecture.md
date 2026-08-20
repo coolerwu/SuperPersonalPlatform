@@ -88,6 +88,14 @@ GET /api/runs/{run_id}/events?after={seq}
 
 系统 API 继续保留配置、日志和生产更新能力。
 
+## Frontend Routes
+
+- `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口兼容，不恢复旧 Agent Chat/Agent 管理页面。
+- `/workspace` 展示 workspace 目录结构、Run 落盘文件和 Agent/Context/Knowledge/Run 关系。
+- `/wechat` 展示微信账号状态和启动/停止操作。
+- `/system` 展示配置、日志和生产更新。
+- 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
+
 ## Retained Capabilities
 
 - 单 token 登录，登录状态通过 HttpOnly cookie 保存。

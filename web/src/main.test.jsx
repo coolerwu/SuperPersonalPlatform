@@ -6,6 +6,7 @@ import { beforeEach, test, vi, expect } from "vitest";
 
 beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
+  window.history.replaceState({}, "", "/agents");
   global.fetch = vi.fn(async (url) => {
     if (String(url).endsWith("/api/auth/me")) {
       return { ok: true, json: async () => ({ authenticated: true }) };
@@ -24,6 +25,7 @@ test("renders the DeepAgent console shell", async () => {
   });
 
   expect(await screen.findByText("DeepAgent")).toBeInTheDocument();
-  expect(await screen.findByText("Runs")).toBeInTheDocument();
+  expect((await screen.findAllByText("Runs")).length).toBeGreaterThan(1);
+  expect(await screen.findByText("workspace/runs/index.json")).toBeInTheDocument();
   expect(await screen.findByText("微信")).toBeInTheDocument();
 });
