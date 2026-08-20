@@ -178,8 +178,8 @@ test("renders the DeepAgent console shell", async () => {
   expect((await screen.findAllByText("Runs")).length).toBeGreaterThan(1);
   expect(await screen.findByText("workspace/runs/index.json")).toBeInTheDocument();
   expect(await screen.findByText("配置")).toBeInTheDocument();
-  expect(await screen.findByText("Providers")).toBeInTheDocument();
-  expect(await screen.findByText("Agents")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Providers/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Agents/ })).not.toBeInTheDocument();
   expect(await screen.findByText("微信")).toBeInTheDocument();
 });
 
@@ -310,6 +310,9 @@ test("saves system config from the dedicated config menu", async () => {
   });
 
   expect(await screen.findByText("认证与服务")).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /基础配置/ })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: /Providers/ })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /Agents/ })).toBeInTheDocument();
   expect(screen.getByLabelText("访问 Token")).toHaveValue("secret-token");
   expect(screen.getByLabelText("访问 Token")).toHaveAttribute("type", "text");
   expect(screen.getByText("坚果云 WebDAV")).toBeInTheDocument();
@@ -355,6 +358,7 @@ test("saves provider config from the provider menu", async () => {
   });
 
   expect(await screen.findByText("Provider 默认项")).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /Providers/ })).toHaveAttribute("aria-selected", "true");
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("模型名"), { target: { value: "gpt-4.1-mini" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));

@@ -780,6 +780,30 @@ pre {
   min-height: calc(100vh - 110px);
 }
 
+.config-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 12px;
+}
+
+.config-tabs button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  border-color: var(--line-soft);
+  background: rgba(13, 20, 29, 0.72);
+  color: var(--muted);
+}
+
+.config-tabs button.active,
+.config-tabs button:hover {
+  border-color: rgba(23, 168, 245, 0.45);
+  background: rgba(23, 168, 245, 0.12);
+  color: var(--text);
+}
+
 .config-page-actions {
   display: flex;
   gap: 8px;

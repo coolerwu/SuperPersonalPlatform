@@ -29,10 +29,14 @@ const NAV_ITEMS = [
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
   { id: "config", path: "/config", label: "配置", icon: SlidersHorizontal },
-  { id: "providers", path: "/providers", label: "Providers", icon: Cpu },
-  { id: "agent-config", path: "/agent-config", label: "Agents", icon: Bot },
   { id: "wechat", path: "/wechat", label: "微信", icon: Smartphone },
   { id: "system", path: "/system", label: "运维", icon: Settings },
+];
+
+const CONFIG_SECTIONS = [
+  { id: "config", path: "/config", label: "基础配置", icon: SlidersHorizontal },
+  { id: "providers", path: "/providers", label: "Providers", icon: Cpu },
+  { id: "agent-config", path: "/agent-config", label: "Agents", icon: Bot },
 ];
 
 const WORKSPACE_TREE = [
@@ -90,12 +94,17 @@ function mergeRunSnapshot(current, incoming) {
 
 function routeFromPath(pathname) {
   if (pathname === "/" || pathname === "/agents" || pathname === "/login") return "runs";
-  const match = NAV_ITEMS.find((item) => item.path === pathname);
+  const match = [...NAV_ITEMS, ...CONFIG_SECTIONS].find((item) => item.path === pathname);
   return match?.id || "runs";
 }
 
 function pathForPage(page) {
-  return NAV_ITEMS.find((item) => item.id === page)?.path || "/runs";
+  return [...NAV_ITEMS, ...CONFIG_SECTIONS].find((item) => item.id === page)?.path || "/runs";
+}
+
+function navItemIsActive(item, page) {
+  if (item.id === page) return true;
+  return item.id === "config" && CONFIG_SECTIONS.some((section) => section.id === page);
 }
 
 function LoginPage({ onLogin }) {
@@ -198,7 +207,7 @@ function App() {
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             return (
-              <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => navigate(item.id)}>
+              <button key={item.id} className={navItemIsActive(item, page) ? "active" : ""} onClick={() => navigate(item.id)}>
                 <Icon size={16} />
                 {item.label}
               </button>
@@ -217,9 +226,9 @@ function App() {
       <main className="content">
         {page === "runs" ? <RunsPage /> : null}
         {page === "workspace" ? <WorkspacePage /> : null}
-        {page === "config" ? <ConfigPage /> : null}
-        {page === "providers" ? <ProviderPage /> : null}
-        {page === "agent-config" ? <AgentConfigPage /> : null}
+        {page === "config" ? <ConfigPage onNavigate={navigate} /> : null}
+        {page === "providers" ? <ProviderPage onNavigate={navigate} /> : null}
+        {page === "agent-config" ? <AgentConfigPage onNavigate={navigate} /> : null}
         {page === "wechat" ? <WechatPage /> : null}
         {page === "system" ? <SystemPage onNavigate={navigate} /> : null}
       </main>
@@ -746,19 +755,19 @@ function WorkspacePage() {
   );
 }
 
-function ConfigPage() {
-  return <ConfigBackedPage title="配置" heading="config.yaml" panelTitle="系统配置" Editor={ConfigVisualEditor} />;
+function ConfigPage({ onNavigate }) {
+  return <ConfigBackedPage activeSection="config" panelTitle="系统配置" Editor={ConfigVisualEditor} onNavigate={onNavigate} />;
 }
 
-function ProviderPage() {
-  return <ConfigBackedPage title="Providers" heading="model providers" panelTitle="Provider 配置" Editor={ProviderConfigEditor} />;
+function ProviderPage({ onNavigate }) {
+  return <ConfigBackedPage activeSection="providers" panelTitle="Provider 配置" Editor={ProviderConfigEditor} onNavigate={onNavigate} />;
 }
 
-function AgentConfigPage() {
-  return <ConfigBackedPage title="Agents" heading="deepagent runtime" panelTitle="Agent 配置" Editor={AgentConfigEditor} />;
+function AgentConfigPage({ onNavigate }) {
+  return <ConfigBackedPage activeSection="agent-config" panelTitle="Agent 配置" Editor={AgentConfigEditor} onNavigate={onNavigate} />;
 }
 
-function ConfigBackedPage({ title, heading, panelTitle, Editor }) {
+function ConfigBackedPage({ activeSection, panelTitle, Editor, onNavigate }) {
   const [configFile, setConfigFile] = useState(null);
   const [draft, setDraft] = useState("");
   const [message, setMessage] = useState("");
@@ -804,8 +813,8 @@ function ConfigBackedPage({ title, heading, panelTitle, Editor }) {
     <section className="console-screen config-screen">
       <div className="workspace-header">
         <div>
-          <span className="section-label">{title}</span>
-          <h1>{heading}</h1>
+          <span className="section-label">配置</span>
+          <h1>config.yaml</h1>
         </div>
         <Status status="落盘运行" />
       </div>
@@ -814,6 +823,24 @@ function ConfigBackedPage({ title, heading, panelTitle, Editor }) {
       {error ? <p className="error">{error}</p> : null}
 
       <section className="panel file-editor config-page-panel">
+        <div className="config-tabs" role="tablist" aria-label="配置栏目">
+          {CONFIG_SECTIONS.map((section) => {
+            const Icon = section.icon;
+            return (
+              <button
+                key={section.id}
+                type="button"
+                role="tab"
+                aria-selected={activeSection === section.id}
+                className={activeSection === section.id ? "active" : ""}
+                onClick={() => onNavigate(section.id)}
+              >
+                <Icon size={14} />
+                {section.label}
+              </button>
+            );
+          })}
+        </div>
         <div className="panel-title">
           <div>
             <span>{panelTitle}</span>
