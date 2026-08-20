@@ -755,6 +755,19 @@ pre {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.config-screen {
+  align-content: start;
+}
+
+.config-page-panel {
+  min-height: calc(100vh - 110px);
+}
+
+.config-page-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .workspace-editor {
   min-height: 620px;
   border: 0;

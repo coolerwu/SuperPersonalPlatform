@@ -15,6 +15,7 @@ import {
   Save,
   Send,
   Settings,
+  SlidersHorizontal,
   Smartphone,
   TerminalSquare,
   Trash2,
@@ -26,6 +27,7 @@ import "./styles.css";
 const NAV_ITEMS = [
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
+  { id: "config", path: "/config", label: "配置", icon: SlidersHorizontal },
   { id: "wechat", path: "/wechat", label: "微信", icon: Smartphone },
   { id: "system", path: "/system", label: "运维", icon: Settings },
 ];
@@ -212,6 +214,7 @@ function App() {
       <main className="content">
         {page === "runs" ? <RunsPage /> : null}
         {page === "workspace" ? <WorkspacePage /> : null}
+        {page === "config" ? <ConfigPage /> : null}
         {page === "wechat" ? <WechatPage /> : null}
         {page === "system" ? <SystemPage onNavigate={navigate} /> : null}
       </main>
@@ -605,7 +608,6 @@ function WorkspacePage() {
 
   const breadcrumbs = path ? path.split("/") : [];
   const dirty = activeFile && draft !== activeFile.content;
-  const editingConfig = activeFile?.path === "config.yaml";
 
   return (
     <section className="console-screen workspace-screen">
@@ -692,9 +694,7 @@ function WorkspacePage() {
             <div>
               <span>{activeFile?.path || "选择文件"}</span>
               <small>
-                {activeFile
-                  ? `${formatBytes(activeFile.size)} · ${editingConfig ? "可视化配置" : activeFile.editable ? "可编辑" : "只读"}`
-                  : "支持 UTF-8 文本文件"}
+                {activeFile ? `${formatBytes(activeFile.size)} · ${activeFile.editable ? "可编辑" : "只读"}` : "支持 UTF-8 文本文件"}
               </small>
             </div>
             <button className="primary" onClick={saveFile} disabled={!activeFile?.editable || !dirty}>
@@ -702,9 +702,7 @@ function WorkspacePage() {
               保存
             </button>
           </div>
-          {activeFile && editingConfig ? (
-            <ConfigVisualEditor draft={draft} onChange={setDraft} readOnly={!activeFile.editable} />
-          ) : activeFile ? (
+          {activeFile ? (
             <textarea
               className="workspace-editor"
               value={draft}
@@ -738,6 +736,91 @@ function WorkspacePage() {
             </button>
           ))}
         </div>
+      </section>
+    </section>
+  );
+}
+
+function ConfigPage() {
+  const [configFile, setConfigFile] = useState(null);
+  const [draft, setDraft] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function loadConfig() {
+    setError("");
+    try {
+      const file = await api("/api/workspace/read", {
+        method: "POST",
+        body: JSON.stringify({ path: "config.yaml" }),
+      });
+      setConfigFile(file);
+      setDraft(file.content || "");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function saveConfig() {
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/api/workspace/write", {
+        method: "PUT",
+        body: JSON.stringify({ path: "config.yaml", content: draft }),
+      });
+      setConfigFile(data.file);
+      setDraft(data.file.content || "");
+      setMessage(data.message || "config.yaml 已保存");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  useEffect(() => {
+    loadConfig();
+  }, []);
+
+  const dirty = configFile && draft !== configFile.content;
+
+  return (
+    <section className="console-screen config-screen">
+      <div className="workspace-header">
+        <div>
+          <span className="section-label">配置</span>
+          <h1>config.yaml</h1>
+        </div>
+        <Status status="落盘运行" />
+      </div>
+
+      {message ? <p className="ok">{message}</p> : null}
+      {error ? <p className="error">{error}</p> : null}
+
+      <section className="panel file-editor config-page-panel">
+        <div className="panel-title">
+          <div>
+            <span>可视化配置</span>
+            <small>{configFile ? `${formatBytes(configFile.size)} · workspace/config.yaml` : "读取中"}</small>
+          </div>
+          <div className="config-page-actions">
+            <button className="icon-button" onClick={loadConfig} title="重新读取">
+              <RefreshCw size={15} />
+            </button>
+            <button className="primary" onClick={saveConfig} disabled={!configFile?.editable || !dirty}>
+              <Save size={15} />
+              保存
+            </button>
+          </div>
+        </div>
+        {configFile ? (
+          <ConfigVisualEditor draft={draft} onChange={setDraft} readOnly={!configFile.editable} />
+        ) : (
+          <div className="workspace-empty-editor">
+            <TerminalSquare size={30} />
+            <strong>正在读取 config.yaml</strong>
+            <span>配置页读取 active workspace 的 config.yaml，保存时仍走后端配置校验。</span>
+          </div>
+        )}
       </section>
     </section>
   );

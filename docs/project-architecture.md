@@ -86,7 +86,7 @@ GET /api/runs/{run_id}/events?after={seq}
 
 微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
 
-系统 API 只保留日志和生产更新能力；配置文件读写统一走 Workspace 文件 API。
+系统 API 只保留日志和生产更新能力；配置文件读写统一走 Workspace 文件 API，可视化配置页也复用同一个读写入口。
 
 Workspace 文件 API：
 
@@ -102,9 +102,10 @@ POST /api/workspace/delete
 ## Frontend Routes
 
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口兼容，不恢复旧 Agent Chat/Agent 管理页面。
-- `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；打开 `config.yaml` 时默认显示可视化配置表单，保存仍写回同一个 YAML 并经后端配置校验；`config.yaml` 和根层固定骨架目录不可删除。
+- `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
+- `/config` 是 `config.yaml` 的可视化配置菜单，读取 active workspace 的同一份 YAML，保存仍写回 `workspace/config.yaml` 并经后端配置校验。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作。
-- `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。`config.yaml` 查看/编辑入口收敛到 `/workspace`。
+- `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。配置表单入口收敛到 `/config`，文件级查看/编辑入口保留在 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
 - Runs 工作区通过 1 分钟一次的轮询读取后端落盘状态，但前端必须保留当前详情快照、只在返回内容实际变化时更新状态，避免每次拉取 `workspace/runs/index.json` 时出现短暂重刷或 `unknown` 状态闪动。
 

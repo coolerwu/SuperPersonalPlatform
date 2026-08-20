@@ -7,6 +7,42 @@ function response(data) {
   return { ok: true, json: async () => data };
 }
 
+const CONFIG_YAML = [
+  "auth:",
+  '  token: "secret-token"',
+  "server:",
+  '  host: "0.0.0.0"',
+  "  port: 8888",
+  "llm:",
+  '  default_model_id: "default"',
+  "  models:",
+  '    - id: "default"',
+  '      name: "默认模型"',
+  '      provider: "openai_compatible"',
+  '      base_url: "https://api.openai.com/v1"',
+  '      api_key: "key"',
+  '      model: "gpt-4o-mini"',
+  "      temperature: 0.7",
+  "      supports_images: false",
+  "nutstore:",
+  "  enabled: false",
+  '  base_url: "https://dav.jianguoyun.com/dav/"',
+  '  username: ""',
+  '  password: ""',
+  '  root_path: "/"',
+  "channels:",
+  "  wechat_personal:",
+  "    enabled: false",
+  "    accounts: []",
+  "agents:",
+  "  definitions:",
+  '    - id: "assistant"',
+  '      name: "默认助手"',
+  '      system_prompt: "你是一个运行在后端的 DeepAgent。"',
+  '      model_id: "default"',
+  "      context_ids: []",
+].join("\n");
+
 async function flushReact() {
   for (let index = 0; index < 6; index += 1) {
     await act(async () => {
@@ -43,6 +79,7 @@ test("renders the DeepAgent console shell", async () => {
   expect(await screen.findByText("DeepAgent")).toBeInTheDocument();
   expect((await screen.findAllByText("Runs")).length).toBeGreaterThan(1);
   expect(await screen.findByText("workspace/runs/index.json")).toBeInTheDocument();
+  expect(await screen.findByText("配置")).toBeInTheDocument();
   expect(await screen.findByText("微信")).toBeInTheDocument();
 });
 
@@ -102,7 +139,7 @@ test("keeps run details stable when index polling returns only summaries", async
   expect(screen.queryByText("unknown")).not.toBeInTheDocument();
 });
 
-test("opens config.yaml with the visual config editor", async () => {
+test("opens config.yaml as a native workspace text file", async () => {
   window.history.replaceState({}, "", "/workspace");
   global.fetch = vi.fn(async (url) => {
     const path = String(url);
@@ -123,41 +160,39 @@ test("opens config.yaml with the visual config editor", async () => {
         path: "config.yaml",
         size: 128,
         editable: true,
-        content: [
-          "auth:",
-          '  token: "secret-token"',
-          "server:",
-          '  host: "0.0.0.0"',
-          "  port: 8888",
-          "llm:",
-          '  default_model_id: "default"',
-          "  models:",
-          '    - id: "default"',
-          '      name: "默认模型"',
-          '      provider: "openai_compatible"',
-          '      base_url: "https://api.openai.com/v1"',
-          '      api_key: "key"',
-          '      model: "gpt-4o-mini"',
-          "      temperature: 0.7",
-          "      supports_images: false",
-          "nutstore:",
-          "  enabled: false",
-          '  base_url: "https://dav.jianguoyun.com/dav/"',
-          '  username: ""',
-          '  password: ""',
-          '  root_path: "/"',
-          "channels:",
-          "  wechat_personal:",
-          "    enabled: false",
-          "    accounts: []",
-          "agents:",
-          "  definitions:",
-          '    - id: "assistant"',
-          '      name: "默认助手"',
-          '      system_prompt: "你是一个运行在后端的 DeepAgent。"',
-          '      model_id: "default"',
-          "      context_ids: []",
-        ].join("\n"),
+        content: CONFIG_YAML,
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  fireEvent.click((await screen.findAllByRole("button", { name: /config.yaml/ }))[0]);
+
+  const editor = await screen.findByDisplayValue((value) => value.includes("auth:") && value.includes("server:"));
+  expect(editor).toHaveClass("workspace-editor");
+  expect(screen.queryByText("认证与服务")).not.toBeInTheDocument();
+});
+
+test("saves config.yaml from the dedicated config menu", async () => {
+  window.history.replaceState({}, "", "/config");
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({
+        path: "config.yaml",
+        size: 128,
+        editable: true,
+        content: CONFIG_YAML,
       });
     }
     if (path.endsWith("/api/workspace/write")) {
@@ -173,8 +208,6 @@ test("opens config.yaml with the visual config editor", async () => {
   await act(async () => {
     await import("./main.jsx");
   });
-
-  fireEvent.click((await screen.findAllByRole("button", { name: /config.yaml/ }))[0]);
 
   expect(await screen.findByText("认证与服务")).toBeInTheDocument();
   expect(screen.getByLabelText("访问 Token")).toHaveValue("secret-token");
