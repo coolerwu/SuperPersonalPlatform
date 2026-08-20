@@ -1,3 +1,4 @@
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,10 @@ class WorkspaceFileNotTextError(Exception):
     pass
 
 
+class ProtectedWorkspacePathError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class WorkspaceEntry:
     name: str
@@ -21,6 +26,7 @@ class WorkspaceEntry:
     type: str
     size: int
     modified_at: float
+    deletable: bool
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,8 @@ class WorkspaceTextFile:
 class WorkspaceFileService:
     max_read_bytes = 1_000_000
     max_write_bytes = 1_000_000
+    protected_root_files = {"config.yaml"}
+    protected_root_directories = {"agents", "contexts", "runs", "channels", "logs"}
 
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace.resolve()
@@ -56,6 +64,7 @@ class WorkspaceFileService:
                     type="directory" if child.is_dir() else "file",
                     size=stat.st_size,
                     modified_at=stat.st_mtime,
+                    deletable=self._is_deletable(child),
                 )
             )
         return sorted(entries, key=lambda entry: (entry.type != "directory", entry.name.lower()))
@@ -99,6 +108,20 @@ class WorkspaceFileService:
         tmp_path.replace(path)
         return self.read_text_file(relative_path)
 
+    def delete_path(self, relative_path: str) -> None:
+        path = self._resolve(relative_path)
+        if path == self.workspace:
+            raise ProtectedWorkspacePathError(relative_path)
+        if self._is_protected_relative(self._relative(path)):
+            raise ProtectedWorkspacePathError(relative_path)
+        if not path.exists():
+            raise FileNotFoundError(relative_path)
+
+        if path.is_dir():
+            shutil.rmtree(path)
+            return
+        path.unlink()
+
     def _resolve(self, relative_path: str) -> Path:
         normalized = str(relative_path or "").strip()
         if normalized in {"", "."}:
@@ -114,6 +137,14 @@ class WorkspaceFileService:
     def _relative(self, path: Path) -> str:
         value = path.resolve().relative_to(self.workspace)
         return value.as_posix()
+
+    def _is_deletable(self, path: Path) -> bool:
+        return not self._is_protected_relative(self._relative(path))
+
+    def _is_protected_relative(self, relative: str) -> bool:
+        if "/" in relative:
+            return False
+        return relative in self.protected_root_files or relative in self.protected_root_directories
 
     def _is_editable(self, path: Path) -> bool:
         return path.suffix.lower() in {

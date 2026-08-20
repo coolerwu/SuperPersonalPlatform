@@ -682,6 +682,16 @@ pre {
 
 .file-row {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 38px;
+}
+
+.file-open-button,
+.file-parent-row {
+  display: grid;
   grid-template-columns: 20px minmax(0, 1fr) 92px 80px;
   gap: 10px;
   width: 100%;
@@ -694,28 +704,51 @@ pre {
   text-align: left;
 }
 
-.file-row:hover,
-.file-row.selected {
+.file-open-button:hover,
+.file-row.selected .file-open-button,
+.file-parent-row:hover {
   border-color: rgba(23, 168, 245, 0.32);
   background: rgba(23, 168, 245, 0.08);
   color: var(--text);
 }
 
-.file-row span,
-.file-row small,
-.file-row time {
+.file-open-button span,
+.file-open-button small,
+.file-open-button time,
+.file-parent-row span,
+.file-parent-row small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.file-row span {
+.file-open-button span,
+.file-parent-row span {
   color: #d8e5f0;
 }
 
-.file-row small,
-.file-row time {
+.file-open-button small,
+.file-open-button time,
+.file-parent-row small {
   color: var(--faint);
+}
+
+.delete-button {
+  color: #ffaaaa;
+}
+
+.delete-button:hover {
+  border-color: rgba(255, 93, 93, 0.38);
+  background: rgba(255, 93, 93, 0.12);
+}
+
+.protected-label {
+  display: inline-grid;
+  min-width: 34px;
+  min-height: 28px;
+  place-items: center;
+  color: var(--faint);
+  font-size: 11px;
 }
 
 .file-editor {
@@ -1194,11 +1227,12 @@ pre {
     display: none;
   }
 
-  .file-row {
+  .file-open-button,
+  .file-parent-row {
     grid-template-columns: 20px minmax(0, 1fr) 80px;
   }
 
-  .file-row time {
+  .file-open-button time {
     display: none;
   }
 }

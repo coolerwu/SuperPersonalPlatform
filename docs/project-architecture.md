@@ -94,14 +94,15 @@ Workspace 文件 API：
 POST /api/workspace/list
 POST /api/workspace/read
 PUT /api/workspace/write
+POST /api/workspace/delete
 ```
 
-这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览和编辑 UTF-8 文本文件。`config.yaml` 通过该入口保存时仍执行配置校验。
+这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`contexts/`、`runs/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
 
 ## Frontend Routes
 
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口兼容，不恢复旧 Agent Chat/Agent 管理页面。
-- `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，包括 `config.yaml`、`runs/index.json`、Run 状态/事件/结果文件和 Context/Knowledge 配置。
+- `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 和根层固定骨架目录不可删除。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作。
 - `/system` 展示生产更新、配置说明和系统日志；`config.yaml` 编辑入口收敛到 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。

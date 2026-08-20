@@ -215,6 +215,7 @@ def test_workspace_file_routes_are_scoped_and_edit_text(tmp_path) -> None:
     list_response = client.post("/api/workspace/list", json={"path": "runs"})
     assert list_response.status_code == 200
     assert list_response.json()["entries"][0]["path"] == "runs/index.json"
+    assert list_response.json()["entries"][0]["deletable"] is True
 
     read_response = client.post("/api/workspace/read", json={"path": "runs/index.json"})
     assert read_response.status_code == 200
@@ -229,6 +230,28 @@ def test_workspace_file_routes_are_scoped_and_edit_text(tmp_path) -> None:
 
     escape_response = client.post("/api/workspace/list", json={"path": "../"})
     assert escape_response.status_code == 400
+
+
+def test_workspace_delete_protects_config_and_root_skeleton(tmp_path) -> None:
+    client = make_system_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    (tmp_path / "runs").mkdir()
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    (scratch_dir / "note.txt").write_text("delete me", encoding="utf-8")
+
+    root_response = client.post("/api/workspace/list", json={"path": ""})
+    root_entries = {entry["path"]: entry for entry in root_response.json()["entries"]}
+    assert root_entries["config.yaml"]["deletable"] is False
+    assert root_entries["runs"]["deletable"] is False
+    assert root_entries["scratch"]["deletable"] is True
+
+    assert client.post("/api/workspace/delete", json={"path": "config.yaml"}).status_code == 400
+    assert client.post("/api/workspace/delete", json={"path": "runs"}).status_code == 400
+
+    delete_response = client.post("/api/workspace/delete", json={"path": "scratch"})
+    assert delete_response.status_code == 200
+    assert not scratch_dir.exists()
 
 
 def test_wechat_account_routes(tmp_path) -> None:

@@ -18,6 +18,7 @@ import {
   Settings,
   Smartphone,
   TerminalSquare,
+  Trash2,
   XCircle,
 } from "lucide-react";
 import "./styles.css";
@@ -531,6 +532,28 @@ function WorkspacePage() {
     }
   }
 
+  async function deleteEntry(entry) {
+    if (!entry.deletable) return;
+    const confirmed = window.confirm(`删除 workspace/${entry.path}？`);
+    if (!confirmed) return;
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/api/workspace/delete", {
+        method: "POST",
+        body: JSON.stringify({ path: entry.path }),
+      });
+      if (activeFile?.path === entry.path || activeFile?.path?.startsWith(`${entry.path}/`)) {
+        setActiveFile(null);
+        setDraft("");
+      }
+      setMessage(data.message || "已删除");
+      await load(path);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   useEffect(() => {
     load("");
   }, []);
@@ -588,7 +611,7 @@ function WorkspacePage() {
           </div>
           <div className="file-list">
             {path ? (
-              <button className="file-row" onClick={() => load(path.split("/").slice(0, -1).join("/"))}>
+              <button className="file-parent-row" onClick={() => load(path.split("/").slice(0, -1).join("/"))}>
                 <FolderOpen size={16} />
                 <span>..</span>
                 <small>上级目录</small>
@@ -596,16 +619,24 @@ function WorkspacePage() {
             ) : null}
             {entries.length === 0 ? <div className="empty-state">当前目录为空。</div> : null}
             {entries.map((entry) => (
-              <button
+              <div
                 key={entry.path}
                 className={`file-row ${activeFile?.path === entry.path ? "selected" : ""}`}
-                onClick={() => openEntry(entry)}
               >
-                {entry.type === "directory" ? <FolderOpen size={16} /> : <FileText size={16} />}
-                <span>{entry.name}</span>
-                <small>{entry.type === "directory" ? "directory" : formatBytes(entry.size)}</small>
-                <time>{formatTime(entry.modified_at * 1000)}</time>
-              </button>
+                <button className="file-open-button" onClick={() => openEntry(entry)}>
+                  {entry.type === "directory" ? <FolderOpen size={16} /> : <FileText size={16} />}
+                  <span>{entry.name}</span>
+                  <small>{entry.type === "directory" ? "directory" : formatBytes(entry.size)}</small>
+                  <time>{formatTime(entry.modified_at * 1000)}</time>
+                </button>
+                {entry.deletable ? (
+                  <button className="icon-button delete-button" onClick={() => deleteEntry(entry)} title="删除">
+                    <Trash2 size={14} />
+                  </button>
+                ) : (
+                  <span className="protected-label">固定</span>
+                )}
+              </div>
             ))}
           </div>
         </section>

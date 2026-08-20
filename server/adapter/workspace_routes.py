@@ -6,6 +6,7 @@ from server.adapter.security import require_authenticated
 from server.app.config_file_service import InvalidConfigFileError
 from server.app.workspace_file_service import (
     InvalidWorkspacePathError,
+    ProtectedWorkspacePathError,
     WorkspaceFileNotTextError,
     WorkspaceFileTooLargeError,
 )
@@ -88,5 +89,18 @@ def create_workspace_router(container: AppContainer) -> APIRouter:
             raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="只支持可编辑文本文件") from exc
 
         return {"ok": True, "message": "文件已保存", "file": file.__dict__}
+
+    @router.post("/delete")
+    def delete_path(payload: WorkspacePathRequest) -> dict[str, object]:
+        try:
+            container.workspace_file_service.delete_path(payload.path)
+        except InvalidWorkspacePathError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="工作目录路径无效") from exc
+        except ProtectedWorkspacePathError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该路径是 workspace 固定骨架，不能删除") from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="路径不存在") from exc
+
+        return {"ok": True, "message": "已删除"}
 
     return router
