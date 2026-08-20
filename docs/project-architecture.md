@@ -1,82 +1,129 @@
 # Project Architecture
 
-## Current Shape
+本文件是当前项目架构入口。DeepAgent 重构的详细决策记录在 `docs/architecture-qa.md`，后续实现以该问答中的模型为准。
 
-- This is a new full-stack personal platform in `/Users/wulang/Desktop/AI/SuperPersonalPlatform`.
-- The backend is Python 3.12.x with FastAPI and listens on port `8888`.
-- The frontend is React + Vite. Dev startup (`./run-dev.sh` or `./run.sh dev`) runs `npm run build` in `web/` before starting FastAPI so the backend serves fresh `web/dist` assets. Production uses the committed `web/dist` build output and does not build frontend assets during `prod`.
-- Personal WeChat channel support uses the Tencent iLink Bot HTTP API through a pure Python async implementation under `server/infrastructure/ilink_client.py`.
-- The app is not deployed as separated frontend/backend services. Browser traffic goes to FastAPI, and FastAPI serves both API and built frontend assets.
-- Agent Chat uses a domain-level multi-mode Harness runner under `server/domain/harness`. Each `ModelDefinition.mode` selects `prompt` for direct completion or `agent` for the strict task loop; individual requests do not select a mode. Stateless `run_agent(request)` reads the bound Agent, run input, checkpoint callback, iteration limit, and optional tool context from one `HarnessRequest`, then creates a model-bound infrastructure `ModelRunner`. `HarnessRequest.for_prompt(...)` and `HarnessRequest.for_agent(...)` are the domain factories for the two legal request shapes: Prompt requests reject tool context, while Agent requests validate resolved tool registry/runtime consistency. ModelRunner uses LangChain internally for OpenAI-compatible (`ChatOpenAI`) and Anthropic Claude (`ChatAnthropic`) providers.
+## Current Direction
 
-## Backend Architecture
+- 项目仍是一个由 FastAPI 提供后端、React + Vite 提供前端、后端统一服务静态资源的单体应用。
+- 后端 Python 版本目标为 3.12.x，默认监听端口为 `8888`。
+- 运行入口仍是 `./run-dev.sh`、`./run-prod.sh` 和底层 `./run.sh`。
+- 生产环境仍使用已提交的 `web/dist`，生产启动不现场构建前端。
+- 工作区默认仍是项目目录下 `.super-personal-platform`，可通过 `--workspace` 覆盖。
+- 目标产品边界收缩为：DeepAgent/LangGraph 后端任务执行、微信个人号入口、坚果云 WebDAV Context、单 token 登录、基础配置、基础日志和生产更新。
 
-- The backend follows a standard COLA layout:
-  - `server/adapter`: FastAPI routes, HTTP DTOs, static frontend serving.
-  - `server/app`: application services and use-case orchestration.
-  - `server/domain`: framework-free domain models, rules, and domain errors.
-  - `server/infrastructure`: config loading, HTTP clients, session cookie implementation, app factory wiring.
-- Domain code must not import FastAPI, httpx, or filesystem/config libraries.
-- New behavior should be added through application services first, with adapters kept thin.
-- Agent Harness is classified by responsibility under `server/domain/harness`: `contracts.py` owns shared DTOs, protocols, and request factories; `modes/prompt.py` owns direct prompt execution; `modes/agent.py` owns the strict Agent state machine; `runner.py` creates a `ModelRunner` from the bound `ModelDefinition` and dispatches by `model.mode`; and `__init__.py` is the stable public API. `Agent` contains only Agent/model definitions. `PromptRunner` and `AgentRunner` receive the model-bound runner created for the current call; there is no `LLMClient`, Harness Runtime, cached runner map, `ChatOptions`, or model-client argument in application wiring. `server/app/agent_chat_service.py` loads configuration, validates chat input, binds the selected Agent/model into a pure Harness `Agent`, delegates request construction to the domain factories, and calls stateless `run_agent(request)`. Application services may use `bind_prompt_agent(...)` to create an in-memory Agent with a dynamic system prompt and the configured default or explicit Prompt-mode model; this method rejects Agent-mode models and never persists the temporary Agent into `config.yaml`. `HarnessRequest` remains the complete execution boundary: it carries the bound Agent, content, images, optional tool context, checkpoint callback, run artifact callback, and Agent-mode iteration limit. Harness code emits stable run artifact events for fields such as phase, goal, evidence, verification, final response, status, and error, but never reads or writes workspace files. Tool definitions and handlers remain in `server/app/agent_tool_service.py`; model I/O is implemented by the model-bound `server/infrastructure/model_runner.py`.
+## Architecture Q&A
 
-## Implemented Capabilities
+`docs/architecture-qa.md` 是本轮重构的产品和技术问答来源，已确定：
 
-- Single-token login using the active workspace `config.yaml` at `auth.token`. Login, auth-state checks, and protected HTTP/WebSocket routes re-read the current workspace token, so changing `config.yaml` invalidates old sessions and allows the new token without a service restart. Dev startup enables a development-only auth bypass through `SUPER_PERSONAL_RELOAD=1` plus `SUPER_PERSONAL_DEV_AUTH_BYPASS=1`, so local UI verification can access protected pages and APIs without entering the token; production startup does not set this bypass.
-- Login writes an HttpOnly cookie. Logout clears it.
-- Auth state is available through `GET /api/auth/me`.
-- Agent Chat uses the existing single-token login model. There is no Agent-specific permission switch, user model, role model, or per-Agent authorization; authenticated users can access Agent routes.
-- Agent Chat configuration lives in workspace `config.yaml` under `llm.models`, `llm.default_model_id`, `skills.definitions`, and `agents.definitions`. Agents and Skills are exclusively workspace-owned: the backend injects no templates, presets, fallback definitions, or `is_builtin` markers. There is no global `agents.default_agent_id`; the UI uses the first available Agent as an initial selection when a screen needs one, and individual workflows store their own explicit Agent binding. Model entries contain `provider` (`openai_compatible` or `anthropic`), OpenAI-compatible `base_url`, `api_key`, `model`, optional `temperature`, `supports_images`, and `mode` (`prompt` or `agent`, defaulting to `prompt` when omitted); `skills.definitions` is only a Skill id index; Agent entries contain `id`, `name`, `system_prompt`, `model_id`, and optional `skill_ids`. Agent Skill binding is optional and edited through a selectable Skill list rather than free-form ids. Saving Agent config removes legacy `agents.default_agent_id` and `agents.builtin_overrides`; loading rejects `builtin_overrides`.
-- `GET /api/agents/options` is authenticated and returns Agent options with each Agent's bound model capability metadata without exposing `api_key`.
-- `GET /api/agents/config` and `PUT /api/agents/config` are authenticated workspace configuration APIs for models, Skill index entries, and Agent definitions. They mask model API keys in read responses; empty `api_key` values on update preserve existing keys. `GET /api/agents/skills/content?id=...` and `PUT /api/agents/skills/content` read and write the Markdown content plus frontmatter metadata for workspace skills without storing Markdown or Skill-owned tools in `config.yaml`.
-- Agent tools follow an OpenClaw/Hermes-style split: the backend Tool Registry is the only metadata, discovery, validation, model-schema, and dispatch source; each tool publishes `name`, `display_name`, `description`, JSON Schema `input`, JSON Schema `output`, and a non-empty `support_scene` list containing `mcp`, `dag`, and/or `agent`. `GET /api/agents/tools` returns the authenticated public catalog. Skills are Markdown operating instructions visible only when bound through `skill_ids`; each `SKILL.md` owns callable exposure only through `tools.allow`, which stores Registry tool names. Effective tools are the union of `tools.allow` from Skill files bound to the selected Agent. The former platform `tools`, `common_skills.tools`, Tool Profiles, `deny`, per-Agent tools, and compatibility fallbacks are unsupported and rejected.
-- `POST /api/agents/search` is the authenticated capability discovery endpoint for one session or UI flow. It searches Skill definitions and Registry tools with local lexical search: optional `jieba` tokenization when available, built-in Chinese/ASCII token fallback, deterministic scoring, and permission-aware reranking. It does not call an LLM, require embeddings, invent synonyms for unavailable production abilities, or grant permissions. Results mark `discoverable`, `loadable`, `callable`, matched terms, and required Skill bindings; a Tool is callable only when the current `agent_id` already has a bound Skill whose `SKILL.md` frontmatter exposes that Registry tool.
-- `WebSocket /api/agents/chat/connect` is authenticated, accepts JSON `message` events with required `agent_id`, `content`, optional base64 `images`, and optional `session_id`, and returns `status`, `checkpoint`, `assistant_message`, or `error` events. Empty `agent_id` is rejected instead of falling back to the default Agent. The backend chooses the model through the selected Agent's `model_id`; the frontend does not send `model_id`. PROMPT mode calls `complete` directly and does not load Agent-mode dependencies. AGENT mode executes `GOAL -> REASON -> ACT -> OBSERVE -> VERIFY -> FINALIZE`; `AgentRunPhase` models only those active stages, while `AgentRunStatus` is limited to `RUNNING` and `COMPLETED`. Failed, blocked, or cancelled outcomes are expressed through checkpoint/error events, exceptions, and run artifact `error.kind`, not run status values. GOAL creates a structured goal contract, ACT executes tools sequentially, OBSERVE cleans tool results into a run-scoped evidence ledger, VERIFY applies deterministic evidence checks plus a fresh-context semantic model check, and FINALIZE runs only after verification passes. Failed verification returns to REASON while iterations remain; reaching the limit fails instead of degrading. Checkpoint events expose these operational stages without hidden model reasoning. Messages carrying `session_id` persist user and assistant messages to the matching session file and attach the generated `run_id`; messages without it remain temporary and do not create run artifact files.
-- `/api/sessions/*` routes are authenticated and manage Agent Chat conversation sessions. Sessions are persisted as JSON files under `workspace/sessions/{session_id}.json`. `GET /api/sessions` requires `agent_id` and returns only that Agent's summaries. `POST /api/sessions` creates a session with `agent_id` and optional `title`; title is auto-set from the first user message if empty. `GET/PUT/DELETE /api/sessions/{id}` require `agent_id` and reject sessions owned by another Agent. WebSocket chat validates `session.agent_id` against message `agent_id` before Agent execution or persistence. Session messages may carry a `run_id` that links the chat timeline to per-run artifacts without embedding large run state in the session file. Per-run artifacts are written by `server/app/agent_run_state_service.py` under `workspace/agent_runs/{session_id}/{run_id}.json`, using schema version 1 and stable JSON fields for `intent`, `goal`, `phase`, `evidence`, `candidate`, `verification`, `final_response`, `status`, and `error`. The frontend keeps independent session lists and active-session memory per Agent, clears the visible conversation when switching Agents, ignores stale session responses, and disables Agent/session switches while generating.
-- `/api/portfolio/*` routes are authenticated and manage investment portfolio holdings. Holdings are persisted as JSON files under `workspace/portfolio/holdings.json`. `GET /api/portfolio/holdings` lists all holdings, `POST` creates one, `GET/PUT/DELETE /api/portfolio/holdings/{id}` retrieves/updates/deletes a single holding. Each holding has `type` (stock/fund/crypto), `symbol`, `name`, `quantity`, `avg_cost`, and `currency`. Workspace `portfolio.agent_id` explicitly binds the Portfolio AI chat to an ordinary Agent and must be empty or reference an existing workspace Agent. The Portfolio page never selects a Skill: the bound Agent owns its `skill_ids`, and an ordinary Skill file exposes portfolio CRUD Registry tools through `tools.allow`. Missing binding leaves holdings CRUD available and disables AI chat with a configuration notice; there is no implicit Agent or Skill fallback. Portfolio sessions and WebSocket messages use the configured Agent id.
-- `/api/critique/*` routes are authenticated and manage the multidisciplinary dimension-Agent chat workflow. Discipline CRUD stores user-maintained dimension entries in `workspace/critique/disciplines.json`; each entry has a name, the user's known scope, critique focus, and `default_enabled` flag. Run history is stored as atomic JSON files under `workspace/critique/runs/{run_id}.json`, including immutable discipline snapshots and ordered `turns` so later edits or deletion do not change historical meaning. `WebSocket /api/critique/runs/connect` accepts `run`, `follow_up`, and `retry` messages and emits run, per-discipline, judge, and completion events. Initial `run` messages require `discipline_ids`; `follow_up` messages may include `discipline_ids` to target a saved subset for that turn, and omit it to reuse the full saved panel. Prior turns are supplied as context to each selected discipline and the judge. Legacy one-shot run files are synthesized as single-turn conversations when read. `CritiqueService` builds one transient Prompt Agent per selected discipline through `AgentChatService.bind_prompt_agent(...)`, creates requests with `HarnessRequest.for_prompt(...)`, executes them concurrently with `asyncio.gather`, parses fixed JSON fields, and sends successful results to a final transient judge Prompt Agent. A failed or malformed discipline result does not discard successful results; the turn becomes `partial`, the judge uses successful rows, and failed rows can be retried from their saved discipline snapshot. The model must be configured with `mode=prompt`; the workflow never bypasses Harness or writes temporary Agents into platform configuration.
-- `/api/proxy/site/` reverse-proxies the configured upstream site under `proxy.upstream_base_url`.
-- The proxy forwards normal HTTP methods through the Python backend and returns upstream status, body, and safe response headers.
-- `/api/channels/wechat/*` routes are authenticated and manage personal WeChat channels. The system supports **multiple WeChat accounts** via `WechatChannelManager`, each with independent QR login, session persistence, message loops, and Agent Chat conversation sessions. New REST endpoints (`GET/POST/PUT/DELETE /api/channels/wechat/accounts`, `GET/POST /api/channels/wechat/accounts/{id}/status|start|stop`) provide full account CRUD, per-account Agent binding updates, and per-account lifecycle control. Legacy singleton endpoints (`/api/channels/wechat/status|start|stop`) delegate to the first configured account for backward compatibility. Account configuration lives under `channels.wechat_personal.accounts` as a list in workspace `config.yaml`; each entry has `id`, `name`, optional `default_agent_id`, `auto_start`, and `proxy`. The Channels page can update an existing account's `default_agent_id` through `PUT /api/channels/wechat/accounts/{id}` without restarting that account; an empty value means that WeChat account is not bound to an Agent and will ask the operator to bind one instead of falling back to a global default. When `accounts` is absent, the legacy flat fields (`enabled`, `default_agent_id`, `auto_start`, `proxy`) are treated as a single virtual account with `id="default"`. Session credentials are persisted to `.run/wechat_session_{account_id}.json` per account (with automatic migration of legacy `wechat_session.json` to `wechat_session_default.json`). Incoming WeChat text messages are grouped by WeChat account id, not sender id: each account reuses its active `/api/sessions` conversation for 24 hours since the previous inbound message, then opens a new session. The active mapping is stored under `workspace/channels/wechat_sessions/{account_id}.json`. Full messages remain in the session file, while the prompt sent to the Agent uses compressed context for long histories: older messages are shortened into a summary section and the most recent 8 messages are kept as raw transcript before the current message.
-- `/api/system/*` routes are protected at the router level. `POST /api/system/config/read` reads the active workspace `config.yaml`, `PUT /api/system/config` validates and writes it, `POST /api/system/logs/list` and `POST /api/system/logs/read` expose read-only unified logs, and `POST /api/system/update-service` starts a background production update task.
-- The frontend contains a login page, a full-height console app shell, an Agent command center, a dimension-Agent chat page, a Channels page, a portfolio page, and a system page split into config, logs, and update tabs. There is no standalone home page: login success, `/`, and unknown authenticated paths enter the Agent command center. The global visual direction is a restrained Hermes/OpenClaw-style dark command center: slate/gray surfaces, blue reserved for active controls, no gradients or glow effects, and hierarchy built from typography, alignment, row separators, and subtle borders instead of card piles. Menu pages fill the right-side workspace directly without a repeated global title. The global sidebar exposes route-backed Agent submenus only while an Agent route is active: `/agents` for chat, `/agents/manage` for Agent management, `/agents/skills` for Skill management, and `/agents/models` for model configuration; `/models` remains a compatibility route for model configuration. Agent pages do not render a second local mode rail. Chat mode combines a session rail, central conversation stream, stable composer, and right runtime inspector showing the selected Agent, bound model, Skills, connection state, key readiness, and input capability. The dimension-Agent chat page follows the same command-center pattern with a persistent conversation rail, chronological user/dimension/judge turns, a stable composer, and a right dimension/context inspector; users can type `@维度名` to route the current message to specific dimension Agents, while messages without `@` use the default enabled dimension set for new conversations or the saved panel for existing conversations. Assistant replies render Markdown without raw HTML injection. Management modes retain real configuration editing and save flows: Agent management uses a left Agent list, central identity/prompt/Skill editor, and right runtime profile; Skill management uses a file library plus Markdown editor/preview, a self-evolution template insertion action, and a Registry-driven capability selector; model management keeps collapsible model rows. On narrow screens the global navigation and active Agent submenu share a horizontally scrollable row, runtime inspectors hide, and conversation rails stack above their message streams. The former self-development, browser-terminal, and home pages, navigation, frontend dependencies, backend routes, and dedicated services are removed; their legacy frontend paths fall back to the Agent command center.
+- 前端不使用 WebSocket 聊天，不执行 Agent，只创建任务并轮询后端 API。
+- DeepAgent 在后端运行，状态、事件、结果全部落盘。
+- `workspace/runs/index.json` 维护所有 run 的摘要和当前状态。
+- 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json`、`lock.json` 和 `delivery.json`。
+- `Agent` 只保存人格、模型和绑定的 Context 列表。
+- `Context` 是隔离边界，内部包含 roots、tools、knowledge、owner、scope 等配置。
+- `Knowledge` 是 Context 内部资源，不作为全局散放目录。
+- Run 创建时必须固化 Agent + Context + Knowledge 快照。
+- 微信收到消息后创建 `source=wechat` 的 run；DeepAgent 完成后由平台投递微信回复。
+
+## Target Workspace Layout
+
+```text
+workspace/
+  config.yaml
+
+  agents/
+    index.json
+    {agent_id}/
+      agent.json
+
+  contexts/
+    index.json
+    {context_id}/
+      context.json
+      knowledge/
+        index.json
+        files/
+      state/
+        embeddings/
+        cache/
+
+  runs/
+    index.json
+    {run_id}/
+      input.json
+      state.json
+      events.jsonl
+      result.json
+      lock.json
+      delivery.json
+
+  channels/
+    wechat/
+      accounts.json
+      sessions/
+
+  logs/
+    platform-YYYY-MM-DD.log
+```
+
+## Target Backend Boundaries
+
+- `server/adapter` 只保留薄 HTTP API：认证、run 创建/查询/事件轮询、微信账号管理、配置/日志/更新、静态资源。
+- `server/app` 负责应用服务：DeepAgent run 服务、Agent/Context 工作区服务、坚果云服务、微信通道服务、系统日志/更新服务。
+- `server/domain` 只保留框架无关的领域对象、配置规则、错误类型和 run/context/agent 数据约束。
+- `server/infrastructure` 负责配置加载、DeepAgent/LangChain 模型运行、坚果云 WebDAV、微信 iLink 客户端、FastAPI app 装配和 cookie session。
+
+## Target API Shape
+
+Run API：
+
+```text
+POST /api/runs
+GET /api/runs
+GET /api/runs/{run_id}
+GET /api/runs/{run_id}/events?after={seq}
+```
+
+微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
+
+系统 API 继续保留配置、日志和生产更新能力。
+
+## Retained Capabilities
+
+- 单 token 登录，登录状态通过 HttpOnly cookie 保存。
+- 配置从 active workspace 的 `config.yaml` 读取。
+- 个人微信通过 Tencent iLink Bot HTTP API 接入。
+- 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
+- DeepAgent 依赖 `deepagents` 和 LangGraph；后端任务执行结果必须落盘。
+- 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
+
+## Removed From Target Architecture
+
+以下旧功能不再作为目标架构保留；删除对应代码时必须同步清理文档、测试、前端入口和配置模板：
+
+- 旧 Agent Chat WebSocket 聊天。
+- 旧 Harness 严格状态机产品路径。
+- Prompt/Agent 双模式产品概念。
+- 旧 Session CRUD 和 `workspace/sessions/*` 会话模型。
+- 旧 Skill 管理和 Skill 作为产品级概念。
+- Portfolio 投资组合模块。
+- Critique 多维批判模块。
+- Proxy 嵌入站点模块。
+- Agent command center 里围绕旧 Agent/Skill/Model 管理构建的复杂 UI。
+
+## Documentation Cleanup Rule
+
+- 主架构入口只描述当前目标架构，不再保存已决定删除模块的完整行为说明。
+- `docs/architecture-qa.md` 保存本轮架构问答和设计决策。
+- 旧 `docs/superpowers/*` 计划/规格和旧多维批判设计图已经删除；后续删除旧代码模块时，必须同步删除或归档对应文档，避免搜索结果继续指向旧架构。
+- 如果实现改变架构、行为、命令、依赖、配置、公共接口、运维方式或长期协作规则，必须同步更新本文件和相关说明。
 
 ## Operating Notes
 
-- `AGENTS.md` is the repository-level Codex instruction entrypoint. It indexes this architecture document for project memory and operating assumptions.
-- The project contains a local Codex skill at `.codex/skills/project-commit` for the standard test, architecture update, commit, push, and production restart workflow. After a successful push, the workflow records the local pushed SHA, SSHes to `qiuqiu@192.168.1.3`, runs from `SuperPersonalPlatform/`, pulls with `git -c http.version=HTTP/1.1 pull` and up to 3 retries for transient network/TLS failures, verifies the remote `git rev-parse HEAD` equals the pushed SHA, restarts with `sudo -n systemctl restart super-personal-platform.service`, then verifies service health with non-sudo `systemctl is-active/status super-personal-platform.service`. SSH/sudo passwords must remain runtime-only secrets and must not be committed or embedded in command text.
-- `config.example.yaml` is the committed template for workspace configuration.
-- `config.example.yaml` includes model structure but no Agent or Skill definitions. Local workspaces must create ordinary Agent/Skill definitions and replace model `api_key`, `base_url`, and `model` with real provider values before using Agent Chat. `portfolio.agent_id` defaults to empty.
-- Default proxy target is `http://192.168.1.3:9119/`.
-- The proxy currently supports ordinary HTTP requests, not WebSocket upgrade traffic.
-- The proxy HTTP client uses `trust_env=False` so system proxy settings do not intercept private LAN upstream requests.
-- HTML, CSS, and JavaScript returned through the proxy get light rewriting for common root-relative paths so upstream assets and API calls continue through `/api/proxy/site/`.
-- Unknown authenticated `/api/*` requests fall back to the upstream proxy after platform-owned API routes are checked, which supports embedded apps that call root-relative APIs such as `/api/status`.
-- Known upstream root asset prefixes `/fonts/*`, `/ds-assets/*`, and `/dashboard-plugins/*` also fall back to the upstream proxy so embedded absolute asset paths do not hit the platform SPA fallback.
-- Workspace `config.yaml` should stay local and must not be committed.
-- The system page edits the active workspace `config.yaml` in place. Saved YAML is parsed and validated against required runtime settings before it replaces the file. Changing `auth.token` takes effect immediately for login and route authentication; existing cookies issued with the old token no longer authenticate.
-- Agent routes re-read the active workspace `config.yaml` so model definitions and personality definitions can change without a service restart. API responses and unified request logs must not expose model `api_key` values.
-- Workspace skills live under AgentSkills-style `skills/common/{skill}/SKILL.md` and `skills/agents/{agent_id}/{skill}/SKILL.md`; legacy flat Markdown paths remain readable for content only. Skill ids use `common:{stem}` or `private:{stem}` and must be explicitly selected in the Agent's `skill_ids`; Agents cannot read unbound skills or another Agent's private skills. Each `SKILL.md` may expose callable tools only through YAML frontmatter `tools: { allow: [...] }`. The Skill management UI opens as a Skill file editor with live Markdown preview and a Registry-driven capability panel that searches `name`, `display_name`, and `description`, filters by `MCP`, `DAG`, or `AGENT`, and expands input/output schemas. It includes an insertable self-evolution Markdown template that helps users record stable improvement goals, evidence rules, and update boundaries inside the selected Skill file. Missing Registry names render as unavailable selections that must be removed before saving.
-- Agent chat supports per-message image inputs for models configured with `supports_images: true`. Images are sent as base64 data in the WebSocket message for the current request only, are included in the internal task-goal confirmation call and the tool-capable Agent response call, and are not written to the workspace.
-- Workspace `logs/` contains unified platform log files named `platform-YYYY-MM-DD.log`; logs are read-only in the UI, default to the latest file, scroll to the tail when loaded, and are retained for 3 days by the system log service. The unified log includes update-service output and `/api/*` request summaries with method, path, status, duration, and client, but never request bodies.
-- Workspace `critique/` contains the user-managed dimension-Agent library and conversation history. `disciplines.json` stores current dimension definitions, while `runs/*.json` stores immutable discipline snapshots, ordered turns, structured row outputs, judge outputs, model id, statuses, and timestamps. These files are runtime workspace data and are not committed.
-- Workspace `.run/` contains runtime-only files such as update locks and generated service files. If `.run/` is missing in production, it has no effect until an operation needs it; production startup or web-triggered update creates it automatically. Web-triggered update locks record the background update process PID, and stale legacy or dead-process locks are removed before starting a new update.
-- The default workspace is `.super-personal-platform` under the repository directory for both dev and prod.
-- If the default workspace has no `config.yaml`, `run.sh` first copies an existing repository-root `config.yaml`, then the former default `$HOME/.super-personal-platform/config.yaml` for prod, and finally the committed `config.example.yaml` template.
-- Start development with `./run-dev.sh` or `./run.sh dev`; dev startup builds frontend assets first with `npm run build`, then starts the backend.
-
-- Development startup uses the default `.super-personal-platform` workspace. It does not run git checks or pull code; it is for the current local working tree. It assumes `web/` dependencies are already installed, builds `web/dist`, enables development auth bypass by default, and if the configured port is held by a process whose working directory is this project, dev startup stops it before launching.
-- Pass `--workspace /path/to/workspace` to dev or prod to override the default workspace. A workspace stores `config.yaml`, unified logs, and `.run/` runtime data; code, `.venv`, and frontend assets stay outside durable workspace state.
-- Deploy production with `./run-prod.sh` or `./run.sh prod`. Run `./run.sh setup-sudo` once from an interactive production terminal to install a restricted sudoers rule for the service user that allows passwordless `systemctl restart/status/is-active super-personal-platform.service`; this lets web-triggered updates restart the existing unit without leaving the app in a pulled-but-not-restarted state.
-- Production startup uses the default `.super-personal-platform` workspace so dev and prod reuse the same workspace unless `--workspace` is specified.
-- `run.sh` contains the dev/prod logic. `run-dev.sh` and `run-prod.sh` only forward to it.
-- The Python service entrypoint is `.venv/bin/python -m server`; it wraps uvicorn internally.
-- The service reads configuration from `${SUPER_PERSONAL_WORKSPACE}/config.yaml`. `SUPER_PERSONAL_CONFIG` is not supported.
-- Production deployment requires Linux systemd and sudo for service changes and restarts. `run.sh prod` compares Git HEAD before/after pull and service-unit content; when both code and unit are unchanged it skips `systemctl enable/restart/status` entirely (no sudo needed). No-TTY web-triggered updates prefer passwordless sudo for `systemctl restart`; when that is unavailable, they install Python dependencies, skip systemd unit refresh/status, then send SIGTERM to the current service MainPID so systemd `Restart=always` starts the code currently on disk. When passwordless restart is available but the systemd unit file has changed and broader sudo is unavailable, web updates skip the unit refresh for that run and still restart the service so code updates are not blocked by unit installation. This means a web update that pulled new code but was running an older update script can be followed by another web update to restart into the already-pulled code. Interactive terminal runs may prompt for sudo. `./run.sh setup-sudo` installs only restart/status/is-active permissions for the existing service unit; systemd unit content changes still require interactive sudo because installing a root-owned service file is intentionally not covered by the passwordless rule. Production pulls `main` from the public HTTPS repository `https://github.com/coolerwu/SuperPersonalPlatform.git` with command-scoped `safe.directory`, forces Git HTTPS pulls to HTTP/1.1, retries transient pull failures 3 times, installs Python dependencies with no pip cache and a 3-attempt outer retry for transient package-index failures, and skips dependency installation when the `.venv` dependency fingerprint for Python version, install target, and dependency declaration files is unchanged. It refreshes `super-personal-platform.service` only when the generated unit content differs and sufficient sudo is available, enables the unit only after a unit refresh, and restarts the service when code or service changes are detected. The generated unit uses `KillMode=process` so the web-triggered update subprocess can survive explicit service restarts long enough to write restart/status/finished log lines. Web-triggered updates start `run-prod.sh` directly as a background process rather than through `systemd-run`.
-- The production systemd unit runs as `${SUPER_PERSONAL_SERVICE_USER}` when set; otherwise it uses `${SUDO_USER}` when present, then falls back to the current terminal user from `id -un`. The unit also writes `Group=` when the user's primary group can be resolved.
-- Use the web UI at `Agent` to chat with configured personality Agents, `系统 -> 配置` to edit the active workspace configuration, `系统 -> 日志` to inspect unified logs in a fixed-height console viewer, and `系统 -> 更新` to manually trigger the production update flow after login.
-- Before committing changes, execute the local `$project-commit` skill.
-
-## Maintenance Rule
-
-- Every implementation pass must update this file if it changes architecture, behavior, setup, commands, dependencies, configuration, public interfaces, or operating assumptions.
+- `AGENTS.md` 是仓库级 Codex 指令入口。
+- `config.example.yaml` 是 workspace 配置模板，不得放入真实密钥。
+- `config.yaml` 属于本地 workspace 数据，不提交。
+- 开发启动使用 `./run-dev.sh` 或 `./run.sh dev`。
+- 生产启动使用 `./run-prod.sh` 或 `./run.sh prod`。
+- `./run.sh setup-sudo` 仍用于安装受限 sudoers 规则，使生产服务能无密码执行受限的 `systemctl restart/status/is-active super-personal-platform.service`。
+- 提交项目前必须执行 `.codex/skills/project-commit` 工作流。

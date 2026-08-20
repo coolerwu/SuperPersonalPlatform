@@ -1,6 +1,6 @@
 # Super Personal Platform
 
-A compact personal platform served as one deployable Python application. The frontend is built with Vite and served by the FastAPI backend on port `8888`.
+A compact DeepAgent platform served as one deployable Python application. It keeps backend run execution, WeChat channel control, Nutstore WebDAV context support, and system config/log/update screens. The frontend is built with Vite and served by the FastAPI backend on port `8888`.
 
 ## Requirements
 
@@ -15,7 +15,7 @@ A compact personal platform served as one deployable Python application. The fro
 
 Open `http://localhost:8888` and log in with the token from `config.yaml`.
 
-Development mode uses `.super-personal-platform` under the project directory as its workspace by default. The workspace holds `config.yaml`, logs, and runtime files. Terminal sessions are live-only and are not written to workspace history. It does not check git status or pull code. If the configured port is already held by a process whose working directory is this project, dev mode stops that process before starting.
+Development mode uses `.super-personal-platform` under the project directory as its workspace by default. The workspace holds `config.yaml`, logs, and runtime files. It does not check git status or pull code. If the configured port is already held by a process whose working directory is this project, dev mode stops that process before starting.
 If the default workspace does not contain `config.yaml`, the script first reuses an existing project `config.yaml` when present; otherwise it creates one from `config.example.yaml`.
 
 To use a different workspace:
@@ -40,10 +40,10 @@ To deploy with a different workspace:
 ./run-prod.sh --workspace /path/to/workspace
 ```
 
-After login, use `系统 -> 更新` to trigger the same production update flow from the web UI, or `终端` to open an authenticated live xterm.js shell on the backend machine. Terminal transcripts are not saved.
+After login, use `系统 -> 更新` to trigger the same production update flow from the web UI.
 
-The production systemd service runs as `SUPER_PERSONAL_SERVICE_USER` when set; otherwise it uses `SUDO_USER` or the current `id -un` user. The web terminal shell inherits that service user.
+The production systemd service runs as `SUPER_PERSONAL_SERVICE_USER` when set; otherwise it uses `SUDO_USER` or the current `id -un` user.
 
 ## Project Architecture
 
-`docs/project-architecture.md` is part of the project contract. Update it whenever implementation changes behavior, architecture, commands, or operating assumptions.
+`docs/project-architecture.md` is part of the project contract. `docs/architecture-qa.md` records the DeepAgent rebuild decisions. Update both when implementation changes behavior, architecture, commands, or operating assumptions.

@@ -4,7 +4,3 @@ class DomainError(Exception):
 
 class InvalidTokenError(DomainError):
     """Raised when a login token does not match the configured token."""
-
-
-class UpstreamProxyError(DomainError):
-    """Raised when the proxy upstream cannot be read."""
