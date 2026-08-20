@@ -42,6 +42,8 @@ const WORKSPACE_TREE = [
   ["workspace/logs/platform-YYYY-MM-DD.log", "系统日志"],
 ];
 
+const RUN_POLL_INTERVAL_MS = 60_000;
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: "include",
@@ -250,7 +252,7 @@ function RunsPage() {
 
   useEffect(() => {
     load();
-    const timer = window.setInterval(load, 2500);
+    const timer = window.setInterval(load, RUN_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -271,7 +273,7 @@ function RunsPage() {
       setEvents((current) => replaceWhenChanged(current, eventData.events || []));
     }
     poll();
-    const timer = window.setInterval(poll, 2000);
+    const timer = window.setInterval(poll, RUN_POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

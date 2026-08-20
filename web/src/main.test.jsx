@@ -95,7 +95,7 @@ test("keeps run details stable when index polling returns only summaries", async
   expect(screen.getByText("稳定结果内容")).toBeInTheDocument();
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2600);
+    await vi.advanceTimersByTimeAsync(60_100);
   });
 
   expect(screen.getByText("稳定结果内容")).toBeInTheDocument();
