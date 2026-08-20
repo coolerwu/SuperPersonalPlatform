@@ -1,0 +1,704 @@
+import React, { useMemo } from "react";
+import { Plus, Trash2 } from "lucide-react";
+
+const DEFAULT_CONFIG = {
+  auth: { token: "" },
+  server: { host: "0.0.0.0", port: 8888 },
+  llm: {
+    default_model_id: "default",
+    models: [
+      {
+        id: "default",
+        name: "默认 DeepAgent 模型",
+        provider: "openai_compatible",
+        base_url: "https://api.openai.com/v1",
+        api_key: "",
+        model: "gpt-4o-mini",
+        temperature: 0.7,
+        supports_images: false,
+      },
+    ],
+  },
+  nutstore: {
+    enabled: false,
+    base_url: "https://dav.jianguoyun.com/dav/",
+    username: "",
+    password: "",
+    root_path: "/",
+  },
+  channels: {
+    wechat_personal: {
+      enabled: false,
+      accounts: [],
+    },
+  },
+  agents: {
+    definitions: [
+      {
+        id: "assistant",
+        name: "默认助手",
+        system_prompt: "你是一个运行在后端的 DeepAgent。",
+        model_id: "default",
+        context_ids: [],
+      },
+    ],
+  },
+};
+
+export function ConfigVisualEditor({ draft, onChange, readOnly }) {
+  const parsed = useMemo(() => {
+    try {
+      return { config: withDefaults(parseSimpleYaml(draft)), error: "" };
+    } catch (error) {
+      return { config: withDefaults({}), error: error.message };
+    }
+  }, [draft]);
+  const config = parsed.config;
+  const models = config.llm.models;
+  const agents = config.agents.definitions;
+  const wechat = config.channels.wechat_personal;
+  const accounts = wechat.accounts;
+
+  function update(mutator) {
+    const next = cloneConfig(config);
+    mutator(next);
+    onChange(dumpSimpleYaml(next));
+  }
+
+  function updateModel(index, field, value) {
+    update((next) => {
+      next.llm.models[index] = { ...next.llm.models[index], [field]: value };
+    });
+  }
+
+  function updateAgent(index, field, value) {
+    update((next) => {
+      next.agents.definitions[index] = { ...next.agents.definitions[index], [field]: value };
+    });
+  }
+
+  function updateAccount(index, field, value) {
+    update((next) => {
+      next.channels.wechat_personal.accounts[index] = {
+        ...next.channels.wechat_personal.accounts[index],
+        [field]: value,
+      };
+    });
+  }
+
+  if (parsed.error) {
+    return (
+      <div className="config-editor">
+        <p className="error">config.yaml 解析失败：{parsed.error}</p>
+        <textarea
+          className="workspace-editor"
+          value={draft}
+          readOnly={readOnly}
+          onChange={(event) => onChange(event.target.value)}
+          spellCheck={false}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="config-editor">
+      <section className="config-section">
+        <div className="config-section-title">
+          <strong>认证与服务</strong>
+          <span>auth / server</span>
+        </div>
+        <div className="config-grid">
+          <ConfigField label="访问 Token">
+            <input
+              type="password"
+              value={config.auth.token}
+              readOnly={readOnly}
+              onChange={(event) => update((next) => (next.auth.token = event.target.value))}
+            />
+          </ConfigField>
+          <ConfigField label="监听 Host">
+            <input
+              value={config.server.host}
+              readOnly={readOnly}
+              onChange={(event) => update((next) => (next.server.host = event.target.value))}
+            />
+          </ConfigField>
+          <ConfigField label="监听端口">
+            <input
+              type="number"
+              min="1"
+              max="65535"
+              value={config.server.port}
+              readOnly={readOnly}
+              onChange={(event) => update((next) => (next.server.port = Number(event.target.value) || 8888))}
+            />
+          </ConfigField>
+          <ConfigField label="默认模型">
+            <select
+              value={config.llm.default_model_id}
+              disabled={readOnly}
+              onChange={(event) => update((next) => (next.llm.default_model_id = event.target.value))}
+            >
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.id || "未命名模型"}
+                </option>
+              ))}
+            </select>
+          </ConfigField>
+        </div>
+      </section>
+
+      <section className="config-section">
+        <div className="config-section-title">
+          <strong>坚果云 WebDAV</strong>
+          <label className="config-toggle">
+            <input
+              type="checkbox"
+              checked={config.nutstore.enabled}
+              disabled={readOnly}
+              onChange={(event) => update((next) => (next.nutstore.enabled = event.target.checked))}
+            />
+            <span>启用</span>
+          </label>
+        </div>
+        <div className="config-grid two">
+          <ConfigField label="WebDAV 地址">
+            <input
+              value={config.nutstore.base_url}
+              readOnly={readOnly}
+              onChange={(event) => update((next) => (next.nutstore.base_url = event.target.value))}
+            />
+          </ConfigField>
+          <ConfigField label="根目录">
+            <input
+              value={config.nutstore.root_path}
+              readOnly={readOnly}
+              onChange={(event) => update((next) => (next.nutstore.root_path = event.target.value))}
+            />
+          </ConfigField>
+          <ConfigField label="账号">
+            <input
+              value={config.nutstore.username}
+              readOnly={readOnly}
+              onChange={(event) => update((next) => (next.nutstore.username = event.target.value))}
+            />
+          </ConfigField>
+          <ConfigField label="应用密码">
+            <input
+              type="password"
+              value={config.nutstore.password}
+              readOnly={readOnly}
+              onChange={(event) => update((next) => (next.nutstore.password = event.target.value))}
+            />
+          </ConfigField>
+        </div>
+      </section>
+
+      <ConfigList
+        title="模型"
+        subtitle="llm.models"
+        readOnly={readOnly}
+        onAdd={() =>
+          update((next) => {
+            const id = `model_${next.llm.models.length + 1}`;
+            next.llm.models.push({
+              id,
+              name: id,
+              provider: "openai_compatible",
+              base_url: "",
+              api_key: "",
+              model: "",
+              temperature: 0.7,
+              supports_images: false,
+            });
+            if (!next.llm.default_model_id) next.llm.default_model_id = id;
+          })
+        }
+      >
+        {models.map((model, index) => (
+          <div className="config-item" key={`${model.id}-${index}`}>
+            <div className="config-item-title">
+              <strong>{model.id || `model_${index + 1}`}</strong>
+              <button
+                className="icon-button delete-button"
+                type="button"
+                title="删除模型"
+                disabled={readOnly || models.length <= 1}
+                onClick={() =>
+                  update((next) => {
+                    const removed = next.llm.models[index]?.id;
+                    next.llm.models.splice(index, 1);
+                    if (next.llm.default_model_id === removed) {
+                      next.llm.default_model_id = next.llm.models[0]?.id || "";
+                    }
+                  })
+                }
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+            <div className="config-grid two">
+              <ConfigField label="ID">
+                <input value={model.id} readOnly={readOnly} onChange={(event) => updateModel(index, "id", event.target.value)} />
+              </ConfigField>
+              <ConfigField label="名称">
+                <input value={model.name} readOnly={readOnly} onChange={(event) => updateModel(index, "name", event.target.value)} />
+              </ConfigField>
+              <ConfigField label="Provider">
+                <select value={model.provider} disabled={readOnly} onChange={(event) => updateModel(index, "provider", event.target.value)}>
+                  <option value="openai_compatible">openai_compatible</option>
+                  <option value="anthropic">anthropic</option>
+                </select>
+              </ConfigField>
+              <ConfigField label="模型名">
+                <input value={model.model} readOnly={readOnly} onChange={(event) => updateModel(index, "model", event.target.value)} />
+              </ConfigField>
+              <ConfigField label="Base URL">
+                <input value={model.base_url} readOnly={readOnly} onChange={(event) => updateModel(index, "base_url", event.target.value)} />
+              </ConfigField>
+              <ConfigField label="API Key">
+                <input type="password" value={model.api_key} readOnly={readOnly} onChange={(event) => updateModel(index, "api_key", event.target.value)} />
+              </ConfigField>
+              <ConfigField label="Temperature">
+                <input
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={model.temperature ?? ""}
+                  readOnly={readOnly}
+                  onChange={(event) =>
+                    updateModel(index, "temperature", event.target.value === "" ? undefined : Number(event.target.value))
+                  }
+                />
+              </ConfigField>
+              <label className="config-toggle field-toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(model.supports_images)}
+                  disabled={readOnly}
+                  onChange={(event) => updateModel(index, "supports_images", event.target.checked)}
+                />
+                <span>支持图片</span>
+              </label>
+            </div>
+          </div>
+        ))}
+      </ConfigList>
+
+      <ConfigList
+        title="Agent"
+        subtitle="agents.definitions"
+        readOnly={readOnly}
+        onAdd={() =>
+          update((next) => {
+            const id = `agent_${next.agents.definitions.length + 1}`;
+            next.agents.definitions.push({
+              id,
+              name: id,
+              system_prompt: "你是一个运行在后端的 DeepAgent。",
+              model_id: next.llm.default_model_id,
+              context_ids: [],
+            });
+          })
+        }
+      >
+        {agents.map((agent, index) => (
+          <div className="config-item" key={`${agent.id}-${index}`}>
+            <div className="config-item-title">
+              <strong>{agent.id || `agent_${index + 1}`}</strong>
+              <button
+                className="icon-button delete-button"
+                type="button"
+                title="删除 Agent"
+                disabled={readOnly || agents.length <= 1}
+                onClick={() => update((next) => next.agents.definitions.splice(index, 1))}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+            <div className="config-grid two">
+              <ConfigField label="ID">
+                <input value={agent.id} readOnly={readOnly} onChange={(event) => updateAgent(index, "id", event.target.value)} />
+              </ConfigField>
+              <ConfigField label="名称">
+                <input value={agent.name} readOnly={readOnly} onChange={(event) => updateAgent(index, "name", event.target.value)} />
+              </ConfigField>
+              <ConfigField label="模型">
+                <select value={agent.model_id || ""} disabled={readOnly} onChange={(event) => updateAgent(index, "model_id", event.target.value)}>
+                  <option value="">默认模型</option>
+                  {models.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.id || "未命名模型"}
+                    </option>
+                  ))}
+                </select>
+              </ConfigField>
+              <ConfigField label="Context IDs">
+                <input
+                  value={(agent.context_ids || []).join(", ")}
+                  readOnly={readOnly}
+                  onChange={(event) => updateAgent(index, "context_ids", splitList(event.target.value))}
+                />
+              </ConfigField>
+            </div>
+            <ConfigField label="System Prompt">
+              <textarea
+                value={agent.system_prompt}
+                readOnly={readOnly}
+                onChange={(event) => updateAgent(index, "system_prompt", event.target.value)}
+              />
+            </ConfigField>
+          </div>
+        ))}
+      </ConfigList>
+
+      <ConfigList
+        title="微信账号"
+        subtitle="channels.wechat_personal.accounts"
+        readOnly={readOnly}
+        onAdd={() =>
+          update((next) => {
+            const id = `wechat_${next.channels.wechat_personal.accounts.length + 1}`;
+            next.channels.wechat_personal.accounts.push({
+              id,
+              name: id,
+              default_agent_id: next.agents.definitions[0]?.id || "",
+              auto_start: false,
+              proxy: "",
+            });
+          })
+        }
+        extra={
+          <label className="config-toggle">
+            <input
+              type="checkbox"
+              checked={Boolean(wechat.enabled)}
+              disabled={readOnly}
+              onChange={(event) => update((next) => (next.channels.wechat_personal.enabled = event.target.checked))}
+            />
+            <span>启用</span>
+          </label>
+        }
+      >
+        {accounts.length === 0 ? <div className="empty-state">暂无微信账号。</div> : null}
+        {accounts.map((account, index) => (
+          <div className="config-item" key={`${account.id}-${index}`}>
+            <div className="config-item-title">
+              <strong>{account.id || `wechat_${index + 1}`}</strong>
+              <button
+                className="icon-button delete-button"
+                type="button"
+                title="删除微信账号"
+                disabled={readOnly}
+                onClick={() => update((next) => next.channels.wechat_personal.accounts.splice(index, 1))}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+            <div className="config-grid two">
+              <ConfigField label="ID">
+                <input value={account.id} readOnly={readOnly} onChange={(event) => updateAccount(index, "id", event.target.value)} />
+              </ConfigField>
+              <ConfigField label="名称">
+                <input value={account.name} readOnly={readOnly} onChange={(event) => updateAccount(index, "name", event.target.value)} />
+              </ConfigField>
+              <ConfigField label="默认 Agent">
+                <select
+                  value={account.default_agent_id || ""}
+                  disabled={readOnly}
+                  onChange={(event) => updateAccount(index, "default_agent_id", event.target.value)}
+                >
+                  <option value="">未绑定</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.id || "未命名 Agent"}
+                    </option>
+                  ))}
+                </select>
+              </ConfigField>
+              <ConfigField label="代理">
+                <input value={account.proxy || ""} readOnly={readOnly} onChange={(event) => updateAccount(index, "proxy", event.target.value)} />
+              </ConfigField>
+              <label className="config-toggle field-toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(account.auto_start)}
+                  disabled={readOnly}
+                  onChange={(event) => updateAccount(index, "auto_start", event.target.checked)}
+                />
+                <span>自动启动</span>
+              </label>
+            </div>
+          </div>
+        ))}
+      </ConfigList>
+    </div>
+  );
+}
+
+function ConfigList({ title, subtitle, children, extra, onAdd, readOnly }) {
+  return (
+    <section className="config-section">
+      <div className="config-section-title">
+        <div>
+          <strong>{title}</strong>
+          <span>{subtitle}</span>
+        </div>
+        <div className="config-section-actions">
+          {extra}
+          <button type="button" onClick={onAdd} disabled={readOnly}>
+            <Plus size={14} />
+            新增
+          </button>
+        </div>
+      </div>
+      <div className="config-list">{children}</div>
+    </section>
+  );
+}
+
+function ConfigField({ label, children }) {
+  return (
+    <label className="config-field">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function withDefaults(value) {
+  const config = mergeObjects(cloneConfig(DEFAULT_CONFIG), isPlainObject(value) ? value : {});
+  config.llm.models = Array.isArray(config.llm.models) ? config.llm.models.map((model) => ({ ...model })) : [];
+  config.agents.definitions = Array.isArray(config.agents.definitions)
+    ? config.agents.definitions.map((agent) => ({ ...agent, context_ids: normalizeList(agent.context_ids) }))
+    : [];
+  config.channels.wechat_personal.accounts = Array.isArray(config.channels.wechat_personal.accounts)
+    ? config.channels.wechat_personal.accounts.map((account) => ({ ...account }))
+    : [];
+  if (config.llm.models.length === 0) config.llm.models = cloneConfig(DEFAULT_CONFIG.llm.models);
+  if (config.agents.definitions.length === 0) config.agents.definitions = cloneConfig(DEFAULT_CONFIG.agents.definitions);
+  return config;
+}
+
+function mergeObjects(base, incoming) {
+  for (const [key, value] of Object.entries(incoming)) {
+    if (isPlainObject(value) && isPlainObject(base[key])) {
+      base[key] = mergeObjects(base[key], value);
+    } else {
+      base[key] = value;
+    }
+  }
+  return base;
+}
+
+function cloneConfig(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normalizeList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
+function splitList(value) {
+  return String(value)
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseSimpleYaml(text) {
+  const lines = String(text)
+    .replace(/\t/g, "  ")
+    .split(/\r?\n/)
+    .map((raw) => ({ raw, indent: raw.match(/^ */)?.[0].length || 0, text: raw.trim() }))
+    .filter((line) => line.text && !line.text.startsWith("#"));
+  const [value] = parseBlock(lines, 0, 0);
+  return value || {};
+}
+
+function parseBlock(lines, start, indent) {
+  if (start >= lines.length || lines[start].indent < indent) return [{}, start];
+  return lines[start].text.startsWith("- ") ? parseArray(lines, start, indent) : parseObject(lines, start, indent);
+}
+
+function parseObject(lines, start, indent) {
+  const result = {};
+  let index = start;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (line.indent < indent) break;
+    if (line.indent > indent) {
+      index += 1;
+      continue;
+    }
+    if (line.text.startsWith("- ")) break;
+    const item = readKeyValue(line.text);
+    if (!item) throw new Error(`invalid line: ${line.raw.trim()}`);
+    if (isBlockScalar(item.value)) {
+      const block = readBlockScalar(lines, index + 1, indent + 2);
+      result[item.key] = block.value;
+      index = block.next;
+    } else if (item.value === "") {
+      if (index + 1 < lines.length && lines[index + 1].indent > indent) {
+        const [child, next] = parseBlock(lines, index + 1, lines[index + 1].indent);
+        result[item.key] = child;
+        index = next;
+      } else {
+        result[item.key] = {};
+        index += 1;
+      }
+    } else {
+      result[item.key] = parseScalar(item.value);
+      index += 1;
+    }
+  }
+  return [result, index];
+}
+
+function parseArray(lines, start, indent) {
+  const result = [];
+  let index = start;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (line.indent < indent) break;
+    if (line.indent > indent) {
+      index += 1;
+      continue;
+    }
+    if (!line.text.startsWith("- ")) break;
+    const rest = line.text.slice(2).trim();
+    if (!rest) {
+      const [child, next] = parseBlock(lines, index + 1, indent + 2);
+      result.push(child);
+      index = next;
+      continue;
+    }
+    const item = readKeyValue(rest);
+    if (item) {
+      const object = {};
+      if (isBlockScalar(item.value)) {
+        const block = readBlockScalar(lines, index + 1, indent + 2);
+        object[item.key] = block.value;
+        index = block.next;
+      } else {
+        object[item.key] = item.value === "" ? {} : parseScalar(item.value);
+        index += 1;
+      }
+      if (index < lines.length && lines[index].indent > indent) {
+        const [child, next] = parseBlock(lines, index, lines[index].indent);
+        if (isPlainObject(child)) Object.assign(object, child);
+        index = next;
+      }
+      result.push(object);
+    } else {
+      result.push(parseScalar(rest));
+      index += 1;
+    }
+  }
+  return [result, index];
+}
+
+function readKeyValue(text) {
+  const colon = text.indexOf(":");
+  if (colon < 0) return null;
+  return { key: text.slice(0, colon).trim(), value: text.slice(colon + 1).trim() };
+}
+
+function readBlockScalar(lines, start, indent) {
+  const values = [];
+  let index = start;
+  while (index < lines.length && lines[index].indent >= indent) {
+    values.push(lines[index].raw.slice(Math.min(indent, lines[index].raw.length)));
+    index += 1;
+  }
+  return { value: values.join("\n"), next: index };
+}
+
+function parseScalar(value) {
+  const trimmed = stripInlineComment(value.trim());
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (trimmed === "null") return null;
+  if (trimmed === "[]") return [];
+  if (trimmed === "{}") return {};
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    try {
+      return JSON.parse(trimmed.startsWith("'") ? `"${trimmed.slice(1, -1).replace(/"/g, '\\"')}"` : trimmed);
+    } catch {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+function stripInlineComment(value) {
+  if (value.startsWith('"') || value.startsWith("'")) return value;
+  const index = value.indexOf(" #");
+  return index >= 0 ? value.slice(0, index).trim() : value;
+}
+
+function isBlockScalar(value) {
+  return value === "|" || value === "|-" || value === "|+";
+}
+
+function dumpSimpleYaml(value, indent = 0) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    return value.map((item) => dumpArrayItem(item, indent)).join("\n");
+  }
+  if (!isPlainObject(value)) return formatScalar(value);
+  return Object.entries(value)
+    .filter(([, child]) => child !== undefined)
+    .map(([key, child]) => dumpObjectItem(key, child, indent))
+    .join("\n");
+}
+
+function dumpObjectItem(key, value, indent) {
+  const pad = " ".repeat(indent);
+  if (Array.isArray(value)) {
+    return value.length === 0 ? `${pad}${key}: []` : `${pad}${key}:\n${dumpSimpleYaml(value, indent + 2)}`;
+  }
+  if (isPlainObject(value)) {
+    const body = dumpSimpleYaml(value, indent + 2);
+    return body ? `${pad}${key}:\n${body}` : `${pad}${key}: {}`;
+  }
+  return `${pad}${key}: ${formatScalar(value)}`;
+}
+
+function dumpArrayItem(value, indent) {
+  const pad = " ".repeat(indent);
+  if (!isPlainObject(value)) return `${pad}- ${formatScalar(value)}`;
+  const entries = Object.entries(value).filter(([, child]) => child !== undefined);
+  if (entries.length === 0) return `${pad}- {}`;
+  const [firstKey, firstValue] = entries[0];
+  const lines = [];
+  if (Array.isArray(firstValue) || isPlainObject(firstValue)) {
+    lines.push(`${pad}- ${firstKey}:`);
+    lines.push(dumpSimpleYaml(firstValue, indent + 4));
+  } else {
+    lines.push(`${pad}- ${firstKey}: ${formatScalar(firstValue)}`);
+  }
+  for (const [key, child] of entries.slice(1)) {
+    lines.push(dumpObjectItem(key, child, indent + 2));
+  }
+  return lines.join("\n");
+}
+
+function formatScalar(value) {
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (value === null) return "null";
+  return JSON.stringify(String(value ?? ""));
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}

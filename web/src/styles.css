@@ -770,6 +770,147 @@ pre {
   color: #9aa8b7;
 }
 
+.config-editor {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  min-height: 620px;
+  max-height: 720px;
+  overflow: auto;
+  border-radius: 0 0 8px 8px;
+  background: #080e15;
+  padding: 16px;
+}
+
+.config-section {
+  display: grid;
+  gap: 12px;
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 16px;
+}
+
+.config-section:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.config-section-title,
+.config-item-title,
+.config-section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.config-section-title > div {
+  display: grid;
+  gap: 3px;
+}
+
+.config-section-title strong,
+.config-item-title strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.config-section-title span {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.config-grid.two {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.config-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.config-field input,
+.config-field select,
+.config-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0d141d;
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.config-field input,
+.config-field select {
+  height: 36px;
+  padding: 0 10px;
+}
+
+.config-field textarea {
+  min-height: 108px;
+  resize: vertical;
+  padding: 10px;
+  line-height: 1.5;
+}
+
+.config-field input:focus,
+.config-field select:focus,
+.config-field textarea:focus {
+  border-color: rgba(23, 168, 245, 0.54);
+  box-shadow: 0 0 0 1px rgba(23, 168, 245, 0.16);
+}
+
+.config-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.config-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--blue);
+}
+
+.field-toggle {
+  align-self: end;
+  min-height: 36px;
+}
+
+.config-list {
+  display: grid;
+  gap: 10px;
+}
+
+.config-item {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(13, 20, 29, 0.72);
+  padding: 12px;
+}
+
+.config-item-title {
+  min-height: 30px;
+}
+
+.config-section-actions button {
+  min-height: 30px;
+}
+
 .workspace-empty-editor,
 .account-detail-empty {
   display: grid;

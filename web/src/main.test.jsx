@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, test, vi, expect } from "vitest";
 
@@ -20,7 +20,7 @@ beforeEach(() => {
   vi.useRealTimers();
   document.body.innerHTML = '<div id="root"></div>';
   window.history.replaceState({}, "", "/agents");
-  global.fetch = vi.fn(async (url) => {
+  global.fetch = vi.fn(async (url, options = {}) => {
     if (String(url).endsWith("/api/auth/me")) {
       return response({ authenticated: true });
     }
@@ -100,4 +100,94 @@ test("keeps run details stable when index polling returns only summaries", async
 
   expect(screen.getByText("稳定结果内容")).toBeInTheDocument();
   expect(screen.queryByText("unknown")).not.toBeInTheDocument();
+});
+
+test("opens config.yaml with the visual config editor", async () => {
+  window.history.replaceState({}, "", "/workspace");
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/workspace/list")) {
+      return response({
+        path: "",
+        entries: [{ name: "config.yaml", path: "config.yaml", type: "file", size: 128, modified_at: 1797750000, deletable: false }],
+      });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({
+        path: "config.yaml",
+        size: 128,
+        editable: true,
+        content: [
+          "auth:",
+          '  token: "secret-token"',
+          "server:",
+          '  host: "0.0.0.0"',
+          "  port: 8888",
+          "llm:",
+          '  default_model_id: "default"',
+          "  models:",
+          '    - id: "default"',
+          '      name: "默认模型"',
+          '      provider: "openai_compatible"',
+          '      base_url: "https://api.openai.com/v1"',
+          '      api_key: "key"',
+          '      model: "gpt-4o-mini"',
+          "      temperature: 0.7",
+          "      supports_images: false",
+          "nutstore:",
+          "  enabled: false",
+          '  base_url: "https://dav.jianguoyun.com/dav/"',
+          '  username: ""',
+          '  password: ""',
+          '  root_path: "/"',
+          "channels:",
+          "  wechat_personal:",
+          "    enabled: false",
+          "    accounts: []",
+          "agents:",
+          "  definitions:",
+          '    - id: "assistant"',
+          '      name: "默认助手"',
+          '      system_prompt: "你是一个运行在后端的 DeepAgent。"',
+          '      model_id: "default"',
+          "      context_ids: []",
+        ].join("\n"),
+      });
+    }
+    if (path.endsWith("/api/workspace/write")) {
+      return response({
+        ok: true,
+        message: "config.yaml 已校验并保存",
+        file: { path: "config.yaml", size: 128, editable: true, content: JSON.parse(options.body || "{}").content || "" },
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  fireEvent.click((await screen.findAllByRole("button", { name: /config.yaml/ }))[0]);
+
+  expect(await screen.findByText("认证与服务")).toBeInTheDocument();
+  expect(screen.getByLabelText("访问 Token")).toHaveValue("secret-token");
+  expect(screen.getByText("坚果云 WebDAV")).toBeInTheDocument();
+  expect(screen.getAllByText("模型").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Agent").length).toBeGreaterThan(0);
+
+  fireEvent.change(screen.getByLabelText("监听端口"), { target: { value: "9999" } });
+  fireEvent.click(screen.getByRole("button", { name: /保存/ }));
+
+  await waitFor(() => {
+    const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
+    expect(writeCall).toBeTruthy();
+    expect(JSON.parse(writeCall[1].body).content).toContain("port: 9999");
+  });
 });

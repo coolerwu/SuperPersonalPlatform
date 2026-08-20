@@ -102,7 +102,7 @@ POST /api/workspace/delete
 ## Frontend Routes
 
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口兼容，不恢复旧 Agent Chat/Agent 管理页面。
-- `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 和根层固定骨架目录不可删除。
+- `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；打开 `config.yaml` 时默认显示可视化配置表单，保存仍写回同一个 YAML 并经后端配置校验；`config.yaml` 和根层固定骨架目录不可删除。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作。
 - `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。`config.yaml` 查看/编辑入口收敛到 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。

@@ -20,6 +20,7 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
+import { ConfigVisualEditor } from "./configEditor.jsx";
 import "./styles.css";
 
 const NAV_ITEMS = [
@@ -604,6 +605,7 @@ function WorkspacePage() {
 
   const breadcrumbs = path ? path.split("/") : [];
   const dirty = activeFile && draft !== activeFile.content;
+  const editingConfig = activeFile?.path === "config.yaml";
 
   return (
     <section className="console-screen workspace-screen">
@@ -690,7 +692,9 @@ function WorkspacePage() {
             <div>
               <span>{activeFile?.path || "选择文件"}</span>
               <small>
-                {activeFile ? `${formatBytes(activeFile.size)} · ${activeFile.editable ? "可编辑" : "只读"}` : "支持 UTF-8 文本文件"}
+                {activeFile
+                  ? `${formatBytes(activeFile.size)} · ${editingConfig ? "可视化配置" : activeFile.editable ? "可编辑" : "只读"}`
+                  : "支持 UTF-8 文本文件"}
               </small>
             </div>
             <button className="primary" onClick={saveFile} disabled={!activeFile?.editable || !dirty}>
@@ -698,7 +702,9 @@ function WorkspacePage() {
               保存
             </button>
           </div>
-          {activeFile ? (
+          {activeFile && editingConfig ? (
+            <ConfigVisualEditor draft={draft} onChange={setDraft} readOnly={!activeFile.editable} />
+          ) : activeFile ? (
             <textarea
               className="workspace-editor"
               value={draft}
