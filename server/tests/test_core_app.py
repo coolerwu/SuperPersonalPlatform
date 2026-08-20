@@ -17,6 +17,7 @@ from server.app.system_update_service import UpdateAlreadyRunningError
 from server.app.wechat_channel_service import WechatChannelStatus
 from server.domain.auth import AuthToken
 from server.infrastructure.config import AuthConfig, NutstoreConfig, ServerConfig, Settings
+from server.infrastructure.config import parse_settings
 from server.infrastructure.fastapi_app import create_app
 from server.infrastructure.session import SessionCodec
 
@@ -130,6 +131,46 @@ def test_old_product_routes_are_gone(tmp_path) -> None:
     assert client.get("/api/sessions").status_code == 404
     assert client.get("/api/portfolio/holdings").status_code == 404
     assert client.get("/api/proxy/site/").status_code == 404
+
+
+def test_legacy_workspace_config_fields_are_ignored() -> None:
+    settings = parse_settings(
+        {
+            "auth": {"token": "secret-token"},
+            "proxy": {"upstream_base_url": "http://example.test/"},
+            "portfolio": {"agent_id": "assistant"},
+            "skills": {"definitions": [{"id": "common:old"}]},
+            "llm": {
+                "default_model_id": "default",
+                "models": [
+                    {
+                        "id": "default",
+                        "name": "Default",
+                        "provider": "openai_compatible",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "test-key",
+                        "model": "gpt-4o-mini",
+                        "mode": "agent",
+                        "runtime": "deepagent",
+                    }
+                ],
+            },
+            "agents": {
+                "builtin_overrides": {},
+                "definitions": [
+                    {
+                        "id": "assistant",
+                        "name": "Assistant",
+                        "system_prompt": "Be direct.",
+                        "model_id": "default",
+                        "skill_ids": ["common:old"],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert settings.agent_workspace.get_agent("assistant").context_ids == ()
 
 
 def test_system_config_and_update_routes(tmp_path) -> None:

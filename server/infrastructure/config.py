@@ -81,12 +81,6 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
 def parse_agent_workspace(raw: dict[str, Any]) -> AgentWorkspaceDefinition:
     llm_raw = raw.get("llm") or {}
     agents_raw = raw.get("agents") or {}
-    if "skills" in raw or "common_skills" in raw or "tools" in raw:
-        raise AgentConfigError("legacy skills/tools configuration is not supported")
-    if "portfolio" in raw or "proxy" in raw:
-        raise AgentConfigError("legacy portfolio/proxy configuration is not supported")
-    if "builtin_overrides" in agents_raw:
-        raise AgentConfigError("legacy agents.builtin_overrides is not supported")
 
     models_raw = llm_raw.get("models") or []
     agents_def_raw = agents_raw.get("definitions") or []
@@ -129,8 +123,6 @@ def parse_model_definition(raw: Any) -> ModelDefinition:
 def parse_agent_definition(raw: Any) -> AgentDefinition:
     if not isinstance(raw, dict):
         raise ValueError("agents.definitions[] must be an object")
-    if "skill_ids" in raw or "tools" in raw:
-        raise AgentConfigError("legacy agents.definitions skill/tool fields are not supported")
     context_ids_raw = raw.get("context_ids") or []
     if not isinstance(context_ids_raw, list):
         raise ValueError("agents.definitions[].context_ids must be a list")
