@@ -13,6 +13,7 @@ class ModelRunner:
         user_message: str,
         *,
         max_iterations: int = 60,
+        deepagent_options: dict[str, Any] | None = None,
     ) -> str:
         try:
             from deepagents import create_deep_agent
@@ -20,11 +21,21 @@ class ModelRunner:
         except Exception as exc:
             raise RuntimeError("DeepAgent runtime requires the deepagents package") from exc
 
+        options = deepagent_options if isinstance(deepagent_options, dict) else {}
+        iterations = int(options.get("max_iterations") or max_iterations)
         create_kwargs: dict[str, Any] = {
             "tools": [],
             "model": self._chat_model(),
             "instructions": system_prompt,
         }
+        name = str(options.get("name") or "").strip()
+        if name:
+            create_kwargs["name"] = name
+        if bool(options.get("debug", False)):
+            create_kwargs["debug"] = True
+        interrupt_on = _normalize_interrupt_on(options.get("interrupt_on"))
+        if interrupt_on:
+            create_kwargs["interrupt_on"] = interrupt_on
         try:
             agent = create_deep_agent(**create_kwargs)
         except TypeError:
@@ -33,7 +44,7 @@ class ModelRunner:
 
         result = await agent.ainvoke(
             {"messages": [HumanMessage(content=user_message)]},
-            config={"recursion_limit": max_iterations},
+            config={"recursion_limit": iterations},
         )
         return self._extract_content(result)
 
@@ -73,3 +84,11 @@ class ModelRunner:
                 if key in result:
                     return str(result[key])
         return str(result)
+
+
+def _normalize_interrupt_on(value: Any) -> dict[str, bool] | None:
+    if isinstance(value, dict):
+        return {str(key): bool(item) for key, item in value.items() if str(key).strip()}
+    if isinstance(value, list):
+        return {str(item).strip(): True for item in value if str(item).strip()}
+    return None

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 
 class AgentConfigError(ValueError):
@@ -36,12 +37,34 @@ class ModelDefinition:
 
 
 @dataclass(frozen=True)
+class DeepAgentOptions:
+    max_iterations: int = 60
+    name: str = ""
+    debug: bool = False
+    use_longterm_memory: bool = False
+    tools: tuple[str, ...] = ()
+    interrupt_on: tuple[str, ...] = ()
+    middleware: tuple[str, ...] = ()
+    subagents: tuple[dict[str, Any], ...] = ()
+    response_format: str = ""
+    context_schema: str = ""
+    checkpointer: bool = False
+    store: str = ""
+    cache: str = ""
+
+    def __post_init__(self) -> None:
+        if self.max_iterations < 1:
+            raise AgentConfigError("agents.definitions[].deepagent.max_iterations must be greater than zero")
+
+
+@dataclass(frozen=True)
 class AgentDefinition:
     id: str
     name: str
     system_prompt: str
     model_id: str | None = None
     context_ids: tuple[str, ...] = ()
+    deepagent: DeepAgentOptions = DeepAgentOptions()
 
     def __post_init__(self) -> None:
         if not self.id.strip():

@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
+  Cpu,
   FileJson,
   FileText,
   FolderOpen,
@@ -21,13 +22,15 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import { ConfigVisualEditor } from "./configEditor.jsx";
+import { AgentConfigEditor, ConfigVisualEditor, ProviderConfigEditor, parseConfigDraft } from "./configEditor.jsx";
 import "./styles.css";
 
 const NAV_ITEMS = [
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
   { id: "config", path: "/config", label: "配置", icon: SlidersHorizontal },
+  { id: "providers", path: "/providers", label: "Providers", icon: Cpu },
+  { id: "agent-config", path: "/agent-config", label: "Agents", icon: Bot },
   { id: "wechat", path: "/wechat", label: "微信", icon: Smartphone },
   { id: "system", path: "/system", label: "运维", icon: Settings },
 ];
@@ -215,6 +218,8 @@ function App() {
         {page === "runs" ? <RunsPage /> : null}
         {page === "workspace" ? <WorkspacePage /> : null}
         {page === "config" ? <ConfigPage /> : null}
+        {page === "providers" ? <ProviderPage /> : null}
+        {page === "agent-config" ? <AgentConfigPage /> : null}
         {page === "wechat" ? <WechatPage /> : null}
         {page === "system" ? <SystemPage onNavigate={navigate} /> : null}
       </main>
@@ -742,6 +747,18 @@ function WorkspacePage() {
 }
 
 function ConfigPage() {
+  return <ConfigBackedPage title="配置" heading="config.yaml" panelTitle="系统配置" Editor={ConfigVisualEditor} />;
+}
+
+function ProviderPage() {
+  return <ConfigBackedPage title="Providers" heading="model providers" panelTitle="Provider 配置" Editor={ProviderConfigEditor} />;
+}
+
+function AgentConfigPage() {
+  return <ConfigBackedPage title="Agents" heading="deepagent runtime" panelTitle="Agent 配置" Editor={AgentConfigEditor} />;
+}
+
+function ConfigBackedPage({ title, heading, panelTitle, Editor }) {
   const [configFile, setConfigFile] = useState(null);
   const [draft, setDraft] = useState("");
   const [message, setMessage] = useState("");
@@ -787,8 +804,8 @@ function ConfigPage() {
     <section className="console-screen config-screen">
       <div className="workspace-header">
         <div>
-          <span className="section-label">配置</span>
-          <h1>config.yaml</h1>
+          <span className="section-label">{title}</span>
+          <h1>{heading}</h1>
         </div>
         <Status status="落盘运行" />
       </div>
@@ -799,7 +816,7 @@ function ConfigPage() {
       <section className="panel file-editor config-page-panel">
         <div className="panel-title">
           <div>
-            <span>可视化配置</span>
+            <span>{panelTitle}</span>
             <small>{configFile ? `${formatBytes(configFile.size)} · workspace/config.yaml` : "读取中"}</small>
           </div>
           <div className="config-page-actions">
@@ -813,12 +830,12 @@ function ConfigPage() {
           </div>
         </div>
         {configFile ? (
-          <ConfigVisualEditor draft={draft} onChange={setDraft} readOnly={!configFile.editable} />
+          <Editor draft={draft} onChange={setDraft} readOnly={!configFile.editable} />
         ) : (
           <div className="workspace-empty-editor">
             <TerminalSquare size={30} />
             <strong>正在读取 config.yaml</strong>
-            <span>配置页读取 active workspace 的 config.yaml，保存时仍走后端配置校验。</span>
+            <span>这里读取 active workspace 的 config.yaml，保存时仍走后端配置校验。</span>
           </div>
         )}
       </section>
@@ -838,14 +855,23 @@ function ModelLine({ title, text }) {
 
 function WechatPage() {
   const [accounts, setAccounts] = useState([]);
+  const [agents, setAgents] = useState([]);
   const [activeId, setActiveId] = useState("");
   const [error, setError] = useState("");
 
   async function load() {
     try {
-      const data = await api("/api/channels/wechat/accounts");
+      const [data, configFile] = await Promise.all([
+        api("/api/channels/wechat/accounts"),
+        api("/api/workspace/read", {
+          method: "POST",
+          body: JSON.stringify({ path: "config.yaml" }),
+        }),
+      ]);
       const nextAccounts = data.accounts || [];
+      const parsed = parseConfigDraft(configFile.content || "");
       setAccounts(nextAccounts);
+      setAgents(parsed.config.agents.definitions || []);
       setActiveId((current) => current || nextAccounts[0]?.id || "");
     } catch (err) {
       setError(err.message);
@@ -862,6 +888,19 @@ function WechatPage() {
     setError("");
     try {
       await api(`/api/channels/wechat/accounts/${accountId}/${name}`, { method: "POST" });
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function updateAccount(accountId, patch) {
+    setError("");
+    try {
+      await api(`/api/channels/wechat/accounts/${accountId}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
       await load();
     } catch (err) {
       setError(err.message);
@@ -909,7 +948,12 @@ function WechatPage() {
           </div>
         </section>
 
-        <WechatAccountDetail account={accounts.find((account) => account.id === activeId)} onAction={action} />
+        <WechatAccountDetail
+          account={accounts.find((account) => account.id === activeId)}
+          agents={agents}
+          onAction={action}
+          onUpdate={updateAccount}
+        />
       </div>
     </section>
   );
@@ -929,7 +973,7 @@ function WechatSummary({ accounts }) {
   );
 }
 
-function WechatAccountDetail({ account, onAction }) {
+function WechatAccountDetail({ account, agents, onAction, onUpdate }) {
   if (!account) {
     return (
       <section className="panel account-detail-empty">
@@ -970,7 +1014,17 @@ function WechatAccountDetail({ account, onAction }) {
 
         <div className="wechat-facts">
           <div className="kv-grid two">
-            <Kv label="默认 Agent" value={account.default_agent_id || "未绑定"} />
+            <label className="kv kv-field">
+              <span>默认 Agent</span>
+              <select value={account.default_agent_id || ""} onChange={(event) => onUpdate(account.id, { default_agent_id: event.target.value })}>
+                <option value="">未绑定</option>
+                {agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.id || "未命名 Agent"}
+                  </option>
+                ))}
+              </select>
+            </label>
             <Kv label="自动启动" value={account.auto_start ? "是" : "否"} />
             <Kv label="运行进程" value={status.running ? "running" : "stopped"} />
             <Kv label="登录用户" value={status.user || "-"} />

@@ -36,3 +36,17 @@ agents:
       system_prompt: "你是一个运行在后端的 DeepAgent。"
       model_id: "default"
       context_ids: []
+      deepagent:
+        max_iterations: 60
+        name: ""
+        debug: false
+        use_longterm_memory: false
+        tools: []
+        interrupt_on: []
+        middleware: []
+        subagents: []
+        response_format: ""
+        context_schema: ""
+        checkpointer: false
+        store: ""
+        cache: ""

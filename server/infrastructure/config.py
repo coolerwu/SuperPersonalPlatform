@@ -8,6 +8,7 @@ from server.domain.agents import (
     AgentConfigError,
     AgentDefinition,
     AgentWorkspaceDefinition,
+    DeepAgentOptions,
     ModelDefinition,
     ModelProvider,
 )
@@ -133,6 +134,29 @@ def parse_agent_definition(raw: Any) -> AgentDefinition:
         system_prompt=str(raw.get("system_prompt") or "").strip(),
         model_id=str(model_id).strip() if model_id is not None else None,
         context_ids=tuple(str(context_id).strip() for context_id in context_ids_raw if str(context_id).strip()),
+        deepagent=parse_deepagent_options(raw.get("deepagent") or {}),
+    )
+
+
+def parse_deepagent_options(raw: Any) -> DeepAgentOptions:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("agents.definitions[].deepagent must be an object")
+    return DeepAgentOptions(
+        max_iterations=int(raw.get("max_iterations") or 60),
+        name=str(raw.get("name") or "").strip(),
+        debug=bool(raw.get("debug", False)),
+        use_longterm_memory=bool(raw.get("use_longterm_memory", False)),
+        tools=_string_tuple(raw.get("tools") or []),
+        interrupt_on=_string_tuple(raw.get("interrupt_on") or []),
+        middleware=_string_tuple(raw.get("middleware") or []),
+        subagents=_dict_tuple(raw.get("subagents") or []),
+        response_format=str(raw.get("response_format") or "").strip(),
+        context_schema=str(raw.get("context_schema") or "").strip(),
+        checkpointer=bool(raw.get("checkpointer", False)),
+        store=str(raw.get("store") or "").strip(),
+        cache=str(raw.get("cache") or "").strip(),
     )
 
 
@@ -148,3 +172,17 @@ def parse_nutstore_config(raw: Any) -> NutstoreConfig:
         password=str(raw.get("password") or "").strip(),
         root_path=str(raw.get("root_path") or "/").strip() or "/",
     )
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(item.strip() for item in value.split(",") if item.strip())
+    if not isinstance(value, list):
+        raise ValueError("deepagent list options must be lists")
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+def _dict_tuple(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list):
+        raise ValueError("deepagent.subagents must be a list")
+    return tuple(dict(item) for item in value if isinstance(item, dict))

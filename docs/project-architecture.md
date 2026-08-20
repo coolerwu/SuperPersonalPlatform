@@ -20,6 +20,7 @@
 - `workspace/runs/index.json` 维护所有 run 的摘要和当前状态。
 - 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json`、`lock.json` 和 `delivery.json`。
 - `Agent` 只保存人格、模型和绑定的 Context 列表。
+- `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug` 和 `interrupt_on`，工具/知识细节后续随 Context 工具集接入。
 - `Context` 是隔离边界，内部包含 roots、tools、knowledge、owner、scope 等配置。
 - `Knowledge` 是 Context 内部资源，不作为全局散放目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
@@ -103,9 +104,12 @@ POST /api/workspace/delete
 
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口兼容，不恢复旧 Agent Chat/Agent 管理页面。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
-- `/config` 是 `config.yaml` 的可视化配置菜单，读取 active workspace 的同一份 YAML，保存仍写回 `workspace/config.yaml` 并经后端配置校验。
+- `/config` 是系统级 `config.yaml` 可视化配置菜单，只承载访问 Token、服务监听和坚果云 WebDAV 等基础配置；访问 Token 按明文输入展示。保存仍写回 `workspace/config.yaml` 并经后端配置校验。
+- `/providers` 是模型 Provider 配置菜单，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力。
+- `/agent-config` 是 Agent 配置菜单，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；`/agents` 仍是旧入口兼容并跳转 Runs，不作为配置页路径。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作。
-- `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。配置表单入口收敛到 `/config`，文件级查看/编辑入口保留在 `/workspace`。
+- `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录 session 继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存。
+- `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，文件级查看/编辑入口保留在 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
 - Runs 工作区通过 1 分钟一次的轮询读取后端落盘状态，但前端必须保留当前详情快照、只在返回内容实际变化时更新状态，避免每次拉取 `workspace/runs/index.json` 时出现短暂重刷或 `unknown` 状态闪动。
 

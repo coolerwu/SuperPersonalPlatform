@@ -40,50 +40,52 @@ const DEFAULT_CONFIG = {
         system_prompt: "你是一个运行在后端的 DeepAgent。",
         model_id: "default",
         context_ids: [],
+        deepagent: {
+          max_iterations: 60,
+          name: "",
+          debug: false,
+          use_longterm_memory: false,
+          tools: [],
+          interrupt_on: [],
+          middleware: [],
+          subagents: [],
+          response_format: "",
+          context_schema: "",
+          checkpointer: false,
+          store: "",
+          cache: "",
+        },
       },
     ],
   },
 };
 
-export function ConfigVisualEditor({ draft, onChange, readOnly }) {
-  const parsed = useMemo(() => {
+export function parseConfigDraft(draft) {
+  try {
+    return { config: withDefaults(parseSimpleYaml(draft)), error: "" };
+  } catch (error) {
+    return { config: withDefaults({}), error: error.message };
+  }
+}
+
+function useConfigDraft(draft) {
+  return useMemo(() => {
     try {
       return { config: withDefaults(parseSimpleYaml(draft)), error: "" };
     } catch (error) {
       return { config: withDefaults({}), error: error.message };
     }
   }, [draft]);
+}
+
+export function ConfigVisualEditor({ draft, onChange, readOnly }) {
+  const parsed = useConfigDraft(draft);
   const config = parsed.config;
-  const models = config.llm.models;
-  const agents = config.agents.definitions;
-  const wechat = config.channels.wechat_personal;
-  const accounts = wechat.accounts;
 
   function update(mutator) {
     const next = cloneConfig(config);
     mutator(next);
     onChange(dumpSimpleYaml(next));
-  }
-
-  function updateModel(index, field, value) {
-    update((next) => {
-      next.llm.models[index] = { ...next.llm.models[index], [field]: value };
-    });
-  }
-
-  function updateAgent(index, field, value) {
-    update((next) => {
-      next.agents.definitions[index] = { ...next.agents.definitions[index], [field]: value };
-    });
-  }
-
-  function updateAccount(index, field, value) {
-    update((next) => {
-      next.channels.wechat_personal.accounts[index] = {
-        ...next.channels.wechat_personal.accounts[index],
-        [field]: value,
-      };
-    });
   }
 
   if (parsed.error) {
@@ -111,7 +113,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
         <div className="config-grid">
           <ConfigField label="访问 Token">
             <input
-              type="password"
+              type="text"
               value={config.auth.token}
               readOnly={readOnly}
               onChange={(event) => update((next) => (next.auth.token = event.target.value))}
@@ -133,19 +135,6 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
               readOnly={readOnly}
               onChange={(event) => update((next) => (next.server.port = Number(event.target.value) || 8888))}
             />
-          </ConfigField>
-          <ConfigField label="默认模型">
-            <select
-              value={config.llm.default_model_id}
-              disabled={readOnly}
-              onChange={(event) => update((next) => (next.llm.default_model_id = event.target.value))}
-            >
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.id || "未命名模型"}
-                </option>
-              ))}
-            </select>
           </ConfigField>
         </div>
       </section>
@@ -195,9 +184,56 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
           </ConfigField>
         </div>
       </section>
+    </div>
+  );
+}
 
+export function ProviderConfigEditor({ draft, onChange, readOnly }) {
+  const parsed = useConfigDraft(draft);
+  const config = parsed.config;
+  const models = config.llm.models;
+
+  function update(mutator) {
+    const next = cloneConfig(config);
+    mutator(next);
+    onChange(dumpSimpleYaml(next));
+  }
+
+  function updateModel(index, field, value) {
+    update((next) => {
+      next.llm.models[index] = { ...next.llm.models[index], [field]: value };
+    });
+  }
+
+  if (parsed.error) {
+    return <ConfigFallbackEditor draft={draft} onChange={onChange} readOnly={readOnly} error={parsed.error} />;
+  }
+
+  return (
+    <div className="config-editor">
+      <section className="config-section">
+        <div className="config-section-title">
+          <strong>Provider 默认项</strong>
+          <span>llm.default_model_id</span>
+        </div>
+        <div className="config-grid">
+          <ConfigField label="默认模型">
+            <select
+              value={config.llm.default_model_id}
+              disabled={readOnly}
+              onChange={(event) => update((next) => (next.llm.default_model_id = event.target.value))}
+            >
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.id || "未命名模型"}
+                </option>
+              ))}
+            </select>
+          </ConfigField>
+        </div>
+      </section>
       <ConfigList
-        title="模型"
+        title="Providers"
         subtitle="llm.models"
         readOnly={readOnly}
         onAdd={() =>
@@ -287,9 +323,44 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
           </div>
         ))}
       </ConfigList>
+    </div>
+  );
+}
+
+export function AgentConfigEditor({ draft, onChange, readOnly }) {
+  const parsed = useConfigDraft(draft);
+  const config = parsed.config;
+  const models = config.llm.models;
+  const agents = config.agents.definitions;
+
+  function update(mutator) {
+    const next = cloneConfig(config);
+    mutator(next);
+    onChange(dumpSimpleYaml(next));
+  }
+
+  function updateAgent(index, field, value) {
+    update((next) => {
+      next.agents.definitions[index] = { ...next.agents.definitions[index], [field]: value };
+    });
+  }
+
+  function updateDeepAgent(index, field, value) {
+    update((next) => {
+      const current = next.agents.definitions[index].deepagent || cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent);
+      next.agents.definitions[index].deepagent = { ...current, [field]: value };
+    });
+  }
+
+  if (parsed.error) {
+    return <ConfigFallbackEditor draft={draft} onChange={onChange} readOnly={readOnly} error={parsed.error} />;
+  }
+
+  return (
+    <div className="config-editor">
 
       <ConfigList
-        title="Agent"
+        title="Agents"
         subtitle="agents.definitions"
         readOnly={readOnly}
         onAdd={() =>
@@ -301,6 +372,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
               system_prompt: "你是一个运行在后端的 DeepAgent。",
               model_id: next.llm.default_model_id,
               context_ids: [],
+              deepagent: cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent),
             });
           })
         }
@@ -351,10 +423,149 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
                 onChange={(event) => updateAgent(index, "system_prompt", event.target.value)}
               />
             </ConfigField>
+            <section className="config-subsection">
+              <div className="config-section-title compact">
+                <strong>DeepAgent 运行选项</strong>
+                <span>create_deep_agent / recursion_limit</span>
+              </div>
+              <div className="config-grid two">
+                <ConfigField label="Runtime Name">
+                  <input
+                    value={agent.deepagent?.name || ""}
+                    readOnly={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "name", event.target.value)}
+                  />
+                </ConfigField>
+                <ConfigField label="Max Iterations">
+                  <input
+                    type="number"
+                    min="1"
+                    max="1000"
+                    value={agent.deepagent?.max_iterations ?? 60}
+                    readOnly={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "max_iterations", Number(event.target.value) || 60)}
+                  />
+                </ConfigField>
+                <ConfigField label="Tool IDs">
+                  <input
+                    value={(agent.deepagent?.tools || []).join(", ")}
+                    readOnly={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "tools", splitList(event.target.value))}
+                  />
+                </ConfigField>
+                <ConfigField label="Interrupt On">
+                  <input
+                    value={(agent.deepagent?.interrupt_on || []).join(", ")}
+                    readOnly={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "interrupt_on", splitList(event.target.value))}
+                  />
+                </ConfigField>
+                <ConfigField label="Middleware">
+                  <input
+                    value={(agent.deepagent?.middleware || []).join(", ")}
+                    readOnly={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "middleware", splitList(event.target.value))}
+                  />
+                </ConfigField>
+                <ConfigField label="Response Format">
+                  <input
+                    value={agent.deepagent?.response_format || ""}
+                    readOnly={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "response_format", event.target.value)}
+                  />
+                </ConfigField>
+                <ConfigField label="Context Schema">
+                  <input
+                    value={agent.deepagent?.context_schema || ""}
+                    readOnly={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "context_schema", event.target.value)}
+                  />
+                </ConfigField>
+                <ConfigField label="Store">
+                  <input
+                    value={agent.deepagent?.store || ""}
+                    readOnly={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "store", event.target.value)}
+                  />
+                </ConfigField>
+                <ConfigField label="Cache">
+                  <input
+                    value={agent.deepagent?.cache || ""}
+                    readOnly={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "cache", event.target.value)}
+                  />
+                </ConfigField>
+                <label className="config-toggle field-toggle">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(agent.deepagent?.debug)}
+                    disabled={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "debug", event.target.checked)}
+                  />
+                  <span>Debug</span>
+                </label>
+                <label className="config-toggle field-toggle">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(agent.deepagent?.use_longterm_memory)}
+                    disabled={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "use_longterm_memory", event.target.checked)}
+                  />
+                  <span>Long-term Memory</span>
+                </label>
+                <label className="config-toggle field-toggle">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(agent.deepagent?.checkpointer)}
+                    disabled={readOnly}
+                    onChange={(event) => updateDeepAgent(index, "checkpointer", event.target.checked)}
+                  />
+                  <span>Checkpointer</span>
+                </label>
+              </div>
+              <ConfigField label="Subagents JSON">
+                <textarea
+                  value={JSON.stringify(agent.deepagent?.subagents || [], null, 2)}
+                  readOnly={readOnly}
+                  onChange={(event) => updateDeepAgent(index, "subagents", parseJsonList(event.target.value))}
+                />
+              </ConfigField>
+            </section>
           </div>
         ))}
       </ConfigList>
+    </div>
+  );
+}
 
+export function WechatConfigEditor({ draft, onChange, readOnly }) {
+  const parsed = useConfigDraft(draft);
+  const config = parsed.config;
+  const agents = config.agents.definitions;
+  const wechat = config.channels.wechat_personal;
+  const accounts = wechat.accounts;
+
+  function update(mutator) {
+    const next = cloneConfig(config);
+    mutator(next);
+    onChange(dumpSimpleYaml(next));
+  }
+
+  function updateAccount(index, field, value) {
+    update((next) => {
+      next.channels.wechat_personal.accounts[index] = {
+        ...next.channels.wechat_personal.accounts[index],
+        [field]: value,
+      };
+    });
+  }
+
+  if (parsed.error) {
+    return <ConfigFallbackEditor draft={draft} onChange={onChange} readOnly={readOnly} error={parsed.error} />;
+  }
+
+  return (
+    <div className="config-editor">
       <ConfigList
         title="微信账号"
         subtitle="channels.wechat_personal.accounts"
@@ -469,11 +680,30 @@ function ConfigField({ label, children }) {
   );
 }
 
+function ConfigFallbackEditor({ draft, onChange, readOnly, error }) {
+  return (
+    <div className="config-editor">
+      <p className="error">config.yaml 解析失败：{error}</p>
+      <textarea
+        className="workspace-editor"
+        value={draft}
+        readOnly={readOnly}
+        onChange={(event) => onChange(event.target.value)}
+        spellCheck={false}
+      />
+    </div>
+  );
+}
+
 function withDefaults(value) {
   const config = mergeObjects(cloneConfig(DEFAULT_CONFIG), isPlainObject(value) ? value : {});
   config.llm.models = Array.isArray(config.llm.models) ? config.llm.models.map((model) => ({ ...model })) : [];
   config.agents.definitions = Array.isArray(config.agents.definitions)
-    ? config.agents.definitions.map((agent) => ({ ...agent, context_ids: normalizeList(agent.context_ids) }))
+    ? config.agents.definitions.map((agent) => ({
+        ...agent,
+        context_ids: normalizeList(agent.context_ids),
+        deepagent: normalizeDeepAgent(agent.deepagent),
+      }))
     : [];
   config.channels.wechat_personal.accounts = Array.isArray(config.channels.wechat_personal.accounts)
     ? config.channels.wechat_personal.accounts.map((account) => ({ ...account }))
@@ -503,11 +733,30 @@ function normalizeList(value) {
   return value.map((item) => String(item).trim()).filter(Boolean);
 }
 
+function normalizeDeepAgent(value) {
+  const defaults = cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent);
+  const next = mergeObjects(defaults, isPlainObject(value) ? value : {});
+  next.tools = normalizeList(next.tools);
+  next.interrupt_on = normalizeList(next.interrupt_on);
+  next.middleware = normalizeList(next.middleware);
+  next.subagents = Array.isArray(next.subagents) ? next.subagents.filter(isPlainObject) : [];
+  return next;
+}
+
 function splitList(value) {
   return String(value)
     .split(/[,\n]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseJsonList(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter(isPlainObject) : [];
+  } catch {
+    return [];
+  }
 }
 
 function parseSimpleYaml(text) {

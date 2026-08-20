@@ -77,6 +77,10 @@ textarea {
   outline: none;
 }
 
+select {
+  min-width: 0;
+}
+
 input {
   height: 42px;
   padding: 0 12px;
@@ -477,6 +481,19 @@ pre {
   white-space: nowrap;
 }
 
+.kv-field select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0c121a;
+  color: #dce6f1;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
 .path-box {
   display: grid;
   gap: 5px;
@@ -802,6 +819,15 @@ pre {
   padding-bottom: 16px;
 }
 
+.config-subsection {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(8, 14, 21, 0.52);
+  padding: 12px;
+}
+
 .config-section:last-child {
   border-bottom: 0;
   padding-bottom: 0;
@@ -830,6 +856,10 @@ pre {
 .config-section-title span {
   color: var(--faint);
   font-size: 12px;
+}
+
+.config-section-title.compact {
+  min-height: 26px;
 }
 
 .config-grid {

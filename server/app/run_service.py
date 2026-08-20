@@ -96,13 +96,18 @@ class RunService:
         settings = load_settings(self._workspace / "config.yaml")
         model_id = str(run_input["snapshot"]["agent"].get("model_id") or settings.agent_workspace.default_model_id)
         model = settings.agent_workspace.get_model(model_id)
-        system_prompt = str(run_input["snapshot"]["agent"].get("system_prompt") or "")
+        agent_snapshot = run_input["snapshot"]["agent"]
+        system_prompt = str(agent_snapshot.get("system_prompt") or "")
         content = str(run_input.get("content") or "")
         self._set_state(run_id, "running")
         self._append_event(run_id, "running", {"message": "DeepAgent started"})
 
         try:
-            result = await ModelRunner(model).run_deep_agent(system_prompt, content)
+            result = await ModelRunner(model).run_deep_agent(
+                system_prompt,
+                content,
+                deepagent_options=agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {},
+            )
         except Exception as exc:
             error = {"message": str(exc), "type": exc.__class__.__name__}
             _write_json(
@@ -295,6 +300,21 @@ def _public_agent(agent: AgentDefinition) -> dict[str, Any]:
         "system_prompt": agent.system_prompt,
         "model_id": agent.model_id,
         "context_ids": list(agent.context_ids),
+        "deepagent": {
+            "max_iterations": agent.deepagent.max_iterations,
+            "name": agent.deepagent.name,
+            "debug": agent.deepagent.debug,
+            "use_longterm_memory": agent.deepagent.use_longterm_memory,
+            "tools": list(agent.deepagent.tools),
+            "interrupt_on": list(agent.deepagent.interrupt_on),
+            "middleware": list(agent.deepagent.middleware),
+            "subagents": list(agent.deepagent.subagents),
+            "response_format": agent.deepagent.response_format,
+            "context_schema": agent.deepagent.context_schema,
+            "checkpointer": agent.deepagent.checkpointer,
+            "store": agent.deepagent.store,
+            "cache": agent.deepagent.cache,
+        },
     }
 
 

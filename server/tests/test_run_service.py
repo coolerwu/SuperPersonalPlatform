@@ -24,6 +24,8 @@ agents:
       model_id: default
       context_ids:
         - nutstore
+      deepagent:
+        max_iterations: 7
 """
 
 
@@ -34,7 +36,10 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     (context_dir / "context.json").write_text('{"id":"nutstore","tools":["webdav"]}', encoding="utf-8")
     (context_dir / "knowledge" / "index.json").write_text('{"items":[]}', encoding="utf-8")
 
-    async def fake_run(self, system_prompt, user_message, *, max_iterations=60):
+    captured = {}
+
+    async def fake_run(self, system_prompt, user_message, *, max_iterations=60, deepagent_options=None):
+        captured["deepagent_options"] = deepagent_options
         return f"answer: {user_message}"
 
     monkeypatch.setattr("server.infrastructure.model_runner.ModelRunner.run_deep_agent", fake_run)
@@ -46,6 +51,7 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
 
     assert completed["state"]["status"] == "completed"
     assert completed["result"]["content"] == "answer: hello"
+    assert captured["deepagent_options"]["max_iterations"] == 7
     assert (tmp_path / "runs" / "index.json").exists()
     assert (tmp_path / "runs" / run_id / "input.json").exists()
     assert (tmp_path / "runs" / run_id / "state.json").exists()

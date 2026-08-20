@@ -41,6 +41,20 @@ const CONFIG_YAML = [
   '      system_prompt: "你是一个运行在后端的 DeepAgent。"',
   '      model_id: "default"',
   "      context_ids: []",
+  "      deepagent:",
+  "        max_iterations: 60",
+  '        name: ""',
+  "        debug: false",
+  "        use_longterm_memory: false",
+  "        tools: []",
+  "        interrupt_on: []",
+  "        middleware: []",
+  "        subagents: []",
+  '        response_format: ""',
+  '        context_schema: ""',
+  "        checkpointer: false",
+  '        store: ""',
+  '        cache: ""',
 ].join("\n");
 
 async function flushReact() {
@@ -80,6 +94,8 @@ test("renders the DeepAgent console shell", async () => {
   expect((await screen.findAllByText("Runs")).length).toBeGreaterThan(1);
   expect(await screen.findByText("workspace/runs/index.json")).toBeInTheDocument();
   expect(await screen.findByText("配置")).toBeInTheDocument();
+  expect(await screen.findByText("Providers")).toBeInTheDocument();
+  expect(await screen.findByText("Agents")).toBeInTheDocument();
   expect(await screen.findByText("微信")).toBeInTheDocument();
 });
 
@@ -177,7 +193,7 @@ test("opens config.yaml as a native workspace text file", async () => {
   expect(screen.queryByText("认证与服务")).not.toBeInTheDocument();
 });
 
-test("saves config.yaml from the dedicated config menu", async () => {
+test("saves system config from the dedicated config menu", async () => {
   window.history.replaceState({}, "", "/config");
   global.fetch = vi.fn(async (url, options = {}) => {
     const path = String(url);
@@ -211,9 +227,10 @@ test("saves config.yaml from the dedicated config menu", async () => {
 
   expect(await screen.findByText("认证与服务")).toBeInTheDocument();
   expect(screen.getByLabelText("访问 Token")).toHaveValue("secret-token");
+  expect(screen.getByLabelText("访问 Token")).toHaveAttribute("type", "text");
   expect(screen.getByText("坚果云 WebDAV")).toBeInTheDocument();
-  expect(screen.getAllByText("模型").length).toBeGreaterThan(0);
-  expect(screen.getAllByText("Agent").length).toBeGreaterThan(0);
+  expect(screen.queryByText("Provider 默认项")).not.toBeInTheDocument();
+  expect(screen.queryByText("DeepAgent 运行选项")).not.toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("监听端口"), { target: { value: "9999" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
@@ -222,5 +239,132 @@ test("saves config.yaml from the dedicated config menu", async () => {
     const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
     expect(writeCall).toBeTruthy();
     expect(JSON.parse(writeCall[1].body).content).toContain("port: 9999");
+  });
+});
+
+test("saves provider config from the provider menu", async () => {
+  window.history.replaceState({}, "", "/providers");
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", size: 128, editable: true, content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/workspace/write")) {
+      return response({
+        ok: true,
+        message: "config.yaml 已校验并保存",
+        file: { path: "config.yaml", size: 128, editable: true, content: JSON.parse(options.body || "{}").content || "" },
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect(await screen.findByText("Provider 默认项")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("模型名"), { target: { value: "gpt-4.1-mini" } });
+  fireEvent.click(screen.getByRole("button", { name: /保存/ }));
+
+  await waitFor(() => {
+    const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
+    expect(writeCall).toBeTruthy();
+    expect(JSON.parse(writeCall[1].body).content).toContain('model: "gpt-4.1-mini"');
+  });
+});
+
+test("saves deepagent options from the agent config menu", async () => {
+  window.history.replaceState({}, "", "/agent-config");
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", size: 128, editable: true, content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/workspace/write")) {
+      return response({
+        ok: true,
+        message: "config.yaml 已校验并保存",
+        file: { path: "config.yaml", size: 128, editable: true, content: JSON.parse(options.body || "{}").content || "" },
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect(await screen.findByText("DeepAgent 运行选项")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Max Iterations"), { target: { value: "12" } });
+  fireEvent.change(screen.getByLabelText("Tool IDs"), { target: { value: "nutstore, webdav" } });
+  fireEvent.click(screen.getByRole("button", { name: /保存/ }));
+
+  await waitFor(() => {
+    const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
+    expect(writeCall).toBeTruthy();
+    const content = JSON.parse(writeCall[1].body).content;
+    expect(content).toContain("max_iterations: 12");
+    expect(content).toContain('- "nutstore"');
+    expect(content).toContain('- "webdav"');
+  });
+});
+
+test("updates the selected agent for a wechat account", async () => {
+  window.history.replaceState({}, "", "/wechat");
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/channels/wechat/accounts") && (!options.method || options.method === "GET")) {
+      return response({
+        accounts: [
+          {
+            id: "main",
+            name: "主账号",
+            default_agent_id: "assistant",
+            auto_start: false,
+            proxy: "",
+            status: { login_state: "stopped", running: false, logs: [] },
+          },
+        ],
+      });
+    }
+    if (path.endsWith("/api/channels/wechat/accounts/main")) {
+      return response({ ok: true, account: { id: "main", default_agent_id: JSON.parse(options.body || "{}").default_agent_id } });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", size: 128, editable: true, content: CONFIG_YAML });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect((await screen.findAllByText("主账号")).length).toBeGreaterThan(0);
+  fireEvent.change(screen.getByLabelText("默认 Agent"), { target: { value: "" } });
+
+  await waitFor(() => {
+    const updateCall = global.fetch.mock.calls.find(([url, options]) => String(url).endsWith("/api/channels/wechat/accounts/main") && options.method === "PUT");
+    expect(updateCall).toBeTruthy();
+    expect(JSON.parse(updateCall[1].body).default_agent_id).toBe("");
   });
 });
