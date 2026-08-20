@@ -8,6 +8,7 @@ from server.adapter.auth_routes import create_auth_router
 from server.adapter.channel_routes import create_channel_router
 from server.adapter.dependencies import AppContainer
 from server.adapter.system_routes import create_system_router
+from server.adapter.workspace_routes import create_workspace_router
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
 from server.app.nutstore_service import NutstoreService
@@ -15,6 +16,7 @@ from server.app.run_service import RunService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import UpdateAlreadyRunningError
 from server.app.wechat_channel_service import WechatChannelStatus
+from server.app.workspace_file_service import WorkspaceFileService
 from server.domain.auth import AuthToken
 from server.infrastructure.config import AuthConfig, NutstoreConfig, ServerConfig, Settings
 from server.infrastructure.config import parse_settings
@@ -101,6 +103,7 @@ def make_system_client(tmp_path: Path, update_service: FakeUpdateService | None 
         nutstore_service=NutstoreService(NutstoreConfig()),
         system_log_service=SystemLogService(tmp_path),
         system_update_service=update_service or FakeUpdateService(),
+        workspace_file_service=WorkspaceFileService(tmp_path),
         session_codec=SessionCodec(token),
         wechat_channel_manager=FakeWechatManager(),
     )
@@ -108,6 +111,7 @@ def make_system_client(tmp_path: Path, update_service: FakeUpdateService | None 
     app.include_router(create_auth_router(container))
     app.include_router(create_channel_router(container))
     app.include_router(create_system_router(container))
+    app.include_router(create_workspace_router(container))
     return TestClient(app)
 
 
@@ -199,6 +203,32 @@ def test_system_update_conflict(tmp_path) -> None:
     response = client.post("/api/system/update-service")
 
     assert response.status_code == 409
+
+
+def test_workspace_file_routes_are_scoped_and_edit_text(tmp_path) -> None:
+    client = make_system_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    (runs_dir / "index.json").write_text('{"runs":[]}', encoding="utf-8")
+
+    list_response = client.post("/api/workspace/list", json={"path": "runs"})
+    assert list_response.status_code == 200
+    assert list_response.json()["entries"][0]["path"] == "runs/index.json"
+
+    read_response = client.post("/api/workspace/read", json={"path": "runs/index.json"})
+    assert read_response.status_code == 200
+    assert read_response.json()["content"] == '{"runs":[]}'
+
+    save_response = client.put(
+        "/api/workspace/write",
+        json={"path": "runs/index.json", "content": '{"runs":[{"status":"completed"}]}'},
+    )
+    assert save_response.status_code == 200
+    assert (runs_dir / "index.json").read_text(encoding="utf-8") == '{"runs":[{"status":"completed"}]}'
+
+    escape_response = client.post("/api/workspace/list", json={"path": "../"})
+    assert escape_response.status_code == 400
 
 
 def test_wechat_account_routes(tmp_path) -> None:

@@ -11,6 +11,7 @@ from server.adapter.dependencies import AppContainer
 from server.adapter.run_routes import create_run_router
 from server.adapter.static_routes import mount_frontend
 from server.adapter.system_routes import create_system_router
+from server.adapter.workspace_routes import create_workspace_router
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
 from server.app.nutstore_service import NutstoreService
@@ -18,6 +19,7 @@ from server.app.run_service import RunService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.app.wechat_channel_manager import WechatChannelManager
+from server.app.workspace_file_service import WorkspaceFileService
 from server.domain.auth import AuthToken
 from server.infrastructure.config import Settings, load_settings
 from server.infrastructure.session import SessionCodec
@@ -48,6 +50,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
             active_workspace,
             system_log_service,
         ),
+        workspace_file_service=WorkspaceFileService(active_workspace),
         session_codec=SessionCodec(settings.auth.token),
         wechat_channel_manager=wechat_channel_manager,
     )
@@ -100,6 +103,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     app.include_router(create_run_router(container))
     app.include_router(create_channel_router(container))
     app.include_router(create_system_router(container))
+    app.include_router(create_workspace_router(container))
 
     project_root = Path(__file__).resolve().parents[2]
     mount_frontend(app, container, project_root / "web" / "dist")

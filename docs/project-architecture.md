@@ -88,12 +88,22 @@ GET /api/runs/{run_id}/events?after={seq}
 
 系统 API 继续保留配置、日志和生产更新能力。
 
+Workspace 文件 API：
+
+```text
+POST /api/workspace/list
+POST /api/workspace/read
+PUT /api/workspace/write
+```
+
+这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览和编辑 UTF-8 文本文件。`config.yaml` 通过该入口保存时仍执行配置校验。
+
 ## Frontend Routes
 
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口兼容，不恢复旧 Agent Chat/Agent 管理页面。
-- `/workspace` 展示 workspace 目录结构、Run 落盘文件和 Agent/Context/Knowledge/Run 关系。
-- `/wechat` 展示微信账号状态和启动/停止操作。
-- `/system` 展示配置、日志和生产更新。
+- `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，包括 `config.yaml`、`runs/index.json`、Run 状态/事件/结果文件和 Context/Knowledge 配置。
+- `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作。
+- `/system` 展示生产更新、配置说明和系统日志；`config.yaml` 编辑入口收敛到 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
 
 ## Retained Capabilities

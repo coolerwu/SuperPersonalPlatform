@@ -7,6 +7,8 @@ import {
   Clock3,
   Database,
   FileJson,
+  FileText,
+  FolderOpen,
   FolderTree,
   LogOut,
   Play,
@@ -185,7 +187,7 @@ function App() {
         {page === "runs" ? <RunsPage /> : null}
         {page === "workspace" ? <WorkspacePage /> : null}
         {page === "wechat" ? <WechatPage /> : null}
-        {page === "system" ? <SystemPage /> : null}
+        {page === "system" ? <SystemPage onNavigate={navigate} /> : null}
       </main>
     </div>
   );
@@ -465,48 +467,197 @@ function RailRow({ label, value }) {
 }
 
 function WorkspacePage() {
+  const [path, setPath] = useState("");
+  const [entries, setEntries] = useState([]);
+  const [activeFile, setActiveFile] = useState(null);
+  const [draft, setDraft] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function load(nextPath = path) {
+    setError("");
+    try {
+      const data = await api("/api/workspace/list", {
+        method: "POST",
+        body: JSON.stringify({ path: nextPath }),
+      });
+      setPath(data.path || "");
+      setEntries(data.entries || []);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function openEntry(entry) {
+    setMessage("");
+    setError("");
+    if (entry.type === "directory") {
+      setActiveFile(null);
+      setDraft("");
+      await load(entry.path);
+      return;
+    }
+    try {
+      const file = await api("/api/workspace/read", {
+        method: "POST",
+        body: JSON.stringify({ path: entry.path }),
+      });
+      setActiveFile(file);
+      setDraft(file.content || "");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function openPath(nextPath) {
+    await openEntry({ type: "file", path: nextPath });
+  }
+
+  async function saveFile() {
+    if (!activeFile) return;
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/api/workspace/write", {
+        method: "PUT",
+        body: JSON.stringify({ path: activeFile.path, content: draft }),
+      });
+      setActiveFile(data.file);
+      setDraft(data.file.content || "");
+      setMessage(data.message || "已保存");
+      await load(path);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  useEffect(() => {
+    load("");
+  }, []);
+
+  const breadcrumbs = path ? path.split("/") : [];
+  const dirty = activeFile && draft !== activeFile.content;
+
   return (
     <section className="console-screen workspace-screen">
       <div className="workspace-header">
         <div>
           <span className="section-label">工作目录</span>
-          <h1>workspace runtime layout</h1>
+          <h1>workspace browser</h1>
         </div>
         <Status status="落盘运行" />
       </div>
-      <div className="workspace-layout">
-        <section className="panel tree-panel">
+
+      <div className="workspace-toolbar panel">
+        <button className={path === "" ? "active-soft" : ""} onClick={() => load("")}>
+          workspace
+        </button>
+        {breadcrumbs.map((part, index) => {
+          const nextPath = breadcrumbs.slice(0, index + 1).join("/");
+          return (
+            <button key={nextPath} onClick={() => load(nextPath)}>
+              <ChevronRight size={14} />
+              {part}
+            </button>
+          );
+        })}
+        <span className="toolbar-spacer" />
+        <button onClick={() => openPath("config.yaml")}>
+          <FileText size={15} />
+          config.yaml
+        </button>
+        <button onClick={() => openPath("runs/index.json")}>
+          <FileJson size={15} />
+          runs/index.json
+        </button>
+        <button className="icon-button" onClick={() => load(path)} title="刷新目录">
+          <RefreshCw size={15} />
+        </button>
+      </div>
+
+      {message ? <p className="ok">{message}</p> : null}
+      {error ? <p className="error">{error}</p> : null}
+
+      <div className="workspace-file-layout">
+        <section className="panel file-browser">
           <div className="panel-title">
             <div>
-              <span>目录结构</span>
-              <small>后端重启后从磁盘恢复状态</small>
+              <span>文件</span>
+              <small>{path ? `workspace/${path}` : "workspace/"}</small>
             </div>
           </div>
-          <div className="tree-list">
-            {WORKSPACE_TREE.map(([path, description]) => (
-              <div className="tree-row" key={path}>
-                <FileJson size={15} />
-                <code>{path}</code>
-                <span>{description}</span>
-              </div>
+          <div className="file-list">
+            {path ? (
+              <button className="file-row" onClick={() => load(path.split("/").slice(0, -1).join("/"))}>
+                <FolderOpen size={16} />
+                <span>..</span>
+                <small>上级目录</small>
+              </button>
+            ) : null}
+            {entries.length === 0 ? <div className="empty-state">当前目录为空。</div> : null}
+            {entries.map((entry) => (
+              <button
+                key={entry.path}
+                className={`file-row ${activeFile?.path === entry.path ? "selected" : ""}`}
+                onClick={() => openEntry(entry)}
+              >
+                {entry.type === "directory" ? <FolderOpen size={16} /> : <FileText size={16} />}
+                <span>{entry.name}</span>
+                <small>{entry.type === "directory" ? "directory" : formatBytes(entry.size)}</small>
+                <time>{formatTime(entry.modified_at * 1000)}</time>
+              </button>
             ))}
           </div>
         </section>
-        <section className="panel workspace-notes">
+
+        <section className="panel file-editor">
           <div className="panel-title">
             <div>
-              <span>边界</span>
-              <small>Agent / Context / Knowledge / Run</small>
+              <span>{activeFile?.path || "选择文件"}</span>
+              <small>
+                {activeFile ? `${formatBytes(activeFile.size)} · ${activeFile.editable ? "可编辑" : "只读"}` : "支持 UTF-8 文本文件"}
+              </small>
             </div>
+            <button className="primary" onClick={saveFile} disabled={!activeFile?.editable || !dirty}>
+              <Save size={15} />
+              保存
+            </button>
           </div>
-          <div className="model-stack">
-            <ModelLine title="Agent" text="人格、模型、默认 Context 集合" />
-            <ModelLine title="Context" text="归属隔离边界，包含 roots、tools、knowledge" />
-            <ModelLine title="Knowledge" text="Context 内部资源，不全局散放" />
-            <ModelLine title="Run" text="创建时固化 Agent + Context + Knowledge 快照" />
-          </div>
+          {activeFile ? (
+            <textarea
+              className="workspace-editor"
+              value={draft}
+              readOnly={!activeFile.editable}
+              onChange={(event) => setDraft(event.target.value)}
+              spellCheck={false}
+            />
+          ) : (
+            <div className="workspace-empty-editor">
+              <TerminalSquare size={30} />
+              <strong>打开 workspace 内的文件</strong>
+              <span>Run 状态、事件、结果、Context 和 config.yaml 都可以在这里查看；可编辑文本会启用保存。</span>
+            </div>
+          )}
         </section>
       </div>
+
+      <section className="panel workspace-map">
+        <div className="panel-title">
+          <div>
+            <span>约定目录</span>
+            <small>后端重启后从这些落盘文件恢复任务状态</small>
+          </div>
+        </div>
+        <div className="tree-list">
+          {WORKSPACE_TREE.map(([treePath, description]) => (
+            <button className="tree-row" key={treePath} onClick={() => openPath(treePath.replace("workspace/", ""))}>
+              <FileJson size={15} />
+              <code>{treePath}</code>
+              <span>{description}</span>
+            </button>
+          ))}
+        </div>
+      </section>
     </section>
   );
 }
@@ -523,12 +674,15 @@ function ModelLine({ title, text }) {
 
 function WechatPage() {
   const [accounts, setAccounts] = useState([]);
+  const [activeId, setActiveId] = useState("");
   const [error, setError] = useState("");
 
   async function load() {
     try {
       const data = await api("/api/channels/wechat/accounts");
-      setAccounts(data.accounts || []);
+      const nextAccounts = data.accounts || [];
+      setAccounts(nextAccounts);
+      setActiveId((current) => current || nextAccounts[0]?.id || "");
     } catch (err) {
       setError(err.message);
     }
@@ -555,7 +709,7 @@ function WechatPage() {
       <div className="workspace-header">
         <div>
           <span className="section-label">微信</span>
-          <h1>WeChat channel accounts</h1>
+          <h1>wechat channel</h1>
         </div>
         <button onClick={load}>
           <RefreshCw size={15} />
@@ -563,62 +717,125 @@ function WechatPage() {
         </button>
       </div>
       {error ? <p className="error">{error}</p> : null}
-      <div className="account-grid">
-        {accounts.map((account) => (
-          <section className="panel account-panel" key={account.id}>
-            <div className="detail-header">
-              <div>
-                <span className="section-label">{account.id}</span>
-                <h2>{account.name || account.id}</h2>
-              </div>
-              <Status status={account.status?.login_state} />
+
+      <WechatSummary accounts={accounts} />
+
+      <div className="wechat-layout">
+        <section className="panel wechat-list">
+          <div className="panel-title">
+            <div>
+              <span>账号</span>
+              <small>config.yaml channels.wechat_personal.accounts</small>
             </div>
-            <div className="kv-grid two">
-              <Kv label="Agent" value={account.default_agent_id || "未绑定"} />
-              <Kv label="自动启动" value={account.auto_start ? "是" : "否"} />
-              <Kv label="运行" value={account.status?.running ? "running" : "stopped"} />
-              <Kv label="用户" value={account.status?.user || "-"} />
-            </div>
-            {account.status?.qrcode_data_url ? (
-              <img className="qr" src={account.status.qrcode_data_url} alt="微信登录二维码" />
-            ) : null}
-            <div className="actions">
-              <button className="primary" onClick={() => action(account.id, "start")}>
-                启动
+          </div>
+          <div className="wechat-account-list">
+            {accounts.length === 0 ? <div className="empty-state">暂无微信账号。</div> : null}
+            {accounts.map((account) => (
+              <button
+                key={account.id}
+                className={`wechat-account-row ${activeId === account.id ? "selected" : ""}`}
+                onClick={() => setActiveId(account.id)}
+              >
+                <Smartphone size={16} />
+                <span>{account.name || account.id}</span>
+                <Status status={account.status?.login_state} />
+                <small>{account.default_agent_id || "未绑定 Agent"}</small>
               </button>
-              <button onClick={() => action(account.id, "stop")}>停止</button>
-            </div>
-          </section>
-        ))}
+            ))}
+          </div>
+        </section>
+
+        <WechatAccountDetail account={accounts.find((account) => account.id === activeId)} onAction={action} />
       </div>
     </section>
   );
 }
 
-function SystemPage() {
-  const [config, setConfig] = useState("");
+function WechatSummary({ accounts }) {
+  const running = accounts.filter((account) => account.status?.running).length;
+  const loggedIn = accounts.filter((account) => account.status?.login_state === "logged_in").length;
+  const withError = accounts.filter((account) => account.status?.error).length;
+  return (
+    <div className="metrics-row wechat-metrics">
+      <Metric label="账号" value={accounts.length} tone="blue" />
+      <Metric label="运行中" value={running} tone="cyan" />
+      <Metric label="已登录" value={loggedIn} tone="green" />
+      <Metric label="异常" value={withError} tone="red" />
+    </div>
+  );
+}
+
+function WechatAccountDetail({ account, onAction }) {
+  if (!account) {
+    return (
+      <section className="panel account-detail-empty">
+        <Smartphone size={32} />
+        <strong>选择一个微信账号</strong>
+        <span>这里会显示登录态、二维码、绑定 Agent 和最近通道日志。</span>
+      </section>
+    );
+  }
+  const status = account.status || {};
+  return (
+    <section className="panel account-detail">
+      <div className="account-hero">
+        <div>
+          <span className="section-label">{account.id}</span>
+          <h2>{account.name || account.id}</h2>
+        </div>
+        <Status status={status.login_state} />
+      </div>
+
+      <div className="wechat-detail-grid">
+        <div className="wechat-qr-zone">
+          {status.qrcode_data_url ? (
+            <img className="qr" src={status.qrcode_data_url} alt="微信登录二维码" />
+          ) : (
+            <div className="qr-placeholder">
+              <Smartphone size={28} />
+              <span>{status.login_state === "logged_in" ? "已登录" : "等待二维码"}</span>
+            </div>
+          )}
+          <div className="actions">
+            <button className="primary" onClick={() => onAction(account.id, "start")}>
+              启动
+            </button>
+            <button onClick={() => onAction(account.id, "stop")}>停止</button>
+          </div>
+        </div>
+
+        <div className="wechat-facts">
+          <div className="kv-grid two">
+            <Kv label="默认 Agent" value={account.default_agent_id || "未绑定"} />
+            <Kv label="自动启动" value={account.auto_start ? "是" : "否"} />
+            <Kv label="运行进程" value={status.running ? "running" : "stopped"} />
+            <Kv label="登录用户" value={status.user || "-"} />
+            <Kv label="二维码状态" value={status.qrcode_status || "-"} />
+            <Kv label="代理" value={account.proxy || "未配置"} />
+          </div>
+          {status.error ? <p className="error">{status.error}</p> : null}
+        </div>
+      </div>
+
+      <div className="delivery-strip">
+        <PathBox label="消息入口" value="channels.wechat_personal.accounts[]" />
+        <PathBox label="任务创建" value="workspace/runs/{run_id}/input.json source=wechat" />
+        <PathBox label="投递状态" value="workspace/runs/{run_id}/delivery.json" />
+      </div>
+
+      <div className="wechat-log">
+        <span className="section-label">通道日志</span>
+        <pre>{(status.logs || []).join("\n") || "暂无通道日志"}</pre>
+      </div>
+    </section>
+  );
+}
+
+function SystemPage({ onNavigate }) {
   const [logs, setLogs] = useState([]);
   const [activeLog, setActiveLog] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-
-  async function loadConfig() {
-    const data = await api("/api/system/config/read", { method: "POST" });
-    setConfig(data.content || "");
-  }
-
-  async function saveConfig() {
-    setError("");
-    try {
-      const data = await api("/api/system/config", {
-        method: "PUT",
-        body: JSON.stringify({ content: config }),
-      });
-      setMessage(data.message || "已保存");
-    } catch (err) {
-      setError(err.message);
-    }
-  }
 
   async function loadLogs() {
     const data = await api("/api/system/logs/list", { method: "POST" });
@@ -639,27 +856,44 @@ function SystemPage() {
   }
 
   useEffect(() => {
-    loadConfig();
     loadLogs();
   }, []);
 
   return (
     <section className="console-screen system-screen">
-      <section className="panel config-panel">
+      <section className="panel system-control-panel">
         <div className="panel-title">
           <div>
-            <span>config.yaml</span>
-            <small>active workspace configuration</small>
+            <span>系统控制</span>
+            <small>生产更新、配置位置、运行日志</small>
           </div>
-          <button className="primary" onClick={saveConfig}>
-            <Save size={15} />
-            保存
-          </button>
         </div>
         {message ? <p className="ok">{message}</p> : null}
         {error ? <p className="error">{error}</p> : null}
-        <textarea className="config-editor" value={config} onChange={(event) => setConfig(event.target.value)} />
+        <div className="system-actions">
+          <button className="primary" onClick={updateService}>
+            生产更新
+          </button>
+          <button onClick={() => onNavigate("workspace")}>
+            <FolderTree size={15} />
+            打开工作目录
+          </button>
+        </div>
+        <div className="config-note">
+          <Database size={18} />
+          <div>
+            <strong>config.yaml 仍然需要</strong>
+            <span>后端启动和登录校验依赖它：auth.token、server、Nutstore WebDAV、微信账号、Agent/LLM 配置都从 active workspace 读取。编辑入口已放到工作目录。</span>
+          </div>
+        </div>
+        <div className="model-stack">
+          <ModelLine title="Agent" text="人格、模型、默认 Context 集合" />
+          <ModelLine title="Context" text="归属隔离边界，包含 roots、tools、knowledge" />
+          <ModelLine title="Knowledge" text="Context 内部资源，不全局散放" />
+          <ModelLine title="Run" text="创建时固化 Agent + Context + Knowledge 快照" />
+        </div>
       </section>
+
       <section className="panel logs-panel">
         <div className="panel-title">
           <div>
@@ -679,9 +913,6 @@ function SystemPage() {
           ))}
         </div>
         <pre className="log-output">{activeLog || "暂无日志"}</pre>
-        <button className="primary update-button" onClick={updateService}>
-          生产更新
-        </button>
       </section>
     </section>
   );
@@ -703,6 +934,13 @@ function formatTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatBytes(value) {
+  const size = Number(value) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 createRoot(document.getElementById("root")).render(<App />);

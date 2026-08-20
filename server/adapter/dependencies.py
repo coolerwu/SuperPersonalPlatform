@@ -7,6 +7,7 @@ from server.app.run_service import RunService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.app.wechat_channel_manager import WechatChannelManager
+from server.app.workspace_file_service import WorkspaceFileService
 from server.infrastructure.session import SessionCodec
 
 
@@ -18,5 +19,6 @@ class AppContainer:
     nutstore_service: NutstoreService
     system_log_service: SystemLogService
     system_update_service: SystemUpdateService
+    workspace_file_service: WorkspaceFileService
     session_codec: SessionCodec
     wechat_channel_manager: WechatChannelManager | None = None

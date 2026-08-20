@@ -637,6 +637,134 @@ pre {
   gap: 14px;
 }
 
+.workspace-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 8px;
+}
+
+.workspace-toolbar button {
+  min-height: 32px;
+}
+
+.workspace-toolbar .active-soft {
+  border-color: rgba(23, 168, 245, 0.34);
+  background: rgba(23, 168, 245, 0.12);
+  color: #d8f3ff;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.workspace-file-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.55fr) minmax(520px, 1fr);
+  gap: 14px;
+  min-height: 620px;
+}
+
+.file-browser,
+.file-editor,
+.system-control-panel {
+  display: grid;
+  align-content: start;
+}
+
+.file-list {
+  display: grid;
+  max-height: 620px;
+  overflow: auto;
+  padding: 8px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 92px 80px;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  justify-content: initial;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+}
+
+.file-row:hover,
+.file-row.selected {
+  border-color: rgba(23, 168, 245, 0.32);
+  background: rgba(23, 168, 245, 0.08);
+  color: var(--text);
+}
+
+.file-row span,
+.file-row small,
+.file-row time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row span {
+  color: #d8e5f0;
+}
+
+.file-row small,
+.file-row time {
+  color: var(--faint);
+}
+
+.file-editor {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.workspace-editor {
+  min-height: 620px;
+  border: 0;
+  border-radius: 0 0 8px 8px;
+  background: #080e15;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.workspace-editor[readonly] {
+  color: #9aa8b7;
+}
+
+.workspace-empty-editor,
+.account-detail-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 420px;
+  color: var(--muted);
+  padding: 24px;
+  text-align: center;
+}
+
+.workspace-empty-editor strong,
+.account-detail-empty strong {
+  color: var(--text);
+}
+
+.workspace-empty-editor span,
+.account-detail-empty span {
+  max-width: 360px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.workspace-map .tree-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .tree-list,
 .model-stack {
   display: grid;
@@ -649,8 +777,15 @@ pre {
   grid-template-columns: 18px minmax(260px, 0.9fr) minmax(0, 1fr);
   gap: 10px;
   align-items: center;
+  width: 100%;
   min-height: 38px;
   border-bottom: 1px solid var(--line-soft);
+  border-left-color: transparent;
+  border-right-color: transparent;
+  border-top-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
 }
 
 .tree-row code {
@@ -681,10 +816,127 @@ pre {
   gap: 14px;
 }
 
-.account-panel {
+.account-panel,
+.account-detail {
   display: grid;
   gap: 14px;
   padding: 14px;
+}
+
+.wechat-layout {
+  display: grid;
+  grid-template-columns: minmax(330px, 0.42fr) minmax(560px, 1fr);
+  gap: 14px;
+}
+
+.wechat-list {
+  overflow: hidden;
+}
+
+.wechat-account-list {
+  display: grid;
+  gap: 8px;
+  max-height: calc(100vh - 260px);
+  overflow: auto;
+  padding: 10px;
+}
+
+.wechat-account-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  justify-content: initial;
+  width: 100%;
+  min-height: 58px;
+  border-color: var(--line-soft);
+  background: #0d141d;
+  text-align: left;
+}
+
+.wechat-account-row.selected,
+.wechat-account-row:hover {
+  border-color: rgba(23, 168, 245, 0.36);
+  background: rgba(23, 168, 245, 0.08);
+}
+
+.wechat-account-row span {
+  overflow: hidden;
+  color: #d8e5f0;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wechat-account-row small {
+  grid-column: 2 / 4;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-hero {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 12px;
+}
+
+.account-hero h2 {
+  margin: 3px 0 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.wechat-detail-grid {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.wechat-qr-zone {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.qr-placeholder {
+  display: grid;
+  width: 210px;
+  height: 210px;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  border: 1px dashed #334155;
+  border-radius: 8px;
+  background: #0a1017;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.wechat-facts {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.delivery-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wechat-log {
+  display: grid;
+  gap: 8px;
+}
+
+.wechat-log pre {
+  max-height: 210px;
 }
 
 .actions,
@@ -695,12 +947,58 @@ pre {
 }
 
 .qr {
-  width: 180px;
-  height: 180px;
+  width: 210px;
+  height: 210px;
   border: 8px solid #fff;
   border-radius: 8px;
   background: #fff;
   object-fit: contain;
+}
+
+.system-control-panel {
+  gap: 14px;
+  padding-bottom: 14px;
+}
+
+.system-control-panel .ok,
+.system-control-panel .error,
+.system-actions,
+.config-note,
+.system-control-panel .model-stack {
+  margin-inline: 14px;
+}
+
+.system-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 14px;
+}
+
+.config-note {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: #0d141d;
+  padding: 12px;
+}
+
+.config-note div {
+  display: grid;
+  gap: 5px;
+}
+
+.config-note strong {
+  color: #d8e5f0;
+  font-size: 13px;
+}
+
+.config-note span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .config-panel,
@@ -808,6 +1106,8 @@ pre {
 @media (max-width: 1180px) {
   .runs-grid,
   .workspace-layout,
+  .workspace-file-layout,
+  .wechat-layout,
   .system-screen {
     grid-template-columns: 1fr;
   }
@@ -856,6 +1156,9 @@ pre {
   .metrics-row,
   .kv-grid,
   .kv-grid.two,
+  .delivery-strip,
+  .workspace-map .tree-list,
+  .wechat-detail-grid,
   .status-rail {
     grid-template-columns: 1fr;
   }
@@ -881,5 +1184,21 @@ pre {
 
   .tree-row span {
     grid-column: 2;
+  }
+
+  .workspace-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .toolbar-spacer {
+    display: none;
+  }
+
+  .file-row {
+    grid-template-columns: 20px minmax(0, 1fr) 80px;
+  }
+
+  .file-row time {
+    display: none;
   }
 }
