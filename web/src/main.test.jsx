@@ -231,6 +231,7 @@ test("saves system config from the dedicated config menu", async () => {
   expect(screen.getByText("坚果云 WebDAV")).toBeInTheDocument();
   expect(screen.queryByText("Provider 默认项")).not.toBeInTheDocument();
   expect(screen.queryByText("DeepAgent 运行选项")).not.toBeInTheDocument();
+  expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("监听端口"), { target: { value: "9999" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
@@ -270,6 +271,7 @@ test("saves provider config from the provider menu", async () => {
   });
 
   expect(await screen.findByText("Provider 默认项")).toBeInTheDocument();
+  expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("模型名"), { target: { value: "gpt-4.1-mini" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
@@ -308,6 +310,7 @@ test("saves deepagent options from the agent config menu", async () => {
   });
 
   expect(await screen.findByText("DeepAgent 运行选项")).toBeInTheDocument();
+  expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Max Iterations"), { target: { value: "12" } });
   fireEvent.change(screen.getByLabelText("Tool IDs"), { target: { value: "nutstore, webdav" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));

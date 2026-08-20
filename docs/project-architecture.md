@@ -107,7 +107,7 @@ POST /api/workspace/delete
 - `/config` 是系统级 `config.yaml` 可视化配置菜单，只承载访问 Token、服务监听和坚果云 WebDAV 等基础配置；访问 Token 按明文输入展示。保存仍写回 `workspace/config.yaml` 并经后端配置校验。
 - `/providers` 是模型 Provider 配置菜单，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力。
 - `/agent-config` 是 Agent 配置菜单，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；`/agents` 仍是旧入口兼容并跳转 Runs，不作为配置页路径。
-- `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作。
+- `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
 - `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录 session 继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存。
 - `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，文件级查看/编辑入口保留在 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
