@@ -1,39 +1,53 @@
+from dataclasses import dataclass
 from typing import Any
 
-from server.domain.agents import ModelDefinition, ModelProvider
+from server.domain.agent_config import ModelDefinition, ModelProvider
 
 
-class ModelRunner:
+@dataclass(frozen=True)
+class RuntimeMessage:
+    role: str
+    content: str
+
+
+@dataclass(frozen=True)
+class DeepAgentRuntimeOptions:
+    max_iterations: int = 60
+    name: str = ""
+    debug: bool = False
+    interrupt_on: tuple[str, ...] = ()
+
+
+class DeepAgentRuntime:
     def __init__(self, model: ModelDefinition) -> None:
         self._model = model
 
-    async def run_deep_agent(
+    async def run(
         self,
-        system_prompt: str,
-        user_message: str,
         *,
-        max_iterations: int = 60,
-        deepagent_options: dict[str, Any] | None = None,
+        instructions: str,
+        messages: tuple[RuntimeMessage, ...],
+        options: DeepAgentRuntimeOptions,
     ) -> str:
+        if not messages:
+            raise ValueError("messages are required")
         try:
             from deepagents import create_deep_agent
-            from langchain_core.messages import HumanMessage
+            from langchain_core.messages import AIMessage, HumanMessage
         except Exception as exc:
             raise RuntimeError("DeepAgent runtime requires the deepagents package") from exc
 
-        options = deepagent_options if isinstance(deepagent_options, dict) else {}
-        iterations = int(options.get("max_iterations") or max_iterations)
         create_kwargs: dict[str, Any] = {
             "tools": [],
             "model": self._chat_model(),
-            "instructions": system_prompt,
+            "instructions": instructions,
         }
-        name = str(options.get("name") or "").strip()
+        name = options.name.strip()
         if name:
             create_kwargs["name"] = name
-        if bool(options.get("debug", False)):
+        if options.debug:
             create_kwargs["debug"] = True
-        interrupt_on = _normalize_interrupt_on(options.get("interrupt_on"))
+        interrupt_on = _normalize_interrupt_on(options.interrupt_on)
         if interrupt_on:
             create_kwargs["interrupt_on"] = interrupt_on
         try:
@@ -42,9 +56,10 @@ class ModelRunner:
             create_kwargs["system_prompt"] = create_kwargs.pop("instructions")
             agent = create_deep_agent(**create_kwargs)
 
+        input_messages = _to_langchain_messages(messages, HumanMessage, AIMessage)
         result = await agent.ainvoke(
-            {"messages": [HumanMessage(content=user_message)]},
-            config={"recursion_limit": iterations},
+            {"messages": input_messages},
+            config={"recursion_limit": options.max_iterations},
         )
         return self._extract_content(result)
 
@@ -92,3 +107,17 @@ def _normalize_interrupt_on(value: Any) -> dict[str, bool] | None:
     if isinstance(value, list):
         return {str(item).strip(): True for item in value if str(item).strip()}
     return None
+
+
+def _to_langchain_messages(messages: tuple[RuntimeMessage, ...], human_cls: Any, ai_cls: Any) -> list[Any]:
+    result: list[Any] = []
+    for message in messages:
+        content = message.content.strip()
+        if not content:
+            continue
+        role = message.role.lower()
+        if role in {"assistant", "ai"}:
+            result.append(ai_cls(content=content))
+        elif role in {"user", "human"}:
+            result.append(human_cls(content=content))
+    return result

@@ -16,6 +16,7 @@ from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
 from server.app.nutstore_service import NutstoreService
 from server.app.run_service import RunService
+from server.app.session_service import SessionService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.app.wechat_channel_manager import WechatChannelManager
@@ -33,10 +34,12 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     project_root = Path(__file__).resolve().parents[2]
     active_workspace = workspace or current_workspace()
     system_log_service = SystemLogService(active_workspace)
-    run_service = RunService(active_workspace)
+    session_service = SessionService(active_workspace)
+    run_service = RunService(active_workspace, session_service=session_service)
     wechat_channel_manager = WechatChannelManager(
         workspace=active_workspace,
         run_service=run_service,
+        session_service=session_service,
         system_log_service=system_log_service,
     )
     return AppContainer(

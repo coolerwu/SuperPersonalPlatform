@@ -58,6 +58,7 @@ workspace/
 ```
 
 `workspace/runs/index.json` 维护所有任务摘要和当前状态。列表页、微信补偿、重启扫描优先读这个索引，不依赖扫目录。
+每个 run 可以引用 `session_id`，但 run 本身不保存长期对话历史。
 
 ```json
 {
@@ -195,6 +196,14 @@ workspace/
       lock.json
       delivery.json
 
+  sessions/
+    index.json
+    wechat_main_private_wxid_xxx_assistant_012345abcd/
+      state.json
+      messages.jsonl
+      runs.jsonl
+      artifacts/
+
   channels/
     wechat/
       accounts.json
@@ -215,6 +224,7 @@ workspace/
 
 - `run_id`
 - `source`
+- `session_id`
 - `message`
 - `agent_snapshot`
 - `context_snapshots`

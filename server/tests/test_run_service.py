@@ -2,6 +2,7 @@ import asyncio
 import json
 
 from server.app.run_service import RunService
+from server.app.session_service import SessionService
 
 
 CONFIG = """\
@@ -38,11 +39,12 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
 
     captured = {}
 
-    async def fake_run(self, system_prompt, user_message, *, max_iterations=60, deepagent_options=None):
-        captured["deepagent_options"] = deepagent_options
-        return f"answer: {user_message}"
+    async def fake_run(self, *, instructions, messages, options):
+        captured["options"] = options
+        captured["messages"] = messages
+        return f"answer: {messages[-1].content}"
 
-    monkeypatch.setattr("server.infrastructure.model_runner.ModelRunner.run_deep_agent", fake_run)
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
 
     service = RunService(tmp_path)
     run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
@@ -51,7 +53,8 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
 
     assert completed["state"]["status"] == "completed"
     assert completed["result"]["content"] == "answer: hello"
-    assert captured["deepagent_options"]["max_iterations"] == 7
+    assert captured["options"].max_iterations == 7
+    assert captured["messages"][-1].content == "hello"
     assert (tmp_path / "runs" / "index.json").exists()
     assert (tmp_path / "runs" / run_id / "input.json").exists()
     assert (tmp_path / "runs" / run_id / "state.json").exists()
@@ -64,3 +67,60 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert index["runs"][0]["run_id"] == run_id
     assert index["runs"][0]["status"] == "completed"
     assert service.get_events(run_id, after=0)[-1]["type"] == "completed"
+
+
+def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    session_service = SessionService(tmp_path)
+    session = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_demo",
+        agent_id="assistant",
+    )
+
+    captured = {}
+
+    async def fake_run(self, *, instructions, messages, options):
+        captured["messages"] = messages
+        return "session answer"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path, session_service=session_service)
+    run = asyncio.run(service.create_run(content="第二句", agent_id="assistant", source="wechat", session_id=session.session_id))
+    run_id = run["run_id"]
+    completed = asyncio.run(service.execute_run(run_id))
+
+    assert completed["input"]["session_id"] == session.session_id
+    assert completed["state"]["session_id"] == session.session_id
+    assert completed["delivery"]["session_id"] == session.session_id
+    assert captured["messages"][-1].role == "user"
+    assert captured["messages"][-1].content == "第二句"
+
+    messages_path = tmp_path / "sessions" / session.session_id / "messages.jsonl"
+    messages = [json.loads(line) for line in messages_path.read_text(encoding="utf-8").splitlines()]
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert messages[-1]["content"] == "session answer"
+
+    session_index = json.loads((tmp_path / "sessions" / "index.json").read_text(encoding="utf-8"))
+    assert session_index["sessions"][0]["session_id"] == session.session_id
+    assert session_index["sessions"][0]["last_run_id"] == run_id
+
+    run_index = json.loads((tmp_path / "runs" / "index.json").read_text(encoding="utf-8"))
+    assert run_index["runs"][0]["session_id"] == session.session_id
+
+
+def test_run_service_rejects_unknown_session_before_writing_run(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    service = RunService(tmp_path, session_service=SessionService(tmp_path))
+
+    try:
+        asyncio.run(service.create_run(content="hello", agent_id="assistant", session_id="missing"))
+    except ValueError as exc:
+        assert str(exc) == "session does not exist"
+    else:
+        raise AssertionError("expected unknown session to be rejected")
+
+    assert not (tmp_path / "runs").exists()

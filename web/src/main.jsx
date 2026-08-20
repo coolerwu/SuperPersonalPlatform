@@ -40,6 +40,10 @@ const CONFIG_SECTIONS = [
 ];
 
 const WORKSPACE_TREE = [
+  ["workspace/sessions/index.json", "长期会话索引，微信和未来渠道共用"],
+  ["workspace/sessions/{session_id}/state.json", "长期会话身份、Agent 和最近 run"],
+  ["workspace/sessions/{session_id}/messages.jsonl", "对话历史，DeepAgent 执行前读取"],
+  ["workspace/sessions/{session_id}/runs.jsonl", "该会话关联的 run 列表"],
   ["workspace/runs/index.json", "Run 摘要与状态索引"],
   ["workspace/runs/{run_id}/input.json", "创建时输入与 Agent/Context 快照"],
   ["workspace/runs/{run_id}/state.json", "当前状态、更新时间、事件序号"],
@@ -48,7 +52,7 @@ const WORKSPACE_TREE = [
   ["workspace/runs/{run_id}/delivery.json", "微信等渠道投递状态"],
   ["workspace/contexts/{context_id}/context.json", "Context 隔离边界"],
   ["workspace/contexts/{context_id}/knowledge/index.json", "Context 内知识索引"],
-  ["workspace/channels/wechat/sessions/{account_id}.json", "微信登录态"],
+  ["workspace/channels/wechat/sessions/{account_id}.json", "微信登录态，不作为聊天历史"],
   ["workspace/logs/platform-YYYY-MM-DD.log", "系统日志"],
 ];
 
@@ -419,6 +423,7 @@ function RunDetail({ run, events }) {
   const state = run.state || {};
   const result = run.result?.content || run.result?.error?.message || "";
   const runId = run.run_id || input.run_id;
+  const sessionId = input.session_id || state.session_id || run.session_id || "";
   const status = runStatus(run);
 
   return (
@@ -433,12 +438,14 @@ function RunDetail({ run, events }) {
       <div className="kv-grid">
         <Kv label="Agent" value={input.agent_id || run.agent_id || "-"} />
         <Kv label="来源" value={input.source || run.source || "api"} />
+        <Kv label="Session" value={sessionId || "-"} />
         <Kv label="创建时间" value={formatTime(input.created_at || run.created_at)} />
         <Kv label="事件序号" value={state.seq ?? run.seq ?? 0} />
       </div>
       <PathBox label="工作目录" value={`workspace/runs/${runId}/`} />
       <PathBox label="状态文件" value={`workspace/runs/${runId}/state.json`} />
       <PathBox label="事件文件" value={`workspace/runs/${runId}/events.jsonl`} />
+      {sessionId ? <PathBox label="会话历史" value={`workspace/sessions/${sessionId}/messages.jsonl`} /> : null}
 
       <div className="tabs-line">
         <span className="active">事件</span>
@@ -494,7 +501,7 @@ function StatusRail({ runs }) {
       </RailCard>
       <RailCard title="微信账号" status="按账号管理" tone="blue">
         <RailRow label="入口" value="/api/channels/wechat" />
-        <RailRow label="投递" value="delivery.json" />
+        <RailRow label="登录态" value="channels/wechat/sessions" />
       </RailCard>
       <RailCard title="Nutstore WebDAV" status="Context" tone="green">
         <RailRow label="地址" value="dav.jianguoyun.com" />
@@ -502,7 +509,7 @@ function StatusRail({ runs }) {
       </RailCard>
       <RailCard title="运行概览" status={`${runs.length} runs`} tone="neutral">
         <RailRow label="索引" value="runs/index.json" />
-        <RailRow label="状态" value="state.json" />
+        <RailRow label="会话" value="sessions/index.json" />
       </RailCard>
     </aside>
   );
@@ -654,6 +661,10 @@ function WorkspacePage() {
         <button onClick={() => openPath("runs/index.json")}>
           <FileJson size={15} />
           runs/index.json
+        </button>
+        <button onClick={() => openPath("sessions/index.json")}>
+          <FileJson size={15} />
+          sessions/index.json
         </button>
         <button className="icon-button" onClick={() => load(path)} title="刷新目录">
           <RefreshCw size={15} />
@@ -1064,6 +1075,7 @@ function WechatAccountDetail({ account, agents, onAction, onUpdate }) {
 
       <div className="delivery-strip">
         <PathBox label="消息入口" value="channels.wechat_personal.accounts[]" />
+        <PathBox label="会话落盘" value="workspace/sessions/{session_id}/messages.jsonl" />
         <PathBox label="任务创建" value="workspace/runs/{run_id}/input.json source=wechat" />
         <PathBox label="投递状态" value="workspace/runs/{run_id}/delivery.json" />
       </div>

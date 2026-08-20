@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
-from server.domain.agents import AgentConfigError
+from server.domain.agent_config import AgentConfigError
 from server.infrastructure.config import NutstoreConfig
 
 

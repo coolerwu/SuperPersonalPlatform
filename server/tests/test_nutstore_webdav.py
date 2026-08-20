@@ -3,7 +3,7 @@ import asyncio
 import httpx
 import pytest
 
-from server.domain.agents import AgentConfigError
+from server.domain.agent_config import AgentConfigError
 from server.infrastructure.config import NutstoreConfig, parse_settings
 from server.infrastructure.nutstore_webdav import NutstoreWebDAVClient
 

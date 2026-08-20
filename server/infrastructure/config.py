@@ -4,7 +4,7 @@ from typing import Any
 
 import yaml
 
-from server.domain.agents import (
+from server.domain.agent_config import (
     AgentConfigError,
     AgentDefinition,
     AgentWorkspaceDefinition,

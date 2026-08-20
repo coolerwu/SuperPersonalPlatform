@@ -19,12 +19,13 @@
 - DeepAgent 在后端运行，状态、事件、结果全部落盘。
 - `workspace/runs/index.json` 维护所有 run 的摘要和当前状态。
 - 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json`、`lock.json` 和 `delivery.json`。
+- `workspace/sessions/index.json` 维护所有长期会话摘要；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`。
 - `Agent` 只保存人格、模型和绑定的 Context 列表。
 - `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug` 和 `interrupt_on`，工具/知识细节后续随 Context 工具集接入。
 - `Context` 是隔离边界，内部包含 roots、tools、knowledge、owner、scope 等配置。
 - `Knowledge` 是 Context 内部资源，不作为全局散放目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
-- 微信收到消息后创建 `source=wechat` 的 run；DeepAgent 完成后由平台投递微信回复。
+- 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 `session_id`，再创建 `source=wechat` 的 run；DeepAgent 执行前读取该 session 的历史消息，完成后由平台投递微信回复。
 
 ## Target Workspace Layout
 
@@ -58,6 +59,14 @@ workspace/
       lock.json
       delivery.json
 
+  sessions/
+    index.json
+    {session_id}/
+      state.json
+      messages.jsonl
+      runs.jsonl
+      artifacts/
+
   channels/
     wechat/
       accounts.json
@@ -71,8 +80,8 @@ workspace/
 
 - `server/adapter` 只保留薄 HTTP API：认证、run 创建/查询/事件轮询、微信账号管理、配置/日志/更新、静态资源。
 - `server/app` 负责应用服务：DeepAgent run 服务、Agent/Context 工作区服务、坚果云服务、微信通道服务、系统日志/更新服务。
-- `server/domain` 只保留框架无关的领域对象、配置规则、错误类型和 run/context/agent 数据约束。
-- `server/infrastructure` 负责配置加载、DeepAgent/LangChain 模型运行、坚果云 WebDAV、微信 iLink 客户端、FastAPI app 装配和 cookie session。
+- `server/domain` 只保留框架无关的领域对象、配置规则、错误类型和 run/context/agent 数据约束；`server/domain/agent_config.py` 只描述 Agent/LLM/DeepAgent 选项配置，不封装 deepagents 运行时。
+- `server/infrastructure` 负责配置加载、DeepAgent/LangChain 运行封装、坚果云 WebDAV、微信 iLink 客户端、FastAPI app 装配和 cookie session；DeepAgent 运行封装集中在 `server/infrastructure/deepagent_runtime.py`，其入口只接收 `instructions`、完整 `messages` 和结构化 `options`，不再同时接收“当前消息”和“历史消息”两套参数。
 
 ## Target API Shape
 
@@ -84,6 +93,8 @@ GET /api/runs
 GET /api/runs/{run_id}
 GET /api/runs/{run_id}/events?after={seq}
 ```
+
+`POST /api/runs` 可接受可选 `session_id`。未传时按独立一次性 run 处理；微信通道会传入全局长期会话 ID。
 
 微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
 
@@ -98,7 +109,7 @@ PUT /api/workspace/write
 POST /api/workspace/delete
 ```
 
-这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`contexts/`、`runs/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
+这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`contexts/`、`runs/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
 
 ## Frontend Routes
 
@@ -109,7 +120,7 @@ POST /api/workspace/delete
 - `/providers` 是配置页内的模型 Provider 栏目兼容路径，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
 - `/agent-config` 是配置页内的 Agent 栏目兼容路径，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；`/agents` 仍是旧入口兼容并跳转 Runs，不作为配置页路径。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
-- `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录 session 继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存。
+- `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录态继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存，不作为聊天历史；长期聊天会话统一写入 `workspace/sessions/{session_id}/`。
 - `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，文件级查看/编辑入口保留在 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
 - Runs 工作区通过 1 分钟一次的轮询读取后端落盘状态，但前端必须保留当前详情快照、只在返回内容实际变化时更新状态，避免每次拉取 `workspace/runs/index.json` 时出现短暂重刷或 `unknown` 状态闪动。
@@ -130,7 +141,7 @@ POST /api/workspace/delete
 - 旧 Agent Chat WebSocket 聊天。
 - 旧 Harness 严格状态机产品路径。
 - Prompt/Agent 双模式产品概念。
-- 旧 Session CRUD 和 `workspace/sessions/*` 会话模型。
+- 旧 Session CRUD 产品页和旧 WebSocket 聊天会话模型。
 - 旧 Skill 管理和 Skill 作为产品级概念。
 - Portfolio 投资组合模块。
 - Critique 多维批判模块。

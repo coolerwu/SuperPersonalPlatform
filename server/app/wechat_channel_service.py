@@ -34,11 +34,13 @@ class WechatChannelService:
         self,
         workspace: Path,
         run_service: Any,
+        session_service: Any = None,
         system_log_service: Any = None,
         account_id: str = "default",
     ) -> None:
         self._workspace = workspace
         self._run_service = run_service
+        self._session_service = session_service
         self._system_log_service = system_log_service
         self._account_id = account_id
         self._client: ILinkClient | None = None
@@ -273,12 +275,28 @@ class WechatChannelService:
             return
 
         try:
+            peer_id = _wechat_peer_id(from_user_id, to_user_id)
+            peer_type = _wechat_peer_type(peer_id)
+            session_id = ""
+            if self._session_service is not None:
+                session = self._session_service.get_or_create(
+                    channel="wechat",
+                    channel_account_id=self._account_id,
+                    peer_type=peer_type,
+                    peer_id=peer_id,
+                    agent_id=agent_id,
+                    metadata={"to_user_id": to_user_id},
+                )
+                session_id = session.session_id
             run = await self._run_service.create_run(
                 content=text,
                 agent_id=agent_id,
                 source="wechat",
+                session_id=session_id,
                 metadata={
                     "account_id": self._account_id,
+                    "peer_id": peer_id,
+                    "peer_type": peer_type,
                     "from_user_id": from_user_id,
                     "to_user_id": to_user_id,
                     "context_token": context_token,
@@ -406,3 +424,13 @@ class WechatChannelService:
                 await client.close()
             except Exception:
                 pass
+
+
+def _wechat_peer_id(from_user_id: str, to_user_id: str) -> str:
+    return from_user_id or to_user_id or "unknown"
+
+
+def _wechat_peer_type(peer_id: str) -> str:
+    if "@chatroom" in peer_id:
+        return "room"
+    return "private"

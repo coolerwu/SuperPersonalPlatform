@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
 from server.app.run_service import RunNotFoundError
-from server.domain.agents import AgentConfigError
+from server.domain.agent_config import AgentConfigError
 
 
 class CreateRunRequest(BaseModel):
@@ -14,6 +14,7 @@ class CreateRunRequest(BaseModel):
     agent_id: str = ""
     context_ids: list[str] = Field(default_factory=list)
     source: str = "api"
+    session_id: str = ""
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
@@ -35,6 +36,7 @@ def create_run_router(container: AppContainer) -> APIRouter:
                 agent_id=payload.agent_id,
                 context_ids=tuple(payload.context_ids),
                 source=payload.source,
+                session_id=payload.session_id,
                 metadata=payload.metadata,
             )
         except (ValueError, AgentConfigError) as exc:

@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from server.domain.agents import AgentConfigError, AgentDefinition, ModelDefinition
+from server.app.session_service import SessionService
+from server.domain.agent_config import AgentConfigError, AgentDefinition, ModelDefinition
 from server.infrastructure.config import load_settings
-from server.infrastructure.model_runner import ModelRunner
+from server.infrastructure.deepagent_runtime import DeepAgentRuntime, DeepAgentRuntimeOptions, RuntimeMessage
 
 
 RUN_STATUSES = {"queued", "running", "completed", "failed"}
@@ -25,6 +26,7 @@ class RunInput:
     run_id: str
     source: str
     agent_id: str
+    session_id: str
     content: str
     context_ids: tuple[str, ...]
     created_at: str
@@ -33,9 +35,10 @@ class RunInput:
 
 
 class RunService:
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, session_service: SessionService | None = None) -> None:
         self._workspace = workspace
         self._runs_dir = workspace / "runs"
+        self._session_service = session_service
 
     async def create_run(
         self,
@@ -44,11 +47,14 @@ class RunService:
         agent_id: str = "",
         context_ids: tuple[str, ...] = (),
         source: str = "api",
+        session_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         text = content.strip()
         if not text:
             raise ValueError("content is required")
+        if session_id and self._session_service is not None and not self._session_service.exists(session_id):
+            raise ValueError("session does not exist")
 
         settings = load_settings(self._workspace / "config.yaml")
         agent = self._resolve_agent(settings.agent_workspace.agents, agent_id)
@@ -64,6 +70,7 @@ class RunService:
             run_id=run_id,
             source=source,
             agent_id=agent.id,
+            session_id=session_id,
             content=text,
             context_ids=selected_context_ids,
             created_at=now,
@@ -79,6 +86,7 @@ class RunService:
             run_dir / "state.json",
             {
                 "run_id": run_id,
+                "session_id": session_id,
                 "status": "queued",
                 "created_at": now,
                 "updated_at": now,
@@ -86,7 +94,22 @@ class RunService:
             },
         )
         _write_json(run_dir / "lock.json", {"pid": os.getpid(), "created_at": now})
-        _write_json(run_dir / "delivery.json", {"source": source, "status": "pending"})
+        _write_json(run_dir / "delivery.json", {"source": source, "session_id": session_id, "status": "pending"})
+        if session_id and self._session_service is not None:
+            self._session_service.append_message(
+                session_id,
+                role="user",
+                content=text,
+                run_id=run_id,
+                metadata={"source": source},
+            )
+            self._session_service.append_run(
+                session_id,
+                run_id=run_id,
+                status="queued",
+                source=source,
+                agent_id=agent.id,
+            )
         self._append_event(run_id, "queued", {"message": "run queued"})
         self._upsert_index(self._summary_from_state(run_id))
         return self.get_run(run_id)
@@ -99,14 +122,18 @@ class RunService:
         agent_snapshot = run_input["snapshot"]["agent"]
         system_prompt = str(agent_snapshot.get("system_prompt") or "")
         content = str(run_input.get("content") or "")
+        session_id = str(run_input.get("session_id") or "")
+        history = self._session_service.read_messages(session_id) if session_id and self._session_service is not None else []
+        runtime_messages = _runtime_messages(history, fallback_content=content)
+        runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
         self._set_state(run_id, "running")
         self._append_event(run_id, "running", {"message": "DeepAgent started"})
 
         try:
-            result = await ModelRunner(model).run_deep_agent(
-                system_prompt,
-                content,
-                deepagent_options=agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {},
+            result = await DeepAgentRuntime(model).run(
+                instructions=system_prompt,
+                messages=runtime_messages,
+                options=runtime_options,
             )
         except Exception as exc:
             error = {"message": str(exc), "type": exc.__class__.__name__}
@@ -126,6 +153,14 @@ class RunService:
             "completed_at": _now(),
         }
         _write_json(self._run_dir(run_id) / "result.json", result_payload)
+        if session_id and self._session_service is not None:
+            self._session_service.append_message(
+                session_id,
+                role="assistant",
+                content=result,
+                run_id=run_id,
+                metadata={"source": run_input.get("source", "api")},
+            )
         self._set_state(run_id, "completed")
         self._append_event(run_id, "completed", {"message": "run completed"})
         self._set_delivery(run_id, "ready")
@@ -224,7 +259,12 @@ class RunService:
         *,
         error: dict[str, Any] | None = None,
     ) -> None:
-        payload: dict[str, Any] = {"source": self._load_input(run_id).get("source", "api"), "status": status}
+        run_input = self._load_input(run_id)
+        payload: dict[str, Any] = {
+            "source": run_input.get("source", "api"),
+            "session_id": run_input.get("session_id", ""),
+            "status": status,
+        }
         if error is not None:
             payload["error"] = error
         _write_json(self._run_dir(run_id) / "delivery.json", payload)
@@ -255,6 +295,7 @@ class RunService:
             "status": state.get("status", "queued"),
             "source": run_input.get("source", "api"),
             "agent_id": run_input.get("agent_id", ""),
+            "session_id": run_input.get("session_id", ""),
             "created_at": run_input.get("created_at", ""),
             "updated_at": state.get("updated_at", ""),
             "seq": state.get("seq", 0),
@@ -328,6 +369,30 @@ def _public_model(model: ModelDefinition) -> dict[str, Any]:
         "temperature": model.temperature,
         "supports_images": model.supports_images,
     }
+
+
+def _runtime_messages(history: list[dict[str, Any]], *, fallback_content: str) -> tuple[RuntimeMessage, ...]:
+    messages: list[RuntimeMessage] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if role and content:
+            messages.append(RuntimeMessage(role=role, content=content))
+    if not messages and fallback_content.strip():
+        messages.append(RuntimeMessage(role="user", content=fallback_content.strip()))
+    return tuple(messages)
+
+
+def _runtime_options(raw: Any) -> DeepAgentRuntimeOptions:
+    options = raw if isinstance(raw, dict) else {}
+    return DeepAgentRuntimeOptions(
+        max_iterations=int(options.get("max_iterations") or 60),
+        name=str(options.get("name") or "").strip(),
+        debug=bool(options.get("debug", False)),
+        interrupt_on=tuple(str(item).strip() for item in options.get("interrupt_on") or [] if str(item).strip()),
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
