@@ -201,7 +201,32 @@ export function ProviderConfigEditor({ draft, onChange, readOnly }) {
 
   function updateModel(index, field, value) {
     update((next) => {
+      const previousId = next.llm.models[index]?.id;
       next.llm.models[index] = { ...next.llm.models[index], [field]: value };
+      if (field === "id" && previousId && previousId !== value) {
+        if (next.llm.default_model_id === previousId) next.llm.default_model_id = value;
+        next.agents.definitions = next.agents.definitions.map((agent) =>
+          agent.model_id === previousId ? { ...agent, model_id: value } : agent
+        );
+      }
+    });
+  }
+
+  function removeModel(index) {
+    update((next) => {
+      if (next.llm.models.length <= 1) return;
+      const removed = next.llm.models[index]?.id;
+      next.llm.models.splice(index, 1);
+      const remainingIds = next.llm.models.map((item) => item.id).filter(Boolean);
+      const fallbackId = remainingIds.includes(next.llm.default_model_id)
+        ? next.llm.default_model_id
+        : remainingIds[0] || "";
+      next.llm.default_model_id = fallbackId;
+      if (removed) {
+        next.agents.definitions = next.agents.definitions.map((agent) =>
+          agent.model_id === removed ? { ...agent, model_id: fallbackId } : agent
+        );
+      }
     });
   }
 
@@ -260,17 +285,9 @@ export function ProviderConfigEditor({ draft, onChange, readOnly }) {
               <button
                 className="icon-button delete-button"
                 type="button"
-                title="删除模型"
+                title={models.length <= 1 ? "至少保留一个模型" : "删除模型"}
                 disabled={readOnly || models.length <= 1}
-                onClick={() =>
-                  update((next) => {
-                    const removed = next.llm.models[index]?.id;
-                    next.llm.models.splice(index, 1);
-                    if (next.llm.default_model_id === removed) {
-                      next.llm.default_model_id = next.llm.models[0]?.id || "";
-                    }
-                  })
-                }
+                onClick={() => removeModel(index)}
               >
                 <Trash2 size={14} />
               </button>

@@ -97,6 +97,50 @@ const INDENTLESS_SEQUENCE_CONFIG_YAML = [
   "    context_ids: []",
 ].join("\n");
 
+const TWO_PROVIDER_CONFIG_YAML = [
+  "auth:",
+  '  token: "secret-token"',
+  "server:",
+  '  host: "0.0.0.0"',
+  "  port: 8888",
+  "llm:",
+  '  default_model_id: "primary"',
+  "  models:",
+  '    - id: "primary"',
+  '      name: "Primary"',
+  '      provider: "openai_compatible"',
+  '      base_url: "https://api.primary.test"',
+  '      api_key: "key"',
+  '      model: "primary-model"',
+  "      temperature: 0.7",
+  "      supports_images: false",
+  '    - id: "backup"',
+  '      name: "Backup"',
+  '      provider: "openai_compatible"',
+  '      base_url: "https://api.backup.test"',
+  '      api_key: "key"',
+  '      model: "backup-model"',
+  "      temperature: 0.7",
+  "      supports_images: false",
+  "nutstore:",
+  "  enabled: false",
+  '  base_url: "https://dav.jianguoyun.com/dav/"',
+  '  username: ""',
+  '  password: ""',
+  '  root_path: "/"',
+  "channels:",
+  "  wechat_personal:",
+  "    enabled: false",
+  "    accounts: []",
+  "agents:",
+  "  definitions:",
+  '    - id: "assistant"',
+  '      name: "默认助手"',
+  '      system_prompt: "你是一个运行在后端的 DeepAgent。"',
+  '      model_id: "primary"',
+  "      context_ids: []",
+].join("\n");
+
 async function flushReact() {
   for (let index = 0; index < 6; index += 1) {
     await act(async () => {
@@ -361,6 +405,47 @@ test("loads provider config with yaml indentless sequences", async () => {
     expect(content).toContain('default_model_id: "ds-pro"');
     expect(content).toContain('- id: "ds-pro"');
     expect(content).toContain("temperature: 0.5");
+  });
+});
+
+test("deletes a provider and migrates model references", async () => {
+  window.history.replaceState({}, "", "/providers");
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", size: 128, editable: true, content: TWO_PROVIDER_CONFIG_YAML });
+    }
+    if (path.endsWith("/api/workspace/write")) {
+      return response({
+        ok: true,
+        message: "config.yaml 已校验并保存",
+        file: { path: "config.yaml", size: 128, editable: true, content: JSON.parse(options.body || "{}").content || "" },
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect(await screen.findByDisplayValue("primary-model")).toBeInTheDocument();
+  fireEvent.click(screen.getAllByTitle("删除模型")[0]);
+  fireEvent.click(screen.getByRole("button", { name: /保存/ }));
+
+  await waitFor(() => {
+    const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
+    expect(writeCall).toBeTruthy();
+    const content = JSON.parse(writeCall[1].body).content;
+    expect(content).not.toContain('id: "primary"');
+    expect(content).toContain('default_model_id: "backup"');
+    expect(content).toContain('model_id: "backup"');
   });
 });
 
