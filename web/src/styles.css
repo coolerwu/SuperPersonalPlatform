@@ -996,8 +996,7 @@ pre {
 .system-control-panel .ok,
 .system-control-panel .error,
 .system-actions,
-.config-note,
-.system-control-panel .model-stack {
+.ops-stack {
   margin-inline: 14px;
 }
 
@@ -1008,30 +1007,9 @@ pre {
   padding-top: 14px;
 }
 
-.config-note {
+.ops-stack {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
   gap: 10px;
-  border: 1px solid var(--line-soft);
-  border-radius: 7px;
-  background: #0d141d;
-  padding: 12px;
-}
-
-.config-note div {
-  display: grid;
-  gap: 5px;
-}
-
-.config-note strong {
-  color: #d8e5f0;
-  font-size: 13px;
-}
-
-.config-note span {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 .config-panel,

@@ -177,19 +177,13 @@ def test_legacy_workspace_config_fields_are_ignored() -> None:
     assert settings.agent_workspace.get_agent("assistant").context_ids == ()
 
 
-def test_system_config_and_update_routes(tmp_path) -> None:
+def test_system_update_routes_do_not_expose_config_editor(tmp_path) -> None:
     update_service = FakeUpdateService()
     client = make_system_client(tmp_path, update_service)
     client.post("/api/auth/login", json={"token": "secret-token"})
 
-    read_response = client.post("/api/system/config/read")
-    assert read_response.status_code == 200
-    assert read_response.json()["content"] == CONFIG
-
-    updated = CONFIG.replace("Be direct.", "Be concise.")
-    save_response = client.put("/api/system/config", json={"content": updated})
-    assert save_response.status_code == 200
-    assert (tmp_path / "config.yaml").read_text(encoding="utf-8") == updated
+    assert client.post("/api/system/config/read").status_code == 404
+    assert client.put("/api/system/config", json={"content": CONFIG}).status_code == 404
 
     update_response = client.post("/api/system/update-service")
     assert update_response.status_code == 200
@@ -230,6 +224,25 @@ def test_workspace_file_routes_are_scoped_and_edit_text(tmp_path) -> None:
 
     escape_response = client.post("/api/workspace/list", json={"path": "../"})
     assert escape_response.status_code == 400
+
+
+def test_workspace_config_write_validates_settings(tmp_path) -> None:
+    client = make_system_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    updated = CONFIG.replace("Be direct.", "Be concise.")
+    save_response = client.put(
+        "/api/workspace/write",
+        json={"path": "config.yaml", "content": updated},
+    )
+    assert save_response.status_code == 200
+    assert (tmp_path / "config.yaml").read_text(encoding="utf-8") == updated
+
+    invalid_response = client.put(
+        "/api/workspace/write",
+        json={"path": "config.yaml", "content": "auth: []"},
+    )
+    assert invalid_response.status_code == 400
 
 
 def test_workspace_delete_protects_config_and_root_skeleton(tmp_path) -> None:

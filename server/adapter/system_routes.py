@@ -1,15 +1,10 @@
-from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
-from server.app.config_file_service import InvalidConfigFileError
 from server.app.system_log_service import InvalidLogFileError
 from server.app.system_update_service import UpdateAlreadyRunningError
-
-
-class ConfigUpdateRequest(BaseModel):
-    content: str
 
 
 class LogReadRequest(BaseModel):
@@ -25,31 +20,6 @@ def create_system_router(container: AppContainer) -> APIRouter:
         tags=["system"],
         dependencies=[Depends(require_system_auth)],
     )
-
-    @router.post("/config/read")
-    def get_config() -> dict[str, str]:
-        return {
-            "path": str(container.config_file_service.config_path),
-            "content": container.config_file_service.read_config(),
-        }
-
-    @router.get("/config")
-    def reject_config_get() -> None:
-        raise HTTPException(
-            status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
-            detail="Use the system page to read config.yaml",
-        )
-
-    @router.put("/config")
-    def update_config(payload: ConfigUpdateRequest) -> dict[str, str | bool]:
-        try:
-            container.config_file_service.write_config(payload.content)
-        except InvalidConfigFileError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"配置无效：{exc}",
-            ) from exc
-        return {"ok": True, "message": "config.yaml 已保存"}
 
     @router.post("/logs/list")
     def list_logs() -> dict[str, list[dict[str, str | int]]]:

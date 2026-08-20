@@ -86,7 +86,7 @@ GET /api/runs/{run_id}/events?after={seq}
 
 微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
 
-系统 API 继续保留配置、日志和生产更新能力。
+系统 API 只保留日志和生产更新能力；配置文件读写统一走 Workspace 文件 API。
 
 Workspace 文件 API：
 
@@ -104,7 +104,7 @@ POST /api/workspace/delete
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口兼容，不恢复旧 Agent Chat/Agent 管理页面。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 和根层固定骨架目录不可删除。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作。
-- `/system` 展示生产更新、配置说明和系统日志；`config.yaml` 编辑入口收敛到 `/workspace`。
+- `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。`config.yaml` 查看/编辑入口收敛到 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
 
 ## Retained Capabilities

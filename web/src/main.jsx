@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
-  Database,
   FileJson,
   FileText,
   FolderOpen,
@@ -27,7 +26,7 @@ const NAV_ITEMS = [
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
   { id: "wechat", path: "/wechat", label: "微信", icon: Smartphone },
-  { id: "system", path: "/system", label: "系统", icon: Settings },
+  { id: "system", path: "/system", label: "运维", icon: Settings },
 ];
 
 const WORKSPACE_TREE = [
@@ -205,7 +204,7 @@ function RunsPage() {
   const counts = useMemo(() => {
     return runs.reduce(
       (acc, run) => {
-        const status = run.status || "unknown";
+        const status = runStatus(run);
         acc.total += 1;
         acc[status] = (acc[status] || 0) + 1;
         return acc;
@@ -219,7 +218,7 @@ function RunsPage() {
     const nextRuns = data.runs || [];
     setRuns(nextRuns);
     if (!activeRun && nextRuns[0]?.run_id) {
-      setActiveRun({ run_id: nextRuns[0].run_id });
+      setActiveRun(nextRuns[0]);
     }
   }
 
@@ -290,7 +289,7 @@ function RunsPage() {
       </div>
 
       <div className="runs-grid">
-        <RunIndex runs={runs} activeRunId={activeRun?.run_id} onSelect={(runId) => setActiveRun({ run_id: runId })} onRefresh={load} />
+        <RunIndex runs={runs} activeRunId={activeRun?.run_id} onSelect={setActiveRun} onRefresh={load} />
         <RunDetail run={activeRun} events={events} />
         <StatusRail runs={runs} />
       </div>
@@ -331,10 +330,10 @@ function RunIndex({ runs, activeRunId, onSelect, onRefresh }) {
           <button
             key={run.run_id}
             className={`run-table row ${activeRunId === run.run_id ? "selected" : ""}`}
-            onClick={() => onSelect(run.run_id)}
+            onClick={() => onSelect(run)}
           >
             <span className="mono">{run.run_id}</span>
-            <Status status={run.status} />
+            <Status status={runStatus(run)} />
             <span>{run.agent_id || "-"}</span>
             <span>{formatTime(run.updated_at || run.created_at)}</span>
           </button>
@@ -358,6 +357,7 @@ function RunDetail({ run, events }) {
   const state = run.state || {};
   const result = run.result?.content || run.result?.error?.message || "";
   const runId = run.run_id || input.run_id;
+  const status = runStatus(run);
 
   return (
     <section className="panel run-detail">
@@ -366,13 +366,13 @@ function RunDetail({ run, events }) {
           <span className="section-label">Run 详情</span>
           <h2>{runId}</h2>
         </div>
-        <Status status={state.status} />
+        <Status status={status} />
       </div>
       <div className="kv-grid">
-        <Kv label="Agent" value={input.agent_id || "-"} />
-        <Kv label="来源" value={input.source || "api"} />
-        <Kv label="创建时间" value={formatTime(input.created_at)} />
-        <Kv label="事件序号" value={state.seq ?? 0} />
+        <Kv label="Agent" value={input.agent_id || run.agent_id || "-"} />
+        <Kv label="来源" value={input.source || run.source || "api"} />
+        <Kv label="创建时间" value={formatTime(input.created_at || run.created_at)} />
+        <Kv label="事件序号" value={state.seq ?? run.seq ?? 0} />
       </div>
       <PathBox label="工作目录" value={`workspace/runs/${runId}/`} />
       <PathBox label="状态文件" value={`workspace/runs/${runId}/state.json`} />
@@ -895,8 +895,8 @@ function SystemPage({ onNavigate }) {
       <section className="panel system-control-panel">
         <div className="panel-title">
           <div>
-            <span>系统控制</span>
-            <small>生产更新、配置位置、运行日志</small>
+            <span>运维</span>
+            <small>生产更新、运行日志、工作目录入口</small>
           </div>
         </div>
         {message ? <p className="ok">{message}</p> : null}
@@ -910,18 +910,10 @@ function SystemPage({ onNavigate }) {
             打开工作目录
           </button>
         </div>
-        <div className="config-note">
-          <Database size={18} />
-          <div>
-            <strong>config.yaml 仍然需要</strong>
-            <span>后端启动和登录校验依赖它：auth.token、server、Nutstore WebDAV、微信账号、Agent/LLM 配置都从 active workspace 读取。编辑入口已放到工作目录。</span>
-          </div>
-        </div>
-        <div className="model-stack">
-          <ModelLine title="Agent" text="人格、模型、默认 Context 集合" />
-          <ModelLine title="Context" text="归属隔离边界，包含 roots、tools、knowledge" />
-          <ModelLine title="Knowledge" text="Context 内部资源，不全局散放" />
-          <ModelLine title="Run" text="创建时固化 Agent + Context + Knowledge 快照" />
+        <div className="ops-stack">
+          <PathBox label="配置文件" value="workspace/config.yaml（受保护，不可删除）" />
+          <PathBox label="服务更新" value="/api/system/update-service" />
+          <PathBox label="运行日志" value="workspace/logs/platform-YYYY-MM-DD.log" />
         </div>
       </section>
 
@@ -950,7 +942,7 @@ function SystemPage({ onNavigate }) {
 }
 
 function Status({ status }) {
-  const value = status || "unknown";
+  const value = normalizeStatus(status);
   const icon = value === "failed" || value === "exited" ? <XCircle size={12} /> : <CheckCircle2 size={12} />;
   return (
     <span className={`status status-${String(value)}`}>
@@ -958,6 +950,21 @@ function Status({ status }) {
       {value}
     </span>
   );
+}
+
+function runStatus(run) {
+  return normalizeStatus(
+    run?.state?.status ||
+      run?.status ||
+      run?.result?.status ||
+      run?.delivery?.status ||
+      (run?.result?.error ? "failed" : ""),
+  );
+}
+
+function normalizeStatus(status) {
+  const value = String(status || "").trim();
+  return value || "unknown";
 }
 
 function formatTime(value) {
