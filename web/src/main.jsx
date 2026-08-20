@@ -57,6 +57,29 @@ async function api(path, options = {}) {
   return data;
 }
 
+function sameSnapshot(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function replaceWhenChanged(current, next) {
+  return sameSnapshot(current, next) ? current : next;
+}
+
+function hasField(value, field) {
+  return Object.prototype.hasOwnProperty.call(value || {}, field);
+}
+
+function mergeRunSnapshot(current, incoming) {
+  if (!incoming) return current || null;
+  if (!current || current.run_id !== incoming.run_id) return incoming;
+
+  const merged = { ...current, ...incoming };
+  for (const field of ["input", "state", "result", "delivery"]) {
+    merged[field] = hasField(incoming, field) ? incoming[field] : current[field];
+  }
+  return replaceWhenChanged(current, merged);
+}
+
 function routeFromPath(pathname) {
   if (pathname === "/" || pathname === "/agents" || pathname === "/login") return "runs";
   const match = NAV_ITEMS.find((item) => item.path === pathname);
@@ -216,10 +239,13 @@ function RunsPage() {
   async function load() {
     const data = await api("/api/runs");
     const nextRuns = data.runs || [];
-    setRuns(nextRuns);
-    if (!activeRun && nextRuns[0]?.run_id) {
-      setActiveRun(nextRuns[0]);
-    }
+    setRuns((current) => replaceWhenChanged(current, nextRuns));
+    setActiveRun((current) => {
+      if (nextRuns.length === 0) return current ? null : current;
+      if (!current?.run_id) return nextRuns[0];
+      const nextSummary = nextRuns.find((run) => run.run_id === current.run_id);
+      return nextSummary ? mergeRunSnapshot(current, nextSummary) : nextRuns[0];
+    });
   }
 
   useEffect(() => {
@@ -229,19 +255,35 @@ function RunsPage() {
   }, []);
 
   useEffect(() => {
-    if (!activeRun?.run_id) return undefined;
+    const runId = activeRun?.run_id;
+    if (!runId) {
+      setEvents((current) => (current.length === 0 ? current : []));
+      return undefined;
+    }
+    let cancelled = false;
     async function poll() {
       const [run, eventData] = await Promise.all([
-        api(`/api/runs/${activeRun.run_id}`),
-        api(`/api/runs/${activeRun.run_id}/events`),
+        api(`/api/runs/${runId}`),
+        api(`/api/runs/${runId}/events`),
       ]);
-      setActiveRun(run);
-      setEvents(eventData.events || []);
+      if (cancelled) return;
+      setActiveRun((current) => (current?.run_id === run.run_id ? mergeRunSnapshot(current, run) : current));
+      setEvents((current) => replaceWhenChanged(current, eventData.events || []));
     }
     poll();
     const timer = window.setInterval(poll, 2000);
-    return () => window.clearInterval(timer);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [activeRun?.run_id]);
+
+  function selectRun(run) {
+    if (run.run_id !== activeRun?.run_id) {
+      setEvents([]);
+    }
+    setActiveRun((current) => mergeRunSnapshot(current, run));
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -289,7 +331,7 @@ function RunsPage() {
       </div>
 
       <div className="runs-grid">
-        <RunIndex runs={runs} activeRunId={activeRun?.run_id} onSelect={setActiveRun} onRefresh={load} />
+        <RunIndex runs={runs} activeRunId={activeRun?.run_id} onSelect={selectRun} onRefresh={load} />
         <RunDetail run={activeRun} events={events} />
         <StatusRail runs={runs} />
       </div>

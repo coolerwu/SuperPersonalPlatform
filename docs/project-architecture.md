@@ -106,6 +106,7 @@ POST /api/workspace/delete
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作。
 - `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。`config.yaml` 查看/编辑入口收敛到 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
+- Runs 工作区通过轮询读取后端落盘状态，但前端必须保留当前详情快照、只在返回内容实际变化时更新状态，避免每次拉取 `workspace/runs/index.json` 时出现短暂重刷或 `unknown` 状态闪动。
 
 ## Retained Capabilities
 
