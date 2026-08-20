@@ -680,7 +680,12 @@ function parseObject(lines, start, indent) {
       result[item.key] = block.value;
       index = block.next;
     } else if (item.value === "") {
-      if (index + 1 < lines.length && lines[index + 1].indent > indent) {
+      const nextLine = lines[index + 1];
+      if (nextLine && nextLine.text.startsWith("- ") && nextLine.indent >= indent) {
+        const [child, next] = parseBlock(lines, index + 1, nextLine.indent);
+        result[item.key] = child;
+        index = next;
+      } else if (nextLine && nextLine.indent > indent) {
         const [child, next] = parseBlock(lines, index + 1, lines[index + 1].indent);
         result[item.key] = child;
         index = next;

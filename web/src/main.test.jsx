@@ -57,6 +57,46 @@ const CONFIG_YAML = [
   '        cache: ""',
 ].join("\n");
 
+const INDENTLESS_SEQUENCE_CONFIG_YAML = [
+  "auth:",
+  '  token: "secret-token"',
+  "server:",
+  '  host: "0.0.0.0"',
+  "  port: 8888",
+  "llm:",
+  '  default_model_id: "ds-pro"',
+  "  models:",
+  '  - id: "ds-pro"',
+  '    name: "DeepSeek Pro"',
+  '    provider: "openai_compatible"',
+  '    base_url: "https://api.deepseek.com"',
+  '    api_key: "key"',
+  '    model: "deepseek-v4-pro"',
+  "    temperature: 0.6",
+  "    supports_images: false",
+  "nutstore:",
+  "  enabled: false",
+  '  base_url: "https://dav.jianguoyun.com/dav/"',
+  '  username: ""',
+  '  password: ""',
+  '  root_path: "/"',
+  "channels:",
+  "  wechat_personal:",
+  "    enabled: false",
+  "    accounts:",
+  '    - id: "main"',
+  '      name: "主账号"',
+  '      default_agent_id: "assistant"',
+  "      auto_start: false",
+  "agents:",
+  "  definitions:",
+  '  - id: "assistant"',
+  '    name: "默认助手"',
+  '    system_prompt: "你是一个运行在后端的 DeepAgent。"',
+  '    model_id: "ds-pro"',
+  "    context_ids: []",
+].join("\n");
+
 async function flushReact() {
   for (let index = 0; index < 6; index += 1) {
     await act(async () => {
@@ -279,6 +319,48 @@ test("saves provider config from the provider menu", async () => {
     const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
     expect(writeCall).toBeTruthy();
     expect(JSON.parse(writeCall[1].body).content).toContain('model: "gpt-4.1-mini"');
+  });
+});
+
+test("loads provider config with yaml indentless sequences", async () => {
+  window.history.replaceState({}, "", "/providers");
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", size: 128, editable: true, content: INDENTLESS_SEQUENCE_CONFIG_YAML });
+    }
+    if (path.endsWith("/api/workspace/write")) {
+      return response({
+        ok: true,
+        message: "config.yaml 已校验并保存",
+        file: { path: "config.yaml", size: 128, editable: true, content: JSON.parse(options.body || "{}").content || "" },
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect((await screen.findAllByDisplayValue("ds-pro")).length).toBeGreaterThanOrEqual(2);
+  expect(screen.getByDisplayValue("deepseek-v4-pro")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "0.5" } });
+  fireEvent.click(screen.getByRole("button", { name: /保存/ }));
+
+  await waitFor(() => {
+    const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
+    expect(writeCall).toBeTruthy();
+    const content = JSON.parse(writeCall[1].body).content;
+    expect(content).toContain('default_model_id: "ds-pro"');
+    expect(content).toContain('- id: "ds-pro"');
+    expect(content).toContain("temperature: 0.5");
   });
 });
 
