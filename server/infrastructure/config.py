@@ -150,7 +150,7 @@ def parse_deepagent_options(raw: Any) -> DeepAgentOptions:
         debug=bool(raw.get("debug", False)),
         todo_list=bool(raw.get("todo_list", True)),
         filesystem=_parse_deepagent_filesystem(raw.get("filesystem") or {}),
-        use_longterm_memory=bool(raw.get("use_longterm_memory", False)),
+        use_longterm_memory=bool(raw.get("use_longterm_memory", True)),
         tools=_string_tuple(raw.get("tools") or []),
         interrupt_on=_string_tuple(raw.get("interrupt_on") or []),
         middleware=_string_tuple(raw.get("middleware") or []),

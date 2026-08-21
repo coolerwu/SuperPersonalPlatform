@@ -55,6 +55,8 @@ def _write_context_tool(service: ContextKnowledgeService) -> Any:
         """Write approved knowledge into the local context.
 
         Only call this after the user explicitly asks or confirms that this content should be saved.
+        Do not call this for personal memory, user preferences, future conversation rules, or "remember this" requests.
+        For those, use DeepAgent long-term memory by writing a /memories/... file with the built-in write_file tool.
         absolute_path is a tool path such as /files/wechat.md, not a filesystem path.
         mode must be append, overwrite, or create.
         """
@@ -66,6 +68,8 @@ def _write_context_tool(service: ContextKnowledgeService) -> Any:
         name="write_context",
         description=(
             "Write approved knowledge to workspace/context/knowledge/files. "
+            "Do not use for personal memory, user preferences, future conversation rules, or 'remember this' requests; "
+            "use built-in write_file('/memories/...') for those. "
             "Args: type='knowledge', absolute_path like '/files/wechat.md', content, mode append|overwrite|create. "
             "Only use after explicit user approval."
         ),

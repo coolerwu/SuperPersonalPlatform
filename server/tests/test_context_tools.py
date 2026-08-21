@@ -68,3 +68,15 @@ def test_platform_tool_runtime_builds_search_and_write_tools(tmp_path) -> None:
 
     search_result = tools["search_context"].invoke({"query": "runtime", "top_k": 1})
     assert json.loads(search_result)["hits"][0]["path"] == "/files/runtime.md"
+
+
+def test_write_context_description_keeps_memory_separate(tmp_path) -> None:
+    tools = {
+        tool.name: tool
+        for tool in build_platform_tools(("write_context",), context_workspace=tmp_path / "context")
+    }
+
+    description = tools["write_context"].description
+
+    assert "Do not use for personal memory" in description
+    assert "write_file('/memories/...')" in description

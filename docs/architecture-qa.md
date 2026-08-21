@@ -167,11 +167,15 @@ workspace/
       scratch/
       notes/
       artifacts/
+      memory/
+        store.json
     operator/
       agent.json
       scratch/
       notes/
       artifacts/
+      memory/
+        store.json
 
   context/
     knowledge/
@@ -208,6 +212,8 @@ workspace/
   logs/
     platform-YYYY-MM-DD.log
 ```
+
+`workspace/agents/{agent_id}/scratch`、`notes` 和 `artifacts` 是 DeepAgent 普通 filesystem 的落盘工作区；启用 Agent filesystem 后，DeepAgent 自带的 `ls/read_file/write_file/edit_file` 可读写这些文件。`memory/store.json` 是 DeepAgent `/memories/...` 长期记忆的 LangGraph store 落盘文件，不作为普通 filesystem 文件暴露给 Agent 直接编辑。
 
 ## Run 快照
 

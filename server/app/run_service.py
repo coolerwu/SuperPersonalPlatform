@@ -417,6 +417,7 @@ def _runtime_options(raw: Any) -> DeepAgentRuntimeOptions:
         filesystem_enabled=bool((options.get("filesystem") or {}).get("enabled", False))
         if isinstance(options.get("filesystem") or {}, dict)
         else False,
+        use_longterm_memory=bool(options.get("use_longterm_memory", True)),
     )
 
 

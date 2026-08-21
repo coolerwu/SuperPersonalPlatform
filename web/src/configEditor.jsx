@@ -65,7 +65,7 @@ const DEFAULT_CONFIG = {
             root: "agent",
             mode: "read_write",
           },
-          use_longterm_memory: false,
+          use_longterm_memory: true,
           tools: [],
           interrupt_on: [],
           middleware: [],
@@ -572,11 +572,15 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                     onChange={(event) => updateDeepAgent(index, "context_schema", event.target.value)}
                   />
                 </ConfigField>
-                <ConfigField label="Store">
+                <ConfigField label="Memory Store">
                   <input
-                    value={agent.deepagent?.store || ""}
+                    value={
+                      agent.deepagent?.use_longterm_memory === false
+                        ? "disabled"
+                        : `workspace/agents/${agent.id || "{agent_id}"}/memory/store.json`
+                    }
                     readOnly={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "store", event.target.value)}
+                    disabled
                   />
                 </ConfigField>
                 <ConfigField label="Cache">
@@ -780,6 +784,7 @@ function normalizeDeepAgent(value) {
   next.interrupt_on = normalizeList(next.interrupt_on);
   next.middleware = normalizeList(next.middleware);
   next.todo_list = true;
+  next.use_longterm_memory = next.use_longterm_memory !== false;
   next.filesystem = isPlainObject(next.filesystem)
     ? {
         enabled: Boolean(next.filesystem.enabled),

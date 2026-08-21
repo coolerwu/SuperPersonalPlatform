@@ -45,7 +45,7 @@ agents:
           enabled: false
           root: "agent"
           mode: "read_write"
-        use_longterm_memory: false
+        use_longterm_memory: true
         tools: []
         interrupt_on: []
         middleware: []

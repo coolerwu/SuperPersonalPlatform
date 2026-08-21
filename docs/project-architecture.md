@@ -21,7 +21,7 @@
 - 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json`、`lock.json` 和 `delivery.json`。
 - `workspace/sessions/index.json` 维护所有长期会话摘要；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
-- `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`filesystem.enabled`、`interrupt_on` 和 `tools`。
+- `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`filesystem.enabled`、`use_longterm_memory`、`interrupt_on` 和 `tools`。
 - 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前第一批工具为 `search_context` 和 `write_context`。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
@@ -46,6 +46,8 @@ workspace/
       scratch/
       notes/
       artifacts/
+      memory/
+        store.json
 
   runs/
     index.json
@@ -131,9 +133,11 @@ POST /api/workspace/delete
 - 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
 - DeepAgent 依赖 `deepagents` 和 LangGraph；后端任务执行结果必须落盘。
 - `search_context` 检索 `workspace/context/knowledge/files/` 中的 `.md`、`.txt`、`.json`、`.jsonl` 文本知识，返回 `/files/...` 工具路径、分数和片段。
-- `write_context(type, absolute_path, content, mode)` 写入同一知识目录；当前只支持 `type="knowledge"`，`absolute_path` 必须是 `/files/...` 工具路径，`mode` 支持 `append`、`overwrite` 和 `create`，工具说明要求 Agent 仅在用户明确确认后调用。
+- `write_context(type, absolute_path, content, mode)` 写入同一知识目录；当前只支持 `type="knowledge"`，`absolute_path` 必须是 `/files/...` 工具路径，`mode` 支持 `append`、`overwrite` 和 `create`，工具说明要求 Agent 仅在用户明确确认后调用。该工具只用于共享知识库、文档和参考资料，不用于“记住我”“存入记忆”“用户偏好”“后续对话规则”等请求。
 - DeepAgent 内置 `write_todos` 由运行时保持可用；当前依赖版本的 `create_deep_agent` 默认包含 Todo List middleware，后端配置 `deepagent.todo_list` 用于记录并兼容未来需要显式 middleware 的版本。
-- DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file` 仍使用 DeepAgent 的虚拟 filesystem；当 `agents.definitions[].deepagent.filesystem.enabled=true` 时，后端在 run 开始前把 `workspace/agents/{agent_id}/` 内 UTF-8 文本文件加载为 DeepAgent `files` state，run 完成后只把该 state 写回同一 Agent 目录。该机制不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码；长期知识仍必须通过 `search_context`/`write_context`。
+- DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file` 仍使用 DeepAgent 的虚拟 filesystem；当 `agents.definitions[].deepagent.filesystem.enabled=true` 时，后端在 run 开始前把 `workspace/agents/{agent_id}/` 内 UTF-8 文本文件加载为 DeepAgent `files` state，run 完成后只把该 state 写回同一 Agent 目录。该机制不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码；`workspace/agents/{agent_id}/memory/store.json` 是长期记忆底层 store 文件，不作为普通 filesystem 文件暴露给 Agent。
+- `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后后端为 DeepAgent 传入文件型 LangGraph store，落盘到 `workspace/agents/{agent_id}/memory/store.json`，并用 `assistant_id={agent_id}` 隔离 namespace；Agent 通过 DeepAgent 原生 `/memories/...` 路径读写长期记忆。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。
+- 运行时会在 Agent system prompt 中注入记忆边界：用户要求保存个人偏好、会话规则或“存入记忆”时，应调用 DeepAgent 内置 `write_file("/memories/...", ...)`；只有用户明确要求保存到知识库、文档或共享资料时才调用 `write_context`。
 - 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
 
 ## Removed From Target Architecture

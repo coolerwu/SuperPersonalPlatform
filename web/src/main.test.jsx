@@ -45,7 +45,7 @@ const CONFIG_YAML = [
   "        max_iterations: 60",
   '        name: ""',
   "        debug: false",
-  "        use_longterm_memory: false",
+  "        use_longterm_memory: true",
   "        tools: []",
   "        interrupt_on: []",
   "        middleware: []",
@@ -549,6 +549,7 @@ test("saves deepagent options from the agent config menu", async () => {
     const content = JSON.parse(writeCall[1].body).content;
     expect(content).toContain("max_iterations: 12");
     expect(content).toContain("todo_list: true");
+    expect(content).toContain("use_longterm_memory: true");
     expect(content).toContain("filesystem:");
     expect(content).toContain("enabled: true");
     expect(content).toContain('root: "agent"');

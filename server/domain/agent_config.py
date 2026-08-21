@@ -56,7 +56,7 @@ class DeepAgentOptions:
     debug: bool = False
     todo_list: bool = True
     filesystem: DeepAgentFilesystemOptions = DeepAgentFilesystemOptions()
-    use_longterm_memory: bool = False
+    use_longterm_memory: bool = True
     tools: tuple[str, ...] = ()
     interrupt_on: tuple[str, ...] = ()
     middleware: tuple[str, ...] = ()

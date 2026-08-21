@@ -4,7 +4,17 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
+from server.infrastructure.json_file_store import JsonFileStore
 from server.infrastructure.tool_runtime import build_platform_tools
+
+
+LONGTERM_MEMORY_PROMPT = """## Long-term Memory Boundary
+
+When the user asks you to remember something, save a preference, keep a rule for future conversations, or store agent-specific memory, use the built-in `write_file` tool with a `/memories/...` path.
+Do not use `write_context` for these memory requests.
+
+Use `write_context` only when the user explicitly asks to save shared knowledge, documentation, reference material, or knowledge-base content under workspace/context/knowledge/files.
+"""
 
 
 @dataclass(frozen=True)
@@ -20,6 +30,7 @@ class DeepAgentRuntimeOptions:
     debug: bool = False
     todo_list: bool = True
     filesystem_enabled: bool = False
+    use_longterm_memory: bool = True
     tools: tuple[str, ...] = ()
     interrupt_on: tuple[str, ...] = ()
 
@@ -29,6 +40,7 @@ class DeepAgentRuntime:
         self._model = model
         self._context_workspace = context_workspace
         self._agent_workspace = agent_workspace
+        self._agent_id = agent_workspace.name
 
     async def run(
         self,
@@ -48,13 +60,16 @@ class DeepAgentRuntime:
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(options.tools, context_workspace=self._context_workspace),
             "model": self._chat_model(),
-            "instructions": instructions,
+            "instructions": _runtime_instructions(instructions, options),
         }
         name = options.name.strip()
         if name:
             create_kwargs["name"] = name
         if options.debug:
             create_kwargs["debug"] = True
+        if options.use_longterm_memory:
+            create_kwargs["store"] = JsonFileStore(self._agent_workspace / "memory" / "store.json")
+            create_kwargs["use_longterm_memory"] = True
         interrupt_on = _normalize_interrupt_on(options.interrupt_on)
         if interrupt_on:
             create_kwargs["interrupt_on"] = interrupt_on
@@ -73,7 +88,10 @@ class DeepAgentRuntime:
             input_state["files"] = load_agent_files(self._agent_workspace)
         result = await agent.ainvoke(
             input_state,
-            config={"recursion_limit": options.max_iterations},
+            config={
+                "recursion_limit": options.max_iterations,
+                "metadata": {"assistant_id": self._agent_id},
+            },
         )
         if options.filesystem_enabled and isinstance(result, dict):
             persist_agent_files(self._agent_workspace, result.get("files"))
@@ -117,6 +135,13 @@ class DeepAgentRuntime:
         return str(result)
 
 
+def _runtime_instructions(instructions: str, options: DeepAgentRuntimeOptions) -> str:
+    base = instructions.strip()
+    if not options.use_longterm_memory:
+        return base
+    return f"{base}\n\n{LONGTERM_MEMORY_PROMPT}".strip()
+
+
 def _normalize_interrupt_on(value: Any) -> dict[str, bool] | None:
     if isinstance(value, dict):
         return {str(key): bool(item) for key, item in value.items() if str(key).strip()}
@@ -134,13 +159,16 @@ def _deepagent_builtin_middleware(create_deep_agent: Any, options: DeepAgentRunt
             TodoListMiddleware = None
         if TodoListMiddleware is not None:
             middleware.append(TodoListMiddleware())
-    if options.filesystem_enabled and not _create_deep_agent_has_default_middleware(create_deep_agent, "FilesystemMiddleware"):
+    if (options.filesystem_enabled or options.use_longterm_memory) and not _create_deep_agent_has_default_middleware(
+        create_deep_agent,
+        "FilesystemMiddleware",
+    ):
         try:
             from deepagents import FilesystemMiddleware
         except Exception:
             FilesystemMiddleware = None
         if FilesystemMiddleware is not None:
-            middleware.append(FilesystemMiddleware(long_term_memory=False))
+            middleware.append(FilesystemMiddleware(long_term_memory=options.use_longterm_memory))
     return middleware
 
 
@@ -174,6 +202,8 @@ def load_agent_files(agent_workspace: Path, *, max_file_size: int = 512 * 1024) 
     for path in sorted(agent_workspace.rglob("*")):
         if not path.is_file() or _path_has_symlink(path, agent_workspace):
             continue
+        if path.relative_to(agent_workspace).as_posix() == "memory/store.json":
+            continue
         resolved = path.resolve()
         if not resolved.is_relative_to(root) or path.stat().st_size > max_file_size:
             continue
@@ -199,6 +229,8 @@ def persist_agent_files(agent_workspace: Path, files: Any) -> None:
     for raw_path, raw_file in files.items():
         relative = _state_file_relative_path(str(raw_path))
         if relative is None or not isinstance(raw_file, dict):
+            continue
+        if relative.as_posix() == "memory/store.json":
             continue
         content = _state_file_content(raw_file.get("content"))
         if content is None:
