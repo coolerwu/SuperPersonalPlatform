@@ -27,7 +27,7 @@
 
 **Q: 前端怎么拿 DeepAgent 结果？**
 
-前端只创建任务和轮询结果，不保持 WebSocket，不执行 Agent。
+前端只轮询和查看结果，不保持 WebSocket，不执行 Agent。Run 创建由微信等渠道、自动化或后端集成调用 API 完成，Runs 页面不提供手动创建表单。
 
 ```text
 POST /api/runs

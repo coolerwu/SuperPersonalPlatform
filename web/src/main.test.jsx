@@ -535,8 +535,11 @@ test("saves deepagent options from the agent config menu", async () => {
   expect(await screen.findByText("DeepAgent 运行选项")).toBeInTheDocument();
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Max Iterations"), { target: { value: "12" } });
+  fireEvent.click(screen.getByRole("button", { name: "配置工具" }));
+  expect(screen.getByRole("dialog", { name: "Agent 工具授权" })).toBeInTheDocument();
   fireEvent.click(screen.getByLabelText("Search Context"));
   fireEvent.click(screen.getByLabelText("Write Context"));
+  fireEvent.click(screen.getByRole("button", { name: "完成" }));
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
   await waitFor(() => {

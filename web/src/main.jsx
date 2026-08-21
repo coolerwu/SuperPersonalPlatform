@@ -243,9 +243,6 @@ function RunsPage() {
   const [runs, setRuns] = useState([]);
   const [activeRun, setActiveRun] = useState(null);
   const [events, setEvents] = useState([]);
-  const [content, setContent] = useState("");
-  const [agentId, setAgentId] = useState("");
-  const [error, setError] = useState("");
 
   const counts = useMemo(() => {
     return runs.reduce(
@@ -308,44 +305,8 @@ function RunsPage() {
     setActiveRun((current) => mergeRunSnapshot(current, run));
   }
 
-  async function submit(event) {
-    event.preventDefault();
-    setError("");
-    try {
-      const run = await api("/api/runs", {
-        method: "POST",
-        body: JSON.stringify({ content, agent_id: agentId }),
-      });
-      setContent("");
-      setActiveRun(run);
-      await load();
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
   return (
     <section className="console-screen">
-      <form className="command-strip" onSubmit={submit}>
-        <label>
-          Prompt
-          <textarea
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            placeholder="输入任务指令，后端创建 workspace/runs/{run_id}"
-          />
-        </label>
-        <label className="agent-field">
-          Agent ID
-          <input value={agentId} onChange={(event) => setAgentId(event.target.value)} placeholder="可空，默认第一个 Agent" />
-        </label>
-        <button className="primary create-run" disabled={!content.trim()}>
-          <Play size={16} />
-          创建 Run
-        </button>
-        {error ? <p className="error command-error">{error}</p> : null}
-      </form>
-
       <div className="metrics-row">
         <Metric label="全部 Run" value={counts.total} tone="blue" />
         <Metric label="运行中" value={counts.running} tone="cyan" />
@@ -390,7 +351,7 @@ function RunIndex({ runs, activeRunId, onSelect, onRefresh }) {
         <span>更新时间</span>
       </div>
       <div className="run-table-body">
-        {runs.length === 0 ? <div className="empty-state">暂无 runs。创建任务后会写入 index.json。</div> : null}
+        {runs.length === 0 ? <div className="empty-state">暂无 runs。收到任务后会写入 index.json。</div> : null}
         {runs.map((run) => (
           <button
             key={run.run_id}
@@ -413,7 +374,7 @@ function RunDetail({ run, events }) {
     return (
       <section className="panel run-detail empty-detail">
         <TerminalSquare size={32} />
-        <strong>选择或创建一个 run</strong>
+        <strong>选择一个 run</strong>
         <span>前端不会执行 Agent，只轮询磁盘状态和事件。</span>
       </section>
     );

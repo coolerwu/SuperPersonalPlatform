@@ -15,7 +15,7 @@
 
 `docs/architecture-qa.md` 是本轮重构的产品和技术问答来源，已确定：
 
-- 前端不使用 WebSocket 聊天，不执行 Agent，只创建任务并轮询后端 API。
+- 前端不使用 WebSocket 聊天，不执行 Agent；Runs 页面只查看落盘任务、状态、事件和结果，不提供手动创建 Run 入口。
 - DeepAgent 在后端运行，状态、事件、结果全部落盘。
 - `workspace/runs/index.json` 维护所有 run 的摘要和当前状态。
 - 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json`、`lock.json` 和 `delivery.json`。
@@ -89,7 +89,7 @@ GET /api/runs/{run_id}
 GET /api/runs/{run_id}/events?after={seq}
 ```
 
-`POST /api/runs` 可接受可选 `session_id`。未传时按独立一次性 run 处理；微信通道会传入全局长期会话 ID。
+`POST /api/runs` 可接受可选 `session_id`。未传时按独立一次性 run 处理；微信通道会传入全局长期会话 ID。该接口保留给渠道接入、自动化和后端集成使用，当前前端 Runs 页面不暴露手动创建入口。
 
 微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
 
@@ -108,12 +108,12 @@ POST /api/workspace/delete
 
 ## Frontend Routes
 
-- `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口兼容，不恢复旧 Agent Chat/Agent 管理页面。
+- `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口兼容，不恢复旧 Agent Chat/Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。
 - `/config` 基础配置栏目只承载访问 Token、服务监听和坚果云 WebDAV 等基础配置；访问 Token 按明文输入展示。
 - `/providers` 是配置页内的模型 Provider 栏目兼容路径，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
-- `/agent-config` 是配置页内的 Agent 栏目兼容路径，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，第一批平台工具为 `search_context` 和需要确认的 `write_context`；`/agents` 仍是旧入口兼容并跳转 Runs，不作为配置页路径。
+- `/agent-config` 是配置页内的 Agent 栏目兼容路径，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，第一批平台工具为 `search_context` 和需要确认的 `write_context`；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍是旧入口兼容并跳转 Runs，不作为配置页路径。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
 - `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录态继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存，不作为聊天历史；长期聊天会话统一写入 `workspace/sessions/{session_id}/`。
 - `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，文件级查看/编辑入口保留在 `/workspace`。

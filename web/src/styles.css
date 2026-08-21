@@ -244,39 +244,12 @@ pre {
   padding: 18px;
 }
 
-.command-strip {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 220px 132px;
-  gap: 12px;
-  align-items: end;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(15, 22, 31, 0.82);
-  box-shadow: var(--shadow);
-  padding: 12px;
-}
-
-.command-strip label,
-.agent-field,
 .login-panel label {
   display: grid;
   gap: 7px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 680;
-}
-
-.command-strip textarea {
-  min-height: 42px;
-  max-height: 132px;
-}
-
-.create-run {
-  height: 42px;
-}
-
-.command-error {
-  grid-column: 1 / -1;
 }
 
 .metrics-row {
@@ -956,9 +929,34 @@ pre {
   min-height: 36px;
 }
 
-.agent-tool-picker {
+.agent-tool-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(8, 13, 20, 0.64);
+  padding: 12px;
+}
+
+.agent-tool-summary > div {
   display: grid;
-  gap: 10px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-tool-summary strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.agent-tool-summary span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-card-grid {
@@ -1016,6 +1014,61 @@ pre {
   font-style: normal;
   padding: 4px 8px;
   white-space: nowrap;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 6, 10, 0.72);
+  padding: 18px;
+}
+
+.tool-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(760px, calc(100vw - 36px));
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0b1119;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.52);
+  padding: 16px;
+}
+
+.dialog-header,
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dialog-header > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dialog-header strong {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.dialog-header span,
+.dialog-footer span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-tool-grid {
+  grid-template-columns: 1fr;
 }
 
 .config-list {
@@ -1433,7 +1486,6 @@ pre {
     margin-top: 0;
   }
 
-  .command-strip,
   .metrics-row,
   .kv-grid,
   .kv-grid.two,

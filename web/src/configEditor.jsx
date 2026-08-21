@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { Plus, Trash2, X } from "lucide-react";
 
 const AGENT_TOOL_CARDS = [
   {
@@ -364,6 +364,8 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
   const config = parsed.config;
   const models = config.llm.models;
   const agents = config.agents.definitions;
+  const [toolDialogAgentIndex, setToolDialogAgentIndex] = useState(null);
+  const toolDialogAgent = Number.isInteger(toolDialogAgentIndex) ? agents[toolDialogAgentIndex] : null;
 
   function update(mutator) {
     const next = cloneConfig(config);
@@ -478,32 +480,14 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                 <strong>DeepAgent 运行选项</strong>
                 <span>create_deep_agent / recursion_limit</span>
               </div>
-              <div className="agent-tool-picker">
-                <div className="config-section-title compact">
+              <div className="agent-tool-summary">
+                <div>
                   <strong>Agent 工具</strong>
-                  <span>agents.definitions[].deepagent.tools</span>
+                  <span>{formatSelectedTools(agent.deepagent?.tools)}</span>
                 </div>
-                <div className="tool-card-grid">
-                  {AGENT_TOOL_CARDS.map((tool) => {
-                    const checked = normalizeList(agent.deepagent?.tools).includes(tool.id);
-                    return (
-                      <label className={`tool-choice ${checked ? "selected" : ""}`} key={tool.id}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={readOnly}
-                          onChange={(event) => toggleTool(index, tool.id, event.target.checked)}
-                          aria-label={tool.name}
-                        />
-                        <span>
-                          <strong>{tool.name}</strong>
-                          <small>{tool.summary}</small>
-                        </span>
-                        <em>{tool.badge}</em>
-                      </label>
-                    );
-                  })}
-                </div>
+                <button type="button" onClick={() => setToolDialogAgentIndex(index)}>
+                  配置工具
+                </button>
               </div>
               <div className="config-grid two">
                 <ConfigField label="Runtime Name">
@@ -604,8 +588,69 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
           </div>
         ))}
       </ConfigList>
+      {toolDialogAgent ? (
+        <ToolPickerDialog
+          agent={toolDialogAgent}
+          agentIndex={toolDialogAgentIndex}
+          readOnly={readOnly}
+          onClose={() => setToolDialogAgentIndex(null)}
+          onToggle={toggleTool}
+        />
+      ) : null}
     </div>
   );
+}
+
+function ToolPickerDialog({ agent, agentIndex, readOnly, onClose, onToggle }) {
+  const selectedTools = normalizeList(agent.deepagent?.tools);
+  return (
+    <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="tool-dialog" role="dialog" aria-modal="true" aria-labelledby="tool-dialog-title">
+        <div className="dialog-header">
+          <div>
+            <strong id="tool-dialog-title">Agent 工具授权</strong>
+            <span>{agent.id || "未命名 Agent"} · agents.definitions[].deepagent.tools</span>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭工具弹窗">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="tool-card-grid dialog-tool-grid">
+          {AGENT_TOOL_CARDS.map((tool) => {
+            const checked = selectedTools.includes(tool.id);
+            return (
+              <label className={`tool-choice ${checked ? "selected" : ""}`} key={tool.id}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={readOnly}
+                  onChange={(event) => onToggle(agentIndex, tool.id, event.target.checked)}
+                  aria-label={tool.name}
+                />
+                <span>
+                  <strong>{tool.name}</strong>
+                  <small>{tool.summary}</small>
+                </span>
+                <em>{tool.badge}</em>
+              </label>
+            );
+          })}
+        </div>
+        <div className="dialog-footer">
+          <span>已选择：{formatSelectedTools(selectedTools)}</span>
+          <button type="button" className="primary" onClick={onClose}>
+            完成
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function formatSelectedTools(value) {
+  const selected = normalizeList(value);
+  if (selected.length === 0) return "未授权工具";
+  return selected.join(", ");
 }
 
 function ConfigList({ title, subtitle, children, extra, onAdd, readOnly }) {
