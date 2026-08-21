@@ -794,37 +794,39 @@ function ConfigBackedPage({ activeSection, panelTitle, Editor, onNavigate }) {
       {error ? <p className="error">{error}</p> : null}
 
       <section className="panel file-editor config-page-panel">
-        <div className="config-tabs" role="tablist" aria-label="配置栏目">
-          {CONFIG_SECTIONS.map((section) => {
-            const Icon = section.icon;
-            return (
-              <button
-                key={section.id}
-                type="button"
-                role="tab"
-                aria-selected={activeSection === section.id}
-                className={activeSection === section.id ? "active" : ""}
-                onClick={() => onNavigate(section.id)}
-              >
-                <Icon size={14} />
-                {section.label}
-              </button>
-            );
-          })}
-        </div>
-        <div className="panel-title">
-          <div>
-            <span>{panelTitle}</span>
-            <small>{configFile ? `${formatBytes(configFile.size)} · workspace/config.yaml` : "读取中"}</small>
+        <div className="config-page-toolbar">
+          <div className="config-tabs" role="tablist" aria-label="配置栏目">
+            {CONFIG_SECTIONS.map((section) => {
+              const Icon = section.icon;
+              return (
+                <button
+                  key={section.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeSection === section.id}
+                  className={activeSection === section.id ? "active" : ""}
+                  onClick={() => onNavigate(section.id)}
+                >
+                  <Icon size={14} />
+                  {section.label}
+                </button>
+              );
+            })}
           </div>
           <div className="config-page-actions">
             <button className="icon-button" onClick={loadConfig} title="重新读取">
               <RefreshCw size={15} />
             </button>
-            <button className="primary" onClick={saveConfig} disabled={!configFile?.editable || !dirty}>
+            <button className="primary config-save-button" onClick={saveConfig} disabled={!configFile?.editable || !dirty}>
               <Save size={15} />
               保存
             </button>
+          </div>
+        </div>
+        <div className="panel-title">
+          <div>
+            <span>{panelTitle}</span>
+            <small>{configFile ? `${formatBytes(configFile.size)} · workspace/config.yaml` : "读取中"}</small>
           </div>
         </div>
         {configFile ? (
