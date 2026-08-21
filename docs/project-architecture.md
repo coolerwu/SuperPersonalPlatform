@@ -167,6 +167,7 @@ POST /api/workspace/delete
 - `AGENTS.md` 是仓库级 Codex 指令入口。
 - `config.example.yaml` 是 workspace 配置模板，不得放入真实密钥。
 - 使用 `browser_extract` 需要安装 Python 依赖 `langchain-community`、`playwright`、`beautifulsoup4` 和 `lxml`；`run.sh dev/prod` 会在依赖安装后检查并执行 `python -m playwright install chromium` 准备浏览器二进制。
+- 当前生产 systemd unit 直接运行 `.venv/bin/python -m server`，单独 `systemctl restart` 不会安装新依赖；提交后远端部署必须在 pull 和 HEAD 校验之后执行 `.venv/bin/python -m pip install .`，并确保 Playwright Chromium 已安装，再重启服务。
 - `config.yaml` 属于本地 workspace 数据，不提交。
 - 开发启动使用 `./run-dev.sh` 或 `./run.sh dev`。
 - 生产启动使用 `./run-prod.sh` 或 `./run.sh prod`。

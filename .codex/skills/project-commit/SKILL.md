@@ -43,6 +43,15 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
    - After pull, verify remote `git rev-parse HEAD` exactly equals the local
      target SHA recorded before SSH. Do not restart or claim deployment success
      if the remote HEAD is different.
+   - After the HEAD check and before restart, synchronize production runtime
+     dependencies because the systemd unit starts `.venv/bin/python -m server`
+     directly and does not run `run.sh` dependency installation on restart:
+     run `.venv/bin/python -m pip install .`.
+   - Ensure Playwright browser binaries are present before restart when browser
+     tooling is in the project. Prefer
+     `PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright} .venv/bin/python -m playwright install chromium`
+     on the production host so CDN issues do not leave `browser_extract` without
+     Chromium.
    - Restart with `sudo -n systemctl restart super-personal-platform.service`.
      Check service health with non-sudo
      `systemctl is-active super-personal-platform.service` and
@@ -59,8 +68,9 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
      `expect`/`ssh` attempt hangs at a password prompt, terminate the stale local
      process before retrying.
    - The final response must separately report push outcome, remote pull/HEAD
-     outcome, restart outcome, and service active/status outcome. If any phase
-     fails, report that phase and do not claim deployment completed.
+     outcome, dependency/browser install outcome, restart outcome, and service
+     active/status outcome. If any phase fails, report that phase and do not
+     claim deployment completed.
 
 ## Guardrails
 

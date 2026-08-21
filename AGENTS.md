@@ -12,10 +12,13 @@
 - 按用户当前偏好，提交并 push 成功后，需要重启生产：通过
   `ssh qiuqiu@192.168.1.3` 进入远端 `SuperPersonalPlatform/`，使用
   `git -c http.version=HTTP/1.1 pull` 拉取 `main`（瞬时网络/TLS 失败最多重试
-  3 次），确认远端 `git rev-parse HEAD` 等于本地刚 push 的 HEAD，再执行
+  3 次），确认远端 `git rev-parse HEAD` 等于本地刚 push 的 HEAD；随后同步生产
+  `.venv` 依赖：执行 `.venv/bin/python -m pip install .`，并执行
+  `PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright} .venv/bin/python -m playwright install chromium`
+  确保浏览器工具运行时可用；再执行
   `sudo -n systemctl restart super-personal-platform.service`，最后用非 sudo
-  `systemctl is-active/status super-personal-platform.service` 验证。不要把
-  SSH/sudo 密码写入仓库文件或命令文本；运行时使用用户输入、已认证 SSH 会话或本地未提交环境变量。
+  `systemctl is-active/status super-personal-platform.service` 验证。不要把 SSH/sudo
+  密码写入仓库文件或命令文本；运行时使用用户输入、已认证 SSH 会话或本地未提交环境变量。
 
 如果实现改变了架构、行为、命令、依赖、配置、公共接口或运维方式，必须同步更新 `docs/project-architecture.md`。
 
