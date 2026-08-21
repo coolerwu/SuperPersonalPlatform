@@ -25,6 +25,11 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         description="Write approved knowledge into workspace/context/knowledge/files.",
         approval_required=True,
     ),
+    ToolDefinition(
+        id="browser_extract",
+        name="Browser Extract",
+        description="Open a public http/https page with Playwright and extract rendered text and links.",
+    ),
 )
 
 

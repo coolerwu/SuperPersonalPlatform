@@ -10,6 +10,7 @@ PROD_GIT_BRANCH="main"
 PROD_GIT_PULL_ATTEMPTS=3
 PYTHON_DEPS_INSTALL_ATTEMPTS=3
 PYTHON_DEPS_STAMP_PREFIX=".super-personal-platform-python-deps"
+PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS=3
 
 usage() {
   cat <<USAGE
@@ -219,6 +220,38 @@ install_python_deps() {
   return 1
 }
 
+ensure_playwright_chromium() {
+  cd "$SCRIPT_DIR"
+  if ! "${SCRIPT_DIR}/.venv/bin/python" - <<'PY'
+from pathlib import Path
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:
+    raise SystemExit(1)
+
+with sync_playwright() as playwright:
+    path = Path(playwright.chromium.executable_path)
+    raise SystemExit(0 if path.exists() else 1)
+PY
+  then
+    local attempt delay=2
+    for ((attempt = 1; attempt <= PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS; attempt += 1)); do
+      echo "Installing Playwright Chromium, attempt ${attempt}/${PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS}"
+      if "${SCRIPT_DIR}/.venv/bin/python" -m playwright install chromium; then
+        return 0
+      fi
+      if [[ "$attempt" -lt "$PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS" ]]; then
+        echo "Playwright Chromium install failed; retrying in ${delay}s..." >&2
+        sleep "$delay"
+        delay=$((delay * 2))
+      fi
+    done
+    echo "Playwright Chromium install failed after ${PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS} attempts." >&2
+    return 1
+  fi
+  echo "Playwright Chromium already installed; skipping install."
+}
+
 resolve_service_user() {
   if [[ -n "${SUPER_PERSONAL_SERVICE_USER:-}" ]]; then
     printf '%s\n' "$SUPER_PERSONAL_SERVICE_USER"
@@ -358,6 +391,7 @@ run_dev() {
   build_frontend_assets
   ensure_venv
   install_python_deps ".[dev]" "dev"
+  ensure_playwright_chromium
   stop_dev_port_processes
 
   cd "$SCRIPT_DIR"
@@ -444,6 +478,7 @@ MSG
   fi
   ensure_venv
   install_python_deps "." "prod"
+  ensure_playwright_chromium
 
   if ! has_systemctl; then
     if [[ "${CODE_UPDATED:-0}" == "1" ]]; then

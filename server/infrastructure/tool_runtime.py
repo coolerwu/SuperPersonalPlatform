@@ -6,6 +6,7 @@ from typing import Any
 
 from server.app.context_knowledge_service import ContextKnowledgeService
 from server.domain.tooling import get_tool_definition
+from server.infrastructure.browser_tools import build_browser_extract_tool
 
 
 def build_platform_tools(tool_ids: tuple[str, ...], *, context_workspace: Path) -> list[Any]:
@@ -17,6 +18,8 @@ def build_platform_tools(tool_ids: tuple[str, ...], *, context_workspace: Path) 
             tools.append(_search_context_tool(service))
         elif definition.id == "write_context":
             tools.append(_write_context_tool(service))
+        elif definition.id == "browser_extract":
+            tools.append(build_browser_extract_tool())
     return tools
 
 
