@@ -27,6 +27,11 @@ agents:
         - nutstore
       deepagent:
         max_iterations: 7
+        todo_list: true
+        filesystem:
+          enabled: true
+          root: agent
+          mode: read_write
         tools:
           - search_context
 """
@@ -55,6 +60,8 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert completed["state"]["status"] == "completed"
     assert completed["result"]["content"] == "answer: hello"
     assert captured["options"].max_iterations == 7
+    assert captured["options"].todo_list is True
+    assert captured["options"].filesystem_enabled is True
     assert captured["options"].tools == ("search_context",)
     assert captured["messages"][-1].content == "hello"
     assert (tmp_path / "runs" / "index.json").exists()

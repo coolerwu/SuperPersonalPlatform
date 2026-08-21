@@ -130,7 +130,11 @@ class RunService:
         self._append_event(run_id, "running", {"message": "DeepAgent started"})
 
         try:
-            result = await DeepAgentRuntime(model, context_workspace=self._workspace / "context").run(
+            result = await DeepAgentRuntime(
+                model,
+                context_workspace=self._workspace / "context",
+                agent_workspace=self._agent_workspace(str(run_input.get("agent_id") or "")),
+            ).run(
                 instructions=system_prompt,
                 messages=runtime_messages,
                 options=runtime_options,
@@ -330,6 +334,11 @@ class RunService:
     def _run_dir(self, run_id: str) -> Path:
         return self._runs_dir / run_id
 
+    def _agent_workspace(self, agent_id: str) -> Path:
+        if not agent_id or any(part in agent_id for part in ("/", "\\")) or agent_id in {".", ".."}:
+            raise AgentConfigError("agents.definitions[].id must be a single path segment for filesystem access")
+        return self._workspace / "agents" / agent_id
+
     @property
     def _index_path(self) -> Path:
         return self._runs_dir / "index.json"
@@ -350,6 +359,12 @@ def _public_agent(agent: AgentDefinition) -> dict[str, Any]:
             "max_iterations": agent.deepagent.max_iterations,
             "name": agent.deepagent.name,
             "debug": agent.deepagent.debug,
+            "todo_list": agent.deepagent.todo_list,
+            "filesystem": {
+                "enabled": agent.deepagent.filesystem.enabled,
+                "root": agent.deepagent.filesystem.root,
+                "mode": agent.deepagent.filesystem.mode,
+            },
             "use_longterm_memory": agent.deepagent.use_longterm_memory,
             "tools": list(agent.deepagent.tools),
             "interrupt_on": list(agent.deepagent.interrupt_on),
@@ -398,6 +413,10 @@ def _runtime_options(raw: Any) -> DeepAgentRuntimeOptions:
         debug=bool(options.get("debug", False)),
         tools=tuple(str(item).strip() for item in options.get("tools") or [] if str(item).strip()),
         interrupt_on=tuple(str(item).strip() for item in options.get("interrupt_on") or [] if str(item).strip()),
+        todo_list=bool(options.get("todo_list", True)),
+        filesystem_enabled=bool((options.get("filesystem") or {}).get("enabled", False))
+        if isinstance(options.get("filesystem") or {}, dict)
+        else False,
     )
 
 

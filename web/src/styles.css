@@ -972,6 +972,13 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.builtin-toggle-row {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
 
 .tool-card-grid {
   display: grid;

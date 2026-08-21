@@ -40,6 +40,11 @@ agents:
         max_iterations: 60
         name: ""
         debug: false
+        todo_list: true
+        filesystem:
+          enabled: false
+          root: "agent"
+          mode: "read_write"
         use_longterm_memory: false
         tools: []
         interrupt_on: []

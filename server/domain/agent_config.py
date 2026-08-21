@@ -37,10 +37,25 @@ class ModelDefinition:
 
 
 @dataclass(frozen=True)
+class DeepAgentFilesystemOptions:
+    enabled: bool = False
+    root: str = "agent"
+    mode: str = "read_write"
+
+    def __post_init__(self) -> None:
+        if self.root != "agent":
+            raise AgentConfigError("agents.definitions[].deepagent.filesystem.root must be agent")
+        if self.mode not in {"read_write"}:
+            raise AgentConfigError("agents.definitions[].deepagent.filesystem.mode must be read_write")
+
+
+@dataclass(frozen=True)
 class DeepAgentOptions:
     max_iterations: int = 60
     name: str = ""
     debug: bool = False
+    todo_list: bool = True
+    filesystem: DeepAgentFilesystemOptions = DeepAgentFilesystemOptions()
     use_longterm_memory: bool = False
     tools: tuple[str, ...] = ()
     interrupt_on: tuple[str, ...] = ()

@@ -8,6 +8,7 @@ from server.domain.agent_config import (
     AgentConfigError,
     AgentDefinition,
     AgentWorkspaceDefinition,
+    DeepAgentFilesystemOptions,
     DeepAgentOptions,
     ModelDefinition,
     ModelProvider,
@@ -147,6 +148,8 @@ def parse_deepagent_options(raw: Any) -> DeepAgentOptions:
         max_iterations=int(raw.get("max_iterations") or 60),
         name=str(raw.get("name") or "").strip(),
         debug=bool(raw.get("debug", False)),
+        todo_list=bool(raw.get("todo_list", True)),
+        filesystem=_parse_deepagent_filesystem(raw.get("filesystem") or {}),
         use_longterm_memory=bool(raw.get("use_longterm_memory", False)),
         tools=_string_tuple(raw.get("tools") or []),
         interrupt_on=_string_tuple(raw.get("interrupt_on") or []),
@@ -157,6 +160,18 @@ def parse_deepagent_options(raw: Any) -> DeepAgentOptions:
         checkpointer=bool(raw.get("checkpointer", False)),
         store=str(raw.get("store") or "").strip(),
         cache=str(raw.get("cache") or "").strip(),
+    )
+
+
+def _parse_deepagent_filesystem(raw: Any) -> DeepAgentFilesystemOptions:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("agents.definitions[].deepagent.filesystem must be an object")
+    return DeepAgentFilesystemOptions(
+        enabled=bool(raw.get("enabled", False)),
+        root=str(raw.get("root") or "agent").strip() or "agent",
+        mode=str(raw.get("mode") or "read_write").strip() or "read_write",
     )
 
 

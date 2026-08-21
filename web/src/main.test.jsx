@@ -540,6 +540,7 @@ test("saves deepagent options from the agent config menu", async () => {
   fireEvent.click(screen.getByLabelText("Search Context"));
   fireEvent.click(screen.getByLabelText("Write Context"));
   fireEvent.click(screen.getByRole("button", { name: "完成" }));
+  fireEvent.click(screen.getByLabelText("Agent 文件系统"));
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
   await waitFor(() => {
@@ -547,6 +548,11 @@ test("saves deepagent options from the agent config menu", async () => {
     expect(writeCall).toBeTruthy();
     const content = JSON.parse(writeCall[1].body).content;
     expect(content).toContain("max_iterations: 12");
+    expect(content).toContain("todo_list: true");
+    expect(content).toContain("filesystem:");
+    expect(content).toContain("enabled: true");
+    expect(content).toContain('root: "agent"');
+    expect(content).toContain('mode: "read_write"');
     expect(content).toContain('- "search_context"');
     expect(content).toContain('- "write_context"');
   });

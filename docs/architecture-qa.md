@@ -164,8 +164,14 @@ workspace/
     index.json
     assistant/
       agent.json
+      scratch/
+      notes/
+      artifacts/
     operator/
       agent.json
+      scratch/
+      notes/
+      artifacts/
 
   context/
     knowledge/

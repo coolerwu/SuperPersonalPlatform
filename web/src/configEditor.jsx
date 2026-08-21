@@ -59,6 +59,12 @@ const DEFAULT_CONFIG = {
           max_iterations: 60,
           name: "",
           debug: false,
+          todo_list: true,
+          filesystem: {
+            enabled: false,
+            root: "agent",
+            mode: "read_write",
+          },
           use_longterm_memory: false,
           tools: [],
           interrupt_on: [],
@@ -386,6 +392,17 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
     });
   }
 
+  function updateDeepAgentFilesystem(index, field, value) {
+    update((next) => {
+      const current = next.agents.definitions[index].deepagent || cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent);
+      const filesystem = current.filesystem || cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent.filesystem);
+      next.agents.definitions[index].deepagent = {
+        ...current,
+        filesystem: { ...filesystem, [field]: value },
+      };
+    });
+  }
+
   function toggleTool(index, toolId, enabled) {
     update((next) => {
       const current = next.agents.definitions[index].deepagent || cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent);
@@ -489,6 +506,30 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                   配置工具
                 </button>
               </div>
+              <div className="agent-tool-summary">
+                <div>
+                  <strong>DeepAgent 内置能力</strong>
+                  <span>
+                    write_todos
+                    {agent.deepagent?.filesystem?.enabled ? `, filesystem -> workspace/agents/${agent.id || "{agent_id}"}` : ""}
+                  </span>
+                </div>
+                <div className="builtin-toggle-row">
+                  <label className="config-toggle field-toggle" title="当前 deepagents 版本默认内置 write_todos">
+                    <input type="checkbox" checked readOnly disabled />
+                    <span>Todo List</span>
+                  </label>
+                  <label className="config-toggle field-toggle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(agent.deepagent?.filesystem?.enabled)}
+                      disabled={readOnly}
+                      onChange={(event) => updateDeepAgentFilesystem(index, "enabled", event.target.checked)}
+                    />
+                    <span>Agent 文件系统</span>
+                  </label>
+                </div>
+              </div>
               <div className="config-grid two">
                 <ConfigField label="Runtime Name">
                   <input
@@ -514,12 +555,8 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                     onChange={(event) => updateDeepAgent(index, "interrupt_on", splitList(event.target.value))}
                   />
                 </ConfigField>
-                <ConfigField label="Middleware">
-                  <input
-                    value={(agent.deepagent?.middleware || []).join(", ")}
-                    readOnly={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "middleware", splitList(event.target.value))}
-                  />
+                <ConfigField label="Filesystem Root">
+                  <input value={`workspace/agents/${agent.id || "{agent_id}"}`} readOnly />
                 </ConfigField>
                 <ConfigField label="Response Format">
                   <input
@@ -742,6 +779,14 @@ function normalizeDeepAgent(value) {
   next.tools = normalizeList(next.tools);
   next.interrupt_on = normalizeList(next.interrupt_on);
   next.middleware = normalizeList(next.middleware);
+  next.todo_list = true;
+  next.filesystem = isPlainObject(next.filesystem)
+    ? {
+        enabled: Boolean(next.filesystem.enabled),
+        root: "agent",
+        mode: "read_write",
+      }
+    : cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent.filesystem);
   next.subagents = Array.isArray(next.subagents) ? next.subagents.filter(isPlainObject) : [];
   return next;
 }
