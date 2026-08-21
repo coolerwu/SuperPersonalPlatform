@@ -20,10 +20,10 @@
 - `workspace/runs/index.json` 维护所有 run 的摘要和当前状态。
 - 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json`、`lock.json` 和 `delivery.json`。
 - `workspace/sessions/index.json` 维护所有长期会话摘要；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`。
-- `Agent` 只保存人格、模型和绑定的 Context 列表。
-- `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug` 和 `interrupt_on`，工具/知识细节后续随 Context 工具集接入。
-- `Context` 是隔离边界，内部包含 roots、tools、knowledge、owner、scope 等配置。
-- `Knowledge` 是 Context 内部资源，不作为全局散放目录。
+- `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
+- `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`interrupt_on` 和 `tools`。
+- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前第一批工具为 `search_context` 和 `write_context`。
+- 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
 - 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 `session_id`，再创建 `source=wechat` 的 run；DeepAgent 执行前读取该 session 的历史消息，完成后由平台投递微信回复。
 
@@ -33,21 +33,16 @@
 workspace/
   config.yaml
 
+  context/
+    knowledge/
+      files/
+    state/
+      cache/
+
   agents/
     index.json
     {agent_id}/
       agent.json
-
-  contexts/
-    index.json
-    {context_id}/
-      context.json
-      knowledge/
-        index.json
-        files/
-      state/
-        embeddings/
-        cache/
 
   runs/
     index.json
@@ -109,7 +104,7 @@ PUT /api/workspace/write
 POST /api/workspace/delete
 ```
 
-这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`contexts/`、`runs/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
+这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`context/`、`runs/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
 
 ## Frontend Routes
 
@@ -118,7 +113,7 @@ POST /api/workspace/delete
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。
 - `/config` 基础配置栏目只承载访问 Token、服务监听和坚果云 WebDAV 等基础配置；访问 Token 按明文输入展示。
 - `/providers` 是配置页内的模型 Provider 栏目兼容路径，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
-- `/agent-config` 是配置页内的 Agent 栏目兼容路径，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；`/agents` 仍是旧入口兼容并跳转 Runs，不作为配置页路径。
+- `/agent-config` 是配置页内的 Agent 栏目兼容路径，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，第一批平台工具为 `search_context` 和需要确认的 `write_context`；`/agents` 仍是旧入口兼容并跳转 Runs，不作为配置页路径。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
 - `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录态继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存，不作为聊天历史；长期聊天会话统一写入 `workspace/sessions/{session_id}/`。
 - `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，文件级查看/编辑入口保留在 `/workspace`。
@@ -132,6 +127,8 @@ POST /api/workspace/delete
 - 个人微信通过 Tencent iLink Bot HTTP API 接入。
 - 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
 - DeepAgent 依赖 `deepagents` 和 LangGraph；后端任务执行结果必须落盘。
+- `search_context` 检索 `workspace/context/knowledge/files/` 中的 `.md`、`.txt`、`.json`、`.jsonl` 文本知识，返回 `/files/...` 工具路径、分数和片段。
+- `write_context(type, absolute_path, content, mode)` 写入同一知识目录；当前只支持 `type="knowledge"`，`absolute_path` 必须是 `/files/...` 工具路径，`mode` 支持 `append`、`overwrite` 和 `create`，工具说明要求 Agent 仅在用户明确确认后调用。
 - 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
 
 ## Removed From Target Architecture

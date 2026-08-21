@@ -27,15 +27,16 @@ agents:
         - nutstore
       deepagent:
         max_iterations: 7
+        tools:
+          - search_context
 """
 
 
 def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatch) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
-    context_dir = tmp_path / "contexts" / "nutstore"
-    (context_dir / "knowledge").mkdir(parents=True)
-    (context_dir / "context.json").write_text('{"id":"nutstore","tools":["webdav"]}', encoding="utf-8")
-    (context_dir / "knowledge" / "index.json").write_text('{"items":[]}', encoding="utf-8")
+    files_dir = tmp_path / "context" / "knowledge" / "files"
+    files_dir.mkdir(parents=True)
+    (files_dir / "profile.md").write_text("local knowledge", encoding="utf-8")
 
     captured = {}
 
@@ -54,6 +55,7 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert completed["state"]["status"] == "completed"
     assert completed["result"]["content"] == "answer: hello"
     assert captured["options"].max_iterations == 7
+    assert captured["options"].tools == ("search_context",)
     assert captured["messages"][-1].content == "hello"
     assert (tmp_path / "runs" / "index.json").exists()
     assert (tmp_path / "runs" / run_id / "input.json").exists()
@@ -62,6 +64,8 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert (tmp_path / "runs" / run_id / "result.json").exists()
     assert (tmp_path / "runs" / run_id / "lock.json").exists()
     assert (tmp_path / "runs" / run_id / "delivery.json").exists()
+    run_input = json.loads((tmp_path / "runs" / run_id / "input.json").read_text(encoding="utf-8"))
+    assert run_input["snapshot"]["context"]["files"][0]["path"] == "/files/profile.md"
 
     index = json.loads((tmp_path / "runs" / "index.json").read_text(encoding="utf-8"))
     assert index["runs"][0]["run_id"] == run_id

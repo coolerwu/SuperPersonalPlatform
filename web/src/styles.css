@@ -956,6 +956,68 @@ pre {
   min-height: 36px;
 }
 
+.agent-tool-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.tool-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.tool-choice {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 78px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(8, 13, 20, 0.64);
+  padding: 12px;
+  cursor: pointer;
+}
+
+.tool-choice.selected {
+  border-color: rgba(23, 168, 245, 0.72);
+  background: rgba(9, 43, 65, 0.72);
+}
+
+.tool-choice input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--blue);
+}
+
+.tool-choice span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tool-choice strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.tool-choice small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tool-choice em {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
 .config-list {
   display: grid;
   gap: 10px;

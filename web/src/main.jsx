@@ -50,8 +50,7 @@ const WORKSPACE_TREE = [
   ["workspace/runs/{run_id}/events.jsonl", "前端轮询读取的事件流"],
   ["workspace/runs/{run_id}/result.json", "DeepAgent 最终输出"],
   ["workspace/runs/{run_id}/delivery.json", "微信等渠道投递状态"],
-  ["workspace/contexts/{context_id}/context.json", "Context 隔离边界"],
-  ["workspace/contexts/{context_id}/knowledge/index.json", "Context 内知识索引"],
+  ["workspace/context/knowledge/files/", "默认 Context 知识目录，search_context / write_context 使用"],
   ["workspace/channels/wechat/sessions/{account_id}.json", "微信登录态，不作为聊天历史"],
   ["workspace/logs/platform-YYYY-MM-DD.log", "系统日志"],
 ];

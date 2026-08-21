@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
+from server.infrastructure.tool_runtime import build_platform_tools
 
 
 @dataclass(frozen=True)
@@ -15,12 +17,14 @@ class DeepAgentRuntimeOptions:
     max_iterations: int = 60
     name: str = ""
     debug: bool = False
+    tools: tuple[str, ...] = ()
     interrupt_on: tuple[str, ...] = ()
 
 
 class DeepAgentRuntime:
-    def __init__(self, model: ModelDefinition) -> None:
+    def __init__(self, model: ModelDefinition, *, context_workspace: Path) -> None:
         self._model = model
+        self._context_workspace = context_workspace
 
     async def run(
         self,
@@ -38,7 +42,7 @@ class DeepAgentRuntime:
             raise RuntimeError("DeepAgent runtime requires the deepagents package") from exc
 
         create_kwargs: dict[str, Any] = {
-            "tools": [],
+            "tools": build_platform_tools(options.tools, context_workspace=self._context_workspace),
             "model": self._chat_model(),
             "instructions": instructions,
         }

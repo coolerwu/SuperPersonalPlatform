@@ -535,7 +535,8 @@ test("saves deepagent options from the agent config menu", async () => {
   expect(await screen.findByText("DeepAgent 运行选项")).toBeInTheDocument();
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Max Iterations"), { target: { value: "12" } });
-  fireEvent.change(screen.getByLabelText("Tool IDs"), { target: { value: "nutstore, webdav" } });
+  fireEvent.click(screen.getByLabelText("Search Context"));
+  fireEvent.click(screen.getByLabelText("Write Context"));
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
   await waitFor(() => {
@@ -543,8 +544,8 @@ test("saves deepagent options from the agent config menu", async () => {
     expect(writeCall).toBeTruthy();
     const content = JSON.parse(writeCall[1].body).content;
     expect(content).toContain("max_iterations: 12");
-    expect(content).toContain('- "nutstore"');
-    expect(content).toContain('- "webdav"');
+    expect(content).toContain('- "search_context"');
+    expect(content).toContain('- "write_context"');
   });
 });
 

@@ -1,6 +1,21 @@
 import React, { useMemo } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
+const AGENT_TOOL_CARDS = [
+  {
+    id: "search_context",
+    name: "Search Context",
+    summary: "搜索 workspace/context/knowledge/files 里的知识。",
+    badge: "只读",
+  },
+  {
+    id: "write_context",
+    name: "Write Context",
+    summary: "用户确认后写入 /files/*.md、*.txt 或 *.jsonl。",
+    badge: "需确认",
+  },
+];
+
 const DEFAULT_CONFIG = {
   auth: { token: "" },
   server: { host: "0.0.0.0", port: 8888 },
@@ -369,6 +384,24 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
     });
   }
 
+  function toggleTool(index, toolId, enabled) {
+    update((next) => {
+      const current = next.agents.definitions[index].deepagent || cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent);
+      const toolSet = new Set(normalizeList(current.tools));
+      if (enabled) {
+        toolSet.add(toolId);
+      } else {
+        toolSet.delete(toolId);
+      }
+      const orderedKnownTools = AGENT_TOOL_CARDS.map((tool) => tool.id).filter((id) => toolSet.has(id));
+      const customTools = [...toolSet].filter((id) => !AGENT_TOOL_CARDS.some((tool) => tool.id === id));
+      next.agents.definitions[index].deepagent = {
+        ...current,
+        tools: [...orderedKnownTools, ...customTools],
+      };
+    });
+  }
+
   if (parsed.error) {
     return <ConfigFallbackEditor draft={draft} onChange={onChange} readOnly={readOnly} error={parsed.error} />;
   }
@@ -445,6 +478,33 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                 <strong>DeepAgent 运行选项</strong>
                 <span>create_deep_agent / recursion_limit</span>
               </div>
+              <div className="agent-tool-picker">
+                <div className="config-section-title compact">
+                  <strong>Agent 工具</strong>
+                  <span>agents.definitions[].deepagent.tools</span>
+                </div>
+                <div className="tool-card-grid">
+                  {AGENT_TOOL_CARDS.map((tool) => {
+                    const checked = normalizeList(agent.deepagent?.tools).includes(tool.id);
+                    return (
+                      <label className={`tool-choice ${checked ? "selected" : ""}`} key={tool.id}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={readOnly}
+                          onChange={(event) => toggleTool(index, tool.id, event.target.checked)}
+                          aria-label={tool.name}
+                        />
+                        <span>
+                          <strong>{tool.name}</strong>
+                          <small>{tool.summary}</small>
+                        </span>
+                        <em>{tool.badge}</em>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
               <div className="config-grid two">
                 <ConfigField label="Runtime Name">
                   <input
@@ -461,13 +521,6 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                     value={agent.deepagent?.max_iterations ?? 60}
                     readOnly={readOnly}
                     onChange={(event) => updateDeepAgent(index, "max_iterations", Number(event.target.value) || 60)}
-                  />
-                </ConfigField>
-                <ConfigField label="Tool IDs">
-                  <input
-                    value={(agent.deepagent?.tools || []).join(", ")}
-                    readOnly={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "tools", splitList(event.target.value))}
                   />
                 </ConfigField>
                 <ConfigField label="Interrupt On">

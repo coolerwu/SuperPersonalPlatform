@@ -167,24 +167,13 @@ workspace/
     operator/
       agent.json
 
-  contexts/
-    index.json
-    ctx_nutstore_work/
-      context.json
-      knowledge/
-        index.json
-        files/
-          handbook.md
-          profile.md
-      state/
-        embeddings/
-        cache/
-    ctx_personal_notes/
-      context.json
-      knowledge/
-        index.json
-        files/
-      state/
+  context/
+    knowledge/
+      files/
+        handbook.md
+        profile.md
+    state/
+      cache/
 
   runs/
     index.json
@@ -218,7 +207,7 @@ workspace/
 
 **Q: 为什么 Run 要固化 Agent + Context 快照？**
 
-因为任务创建后，后续修改 Agent 或 Context 不应该改变旧任务语义。
+因为任务创建后，后续修改 Agent 或 Context 不应该改变旧任务语义。当前 Context 是单数 `workspace/context/`，不再按 `{context_id}` 拆多套目录。
 
 `workspace/runs/{run_id}/input.json` 必须保存：
 
@@ -227,7 +216,7 @@ workspace/
 - `session_id`
 - `message`
 - `agent_snapshot`
-- `context_snapshots`
+- `context_snapshot`
 - 创建时间
 
 其中 `context_snapshots` 包含当时允许的 roots、tools、knowledge 文档列表和归属隔离配置。

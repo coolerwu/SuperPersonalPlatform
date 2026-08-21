@@ -78,7 +78,7 @@ class RunService:
             snapshot={
                 "agent": _public_agent(agent),
                 "model": _public_model(model),
-                "contexts": self._snapshot_contexts(selected_context_ids),
+                "context": self._snapshot_context(),
             },
         )
         _write_json(run_dir / "input.json", asdict(run_input))
@@ -130,7 +130,7 @@ class RunService:
         self._append_event(run_id, "running", {"message": "DeepAgent started"})
 
         try:
-            result = await DeepAgentRuntime(model).run(
+            result = await DeepAgentRuntime(model, context_workspace=self._workspace / "context").run(
                 instructions=system_prompt,
                 messages=runtime_messages,
                 options=runtime_options,
@@ -219,20 +219,25 @@ class RunService:
                 return agent
         raise AgentConfigError("Agent does not exist")
 
-    def _snapshot_contexts(self, context_ids: tuple[str, ...]) -> list[dict[str, Any]]:
-        snapshots: list[dict[str, Any]] = []
-        for context_id in context_ids:
-            context_dir = self._workspace / "contexts" / context_id
-            context_path = context_dir / "context.json"
-            knowledge_path = context_dir / "knowledge" / "index.json"
-            snapshots.append(
-                {
-                    "id": context_id,
-                    "context": _read_json(context_path) if context_path.exists() else None,
-                    "knowledge": _read_json(knowledge_path) if knowledge_path.exists() else None,
-                }
-            )
-        return snapshots
+    def _snapshot_context(self) -> dict[str, Any]:
+        files_dir = self._workspace / "context" / "knowledge" / "files"
+        files: list[dict[str, Any]] = []
+        if files_dir.exists():
+            for path in sorted(files_dir.rglob("*")):
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+                files.append(
+                    {
+                        "path": f"/files/{path.relative_to(files_dir).as_posix()}",
+                        "size": stat.st_size,
+                        "modified_at": stat.st_mtime,
+                    }
+                )
+        return {
+            "knowledge_files_path": "context/knowledge/files",
+            "files": files,
+        }
 
     def _set_state(
         self,
@@ -391,6 +396,7 @@ def _runtime_options(raw: Any) -> DeepAgentRuntimeOptions:
         max_iterations=int(options.get("max_iterations") or 60),
         name=str(options.get("name") or "").strip(),
         debug=bool(options.get("debug", False)),
+        tools=tuple(str(item).strip() for item in options.get("tools") or [] if str(item).strip()),
         interrupt_on=tuple(str(item).strip() for item in options.get("interrupt_on") or [] if str(item).strip()),
     )
 
