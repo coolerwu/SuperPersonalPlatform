@@ -39,7 +39,7 @@ class WebDAVContextService:
         self._context = context
         self._sync = context.webdav_sync
         self._client = client or NutstoreWebDAVClient(nutstore)
-        self._cache_dir = workspace / "context" / "state" / "webdav_cache"
+        self._cache_dir = workspace / "context" / "webdav"
         self._files_dir = self._cache_dir / "files"
         self._index_path = self._cache_dir / "index.json"
         self._lock = asyncio.Lock()
@@ -66,7 +66,13 @@ class WebDAVContextService:
                 continue
             entries = await self._scan_root(root)
             for entry in entries[: self._sync.max_files_per_root]:
-                tool_path = _tool_path(root.id, _relative_to_root(_full_remote_root(self._nutstore.root_path, root.path), entry.path))
+                tool_path = _tool_path(
+                    root.id,
+                    _relative_to_root(
+                        _full_remote_root(self._nutstore.root_path, root.path),
+                        entry.path,
+                    ),
+                )
                 if not _is_allowed_file(tool_path, self._sync):
                     continue
                 metadata = _entry_metadata(root, entry, tool_path)

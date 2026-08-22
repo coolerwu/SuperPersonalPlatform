@@ -75,7 +75,7 @@ def test_webdav_context_refresh_caches_readable_roots(tmp_path) -> None:
     assert [(item.path, item.content) for item in documents] == [
         ("/webdav/my_notes/a.md", "长期规则：结论先行")
     ]
-    index = json.loads((tmp_path / "context" / "state" / "webdav_cache" / "index.json").read_text(encoding="utf-8"))
+    index = json.loads((tmp_path / "context" / "webdav" / "index.json").read_text(encoding="utf-8"))
     assert index["files"]["/webdav/my_notes/a.md"]["etag"] == "abc"
 
 
@@ -116,13 +116,40 @@ def test_webdav_context_write_updates_writable_root_cache(tmp_path) -> None:
     )
 
     assert result["path"] == "/webdav/agent_inbox/new.md"
-    assert (tmp_path / "context" / "state" / "webdav_cache" / "files" / "webdav__agent_inbox__new.md").read_text(
+    assert (tmp_path / "context" / "webdav" / "files" / "webdav__agent_inbox__new.md").read_text(
         encoding="utf-8"
     ) == "候选知识"
     assert [item[0] for item in requests] == ["GET", "MKCOL", "MKCOL", "PUT"]
+    assert str(requests[-1][1]).endswith("/dav/AgentWorkspace/inbox/new.md")
 
 
-def _service(tmp_path, transport: httpx.MockTransport) -> WebDAVContextService:
+def test_webdav_context_remote_paths_still_respect_nutstore_root_path(tmp_path) -> None:
+    requested_urls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.method == "GET":
+            return httpx.Response(404)
+        if request.method == "MKCOL":
+            return httpx.Response(201)
+        if request.method == "PUT":
+            return httpx.Response(201)
+        return httpx.Response(500)
+
+    service = _service(tmp_path, httpx.MockTransport(handler), nutstore_root_path="/Apps/DeepAgent")
+
+    asyncio.run(
+        service.write(
+            absolute_path="/webdav/agent_inbox/scoped.md",
+            content="workspace scoped",
+            mode="create",
+        )
+    )
+
+    assert requested_urls[-1].endswith("/dav/Apps/DeepAgent/AgentWorkspace/inbox/scoped.md")
+
+
+def _service(tmp_path, transport: httpx.MockTransport, *, nutstore_root_path: str = "/") -> WebDAVContextService:
     settings = parse_settings(
         {
             "auth": {"token": "secret-token"},
@@ -130,6 +157,7 @@ def _service(tmp_path, transport: httpx.MockTransport) -> WebDAVContextService:
                 "enabled": True,
                 "username": "u",
                 "password": "p",
+                "root_path": nutstore_root_path,
             },
             "context": {
                 "webdav_sync": {

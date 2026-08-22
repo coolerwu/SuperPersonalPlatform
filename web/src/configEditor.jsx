@@ -308,7 +308,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
         </div>
         <ConfigList
           title="WebDAV Roots"
-          subtitle="/webdav/{root_id}/..."
+          subtitle="远端路径按 nutstore.root_path + WebDAV 路径解析；本地缓存落在 workspace/context/webdav/"
           readOnly={readOnly}
           onAdd={() =>
             update((next) => {

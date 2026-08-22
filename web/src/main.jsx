@@ -51,7 +51,7 @@ const WORKSPACE_TREE = [
   ["workspace/runs/{run_id}/result.json", "DeepAgent 最终输出"],
   ["workspace/runs/{run_id}/delivery.json", "微信等渠道投递状态"],
   ["workspace/context/knowledge/files/", "默认 Context 知识目录，search_context / write_context 使用"],
-  ["workspace/context/state/webdav_cache/", "坚果云 WebDAV readable roots 的增量同步缓存"],
+  ["workspace/context/webdav/", "坚果云 WebDAV readable roots 的本地同步缓存"],
   ["workspace/channels/wechat/sessions/{account_id}.json", "微信登录态，不作为聊天历史"],
   ["workspace/logs/platform-YYYY-MM-DD.log", "系统日志"],
 ];
