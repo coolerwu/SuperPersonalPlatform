@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
+import { RefreshCw, Plus, Trash2, X } from "lucide-react";
 
 const AGENT_TOOL_CARDS = [
   {
@@ -129,7 +129,7 @@ function useConfigDraft(draft) {
   }, [draft]);
 }
 
-export function ConfigVisualEditor({ draft, onChange, readOnly }) {
+export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav }) {
   const parsed = useConfigDraft(draft);
   const config = parsed.config;
 
@@ -257,15 +257,29 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
             <strong>Context WebDAV 同步</strong>
             <span>context.webdav_sync / context.webdav_permissions</span>
           </div>
-          <label className="config-toggle">
-            <input
-              type="checkbox"
-              checked={Boolean(config.context.webdav_sync.enabled)}
-              disabled={readOnly}
-              onChange={(event) => updateWebdavSync("enabled", event.target.checked)}
-            />
-            <span>启用同步</span>
-          </label>
+          <div className="config-inline-actions">
+            {onSyncWebdav ? (
+              <button
+                className="ghost"
+                type="button"
+                disabled={readOnly}
+                onClick={onSyncWebdav}
+                title="使用已保存的 config.yaml 同步 WebDAV"
+              >
+                <RefreshCw size={14} />
+                立即同步
+              </button>
+            ) : null}
+            <label className="config-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(config.context.webdav_sync.enabled)}
+                disabled={readOnly}
+                onChange={(event) => updateWebdavSync("enabled", event.target.checked)}
+              />
+              <span>启用同步</span>
+            </label>
+          </div>
         </div>
         <div className="config-grid">
           <ConfigField label="同步根目录">

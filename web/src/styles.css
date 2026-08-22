@@ -938,6 +938,14 @@ pre {
   accent-color: var(--blue);
 }
 
+.config-inline-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .field-toggle {
   align-self: end;
   min-height: 36px;

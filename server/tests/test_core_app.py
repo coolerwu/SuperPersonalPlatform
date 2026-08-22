@@ -97,6 +97,7 @@ def make_system_client(tmp_path: Path, update_service: FakeUpdateService | None 
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
     token = "secret-token"
     container = AppContainer(
+        workspace=tmp_path,
         auth_service=AuthService(AuthToken(token)),
         config_file_service=ConfigFileService(tmp_path),
         run_service=RunService(tmp_path),
@@ -197,6 +198,60 @@ def test_system_update_conflict(tmp_path) -> None:
     response = client.post("/api/system/update-service")
 
     assert response.status_code == 409
+
+
+def test_manual_webdav_context_sync_uses_saved_config(tmp_path, monkeypatch) -> None:
+    class FakeWebDAVContextService:
+        def __init__(self, *, workspace, nutstore, context):
+            self.workspace = workspace
+            self.nutstore = nutstore
+            self.context = context
+
+        async def refresh(self):
+            cache_dir = self.workspace / "context" / "webdav"
+            cache_dir.mkdir(parents=True)
+            (cache_dir / "index.json").write_text("{}", encoding="utf-8")
+
+        def summary(self):
+            return {
+                "updated_at": "2026-08-22T00:00:00+00:00",
+                "documents": 2,
+                "assets": 1,
+                "total": 3,
+                "index_path": str(self.workspace / "context" / "webdav" / "index.json"),
+                "cache_dir": str(self.workspace / "context" / "webdav"),
+            }
+
+    monkeypatch.setattr("server.adapter.system_routes.WebDAVContextService", FakeWebDAVContextService)
+    client = make_system_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    (tmp_path / "config.yaml").write_text(
+        CONFIG
+        + """
+nutstore:
+  enabled: true
+  username: user
+  password: pass
+  root_path: /
+context:
+  webdav_sync:
+    enabled: true
+    root_path: /notebook
+    interval_seconds: 600
+  webdav_permissions:
+    - path: /
+      readable: true
+      writable: false
+      protected: true
+""",
+        encoding="utf-8",
+    )
+
+    response = client.post("/api/system/webdav-context/sync")
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["total"] == 3
+    assert (tmp_path / "context" / "webdav" / "index.json").exists()
 
 
 def test_workspace_file_routes_are_scoped_and_edit_text(tmp_path) -> None:

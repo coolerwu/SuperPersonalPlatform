@@ -45,6 +45,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         system_log_service=system_log_service,
     )
     return AppContainer(
+        workspace=active_workspace,
         auth_service=AuthService(AuthToken(settings.auth.token)),
         config_file_service=ConfigFileService(active_workspace),
         run_service=run_service,

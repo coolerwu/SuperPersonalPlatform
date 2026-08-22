@@ -775,6 +775,17 @@ function ConfigBackedPage({ activeSection, panelTitle, Editor, onNavigate }) {
     }
   }
 
+  async function syncWebdavContext() {
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/api/system/webdav-context/sync", { method: "POST" });
+      setMessage(data.message || "WebDAV 已同步");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   useEffect(() => {
     loadConfig();
   }, []);
@@ -831,7 +842,12 @@ function ConfigBackedPage({ activeSection, panelTitle, Editor, onNavigate }) {
           </div>
         </div>
         {configFile ? (
-          <Editor draft={draft} onChange={setDraft} readOnly={!configFile.editable} />
+          <Editor
+            draft={draft}
+            onChange={setDraft}
+            readOnly={!configFile.editable}
+            onSyncWebdav={activeSection === "config" ? syncWebdavContext : undefined}
+          />
         ) : (
           <div className="workspace-empty-editor">
             <TerminalSquare size={30} />

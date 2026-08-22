@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
@@ -13,6 +14,7 @@ from server.infrastructure.session import SessionCodec
 
 @dataclass(frozen=True)
 class AppContainer:
+    workspace: Path
     auth_service: AuthService
     config_file_service: ConfigFileService
     run_service: RunService

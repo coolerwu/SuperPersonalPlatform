@@ -156,6 +156,29 @@ class WebDAVContextService:
             documents.append(WebDAVContextDocument(path=tool_path, content=content))
         return documents
 
+    def summary(self) -> dict[str, object]:
+        index = _read_json(self._index_path)
+        raw_files = index.get("files") if isinstance(index, dict) else {}
+        if not isinstance(raw_files, dict):
+            raw_files = {}
+        documents = 0
+        assets = 0
+        for metadata in raw_files.values():
+            if not isinstance(metadata, dict):
+                continue
+            if metadata.get("kind", "document") == "asset":
+                assets += 1
+            else:
+                documents += 1
+        return {
+            "updated_at": str(index.get("updated_at") or "") if isinstance(index, dict) else "",
+            "documents": documents,
+            "assets": assets,
+            "total": documents + assets,
+            "index_path": str(self._index_path),
+            "cache_dir": str(self._cache_dir),
+        }
+
     async def write(self, *, absolute_path: str, content: str, mode: str = "append") -> dict[str, object]:
         relative = self._resolve_write_path(absolute_path)
         permission = _permission_for_path("/" + relative, self._context.webdav_permissions)

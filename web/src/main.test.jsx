@@ -302,6 +302,13 @@ test("saves system config from the dedicated config menu", async () => {
         file: { path: "config.yaml", size: 128, editable: true, content: JSON.parse(options.body || "{}").content || "" },
       });
     }
+    if (path.endsWith("/api/system/webdav-context/sync")) {
+      return response({
+        ok: true,
+        message: "WebDAV 已同步：2 个文本，1 个图片资源",
+        summary: { documents: 2, assets: 1, total: 3 },
+      });
+    }
     return response({});
   });
 
@@ -316,6 +323,7 @@ test("saves system config from the dedicated config menu", async () => {
   expect(screen.getByLabelText("访问 Token")).toHaveValue("secret-token");
   expect(screen.getByLabelText("访问 Token")).toHaveAttribute("type", "text");
   expect(screen.getByText("坚果云 WebDAV")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /立即同步/ })).toBeInTheDocument();
   expect(screen.queryByText("Provider 默认项")).not.toBeInTheDocument();
   expect(screen.queryByText("DeepAgent 运行选项")).not.toBeInTheDocument();
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
@@ -327,6 +335,12 @@ test("saves system config from the dedicated config menu", async () => {
     const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
     expect(writeCall).toBeTruthy();
     expect(JSON.parse(writeCall[1].body).content).toContain("port: 9999");
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: /立即同步/ }));
+
+  await waitFor(() => {
+    expect(screen.getByText("WebDAV 已同步：2 个文本，1 个图片资源")).toBeInTheDocument();
   });
 });
 

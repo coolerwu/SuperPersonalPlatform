@@ -227,6 +227,8 @@ def test_webdav_context_refresh_caches_markdown_referenced_assets(tmp_path) -> N
     assert index["files"]["/webdav/images/chart.png"]["kind"] == "asset"
     asset_cache = tmp_path / "context" / "webdav" / index["files"]["/webdav/images/chart.png"]["cache_path"]
     assert asset_cache.read_bytes() == png_bytes
+    assert service.summary()["documents"] == 1
+    assert service.summary()["assets"] == 1
 
 
 def test_webdav_context_write_rejects_protected_parent_path(tmp_path) -> None:
