@@ -309,6 +309,14 @@ test("saves system config from the dedicated config menu", async () => {
         summary: { documents: 2, assets: 1, total: 3 },
       });
     }
+    if (path.endsWith("/api/system/webdav-context/test")) {
+      return response({
+        ok: true,
+        message: "WebDAV 连接成功",
+        target_url: "https://dav.jianguoyun.com/dav/notebook/",
+        status_code: 207,
+      });
+    }
     return response({});
   });
 
@@ -323,6 +331,7 @@ test("saves system config from the dedicated config menu", async () => {
   expect(screen.getByLabelText("访问 Token")).toHaveValue("secret-token");
   expect(screen.getByLabelText("访问 Token")).toHaveAttribute("type", "text");
   expect(screen.getByText("坚果云 WebDAV")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /测试连接/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /立即同步/ })).toBeInTheDocument();
   expect(screen.queryByText("Provider 默认项")).not.toBeInTheDocument();
   expect(screen.queryByText("DeepAgent 运行选项")).not.toBeInTheDocument();
@@ -341,6 +350,12 @@ test("saves system config from the dedicated config menu", async () => {
 
   await waitFor(() => {
     expect(screen.getByText("WebDAV 已同步：2 个文本，1 个图片资源")).toBeInTheDocument();
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: /测试连接/ }));
+
+  await waitFor(() => {
+    expect(screen.getByText(/WebDAV 连接成功/)).toBeInTheDocument();
   });
 });
 

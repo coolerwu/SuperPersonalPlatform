@@ -50,6 +50,20 @@ class NutstoreWebDAVClient:
             self._raise_response_error(response, "list")
         return self._parse_multistatus(response.text, target_path)
 
+    async def probe_list(self, path: str = "") -> dict[str, object]:
+        self._ensure_enabled()
+        target_path = self._resolve_path(path, directory=True)
+        response = await self._request(
+            "PROPFIND",
+            target_path,
+            headers={"Depth": "1"},
+        )
+        return {
+            "ok": response.status_code == 207,
+            "status_code": response.status_code,
+            "target_url": self._url_for_path(target_path),
+        }
+
     async def read_bytes(self, path: str, *, max_bytes: int = 200000) -> tuple[bytes, bool]:
         self._ensure_enabled()
         if max_bytes <= 0:

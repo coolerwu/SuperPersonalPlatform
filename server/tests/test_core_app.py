@@ -254,6 +254,54 @@ context:
     assert (tmp_path / "context" / "webdav" / "index.json").exists()
 
 
+def test_webdav_context_test_accepts_draft_config(tmp_path, monkeypatch) -> None:
+    class FakeNutstoreWebDAVClient:
+        def __init__(self, config):
+            self.config = config
+
+        async def probe_list(self, path=""):
+            assert path == "/notebook"
+            assert self.config.password == "draft-secret"
+            return {
+                "ok": True,
+                "status_code": 207,
+                "target_url": "https://dav.jianguoyun.com/dav/notebook/",
+            }
+
+    monkeypatch.setattr("server.adapter.system_routes.NutstoreWebDAVClient", FakeNutstoreWebDAVClient)
+    client = make_system_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    draft = (
+        CONFIG
+        + """
+nutstore:
+  enabled: true
+  base_url: https://dav.jianguoyun.com/dav/
+  username: user@example.com
+  password: draft-secret
+  root_path: /
+context:
+  webdav_sync:
+    enabled: true
+    root_path: /notebook
+  webdav_permissions:
+    - path: /
+      readable: true
+      writable: false
+      protected: true
+"""
+    )
+
+    response = client.post("/api/system/webdav-context/test", json={"content": draft})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["source"] == "draft"
+    assert body["status_code"] == 207
+    assert "draft-secret" not in str(body)
+
+
 def test_workspace_file_routes_are_scoped_and_edit_text(tmp_path) -> None:
     client = make_system_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})

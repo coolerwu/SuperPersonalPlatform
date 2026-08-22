@@ -115,10 +115,11 @@ POST /api/workspace/delete
 System API 额外保留：
 
 ```text
+POST /api/system/webdav-context/test
 POST /api/system/webdav-context/sync
 ```
 
-该接口现读已保存的 `workspace/config.yaml`，手动执行一次 Context WebDAV 同步，用于配置变更后立即制作本地缓存，而不必等待后台间隔或重启服务。
+`/webdav-context/test` 可使用配置页当前草稿或已保存配置测试坚果云 WebDAV 连接，只返回目标 URL、HTTP 状态和是否成功，不回传账号密码；`/webdav-context/sync` 现读已保存的 `workspace/config.yaml`，手动执行一次 Context WebDAV 同步，用于配置变更后立即制作本地缓存，而不必等待后台间隔或重启服务。
 
 ## Frontend Routes
 
@@ -126,7 +127,7 @@ POST /api/system/webdav-context/sync
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。
 - `/config` 基础配置栏目只承载访问 Token、服务监听和坚果云 WebDAV 等基础配置；访问 Token 按明文输入展示。
-- `/config` 的 Context WebDAV 同步区域提供“立即同步”操作，调用后端手动同步接口读取已保存的 `workspace/config.yaml`，立刻把坚果云远端文件缓存到 `workspace/context/webdav/` 并返回文本/图片资源数量；保存配置本身仍只负责校验并写回 `config.yaml`。
+- `/config` 的 Context WebDAV 同步区域提供“测试连接”和“立即同步”操作；测试连接使用当前表单草稿测试 WebDAV，不保存配置且不回传 secret；立即同步调用后端手动同步接口读取已保存的 `workspace/config.yaml`，立刻把坚果云远端文件缓存到 `workspace/context/webdav/` 并返回文本/图片资源数量；保存配置本身仍只负责校验并写回 `config.yaml`。
 - `/providers` 是配置页内的模型 Provider 栏目兼容路径，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
 - `/agent-config` 是配置页内的 Agent 栏目兼容路径，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、需要确认的 `write_context` 和浏览器提取工具 `browser_extract`；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍是旧入口兼容并跳转 Runs，不作为配置页路径。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。

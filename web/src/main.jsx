@@ -786,6 +786,25 @@ function ConfigBackedPage({ activeSection, panelTitle, Editor, onNavigate }) {
     }
   }
 
+  async function testWebdavContext() {
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/api/system/webdav-context/test", {
+        method: "POST",
+        body: JSON.stringify({ content: draft }),
+      });
+      const detail = data.target_url ? `（${data.status_code} · ${data.target_url}）` : "";
+      if (data.ok) {
+        setMessage(`${data.message || "WebDAV 连接成功"}${detail}`);
+      } else {
+        setError(`${data.message || "WebDAV 连接失败"}${detail}`);
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   useEffect(() => {
     loadConfig();
   }, []);
@@ -847,6 +866,7 @@ function ConfigBackedPage({ activeSection, panelTitle, Editor, onNavigate }) {
             onChange={setDraft}
             readOnly={!configFile.editable}
             onSyncWebdav={activeSection === "config" ? syncWebdavContext : undefined}
+            onTestWebdav={activeSection === "config" ? testWebdavContext : undefined}
           />
         ) : (
           <div className="workspace-empty-editor">

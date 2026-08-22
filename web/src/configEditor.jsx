@@ -129,7 +129,7 @@ function useConfigDraft(draft) {
   }, [draft]);
 }
 
-export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav }) {
+export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav, onTestWebdav }) {
   const parsed = useConfigDraft(draft);
   const config = parsed.config;
 
@@ -258,6 +258,17 @@ export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav }) 
             <span>context.webdav_sync / context.webdav_permissions</span>
           </div>
           <div className="config-inline-actions">
+            {onTestWebdav ? (
+              <button
+                className="ghost"
+                type="button"
+                disabled={readOnly}
+                onClick={onTestWebdav}
+                title="使用当前表单草稿测试 WebDAV，不保存配置"
+              >
+                测试连接
+              </button>
+            ) : null}
             {onSyncWebdav ? (
               <button
                 className="ghost"

@@ -1,16 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
+import yaml
 
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
 from server.app.system_log_service import InvalidLogFileError
 from server.app.system_update_service import UpdateAlreadyRunningError
 from server.app.webdav_context_service import WebDAVContextService
-from server.infrastructure.config import load_settings
+from server.infrastructure.config import load_settings, parse_settings
+from server.infrastructure.nutstore_webdav import NutstoreWebDAVClient
 
 
 class LogReadRequest(BaseModel):
     name: str
+
+
+class WebDAVTestRequest(BaseModel):
+    content: str | None = None
 
 
 def create_system_router(container: AppContainer) -> APIRouter:
@@ -118,6 +124,41 @@ def create_system_router(container: AppContainer) -> APIRouter:
             "ok": True,
             "message": f"WebDAV 已同步：{summary['documents']} 个文本，{summary['assets']} 个图片资源",
             "summary": summary,
+        }
+
+    @router.post("/webdav-context/test")
+    async def test_webdav_context(payload: WebDAVTestRequest) -> dict[str, object]:
+        try:
+            if payload.content is None:
+                settings = load_settings(container.config_file_service.config_path)
+                source = "saved"
+            else:
+                raw = yaml.safe_load(payload.content) or {}
+                if not isinstance(raw, dict):
+                    raise ValueError("config.yaml 顶层必须是对象")
+                settings = parse_settings(raw)
+                source = "draft"
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"配置无效：{exc}") from exc
+
+        if not settings.nutstore.enabled:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="坚果云 WebDAV 未启用")
+        if not settings.nutstore.username or not settings.nutstore.password:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="坚果云账号或应用密码为空")
+
+        client = NutstoreWebDAVClient(settings.nutstore)
+        try:
+            result = await client.probe_list(settings.context.webdav_sync.root_path)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"WebDAV 连接测试失败：{exc}") from exc
+
+        message = "WebDAV 连接成功" if result["ok"] else f"WebDAV 连接失败：HTTP {result['status_code']}"
+        return {
+            "ok": result["ok"],
+            "message": message,
+            "source": source,
+            "target_url": result["target_url"],
+            "status_code": result["status_code"],
         }
 
     return router
