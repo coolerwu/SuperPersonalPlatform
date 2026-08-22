@@ -302,7 +302,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
               onChange={(event) => updateWebdavSync("max_file_size_bytes", Number(event.target.value) || 524288)}
             />
           </ConfigField>
-          <ConfigField label="文件后缀">
+          <ConfigField label="文本索引后缀">
             <input
               value={(config.context.webdav_sync.extensions || []).join(", ")}
               readOnly={readOnly}
@@ -312,7 +312,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
         </div>
         <ConfigList
           title="WebDAV 权限规则"
-          subtitle="同步根目录下的相对路径权限；工具路径统一是 /webdav/..."
+          subtitle="同步根目录下的相对路径权限；Markdown 引用图片会作为资源缓存，工具路径统一是 /webdav/..."
           readOnly={readOnly}
           onAdd={() =>
             update((next) => {

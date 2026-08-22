@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from server.domain.agent_config import AgentConfigError
 from server.infrastructure.config import ContextConfig, NutstoreConfig, WebDAVPermission, WebDAVSyncConfig
@@ -24,7 +26,8 @@ class WebDAVContextDocument:
 
 
 class WebDAVContextService:
-    allowed_suffixes = {".md", ".txt", ".json", ".jsonl"}
+    text_suffixes = {".md", ".txt", ".json", ".jsonl"}
+    markdown_asset_suffixes = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 
     def __init__(
         self,
@@ -63,16 +66,23 @@ class WebDAVContextService:
         next_files: dict[str, dict[str, Any]] = {}
         entries = await self._scan_root()
         scan_root = _full_remote_root(self._nutstore.root_path, self._sync.root_path)
+        readable_entries: dict[str, tuple[WebDAVEntry, WebDAVPermission]] = {}
         for entry in entries[: self._sync.max_files_per_root]:
             relative_path = _relative_to_root(scan_root, entry.path)
             permission = _permission_for_path("/" + relative_path, self._context.webdav_permissions)
             if permission is None or not permission.readable:
                 continue
+            readable_entries[relative_path] = (entry, permission)
+
+        referenced_assets: set[str] = set()
+        for relative_path, (entry, permission) in readable_entries.items():
             tool_path = _tool_path(relative_path)
-            if not _is_allowed_file(tool_path, self._sync):
+            if not _is_text_document(tool_path, self._sync):
                 continue
             metadata = _entry_metadata(permission, entry, tool_path)
+            metadata["kind"] = "document"
             old_metadata = previous_files.get(tool_path) if isinstance(previous_files, dict) else None
+            content_text = ""
             if _metadata_changed(old_metadata, metadata):
                 content, truncated = await self._client.read_bytes(entry.path, max_bytes=self._sync.max_file_size_bytes)
                 if truncated:
@@ -80,9 +90,37 @@ class WebDAVContextService:
                 cache_path = self._cache_file_path(tool_path)
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    cache_path.write_text(content.decode("utf-8"), encoding="utf-8")
+                    content_text = content.decode("utf-8")
                 except UnicodeDecodeError:
                     continue
+                cache_path.write_text(content_text, encoding="utf-8")
+            else:
+                try:
+                    content_text = self._cache_file_path(tool_path).read_text(encoding="utf-8")
+                except OSError:
+                    content_text = ""
+            if PurePosixPath(relative_path).suffix.lower() == ".md":
+                referenced_assets.update(_markdown_asset_references(content_text, relative_path))
+            metadata["cache_path"] = self._cache_file_path(tool_path).relative_to(self._cache_dir).as_posix()
+            next_files[tool_path] = metadata
+        for relative_path in sorted(referenced_assets):
+            entry_pair = readable_entries.get(relative_path)
+            if entry_pair is None:
+                continue
+            entry, permission = entry_pair
+            tool_path = _tool_path(relative_path)
+            if not _is_markdown_asset(tool_path):
+                continue
+            metadata = _entry_metadata(permission, entry, tool_path)
+            metadata["kind"] = "asset"
+            old_metadata = previous_files.get(tool_path) if isinstance(previous_files, dict) else None
+            if _metadata_changed(old_metadata, metadata):
+                content, truncated = await self._client.read_bytes(entry.path, max_bytes=self._sync.max_file_size_bytes)
+                if truncated:
+                    continue
+                cache_path = self._cache_file_path(tool_path)
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_bytes(content)
             metadata["cache_path"] = self._cache_file_path(tool_path).relative_to(self._cache_dir).as_posix()
             next_files[tool_path] = metadata
         _write_json(
@@ -102,6 +140,8 @@ class WebDAVContextService:
         documents: list[WebDAVContextDocument] = []
         for tool_path, metadata in sorted(raw_files.items()):
             if not isinstance(tool_path, str) or not isinstance(metadata, dict):
+                continue
+            if metadata.get("kind", "document") != "document":
                 continue
             cache_relative = str(metadata.get("cache_path") or "")
             if not cache_relative:
@@ -330,9 +370,51 @@ def _join_remote(root_path: str, relative_path: str) -> str:
     return "/" + (PurePosixPath(root_path.strip("/")) / relative_path).as_posix()
 
 
-def _is_allowed_file(path: str, sync: WebDAVSyncConfig) -> bool:
+def _is_text_document(path: str, sync: WebDAVSyncConfig) -> bool:
     suffix = PurePosixPath(path).suffix.lower()
-    return suffix in set(sync.extensions) and suffix in WebDAVContextService.allowed_suffixes
+    return suffix in set(sync.extensions) and suffix in WebDAVContextService.text_suffixes
+
+
+def _is_markdown_asset(path: str) -> bool:
+    return PurePosixPath(path).suffix.lower() in WebDAVContextService.markdown_asset_suffixes
+
+
+def _markdown_asset_references(content: str, document_relative_path: str) -> set[str]:
+    document_parent = PurePosixPath(document_relative_path).parent
+    references: set[str] = set()
+    for raw_target in _markdown_image_targets(content):
+        target = _normalize_markdown_asset_target(raw_target)
+        if target is None:
+            continue
+        if target.startswith("/"):
+            candidate = target.lstrip("/")
+        else:
+            candidate = (document_parent / target).as_posix()
+        try:
+            normalized = PurePosixPath(candidate)
+            if any(part in {"", ".", ".."} for part in normalized.parts):
+                continue
+        except ValueError:
+            continue
+        if normalized.suffix.lower() in WebDAVContextService.markdown_asset_suffixes:
+            references.add(normalized.as_posix())
+    return references
+
+
+def _markdown_image_targets(content: str) -> list[str]:
+    targets = re.findall(r"!\[[^\]]*]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", content)
+    targets.extend(re.findall(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"']", content, flags=re.IGNORECASE))
+    return targets
+
+
+def _normalize_markdown_asset_target(raw_target: str) -> str | None:
+    value = raw_target.strip()
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme or parsed.netloc or value.startswith(("#", "data:")):
+        return None
+    return unquote(parsed.path).strip()
 
 
 def _read_json(path: Path) -> dict[str, Any]:

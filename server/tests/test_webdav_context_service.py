@@ -159,6 +159,76 @@ def test_webdav_context_refresh_uses_single_root_and_permission_paths(tmp_path) 
     assert requested_urls.count("https://dav.jianguoyun.com/dav/notebook/00AgentInbox/") == 1
 
 
+def test_webdav_context_refresh_caches_markdown_referenced_assets(tmp_path) -> None:
+    png_bytes = b"\x89PNG\r\n\x1a\nasset"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PROPFIND" and str(request.url).endswith("/dav/notebook/"):
+            return httpx.Response(
+                207,
+                text="""
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/dav/notebook/</d:href>
+    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/notebook/report.md</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype/>
+      <d:getcontentlength>28</d:getcontentlength>
+      <d:getlastmodified>Sat, 22 Aug 2026 01:00:00 GMT</d:getlastmodified>
+      <d:getetag>"report"</d:getetag>
+    </d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/notebook/images/</d:href>
+    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+  </d:response>
+</d:multistatus>
+""",
+            )
+        if request.method == "PROPFIND" and str(request.url).endswith("/dav/notebook/images/"):
+            return httpx.Response(
+                207,
+                text="""
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/dav/notebook/images/</d:href>
+    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/notebook/images/chart.png</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype/>
+      <d:getcontentlength>13</d:getcontentlength>
+      <d:getlastmodified>Sat, 22 Aug 2026 01:00:01 GMT</d:getlastmodified>
+      <d:getetag>"chart"</d:getetag>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>
+""",
+            )
+        if request.method == "GET" and str(request.url).endswith("/report.md"):
+            return httpx.Response(200, content="报告\n\n![chart](images/chart.png)".encode())
+        if request.method == "GET" and str(request.url).endswith("/images/chart.png"):
+            return httpx.Response(200, content=png_bytes)
+        return httpx.Response(500)
+
+    service = _service(tmp_path, httpx.MockTransport(handler))
+
+    asyncio.run(service.refresh())
+
+    assert [(item.path, item.content) for item in service.documents()] == [
+        ("/webdav/report.md", "报告\n\n![chart](images/chart.png)")
+    ]
+    index = json.loads((tmp_path / "context" / "webdav" / "index.json").read_text(encoding="utf-8"))
+    assert index["files"]["/webdav/report.md"]["kind"] == "document"
+    assert index["files"]["/webdav/images/chart.png"]["kind"] == "asset"
+    asset_cache = tmp_path / "context" / "webdav" / index["files"]["/webdav/images/chart.png"]["cache_path"]
+    assert asset_cache.read_bytes() == png_bytes
+
+
 def test_webdav_context_write_rejects_protected_parent_path(tmp_path) -> None:
     service = _service(tmp_path, httpx.MockTransport(lambda request: httpx.Response(500)))
 
