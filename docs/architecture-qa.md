@@ -231,33 +231,32 @@ workspace/
 - `context_snapshot`
 - 创建时间
 
-其中 `context_snapshots` 包含当时允许的 roots、tools、knowledge 文档列表和归属隔离配置。
+其中 `context_snapshots` 包含当时允许的权限规则、tools、knowledge 文档列表和归属隔离配置。
 
 ## 目录权限
 
 **Q: 坚果云或本地目录怎么限制？**
 
-工具调用必须使用 `root_id + relative path`，不能让模型直接传任意绝对路径。
+早期方案是工具调用使用 `root_id + relative path`；当前已被单一 WebDAV 同步根目录 + 相对路径权限规则替代。
 
 ```json
 {
-  "root_id": "docs",
-  "path": "日报/2026-08-20.md"
+  "absolute_path": "/webdav/00AgentInbox/日报/2026-08-20.md"
 }
 ```
 
 后端根据 Run 快照解析：
 
 ```text
-context root path + relative path
+nutstore.root_path + context.webdav_sync.root_path + /webdav/ 后的相对路径
 ```
 
 必须校验：
 
-- `root_id` 存在于当前 Run 的 Context 快照。
-- `path` 不包含 `..`。
-- 写操作必须要求 root `access=readwrite`。
-- 任何操作都不能逃出 root。
+- `/webdav/...` 后的相对路径不包含 `..`。
+- 写操作必须匹配当前 Run 的 Context 快照中 `writable=true` 且 `protected=false` 的最长前缀权限规则。
+- 父级 `protected=true` 可以覆盖整个同步根，子目录可通过更具体的权限规则开放写入。
+- 任何操作都不能逃出 `context.webdav_sync.root_path`。
 
 ## 微信
 

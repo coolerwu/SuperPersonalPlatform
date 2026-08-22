@@ -34,7 +34,7 @@ def _webdav_context_service(context_workspace: Path) -> WebDAVContextService | N
         return None
     if not settings.nutstore.enabled or not settings.context.webdav_sync.enabled:
         return None
-    if not settings.context.webdav_roots:
+    if not settings.context.webdav_permissions:
         return None
     return WebDAVContextService(
         workspace=workspace,
@@ -79,8 +79,8 @@ def _search_context_tool(service: ContextKnowledgeService, webdav_service: WebDA
         search_context,
         name="search_context",
         description=(
-            "Search local context and synced readable WebDAV roots for relevant knowledge. "
-            "Local hits use /files/... paths; WebDAV hits use /webdav/{root_id}/... paths. Args: query, top_k."
+            "Search local context and synced readable WebDAV knowledge for relevant information. "
+            "Local hits use /files/... paths; WebDAV hits use /webdav/... paths. Args: query, top_k."
         ),
     )
 
@@ -112,10 +112,10 @@ def _write_context_tool(service: ContextKnowledgeService, webdav_service: WebDAV
         name="write_context",
         description=(
             "Write approved knowledge to workspace/context/knowledge/files. "
-            "For WebDAV writable roots, use /webdav/{root_id}/path.ext; protected roots cannot be written. "
+            "For writable WebDAV permission paths, use /webdav/path.ext; protected paths cannot be written. "
             "Do not use for personal memory, user preferences, future conversation rules, or 'remember this' requests; "
             "use built-in write_file('/memories/...') for those. "
-            "Args: type='knowledge', absolute_path like '/files/wechat.md' or '/webdav/agent_inbox/wechat.md', "
+            "Args: type='knowledge', absolute_path like '/files/wechat.md' or '/webdav/00AgentInbox/wechat.md', "
             "content, mode append|overwrite|create. "
             "Only use after explicit user approval."
         ),

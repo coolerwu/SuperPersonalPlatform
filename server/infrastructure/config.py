@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -36,34 +36,33 @@ class NutstoreConfig:
 
 
 @dataclass(frozen=True)
-class WebDAVContextRoot:
-    id: str
-    name: str
+class WebDAVPermission:
     path: str
     readable: bool = True
     writable: bool = False
     protected: bool = False
 
     def __post_init__(self) -> None:
-        if not self.id.strip():
-            raise AgentConfigError("context.webdav_roots[].id is required")
-        if any(part in self.id for part in ("/", "\\")) or self.id in {".", ".."}:
-            raise AgentConfigError("context.webdav_roots[].id must be a single path segment")
-        if not self.path.strip().startswith("/"):
-            raise AgentConfigError(f"context.webdav_roots[{self.id}].path must start with /")
+        object.__setattr__(self, "path", _normalize_posix_path(self.path))
+        if not self.path.startswith("/"):
+            raise AgentConfigError("context.webdav_permissions[].path must start with /")
         if self.protected and self.writable:
-            raise AgentConfigError(f"context.webdav_roots[{self.id}] cannot be both protected and writable")
+            raise AgentConfigError(f"context.webdav_permissions[{self.path}] cannot be both protected and writable")
 
 
 @dataclass(frozen=True)
 class WebDAVSyncConfig:
     enabled: bool = False
+    root_path: str = "/"
     interval_seconds: int = 600
     max_files_per_root: int = 500
     max_file_size_bytes: int = 524288
     extensions: tuple[str, ...] = (".md", ".txt", ".json", ".jsonl")
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "root_path", _normalize_posix_path(self.root_path))
+        if not self.root_path.startswith("/"):
+            raise AgentConfigError("context.webdav_sync.root_path must start with /")
         if self.interval_seconds < 60:
             raise AgentConfigError("context.webdav_sync.interval_seconds must be at least 60")
         if self.max_files_per_root < 1:
@@ -75,7 +74,7 @@ class WebDAVSyncConfig:
 @dataclass(frozen=True)
 class ContextConfig:
     webdav_sync: WebDAVSyncConfig = field(default_factory=WebDAVSyncConfig)
-    webdav_roots: tuple[WebDAVContextRoot, ...] = ()
+    webdav_permissions: tuple[WebDAVPermission, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -240,43 +239,109 @@ def parse_context_config(raw: Any) -> ContextConfig:
     if not isinstance(raw, dict):
         raise ValueError("context must be an object")
     sync_raw = raw.get("webdav_sync") or {}
-    roots_raw = raw.get("webdav_roots") or []
+    permissions_raw = raw.get("webdav_permissions")
+    legacy_roots_raw = raw.get("webdav_roots") or []
     if not isinstance(sync_raw, dict):
         raise ValueError("context.webdav_sync must be an object")
-    if not isinstance(roots_raw, list):
+    if permissions_raw is not None and not isinstance(permissions_raw, list):
+        raise ValueError("context.webdav_permissions must be a list")
+    if not isinstance(legacy_roots_raw, list):
         raise ValueError("context.webdav_roots must be a list")
     extensions_raw = sync_raw.get("extensions") or [".md", ".txt", ".json", ".jsonl"]
     if not isinstance(extensions_raw, list):
         raise ValueError("context.webdav_sync.extensions must be a list")
     extensions = tuple(_normalize_extension(item) for item in extensions_raw if str(item).strip())
-    roots = tuple(_parse_webdav_root(item) for item in roots_raw)
-    root_ids = {root.id for root in roots}
-    if len(root_ids) != len(roots):
-        raise AgentConfigError("context.webdav_roots[].id must be unique")
+    if permissions_raw is None and legacy_roots_raw:
+        root_path, permissions = _parse_legacy_webdav_roots(legacy_roots_raw)
+    else:
+        root_path = str(sync_raw.get("root_path") or "/").strip() or "/"
+        permissions = tuple(_parse_webdav_permission(item) for item in (permissions_raw or []))
+    permission_paths = {permission.path for permission in permissions}
+    if len(permission_paths) != len(permissions):
+        raise AgentConfigError("context.webdav_permissions[].path must be unique")
     return ContextConfig(
         webdav_sync=WebDAVSyncConfig(
             enabled=bool(sync_raw.get("enabled", False)),
+            root_path=root_path,
             interval_seconds=int(sync_raw.get("interval_seconds") or 600),
             max_files_per_root=int(sync_raw.get("max_files_per_root") or 500),
             max_file_size_bytes=int(sync_raw.get("max_file_size_bytes") or 524288),
             extensions=extensions or (".md", ".txt", ".json", ".jsonl"),
         ),
-        webdav_roots=roots,
+        webdav_permissions=permissions,
     )
 
 
-def _parse_webdav_root(raw: Any) -> WebDAVContextRoot:
+def _parse_webdav_permission(raw: Any) -> WebDAVPermission:
     if not isinstance(raw, dict):
-        raise ValueError("context.webdav_roots[] must be an object")
-    root_id = str(raw.get("id") or "").strip()
-    return WebDAVContextRoot(
-        id=root_id,
-        name=str(raw.get("name") or root_id).strip(),
+        raise ValueError("context.webdav_permissions[] must be an object")
+    return WebDAVPermission(
         path=str(raw.get("path") or "").strip(),
         readable=bool(raw.get("readable", True)),
         writable=bool(raw.get("writable", False)),
         protected=bool(raw.get("protected", False)),
     )
+
+
+def _parse_legacy_webdav_roots(raw_roots: list[Any]) -> tuple[str, tuple[WebDAVPermission, ...]]:
+    roots = [_parse_legacy_webdav_root(item) for item in raw_roots]
+    paths = tuple(root["path"] for root in roots)
+    root_path = _common_parent_path(paths)
+    permissions = tuple(
+        WebDAVPermission(
+            path=_relative_permission_path(str(root["path"]), root_path),
+            readable=bool(root["readable"]),
+            writable=bool(root["writable"]),
+            protected=bool(root["protected"]),
+        )
+        for root in roots
+    )
+    return root_path, permissions
+
+
+def _parse_legacy_webdav_root(raw: Any) -> dict[str, object]:
+    if not isinstance(raw, dict):
+        raise ValueError("context.webdav_roots[] must be an object")
+    path = str(raw.get("path") or "").strip()
+    if not path.startswith("/"):
+        raise AgentConfigError("context.webdav_roots[].path must start with /")
+    if bool(raw.get("protected", False)) and bool(raw.get("writable", False)):
+        raise AgentConfigError(f"context.webdav_roots[{path}] cannot be both protected and writable")
+    return {
+        "path": _normalize_posix_path(path),
+        "readable": bool(raw.get("readable", True)),
+        "writable": bool(raw.get("writable", False)),
+        "protected": bool(raw.get("protected", False)),
+    }
+
+
+def _common_parent_path(paths: tuple[str, ...]) -> str:
+    if not paths:
+        return "/"
+    split_paths = [tuple(part for part in path.strip("/").split("/") if part) for path in paths]
+    common: list[str] = []
+    for parts in zip(*split_paths):
+        if len(set(parts)) != 1:
+            break
+        common.append(parts[0])
+    return "/" + "/".join(common) if common else "/"
+
+
+def _relative_permission_path(path: str, root_path: str) -> str:
+    path_parts = PurePosixPath(path.strip("/")).parts if path.strip("/") else ()
+    root_parts = PurePosixPath(root_path.strip("/")).parts if root_path.strip("/") else ()
+    relative = path_parts[len(root_parts) :]
+    return "/" + "/".join(relative) if relative else "/"
+
+
+def _normalize_posix_path(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith("/"):
+        return raw
+    normalized = "/" + PurePosixPath(raw).as_posix().strip("/")
+    return "/" if normalized == "/" else normalized.rstrip("/")
 
 
 def _normalize_extension(value: Any) -> str:

@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from server.domain.agent_config import AgentConfigError
-from server.infrastructure.config import ContextConfig, NutstoreConfig, WebDAVContextRoot, WebDAVSyncConfig
+from server.infrastructure.config import ContextConfig, NutstoreConfig, WebDAVPermission, WebDAVSyncConfig
 from server.infrastructure.nutstore_webdav import NutstoreWebDAVClient, WebDAVEntry
 
 
@@ -61,34 +61,30 @@ class WebDAVContextService:
         if not isinstance(previous_files, dict):
             previous_files = {}
         next_files: dict[str, dict[str, Any]] = {}
-        for root in self._context.webdav_roots:
-            if not root.readable:
+        entries = await self._scan_root()
+        scan_root = _full_remote_root(self._nutstore.root_path, self._sync.root_path)
+        for entry in entries[: self._sync.max_files_per_root]:
+            relative_path = _relative_to_root(scan_root, entry.path)
+            permission = _permission_for_path("/" + relative_path, self._context.webdav_permissions)
+            if permission is None or not permission.readable:
                 continue
-            entries = await self._scan_root(root)
-            for entry in entries[: self._sync.max_files_per_root]:
-                tool_path = _tool_path(
-                    root.id,
-                    _relative_to_root(
-                        _full_remote_root(self._nutstore.root_path, root.path),
-                        entry.path,
-                    ),
-                )
-                if not _is_allowed_file(tool_path, self._sync):
+            tool_path = _tool_path(relative_path)
+            if not _is_allowed_file(tool_path, self._sync):
+                continue
+            metadata = _entry_metadata(permission, entry, tool_path)
+            old_metadata = previous_files.get(tool_path) if isinstance(previous_files, dict) else None
+            if _metadata_changed(old_metadata, metadata):
+                content, truncated = await self._client.read_bytes(entry.path, max_bytes=self._sync.max_file_size_bytes)
+                if truncated:
                     continue
-                metadata = _entry_metadata(root, entry, tool_path)
-                old_metadata = previous_files.get(tool_path) if isinstance(previous_files, dict) else None
-                if _metadata_changed(old_metadata, metadata):
-                    content, truncated = await self._client.read_bytes(entry.path, max_bytes=self._sync.max_file_size_bytes)
-                    if truncated:
-                        continue
-                    cache_path = self._cache_file_path(tool_path)
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        cache_path.write_text(content.decode("utf-8"), encoding="utf-8")
-                    except UnicodeDecodeError:
-                        continue
-                metadata["cache_path"] = self._cache_file_path(tool_path).relative_to(self._cache_dir).as_posix()
-                next_files[tool_path] = metadata
+                cache_path = self._cache_file_path(tool_path)
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    cache_path.write_text(content.decode("utf-8"), encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+            metadata["cache_path"] = self._cache_file_path(tool_path).relative_to(self._cache_dir).as_posix()
+            next_files[tool_path] = metadata
         _write_json(
             self._index_path,
             {
@@ -121,9 +117,10 @@ class WebDAVContextService:
         return documents
 
     async def write(self, *, absolute_path: str, content: str, mode: str = "append") -> dict[str, object]:
-        root, relative = self._resolve_write_path(absolute_path)
-        if root.protected or not root.writable:
-            raise WebDAVContextError("webdav root is protected or not writable")
+        relative = self._resolve_write_path(absolute_path)
+        permission = _permission_for_path("/" + relative, self._context.webdav_permissions)
+        if permission is None or permission.protected or not permission.writable:
+            raise WebDAVContextError("webdav path is protected or not writable")
         write_mode = str(mode or "append").strip().lower()
         if write_mode not in {"append", "overwrite", "create"}:
             raise WebDAVContextError("mode must be append, overwrite, or create")
@@ -134,7 +131,7 @@ class WebDAVContextService:
         if PurePosixPath(relative).suffix.lower() not in set(self._sync.extensions):
             raise WebDAVContextError("absolute_path suffix is not allowed")
 
-        remote_path = _join_remote(root.path, relative)
+        remote_path = _join_remote(self._sync.root_path, relative)
         if write_mode == "append":
             try:
                 existing, truncated = await self._client.read_bytes(remote_path, max_bytes=self._sync.max_file_size_bytes)
@@ -155,22 +152,26 @@ class WebDAVContextService:
             next_content = content
 
         await self._client.write_bytes(remote_path, next_content.encode("utf-8"), create_parent=True)
-        tool_path = f"/webdav/{root.id}/{relative}"
+        tool_path = _tool_path(relative)
         cache_path = self._cache_file_path(tool_path)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(next_content, encoding="utf-8")
-        self._update_cached_write(root=root, tool_path=tool_path, remote_path=remote_path, bytes_count=len(next_content.encode("utf-8")))
+        self._update_cached_write(
+            permission=permission,
+            tool_path=tool_path,
+            remote_path=remote_path,
+            bytes_count=len(next_content.encode("utf-8")),
+        )
         return {
             "type": "knowledge",
             "backend": "webdav",
-            "root_id": root.id,
             "path": tool_path,
             "mode": write_mode,
             "bytes": len(next_content.encode("utf-8")),
         }
 
-    async def _scan_root(self, root: WebDAVContextRoot) -> list[WebDAVEntry]:
-        pending = [root.path]
+    async def _scan_root(self) -> list[WebDAVEntry]:
+        pending = [self._sync.root_path]
         files: list[WebDAVEntry] = []
         while pending and len(files) < self._sync.max_files_per_root:
             current = pending.pop(0)
@@ -183,21 +184,17 @@ class WebDAVContextService:
                         break
         return files
 
-    def _resolve_write_path(self, absolute_path: str) -> tuple[WebDAVContextRoot, str]:
+    def _resolve_write_path(self, absolute_path: str) -> str:
         value = str(absolute_path or "").strip()
         if not value.startswith("/webdav/"):
-            raise WebDAVContextError("webdav absolute_path must start with /webdav/{root_id}/")
+            raise WebDAVContextError("webdav absolute_path must start with /webdav/")
         parts = PurePosixPath(value).parts
-        if len(parts) < 4:
-            raise WebDAVContextError("webdav absolute_path must include root id and file path")
-        root_id = parts[2]
-        root = next((item for item in self._context.webdav_roots if item.id == root_id), None)
-        if root is None:
-            raise WebDAVContextError("webdav root does not exist")
-        relative_parts = parts[3:]
+        if len(parts) < 3:
+            raise WebDAVContextError("webdav absolute_path must include file path")
+        relative_parts = parts[2:]
         if any(part in {"", ".", ".."} for part in relative_parts):
             raise WebDAVContextError("webdav absolute_path must not contain . or ..")
-        return root, "/".join(relative_parts)
+        return "/".join(relative_parts)
 
     def _is_stale(self) -> bool:
         index = _read_json(self._index_path)
@@ -215,19 +212,19 @@ class WebDAVContextService:
         safe = tool_path.removeprefix("/").replace("/", "__")
         return self._files_dir / safe
 
-    def _update_cached_write(self, *, root: WebDAVContextRoot, tool_path: str, remote_path: str, bytes_count: int) -> None:
+    def _update_cached_write(self, *, permission: WebDAVPermission, tool_path: str, remote_path: str, bytes_count: int) -> None:
         index = _read_json(self._index_path)
         files = index.get("files") if isinstance(index, dict) else {}
         if not isinstance(files, dict):
             files = {}
         files[tool_path] = {
-            "root_id": root.id,
+            "permission_path": permission.path,
             "remote_path": remote_path,
             "size": bytes_count,
             "modified": _now(),
             "etag": "",
-            "protected": root.protected,
-            "writable": root.writable,
+            "protected": permission.protected,
+            "writable": permission.writable,
             "cache_path": self._cache_file_path(tool_path).relative_to(self._cache_dir).as_posix(),
         }
         _write_json(self._index_path, {"schema_version": 1, "updated_at": _now(), "files": files})
@@ -254,16 +251,16 @@ def run_async(coro: Any) -> Any:
     return result.get("value")
 
 
-def _entry_metadata(root: WebDAVContextRoot, entry: WebDAVEntry, tool_path: str) -> dict[str, Any]:
+def _entry_metadata(permission: WebDAVPermission, entry: WebDAVEntry, tool_path: str) -> dict[str, Any]:
     return {
-        "root_id": root.id,
+        "permission_path": permission.path,
         "remote_path": entry.path,
         "tool_path": tool_path,
         "size": entry.size,
         "modified": entry.modified,
         "etag": entry.etag,
-        "protected": root.protected,
-        "writable": root.writable,
+        "protected": permission.protected,
+        "writable": permission.writable,
     }
 
 
@@ -276,8 +273,23 @@ def _metadata_changed(old: Any, new: dict[str, Any]) -> bool:
     return False
 
 
-def _tool_path(root_id: str, relative_path: str) -> str:
-    return f"/webdav/{root_id}/{relative_path.lstrip('/')}"
+def _tool_path(relative_path: str) -> str:
+    return f"/webdav/{relative_path.lstrip('/')}"
+
+
+def _permission_for_path(path: str, permissions: tuple[WebDAVPermission, ...]) -> WebDAVPermission | None:
+    normalized = _normalize_remote_path(path)
+    matches = [permission for permission in permissions if _is_permission_match(normalized, permission.path)]
+    if not matches:
+        return None
+    return max(matches, key=lambda permission: len(PurePosixPath(_normalize_remote_path(permission.path)).parts))
+
+
+def _is_permission_match(path: str, permission_path: str) -> bool:
+    normalized_permission = _normalize_remote_path(permission_path)
+    if normalized_permission == "/":
+        return True
+    return path == normalized_permission or _is_child_path(path, normalized_permission)
 
 
 def _relative_to_root(root_path: str, entry_path: str) -> str:
@@ -298,6 +310,20 @@ def _full_remote_root(nutstore_root_path: str, context_root_path: str) -> str:
     if root == PurePosixPath("/"):
         return "/" + context if context else "/"
     return "/" + (root / context).as_posix().strip("/")
+
+
+def _is_child_path(path: str, parent: str) -> bool:
+    path_value = PurePosixPath(_normalize_remote_path(path))
+    parent_value = PurePosixPath(_normalize_remote_path(parent))
+    try:
+        path_value.relative_to(parent_value)
+    except ValueError:
+        return False
+    return path_value != parent_value
+
+
+def _normalize_remote_path(path: str) -> str:
+    return "/" + str(PurePosixPath("/" + str(path or "/").strip("/"))).strip("/")
 
 
 def _join_remote(root_path: str, relative_path: str) -> str:

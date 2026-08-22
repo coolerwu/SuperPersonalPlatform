@@ -11,7 +11,7 @@ const AGENT_TOOL_CARDS = [
   {
     id: "write_context",
     name: "Write Context",
-    summary: "用户确认后写入 /files/... 或可写 WebDAV root。",
+    summary: "用户确认后写入 /files/... 或可写 WebDAV 权限路径。",
     badge: "需确认",
   },
   {
@@ -50,24 +50,21 @@ const DEFAULT_CONFIG = {
   context: {
     webdav_sync: {
       enabled: false,
+      root_path: "/notebook",
       interval_seconds: 600,
       max_files_per_root: 500,
       max_file_size_bytes: 524288,
       extensions: [".md", ".txt", ".json", ".jsonl"],
     },
-    webdav_roots: [
+    webdav_permissions: [
       {
-        id: "my_notes",
-        name: "我的心得",
-        path: "/Knowledge/notes",
+        path: "/",
         readable: true,
         writable: false,
         protected: true,
       },
       {
-        id: "agent_inbox",
-        name: "Agent 写入区",
-        path: "/AgentWorkspace/inbox",
+        path: "/00AgentInbox",
         readable: true,
         writable: true,
         protected: false,
@@ -148,12 +145,12 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
     });
   }
 
-  function updateWebdavRoot(index, field, value) {
+  function updateWebdavPermission(index, field, value) {
     update((next) => {
-      const root = { ...next.context.webdav_roots[index], [field]: value };
-      if (field === "protected" && value) root.writable = false;
-      if (field === "writable" && value) root.protected = false;
-      next.context.webdav_roots[index] = root;
+      const permission = { ...next.context.webdav_permissions[index], [field]: value };
+      if (field === "protected" && value) permission.writable = false;
+      if (field === "writable" && value) permission.protected = false;
+      next.context.webdav_permissions[index] = permission;
     });
   }
 
@@ -258,7 +255,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
         <div className="config-section-title">
           <div>
             <strong>Context WebDAV 同步</strong>
-            <span>context.webdav_sync / context.webdav_roots</span>
+            <span>context.webdav_sync / context.webdav_permissions</span>
           </div>
           <label className="config-toggle">
             <input
@@ -271,6 +268,13 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
           </label>
         </div>
         <div className="config-grid">
+          <ConfigField label="同步根目录">
+            <input
+              value={config.context.webdav_sync.root_path}
+              readOnly={readOnly}
+              onChange={(event) => updateWebdavSync("root_path", event.target.value)}
+            />
+          </ConfigField>
           <ConfigField label="同步间隔秒数">
             <input
               type="number"
@@ -280,7 +284,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
               onChange={(event) => updateWebdavSync("interval_seconds", Number(event.target.value) || 600)}
             />
           </ConfigField>
-          <ConfigField label="单 Root 最大文件数">
+          <ConfigField label="最大文件数">
             <input
               type="number"
               min="1"
@@ -307,16 +311,13 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
           </ConfigField>
         </div>
         <ConfigList
-          title="WebDAV Roots"
-          subtitle="远端路径按 nutstore.root_path + WebDAV 路径解析；本地缓存落在 workspace/context/webdav/"
+          title="WebDAV 权限规则"
+          subtitle="同步根目录下的相对路径权限；工具路径统一是 /webdav/..."
           readOnly={readOnly}
           onAdd={() =>
             update((next) => {
-              const id = `webdav_${next.context.webdav_roots.length + 1}`;
-              next.context.webdav_roots.push({
-                id,
-                name: id,
-                path: "/",
+              next.context.webdav_permissions.push({
+                path: "/new-folder",
                 readable: true,
                 writable: false,
                 protected: true,
@@ -324,55 +325,53 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
             })
           }
         >
-          {config.context.webdav_roots.map((root, index) => (
-            <div className="config-item" key={`webdav-root-${index}`}>
+          {config.context.webdav_permissions.map((permission, index) => (
+            <div className="config-item" key={`webdav-permission-${index}`}>
               <div className="config-item-title">
-                <strong>{root.id || `root_${index + 1}`}</strong>
+                <strong>{permission.path || `permission_${index + 1}`}</strong>
                 <button
                   className="icon-button delete-button"
                   type="button"
-                  title="删除 Root"
+                  title="删除权限规则"
                   disabled={readOnly}
-                  onClick={() => update((next) => next.context.webdav_roots.splice(index, 1))}
+                  onClick={() => update((next) => next.context.webdav_permissions.splice(index, 1))}
                 >
                   <Trash2 size={14} />
                 </button>
               </div>
               <div className="config-grid two">
-                <ConfigField label="ID">
-                  <input value={root.id} readOnly={readOnly} onChange={(event) => updateWebdavRoot(index, "id", event.target.value)} />
-                </ConfigField>
-                <ConfigField label="名称">
-                  <input value={root.name} readOnly={readOnly} onChange={(event) => updateWebdavRoot(index, "name", event.target.value)} />
-                </ConfigField>
-                <ConfigField label="WebDAV 路径">
-                  <input value={root.path} readOnly={readOnly} onChange={(event) => updateWebdavRoot(index, "path", event.target.value)} />
+                <ConfigField label="相对路径">
+                  <input
+                    value={permission.path}
+                    readOnly={readOnly}
+                    onChange={(event) => updateWebdavPermission(index, "path", event.target.value)}
+                  />
                 </ConfigField>
                 <div className="builtin-toggle-row">
                   <label className="config-toggle field-toggle">
                     <input
                       type="checkbox"
-                      checked={Boolean(root.readable)}
+                      checked={Boolean(permission.readable)}
                       disabled={readOnly}
-                      onChange={(event) => updateWebdavRoot(index, "readable", event.target.checked)}
+                      onChange={(event) => updateWebdavPermission(index, "readable", event.target.checked)}
                     />
                     <span>可读</span>
                   </label>
                   <label className="config-toggle field-toggle">
                     <input
                       type="checkbox"
-                      checked={Boolean(root.writable)}
+                      checked={Boolean(permission.writable)}
                       disabled={readOnly}
-                      onChange={(event) => updateWebdavRoot(index, "writable", event.target.checked)}
+                      onChange={(event) => updateWebdavPermission(index, "writable", event.target.checked)}
                     />
                     <span>可写</span>
                   </label>
                   <label className="config-toggle field-toggle">
                     <input
                       type="checkbox"
-                      checked={Boolean(root.protected)}
+                      checked={Boolean(permission.protected)}
                       disabled={readOnly}
-                      onChange={(event) => updateWebdavRoot(index, "protected", event.target.checked)}
+                      onChange={(event) => updateWebdavPermission(index, "protected", event.target.checked)}
                     />
                     <span>保护</span>
                   </label>
@@ -917,7 +916,9 @@ function ConfigFallbackEditor({ draft, onChange, readOnly, error }) {
 }
 
 function withDefaults(value) {
-  const config = mergeObjects(cloneConfig(DEFAULT_CONFIG), isPlainObject(value) ? value : {});
+  const incoming = isPlainObject(value) ? cloneConfig(value) : {};
+  migrateLegacyWebdavConfig(incoming);
+  const config = mergeObjects(cloneConfig(DEFAULT_CONFIG), incoming);
   config.llm.models = Array.isArray(config.llm.models) ? config.llm.models.map((model) => ({ ...model })) : [];
   config.agents.definitions = Array.isArray(config.agents.definitions)
     ? config.agents.definitions.map((agent) => ({
@@ -929,18 +930,35 @@ function withDefaults(value) {
   config.channels.wechat_personal.accounts = Array.isArray(config.channels.wechat_personal.accounts)
     ? config.channels.wechat_personal.accounts.map((account) => ({ ...account }))
     : [];
+  config.context.webdav_sync.root_path = normalizePath(config.context.webdav_sync.root_path || "/");
   config.context.webdav_sync.extensions = normalizeList(config.context.webdav_sync.extensions);
-  config.context.webdav_roots = Array.isArray(config.context.webdav_roots)
-    ? config.context.webdav_roots.map((root) => ({
-        ...root,
-        readable: root.readable !== false,
-        writable: Boolean(root.writable) && !Boolean(root.protected),
-        protected: Boolean(root.protected),
+  config.context.webdav_permissions = Array.isArray(config.context.webdav_permissions)
+    ? config.context.webdav_permissions.map((permission) => ({
+        path: normalizePath(permission.path || "/"),
+        readable: permission.readable !== false,
+        writable: Boolean(permission.writable) && !Boolean(permission.protected),
+        protected: Boolean(permission.protected),
       }))
     : [];
+  delete config.context.webdav_roots;
   if (config.llm.models.length === 0) config.llm.models = cloneConfig(DEFAULT_CONFIG.llm.models);
   if (config.agents.definitions.length === 0) config.agents.definitions = cloneConfig(DEFAULT_CONFIG.agents.definitions);
   return config;
+}
+
+function migrateLegacyWebdavConfig(config) {
+  if (!isPlainObject(config.context)) return;
+  const roots = Array.isArray(config.context.webdav_roots) ? config.context.webdav_roots : [];
+  if (Array.isArray(config.context.webdav_permissions) || roots.length === 0) return;
+  const rootPath = commonParentPath(roots.map((root) => normalizePath(root.path || "/")).filter(Boolean));
+  config.context.webdav_sync = isPlainObject(config.context.webdav_sync) ? config.context.webdav_sync : {};
+  if (!config.context.webdav_sync.root_path) config.context.webdav_sync.root_path = rootPath;
+  config.context.webdav_permissions = roots.map((root) => ({
+    path: relativePermissionPath(normalizePath(root.path || "/"), rootPath),
+    readable: root.readable !== false,
+    writable: Boolean(root.writable) && !Boolean(root.protected),
+    protected: Boolean(root.protected),
+  }));
 }
 
 function mergeObjects(base, incoming) {
@@ -961,6 +979,32 @@ function cloneConfig(value) {
 function normalizeList(value) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item).trim()).filter(Boolean);
+}
+
+function normalizePath(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "/";
+  const parts = raw.split("/").filter(Boolean);
+  return `/${parts.join("/")}`;
+}
+
+function commonParentPath(paths) {
+  if (!paths.length) return "/";
+  const splitPaths = paths.map((path) => normalizePath(path).split("/").filter(Boolean));
+  const common = [];
+  for (let index = 0; ; index += 1) {
+    const part = splitPaths[0]?.[index];
+    if (!part || !splitPaths.every((items) => items[index] === part)) break;
+    common.push(part);
+  }
+  return common.length ? `/${common.join("/")}` : "/";
+}
+
+function relativePermissionPath(path, rootPath) {
+  const pathParts = normalizePath(path).split("/").filter(Boolean);
+  const rootParts = normalizePath(rootPath).split("/").filter(Boolean);
+  const relative = pathParts.slice(rootParts.length);
+  return relative.length ? `/${relative.join("/")}` : "/";
 }
 
 function normalizeDeepAgent(value) {

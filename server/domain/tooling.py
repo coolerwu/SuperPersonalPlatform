@@ -17,12 +17,12 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
         id="search_context",
         name="Search Context",
-        description="Search local context files and synced readable WebDAV roots for relevant knowledge.",
+        description="Search local context files and synced readable WebDAV permission paths for relevant knowledge.",
     ),
     ToolDefinition(
         id="write_context",
         name="Write Context",
-        description="Write approved knowledge into local context files or writable non-protected WebDAV roots.",
+        description="Write approved knowledge into local context files or writable non-protected WebDAV permission paths.",
         approval_required=True,
     ),
     ToolDefinition(

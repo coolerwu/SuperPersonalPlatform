@@ -96,7 +96,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     async def lifespan(app: FastAPI):
         webdav_sync_task: asyncio.Task | None = None
         webdav_sync_stop = asyncio.Event()
-        if settings.nutstore.enabled and settings.context.webdav_sync.enabled and settings.context.webdav_roots:
+        if settings.nutstore.enabled and settings.context.webdav_sync.enabled and settings.context.webdav_permissions:
             webdav_context_service = WebDAVContextService(
                 workspace=active_workspace,
                 nutstore=settings.nutstore,

@@ -23,6 +23,7 @@ nutstore:
 context:
   webdav_sync:
     enabled: false
+    root_path: "/notebook"
     interval_seconds: 600
     max_files_per_root: 500
     max_file_size_bytes: 524288
@@ -31,16 +32,12 @@ context:
       - ".txt"
       - ".json"
       - ".jsonl"
-  webdav_roots:
-    - id: "my_notes"
-      name: "我的心得"
-      path: "/Knowledge/notes"
+  webdav_permissions:
+    - path: "/"
       readable: true
       writable: false
       protected: true
-    - id: "agent_inbox"
-      name: "Agent 写入区"
-      path: "/AgentWorkspace/inbox"
+    - path: "/00AgentInbox"
       readable: true
       writable: true
       protected: false
