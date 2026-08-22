@@ -17,6 +17,7 @@ class WebDAVEntry:
     is_dir: bool
     size: int
     modified: str
+    etag: str = ""
 
 
 class NutstoreWebDAVClient:
@@ -41,7 +42,7 @@ class NutstoreWebDAVClient:
             content=(
                 "<?xml version='1.0' encoding='utf-8'?>"
                 "<propfind xmlns='DAV:'><prop>"
-                "<resourcetype/><getcontentlength/><getlastmodified/>"
+                "<resourcetype/><getcontentlength/><getlastmodified/><getetag/>"
                 "</prop></propfind>"
             ),
         )
@@ -127,7 +128,11 @@ class NutstoreWebDAVClient:
         root = PurePosixPath(self._root_path)
         target = root
         if requested != "/":
-            target = root / requested.lstrip("/")
+            requested_path = PurePosixPath(requested)
+            if root != PurePosixPath("/") and _is_relative_to(requested_path, root):
+                target = requested_path
+            else:
+                target = root / requested.lstrip("/")
         normalized = _normalize_path(str(target), allow_empty=True)
         if directory and not normalized.endswith("/"):
             normalized += "/"
@@ -152,6 +157,7 @@ class NutstoreWebDAVClient:
             is_dir = prop.find("d:resourcetype/d:collection", ns) is not None
             size_text = prop.findtext("d:getcontentlength", default="0", namespaces=ns)
             modified = prop.findtext("d:getlastmodified", default="", namespaces=ns)
+            etag = prop.findtext("d:getetag", default="", namespaces=ns)
             entries.append(
                 WebDAVEntry(
                     path=path,
@@ -159,6 +165,7 @@ class NutstoreWebDAVClient:
                     is_dir=is_dir,
                     size=int(size_text or 0),
                     modified=modified,
+                    etag=etag.strip('"'),
                 )
             )
         return tuple(entries)
@@ -198,3 +205,11 @@ def _normalize_path(path: str, *, allow_empty: bool = False) -> str:
             raise AgentConfigError("path must not contain . or ..")
         parts.append(part)
     return "/" + "/".join(parts)
+
+
+def _is_relative_to(path: PurePosixPath, root: PurePosixPath) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True

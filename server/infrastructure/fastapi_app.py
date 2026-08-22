@@ -1,4 +1,5 @@
 import os
+import asyncio
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +22,7 @@ from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.app.wechat_channel_manager import WechatChannelManager
 from server.app.workspace_file_service import WorkspaceFileService
+from server.app.webdav_context_service import WebDAVContextService
 from server.domain.auth import AuthToken
 from server.infrastructure.config import Settings, load_settings
 from server.infrastructure.session import SessionCodec
@@ -84,19 +86,38 @@ def install_request_logging(app: FastAPI, container: AppContainer) -> None:
 
 
 def create_app(settings: Settings | None = None, workspace: Path | None = None) -> FastAPI:
+    active_workspace = workspace or current_workspace()
     if settings is None:
-        active_workspace = workspace or current_workspace()
         settings = load_settings(active_workspace / "config.yaml")
 
-    container = create_container(settings, workspace)
+    container = create_container(settings, active_workspace)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        webdav_sync_task: asyncio.Task | None = None
+        webdav_sync_stop = asyncio.Event()
+        if settings.nutstore.enabled and settings.context.webdav_sync.enabled and settings.context.webdav_roots:
+            webdav_context_service = WebDAVContextService(
+                workspace=active_workspace,
+                nutstore=settings.nutstore,
+                context=settings.context,
+            )
+            webdav_sync_task = asyncio.create_task(
+                _run_webdav_context_sync(
+                    webdav_context_service,
+                    interval_seconds=settings.context.webdav_sync.interval_seconds,
+                    stop=webdav_sync_stop,
+                    system_log_service=container.system_log_service,
+                )
+            )
         if container.wechat_channel_manager is not None:
             await container.wechat_channel_manager.auto_start_all()
         try:
             yield
         finally:
+            if webdav_sync_task is not None:
+                webdav_sync_stop.set()
+                await webdav_sync_task
             if container.wechat_channel_manager is not None:
                 await container.wechat_channel_manager.stop_all()
 
@@ -111,3 +132,22 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     project_root = Path(__file__).resolve().parents[2]
     mount_frontend(app, container, project_root / "web" / "dist")
     return app
+
+
+async def _run_webdav_context_sync(
+    service: WebDAVContextService,
+    *,
+    interval_seconds: int,
+    stop: asyncio.Event,
+    system_log_service: SystemLogService,
+) -> None:
+    while not stop.is_set():
+        try:
+            await service.refresh()
+            system_log_service.append_line("webdav_context_sync status=ok")
+        except Exception as exc:  # noqa: BLE001
+            system_log_service.append_line(f"webdav_context_sync status=failed type={exc.__class__.__name__} message={exc}")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
+        except asyncio.TimeoutError:
+            pass

@@ -20,6 +20,30 @@ nutstore:
   username: ""
   password: ""
   root_path: "/"
+context:
+  webdav_sync:
+    enabled: false
+    interval_seconds: 600
+    max_files_per_root: 500
+    max_file_size_bytes: 524288
+    extensions:
+      - ".md"
+      - ".txt"
+      - ".json"
+      - ".jsonl"
+  webdav_roots:
+    - id: "my_notes"
+      name: "我的心得"
+      path: "/Knowledge/notes"
+      readable: true
+      writable: false
+      protected: true
+    - id: "agent_inbox"
+      name: "Agent 写入区"
+      path: "/AgentWorkspace/inbox"
+      readable: true
+      writable: true
+      protected: false
 channels:
   wechat_personal:
     enabled: false

@@ -5,13 +5,13 @@ const AGENT_TOOL_CARDS = [
   {
     id: "search_context",
     name: "Search Context",
-    summary: "搜索 workspace/context/knowledge/files 里的知识。",
+    summary: "搜索本地知识和已同步的 WebDAV 只读目录。",
     badge: "只读",
   },
   {
     id: "write_context",
     name: "Write Context",
-    summary: "用户确认后写入 /files/*.md、*.txt 或 *.jsonl。",
+    summary: "用户确认后写入 /files/... 或可写 WebDAV root。",
     badge: "需确认",
   },
   {
@@ -46,6 +46,33 @@ const DEFAULT_CONFIG = {
     username: "",
     password: "",
     root_path: "/",
+  },
+  context: {
+    webdav_sync: {
+      enabled: false,
+      interval_seconds: 600,
+      max_files_per_root: 500,
+      max_file_size_bytes: 524288,
+      extensions: [".md", ".txt", ".json", ".jsonl"],
+    },
+    webdav_roots: [
+      {
+        id: "my_notes",
+        name: "我的心得",
+        path: "/Knowledge/notes",
+        readable: true,
+        writable: false,
+        protected: true,
+      },
+      {
+        id: "agent_inbox",
+        name: "Agent 写入区",
+        path: "/AgentWorkspace/inbox",
+        readable: true,
+        writable: true,
+        protected: false,
+      },
+    ],
   },
   channels: {
     wechat_personal: {
@@ -113,6 +140,21 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
     const next = cloneConfig(config);
     mutator(next);
     onChange(dumpSimpleYaml(next));
+  }
+
+  function updateWebdavSync(field, value) {
+    update((next) => {
+      next.context.webdav_sync = { ...next.context.webdav_sync, [field]: value };
+    });
+  }
+
+  function updateWebdavRoot(index, field, value) {
+    update((next) => {
+      const root = { ...next.context.webdav_roots[index], [field]: value };
+      if (field === "protected" && value) root.writable = false;
+      if (field === "writable" && value) root.protected = false;
+      next.context.webdav_roots[index] = root;
+    });
   }
 
   if (parsed.error) {
@@ -210,6 +252,135 @@ export function ConfigVisualEditor({ draft, onChange, readOnly }) {
             />
           </ConfigField>
         </div>
+      </section>
+
+      <section className="config-section">
+        <div className="config-section-title">
+          <div>
+            <strong>Context WebDAV 同步</strong>
+            <span>context.webdav_sync / context.webdav_roots</span>
+          </div>
+          <label className="config-toggle">
+            <input
+              type="checkbox"
+              checked={Boolean(config.context.webdav_sync.enabled)}
+              disabled={readOnly}
+              onChange={(event) => updateWebdavSync("enabled", event.target.checked)}
+            />
+            <span>启用同步</span>
+          </label>
+        </div>
+        <div className="config-grid">
+          <ConfigField label="同步间隔秒数">
+            <input
+              type="number"
+              min="60"
+              value={config.context.webdav_sync.interval_seconds}
+              readOnly={readOnly}
+              onChange={(event) => updateWebdavSync("interval_seconds", Number(event.target.value) || 600)}
+            />
+          </ConfigField>
+          <ConfigField label="单 Root 最大文件数">
+            <input
+              type="number"
+              min="1"
+              value={config.context.webdav_sync.max_files_per_root}
+              readOnly={readOnly}
+              onChange={(event) => updateWebdavSync("max_files_per_root", Number(event.target.value) || 500)}
+            />
+          </ConfigField>
+          <ConfigField label="单文件最大字节">
+            <input
+              type="number"
+              min="1"
+              value={config.context.webdav_sync.max_file_size_bytes}
+              readOnly={readOnly}
+              onChange={(event) => updateWebdavSync("max_file_size_bytes", Number(event.target.value) || 524288)}
+            />
+          </ConfigField>
+          <ConfigField label="文件后缀">
+            <input
+              value={(config.context.webdav_sync.extensions || []).join(", ")}
+              readOnly={readOnly}
+              onChange={(event) => updateWebdavSync("extensions", splitList(event.target.value))}
+            />
+          </ConfigField>
+        </div>
+        <ConfigList
+          title="WebDAV Roots"
+          subtitle="/webdav/{root_id}/..."
+          readOnly={readOnly}
+          onAdd={() =>
+            update((next) => {
+              const id = `webdav_${next.context.webdav_roots.length + 1}`;
+              next.context.webdav_roots.push({
+                id,
+                name: id,
+                path: "/",
+                readable: true,
+                writable: false,
+                protected: true,
+              });
+            })
+          }
+        >
+          {config.context.webdav_roots.map((root, index) => (
+            <div className="config-item" key={`webdav-root-${index}`}>
+              <div className="config-item-title">
+                <strong>{root.id || `root_${index + 1}`}</strong>
+                <button
+                  className="icon-button delete-button"
+                  type="button"
+                  title="删除 Root"
+                  disabled={readOnly}
+                  onClick={() => update((next) => next.context.webdav_roots.splice(index, 1))}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <div className="config-grid two">
+                <ConfigField label="ID">
+                  <input value={root.id} readOnly={readOnly} onChange={(event) => updateWebdavRoot(index, "id", event.target.value)} />
+                </ConfigField>
+                <ConfigField label="名称">
+                  <input value={root.name} readOnly={readOnly} onChange={(event) => updateWebdavRoot(index, "name", event.target.value)} />
+                </ConfigField>
+                <ConfigField label="WebDAV 路径">
+                  <input value={root.path} readOnly={readOnly} onChange={(event) => updateWebdavRoot(index, "path", event.target.value)} />
+                </ConfigField>
+                <div className="builtin-toggle-row">
+                  <label className="config-toggle field-toggle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(root.readable)}
+                      disabled={readOnly}
+                      onChange={(event) => updateWebdavRoot(index, "readable", event.target.checked)}
+                    />
+                    <span>可读</span>
+                  </label>
+                  <label className="config-toggle field-toggle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(root.writable)}
+                      disabled={readOnly}
+                      onChange={(event) => updateWebdavRoot(index, "writable", event.target.checked)}
+                    />
+                    <span>可写</span>
+                  </label>
+                  <label className="config-toggle field-toggle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(root.protected)}
+                      disabled={readOnly}
+                      onChange={(event) => updateWebdavRoot(index, "protected", event.target.checked)}
+                    />
+                    <span>保护</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          ))}
+        </ConfigList>
       </section>
     </div>
   );
@@ -757,6 +928,15 @@ function withDefaults(value) {
     : [];
   config.channels.wechat_personal.accounts = Array.isArray(config.channels.wechat_personal.accounts)
     ? config.channels.wechat_personal.accounts.map((account) => ({ ...account }))
+    : [];
+  config.context.webdav_sync.extensions = normalizeList(config.context.webdav_sync.extensions);
+  config.context.webdav_roots = Array.isArray(config.context.webdav_roots)
+    ? config.context.webdav_roots.map((root) => ({
+        ...root,
+        readable: root.readable !== false,
+        writable: Boolean(root.writable) && !Boolean(root.protected),
+        protected: Boolean(root.protected),
+      }))
     : [];
   if (config.llm.models.length === 0) config.llm.models = cloneConfig(DEFAULT_CONFIG.llm.models);
   if (config.agents.definitions.length === 0) config.agents.definitions = cloneConfig(DEFAULT_CONFIG.agents.definitions);

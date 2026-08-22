@@ -69,12 +69,30 @@ def test_nutstore_webdav_lists_reads_writes_and_deletes() -> None:
     asyncio.run(client.write_bytes("docs/new/b.txt", b"body"))
     asyncio.run(client.delete("docs/a.txt"))
 
-    assert [(entry.path, entry.name, entry.is_dir, entry.size) for entry in entries] == [
-        ("/Apps/Agent/docs/a.txt", "a.txt", False, 5)
+    assert [(entry.path, entry.name, entry.is_dir, entry.size, entry.etag) for entry in entries] == [
+        ("/Apps/Agent/docs/a.txt", "a.txt", False, 5, "")
     ]
     assert content == b"hello"
     assert truncated is True
     assert [request.method for request in requests] == ["PROPFIND", "GET", "MKCOL", "MKCOL", "PUT", "DELETE"]
+
+
+def test_nutstore_webdav_does_not_duplicate_configured_root_path() -> None:
+    requested_urls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        return httpx.Response(200, content=b"ok")
+
+    client = NutstoreWebDAVClient(
+        NutstoreConfig(enabled=True, username="user@example.com", password="app-password", root_path="/Apps/Agent"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    content, _ = asyncio.run(client.read_bytes("/Apps/Agent/docs/a.txt", max_bytes=10))
+
+    assert content == b"ok"
+    assert requested_urls == ["https://dav.jianguoyun.com/dav/Apps/Agent/docs/a.txt"]
 
 
 def test_nutstore_webdav_rejects_unsafe_paths() -> None:

@@ -30,12 +30,19 @@ class ContextKnowledgeService:
     def files_dir(self) -> Path:
         return self._files_dir
 
-    def search(self, query: str, *, top_k: int = 5) -> tuple[ContextSearchHit, ...]:
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        extra_documents: tuple[tuple[str, str], ...] = (),
+    ) -> tuple[ContextSearchHit, ...]:
         normalized_query = query.strip()
         if not normalized_query:
             raise ContextKnowledgeError("query is required")
         limit = min(max(int(top_k or 5), 1), 10)
-        documents = self._documents()
+        documents = [(f"/files/{path.as_posix()}", text) for path, text in self._documents()]
+        documents.extend((path, text) for path, text in extra_documents if path and text)
         if not documents:
             return ()
 
@@ -58,7 +65,7 @@ class ContextKnowledgeService:
                 continue
             hits.append(
                 ContextSearchHit(
-                    path=f"/files/{path.as_posix()}",
+                    path=path,
                     score=round(score, 4),
                     snippet=_snippet(text, query_terms),
                 )
