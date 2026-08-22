@@ -155,6 +155,12 @@ def test_webdav_context_refresh_uses_single_root_and_permission_paths(tmp_path) 
     index = json.loads((tmp_path / "context" / "webdav" / "index.json").read_text(encoding="utf-8"))
     assert index["files"]["/webdav/rules.md"]["permission_path"] == "/"
     assert index["files"]["/webdav/00AgentInbox/write.md"]["permission_path"] == "/00AgentInbox"
+    assert index["files"]["/webdav/rules.md"]["cache_path"] == "files/rules.md"
+    assert index["files"]["/webdav/00AgentInbox/write.md"]["cache_path"] == "files/00AgentInbox/write.md"
+    assert (tmp_path / "context" / "webdav" / "files" / "rules.md").read_text(encoding="utf-8") == "rules"
+    assert (
+        tmp_path / "context" / "webdav" / "files" / "00AgentInbox" / "write.md"
+    ).read_text(encoding="utf-8") == "write"
     assert requested_urls.count("https://dav.jianguoyun.com/dav/notebook/") == 1
     assert requested_urls.count("https://dav.jianguoyun.com/dav/notebook/00AgentInbox/") == 1
 
@@ -225,6 +231,8 @@ def test_webdav_context_refresh_caches_markdown_referenced_assets(tmp_path) -> N
     index = json.loads((tmp_path / "context" / "webdav" / "index.json").read_text(encoding="utf-8"))
     assert index["files"]["/webdav/report.md"]["kind"] == "document"
     assert index["files"]["/webdav/images/chart.png"]["kind"] == "asset"
+    assert index["files"]["/webdav/report.md"]["cache_path"] == "files/report.md"
+    assert index["files"]["/webdav/images/chart.png"]["cache_path"] == "files/images/chart.png"
     asset_cache = tmp_path / "context" / "webdav" / index["files"]["/webdav/images/chart.png"]["cache_path"]
     assert asset_cache.read_bytes() == png_bytes
     assert service.summary()["documents"] == 1
@@ -268,7 +276,7 @@ def test_webdav_context_write_uses_writable_child_permission(tmp_path) -> None:
     )
 
     assert result["path"] == "/webdav/00AgentInbox/new.md"
-    assert (tmp_path / "context" / "webdav" / "files" / "webdav__00AgentInbox__new.md").read_text(
+    assert (tmp_path / "context" / "webdav" / "files" / "00AgentInbox" / "new.md").read_text(
         encoding="utf-8"
     ) == "候选知识"
     assert [item[0] for item in requests] == ["GET", "MKCOL", "MKCOL", "PUT"]
@@ -299,6 +307,49 @@ def test_webdav_context_remote_paths_still_respect_nutstore_root_path(tmp_path) 
     )
 
     assert requested_urls[-1].endswith("/dav/Apps/DeepAgent/notebook/00AgentInbox/scoped.md")
+
+
+def test_webdav_context_refresh_prunes_flat_legacy_cache_files(tmp_path) -> None:
+    legacy_cache = tmp_path / "context" / "webdav" / "files" / "webdav__rules.md"
+    legacy_cache.parent.mkdir(parents=True, exist_ok=True)
+    legacy_cache.write_text("old", encoding="utf-8")
+    requested_reads = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requested_reads
+        if request.method == "PROPFIND" and str(request.url).endswith("/dav/notebook/"):
+            return httpx.Response(
+                207,
+                text="""
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/dav/notebook/</d:href>
+    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/notebook/rules.md</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype/>
+      <d:getcontentlength>5</d:getcontentlength>
+      <d:getlastmodified>Sat, 22 Aug 2026 01:00:00 GMT</d:getlastmodified>
+      <d:getetag>"rules"</d:getetag>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>
+""",
+            )
+        if request.method == "GET" and str(request.url).endswith("/rules.md"):
+            requested_reads += 1
+            return httpx.Response(200, content=b"rules")
+        return httpx.Response(500)
+
+    service = _service(tmp_path, httpx.MockTransport(handler))
+
+    asyncio.run(service.refresh())
+
+    assert requested_reads == 1
+    assert not legacy_cache.exists()
+    assert (tmp_path / "context" / "webdav" / "files" / "rules.md").read_text(encoding="utf-8") == "rules"
 
 
 def _service(tmp_path, transport: httpx.MockTransport, *, nutstore_root_path: str = "/") -> WebDAVContextService:

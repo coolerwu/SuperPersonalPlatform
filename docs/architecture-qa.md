@@ -251,6 +251,16 @@ workspace/
 nutstore.root_path + context.webdav_sync.root_path + /webdav/ 后的相对路径
 ```
 
+本地缓存必须保留同步根目录下的相对目录结构：
+
+```text
+远端 /notebook/96备忘录/OpenWrt.md
+本地 workspace/context/webdav/files/96备忘录/OpenWrt.md
+工具 /webdav/96备忘录/OpenWrt.md
+```
+
+不能把远端路径拍平成 `webdav__96备忘录__OpenWrt.md` 这类文件名；否则同名文件、目录语义和 Markdown 相对图片引用都会失真。
+
 必须校验：
 
 - `/webdav/...` 后的相对路径不包含 `..`。

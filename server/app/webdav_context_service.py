@@ -75,6 +75,7 @@ class WebDAVContextService:
             readable_entries[relative_path] = (entry, permission)
 
         referenced_assets: set[str] = set()
+        cached_paths: set[Path] = set()
         for relative_path, (entry, permission) in readable_entries.items():
             tool_path = _tool_path(relative_path)
             if not _is_text_document(tool_path, self._sync):
@@ -82,12 +83,12 @@ class WebDAVContextService:
             metadata = _entry_metadata(permission, entry, tool_path)
             metadata["kind"] = "document"
             old_metadata = previous_files.get(tool_path) if isinstance(previous_files, dict) else None
+            cache_path = self._cache_file_path(tool_path)
             content_text = ""
-            if _metadata_changed(old_metadata, metadata):
+            if _metadata_changed(old_metadata, metadata) or not cache_path.exists():
                 content, truncated = await self._client.read_bytes(entry.path, max_bytes=self._sync.max_file_size_bytes)
                 if truncated:
                     continue
-                cache_path = self._cache_file_path(tool_path)
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     content_text = content.decode("utf-8")
@@ -101,7 +102,8 @@ class WebDAVContextService:
                     content_text = ""
             if PurePosixPath(relative_path).suffix.lower() == ".md":
                 referenced_assets.update(_markdown_asset_references(content_text, relative_path))
-            metadata["cache_path"] = self._cache_file_path(tool_path).relative_to(self._cache_dir).as_posix()
+            cached_paths.add(cache_path.resolve())
+            metadata["cache_path"] = cache_path.relative_to(self._cache_dir).as_posix()
             next_files[tool_path] = metadata
         for relative_path in sorted(referenced_assets):
             entry_pair = readable_entries.get(relative_path)
@@ -114,15 +116,17 @@ class WebDAVContextService:
             metadata = _entry_metadata(permission, entry, tool_path)
             metadata["kind"] = "asset"
             old_metadata = previous_files.get(tool_path) if isinstance(previous_files, dict) else None
-            if _metadata_changed(old_metadata, metadata):
+            cache_path = self._cache_file_path(tool_path)
+            if _metadata_changed(old_metadata, metadata) or not cache_path.exists():
                 content, truncated = await self._client.read_bytes(entry.path, max_bytes=self._sync.max_file_size_bytes)
                 if truncated:
                     continue
-                cache_path = self._cache_file_path(tool_path)
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 cache_path.write_bytes(content)
-            metadata["cache_path"] = self._cache_file_path(tool_path).relative_to(self._cache_dir).as_posix()
+            cached_paths.add(cache_path.resolve())
+            metadata["cache_path"] = cache_path.relative_to(self._cache_dir).as_posix()
             next_files[tool_path] = metadata
+        self._prune_cache_files(cached_paths)
         _write_json(
             self._index_path,
             {
@@ -272,8 +276,24 @@ class WebDAVContextService:
         return age >= self._sync.interval_seconds
 
     def _cache_file_path(self, tool_path: str) -> Path:
-        safe = tool_path.removeprefix("/").replace("/", "__")
-        return self._files_dir / safe
+        return self._files_dir / _webdav_tool_relative_path(tool_path)
+
+    def _prune_cache_files(self, keep_paths: set[Path]) -> None:
+        if not self._files_dir.exists():
+            return
+        for path in sorted(self._files_dir.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if path.is_file() and resolved not in keep_paths:
+                path.unlink(missing_ok=True)
+            elif path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
+        self._files_dir.mkdir(parents=True, exist_ok=True)
 
     def _update_cached_write(self, *, permission: WebDAVPermission, tool_path: str, remote_path: str, bytes_count: int) -> None:
         index = _read_json(self._index_path)
@@ -338,6 +358,17 @@ def _metadata_changed(old: Any, new: dict[str, Any]) -> bool:
 
 def _tool_path(relative_path: str) -> str:
     return f"/webdav/{relative_path.lstrip('/')}"
+
+
+def _webdav_tool_relative_path(tool_path: str) -> Path:
+    value = str(tool_path or "").strip()
+    if not value.startswith("/webdav/"):
+        raise WebDAVContextError("webdav tool path must start with /webdav/")
+    parts = PurePosixPath(value).parts
+    relative_parts = parts[2:]
+    if not relative_parts or any(part in {"", ".", ".."} for part in relative_parts):
+        raise WebDAVContextError("webdav tool path must include safe relative path")
+    return Path(*relative_parts)
 
 
 def _permission_for_path(path: str, permissions: tuple[WebDAVPermission, ...]) -> WebDAVPermission | None:
