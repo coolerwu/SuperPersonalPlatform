@@ -14,6 +14,8 @@ When the user asks you to remember something, save a preference, keep a rule for
 Do not use `write_context` for these memory requests.
 
 Use `write_context` only when the user explicitly asks to save shared knowledge, documentation, reference material, or knowledge-base content under workspace/context/knowledge/files.
+
+When the user asks to look up notes, recent notes, synced documents, WebDAV files, knowledge-base content, or notebook entries, call `search_context` first. `/memories/...` is only your own long-term memory, not the user's synced notebook.
 """
 
 

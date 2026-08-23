@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -50,18 +51,33 @@ def _search_context_tool(service: ContextKnowledgeService, webdav_service: WebDA
         """Search local and synced WebDAV knowledge context.
 
         Use this to retrieve relevant notes from workspace/context/knowledge/files and readable WebDAV roots before answering.
+        For "recent notes" questions, this also returns recent_documents sorted by WebDAV modified time.
         """
         extra_documents: tuple[tuple[str, str], ...] = ()
+        recent_documents: list[dict[str, Any]] = []
         sync_error = ""
+        limit = min(max(int(top_k or 5), 1), 10)
         if webdav_service is not None:
             try:
                 run_async(webdav_service.refresh_if_stale())
                 extra_documents = tuple((item.path, item.content) for item in webdav_service.documents())
+                if _is_recent_context_query(query):
+                    recent_documents = [
+                        {
+                            "path": item.path,
+                            "modified": item.modified,
+                            "size": item.size,
+                            "snippet": item.snippet,
+                        }
+                        for item in webdav_service.recent_documents(limit=limit)
+                    ]
             except Exception as exc:  # noqa: BLE001
                 sync_error = f"{exc.__class__.__name__}: {exc}"
-        hits = service.search(query, top_k=top_k, extra_documents=extra_documents)
+        hits = service.search(query, top_k=limit, extra_documents=extra_documents)
         if not hits:
             payload: dict[str, Any] = {"hits": [], "message": "No matching context knowledge found."}
+            if recent_documents:
+                payload["recent_documents"] = recent_documents
             if sync_error:
                 payload["webdav_sync_error"] = sync_error
             return json.dumps(payload, ensure_ascii=False)
@@ -71,6 +87,8 @@ def _search_context_tool(service: ContextKnowledgeService, webdav_service: WebDA
                 for hit in hits
             ]
         }
+        if recent_documents:
+            payload["recent_documents"] = recent_documents
         if sync_error:
             payload["webdav_sync_error"] = sync_error
         return json.dumps(payload, ensure_ascii=False)
@@ -80,6 +98,8 @@ def _search_context_tool(service: ContextKnowledgeService, webdav_service: WebDA
         name="search_context",
         description=(
             "Search local context and synced readable WebDAV knowledge for relevant information. "
+            "Use this for user notes, synced notes, documents, knowledge, and WebDAV context; do not use /memories for user notes. "
+            "For recent/latest notes requests, the result may include recent_documents sorted by modified time. "
             "Local hits use /files/... paths; WebDAV hits use /webdav/... paths. Args: query, top_k."
         ),
     )
@@ -120,3 +140,12 @@ def _write_context_tool(service: ContextKnowledgeService, webdav_service: WebDAV
             "Only use after explicit user approval."
         ),
     )
+
+
+def _is_recent_context_query(query: str) -> bool:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return False
+    has_recent = any(marker in normalized for marker in ("最近", "近期", "最新", "recent", "latest", "newest"))
+    has_context = any(marker in normalized for marker in ("笔记", "文档", "知识", "notes", "note", "docs", "documents"))
+    return has_recent and has_context or bool(re.search(r"\b(last|latest|recent)\s+\d*\s*(notes|docs|documents)\b", normalized))

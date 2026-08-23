@@ -352,6 +352,43 @@ def test_webdav_context_refresh_prunes_flat_legacy_cache_files(tmp_path) -> None
     assert (tmp_path / "context" / "webdav" / "files" / "rules.md").read_text(encoding="utf-8") == "rules"
 
 
+def test_webdav_context_recent_documents_sort_by_modified_time(tmp_path) -> None:
+    cache_dir = tmp_path / "context" / "webdav"
+    (cache_dir / "files" / "old.md").parent.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "files" / "old.md").write_text("旧笔记内容", encoding="utf-8")
+    (cache_dir / "files" / "new.md").write_text("# 新笔记\n\n今天的内容", encoding="utf-8")
+    (cache_dir / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "updated_at": "2026-08-23T00:00:00+00:00",
+                "files": {
+                    "/webdav/old.md": {
+                        "kind": "document",
+                        "cache_path": "files/old.md",
+                        "modified": "Sat, 22 Aug 2026 01:00:00 GMT",
+                        "size": 12,
+                    },
+                    "/webdav/new.md": {
+                        "kind": "document",
+                        "cache_path": "files/new.md",
+                        "modified": "2026-08-23T01:00:00+00:00",
+                        "size": 20,
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    service = _service(tmp_path, httpx.MockTransport(lambda request: httpx.Response(500)))
+
+    recent = service.recent_documents(limit=2)
+
+    assert [item.path for item in recent] == ["/webdav/new.md", "/webdav/old.md"]
+    assert recent[0].snippet == "# 新笔记"
+
+
 def _service(tmp_path, transport: httpx.MockTransport, *, nutstore_root_path: str = "/") -> WebDAVContextService:
     settings = parse_settings(
         {

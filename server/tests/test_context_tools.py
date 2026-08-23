@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -68,6 +69,66 @@ def test_platform_tool_runtime_builds_search_and_write_tools(tmp_path) -> None:
 
     search_result = tools["search_context"].invoke({"query": "runtime", "top_k": 1})
     assert json.loads(search_result)["hits"][0]["path"] == "/files/runtime.md"
+
+
+def test_search_context_returns_recent_webdav_documents_for_recent_notes(tmp_path) -> None:
+    context_workspace = tmp_path / "context"
+    webdav_cache = context_workspace / "webdav"
+    (webdav_cache / "files" / "daily").mkdir(parents=True)
+    (webdav_cache / "files" / "daily" / "today.md").write_text("# 今日笔记\n\n记录内容", encoding="utf-8")
+    (webdav_cache / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "files": {
+                    "/webdav/daily/today.md": {
+                        "kind": "document",
+                        "cache_path": "files/daily/today.md",
+                        "modified": "2026-08-23T08:00:00+00:00",
+                        "size": 24,
+                        "permission_path": "/",
+                        "protected": True,
+                        "writable": False,
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "config.yaml").write_text(
+        """
+auth:
+  token: secret-token
+nutstore:
+  enabled: true
+  base_url: https://dav.jianguoyun.com/dav/
+  username: user@example.com
+  password: secret
+  root_path: /
+context:
+  webdav_sync:
+    enabled: true
+    root_path: /notebook
+    interval_seconds: 600
+  webdav_permissions:
+    - path: /
+      readable: true
+      writable: false
+      protected: true
+""",
+        encoding="utf-8",
+    )
+    tools = {
+        tool.name: tool
+        for tool in build_platform_tools(("search_context",), context_workspace=context_workspace)
+    }
+
+    result = json.loads(tools["search_context"].invoke({"query": "看看最近我的笔记", "top_k": 3}))
+
+    assert result["recent_documents"][0]["path"] == "/webdav/daily/today.md"
+    assert result["recent_documents"][0]["snippet"] == "# 今日笔记"
 
 
 def test_write_context_description_keeps_memory_separate(tmp_path) -> None:

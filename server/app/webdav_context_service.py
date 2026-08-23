@@ -6,6 +6,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -23,6 +24,14 @@ class WebDAVContextError(ValueError):
 class WebDAVContextDocument:
     path: str
     content: str
+
+
+@dataclass(frozen=True)
+class WebDAVRecentDocument:
+    path: str
+    modified: str
+    size: int
+    snippet: str
 
 
 class WebDAVContextService:
@@ -159,6 +168,42 @@ class WebDAVContextService:
                 continue
             documents.append(WebDAVContextDocument(path=tool_path, content=content))
         return documents
+
+    def recent_documents(self, *, limit: int = 5) -> list[WebDAVRecentDocument]:
+        index = _read_json(self._index_path)
+        raw_files = index.get("files") if isinstance(index, dict) else {}
+        if not isinstance(raw_files, dict):
+            return []
+        items: list[tuple[float, WebDAVRecentDocument]] = []
+        for tool_path, metadata in raw_files.items():
+            if not isinstance(tool_path, str) or not isinstance(metadata, dict):
+                continue
+            if metadata.get("kind", "document") != "document":
+                continue
+            cache_relative = str(metadata.get("cache_path") or "")
+            if not cache_relative:
+                continue
+            cache_path = (self._cache_dir / cache_relative).resolve()
+            snippet = ""
+            try:
+                if cache_path.is_relative_to(self._cache_dir.resolve()) and cache_path.is_file():
+                    snippet = _first_content_line(cache_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError):
+                snippet = ""
+            modified = str(metadata.get("modified") or "")
+            items.append(
+                (
+                    _modified_sort_key(modified),
+                    WebDAVRecentDocument(
+                        path=tool_path,
+                        modified=modified,
+                        size=int(metadata.get("size") or 0),
+                        snippet=snippet,
+                    ),
+                )
+            )
+        normalized_limit = min(max(int(limit or 5), 1), 10)
+        return [item for _, item in sorted(items, key=lambda pair: pair[0], reverse=True)[:normalized_limit]]
 
     def summary(self) -> dict[str, object]:
         index = _read_json(self._index_path)
@@ -354,6 +399,28 @@ def _metadata_changed(old: Any, new: dict[str, Any]) -> bool:
         if old.get(key) != new.get(key):
             return True
     return False
+
+
+def _modified_sort_key(value: str) -> float:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return datetime.fromisoformat(raw).timestamp()
+    except ValueError:
+        pass
+    try:
+        return parsedate_to_datetime(raw).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
+def _first_content_line(content: str, *, max_chars: int = 180) -> str:
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:max_chars]
+    return ""
 
 
 def _tool_path(relative_path: str) -> str:
