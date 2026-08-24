@@ -1105,6 +1105,77 @@ pre {
   gap: 10px;
 }
 
+.schedules-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.42fr) minmax(560px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.schedule-index,
+.schedule-detail {
+  min-height: 620px;
+}
+
+.schedule-list,
+.schedule-form,
+.schedule-state {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.schedule-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 74px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  padding: 12px;
+  text-align: left;
+}
+
+.schedule-row:hover,
+.schedule-row.selected {
+  border-color: rgba(23, 168, 245, 0.58);
+  background: rgba(9, 43, 65, 0.72);
+}
+
+.schedule-row > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.schedule-row strong,
+.schedule-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schedule-row small,
+.muted-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.muted-note {
+  margin: 12px 14px 0;
+}
+
+.schedule-events {
+  max-height: 260px;
+  overflow: auto;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 8px;
+}
+
 .config-item {
   display: grid;
   gap: 12px;
@@ -1470,6 +1541,7 @@ pre {
   .runs-grid,
   .workspace-layout,
   .workspace-file-layout,
+  .schedules-grid,
   .wechat-layout,
   .system-screen {
     grid-template-columns: 1fr;

@@ -12,6 +12,7 @@ import {
   FolderTree,
   LogOut,
   Play,
+  Plus,
   RefreshCw,
   Save,
   Send,
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
   { id: "config", path: "/config", label: "配置", icon: SlidersHorizontal },
+  { id: "schedules", path: "/schedules", label: "定时任务", icon: Clock3 },
   { id: "wechat", path: "/wechat", label: "微信", icon: Smartphone },
   { id: "system", path: "/system", label: "运维", icon: Settings },
 ];
@@ -236,6 +238,7 @@ function App() {
         {page === "config" ? <ConfigPage onNavigate={navigate} /> : null}
         {page === "providers" ? <ProviderPage onNavigate={navigate} /> : null}
         {page === "agent-config" ? <AgentConfigPage onNavigate={navigate} /> : null}
+        {page === "schedules" ? <SchedulesPage /> : null}
         {page === "wechat" ? <WechatPage /> : null}
         {page === "system" ? <SystemPage onNavigate={navigate} /> : null}
       </main>
@@ -1090,6 +1093,329 @@ function WechatAccountDetail({ account, agents, onAction, onUpdate }) {
   );
 }
 
+const EMPTY_SCHEDULE = {
+  id: "",
+  name: "",
+  enabled: true,
+  agent_id: "assistant",
+  prompt: "",
+  context_ids_text: "",
+  session_id: "",
+  metadata_text: "{}",
+  trigger_kind: "interval",
+  interval_minutes: 60,
+  cron_expr: "0 9 * * *",
+  cron_timezone: "Asia/Shanghai",
+  once_at: "",
+};
+
+function SchedulesPage() {
+  const [schedules, setSchedules] = useState([]);
+  const [activeSchedule, setActiveSchedule] = useState(null);
+  const [draft, setDraft] = useState(EMPTY_SCHEDULE);
+  const [agents, setAgents] = useState([]);
+  const [editingNew, setEditingNew] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function load() {
+    setError("");
+    try {
+      const [scheduleData, configData] = await Promise.all([
+        api("/api/schedules"),
+        api("/api/workspace/read", {
+          method: "POST",
+          body: JSON.stringify({ path: "config.yaml" }),
+        }),
+      ]);
+      const nextSchedules = scheduleData.schedules || [];
+      const parsed = parseConfigDraft(configData.content || "");
+      const nextAgents = parsed.config.agents.definitions || [];
+      setSchedules(nextSchedules);
+      setAgents(nextAgents);
+      const activeId = activeSchedule?.definition?.id || activeSchedule?.summary?.id;
+      const nextActive = nextSchedules.find((item) => scheduleId(item) === activeId) || nextSchedules[0] || null;
+      if (nextActive && !editingNew) {
+        await loadDetail(scheduleId(nextActive));
+      } else if (!nextActive && !editingNew) {
+        setActiveSchedule(null);
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function loadDetail(scheduleIdValue) {
+    const detail = await api(`/api/schedules/${encodeURIComponent(scheduleIdValue)}`);
+    setActiveSchedule(detail);
+    setDraft(scheduleToDraft(detail));
+    setEditingNew(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  function createNew() {
+    const defaultAgent = agents[0]?.id || "assistant";
+    setActiveSchedule(null);
+    setDraft({
+      ...EMPTY_SCHEDULE,
+      id: `daily_${new Date().toISOString().slice(0, 10).replaceAll("-", "_")}`,
+      agent_id: defaultAgent,
+    });
+    setEditingNew(true);
+    setMessage("");
+    setError("");
+  }
+
+  async function saveSchedule() {
+    setMessage("");
+    setError("");
+    try {
+      const payload = draftToSchedulePayload(draft);
+      const method = editingNew ? "POST" : "PUT";
+      const path = editingNew ? "/api/schedules" : `/api/schedules/${encodeURIComponent(payload.id)}`;
+      const data = await api(path, { method, body: JSON.stringify(payload) });
+      setMessage(editingNew ? "定时任务已创建" : "定时任务已保存");
+      await load();
+      await loadDetail(data.definition.id);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function deleteSchedule() {
+    const id = draft.id;
+    if (!id || !window.confirm(`删除定时任务 ${id}？`)) return;
+    setMessage("");
+    setError("");
+    try {
+      await api(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setMessage("定时任务已删除");
+      setActiveSchedule(null);
+      setEditingNew(false);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function runNow() {
+    const id = activeSchedule?.definition?.id;
+    if (!id) return;
+    setMessage("");
+    setError("");
+    try {
+      const detail = await api(`/api/schedules/${encodeURIComponent(id)}/run-now`, { method: "POST" });
+      setActiveSchedule(detail);
+      setDraft(scheduleToDraft(detail));
+      setMessage("定时任务已执行");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  const builtIn = Boolean(activeSchedule?.definition?.built_in);
+  const selectedId = activeSchedule?.definition?.id || (editingNew ? draft.id : "");
+
+  return (
+    <section className="console-screen schedules-screen">
+      {message ? <p className="ok">{message}</p> : null}
+      {error ? <p className="error">{error}</p> : null}
+      <div className="schedules-grid">
+        <section className="panel schedule-index">
+          <div className="panel-title">
+            <div>
+              <span>定时任务</span>
+              <small>workspace/schedules/index.json</small>
+            </div>
+            <div className="config-inline-actions">
+              <button className="icon-button" onClick={load} title="刷新">
+                <RefreshCw size={15} />
+              </button>
+              <button onClick={createNew}>
+                <Plus size={15} />
+                新建
+              </button>
+            </div>
+          </div>
+          <div className="schedule-list">
+            {schedules.length === 0 ? <div className="empty-state">暂无定时任务。</div> : null}
+            {schedules.map((item) => {
+              const summary = item.summary || item;
+              const id = scheduleId(item);
+              return (
+                <button
+                  key={id}
+                  className={`schedule-row ${selectedId === id ? "selected" : ""}`}
+                  onClick={() => loadDetail(id)}
+                >
+                  <div>
+                    <strong>{summary.name || id}</strong>
+                    <small>{formatScheduleTrigger(summary.trigger)}</small>
+                  </div>
+                  <Status status={summary.enabled ? summary.status : "disabled"} />
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="panel schedule-detail">
+          <div className="panel-title">
+            <div>
+              <span>{editingNew ? "新建 Agent 定时任务" : activeSchedule ? activeSchedule.definition.name : "任务详情"}</span>
+              <small>prompt + agent + trigger</small>
+            </div>
+            <div className="config-inline-actions">
+              <button onClick={runNow} disabled={!activeSchedule?.definition?.id}>
+                <Play size={15} />
+                立即运行
+              </button>
+              <button className="primary" onClick={saveSchedule} disabled={builtIn}>
+                <Save size={15} />
+                保存
+              </button>
+              <button className="delete-button" onClick={deleteSchedule} disabled={builtIn || editingNew || !activeSchedule}>
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </div>
+          {builtIn ? (
+            <p className="muted-note">内置任务由系统配置驱动，只能在这里查看状态或立即执行。</p>
+          ) : null}
+          <ScheduleForm draft={draft} onChange={setDraft} agents={agents} readOnly={builtIn} lockId={!editingNew} />
+          {activeSchedule ? <ScheduleStatePanel detail={activeSchedule} /> : null}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function ScheduleForm({ draft, onChange, agents, readOnly, lockId }) {
+  function update(field, value) {
+    onChange({ ...draft, [field]: value });
+  }
+
+  return (
+    <div className="schedule-form">
+      <div className="config-grid">
+        <ConfigFieldLite label="ID">
+          <input value={draft.id} readOnly={readOnly || lockId} onChange={(event) => update("id", event.target.value)} />
+        </ConfigFieldLite>
+        <ConfigFieldLite label="名称">
+          <input value={draft.name} readOnly={readOnly} onChange={(event) => update("name", event.target.value)} />
+        </ConfigFieldLite>
+        <ConfigFieldLite label="Agent">
+          <select value={draft.agent_id} disabled={readOnly} onChange={(event) => update("agent_id", event.target.value)}>
+            {!draft.agent_id || !agents.some((agent) => agent.id === draft.agent_id) ? (
+              <option value={draft.agent_id}>{draft.agent_id || "-"}</option>
+            ) : null}
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name || agent.id}
+              </option>
+            ))}
+          </select>
+        </ConfigFieldLite>
+        <ConfigFieldLite label="启用">
+          <label className="config-toggle field-toggle">
+            <input type="checkbox" checked={draft.enabled} disabled={readOnly} onChange={(event) => update("enabled", event.target.checked)} />
+            <span>{draft.enabled ? "启用" : "停用"}</span>
+          </label>
+        </ConfigFieldLite>
+      </div>
+      <ConfigFieldLite label="Prompt">
+        <textarea value={draft.prompt} readOnly={readOnly} onChange={(event) => update("prompt", event.target.value)} />
+      </ConfigFieldLite>
+      <div className="config-grid">
+        <ConfigFieldLite label="触发类型">
+          <select value={draft.trigger_kind} disabled={readOnly} onChange={(event) => update("trigger_kind", event.target.value)}>
+            <option value="interval">间隔</option>
+            <option value="cron">Cron</option>
+            <option value="once">一次性</option>
+          </select>
+        </ConfigFieldLite>
+        {draft.trigger_kind === "interval" ? (
+          <ConfigFieldLite label="间隔分钟">
+            <input
+              type="number"
+              min="1"
+              value={draft.interval_minutes}
+              readOnly={readOnly}
+              onChange={(event) => update("interval_minutes", Number(event.target.value) || 1)}
+            />
+          </ConfigFieldLite>
+        ) : null}
+        {draft.trigger_kind === "cron" ? (
+          <>
+            <ConfigFieldLite label="Cron 表达式">
+              <input value={draft.cron_expr} readOnly={readOnly} onChange={(event) => update("cron_expr", event.target.value)} />
+            </ConfigFieldLite>
+            <ConfigFieldLite label="时区">
+              <input value={draft.cron_timezone} readOnly={readOnly} onChange={(event) => update("cron_timezone", event.target.value)} />
+            </ConfigFieldLite>
+          </>
+        ) : null}
+        {draft.trigger_kind === "once" ? (
+          <ConfigFieldLite label="执行时间">
+            <input type="datetime-local" value={draft.once_at} readOnly={readOnly} onChange={(event) => update("once_at", event.target.value)} />
+          </ConfigFieldLite>
+        ) : null}
+      </div>
+      <div className="config-grid two">
+        <ConfigFieldLite label="Context IDs">
+          <input value={draft.context_ids_text} readOnly={readOnly} onChange={(event) => update("context_ids_text", event.target.value)} />
+        </ConfigFieldLite>
+        <ConfigFieldLite label="Session ID">
+          <input value={draft.session_id} readOnly={readOnly} onChange={(event) => update("session_id", event.target.value)} />
+        </ConfigFieldLite>
+      </div>
+      <ConfigFieldLite label="Metadata JSON">
+        <textarea value={draft.metadata_text} readOnly={readOnly} onChange={(event) => update("metadata_text", event.target.value)} />
+      </ConfigFieldLite>
+    </div>
+  );
+}
+
+function ScheduleStatePanel({ detail }) {
+  const state = detail.state || {};
+  const events = detail.events || [];
+  return (
+    <div className="schedule-state">
+      <div className="kv-grid">
+        <Kv label="状态" value={state.status || "-"} />
+        <Kv label="下次运行" value={formatDateTime(state.next_run_at)} />
+        <Kv label="上次运行" value={formatDateTime(state.last_run_at)} />
+        <Kv label="最近 Run" value={state.last_run_id || "-"} />
+      </div>
+      {state.last_error ? <PathBox label="最近错误" value={state.last_error.message || JSON.stringify(state.last_error)} /> : null}
+      <div className="event-list schedule-events">
+        {events.length === 0 ? <div className="empty-state">暂无事件。</div> : null}
+        {events.map((event) => (
+          <div key={event.seq} className="event-row">
+            <span className="event-dot" />
+            <time>{formatTime(event.created_at)}</time>
+            <strong>{event.type}</strong>
+            <code>{JSON.stringify(event.payload)}</code>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConfigFieldLite({ label, children }) {
+  return (
+    <label className="config-field">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
 function SystemPage({ onNavigate }) {
   const [logs, setLogs] = useState([]);
   const [activeLog, setActiveLog] = useState("");
@@ -1207,6 +1533,96 @@ function formatBytes(value) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function scheduleId(schedule) {
+  return schedule?.definition?.id || schedule?.summary?.id || schedule?.id || "";
+}
+
+function scheduleToDraft(detail) {
+  const definition = detail?.definition || {};
+  const trigger = definition.trigger || {};
+  return {
+    ...EMPTY_SCHEDULE,
+    id: definition.id || "",
+    name: definition.name || definition.id || "",
+    enabled: Boolean(definition.enabled),
+    agent_id: definition.agent_id || "assistant",
+    prompt: definition.prompt || "",
+    context_ids_text: (definition.context_ids || []).join(", "),
+    session_id: definition.session_id || "",
+    metadata_text: JSON.stringify(definition.metadata || {}, null, 2),
+    trigger_kind: trigger.kind || "interval",
+    interval_minutes: Math.max(1, Math.round((Number(trigger.seconds) || 3600) / 60)),
+    cron_expr: trigger.expr || "0 9 * * *",
+    cron_timezone: trigger.timezone || "Asia/Shanghai",
+    once_at: trigger.kind === "once" ? toDatetimeLocal(trigger.expr) : "",
+  };
+}
+
+function draftToSchedulePayload(draft) {
+  const id = String(draft.id || "").trim();
+  const prompt = String(draft.prompt || "").trim();
+  let metadata = {};
+  if (String(draft.metadata_text || "").trim()) {
+    metadata = JSON.parse(draft.metadata_text);
+  }
+  if (!id) throw new Error("定时任务 ID 不能为空");
+  if (!prompt) throw new Error("Prompt 不能为空");
+
+  return {
+    id,
+    name: String(draft.name || id).trim(),
+    enabled: Boolean(draft.enabled),
+    agent_id: String(draft.agent_id || "").trim(),
+    prompt,
+    context_ids: String(draft.context_ids_text || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+    session_id: String(draft.session_id || "").trim(),
+    metadata,
+    trigger: draftTriggerPayload(draft),
+  };
+}
+
+function draftTriggerPayload(draft) {
+  if (draft.trigger_kind === "cron") {
+    return {
+      kind: "cron",
+      expr: String(draft.cron_expr || "").trim(),
+      timezone: String(draft.cron_timezone || "Asia/Shanghai").trim(),
+    };
+  }
+  if (draft.trigger_kind === "once") {
+    const date = new Date(draft.once_at);
+    if (Number.isNaN(date.getTime())) throw new Error("一次性执行时间无效");
+    return { kind: "once", expr: date.toISOString() };
+  }
+  return { kind: "interval", seconds: Math.max(1, Number(draft.interval_minutes) || 1) * 60 };
+}
+
+function formatScheduleTrigger(trigger) {
+  if (!trigger) return "-";
+  if (trigger.kind === "interval") return `每 ${Math.round((Number(trigger.seconds) || 0) / 60)} 分钟`;
+  if (trigger.kind === "cron") return `${trigger.expr || "-"} · ${trigger.timezone || "UTC"}`;
+  if (trigger.kind === "once") return `一次性 · ${formatDateTime(trigger.expr)}`;
+  return trigger.kind || "-";
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function toDatetimeLocal(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
 createRoot(document.getElementById("root")).render(<App />);

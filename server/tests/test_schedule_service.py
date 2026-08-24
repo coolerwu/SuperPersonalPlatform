@@ -138,6 +138,51 @@ def test_schedule_service_runs_agent_schedule_from_files(tmp_path) -> None:
     assert state["last_run_id"] == "run_test"
 
 
+def test_schedule_service_manages_user_schedules(tmp_path) -> None:
+    settings = parse_settings(_raw_config())
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=FakeRunService(),
+        system_log_service=SystemLogService(tmp_path),
+        webdav_context_service=FakeWebDAVContextService(),
+    )
+
+    created = service.create_schedule(
+        {
+            "id": "daily_review",
+            "name": "Daily Review",
+            "enabled": True,
+            "trigger": {"kind": "interval", "seconds": 3600},
+            "agent_id": "assistant",
+            "prompt": "总结最近笔记",
+            "context_ids": ["default"],
+            "metadata": {"source": "test"},
+        }
+    )
+    assert created["definition"]["id"] == "daily_review"
+    assert created["definition"]["trigger"]["seconds"] == 3600
+
+    updated = service.update_schedule(
+        "daily_review",
+        {
+            "id": "ignored",
+            "name": "Daily Review",
+            "enabled": False,
+            "trigger": {"kind": "interval", "seconds": 7200},
+            "agent_id": "assistant",
+            "prompt": "总结最近笔记",
+        },
+    )
+    assert updated["definition"]["id"] == "daily_review"
+    assert updated["definition"]["enabled"] is False
+    assert updated["state"]["status"] == "disabled"
+
+    service.delete_schedule("daily_review")
+
+    assert not (tmp_path / "schedules" / "daily_review").exists()
+
+
 def _raw_config() -> dict:
     import yaml
 

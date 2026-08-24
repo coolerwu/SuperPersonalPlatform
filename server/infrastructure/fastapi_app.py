@@ -10,6 +10,7 @@ from server.adapter.auth_routes import create_auth_router
 from server.adapter.channel_routes import create_channel_router
 from server.adapter.dependencies import AppContainer
 from server.adapter.run_routes import create_run_router
+from server.adapter.schedule_routes import create_schedule_router
 from server.adapter.static_routes import mount_frontend
 from server.adapter.system_routes import create_system_router
 from server.adapter.workspace_routes import create_workspace_router
@@ -45,12 +46,27 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         session_service=session_service,
         system_log_service=system_log_service,
     )
+    webdav_context_service = None
+    if settings.nutstore.enabled and settings.context.webdav_sync.enabled:
+        webdav_context_service = WebDAVContextService(
+            workspace=active_workspace,
+            nutstore=settings.nutstore,
+            context=settings.context,
+        )
+    schedule_service = ScheduleService(
+        workspace=active_workspace,
+        settings=settings,
+        run_service=run_service,
+        system_log_service=system_log_service,
+        webdav_context_service=webdav_context_service,
+    )
     return AppContainer(
         workspace=active_workspace,
         auth_service=AuthService(AuthToken(settings.auth.token)),
         config_file_service=ConfigFileService(active_workspace),
         run_service=run_service,
         nutstore_service=NutstoreService(settings.nutstore),
+        schedule_service=schedule_service,
         system_log_service=system_log_service,
         system_update_service=SystemUpdateService(
             project_root,
@@ -98,21 +114,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     async def lifespan(app: FastAPI):
         schedule_task: asyncio.Task | None = None
         schedule_stop = asyncio.Event()
-        webdav_context_service = None
-        if settings.nutstore.enabled and settings.context.webdav_sync.enabled:
-            webdav_context_service = WebDAVContextService(
-                workspace=active_workspace,
-                nutstore=settings.nutstore,
-                context=settings.context,
-            )
-        schedule_service = ScheduleService(
-            workspace=active_workspace,
-            settings=settings,
-            run_service=container.run_service,
-            system_log_service=container.system_log_service,
-            webdav_context_service=webdav_context_service,
-        )
-        schedule_task = asyncio.create_task(schedule_service.run_forever(schedule_stop))
+        schedule_task = asyncio.create_task(container.schedule_service.run_forever(schedule_stop))
         if container.wechat_channel_manager is not None:
             await container.wechat_channel_manager.auto_start_all()
         try:
@@ -128,6 +130,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     install_request_logging(app, container)
     app.include_router(create_auth_router(container))
     app.include_router(create_run_router(container))
+    app.include_router(create_schedule_router(container))
     app.include_router(create_channel_router(container))
     app.include_router(create_system_router(container))
     app.include_router(create_workspace_router(container))

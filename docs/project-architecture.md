@@ -111,6 +111,13 @@ GET /api/runs/{run_id}/events?after={seq}
 Schedule 落盘模型：
 
 ```text
+GET /api/schedules
+POST /api/schedules
+GET /api/schedules/{schedule_id}
+PUT /api/schedules/{schedule_id}
+DELETE /api/schedules/{schedule_id}
+POST /api/schedules/{schedule_id}/run-now
+
 workspace/schedules/index.json
 workspace/schedules/{schedule_id}/definition.json
 workspace/schedules/{schedule_id}/state.json
@@ -119,6 +126,8 @@ workspace/schedules/{schedule_id}/lock.json
 ```
 
 后台统一 Scheduler 每 5 秒扫描轻量调度索引，只判断 `next_run_at` 是否到期，不执行高频 WebDAV 同步。到期后按 `definition.type` 分发：`webdav_sync` 执行 Context WebDAV 同步并写调度事件；`agent_run` 创建普通 `workspace/runs/{run_id}/` 并执行 DeepAgent。`lock.json` 用于避免重复执行，服务崩溃后会清理已失效的旧 lock。
+
+`/api/schedules` 是定时任务管理页面使用的后端入口。前端只允许创建、编辑和删除 `agent_run` 类型任务，字段核心为 `prompt + agent_id + trigger`；内置 `context_webdav_sync` 由配置自动生成，只能查看状态和手动 `run-now`，不能通过页面编辑或删除。当前触发器支持 `interval`、5 字段 `cron` 和 `once`。
 
 微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
 
@@ -153,6 +162,7 @@ POST /api/system/webdav-context/sync
 - `/config` 的 Context WebDAV 同步区域提供“测试连接”和“立即同步”操作；测试连接使用当前表单草稿测试 WebDAV，不保存配置且不回传 secret；立即同步调用后端手动同步接口读取已保存的 `workspace/config.yaml`，立刻把坚果云远端文件缓存到 `workspace/context/webdav/` 并返回文本/图片资源数量；保存配置本身仍只负责校验并写回 `config.yaml`。
 - `/providers` 是配置页内的模型 Provider 栏目直达入口，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
 - `/agent-config` 是配置页内的 Agent 栏目直达入口，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、需要确认的 `write_context` 和浏览器提取工具 `browser_extract`；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
+- `/schedules` 是定时任务管理页面，读取 `workspace/schedules/index.json` 和每个任务详情，支持查看内置 WebDAV 同步任务、创建/编辑/删除 Agent 定时任务、启用/停用、立即运行和查看调度事件；任务创建表单只暴露 `prompt + agent + trigger` 等必要字段，不在前端执行 Agent。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
 - `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录态继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存，不作为聊天历史；长期聊天会话统一写入 `workspace/sessions/{session_id}/`。
 - `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，文件级查看/编辑入口保留在 `/workspace`。

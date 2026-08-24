@@ -13,6 +13,7 @@ from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
 from server.app.nutstore_service import NutstoreService
 from server.app.run_service import RunService
+from server.app.schedule_service import ScheduleService
 from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import UpdateAlreadyRunningError
 from server.app.wechat_channel_service import WechatChannelStatus
@@ -102,6 +103,12 @@ def make_system_client(tmp_path: Path, update_service: FakeUpdateService | None 
         config_file_service=ConfigFileService(tmp_path),
         run_service=RunService(tmp_path),
         nutstore_service=NutstoreService(NutstoreConfig()),
+        schedule_service=ScheduleService(
+            workspace=tmp_path,
+            settings=Settings(auth=AuthConfig(token=token), server=ServerConfig(), nutstore=NutstoreConfig()),
+            run_service=RunService(tmp_path),
+            system_log_service=SystemLogService(tmp_path),
+        ),
         system_log_service=SystemLogService(tmp_path),
         system_update_service=update_service or FakeUpdateService(),
         workspace_file_service=WorkspaceFileService(tmp_path),

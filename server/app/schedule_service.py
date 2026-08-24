@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,11 @@ from server.infrastructure.config import Settings
 
 
 SCHEDULE_STATUSES = {"idle", "running", "completed", "failed", "disabled"}
+BUILTIN_SCHEDULE_IDS = {"context_webdav_sync"}
+
+
+class ScheduleNotFoundError(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -32,6 +38,7 @@ class ScheduleDefinition:
     type: str
     enabled: bool
     trigger: ScheduleTrigger
+    name: str = ""
     agent_id: str = ""
     prompt: str = ""
     context_ids: tuple[str, ...] = ()
@@ -78,10 +85,68 @@ class ScheduleService:
             state = self._read_state(definition.id)
             if state.get("status") == "running":
                 continue
-            next_run_at = _parse_dt(str(state.get("next_run_at") or "")) or now
+            raw_next_run_at = str(state.get("next_run_at") or "")
+            if not raw_next_run_at:
+                continue
+            next_run_at = _parse_dt(raw_next_run_at) or now
             if next_run_at > now:
                 continue
             await self._execute(definition, due_at=next_run_at)
+
+    def list_schedules(self) -> list[dict[str, Any]]:
+        self.bootstrap()
+        return [self._detail(definition, include_events=False) for definition in self._definitions()]
+
+    def get_schedule(self, schedule_id: str) -> dict[str, Any]:
+        self.bootstrap()
+        definition = self._definition_or_raise(schedule_id)
+        return self._detail(definition, include_events=True)
+
+    def create_schedule(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.bootstrap()
+        definition = self._validated_user_definition(payload)
+        if self._definition_path(definition.id).exists():
+            raise ValueError("schedule already exists")
+        self._write_definition(definition)
+        self._write_initial_state(definition)
+        self._append_event(definition.id, "created", {"message": "schedule created"})
+        self._upsert_index(definition)
+        return self.get_schedule(definition.id)
+
+    def update_schedule(self, schedule_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.bootstrap()
+        if schedule_id in BUILTIN_SCHEDULE_IDS:
+            raise ValueError("built-in schedule cannot be edited")
+        if not self._definition_path(schedule_id).exists():
+            raise ScheduleNotFoundError(schedule_id)
+        next_payload = {**payload, "id": schedule_id}
+        definition = self._validated_user_definition(next_payload)
+        self._write_definition(definition)
+        self._write_initial_state(definition)
+        self._append_event(definition.id, "updated", {"message": "schedule updated"})
+        self._upsert_index(definition)
+        return self.get_schedule(definition.id)
+
+    def delete_schedule(self, schedule_id: str) -> None:
+        self.bootstrap()
+        if schedule_id in BUILTIN_SCHEDULE_IDS:
+            raise ValueError("built-in schedule cannot be deleted")
+        if not self._definition_path(schedule_id).exists():
+            raise ScheduleNotFoundError(schedule_id)
+        shutil.rmtree(self._schedule_dir(schedule_id), ignore_errors=True)
+        index = self._read_index()
+        schedules = index.get("schedules") if isinstance(index, dict) else []
+        if not isinstance(schedules, list):
+            schedules = []
+        self._write_index_from_summaries(
+            [item for item in schedules if isinstance(item, dict) and item.get("id") != schedule_id]
+        )
+
+    async def run_now(self, schedule_id: str) -> dict[str, Any]:
+        self.bootstrap()
+        definition = self._definition_or_raise(schedule_id)
+        await self._execute(definition, due_at=_now_dt())
+        return self.get_schedule(schedule_id)
 
     def bootstrap(self) -> None:
         self._schedules_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +172,7 @@ class ScheduleService:
         return ScheduleDefinition(
             id="context_webdav_sync",
             type="webdav_sync",
+            name="Context WebDAV 同步",
             enabled=(
                 self._settings.nutstore.enabled
                 and self._settings.context.webdav_sync.enabled
@@ -198,6 +264,8 @@ class ScheduleService:
 
     def _next_run_at(self, definition: ScheduleDefinition, *, due_at: datetime, completed_at: datetime) -> str:
         trigger = definition.trigger
+        if trigger.kind == "once":
+            return ""
         if trigger.kind == "interval":
             seconds = max(int(trigger.seconds or 0), 1)
             return (completed_at + timedelta(seconds=seconds)).isoformat()
@@ -240,6 +308,25 @@ class ScheduleService:
                 "last_status": "",
                 "last_error": None,
                 "last_run_id": "",
+                "updated_at": now,
+            },
+        )
+
+    def _write_initial_state(self, definition: ScheduleDefinition) -> None:
+        now = _now()
+        existing = self._read_state(definition.id)
+        self._write_state(
+            definition.id,
+            {
+                "schema_version": 1,
+                "schedule_id": definition.id,
+                "status": "idle" if definition.enabled else "disabled",
+                "next_run_at": self._initial_next_run_at(definition) if definition.enabled else "",
+                "last_run_at": "",
+                "last_status": "",
+                "last_error": None,
+                "last_run_id": "",
+                "seq": int(existing.get("seq") or 0),
                 "updated_at": now,
             },
         )
@@ -301,8 +388,13 @@ class ScheduleService:
     def _summary(self, definition: ScheduleDefinition, state: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": definition.id,
+            "name": definition.name or definition.id,
             "type": definition.type,
             "enabled": definition.enabled,
+            "built_in": definition.id in BUILTIN_SCHEDULE_IDS,
+            "agent_id": definition.agent_id,
+            "prompt": definition.prompt,
+            "trigger": _trigger_payload(definition.trigger),
             "status": state.get("status", "idle"),
             "next_run_at": state.get("next_run_at", ""),
             "last_run_at": state.get("last_run_at", ""),
@@ -316,14 +408,10 @@ class ScheduleService:
         payload: dict[str, Any] = {
             "schema_version": 1,
             "id": definition.id,
+            "name": definition.name,
             "type": definition.type,
             "enabled": definition.enabled,
-            "trigger": {
-                "kind": definition.trigger.kind,
-                "seconds": definition.trigger.seconds,
-                "expr": definition.trigger.expr,
-                "timezone": definition.trigger.timezone,
-            },
+            "trigger": _trigger_payload(definition.trigger),
         }
         if definition.type == "agent_run":
             payload.update(
@@ -336,6 +424,67 @@ class ScheduleService:
                 }
             )
         _write_json(self._definition_path(definition.id), payload)
+
+    def _definition_or_raise(self, schedule_id: str) -> ScheduleDefinition:
+        schedule_id = schedule_id.strip()
+        if not _valid_schedule_id(schedule_id):
+            raise ScheduleNotFoundError(schedule_id)
+        raw = _read_json(self._definition_path(schedule_id))
+        definition = _parse_definition(raw)
+        if definition is None:
+            raise ScheduleNotFoundError(schedule_id)
+        return definition
+
+    def _detail(self, definition: ScheduleDefinition, *, include_events: bool) -> dict[str, Any]:
+        payload = {
+            "definition": _definition_payload(definition),
+            "state": self._read_state(definition.id),
+            "summary": self._summary(definition, self._read_state(definition.id)),
+        }
+        if include_events:
+            payload["events"] = self._read_events(definition.id)
+        return payload
+
+    def _read_events(self, schedule_id: str) -> list[dict[str, Any]]:
+        events_path = self._schedule_dir(schedule_id) / "events.jsonl"
+        if not events_path.exists():
+            return []
+        events: list[dict[str, Any]] = []
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                events.append(json.loads(line))
+        return events[-100:]
+
+    def _validated_user_definition(self, payload: dict[str, Any]) -> ScheduleDefinition:
+        raw = {**payload, "type": "agent_run"}
+        definition = _parse_definition(raw)
+        if definition is None:
+            raise ValueError("schedule id is required")
+        if definition.id in BUILTIN_SCHEDULE_IDS:
+            raise ValueError("schedule id is reserved")
+        if definition.type != "agent_run":
+            raise ValueError("only agent_run schedules can be managed")
+        if not definition.prompt.strip():
+            raise ValueError("schedule prompt is required")
+        if not definition.agent_id:
+            raise ValueError("schedule agent_id is required")
+        self._settings.agent_workspace.get_agent(definition.agent_id)
+        _validate_trigger(definition.trigger)
+        return definition
+
+    def _initial_next_run_at(self, definition: ScheduleDefinition) -> str:
+        now = _now_dt()
+        trigger = definition.trigger
+        if trigger.kind == "once":
+            scheduled_at = _parse_dt(trigger.expr)
+            if scheduled_at is None:
+                raise ValueError("once trigger expr must be an ISO datetime")
+            return (scheduled_at if scheduled_at > now else now).isoformat()
+        if trigger.kind == "interval":
+            return (now + timedelta(seconds=max(trigger.seconds, 60))).isoformat()
+        if trigger.kind == "cron":
+            return _next_cron_time(trigger.expr, timezone_name=trigger.timezone, after=now).isoformat()
+        raise ValueError("unsupported trigger kind")
 
     def _read_state(self, schedule_id: str) -> dict[str, Any]:
         value = _read_json(self._state_path(schedule_id))
@@ -376,6 +525,7 @@ def _parse_definition(raw: Any) -> ScheduleDefinition | None:
     if not isinstance(raw, dict):
         return None
     schedule_id = str(raw.get("id") or "").strip()
+    schedule_name = str(raw.get("name") or schedule_id).strip()
     schedule_type = str(raw.get("type") or "").strip()
     trigger_raw = raw.get("trigger") if isinstance(raw.get("trigger"), dict) else {}
     if not _valid_schedule_id(schedule_id) or not schedule_type:
@@ -391,12 +541,56 @@ def _parse_definition(raw: Any) -> ScheduleDefinition | None:
         type=schedule_type,
         enabled=bool(raw.get("enabled", True)),
         trigger=trigger,
+        name=schedule_name,
         agent_id=str(raw.get("agent_id") or "").strip(),
         prompt=str(raw.get("prompt") or ""),
         context_ids=tuple(str(item).strip() for item in raw.get("context_ids") or [] if str(item).strip()),
         session_id=str(raw.get("session_id") or "").strip(),
         metadata=raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {},
     )
+
+
+def _definition_payload(definition: ScheduleDefinition) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "id": definition.id,
+        "name": definition.name or definition.id,
+        "type": definition.type,
+        "enabled": definition.enabled,
+        "built_in": definition.id in BUILTIN_SCHEDULE_IDS,
+        "trigger": _trigger_payload(definition.trigger),
+        "agent_id": definition.agent_id,
+        "prompt": definition.prompt,
+        "context_ids": list(definition.context_ids),
+        "session_id": definition.session_id,
+        "metadata": definition.metadata or {},
+    }
+
+
+def _trigger_payload(trigger: ScheduleTrigger) -> dict[str, Any]:
+    payload: dict[str, Any] = {"kind": trigger.kind}
+    if trigger.kind == "interval":
+        payload["seconds"] = int(trigger.seconds or 0)
+    if trigger.kind in {"cron", "once"}:
+        payload["expr"] = trigger.expr
+    if trigger.kind == "cron":
+        payload["timezone"] = trigger.timezone or "UTC"
+    return payload
+
+
+def _validate_trigger(trigger: ScheduleTrigger) -> None:
+    if trigger.kind == "interval":
+        if int(trigger.seconds or 0) < 60:
+            raise ValueError("interval trigger seconds must be at least 60")
+        return
+    if trigger.kind == "once":
+        if _parse_dt(trigger.expr) is None:
+            raise ValueError("once trigger expr must be an ISO datetime")
+        return
+    if trigger.kind == "cron":
+        _next_cron_time(trigger.expr, timezone_name=trigger.timezone, after=_now_dt())
+        return
+    raise ValueError("unsupported trigger kind")
 
 
 def _next_cron_time(expr: str, *, timezone_name: str, after: datetime) -> datetime:
