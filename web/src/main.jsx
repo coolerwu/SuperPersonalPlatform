@@ -608,38 +608,43 @@ function WorkspacePage() {
       </div>
 
       <div className="workspace-toolbar panel">
-        <button className={path === "" ? "active-soft" : ""} onClick={() => load("")}>
-          workspace
-        </button>
-        {breadcrumbs.map((part, index) => {
-          const nextPath = breadcrumbs.slice(0, index + 1).join("/");
-          return (
-            <button key={nextPath} onClick={() => load(nextPath)}>
-              <ChevronRight size={14} />
-              {part}
-            </button>
-          );
-        })}
-        <span className="toolbar-spacer" />
-        <button onClick={() => openPath("config.yaml")}>
-          <FileText size={15} />
-          config.yaml
-        </button>
-        <button onClick={() => openPath("runs/index.json")}>
-          <FileJson size={15} />
-          runs/index.json
-        </button>
-        <button onClick={() => openPath("sessions/index.json")}>
-          <FileJson size={15} />
-          sessions/index.json
-        </button>
-        <button className="icon-button" onClick={() => load(path)} title="刷新目录">
-          <RefreshCw size={15} />
-        </button>
+        <div className="workspace-breadcrumbs" aria-label="workspace path">
+          <button className={path === "" ? "active-soft" : ""} onClick={() => load("")}>
+            workspace
+          </button>
+          {breadcrumbs.map((part, index) => {
+            const nextPath = breadcrumbs.slice(0, index + 1).join("/");
+            return (
+              <button key={nextPath} onClick={() => load(nextPath)}>
+                <ChevronRight size={14} />
+                {part}
+              </button>
+            );
+          })}
+        </div>
+        <div className="workspace-quick-actions" aria-label="workspace shortcuts">
+          <button onClick={() => openPath("config.yaml")}>
+            <FileText size={15} />
+            config.yaml
+          </button>
+          <button onClick={() => openPath("runs/index.json")}>
+            <FileJson size={15} />
+            runs/index.json
+          </button>
+          <button onClick={() => openPath("sessions/index.json")}>
+            <FileJson size={15} />
+            sessions/index.json
+          </button>
+          <button className="icon-button" onClick={() => load(path)} title="刷新目录">
+            <RefreshCw size={15} />
+          </button>
+        </div>
       </div>
 
-      {message ? <p className="ok">{message}</p> : null}
-      {error ? <p className="error">{error}</p> : null}
+      <div className={`workspace-feedback ${message || error ? "has-feedback" : ""}`}>
+        {message ? <p className="ok">{message}</p> : null}
+        {error ? <p className="error">{error}</p> : null}
+      </div>
 
       <div className="workspace-file-layout">
         <section className="panel file-browser">
