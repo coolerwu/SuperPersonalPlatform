@@ -641,6 +641,8 @@ test("shows built-in schedules without the agent task form", async () => {
   expect(screen.getByText("webdav_sync")).toBeInTheDocument();
   expect(screen.queryByLabelText("Prompt")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Agent")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /立即运行/ })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /保存/ })).not.toBeInTheDocument();
 });
 
 test("updates the selected agent for a wechat account", async () => {

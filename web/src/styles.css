@@ -315,9 +315,10 @@ pre {
   padding: 0 14px;
 }
 
-.panel-title > div {
+.panel-title > div:not(.config-inline-actions) {
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 
 .panel-title span {
@@ -940,10 +941,27 @@ pre {
 
 .config-inline-actions {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  min-width: 0;
+}
+
+.panel-title > .config-inline-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.panel-title > .config-inline-actions button {
+  white-space: nowrap;
+}
+
+.panel-title > .config-inline-actions .icon-button,
+.panel-title > .config-inline-actions .delete-button {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
 }
 
 .field-toggle {

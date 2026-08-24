@@ -1274,13 +1274,17 @@ function SchedulesPage() {
                 <Play size={15} />
                 立即运行
               </button>
-              <button className="primary" onClick={saveSchedule} disabled={builtIn}>
-                <Save size={15} />
-                保存
-              </button>
-              <button className="delete-button" onClick={deleteSchedule} disabled={builtIn || editingNew || !activeSchedule}>
-                <Trash2 size={15} />
-              </button>
+              {!builtIn ? (
+                <>
+                  <button className="primary" onClick={saveSchedule}>
+                    <Save size={15} />
+                    保存
+                  </button>
+                  <button className="delete-button" onClick={deleteSchedule} disabled={editingNew || !activeSchedule}>
+                    <Trash2 size={15} />
+                  </button>
+                </>
+              ) : null}
             </div>
           </div>
           {builtIn ? (
