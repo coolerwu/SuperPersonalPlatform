@@ -313,7 +313,7 @@ function RunsPage() {
   }
 
   return (
-    <section className="console-screen">
+    <section className="console-screen runs-screen">
       <div className="metrics-row">
         <Metric label="全部 Run" value={counts.total} tone="blue" />
         <Metric label="运行中" value={counts.running} tone="cyan" />

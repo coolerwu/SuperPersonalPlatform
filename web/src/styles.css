@@ -300,11 +300,19 @@ pre {
   color: var(--red);
 }
 
+.runs-screen {
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .runs-grid {
   display: grid;
-  grid-template-columns: minmax(420px, 0.92fr) minmax(520px, 1.42fr) 244px;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(440px, 1.42fr) minmax(220px, 0.52fr);
   gap: 12px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .panel {
@@ -347,6 +355,9 @@ pre {
 }
 
 .run-index {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -366,8 +377,9 @@ pre {
 }
 
 .run-table-body {
-  max-height: calc(100vh - 270px);
-  overflow: auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 8px;
 }
 
@@ -400,12 +412,15 @@ pre {
   display: grid;
   align-content: start;
   gap: 12px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 14px;
 }
 
 .empty-detail {
   place-items: center;
-  min-height: 420px;
+  min-height: 0;
   color: var(--muted);
   text-align: center;
 }
@@ -420,13 +435,22 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
+}
+
+.detail-header > div,
+.workspace-header > div {
+  min-width: 0;
 }
 
 .detail-header h2,
 .workspace-header h1 {
+  overflow: hidden;
   margin: 3px 0 0;
   font-size: 18px;
   line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace-header h1 {
@@ -554,6 +578,7 @@ pre {
 .result-preview {
   display: grid;
   gap: 10px;
+  min-height: 0;
 }
 
 .result-preview > div {
@@ -577,6 +602,10 @@ pre {
   display: grid;
   align-content: start;
   gap: 12px;
+  min-height: 0;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .rail-card {
@@ -1031,7 +1060,7 @@ pre {
 
 .panel-title > .config-inline-actions button {
   flex: 0 0 auto;
-  min-width: fit-content;
+  min-width: max-content;
   white-space: nowrap;
 }
 
@@ -1201,16 +1230,45 @@ pre {
   gap: 10px;
 }
 
+.schedules-screen {
+  grid-template-rows: minmax(0, 1fr);
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.schedules-screen > .ok,
+.schedules-screen > .error {
+  align-self: start;
+}
+
+.schedules-screen:has(> .ok),
+.schedules-screen:has(> .error) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .schedules-grid {
   display: grid;
   grid-template-columns: minmax(360px, 0.42fr) minmax(560px, 1fr);
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .schedule-index,
 .schedule-detail {
+  display: grid;
   min-height: 0;
+  overflow: hidden;
+}
+
+.schedule-index {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.schedule-detail {
+  grid-template-rows: auto minmax(0, auto) minmax(0, 1fr);
 }
 
 .schedule-list,
@@ -1222,12 +1280,23 @@ pre {
 }
 
 .schedule-list {
-  max-height: calc(100vh - 270px);
-  overflow: auto;
+  align-content: start;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .schedule-form {
   gap: 10px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.schedule-state {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .builtin-schedule-info {
@@ -1295,8 +1364,10 @@ pre {
 }
 
 .schedule-events {
-  max-height: 220px;
-  overflow: auto;
+  min-height: 0;
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-top: 1px solid var(--line-soft);
   padding-top: 8px;
 }
@@ -1698,6 +1769,19 @@ pre {
   }
 }
 
+@media (max-width: 1460px) {
+  .runs-screen .run-table {
+    grid-template-columns: minmax(150px, 1fr) 86px;
+  }
+
+  .runs-screen .run-table.head span:nth-child(3),
+  .runs-screen .run-table.head span:nth-child(4),
+  .runs-screen .run-table.row span:nth-child(3),
+  .runs-screen .run-table.row span:nth-child(4) {
+    display: none;
+  }
+}
+
 @media (max-width: 820px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -1752,7 +1836,9 @@ pre {
   }
 
   .content,
-  .workspace-screen {
+  .runs-screen,
+  .workspace-screen,
+  .schedules-screen {
     height: auto;
     min-height: 100vh;
     overflow: visible;
