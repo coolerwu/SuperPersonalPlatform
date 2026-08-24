@@ -47,45 +47,6 @@ def test_context_webdav_config_parses_single_sync_root_and_permissions() -> None
     assert settings.context.webdav_permissions[1].writable is True
 
 
-def test_context_webdav_config_migrates_legacy_roots() -> None:
-    settings = parse_settings(
-        {
-            "auth": {"token": "secret-token"},
-            "nutstore": {"enabled": True, "username": "u", "password": "p"},
-            "context": {
-                "webdav_sync": {"enabled": True, "interval_seconds": 600},
-                "webdav_roots": [
-                    {
-                        "id": "notebook",
-                        "name": "notebook",
-                        "path": "/notebook",
-                        "readable": True,
-                        "writable": False,
-                        "protected": True,
-                    },
-                    {
-                        "id": "agent_inbox",
-                        "name": "agent_inbox",
-                        "path": "/notebook/00AgentInbox",
-                        "readable": True,
-                        "writable": True,
-                        "protected": False,
-                    },
-                ],
-            },
-        }
-    )
-
-    assert settings.context.webdav_sync.root_path == "/notebook"
-    assert [
-        (permission.path, permission.readable, permission.writable, permission.protected)
-        for permission in settings.context.webdav_permissions
-    ] == [
-        ("/", True, False, True),
-        ("/00AgentInbox", True, True, False),
-    ]
-
-
 def test_webdav_context_refresh_uses_single_root_and_permission_paths(tmp_path) -> None:
     requested_urls = []
 

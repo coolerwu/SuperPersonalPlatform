@@ -942,7 +942,6 @@ function ConfigFallbackEditor({ draft, onChange, readOnly, error }) {
 
 function withDefaults(value) {
   const incoming = isPlainObject(value) ? cloneConfig(value) : {};
-  migrateLegacyWebdavConfig(incoming);
   const config = mergeObjects(cloneConfig(DEFAULT_CONFIG), incoming);
   config.llm.models = Array.isArray(config.llm.models) ? config.llm.models.map((model) => ({ ...model })) : [];
   config.agents.definitions = Array.isArray(config.agents.definitions)
@@ -971,21 +970,6 @@ function withDefaults(value) {
   return config;
 }
 
-function migrateLegacyWebdavConfig(config) {
-  if (!isPlainObject(config.context)) return;
-  const roots = Array.isArray(config.context.webdav_roots) ? config.context.webdav_roots : [];
-  if (Array.isArray(config.context.webdav_permissions) || roots.length === 0) return;
-  const rootPath = commonParentPath(roots.map((root) => normalizePath(root.path || "/")).filter(Boolean));
-  config.context.webdav_sync = isPlainObject(config.context.webdav_sync) ? config.context.webdav_sync : {};
-  if (!config.context.webdav_sync.root_path) config.context.webdav_sync.root_path = rootPath;
-  config.context.webdav_permissions = roots.map((root) => ({
-    path: relativePermissionPath(normalizePath(root.path || "/"), rootPath),
-    readable: root.readable !== false,
-    writable: Boolean(root.writable) && !Boolean(root.protected),
-    protected: Boolean(root.protected),
-  }));
-}
-
 function mergeObjects(base, incoming) {
   for (const [key, value] of Object.entries(incoming)) {
     if (isPlainObject(value) && isPlainObject(base[key])) {
@@ -1011,25 +995,6 @@ function normalizePath(value) {
   if (!raw) return "/";
   const parts = raw.split("/").filter(Boolean);
   return `/${parts.join("/")}`;
-}
-
-function commonParentPath(paths) {
-  if (!paths.length) return "/";
-  const splitPaths = paths.map((path) => normalizePath(path).split("/").filter(Boolean));
-  const common = [];
-  for (let index = 0; ; index += 1) {
-    const part = splitPaths[0]?.[index];
-    if (!part || !splitPaths.every((items) => items[index] === part)) break;
-    common.push(part);
-  }
-  return common.length ? `/${common.join("/")}` : "/";
-}
-
-function relativePermissionPath(path, rootPath) {
-  const pathParts = normalizePath(path).split("/").filter(Boolean);
-  const rootParts = normalizePath(rootPath).split("/").filter(Boolean);
-  const relative = pathParts.slice(rootParts.length);
-  return relative.length ? `/${relative.join("/")}` : "/";
 }
 
 function normalizeDeepAgent(value) {

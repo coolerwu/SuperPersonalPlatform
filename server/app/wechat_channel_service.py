@@ -376,23 +376,7 @@ class WechatChannelService:
 
     @property
     def _session_path(self) -> Path:
-        new_path = self._workspace / "channels" / "wechat" / "sessions" / f"{self._account_id}.json"
-        legacy_dir = self._workspace / ".run"
-        legacy_path = legacy_dir / "wechat_session.json"
-        legacy_account_path = legacy_dir / f"wechat_session_{self._account_id}.json"
-        if legacy_account_path.exists() and not new_path.exists():
-            try:
-                new_path.parent.mkdir(parents=True, exist_ok=True)
-                legacy_account_path.rename(new_path)
-            except Exception:
-                pass
-        if self._account_id == "default" and legacy_path.exists() and not new_path.exists():
-            try:
-                new_path.parent.mkdir(parents=True, exist_ok=True)
-                legacy_path.rename(new_path)
-            except Exception:
-                pass
-        return new_path
+        return self._workspace / "channels" / "wechat" / "sessions" / f"{self._account_id}.json"
 
     def _save_session(self, bot_token: str, baseurl: str) -> None:
         try:

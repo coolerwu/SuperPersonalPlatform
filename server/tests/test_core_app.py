@@ -365,6 +365,7 @@ def test_workspace_delete_protects_config_and_root_skeleton(tmp_path) -> None:
     assert client.post("/api/workspace/delete", json={"path": "config.yaml"}).status_code == 400
     assert client.post("/api/workspace/delete", json={"path": "context"}).status_code == 400
     assert client.post("/api/workspace/delete", json={"path": "runs"}).status_code == 400
+    assert client.post("/api/workspace/delete", json={"path": "schedules"}).status_code == 400
 
     delete_response = client.post("/api/workspace/delete", json={"path": "scratch"})
     assert delete_response.status_code == 200

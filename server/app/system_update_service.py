@@ -28,13 +28,11 @@ class SystemUpdateService:
     ) -> None:
         self.project_root = project_root
         self.workspace = workspace
-        self.run_dir = workspace / ".run"
-        self.lock_path = self.run_dir / "update-service.lock"
+        self.lock_path = workspace / "logs" / "update-service.lock"
         self.log_service = log_service or SystemLogService(workspace)
         self.script_path = project_root / "run-prod.sh"
 
     def start_update(self) -> Path:
-        self.run_dir.mkdir(parents=True, exist_ok=True)
         self.log_service.logs_dir.mkdir(parents=True, exist_ok=True)
         self.log_service.cleanup_old_logs()
         log_path = self.log_service.current_log_path()

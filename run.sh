@@ -409,12 +409,10 @@ write_service_file() {
     exit 1
   fi
 
-  local run_dir="${WORKSPACE_DIR}/.run"
-  mkdir -p "$run_dir"
-
   local host="${SUPER_PERSONAL_HOST:-0.0.0.0}"
   local port="${SUPER_PERSONAL_PORT:-8888}"
-  local generated_service="${run_dir}/${SERVICE_NAME}"
+  local generated_service
+  generated_service="$(mktemp "${TMPDIR:-/tmp}/super-personal-platform.service.XXXXXX")"
   local service_user service_group group_line=""
   service_user="$(resolve_service_user)"
   service_group="$(resolve_service_group "$service_user")"
@@ -447,17 +445,20 @@ SERVICE
 
   if [[ -f "$SERVICE_PATH" ]] && cmp -s "$generated_service" "$SERVICE_PATH"; then
     echo "systemd service unchanged; skipping install and daemon-reload"
+    rm -f "$generated_service"
     return
   fi
 
   if [[ ! -t 0 ]] && ! sudo -n true 2>/dev/null; then
     SERVICE_FILE_REFRESH_SKIPPED=1
     echo "systemd service file changed, but this no-TTY update cannot install it without broader sudo; skipping unit refresh for this run."
+    rm -f "$generated_service"
     return
   fi
 
   require_sudo "installing or reloading the systemd service file"
   sudo install -m 0644 "$generated_service" "$SERVICE_PATH"
+  rm -f "$generated_service"
   sudo systemctl daemon-reload
   SERVICE_FILE_CHANGED=1
 }
