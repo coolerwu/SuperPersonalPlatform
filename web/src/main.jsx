@@ -1284,13 +1284,29 @@ function SchedulesPage() {
             </div>
           </div>
           {builtIn ? (
-            <p className="muted-note">内置任务由系统配置驱动，只能在这里查看状态或立即执行。</p>
-          ) : null}
-          <ScheduleForm draft={draft} onChange={setDraft} agents={agents} readOnly={builtIn} lockId={!editingNew} />
+            <BuiltInScheduleInfo detail={activeSchedule} />
+          ) : (
+            <ScheduleForm draft={draft} onChange={setDraft} agents={agents} readOnly={builtIn} lockId={!editingNew} />
+          )}
           {activeSchedule ? <ScheduleStatePanel detail={activeSchedule} /> : null}
         </section>
       </div>
     </section>
+  );
+}
+
+function BuiltInScheduleInfo({ detail }) {
+  const definition = detail?.definition || {};
+  return (
+    <div className="builtin-schedule-info">
+      <p className="muted-note">内置任务由系统配置驱动，只能在这里查看状态或立即执行。</p>
+      <div className="kv-grid">
+        <Kv label="ID" value={definition.id || "-"} />
+        <Kv label="类型" value={definition.type || "-"} />
+        <Kv label="触发" value={formatScheduleTrigger(definition.trigger)} />
+        <Kv label="启用" value={definition.enabled ? "启用" : "停用"} />
+      </div>
+    </div>
   );
 }
 
@@ -1328,7 +1344,7 @@ function ScheduleForm({ draft, onChange, agents, readOnly, lockId }) {
         </ConfigFieldLite>
       </div>
       <ConfigFieldLite label="Prompt">
-        <textarea value={draft.prompt} readOnly={readOnly} onChange={(event) => update("prompt", event.target.value)} />
+        <textarea className="schedule-prompt" value={draft.prompt} readOnly={readOnly} onChange={(event) => update("prompt", event.target.value)} />
       </ConfigFieldLite>
       <div className="config-grid">
         <ConfigFieldLite label="触发类型">
@@ -1374,7 +1390,12 @@ function ScheduleForm({ draft, onChange, agents, readOnly, lockId }) {
         </ConfigFieldLite>
       </div>
       <ConfigFieldLite label="Metadata JSON">
-        <textarea value={draft.metadata_text} readOnly={readOnly} onChange={(event) => update("metadata_text", event.target.value)} />
+        <textarea
+          className="schedule-metadata"
+          value={draft.metadata_text}
+          readOnly={readOnly}
+          onChange={(event) => update("metadata_text", event.target.value)}
+        />
       </ConfigFieldLite>
     </div>
   );

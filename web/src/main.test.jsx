@@ -588,6 +588,61 @@ test("saves deepagent options from the agent config menu", async () => {
   });
 });
 
+test("shows built-in schedules without the agent task form", async () => {
+  window.history.replaceState({}, "", "/schedules");
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", size: 128, editable: true, content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/schedules")) {
+      return response({
+        schedules: [
+          {
+            summary: {
+              id: "context_webdav_sync",
+              name: "Context WebDAV 同步",
+              enabled: true,
+              status: "running",
+              trigger: { kind: "interval", seconds: 600 },
+            },
+          },
+        ],
+      });
+    }
+    if (path.endsWith("/api/schedules/context_webdav_sync")) {
+      return response({
+        definition: {
+          id: "context_webdav_sync",
+          name: "Context WebDAV 同步",
+          type: "webdav_sync",
+          enabled: true,
+          built_in: true,
+          trigger: { kind: "interval", seconds: 600 },
+        },
+        state: { status: "running", next_run_at: "2026-08-24T06:53:28Z", last_run_at: "2026-08-24T06:43:28Z" },
+        events: [],
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect(await screen.findByText("内置任务由系统配置驱动，只能在这里查看状态或立即执行。")).toBeInTheDocument();
+  expect(screen.getByText("webdav_sync")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Prompt")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Agent")).not.toBeInTheDocument();
+});
+
 test("updates the selected agent for a wechat account", async () => {
   window.history.replaceState({}, "", "/wechat");
   global.fetch = vi.fn(async (url, options = {}) => {

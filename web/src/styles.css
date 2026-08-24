@@ -1114,7 +1114,7 @@ pre {
 
 .schedule-index,
 .schedule-detail {
-  min-height: 620px;
+  min-height: 0;
 }
 
 .schedule-list,
@@ -1123,6 +1123,26 @@ pre {
   display: grid;
   gap: 12px;
   padding: 14px;
+}
+
+.schedule-list {
+  max-height: calc(100vh - 270px);
+  overflow: auto;
+}
+
+.schedule-form {
+  gap: 10px;
+}
+
+.builtin-schedule-info {
+  display: grid;
+  gap: 12px;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 14px;
+}
+
+.builtin-schedule-info .muted-note {
+  margin: 0;
 }
 
 .schedule-row {
@@ -1169,8 +1189,17 @@ pre {
   margin: 12px 14px 0;
 }
 
+.schedule-form textarea.schedule-prompt {
+  min-height: 88px;
+}
+
+.schedule-form textarea.schedule-metadata {
+  min-height: 58px;
+  font-size: 12px;
+}
+
 .schedule-events {
-  max-height: 260px;
+  max-height: 220px;
   overflow: auto;
   border-top: 1px solid var(--line-soft);
   padding-top: 8px;
