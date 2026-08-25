@@ -1,3 +1,4 @@
+import base64
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -20,9 +21,26 @@ When the user asks to look up notes, recent notes, synced documents, WebDAV file
 
 
 @dataclass(frozen=True)
+class RuntimeAttachment:
+    type: str
+    mime: str
+    path: Path
+    filename: str = ""
+
+    @property
+    def is_image(self) -> bool:
+        return self.type == "image" and self.mime.startswith("image/")
+
+
+@dataclass(frozen=True)
 class RuntimeMessage:
     role: str
     content: str
+    attachments: tuple[RuntimeAttachment, ...] = ()
+
+    @property
+    def has_images(self) -> bool:
+        return any(attachment.is_image for attachment in self.attachments)
 
 
 @dataclass(frozen=True)
@@ -84,7 +102,7 @@ class DeepAgentRuntime:
             create_kwargs["system_prompt"] = create_kwargs.pop("instructions")
             agent = create_deep_agent(**create_kwargs)
 
-        input_messages = _to_langchain_messages(messages, HumanMessage, AIMessage)
+        input_messages = _to_langchain_messages(messages, HumanMessage, AIMessage, self._model.provider)
         input_state: dict[str, Any] = {"messages": input_messages}
         if options.filesystem_enabled:
             input_state["files"] = load_agent_files(self._agent_workspace)
@@ -183,18 +201,58 @@ def _create_deep_agent_has_default_middleware(create_deep_agent: Any, name: str)
         return False
 
 
-def _to_langchain_messages(messages: tuple[RuntimeMessage, ...], human_cls: Any, ai_cls: Any) -> list[Any]:
+def _to_langchain_messages(
+    messages: tuple[RuntimeMessage, ...],
+    human_cls: Any,
+    ai_cls: Any,
+    provider: ModelProvider = ModelProvider.OPENAI_COMPATIBLE,
+) -> list[Any]:
     result: list[Any] = []
     for message in messages:
         content = message.content.strip()
-        if not content:
+        attachments = tuple(attachment for attachment in message.attachments if attachment.is_image)
+        if not content and not attachments:
             continue
         role = message.role.lower()
         if role in {"assistant", "ai"}:
             result.append(ai_cls(content=content))
         elif role in {"user", "human"}:
-            result.append(human_cls(content=content))
+            result.append(human_cls(content=_message_content(content, attachments, provider)))
     return result
+
+
+def _message_content(
+    text: str,
+    attachments: tuple[RuntimeAttachment, ...],
+    provider: ModelProvider,
+) -> str | list[dict[str, Any]]:
+    if not attachments:
+        return text
+
+    if provider is ModelProvider.ANTHROPIC:
+        blocks: list[dict[str, Any]] = []
+        if text:
+            blocks.append({"type": "text", "text": text})
+        for attachment in attachments:
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": attachment.mime,
+                        "data": base64.b64encode(attachment.path.read_bytes()).decode("ascii"),
+                    },
+                }
+            )
+        return blocks
+
+    blocks = []
+    if text:
+        blocks.append({"type": "text", "text": text})
+    for attachment in attachments:
+        data_url = f"data:{attachment.mime};base64,{base64.b64encode(attachment.path.read_bytes()).decode('ascii')}"
+        blocks.append({"type": "image_url", "image_url": {"url": data_url}})
+    return blocks
 
 
 def load_agent_files(agent_workspace: Path, *, max_file_size: int = 512 * 1024) -> dict[str, dict[str, Any]]:

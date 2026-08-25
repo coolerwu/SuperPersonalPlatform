@@ -11,7 +11,12 @@ from typing import Any
 from server.app.session_service import SessionService
 from server.domain.agent_config import AgentConfigError, AgentDefinition, ModelDefinition
 from server.infrastructure.config import load_settings
-from server.infrastructure.deepagent_runtime import DeepAgentRuntime, DeepAgentRuntimeOptions, RuntimeMessage
+from server.infrastructure.deepagent_runtime import (
+    DeepAgentRuntime,
+    DeepAgentRuntimeOptions,
+    RuntimeAttachment,
+    RuntimeMessage,
+)
 
 
 RUN_STATUSES = {"queued", "running", "completed", "failed"}
@@ -28,6 +33,7 @@ class RunInput:
     agent_id: str
     session_id: str
     content: str
+    attachments: tuple[dict[str, Any], ...]
     context_ids: tuple[str, ...]
     created_at: str
     metadata: dict[str, Any]
@@ -48,13 +54,19 @@ class RunService:
         context_ids: tuple[str, ...] = (),
         source: str = "api",
         session_id: str = "",
+        attachments: tuple[dict[str, Any], ...] = (),
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        text = content.strip()
-        if not text:
-            raise ValueError("content is required")
         if session_id and self._session_service is not None and not self._session_service.exists(session_id):
             raise ValueError("session does not exist")
+        saved_attachments: tuple[dict[str, Any], ...] = ()
+        if session_id and self._session_service is not None:
+            saved_attachments = self._session_service.save_attachments(session_id, attachments)
+        else:
+            saved_attachments = _normalize_attachment_metadata(attachments)
+        text = content.strip() or ("用户发送了图片。" if _has_image_attachment(saved_attachments) else "")
+        if not text and not saved_attachments:
+            raise ValueError("content is required")
 
         settings = load_settings(self._workspace / "config.yaml")
         agent = self._resolve_agent(settings.agent_workspace.agents, agent_id)
@@ -72,6 +84,7 @@ class RunService:
             agent_id=agent.id,
             session_id=session_id,
             content=text,
+            attachments=saved_attachments,
             context_ids=selected_context_ids,
             created_at=now,
             metadata=metadata or {},
@@ -100,6 +113,7 @@ class RunService:
                 session_id,
                 role="user",
                 content=text,
+                attachments=saved_attachments,
                 run_id=run_id,
                 metadata={"source": source},
             )
@@ -124,10 +138,38 @@ class RunService:
         content = str(run_input.get("content") or "")
         session_id = str(run_input.get("session_id") or "")
         history = self._session_service.read_messages(session_id) if session_id and self._session_service is not None else []
-        runtime_messages = _runtime_messages(history, fallback_content=content)
+        fallback_attachments = _runtime_attachments(run_input.get("attachments") or [], workspace=self._workspace)
+        runtime_messages = _runtime_messages(
+            history,
+            fallback_content=content,
+            fallback_attachments=fallback_attachments,
+            workspace=self._workspace,
+        )
         runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
         self._set_state(run_id, "running")
         self._append_event(run_id, "running", {"message": "DeepAgent started"})
+
+        if any(message.has_images for message in runtime_messages) and not model.supports_images:
+            result = "当前 Agent 使用的模型未开启图片能力，无法处理微信图片输入。请在 Providers 中选择支持图片的模型并启用 supports_images。"
+            result_payload = {
+                "run_id": run_id,
+                "status": "completed",
+                "content": result,
+                "completed_at": _now(),
+            }
+            _write_json(self._run_dir(run_id) / "result.json", result_payload)
+            if session_id and self._session_service is not None:
+                self._session_service.append_message(
+                    session_id,
+                    role="assistant",
+                    content=result,
+                    run_id=run_id,
+                    metadata={"source": run_input.get("source", "api")},
+                )
+            self._set_state(run_id, "completed")
+            self._append_event(run_id, "completed", {"message": "model does not support image input"})
+            self._set_delivery(run_id, "ready")
+            return self.get_run(run_id)
 
         try:
             result = await DeepAgentRuntime(
@@ -391,18 +433,80 @@ def _public_model(model: ModelDefinition) -> dict[str, Any]:
     }
 
 
-def _runtime_messages(history: list[dict[str, Any]], *, fallback_content: str) -> tuple[RuntimeMessage, ...]:
+def _runtime_messages(
+    history: list[dict[str, Any]],
+    *,
+    fallback_content: str,
+    fallback_attachments: tuple[RuntimeAttachment, ...] = (),
+    workspace: Path,
+) -> tuple[RuntimeMessage, ...]:
     messages: list[RuntimeMessage] = []
     for item in history:
         if not isinstance(item, dict):
             continue
         role = str(item.get("role") or "").strip()
         content = str(item.get("content") or "").strip()
-        if role and content:
-            messages.append(RuntimeMessage(role=role, content=content))
-    if not messages and fallback_content.strip():
-        messages.append(RuntimeMessage(role="user", content=fallback_content.strip()))
+        attachments = _runtime_attachments(item.get("attachments") or [], workspace=workspace)
+        if role and (content or attachments):
+            messages.append(RuntimeMessage(role=role, content=content, attachments=attachments))
+    if not messages and (fallback_content.strip() or fallback_attachments):
+        messages.append(
+            RuntimeMessage(
+                role="user",
+                content=fallback_content.strip(),
+                attachments=fallback_attachments,
+            )
+        )
     return tuple(messages)
+
+
+def _runtime_attachments(raw: Any, *, workspace: Path) -> tuple[RuntimeAttachment, ...]:
+    if not isinstance(raw, list | tuple):
+        return ()
+    root = workspace.resolve()
+    attachments: list[RuntimeAttachment] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        workspace_path = str(item.get("workspace_path") or "").strip()
+        if not workspace_path:
+            continue
+        target = (workspace / workspace_path).resolve()
+        if not target.is_relative_to(root) or not target.is_file():
+            continue
+        attachments.append(
+            RuntimeAttachment(
+                type=str(item.get("type") or "file").strip().lower(),
+                mime=str(item.get("mime") or "application/octet-stream").strip(),
+                filename=str(item.get("filename") or target.name),
+                path=target,
+            )
+        )
+    return tuple(attachments)
+
+
+def _normalize_attachment_metadata(attachments: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+    metadata: list[dict[str, Any]] = []
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        item = {
+            key: value
+            for key, value in attachment.items()
+            if key not in {"bytes", "data_url", "content_base64", "base64", "content", "source_path"}
+        }
+        if item:
+            metadata.append(item)
+    return tuple(metadata)
+
+
+def _has_image_attachment(attachments: tuple[dict[str, Any], ...]) -> bool:
+    return any(
+        str(attachment.get("type") or "").lower() == "image"
+        or str(attachment.get("mime") or "").lower().startswith("image/")
+        for attachment in attachments
+        if isinstance(attachment, dict)
+    )
 
 
 def _runtime_options(raw: Any) -> DeepAgentRuntimeOptions:

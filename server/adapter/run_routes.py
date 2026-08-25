@@ -11,6 +11,7 @@ from server.domain.agent_config import AgentConfigError
 
 class CreateRunRequest(BaseModel):
     content: str
+    attachments: list[dict[str, object]] = Field(default_factory=list)
     agent_id: str = ""
     context_ids: list[str] = Field(default_factory=list)
     source: str = "api"
@@ -37,6 +38,7 @@ def create_run_router(container: AppContainer) -> APIRouter:
                 context_ids=tuple(payload.context_ids),
                 source=payload.source,
                 session_id=payload.session_id,
+                attachments=tuple(payload.attachments),
                 metadata=payload.metadata,
             )
         except (ValueError, AgentConfigError) as exc:

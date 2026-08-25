@@ -102,11 +102,12 @@ class SessionService:
         *,
         role: str,
         content: str,
+        attachments: tuple[dict[str, Any], ...] = (),
         run_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> None:
         text = content.strip()
-        if not text:
+        if not text and not attachments:
             return
 
         session_dir = self._session_dir(session_id)
@@ -122,12 +123,52 @@ class SessionService:
             "created_at": now,
             "metadata": metadata or {},
         }
+        if attachments:
+            message["attachments"] = list(attachments)
         _append_jsonl(session_dir / "messages.jsonl", message)
         state["message_count"] = message_count
         state["last_message_at"] = now
         state["updated_at"] = now
         _write_json(session_dir / "state.json", state)
         self._upsert_index(state)
+
+    def save_attachments(
+        self,
+        session_id: str,
+        attachments: tuple[dict[str, Any], ...],
+    ) -> tuple[dict[str, Any], ...]:
+        if not attachments:
+            return ()
+        state = self._read_state(session_id)
+        message_seq = int(state.get("message_count") or 0) + 1
+        saved: list[dict[str, Any]] = []
+        for index, attachment in enumerate(attachments, start=1):
+            payload = _attachment_bytes(attachment)
+            if not payload:
+                continue
+            raw_kind = str(attachment.get("type") or "file").strip().lower()
+            kind = raw_kind if raw_kind in {"image", "file"} else "file"
+            mime = str(attachment.get("mime") or _guess_mime(attachment) or "application/octet-stream").strip()
+            attachment_id = _safe_part(str(attachment.get("id") or f"{kind}_{index}"))[:48]
+            extension = _attachment_extension(attachment, mime)
+            filename = _safe_filename(str(attachment.get("filename") or f"{attachment_id}{extension}"))
+            relative_path = Path("attachments") / str(message_seq) / filename
+            target = self._session_dir(session_id) / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+            saved.append(
+                {
+                    "id": attachment_id,
+                    "type": kind,
+                    "mime": mime,
+                    "filename": filename,
+                    "size": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "session_path": relative_path.as_posix(),
+                    "workspace_path": f"sessions/{session_id}/{relative_path.as_posix()}",
+                }
+            )
+        return tuple(saved)
 
     def append_run(
         self,
@@ -225,6 +266,67 @@ class SessionService:
 def _safe_part(value: str) -> str:
     safe = _SAFE_ID_RE.sub("_", str(value or "").strip()).strip("._-")
     return safe[:80] or "unknown"
+
+
+def _safe_filename(value: str) -> str:
+    safe = _SAFE_ID_RE.sub("_", Path(value or "").name).strip("._-")
+    return safe[:120] or "attachment"
+
+
+def _attachment_bytes(attachment: dict[str, Any]) -> bytes:
+    raw_bytes = attachment.get("bytes")
+    if isinstance(raw_bytes, bytes):
+        return raw_bytes
+    if isinstance(raw_bytes, bytearray):
+        return bytes(raw_bytes)
+    data_url = str(attachment.get("data_url") or "")
+    if data_url.startswith("data:") and "," in data_url:
+        import base64
+
+        try:
+            return base64.b64decode(data_url.split(",", 1)[1], validate=False)
+        except Exception:
+            return b""
+    content_base64 = str(
+        attachment.get("content_base64")
+        or attachment.get("base64")
+        or attachment.get("content")
+        or ""
+    )
+    if content_base64:
+        import base64
+
+        try:
+            return base64.b64decode(content_base64, validate=False)
+        except Exception:
+            return b""
+    source_path = attachment.get("source_path")
+    if isinstance(source_path, Path) and source_path.is_file():
+        return source_path.read_bytes()
+    return b""
+
+
+def _guess_mime(attachment: dict[str, Any]) -> str:
+    data_url = str(attachment.get("data_url") or "")
+    if data_url.startswith("data:") and ";" in data_url:
+        return data_url.removeprefix("data:").split(";", 1)[0]
+    if str(attachment.get("type") or "").lower() == "image":
+        return "image/jpeg"
+    return ""
+
+
+def _attachment_extension(attachment: dict[str, Any], mime: str) -> str:
+    filename = str(attachment.get("filename") or "")
+    suffix = Path(filename).suffix
+    if suffix:
+        return suffix
+    return {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/svg+xml": ".svg",
+    }.get(mime.lower(), ".bin")
 
 
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:

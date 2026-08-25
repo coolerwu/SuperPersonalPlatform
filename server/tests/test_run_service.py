@@ -38,6 +38,9 @@ agents:
 """
 
 
+IMAGE_CONFIG = CONFIG.replace("model: gpt-4o-mini", "model: gpt-4o-mini\n      supports_images: true")
+
+
 def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatch) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
     files_dir = tmp_path / "context" / "knowledge" / "files"
@@ -123,6 +126,98 @@ def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
 
     run_index = json.loads((tmp_path / "runs" / "index.json").read_text(encoding="utf-8"))
     assert run_index["runs"][0]["session_id"] == session.session_id
+
+
+def test_run_service_persists_session_image_attachments(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(IMAGE_CONFIG, encoding="utf-8")
+    session_service = SessionService(tmp_path)
+    session = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_image",
+        agent_id="assistant",
+    )
+
+    captured = {}
+
+    async def fake_run(self, *, instructions, messages, options):
+        captured["messages"] = messages
+        return "image answer"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path, session_service=session_service)
+    run = asyncio.run(
+        service.create_run(
+            content="看看这张图",
+            agent_id="assistant",
+            source="wechat",
+            session_id=session.session_id,
+            attachments=(
+                {
+                    "id": "photo",
+                    "type": "image",
+                    "mime": "image/png",
+                    "filename": "photo.png",
+                    "bytes": b"\x89PNG\r\n\x1a\n",
+                },
+            ),
+        )
+    )
+    completed = asyncio.run(service.execute_run(run["run_id"]))
+
+    assert completed["result"]["content"] == "image answer"
+    message = captured["messages"][-1]
+    assert message.content == "看看这张图"
+    assert message.attachments[0].mime == "image/png"
+    assert message.attachments[0].path.read_bytes() == b"\x89PNG\r\n\x1a\n"
+
+    run_input = json.loads((tmp_path / "runs" / run["run_id"] / "input.json").read_text(encoding="utf-8"))
+    assert run_input["attachments"][0]["workspace_path"].startswith(f"sessions/{session.session_id}/attachments/")
+    messages_path = tmp_path / "sessions" / session.session_id / "messages.jsonl"
+    messages = [json.loads(line) for line in messages_path.read_text(encoding="utf-8").splitlines()]
+    assert messages[0]["attachments"][0]["filename"] == "photo.png"
+
+
+def test_run_service_returns_clear_message_when_model_does_not_support_images(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    session_service = SessionService(tmp_path)
+    session = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_image",
+        agent_id="assistant",
+    )
+
+    async def fake_run(self, *, instructions, messages, options):
+        raise AssertionError("DeepAgent should not run when image input is unsupported")
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path, session_service=session_service)
+    run = asyncio.run(
+        service.create_run(
+            content="",
+            agent_id="assistant",
+            source="wechat",
+            session_id=session.session_id,
+            attachments=(
+                {
+                    "id": "photo",
+                    "type": "image",
+                    "mime": "image/png",
+                    "filename": "photo.png",
+                    "bytes": b"\x89PNG\r\n\x1a\n",
+                },
+            ),
+        )
+    )
+    completed = asyncio.run(service.execute_run(run["run_id"]))
+
+    assert completed["state"]["status"] == "completed"
+    assert "未开启图片能力" in completed["result"]["content"]
 
 
 def test_run_service_rejects_unknown_session_before_writing_run(tmp_path) -> None:

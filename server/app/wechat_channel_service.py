@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import mimetypes
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import yaml
 
@@ -55,6 +58,9 @@ class WechatChannelService:
         self._logs: deque[dict[str, Any]] = deque(maxlen=80)
         self._bot_token = ""
         self._baseurl = ""
+        self._pending_inputs: dict[str, dict[str, Any]] = {}
+        self._pending_tasks: dict[str, asyncio.Task[None]] = {}
+        self._pending_input_delay_seconds = 5.0
 
     async def status(self) -> WechatChannelStatus:
         async with self._lock:
@@ -86,6 +92,7 @@ class WechatChannelService:
                 await task
             except asyncio.CancelledError:
                 pass
+        await self._cancel_pending_inputs()
         await self._close_client()
         async with self._lock:
             return self._snapshot_locked()
@@ -241,26 +248,35 @@ class WechatChannelService:
             consecutive_errors = 0
             cursor = str(updates.get("get_updates_buf") or cursor)
             for msg in updates.get("msgs") or []:
-                if msg.get("message_type") == 1:
+                if _message_has_processable_content(msg):
                     await self._process_message(msg)
 
     async def _process_message(self, msg: dict[str, Any]) -> None:
-        text = ""
+        text_parts: list[str] = []
+        attachments: list[dict[str, Any]] = []
         for item in msg.get("item_list") or []:
             if item.get("type") == 1 and item.get("text_item"):
                 text = str(item["text_item"].get("text") or "")
-                break
-        if not text.strip():
+                if text.strip():
+                    text_parts.append(text.strip())
+                continue
+            attachment = await self._image_attachment_from_item(item)
+            if attachment:
+                attachments.append(attachment)
+        text = "\n".join(text_parts).strip()
+        if not text and not attachments:
             return
 
         from_user_id = str(msg.get("from_user_id") or "")
         to_user_id = str(msg.get("to_user_id") or "")
         context_token = str(msg.get("context_token") or "")
+        agent_id = str(self._channel_config().get("default_agent_id") or "").strip()
         async with self._lock:
             self._logs.append(
                 {
                     "type": "message",
                     "text": text,
+                    "attachments": len(attachments),
                     "from_user_id": from_user_id,
                     "to_user_id": to_user_id,
                     "context_token": context_token,
@@ -269,14 +285,147 @@ class WechatChannelService:
         if self._system_log_service:
             self._system_log_service.append_line(f"wechat rx account={self._account_id} text={text[:200]}")
 
-        agent_id = str(self._channel_config().get("default_agent_id") or "").strip()
         if not agent_id:
             await self._send_reply(from_user_id, context_token, "微信通道未绑定 Agent。")
             return
 
+        peer_id = _wechat_peer_id(from_user_id, to_user_id)
+        peer_type = _wechat_peer_type(peer_id)
+        pending_key = _pending_key(self._account_id, agent_id, peer_type, peer_id)
+
+        await self._queue_pending_message(
+            key=pending_key,
+            text=text,
+            attachments=attachments,
+            from_user_id=from_user_id,
+            to_user_id=to_user_id,
+            context_token=context_token,
+            agent_id=agent_id,
+            peer_id=peer_id,
+            peer_type=peer_type,
+        )
+
+    async def _queue_pending_message(
+        self,
+        *,
+        key: str,
+        text: str,
+        attachments: list[dict[str, Any]],
+        from_user_id: str,
+        to_user_id: str,
+        context_token: str,
+        agent_id: str,
+        peer_id: str,
+        peer_type: str,
+    ) -> None:
+        async with self._lock:
+            pending = self._pending_inputs.get(key)
+            if pending is None:
+                pending = {
+                    "text_parts": [],
+                    "attachments": [],
+                    "message_count": 0,
+                    "from_user_id": from_user_id,
+                    "to_user_id": to_user_id,
+                    "context_token": context_token,
+                    "agent_id": agent_id,
+                    "peer_id": peer_id,
+                    "peer_type": peer_type,
+                }
+                self._pending_inputs[key] = pending
+            if text.strip():
+                pending["text_parts"].append(text.strip())
+            pending["attachments"].extend(attachments)
+            pending["message_count"] += 1
+            pending["from_user_id"] = from_user_id
+            pending["to_user_id"] = to_user_id
+            pending["context_token"] = context_token
+            pending["agent_id"] = agent_id
+            pending["peer_id"] = peer_id
+            pending["peer_type"] = peer_type
+
+            old_task = self._pending_tasks.get(key)
+            if old_task and not old_task.done():
+                old_task.cancel()
+            self._pending_tasks[key] = asyncio.create_task(self._flush_pending_input_after_delay(key))
+            self._logs.append(
+                {
+                    "type": "message_pending",
+                    "texts": len(pending["text_parts"]),
+                    "attachments": len(pending["attachments"]),
+                    "message_count": pending["message_count"],
+                    "peer_id": peer_id,
+                    "context_token": context_token,
+                }
+            )
+
+    async def _flush_pending_input_after_delay(self, key: str) -> None:
         try:
-            peer_id = _wechat_peer_id(from_user_id, to_user_id)
-            peer_type = _wechat_peer_type(peer_id)
+            await asyncio.sleep(self._pending_input_delay_seconds)
+            pending = await self._take_pending_input(key)
+            if not pending:
+                return
+            text = "\n".join(str(part) for part in pending["text_parts"] if str(part).strip()).strip()
+            image_only = not text and bool(pending["attachments"])
+            if image_only:
+                text = "用户发送了一张图片。"
+            if not text and not pending["attachments"]:
+                return
+            await self._execute_wechat_run(
+                text=text,
+                attachments=tuple(pending["attachments"]),
+                from_user_id=str(pending["from_user_id"]),
+                to_user_id=str(pending["to_user_id"]),
+                context_token=str(pending["context_token"]),
+                agent_id=str(pending["agent_id"]),
+                peer_id=str(pending["peer_id"]),
+                peer_type=str(pending["peer_type"]),
+                metadata_extra={
+                    "batched_messages": int(pending["message_count"]),
+                    "merged_pending_images": len(pending["attachments"]),
+                    "image_only_flush": image_only,
+                    "delay_seconds": self._pending_input_delay_seconds,
+                },
+            )
+        except asyncio.CancelledError:
+            pass
+
+    async def _take_pending_input(self, key: str) -> dict[str, Any] | None:
+        async with self._lock:
+            pending = self._pending_inputs.pop(key, None)
+            task = self._pending_tasks.pop(key, None)
+            if task and task is not asyncio.current_task() and not task.done():
+                task.cancel()
+            return pending
+
+    async def _cancel_pending_inputs(self) -> None:
+        async with self._lock:
+            tasks = list(self._pending_tasks.values())
+            self._pending_tasks.clear()
+            self._pending_inputs.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _execute_wechat_run(
+        self,
+        *,
+        text: str,
+        attachments: tuple[dict[str, Any], ...],
+        from_user_id: str,
+        to_user_id: str,
+        context_token: str,
+        agent_id: str,
+        peer_id: str,
+        peer_type: str,
+        metadata_extra: dict[str, Any] | None = None,
+    ) -> None:
+        try:
             session_id = ""
             if self._session_service is not None:
                 session = self._session_service.get_or_create(
@@ -288,19 +437,23 @@ class WechatChannelService:
                     metadata={"to_user_id": to_user_id},
                 )
                 session_id = session.session_id
+            metadata = {
+                "account_id": self._account_id,
+                "peer_id": peer_id,
+                "peer_type": peer_type,
+                "from_user_id": from_user_id,
+                "to_user_id": to_user_id,
+                "context_token": context_token,
+            }
+            if metadata_extra:
+                metadata.update(metadata_extra)
             run = await self._run_service.create_run(
                 content=text,
                 agent_id=agent_id,
                 source="wechat",
                 session_id=session_id,
-                metadata={
-                    "account_id": self._account_id,
-                    "peer_id": peer_id,
-                    "peer_type": peer_type,
-                    "from_user_id": from_user_id,
-                    "to_user_id": to_user_id,
-                    "context_token": context_token,
-                },
+                attachments=tuple(attachments),
+                metadata=metadata,
             )
             completed = await self._run_service.execute_run(str(run["run_id"]))
             result = completed.get("result") or {}
@@ -311,6 +464,65 @@ class WechatChannelService:
                 self._logs.append({"type": "error", "error": reply})
 
         await self._send_reply(from_user_id, context_token, reply)
+
+    async def _image_attachment_from_item(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        image_payload = _image_payload(item)
+        if image_payload is None:
+            return None
+        attachment_id = str(
+            image_payload.get("id")
+            or image_payload.get("media_id")
+            or image_payload.get("file_id")
+            or image_payload.get("aes_key")
+            or "wechat_image"
+        )
+        filename = str(
+            image_payload.get("filename")
+            or image_payload.get("file_name")
+            or image_payload.get("name")
+            or f"{attachment_id}.jpg"
+        )
+        mime = str(
+            image_payload.get("mime")
+            or image_payload.get("mime_type")
+            or image_payload.get("content_type")
+            or mimetypes.guess_type(filename)[0]
+            or "image/jpeg"
+        )
+        data_url = str(image_payload.get("data_url") or image_payload.get("dataUrl") or "")
+        if data_url.startswith("data:image"):
+            return {"id": attachment_id, "type": "image", "mime": mime, "filename": filename, "data_url": data_url}
+
+        for key in ("content_base64", "base64", "data", "content", "file_content", "fileContent"):
+            value = image_payload.get(key)
+            if isinstance(value, str) and value.strip():
+                raw = value.strip()
+                if raw.startswith("data:image"):
+                    return {"id": attachment_id, "type": "image", "mime": mime, "filename": filename, "data_url": raw}
+                try:
+                    base64.b64decode(raw, validate=False)
+                except Exception:
+                    continue
+                return {
+                    "id": attachment_id,
+                    "type": "image",
+                    "mime": mime,
+                    "filename": filename,
+                    "content_base64": raw,
+                }
+
+        media_url = _image_url(image_payload)
+        if media_url and self._client:
+            url = urljoin(self._baseurl, media_url)
+            content, content_type = await self._client.read_media_bytes(url, bot_token=self._bot_token)
+            return {
+                "id": attachment_id,
+                "type": "image",
+                "mime": (content_type.split(";", 1)[0] if content_type else mime) or mime,
+                "filename": filename,
+                "bytes": content,
+            }
+        return None
 
     async def _send_reply(self, to_user_id: str, context_token: str, text: str) -> None:
         if not self._client or not self._baseurl or not self._bot_token:
@@ -418,3 +630,71 @@ def _wechat_peer_type(peer_id: str) -> str:
     if "@chatroom" in peer_id:
         return "room"
     return "private"
+
+
+def _pending_key(account_id: str, agent_id: str, peer_type: str, peer_id: str) -> str:
+    return f"{account_id}:{agent_id}:{peer_type}:{peer_id}"
+
+
+def _message_has_processable_content(msg: dict[str, Any]) -> bool:
+    for item in msg.get("item_list") or []:
+        if item.get("type") == 1 and item.get("text_item"):
+            if str(item["text_item"].get("text") or "").strip():
+                return True
+        if _image_payload(item) is not None:
+            return True
+    return False
+
+
+def _image_payload(item: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    for key in (
+        "image_item",
+        "img_item",
+        "picture_item",
+        "pic_item",
+        "media_item",
+        "file_item",
+    ):
+        payload = item.get(key)
+        if isinstance(payload, dict) and _payload_looks_like_image(payload):
+            return payload
+    if _payload_looks_like_image(item):
+        return item
+    return None
+
+
+def _payload_looks_like_image(payload: dict[str, Any]) -> bool:
+    mime = str(payload.get("mime") or payload.get("mime_type") or payload.get("content_type") or "").lower()
+    if mime.startswith("image/"):
+        return True
+    filename = str(payload.get("filename") or payload.get("file_name") or payload.get("name") or "").lower()
+    if Path(filename).suffix in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}:
+        return True
+    data_url = str(payload.get("data_url") or payload.get("dataUrl") or payload.get("content") or "")
+    if data_url.startswith("data:image"):
+        return True
+    if any(payload.get(key) for key in ("image_url", "imageUrl", "thumb_url", "thumbUrl")):
+        return True
+    return False
+
+
+def _image_url(payload: dict[str, Any]) -> str:
+    for key in (
+        "download_url",
+        "downloadUrl",
+        "url",
+        "cdn_url",
+        "cdnUrl",
+        "image_url",
+        "imageUrl",
+        "file_url",
+        "fileUrl",
+        "thumb_url",
+        "thumbUrl",
+    ):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""

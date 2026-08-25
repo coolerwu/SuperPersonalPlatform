@@ -77,6 +77,7 @@ workspace/
       state.json
       messages.jsonl
       runs.jsonl
+      attachments/
       artifacts/
 
   channels/
@@ -106,7 +107,7 @@ GET /api/runs/{run_id}
 GET /api/runs/{run_id}/events?after={seq}
 ```
 
-`POST /api/runs` 可接受可选 `session_id`。未传时按独立一次性 run 处理；微信通道会传入全局长期会话 ID。该接口保留给渠道接入、自动化和后端集成使用，当前前端 Runs 页面不暴露手动创建入口。
+`POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`。未传 `session_id` 时按独立一次性 run 处理；微信通道会传入全局长期会话 ID，并把图片等附件保存到 `workspace/sessions/{session_id}/attachments/` 后再执行 run。该接口保留给渠道接入、自动化和后端集成使用，当前前端 Runs 页面不暴露手动创建入口。
 
 Schedule 落盘模型：
 
@@ -174,6 +175,7 @@ POST /api/system/webdav-context/sync
 - 单 token 登录，登录状态通过 HttpOnly cookie 保存。
 - 配置从 active workspace 的 `config.yaml` 读取。
 - 个人微信通过 Tencent iLink Bot HTTP API 接入。
+- 微信文本和图片输入都进入同一长期 session。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` 下的文本和图片统一缓冲 5 秒；窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复。模型未在 Provider 中启用 `supports_images` 时，带图片的 run 不调用 DeepAgent，直接返回清晰的模型能力提示。
 - 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
 - DeepAgent 依赖 `deepagents` 和 LangGraph；后端任务执行结果必须落盘。
 - `search_context` 检索 `workspace/context/knowledge/files/` 中的 `.md`、`.txt`、`.json`、`.jsonl` 文本知识，返回 `/files/...` 工具路径、分数和片段。

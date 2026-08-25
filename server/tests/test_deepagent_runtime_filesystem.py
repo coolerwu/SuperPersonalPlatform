@@ -1,9 +1,13 @@
 from server.infrastructure.deepagent_runtime import (
     DeepAgentRuntimeOptions,
+    RuntimeAttachment,
+    RuntimeMessage,
     _runtime_instructions,
+    _to_langchain_messages,
     load_agent_files,
     persist_agent_files,
 )
+from server.domain.agent_config import ModelProvider
 
 
 def test_agent_filesystem_sync_is_limited_to_agent_workspace(tmp_path) -> None:
@@ -48,3 +52,33 @@ def test_longterm_memory_prompt_points_memory_requests_to_memories_path() -> Non
     assert "write_file" in prompt
     assert "/memories/..." in prompt
     assert "Do not use `write_context`" in prompt
+
+
+def test_runtime_message_converts_image_attachment_to_openai_content_block(tmp_path) -> None:
+    image_path = tmp_path / "photo.png"
+    image_path.write_bytes(b"image-bytes")
+
+    class Human:
+        def __init__(self, content):
+            self.content = content
+
+    class AI:
+        def __init__(self, content):
+            self.content = content
+
+    messages = _to_langchain_messages(
+        (
+            RuntimeMessage(
+                role="user",
+                content="看图",
+                attachments=(RuntimeAttachment(type="image", mime="image/png", path=image_path),),
+            ),
+        ),
+        Human,
+        AI,
+        ModelProvider.OPENAI_COMPATIBLE,
+    )
+
+    assert messages[0].content[0] == {"type": "text", "text": "看图"}
+    assert messages[0].content[1]["type"] == "image_url"
+    assert messages[0].content[1]["image_url"]["url"].startswith("data:image/png;base64,")
