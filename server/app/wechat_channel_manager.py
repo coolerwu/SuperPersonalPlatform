@@ -137,6 +137,25 @@ class WechatChannelManager:
             except Exception:
                 pass
 
+    async def deliver_text(
+        self,
+        *,
+        channel: str,
+        account_id: str,
+        to_user_id: str,
+        context_token: str,
+        text: str,
+    ) -> dict[str, Any]:
+        if channel != "wechat":
+            raise WechatChannelManagerError(f"unsupported channel: {channel}")
+        account = self._find_account(account_id)
+        instance = self._get_or_create_instance(account)
+        return await instance.deliver_text(
+            to_user_id=to_user_id,
+            context_token=context_token,
+            text=text,
+        )
+
     def first_account_id(self) -> str | None:
         accounts = self.parse_accounts()
         return str(accounts[0].get("id", "default")) if accounts else None

@@ -525,30 +525,43 @@ class WechatChannelService:
         return None
 
     async def _send_reply(self, to_user_id: str, context_token: str, text: str) -> None:
-        if not self._client or not self._baseurl or not self._bot_token:
-            return
         try:
-            resp = await self._client.send_message(
-                self._baseurl,
-                self._bot_token,
-                {
-                    "to_user_id": to_user_id,
-                    "message_type": 2,
-                    "message_state": 2,
-                    "context_token": context_token,
-                    "item_list": [{"type": 1, "text_item": {"text": text}}],
-                },
-            )
+            await self.deliver_text(to_user_id=to_user_id, context_token=context_token, text=text)
         except Exception as exc:
             async with self._lock:
                 self._logs.append({"type": "error", "error": f"send reply failed: {exc}"})
-            return
 
+    async def deliver_text(self, *, to_user_id: str, context_token: str, text: str) -> dict[str, Any]:
+        if not to_user_id:
+            raise RuntimeError("wechat to_user_id is required")
+        await self._ensure_delivery_client()
+        resp = await self._client.send_message(  # type: ignore[union-attr]
+            self._baseurl,
+            self._bot_token,
+            {
+                "to_user_id": to_user_id,
+                "message_type": 2,
+                "message_state": 2,
+                "context_token": context_token,
+                "item_list": [{"type": 1, "text_item": {"text": text}}],
+            },
+        )
         if self._system_log_service:
             status = resp.get("_debug_status", "") if isinstance(resp, dict) else ""
             self._system_log_service.append_line(
                 f"wechat tx account={self._account_id} to={to_user_id} status={status} text={text[:200]}"
             )
+        return resp if isinstance(resp, dict) else {}
+
+    async def _ensure_delivery_client(self) -> None:
+        if not self._client or not self._baseurl or not self._bot_token:
+            proxy = self._channel_config().get("proxy", "")
+            if self._client is None:
+                self._client = ILinkClient(proxy=str(proxy).strip() if proxy else None)
+            if not self._baseurl or not self._bot_token:
+                resumed = await self._try_resume_session()
+                if not resumed:
+                    raise RuntimeError("wechat account is not logged in")
 
     def _channel_config(self) -> dict[str, Any]:
         raw = self._workspace_config()

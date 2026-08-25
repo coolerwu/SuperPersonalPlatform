@@ -23,7 +23,7 @@
 - `workspace/sessions/index.json` 维护所有长期会话索引；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
 - `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`filesystem.enabled`、`use_longterm_memory`、`interrupt_on` 和 `tools`。
-- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`write_context` 和 `browser_extract`。
+- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`write_context`、`browser_extract` 和 `schedule`。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
 - 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 `session_id`，再创建 `source=wechat` 的 run；DeepAgent 执行前读取该 session 的历史消息，完成后由平台投递微信回复。
@@ -128,7 +128,7 @@ workspace/schedules/{schedule_id}/lock.json
 
 后台统一 Scheduler 每 5 秒扫描轻量调度索引，只判断 `next_run_at` 是否到期，不执行高频 WebDAV 同步。到期后按 `definition.type` 分发：`webdav_sync` 执行 Context WebDAV 同步并写调度事件；`maintenance_cleanup` 执行 15 天保留期清理并写调度事件；`agent_run` 创建普通 `workspace/runs/{run_id}/` 并执行 DeepAgent。`lock.json` 用于避免重复执行，服务崩溃后会清理已失效的旧 lock。
 
-`/api/schedules` 是定时任务管理页面使用的后端入口。前端只允许创建、编辑和删除 `agent_run` 类型任务，字段核心为 `prompt + agent_id + trigger`；内置 `context_webdav_sync` 和 `maintenance_cleanup` 由配置自动生成，只能查看状态和手动 `run-now`，不能通过页面编辑或删除。当前触发器支持 `interval`、5 字段 `cron` 和 `once`。
+`/api/schedules` 是定时任务管理页面使用的后端入口。前端只允许创建、编辑和删除 `agent_run` 类型任务，字段核心为 `prompt + agent_id + trigger`；内置 `context_webdav_sync` 和 `maintenance_cleanup` 由配置自动生成，只能查看状态和手动 `run-now`，不能通过页面编辑或删除。当前触发器支持 `interval`、5 字段 `cron` 和 `once`。Agent 也可以在被授权 `schedule` 平台工具后，通过同一个 ScheduleService 创建、查看、更新和删除定时任务；工具只允许管理由该工具在当前 `agent_id + session_id` 下创建的任务，并把微信来源 run 创建的定时任务结果回发到原微信会话。
 
 微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
 
@@ -167,7 +167,7 @@ POST /api/system/maintenance/run
 - `/config` 基础配置栏目还维护 `maintenance` 清理配置，默认启用、保留 15 天、每天运行一次；也可设置为 dry run 只预览不删除。
 - `/config` 的 Context WebDAV 同步区域提供“测试连接”和“立即同步”操作；测试连接使用当前表单草稿测试 WebDAV，不保存配置且不回传 secret；立即同步调用后端手动同步接口读取已保存的 `workspace/config.yaml`，立刻把坚果云远端文件缓存到 `workspace/context/webdav/` 并返回文本/图片资源数量；保存配置本身仍只负责校验并写回 `config.yaml`。
 - `/providers` 是配置页内的模型 Provider 栏目直达入口，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
-- `/agent-config` 是配置页内的 Agent 栏目直达入口，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、需要确认的 `write_context` 和浏览器提取工具 `browser_extract`；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
+- `/agent-config` 是配置页内的 Agent 栏目直达入口，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、需要确认的 `write_context`、浏览器提取工具 `browser_extract` 和用于对话式创建定时任务的 `schedule`；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
 - `/schedules` 是定时任务管理页面，读取 `workspace/schedules/index.json` 和每个任务详情，支持查看内置 WebDAV 同步任务和维护清理任务、创建/编辑/删除 Agent 定时任务、启用/停用、立即运行和查看调度事件；任务创建表单只暴露 `prompt + agent + trigger` 等必要字段，不在前端执行 Agent。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
 - `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录态继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存，不作为聊天历史；长期聊天会话统一写入 `workspace/sessions/{session_id}/`。
@@ -192,6 +192,7 @@ POST /api/system/maintenance/run
 - `search_context` 合并本地 `/files/...` 与 WebDAV `/webdav/...` 缓存检索；WebDAV 工具路径不再包含 root ID。同步根目录下的远端相对路径会原样保留到本地，例如远端 `/notebook/96备忘录/OpenWrt.md` 会缓存为 `workspace/context/webdav/files/96备忘录/OpenWrt.md`，工具路径为 `/webdav/96备忘录/OpenWrt.md`，`index.json` 记录 remote path、tool path、cache path、etag、mtime、权限和类型。用户询问“最近笔记/最新文档/recent notes”时，`search_context` 会额外返回按 WebDAV `modified` 排序的 `recent_documents`，避免纯 BM25 因没有关键词命中而误判没有笔记。`write_context` 只能写匹配到 `writable=true` 且 `protected=false` 权限规则的 `/webdav/...` 路径；`protected=true` 路径可读可检索但不可写、覆盖或删除。
 - WebDAV 同步会解析 Markdown 里的 `![...](...)` 和 `<img src="...">`，把被引用的 `.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.svg` 按相对目录结构作为二进制资源缓存到 `workspace/context/webdav/files/`；这些资源不进入 `search_context` 文本索引，当前也不通过 `write_context` 写入。
 - `browser_extract(url, include_links, max_chars)` 使用 LangChain `PlayWrightBrowserToolkit` 和 Playwright headless browser 打开公开 `http/https` 页面，提取渲染后的文本和链接；后端封装会拒绝 localhost、私有网段、内网解析地址和非 `http/https` URL。当前只暴露聚合提取工具，不直接授权点击、输入或任意导航工具。
+- `schedule(action, ...)` 是单一调度管理工具，支持 `create/list/get/update/delete`。创建时只能使用当前 Agent、当前长期 session 和当前渠道投递上下文，触发器支持 `once`、`interval` 和 `cron`；`list/get/update/delete` 只能作用于 `metadata.created_by.type="agent_tool"` 且 `agent_id/session_id` 与当前 run 一致的任务，避免 Agent 删除页面或其它会话创建的定时任务。微信来源任务执行完成后，ScheduleService 会读取 run 的 `result.json` 并调用微信通道回发结果，同时更新 run 的 `delivery.json`。
 - DeepAgent 内置 `write_todos` 由运行时保持可用；当前依赖版本的 `create_deep_agent` 默认包含 Todo List middleware，后端配置 `deepagent.todo_list` 用于记录并兼容未来需要显式 middleware 的版本。
 - DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file` 仍使用 DeepAgent 的虚拟 filesystem；当 `agents.definitions[].deepagent.filesystem.enabled=true` 时，后端在 run 开始前把 `workspace/agents/{agent_id}/` 内 UTF-8 文本文件加载为 DeepAgent `files` state，run 完成后只把该 state 写回同一 Agent 目录。该机制不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码；`workspace/agents/{agent_id}/memory/store.json` 是长期记忆底层 store 文件，不作为普通 filesystem 文件暴露给 Agent。
 - `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后后端为 DeepAgent 传入文件型 LangGraph store，落盘到 `workspace/agents/{agent_id}/memory/store.json`，并用 `assistant_id={agent_id}` 隔离 namespace；Agent 通过 DeepAgent 原生 `/memories/...` 路径读写长期记忆。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。

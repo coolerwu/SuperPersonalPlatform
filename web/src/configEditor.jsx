@@ -20,6 +20,12 @@ const AGENT_TOOL_CARDS = [
     summary: "用 Playwright 打开公开网页，提取渲染后的文本和链接。",
     badge: "浏览器",
   },
+  {
+    id: "schedule",
+    name: "Schedule",
+    summary: "创建、查看、修改或删除当前会话自己创建的定时任务，并回发到渠道。",
+    badge: "调度",
+  },
 ];
 
 const DEFAULT_CONFIG = {

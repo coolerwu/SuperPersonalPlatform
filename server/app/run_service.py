@@ -17,6 +17,7 @@ from server.infrastructure.deepagent_runtime import (
     RuntimeAttachment,
     RuntimeMessage,
 )
+from server.infrastructure.tool_runtime import PlatformToolContext
 
 
 RUN_STATUSES = {"queued", "running", "completed", "failed"}
@@ -45,6 +46,10 @@ class RunService:
         self._workspace = workspace
         self._runs_dir = workspace / "runs"
         self._session_service = session_service
+        self._schedule_service: Any = None
+
+    def set_schedule_service(self, schedule_service: Any) -> None:
+        self._schedule_service = schedule_service
 
     async def create_run(
         self,
@@ -176,6 +181,14 @@ class RunService:
                 model,
                 context_workspace=self._workspace / "context",
                 agent_workspace=self._agent_workspace(str(run_input.get("agent_id") or "")),
+                schedule_service=self._schedule_service,
+                tool_context=PlatformToolContext(
+                    run_id=str(run_input.get("run_id") or run_id),
+                    source=str(run_input.get("source") or "api"),
+                    agent_id=str(run_input.get("agent_id") or ""),
+                    session_id=session_id,
+                    metadata=run_input.get("metadata") if isinstance(run_input.get("metadata"), dict) else {},
+                ),
             ).run(
                 instructions=system_prompt,
                 messages=runtime_messages,
@@ -211,6 +224,16 @@ class RunService:
         self._append_event(run_id, "completed", {"message": "run completed"})
         self._set_delivery(run_id, "ready")
         return self.get_run(run_id)
+
+    def set_delivery_status(
+        self,
+        run_id: str,
+        status: str,
+        *,
+        extra: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        self._set_delivery(run_id, status, extra=extra, error=error)
 
     def list_runs(self) -> list[dict[str, Any]]:
         index = self._read_index()
@@ -308,6 +331,7 @@ class RunService:
         run_id: str,
         status: str,
         *,
+        extra: dict[str, Any] | None = None,
         error: dict[str, Any] | None = None,
     ) -> None:
         run_input = self._load_input(run_id)
@@ -316,6 +340,8 @@ class RunService:
             "session_id": run_input.get("session_id", ""),
             "status": status,
         }
+        if extra:
+            payload.update(extra)
         if error is not None:
             payload["error"] = error
         _write_json(self._run_dir(run_id) / "delivery.json", payload)

@@ -59,6 +59,7 @@ class ScheduleService:
         system_log_service: SystemLogService,
         maintenance_service: MaintenanceService | None = None,
         webdav_context_service: WebDAVContextService | None = None,
+        channel_delivery_service: Any = None,
     ) -> None:
         self._workspace = workspace
         self._settings = settings
@@ -66,6 +67,7 @@ class ScheduleService:
         self._system_log_service = system_log_service
         self._maintenance_service = maintenance_service
         self._webdav_context_service = webdav_context_service
+        self._channel_delivery_service = channel_delivery_service
         self._schedules_dir = workspace / "schedules"
         self._index_path = self._schedules_dir / "index.json"
 
@@ -291,9 +293,48 @@ class ScheduleService:
                 metadata={"schedule_id": definition.id, **(definition.metadata or {})},
             )
             run_id = str(run["run_id"])
-            await self._run_service.execute_run(run_id)
-            return {"message": "agent run completed", "run_id": run_id}
+            completed = await self._run_service.execute_run(run_id)
+            delivery = await self._deliver_agent_run_result(definition, completed)
+            return {"message": "agent run completed", "run_id": run_id, "delivery": delivery}
         raise RuntimeError(f"unsupported schedule type: {definition.type}")
+
+    async def _deliver_agent_run_result(
+        self,
+        definition: ScheduleDefinition,
+        completed: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata = definition.metadata or {}
+        delivery = metadata.get("delivery") if isinstance(metadata.get("delivery"), dict) else {}
+        run_id = str(completed.get("run_id") or "")
+        if not delivery:
+            return {"status": "skipped", "reason": "no delivery target"}
+        if delivery.get("channel") != "wechat":
+            return {"status": "skipped", "reason": f"unsupported channel: {delivery.get('channel')}"}
+        if self._channel_delivery_service is None:
+            result = {"status": "failed", "error": "channel delivery service is not configured"}
+            if run_id:
+                self._run_service.set_delivery_status(run_id, "failed", extra={"delivery": delivery}, error=result)
+            return result
+        result_payload = completed.get("result") if isinstance(completed.get("result"), dict) else {}
+        result_text = str(result_payload.get("content") or result_payload.get("error") or "定时任务没有返回内容")
+        try:
+            await self._channel_delivery_service.deliver_text(
+                channel="wechat",
+                account_id=str(delivery.get("account_id") or ""),
+                to_user_id=str(delivery.get("to_user_id") or delivery.get("peer_id") or ""),
+                context_token=str(delivery.get("context_token") or ""),
+                text=result_text,
+            )
+        except Exception as exc:  # noqa: BLE001
+            error = {"type": exc.__class__.__name__, "message": str(exc)}
+            if run_id:
+                self._run_service.set_delivery_status(run_id, "failed", extra={"delivery": delivery}, error=error)
+            self._append_event(definition.id, "delivery_failed", error)
+            return {"status": "failed", "error": error}
+        if run_id:
+            self._run_service.set_delivery_status(run_id, "delivered", extra={"delivery": delivery})
+        self._append_event(definition.id, "delivered", {"channel": "wechat", "run_id": run_id})
+        return {"status": "delivered", "channel": "wechat"}
 
     def _next_run_at(self, definition: ScheduleDefinition, *, due_at: datetime, completed_at: datetime) -> str:
         trigger = definition.trigger

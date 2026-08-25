@@ -6,7 +6,7 @@ from typing import Any
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
 from server.infrastructure.json_file_store import JsonFileStore
-from server.infrastructure.tool_runtime import build_platform_tools
+from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
 
 
 LONGTERM_MEMORY_PROMPT = """## Long-term Memory Boundary
@@ -56,11 +56,21 @@ class DeepAgentRuntimeOptions:
 
 
 class DeepAgentRuntime:
-    def __init__(self, model: ModelDefinition, *, context_workspace: Path, agent_workspace: Path) -> None:
+    def __init__(
+        self,
+        model: ModelDefinition,
+        *,
+        context_workspace: Path,
+        agent_workspace: Path,
+        schedule_service: Any = None,
+        tool_context: PlatformToolContext | None = None,
+    ) -> None:
         self._model = model
         self._context_workspace = context_workspace
         self._agent_workspace = agent_workspace
         self._agent_id = agent_workspace.name
+        self._schedule_service = schedule_service
+        self._tool_context = tool_context
 
     async def run(
         self,
@@ -78,7 +88,12 @@ class DeepAgentRuntime:
             raise RuntimeError("DeepAgent runtime requires the deepagents package") from exc
 
         create_kwargs: dict[str, Any] = {
-            "tools": build_platform_tools(options.tools, context_workspace=self._context_workspace),
+            "tools": build_platform_tools(
+                options.tools,
+                context_workspace=self._context_workspace,
+                schedule_service=self._schedule_service,
+                tool_context=self._tool_context,
+            ),
             "model": self._chat_model(),
             "instructions": _runtime_instructions(instructions, options),
         }

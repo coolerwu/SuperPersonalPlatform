@@ -568,6 +568,7 @@ test("saves deepagent options from the agent config menu", async () => {
   expect(screen.getByRole("dialog", { name: "Agent 工具授权" })).toBeInTheDocument();
   fireEvent.click(screen.getByLabelText("Search Context"));
   fireEvent.click(screen.getByLabelText("Write Context"));
+  fireEvent.click(screen.getByLabelText("Schedule"));
   fireEvent.click(screen.getByRole("button", { name: "完成" }));
   fireEvent.click(screen.getByLabelText("Agent 文件系统"));
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
@@ -585,6 +586,7 @@ test("saves deepagent options from the agent config menu", async () => {
     expect(content).toContain('mode: "read_write"');
     expect(content).toContain('- "search_context"');
     expect(content).toContain('- "write_context"');
+    expect(content).toContain('- "schedule"');
   });
 });
 

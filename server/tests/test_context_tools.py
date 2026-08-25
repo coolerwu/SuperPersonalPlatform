@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from server.app.context_knowledge_service import ContextKnowledgeError, ContextKnowledgeService
-from server.infrastructure.tool_runtime import build_platform_tools
+from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
 
 
 def test_search_context_returns_relevant_context_files(tmp_path) -> None:
@@ -141,3 +141,121 @@ def test_write_context_description_keeps_memory_separate(tmp_path) -> None:
 
     assert "Do not use for personal memory" in description
     assert "write_file('/memories/...')" in description
+
+
+def test_schedule_tool_manages_only_current_agent_session(tmp_path) -> None:
+    service = FakeScheduleService()
+    context = PlatformToolContext(
+        run_id="run_current",
+        source="wechat",
+        agent_id="assistant",
+        session_id="wechat_default_private_wxid",
+        metadata={
+            "account_id": "default",
+            "from_user_id": "wxid",
+            "peer_id": "wxid",
+            "peer_type": "private",
+            "context_token": "reply-token",
+        },
+    )
+    tools = {
+        tool.name: tool
+        for tool in build_platform_tools(
+            ("schedule",),
+            context_workspace=tmp_path / "context",
+            schedule_service=service,
+            tool_context=context,
+        )
+    }
+
+    created = json.loads(
+        tools["schedule"].invoke(
+            {
+                "action": "create",
+                "schedule_id": "morning_review",
+                "name": "Morning Review",
+                "prompt": "每天早上总结最近笔记",
+                "trigger_kind": "interval",
+                "interval_minutes": 60,
+            }
+        )
+    )
+    assert created["schedule_id"] == "morning_review"
+    assert created["agent_id"] == "assistant"
+    assert created["session_id"] == "wechat_default_private_wxid"
+    assert created["delivery"]["channel"] == "wechat"
+    assert created["delivery"]["to_user_id"] == "wxid"
+
+    updated = json.loads(
+        tools["schedule"].invoke(
+            {
+                "action": "update",
+                "schedule_id": "morning_review",
+                "prompt": "每天早上总结最近笔记和待办",
+            }
+        )
+    )
+    assert updated["prompt"] == "每天早上总结最近笔记和待办"
+    assert updated["enabled"] is True
+
+    listed = json.loads(tools["schedule"].invoke({"action": "list"}))
+    assert [item["schedule_id"] for item in listed["schedules"]] == ["morning_review"]
+
+    service.items["foreign"] = {
+        "schema_version": 1,
+        "id": "foreign",
+        "type": "agent_run",
+        "name": "Foreign",
+        "enabled": True,
+        "trigger": {"kind": "interval", "seconds": 3600},
+        "agent_id": "assistant",
+        "prompt": "别的会话创建的任务",
+        "session_id": "other_session",
+        "metadata": {
+            "created_by": {
+                "type": "agent_tool",
+                "agent_id": "assistant",
+                "session_id": "other_session",
+            }
+        },
+    }
+    with pytest.raises(Exception):
+        tools["schedule"].invoke({"action": "delete", "schedule_id": "foreign"})
+
+    deleted = json.loads(tools["schedule"].invoke({"action": "delete", "schedule_id": "morning_review"}))
+    assert deleted == {"schedule_id": "morning_review", "status": "deleted"}
+    assert "morning_review" not in service.items
+
+
+class FakeScheduleService:
+    def __init__(self) -> None:
+        self.items: dict[str, dict] = {}
+
+    def list_schedules(self):
+        return [self._detail(item) for item in self.items.values()]
+
+    def get_schedule(self, schedule_id: str):
+        return self._detail(self.items[schedule_id])
+
+    def create_schedule(self, payload: dict):
+        self.items[payload["id"]] = {"type": "agent_run", **payload}
+        return self.get_schedule(payload["id"])
+
+    def update_schedule(self, schedule_id: str, payload: dict):
+        self.items[schedule_id] = {"type": "agent_run", **payload, "id": schedule_id}
+        return self.get_schedule(schedule_id)
+
+    def delete_schedule(self, schedule_id: str) -> None:
+        del self.items[schedule_id]
+
+    def _detail(self, definition: dict):
+        return {
+            "definition": definition,
+            "state": {
+                "status": "idle",
+                "next_run_at": "2026-08-25T00:00:00+00:00",
+                "last_run_at": "",
+                "last_run_id": "",
+                "last_error": None,
+            },
+        }

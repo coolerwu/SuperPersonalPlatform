@@ -68,6 +68,7 @@ class FakeRunService:
     def __init__(self) -> None:
         self.created = []
         self.executed = []
+        self.delivery_statuses = []
 
     async def create_run(self, **kwargs):
         self.created.append(kwargs)
@@ -75,7 +76,19 @@ class FakeRunService:
 
     async def execute_run(self, run_id: str):
         self.executed.append(run_id)
-        return {"run_id": run_id, "state": {"status": "completed"}}
+        return {"run_id": run_id, "state": {"status": "completed"}, "result": {"content": "定时任务结果"}}
+
+    def set_delivery_status(self, run_id: str, status: str, *, extra=None, error=None) -> None:
+        self.delivery_statuses.append({"run_id": run_id, "status": status, "extra": extra, "error": error})
+
+
+class FakeChannelDeliveryService:
+    def __init__(self) -> None:
+        self.deliveries = []
+
+    async def deliver_text(self, **kwargs):
+        self.deliveries.append(kwargs)
+        return {"ok": True}
 
 
 def test_schedule_service_bootstraps_and_runs_webdav_sync(tmp_path) -> None:
@@ -178,6 +191,78 @@ def test_schedule_service_runs_agent_schedule_from_files(tmp_path) -> None:
     state = _read_json(schedule_dir / "state.json")
     assert state["status"] == "completed"
     assert state["last_run_id"] == "run_test"
+
+
+def test_schedule_service_delivers_agent_schedule_result_to_wechat(tmp_path) -> None:
+    settings = parse_settings(_raw_config())
+    run_service = FakeRunService()
+    delivery_service = FakeChannelDeliveryService()
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=run_service,
+        system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
+        webdav_context_service=FakeWebDAVContextService(),
+        channel_delivery_service=delivery_service,
+    )
+    service.bootstrap()
+    due_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    schedule_dir = tmp_path / "schedules" / "agent_tool_reminder"
+    schedule_dir.mkdir(parents=True)
+    _write_json(
+        schedule_dir / "definition.json",
+        {
+            "schema_version": 1,
+            "id": "agent_tool_reminder",
+            "type": "agent_run",
+            "enabled": True,
+            "trigger": {"kind": "once", "expr": due_at},
+            "agent_id": "assistant",
+            "prompt": "提醒我复盘",
+            "session_id": "wechat_default_private_wxid",
+            "metadata": {
+                "created_by": {
+                    "type": "agent_tool",
+                    "agent_id": "assistant",
+                    "session_id": "wechat_default_private_wxid",
+                },
+                "delivery": {
+                    "channel": "wechat",
+                    "account_id": "default",
+                    "to_user_id": "wxid",
+                    "context_token": "reply-token",
+                },
+            },
+        },
+    )
+    _write_json(
+        schedule_dir / "state.json",
+        {
+            "schema_version": 1,
+            "schedule_id": "agent_tool_reminder",
+            "status": "idle",
+            "next_run_at": due_at,
+        },
+    )
+    index = _read_json(tmp_path / "schedules" / "index.json")
+    index["schedules"].append({"id": "agent_tool_reminder", "type": "agent_run", "enabled": True})
+    _write_json(tmp_path / "schedules" / "index.json", index)
+
+    asyncio.run(service.tick())
+
+    assert delivery_service.deliveries == [
+        {
+            "channel": "wechat",
+            "account_id": "default",
+            "to_user_id": "wxid",
+            "context_token": "reply-token",
+            "text": "定时任务结果",
+        }
+    ]
+    assert run_service.delivery_statuses[-1]["status"] == "delivered"
+    events = (schedule_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert "delivered" in events
 
 
 def test_schedule_service_manages_user_schedules(tmp_path) -> None:

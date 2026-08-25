@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +15,22 @@ from server.infrastructure.browser_tools import build_browser_extract_tool
 from server.infrastructure.config import load_settings
 
 
-def build_platform_tools(tool_ids: tuple[str, ...], *, context_workspace: Path) -> list[Any]:
+@dataclass(frozen=True)
+class PlatformToolContext:
+    run_id: str
+    source: str
+    agent_id: str
+    session_id: str
+    metadata: dict[str, Any]
+
+
+def build_platform_tools(
+    tool_ids: tuple[str, ...],
+    *,
+    context_workspace: Path,
+    schedule_service: Any = None,
+    tool_context: PlatformToolContext | None = None,
+) -> list[Any]:
     tools = []
     service = ContextKnowledgeService(context_workspace)
     webdav_service = _webdav_context_service(context_workspace)
@@ -24,6 +42,10 @@ def build_platform_tools(tool_ids: tuple[str, ...], *, context_workspace: Path) 
             tools.append(_write_context_tool(service, webdav_service))
         elif definition.id == "browser_extract":
             tools.append(build_browser_extract_tool())
+        elif definition.id == "schedule":
+            if schedule_service is None or tool_context is None:
+                continue
+            tools.append(_schedule_tool(schedule_service, tool_context))
     return tools
 
 
@@ -149,3 +171,309 @@ def _is_recent_context_query(query: str) -> bool:
     has_recent = any(marker in normalized for marker in ("最近", "近期", "最新", "recent", "latest", "newest"))
     has_context = any(marker in normalized for marker in ("笔记", "文档", "知识", "notes", "note", "docs", "documents"))
     return has_recent and has_context or bool(re.search(r"\b(last|latest|recent)\s+\d*\s*(notes|docs|documents)\b", normalized))
+
+
+def _schedule_tool(schedule_service: Any, tool_context: PlatformToolContext) -> Any:
+    from langchain_core.tools import StructuredTool
+
+    def schedule(
+        action: str,
+        schedule_id: str = "",
+        name: str = "",
+        prompt: str = "",
+        trigger_kind: str = "",
+        interval_minutes: int = 0,
+        run_at: str = "",
+        cron: str = "",
+        timezone: str = "Asia/Shanghai",
+        enabled: bool | None = None,
+    ) -> str:
+        """Manage scheduled tasks owned by this Agent and this conversation.
+
+        Use create for user-approved reminders or recurring Agent tasks.
+        Use list/get/update/delete only for schedules previously created by this tool in the current conversation.
+        Scheduled Agent results are delivered back to the current channel when channel delivery context is available.
+        """
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action == "create":
+            return json.dumps(
+                _schedule_create(
+                    schedule_service,
+                    tool_context,
+                    schedule_id=schedule_id,
+                    name=name,
+                    prompt=prompt,
+                    trigger_kind=trigger_kind,
+                    interval_minutes=interval_minutes,
+                    run_at=run_at,
+                    cron=cron,
+                    timezone=timezone,
+                    enabled=enabled,
+                ),
+                ensure_ascii=False,
+            )
+        if normalized_action == "list":
+            return json.dumps(_schedule_list(schedule_service, tool_context), ensure_ascii=False)
+        if normalized_action == "get":
+            return json.dumps(_schedule_get(schedule_service, tool_context, schedule_id), ensure_ascii=False)
+        if normalized_action == "update":
+            return json.dumps(
+                _schedule_update(
+                    schedule_service,
+                    tool_context,
+                    schedule_id=schedule_id,
+                    name=name,
+                    prompt=prompt,
+                    trigger_kind=trigger_kind,
+                    interval_minutes=interval_minutes,
+                    run_at=run_at,
+                    cron=cron,
+                    timezone=timezone,
+                    enabled=enabled,
+                ),
+                ensure_ascii=False,
+            )
+        if normalized_action == "delete":
+            return json.dumps(_schedule_delete(schedule_service, tool_context, schedule_id), ensure_ascii=False)
+        raise RuntimeError("action must be create, list, get, update, or delete")
+
+    return StructuredTool.from_function(
+        schedule,
+        name="schedule",
+        description=(
+            "Manage scheduled Agent tasks for the current conversation. "
+            "Actions: create, list, get, update, delete. "
+            "Only schedules created by this tool for the current agent and session can be read, updated, or deleted. "
+            "For create/update pass trigger_kind='once' with run_at ISO datetime, trigger_kind='interval' with interval_minutes>=1, "
+            "or trigger_kind='cron' with a 5-field cron expression and timezone. "
+            "Results are delivered back to the current WeChat conversation when this run came from WeChat. "
+            "Args: action, schedule_id, name, prompt, trigger_kind, interval_minutes, run_at, cron, timezone, enabled."
+        ),
+    )
+
+
+def _schedule_create(
+    schedule_service: Any,
+    tool_context: PlatformToolContext,
+    *,
+    schedule_id: str,
+    name: str,
+    prompt: str,
+    trigger_kind: str,
+    interval_minutes: int,
+    run_at: str,
+    cron: str,
+    timezone: str,
+    enabled: bool | None,
+) -> dict[str, Any]:
+    prompt_text = str(prompt or "").strip()
+    if not prompt_text:
+        raise RuntimeError("prompt is required")
+    next_schedule_id = _safe_schedule_id(schedule_id) or _new_tool_schedule_id()
+    payload = {
+        "id": next_schedule_id,
+        "name": str(name or "").strip() or next_schedule_id,
+        "enabled": True if enabled is None else bool(enabled),
+        "trigger": _tool_trigger_payload(
+            trigger_kind=trigger_kind,
+            interval_minutes=interval_minutes,
+            run_at=run_at,
+            cron=cron,
+            timezone=timezone,
+        ),
+        "agent_id": tool_context.agent_id,
+        "prompt": prompt_text,
+        "session_id": tool_context.session_id,
+        "metadata": _tool_schedule_metadata(tool_context),
+    }
+    created = schedule_service.create_schedule(payload)
+    return _tool_schedule_response(created)
+
+
+def _schedule_list(schedule_service: Any, tool_context: PlatformToolContext) -> dict[str, Any]:
+    owned: list[dict[str, Any]] = []
+    for summary in schedule_service.list_schedules():
+        raw_summary = summary.get("summary") if isinstance(summary.get("summary"), dict) else {}
+        raw_definition = summary.get("definition") if isinstance(summary.get("definition"), dict) else {}
+        schedule_id = str(summary.get("id") or raw_summary.get("id") or raw_definition.get("id") or "")
+        if not schedule_id:
+            continue
+        try:
+            detail = summary if isinstance(summary.get("definition"), dict) else schedule_service.get_schedule(schedule_id)
+        except Exception:
+            continue
+        if _tool_can_manage(detail, tool_context):
+            owned.append(_tool_schedule_response(detail))
+    return {"schedules": owned}
+
+
+def _schedule_get(schedule_service: Any, tool_context: PlatformToolContext, schedule_id: str) -> dict[str, Any]:
+    detail = schedule_service.get_schedule(_required_schedule_id(schedule_id))
+    if not _tool_can_manage(detail, tool_context):
+        raise RuntimeError("schedule is not owned by this agent/session")
+    return _tool_schedule_response(detail)
+
+
+def _schedule_update(
+    schedule_service: Any,
+    tool_context: PlatformToolContext,
+    *,
+    schedule_id: str,
+    name: str,
+    prompt: str,
+    trigger_kind: str,
+    interval_minutes: int,
+    run_at: str,
+    cron: str,
+    timezone: str,
+    enabled: bool | None,
+) -> dict[str, Any]:
+    current = schedule_service.get_schedule(_required_schedule_id(schedule_id))
+    if not _tool_can_manage(current, tool_context):
+        raise RuntimeError("schedule is not owned by this agent/session")
+    definition = current.get("definition") if isinstance(current.get("definition"), dict) else {}
+    payload = {
+        "id": definition.get("id", schedule_id),
+        "name": str(name or "").strip() or definition.get("name") or schedule_id,
+        "enabled": bool(definition.get("enabled", True)) if enabled is None else bool(enabled),
+        "trigger": (
+            _tool_trigger_payload(
+                trigger_kind=trigger_kind,
+                interval_minutes=interval_minutes,
+                run_at=run_at,
+                cron=cron,
+                timezone=timezone,
+            )
+            if str(trigger_kind or "").strip()
+            else definition.get("trigger")
+        ),
+        "agent_id": tool_context.agent_id,
+        "prompt": str(prompt or "").strip() or definition.get("prompt") or "",
+        "session_id": tool_context.session_id,
+        "metadata": definition.get("metadata") if isinstance(definition.get("metadata"), dict) else {},
+    }
+    updated = schedule_service.update_schedule(str(definition.get("id") or schedule_id), payload)
+    return _tool_schedule_response(updated)
+
+
+def _schedule_delete(schedule_service: Any, tool_context: PlatformToolContext, schedule_id: str) -> dict[str, Any]:
+    target_id = _required_schedule_id(schedule_id)
+    detail = schedule_service.get_schedule(target_id)
+    if not _tool_can_manage(detail, tool_context):
+        raise RuntimeError("schedule is not owned by this agent/session")
+    schedule_service.delete_schedule(target_id)
+    return {"schedule_id": target_id, "status": "deleted"}
+
+
+def _tool_schedule_metadata(tool_context: PlatformToolContext) -> dict[str, Any]:
+    metadata = {
+        "created_by": {
+            "type": "agent_tool",
+            "agent_id": tool_context.agent_id,
+            "run_id": tool_context.run_id,
+            "session_id": tool_context.session_id,
+            "source": tool_context.source,
+        }
+    }
+    delivery = _tool_delivery_metadata(tool_context)
+    if delivery:
+        metadata["delivery"] = delivery
+    return metadata
+
+
+def _tool_delivery_metadata(tool_context: PlatformToolContext) -> dict[str, Any]:
+    if tool_context.source != "wechat":
+        return {}
+    metadata = tool_context.metadata if isinstance(tool_context.metadata, dict) else {}
+    account_id = str(metadata.get("account_id") or "").strip()
+    to_user_id = str(metadata.get("from_user_id") or metadata.get("peer_id") or "").strip()
+    context_token = str(metadata.get("context_token") or "").strip()
+    if not account_id or not to_user_id:
+        return {}
+    return {
+        "channel": "wechat",
+        "account_id": account_id,
+        "session_id": tool_context.session_id,
+        "peer_id": str(metadata.get("peer_id") or to_user_id).strip(),
+        "peer_type": str(metadata.get("peer_type") or "private").strip(),
+        "to_user_id": to_user_id,
+        "context_token": context_token,
+    }
+
+
+def _tool_can_manage(detail: dict[str, Any], tool_context: PlatformToolContext) -> bool:
+    definition = detail.get("definition") if isinstance(detail.get("definition"), dict) else {}
+    metadata = definition.get("metadata") if isinstance(definition.get("metadata"), dict) else {}
+    created_by = metadata.get("created_by") if isinstance(metadata.get("created_by"), dict) else {}
+    return (
+        created_by.get("type") == "agent_tool"
+        and created_by.get("agent_id") == tool_context.agent_id
+        and created_by.get("session_id") == tool_context.session_id
+    )
+
+
+def _tool_trigger_payload(
+    *,
+    trigger_kind: str,
+    interval_minutes: int,
+    run_at: str,
+    cron: str,
+    timezone: str,
+) -> dict[str, Any]:
+    kind = str(trigger_kind or "").strip().lower()
+    if kind == "once":
+        expr = str(run_at or "").strip()
+        if not expr:
+            raise RuntimeError("run_at is required for once schedules")
+        return {"kind": "once", "expr": expr}
+    if kind == "interval":
+        minutes = int(interval_minutes or 0)
+        if minutes < 1:
+            raise RuntimeError("interval_minutes must be at least 1")
+        return {"kind": "interval", "seconds": minutes * 60}
+    if kind == "cron":
+        expr = str(cron or "").strip()
+        if not expr:
+            raise RuntimeError("cron is required for cron schedules")
+        return {"kind": "cron", "expr": expr, "timezone": str(timezone or "Asia/Shanghai").strip() or "Asia/Shanghai"}
+    raise RuntimeError("trigger_kind must be once, interval, or cron")
+
+
+def _tool_schedule_response(detail: dict[str, Any]) -> dict[str, Any]:
+    definition = detail.get("definition") if isinstance(detail.get("definition"), dict) else {}
+    state = detail.get("state") if isinstance(detail.get("state"), dict) else {}
+    metadata = definition.get("metadata") if isinstance(definition.get("metadata"), dict) else {}
+    return {
+        "schedule_id": definition.get("id", ""),
+        "name": definition.get("name", ""),
+        "agent_id": definition.get("agent_id", ""),
+        "prompt": definition.get("prompt", ""),
+        "enabled": definition.get("enabled", False),
+        "trigger": definition.get("trigger", {}),
+        "session_id": definition.get("session_id", ""),
+        "delivery": metadata.get("delivery") if isinstance(metadata.get("delivery"), dict) else {},
+        "state": {
+            "status": state.get("status", ""),
+            "next_run_at": state.get("next_run_at", ""),
+            "last_run_at": state.get("last_run_at", ""),
+            "last_run_id": state.get("last_run_id", ""),
+            "last_error": state.get("last_error"),
+        },
+    }
+
+
+def _required_schedule_id(schedule_id: str) -> str:
+    normalized = _safe_schedule_id(schedule_id)
+    if not normalized:
+        raise RuntimeError("schedule_id is required")
+    return normalized
+
+
+def _safe_schedule_id(schedule_id: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(schedule_id or "").strip()).strip("._-")
+    return normalized[:80]
+
+
+def _new_tool_schedule_id() -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    return f"agent_schedule_{timestamp}_{uuid.uuid4().hex[:8]}"

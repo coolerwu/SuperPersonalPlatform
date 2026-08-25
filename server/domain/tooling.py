@@ -30,6 +30,11 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         name="Browser Extract",
         description="Open a public http/https page with Playwright and extract rendered text and links.",
     ),
+    ToolDefinition(
+        id="schedule",
+        name="Schedule",
+        description="Create, list, get, update, and delete this Agent's own scheduled tasks with current-channel delivery.",
+    ),
 )
 
 

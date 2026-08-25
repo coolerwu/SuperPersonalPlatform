@@ -62,7 +62,9 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         system_log_service=system_log_service,
         maintenance_service=maintenance_service,
         webdav_context_service=webdav_context_service,
+        channel_delivery_service=wechat_channel_manager,
     )
+    run_service.set_schedule_service(schedule_service)
     return AppContainer(
         workspace=active_workspace,
         auth_service=AuthService(AuthToken(settings.auth.token)),
