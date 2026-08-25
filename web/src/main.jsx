@@ -905,6 +905,14 @@ function WechatPage() {
   const [accounts, setAccounts] = useState([]);
   const [agents, setAgents] = useState([]);
   const [activeId, setActiveId] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newAccount, setNewAccount] = useState({
+    id: "",
+    name: "",
+    default_agent_id: "",
+    auto_start: false,
+    proxy: "",
+  });
   const [error, setError] = useState("");
 
   async function load() {
@@ -920,7 +928,7 @@ function WechatPage() {
       const parsed = parseConfigDraft(configFile.content || "");
       setAccounts(nextAccounts);
       setAgents(parsed.config.agents.definitions || []);
-      setActiveId((current) => current || nextAccounts[0]?.id || "");
+      setActiveId((current) => (nextAccounts.some((account) => account.id === current) ? current : nextAccounts[0]?.id || ""));
     } catch (err) {
       setError(err.message);
     }
@@ -955,6 +963,45 @@ function WechatPage() {
     }
   }
 
+  async function createAccount() {
+    setError("");
+    const payload = {
+      id: newAccount.id.trim(),
+      name: newAccount.name.trim(),
+      default_agent_id: newAccount.default_agent_id,
+      auto_start: newAccount.auto_start,
+      proxy: newAccount.proxy.trim(),
+    };
+    if (!payload.id) {
+      setError("请输入账号 ID");
+      return;
+    }
+    try {
+      const data = await api("/api/channels/wechat/accounts", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setCreating(false);
+      setNewAccount({ id: "", name: "", default_agent_id: "", auto_start: false, proxy: "" });
+      setActiveId(data.account?.id || payload.id);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function deleteAccount(accountId) {
+    if (!window.confirm(`删除微信账号 ${accountId}？登录态文件也会被移除。`)) return;
+    setError("");
+    try {
+      await api(`/api/channels/wechat/accounts/${accountId}`, { method: "DELETE" });
+      setActiveId("");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   return (
     <section className="console-screen">
       <div className="workspace-header">
@@ -978,7 +1025,70 @@ function WechatPage() {
               <span>账号</span>
               <small>config.yaml channels.wechat_personal.accounts</small>
             </div>
+            <div className="config-inline-actions">
+              <button onClick={() => setCreating((value) => !value)}>
+                <Plus size={15} />
+                新增
+              </button>
+            </div>
           </div>
+          {creating ? (
+            <div className="wechat-create-form">
+              <label>
+                <span>账号 ID</span>
+                <input
+                  value={newAccount.id}
+                  onChange={(event) => setNewAccount((draft) => ({ ...draft, id: event.target.value }))}
+                  placeholder="例如 wife"
+                />
+              </label>
+              <label>
+                <span>显示名称</span>
+                <input
+                  value={newAccount.name}
+                  onChange={(event) => setNewAccount((draft) => ({ ...draft, name: event.target.value }))}
+                  placeholder="留空则使用账号 ID"
+                />
+              </label>
+              <label>
+                <span>默认 Agent</span>
+                <select
+                  value={newAccount.default_agent_id}
+                  onChange={(event) => setNewAccount((draft) => ({ ...draft, default_agent_id: event.target.value }))}
+                >
+                  <option value="">未绑定</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.id || "未命名 Agent"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>代理</span>
+                <input
+                  value={newAccount.proxy}
+                  onChange={(event) => setNewAccount((draft) => ({ ...draft, proxy: event.target.value }))}
+                  placeholder="可选，例如 http://127.0.0.1:7890"
+                />
+              </label>
+              <label className="config-toggle">
+                <input
+                  type="checkbox"
+                  checked={newAccount.auto_start}
+                  onChange={(event) => setNewAccount((draft) => ({ ...draft, auto_start: event.target.checked }))}
+                />
+                自动启动
+              </label>
+              <div className="actions">
+                <button className="primary" onClick={createAccount}>
+                  <Save size={15} />
+                  保存账号
+                </button>
+                <button onClick={() => setCreating(false)}>取消</button>
+              </div>
+            </div>
+          ) : null}
           <div className="wechat-account-list">
             {accounts.length === 0 ? <div className="empty-state">暂无微信账号。</div> : null}
             {accounts.map((account) => (
@@ -1001,6 +1111,7 @@ function WechatPage() {
           agents={agents}
           onAction={action}
           onUpdate={updateAccount}
+          onDelete={deleteAccount}
         />
       </div>
     </section>
@@ -1021,7 +1132,7 @@ function WechatSummary({ accounts }) {
   );
 }
 
-function WechatAccountDetail({ account, agents, onAction, onUpdate }) {
+function WechatAccountDetail({ account, agents, onAction, onUpdate, onDelete }) {
   if (!account) {
     return (
       <section className="panel account-detail-empty">
@@ -1039,7 +1150,12 @@ function WechatAccountDetail({ account, agents, onAction, onUpdate }) {
           <span className="section-label">{account.id}</span>
           <h2>{account.name || account.id}</h2>
         </div>
-        <Status status={status.login_state} />
+        <div className="account-hero-actions">
+          <Status status={status.login_state} />
+          <button className="delete-button icon-button" onClick={() => onDelete(account.id)} title="删除账号" aria-label="删除账号">
+            <Trash2 size={15} />
+          </button>
+        </div>
       </div>
 
       <div className="wechat-detail-grid">

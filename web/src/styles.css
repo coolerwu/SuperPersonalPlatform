@@ -1563,6 +1563,44 @@ pre {
   padding: 10px;
 }
 
+.wechat-create-form {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 12px;
+}
+
+.wechat-create-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.wechat-create-form .config-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.wechat-create-form .config-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+.wechat-create-form select {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0c121a;
+  color: var(--text);
+  outline: none;
+  padding: 0 10px;
+}
+
 .wechat-account-row {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
@@ -1612,6 +1650,13 @@ pre {
   margin: 3px 0 0;
   font-size: 22px;
   line-height: 1.2;
+}
+
+.account-hero-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .wechat-detail-grid {

@@ -176,6 +176,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 test("renders the DeepAgent console shell", async () => {
@@ -714,5 +715,76 @@ test("updates the selected agent for a wechat account", async () => {
     const updateCall = global.fetch.mock.calls.find(([url, options]) => String(url).endsWith("/api/channels/wechat/accounts/main") && options.method === "PUT");
     expect(updateCall).toBeTruthy();
     expect(JSON.parse(updateCall[1].body).default_agent_id).toBe("");
+  });
+});
+
+test("creates and deletes a wechat account", async () => {
+  window.history.replaceState({}, "", "/wechat");
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  let accounts = [
+    {
+      id: "main",
+      name: "主账号",
+      default_agent_id: "assistant",
+      auto_start: false,
+      proxy: "",
+      status: { login_state: "stopped", running: false, logs: [] },
+    },
+  ];
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/channels/wechat/accounts") && (!options.method || options.method === "GET")) {
+      return response({ accounts });
+    }
+    if (path.endsWith("/api/channels/wechat/accounts") && options.method === "POST") {
+      const body = JSON.parse(options.body || "{}");
+      accounts = [...accounts, { ...body, status: { login_state: "stopped", running: false, logs: [] } }];
+      return response({ ok: true, account: body });
+    }
+    if (path.endsWith("/api/channels/wechat/accounts/side") && options.method === "DELETE") {
+      accounts = accounts.filter((account) => account.id !== "side");
+      return response({ ok: true });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", size: 128, editable: true, content: CONFIG_YAML });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect((await screen.findAllByText("主账号")).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", { name: /新增/ }));
+  fireEvent.change(screen.getByLabelText("账号 ID"), { target: { value: "side" } });
+  fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "副账号" } });
+  fireEvent.change(screen.getAllByLabelText("默认 Agent")[0], { target: { value: "assistant" } });
+  fireEvent.click(screen.getByRole("button", { name: /保存账号/ }));
+
+  await waitFor(() => {
+    const createCall = global.fetch.mock.calls.find(([url, options]) => String(url).endsWith("/api/channels/wechat/accounts") && options.method === "POST");
+    expect(createCall).toBeTruthy();
+    expect(JSON.parse(createCall[1].body)).toMatchObject({
+      id: "side",
+      name: "副账号",
+      default_agent_id: "assistant",
+      auto_start: false,
+      proxy: "",
+    });
+  });
+  expect((await screen.findAllByText("副账号")).length).toBeGreaterThan(0);
+
+  fireEvent.click(screen.getByRole("button", { name: "删除账号" }));
+  await waitFor(() => {
+    expect(confirmSpy).toHaveBeenCalled();
+    const deleteCall = global.fetch.mock.calls.find(([url, options]) => String(url).endsWith("/api/channels/wechat/accounts/side") && options.method === "DELETE");
+    expect(deleteCall).toBeTruthy();
   });
 });
