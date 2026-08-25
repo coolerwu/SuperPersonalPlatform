@@ -78,11 +78,26 @@ class ContextConfig:
 
 
 @dataclass(frozen=True)
+class MaintenanceConfig:
+    enabled: bool = True
+    interval_seconds: int = 86400
+    retention_days: int = 15
+    dry_run: bool = False
+
+    def __post_init__(self) -> None:
+        if self.interval_seconds < 60:
+            raise ValueError("maintenance.interval_seconds must be at least 60")
+        if self.retention_days < 1:
+            raise ValueError("maintenance.retention_days must be at least 1")
+
+
+@dataclass(frozen=True)
 class Settings:
     auth: AuthConfig
     server: ServerConfig
     nutstore: NutstoreConfig = field(default_factory=NutstoreConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
+    maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
     agent_workspace: AgentWorkspaceDefinition = field(
         default_factory=lambda: AgentWorkspaceDefinition(
             models=(),
@@ -120,6 +135,7 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
         ),
         nutstore=parse_nutstore_config(nutstore_raw),
         context=parse_context_config(raw.get("context") or {}),
+        maintenance=parse_maintenance_config(raw.get("maintenance") or {}),
         agent_workspace=parse_agent_workspace(raw),
     )
 
@@ -263,6 +279,19 @@ def parse_context_config(raw: Any) -> ContextConfig:
             extensions=extensions or (".md", ".txt", ".json", ".jsonl"),
         ),
         webdav_permissions=permissions,
+    )
+
+
+def parse_maintenance_config(raw: Any) -> MaintenanceConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("maintenance must be an object")
+    return MaintenanceConfig(
+        enabled=bool(raw.get("enabled", True)),
+        interval_seconds=int(raw.get("interval_seconds") or 86400),
+        retention_days=int(raw.get("retention_days") or 15),
+        dry_run=bool(raw.get("dry_run", False)),
     )
 
 

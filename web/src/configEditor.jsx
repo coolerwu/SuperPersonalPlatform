@@ -71,6 +71,12 @@ const DEFAULT_CONFIG = {
       },
     ],
   },
+  maintenance: {
+    enabled: true,
+    interval_seconds: 86400,
+    retention_days: 15,
+    dry_run: false,
+  },
   channels: {
     wechat_personal: {
       enabled: false,
@@ -202,6 +208,57 @@ export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav, on
               onChange={(event) => update((next) => (next.server.port = Number(event.target.value) || 8888))}
             />
           </ConfigField>
+        </div>
+      </section>
+
+      <section className="config-section">
+        <div className="config-section-title">
+          <div>
+            <strong>维护清理</strong>
+            <span>maintenance</span>
+          </div>
+          <label className="config-toggle">
+            <input
+              type="checkbox"
+              checked={Boolean(config.maintenance.enabled)}
+              disabled={readOnly}
+              onChange={(event) => update((next) => (next.maintenance.enabled = event.target.checked))}
+            />
+            <span>启用</span>
+          </label>
+        </div>
+        <div className="config-grid">
+          <ConfigField label="保留天数">
+            <input
+              type="number"
+              min="1"
+              value={config.maintenance.retention_days}
+              readOnly={readOnly}
+              onChange={(event) =>
+                update((next) => (next.maintenance.retention_days = Number(event.target.value) || 15))
+              }
+            />
+          </ConfigField>
+          <ConfigField label="清理间隔秒数">
+            <input
+              type="number"
+              min="60"
+              value={config.maintenance.interval_seconds}
+              readOnly={readOnly}
+              onChange={(event) =>
+                update((next) => (next.maintenance.interval_seconds = Number(event.target.value) || 86400))
+              }
+            />
+          </ConfigField>
+          <label className="config-toggle field-toggle">
+            <input
+              type="checkbox"
+              checked={Boolean(config.maintenance.dry_run)}
+              disabled={readOnly}
+              onChange={(event) => update((next) => (next.maintenance.dry_run = event.target.checked))}
+            />
+            <span>只预览不删除</span>
+          </label>
         </div>
       </section>
 
@@ -954,6 +1011,14 @@ function withDefaults(value) {
   config.channels.wechat_personal.accounts = Array.isArray(config.channels.wechat_personal.accounts)
     ? config.channels.wechat_personal.accounts.map((account) => ({ ...account }))
     : [];
+  config.maintenance = isPlainObject(config.maintenance)
+    ? {
+        enabled: config.maintenance.enabled !== false,
+        interval_seconds: Number(config.maintenance.interval_seconds) || 86400,
+        retention_days: Number(config.maintenance.retention_days) || 15,
+        dry_run: Boolean(config.maintenance.dry_run),
+      }
+    : cloneConfig(DEFAULT_CONFIG.maintenance);
   config.context.webdav_sync.root_path = normalizePath(config.context.webdav_sync.root_path || "/");
   config.context.webdav_sync.extensions = normalizeList(config.context.webdav_sync.extensions);
   config.context.webdav_permissions = Array.isArray(config.context.webdav_permissions)

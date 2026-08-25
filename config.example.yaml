@@ -41,6 +41,11 @@ context:
       readable: true
       writable: true
       protected: false
+maintenance:
+  enabled: true
+  interval_seconds: 86400
+  retention_days: 15
+  dry_run: false
 channels:
   wechat_personal:
     enabled: false

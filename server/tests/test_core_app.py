@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -11,6 +12,7 @@ from server.adapter.system_routes import create_system_router
 from server.adapter.workspace_routes import create_workspace_router
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
+from server.app.maintenance_service import MaintenanceService
 from server.app.nutstore_service import NutstoreService
 from server.app.run_service import RunService
 from server.app.schedule_service import ScheduleService
@@ -102,6 +104,10 @@ def make_system_client(tmp_path: Path, update_service: FakeUpdateService | None 
         auth_service=AuthService(AuthToken(token)),
         config_file_service=ConfigFileService(tmp_path),
         run_service=RunService(tmp_path),
+        maintenance_service=MaintenanceService(
+            tmp_path,
+            Settings(auth=AuthConfig(token=token), server=ServerConfig()).maintenance,
+        ),
         nutstore_service=NutstoreService(NutstoreConfig()),
         schedule_service=ScheduleService(
             workspace=tmp_path,
@@ -205,6 +211,41 @@ def test_system_update_conflict(tmp_path) -> None:
     response = client.post("/api/system/update-service")
 
     assert response.status_code == 409
+
+
+def test_system_maintenance_routes_preview_and_run(tmp_path) -> None:
+    client = make_system_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    old_at = "2026-01-01T00:00:00+00:00"
+    run_dir = tmp_path / "runs" / "run_old"
+    run_dir.mkdir(parents=True)
+    (run_dir / "input.json").write_text('{"run_id":"run_old"}', encoding="utf-8")
+    (tmp_path / "runs" / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "runs": [
+                    {
+                        "run_id": "run_old",
+                        "status": "completed",
+                        "created_at": old_at,
+                        "updated_at": old_at,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    preview = client.post("/api/system/maintenance/preview")
+    assert preview.status_code == 200
+    assert preview.json()["dry_run"] is True
+    assert run_dir.exists()
+
+    response = client.post("/api/system/maintenance/run")
+    assert response.status_code == 200
+    assert response.json()["retention_days"] == 15
+    assert not run_dir.exists()
 
 
 def test_manual_webdav_context_sync_uses_saved_config(tmp_path, monkeypatch) -> None:

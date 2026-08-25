@@ -3,6 +3,7 @@ from pathlib import Path
 
 from server.app.auth_service import AuthService
 from server.app.config_file_service import ConfigFileService
+from server.app.maintenance_service import MaintenanceService
 from server.app.nutstore_service import NutstoreService
 from server.app.run_service import RunService
 from server.app.schedule_service import ScheduleService
@@ -19,6 +20,7 @@ class AppContainer:
     auth_service: AuthService
     config_file_service: ConfigFileService
     run_service: RunService
+    maintenance_service: MaintenanceService
     nutstore_service: NutstoreService
     schedule_service: ScheduleService
     system_log_service: SystemLogService

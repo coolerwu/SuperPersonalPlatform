@@ -82,6 +82,20 @@ def create_system_router(container: AppContainer) -> APIRouter:
             "log_path": str(log_path),
         }
 
+    @router.post("/maintenance/preview")
+    def preview_maintenance() -> dict[str, object]:
+        return container.maintenance_service.preview()
+
+    @router.post("/maintenance/run")
+    def run_maintenance() -> dict[str, object]:
+        result = container.maintenance_service.cleanup(dry_run=False)
+        container.system_log_service.append_line(
+            "maintenance_cleanup "
+            f"status=ok retention_days={result['retention_days']} "
+            f"items={len(result['items'])} bytes={result['summary']['bytes']}"
+        )
+        return result
+
     @router.post("/webdav-context/sync")
     async def sync_webdav_context() -> dict[str, object]:
         try:
