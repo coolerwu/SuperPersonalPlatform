@@ -1268,7 +1268,7 @@ pre {
 }
 
 .schedule-detail {
-  grid-template-rows: auto minmax(0, auto) minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .schedule-list,
@@ -1297,17 +1297,66 @@ pre {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  align-content: start;
+  grid-auto-rows: max-content;
 }
 
 .builtin-schedule-info {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   border-bottom: 1px solid var(--line-soft);
-  padding: 14px;
+  padding: 12px 14px;
 }
 
 .builtin-schedule-info .muted-note {
   margin: 0;
+}
+
+.schedule-detail .panel-title > .config-inline-actions {
+  align-self: start;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  width: auto;
+}
+
+.schedule-detail .panel-title > .config-inline-actions button {
+  min-width: 0;
+}
+
+.schedule-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(128px, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.schedule-state-facts {
+  margin-bottom: 2px;
+}
+
+.schedule-fact {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: rgba(13, 20, 29, 0.82);
+  padding: 9px 10px;
+}
+
+.schedule-fact span {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.schedule-fact strong {
+  overflow: hidden;
+  color: #dce6f1;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .schedule-row {
@@ -1365,7 +1414,7 @@ pre {
 
 .schedule-events {
   min-height: 0;
-  max-height: none;
+  max-height: 420px;
   overflow-x: hidden;
   overflow-y: auto;
   border-top: 1px solid var(--line-soft);
@@ -1780,6 +1829,10 @@ pre {
   .runs-screen .run-table.row span:nth-child(4) {
     display: none;
   }
+
+  .schedule-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 820px) {
@@ -1827,6 +1880,7 @@ pre {
   .delivery-strip,
   .workspace-map .tree-list,
   .wechat-detail-grid,
+  .schedule-facts,
   .status-rail {
     grid-template-columns: 1fr;
   }

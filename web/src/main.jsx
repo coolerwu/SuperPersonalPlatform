@@ -1272,7 +1272,7 @@ function SchedulesPage() {
           <div className="panel-title">
             <div>
               <span>{editingNew ? "新建 Agent 定时任务" : activeSchedule ? activeSchedule.definition.name : "任务详情"}</span>
-              <small>prompt + agent + trigger</small>
+              <small>{builtIn ? "系统内置任务 · 只读配置" : "prompt + agent + trigger"}</small>
             </div>
             <div className="config-inline-actions">
               <button onClick={runNow} disabled={!activeSchedule?.definition?.id}>
@@ -1309,11 +1309,11 @@ function BuiltInScheduleInfo({ detail }) {
   return (
     <div className="builtin-schedule-info">
       <p className="muted-note">内置任务由系统配置驱动，只能在这里查看状态或立即执行。</p>
-      <div className="kv-grid">
-        <Kv label="ID" value={definition.id || "-"} />
-        <Kv label="类型" value={definition.type || "-"} />
-        <Kv label="触发" value={formatScheduleTrigger(definition.trigger)} />
-        <Kv label="启用" value={definition.enabled ? "启用" : "停用"} />
+      <div className="schedule-facts">
+        <ScheduleFact label="ID" value={definition.id || "-"} />
+        <ScheduleFact label="类型" value={definition.type || "-"} />
+        <ScheduleFact label="触发" value={formatScheduleTrigger(definition.trigger)} />
+        <ScheduleFact label="启用" value={definition.enabled ? "启用" : "停用"} />
       </div>
     </div>
   );
@@ -1415,11 +1415,11 @@ function ScheduleStatePanel({ detail }) {
   const events = detail.events || [];
   return (
     <div className="schedule-state">
-      <div className="kv-grid">
-        <Kv label="状态" value={state.status || "-"} />
-        <Kv label="下次运行" value={formatDateTime(state.next_run_at)} />
-        <Kv label="上次运行" value={formatDateTime(state.last_run_at)} />
-        <Kv label="最近 Run" value={state.last_run_id || "-"} />
+      <div className="schedule-facts schedule-state-facts">
+        <ScheduleFact label="状态" value={state.status || "-"} />
+        <ScheduleFact label="下次运行" value={formatDateTime(state.next_run_at)} />
+        <ScheduleFact label="上次运行" value={formatDateTime(state.last_run_at)} />
+        <ScheduleFact label="最近 Run" value={state.last_run_id || "-"} />
       </div>
       {state.last_error ? <PathBox label="最近错误" value={state.last_error.message || JSON.stringify(state.last_error)} /> : null}
       <div className="event-list schedule-events">
@@ -1429,10 +1429,20 @@ function ScheduleStatePanel({ detail }) {
             <span className="event-dot" />
             <time>{formatTime(event.created_at)}</time>
             <strong>{event.type}</strong>
-            <code>{JSON.stringify(event.payload)}</code>
+            <code>{formatScheduleEventPayload(event.payload)}</code>
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function ScheduleFact({ label, value }) {
+  const displayValue = value || "-";
+  return (
+    <div className="schedule-fact">
+      <span>{label}</span>
+      <strong title={String(displayValue)}>{displayValue}</strong>
     </div>
   );
 }
@@ -1638,6 +1648,23 @@ function formatScheduleTrigger(trigger) {
   if (trigger.kind === "cron") return `${trigger.expr || "-"} · ${trigger.timezone || "UTC"}`;
   if (trigger.kind === "once") return `一次性 · ${formatDateTime(trigger.expr)}`;
   return trigger.kind || "-";
+}
+
+function formatScheduleEventPayload(payload) {
+  if (!payload) return "-";
+  if (typeof payload === "string") return payload;
+  const parts = [];
+  if (payload.message) parts.push(payload.message);
+  if (payload.retention_days) parts.push(`保留 ${payload.retention_days} 天`);
+  if (payload.summary && typeof payload.summary === "object") {
+    const summary = Object.entries(payload.summary)
+      .filter(([, value]) => value !== undefined && value !== null && value !== 0)
+      .map(([key, value]) => `${key}: ${value}`);
+    if (summary.length) parts.push(summary.join(" · "));
+  }
+  if (payload.items !== undefined) parts.push(`items: ${payload.items}`);
+  if (payload.run_id) parts.push(payload.run_id);
+  return parts.length ? parts.join(" · ") : JSON.stringify(payload);
 }
 
 function formatDateTime(value) {
