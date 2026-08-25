@@ -126,9 +126,9 @@ workspace/schedules/{schedule_id}/events.jsonl
 workspace/schedules/{schedule_id}/lock.json
 ```
 
-后台统一 Scheduler 每 5 秒扫描轻量调度索引，只判断 `next_run_at` 是否到期，不执行高频 WebDAV 同步。到期后按 `definition.type` 分发：`webdav_sync` 执行 Context WebDAV 同步并写调度事件；`agent_run` 创建普通 `workspace/runs/{run_id}/` 并执行 DeepAgent。`lock.json` 用于避免重复执行，服务崩溃后会清理已失效的旧 lock。
+后台统一 Scheduler 每 5 秒扫描轻量调度索引，只判断 `next_run_at` 是否到期，不执行高频 WebDAV 同步。到期后按 `definition.type` 分发：`webdav_sync` 执行 Context WebDAV 同步并写调度事件；`maintenance_cleanup` 执行 15 天保留期清理并写调度事件；`agent_run` 创建普通 `workspace/runs/{run_id}/` 并执行 DeepAgent。`lock.json` 用于避免重复执行，服务崩溃后会清理已失效的旧 lock。
 
-`/api/schedules` 是定时任务管理页面使用的后端入口。前端只允许创建、编辑和删除 `agent_run` 类型任务，字段核心为 `prompt + agent_id + trigger`；内置 `context_webdav_sync` 由配置自动生成，只能查看状态和手动 `run-now`，不能通过页面编辑或删除。当前触发器支持 `interval`、5 字段 `cron` 和 `once`。
+`/api/schedules` 是定时任务管理页面使用的后端入口。前端只允许创建、编辑和删除 `agent_run` 类型任务，字段核心为 `prompt + agent_id + trigger`；内置 `context_webdav_sync` 和 `maintenance_cleanup` 由配置自动生成，只能查看状态和手动 `run-now`，不能通过页面编辑或删除。当前触发器支持 `interval`、5 字段 `cron` 和 `once`。
 
 微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
 
@@ -156,7 +156,7 @@ POST /api/system/maintenance/run
 
 `/webdav-context/test` 可使用配置页当前草稿或已保存配置测试坚果云 WebDAV 连接，只返回目标 URL、HTTP 状态和是否成功，不回传账号密码；`/webdav-context/sync` 现读已保存的 `workspace/config.yaml`，手动执行一次 Context WebDAV 同步，用于配置变更后立即制作本地缓存，而不必等待后台间隔或重启服务。
 
-`/maintenance/preview` 只计算清理计划不删除文件；`/maintenance/run` 执行清理。当前默认保留期统一为 15 天：删除超过保留期且已终态的 run、超过保留期未活跃且没有活动 run 引用的 session、旧调度事件、旧平台日志、Agent scratch 和 Context cache 里的旧文件，以及很旧的孤立 lock。知识库、WebDAV 文本/图片缓存、微信登录态和 Agent 长期记忆不做自动删除。
+`/maintenance/preview` 只计算清理计划不删除文件；`/maintenance/run` 执行清理。当前默认保留期统一为 15 天：删除超过保留期且已终态的 run、超过保留期未活跃且没有活动 run 引用的 session、旧调度事件、旧平台日志、Agent scratch 和 Context cache 里的旧文件，以及很旧的孤立 lock。知识库、WebDAV 文本/图片缓存、微信登录态和 Agent 长期记忆不做自动删除。自动清理不再使用单独后台 loop，而是作为 `workspace/schedules/maintenance_cleanup/` 内置定时任务落盘并显示在 `/schedules`。
 
 ## Frontend Routes
 
@@ -168,7 +168,7 @@ POST /api/system/maintenance/run
 - `/config` 的 Context WebDAV 同步区域提供“测试连接”和“立即同步”操作；测试连接使用当前表单草稿测试 WebDAV，不保存配置且不回传 secret；立即同步调用后端手动同步接口读取已保存的 `workspace/config.yaml`，立刻把坚果云远端文件缓存到 `workspace/context/webdav/` 并返回文本/图片资源数量；保存配置本身仍只负责校验并写回 `config.yaml`。
 - `/providers` 是配置页内的模型 Provider 栏目直达入口，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
 - `/agent-config` 是配置页内的 Agent 栏目直达入口，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、需要确认的 `write_context` 和浏览器提取工具 `browser_extract`；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
-- `/schedules` 是定时任务管理页面，读取 `workspace/schedules/index.json` 和每个任务详情，支持查看内置 WebDAV 同步任务、创建/编辑/删除 Agent 定时任务、启用/停用、立即运行和查看调度事件；任务创建表单只暴露 `prompt + agent + trigger` 等必要字段，不在前端执行 Agent。
+- `/schedules` 是定时任务管理页面，读取 `workspace/schedules/index.json` 和每个任务详情，支持查看内置 WebDAV 同步任务和维护清理任务、创建/编辑/删除 Agent 定时任务、启用/停用、立即运行和查看调度事件；任务创建表单只暴露 `prompt + agent + trigger` 等必要字段，不在前端执行 Agent。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供启动/停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
 - `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录态继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存，不作为聊天历史；长期聊天会话统一写入 `workspace/sessions/{session_id}/`。
 - `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，文件级查看/编辑入口保留在 `/workspace`。
@@ -197,7 +197,7 @@ POST /api/system/maintenance/run
 - `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后后端为 DeepAgent 传入文件型 LangGraph store，落盘到 `workspace/agents/{agent_id}/memory/store.json`，并用 `assistant_id={agent_id}` 隔离 namespace；Agent 通过 DeepAgent 原生 `/memories/...` 路径读写长期记忆。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。
 - 运行时会在 Agent system prompt 中注入记忆边界：用户要求保存个人偏好、会话规则或“存入记忆”时，应调用 DeepAgent 内置 `write_file("/memories/...", ...)`；只有用户明确要求保存到知识库、文档或共享资料时才调用 `write_context`。用户询问笔记、最近笔记、同步文档、WebDAV 文件、知识库内容或 notebook 条目时，必须先调用 `search_context`；`/memories/...` 只代表 Agent 自己的长期记忆，不代表用户的同步笔记。
 - 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
-- 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据。服务启动后不会立刻清理，需等到 interval 到期；立即清理使用系统 API。
+- 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据。自动执行由统一 Scheduler 的内置 `maintenance_cleanup` 任务负责，状态和事件落在 `workspace/schedules/maintenance_cleanup/`，立即清理可使用系统 API 或 `/schedules` 的立即运行按钮。
 - 生产更新锁文件固定写入 `workspace/logs/update-service.lock`。历史 `workspace/.run/` 已退役，不再保存微信登录态或更新锁；生产升级前必须把旧 `workspace/.run/wechat_session*.json` 移到 `workspace/channels/wechat/sessions/`，再删除空 `.run` 目录。
 
 ## Removed From Target Architecture

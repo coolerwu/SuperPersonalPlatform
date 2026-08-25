@@ -54,14 +54,15 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
             nutstore=settings.nutstore,
             context=settings.context,
         )
+    maintenance_service = MaintenanceService(active_workspace, settings.maintenance)
     schedule_service = ScheduleService(
         workspace=active_workspace,
         settings=settings,
         run_service=run_service,
         system_log_service=system_log_service,
+        maintenance_service=maintenance_service,
         webdav_context_service=webdav_context_service,
     )
-    maintenance_service = MaintenanceService(active_workspace, settings.maintenance)
     return AppContainer(
         workspace=active_workspace,
         auth_service=AuthService(AuthToken(settings.auth.token)),
@@ -116,19 +117,13 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         schedule_task: asyncio.Task | None = None
-        maintenance_task: asyncio.Task | None = None
         schedule_stop = asyncio.Event()
-        maintenance_stop = asyncio.Event()
         schedule_task = asyncio.create_task(container.schedule_service.run_forever(schedule_stop))
-        maintenance_task = asyncio.create_task(container.maintenance_service.run_forever(maintenance_stop))
         if container.wechat_channel_manager is not None:
             await container.wechat_channel_manager.auto_start_all()
         try:
             yield
         finally:
-            if maintenance_task is not None:
-                maintenance_stop.set()
-                await maintenance_task
             if schedule_task is not None:
                 schedule_stop.set()
                 await schedule_task

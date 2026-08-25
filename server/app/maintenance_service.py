@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import shutil
 from datetime import datetime, timedelta, timezone
@@ -17,15 +16,6 @@ class MaintenanceService:
     def __init__(self, workspace: Path, config: MaintenanceConfig) -> None:
         self._workspace = workspace
         self._config = config
-
-    async def run_forever(self, stop: asyncio.Event) -> None:
-        if not self._config.enabled:
-            return
-        while not stop.is_set():
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=self._config.interval_seconds)
-            except asyncio.TimeoutError:
-                await asyncio.to_thread(self.cleanup, dry_run=self._config.dry_run)
 
     def preview(self) -> dict[str, Any]:
         return self.cleanup(dry_run=True)

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from server.app.maintenance_service import MaintenanceService
 from server.app.run_service import RunService
 from server.app.system_log_service import SystemLogService
 from server.app.webdav_context_service import WebDAVContextService
@@ -17,7 +18,7 @@ from server.infrastructure.config import Settings
 
 
 SCHEDULE_STATUSES = {"idle", "running", "completed", "failed", "disabled"}
-BUILTIN_SCHEDULE_IDS = {"context_webdav_sync"}
+BUILTIN_SCHEDULE_IDS = {"context_webdav_sync", "maintenance_cleanup"}
 
 
 class ScheduleNotFoundError(Exception):
@@ -56,12 +57,14 @@ class ScheduleService:
         settings: Settings,
         run_service: RunService,
         system_log_service: SystemLogService,
+        maintenance_service: MaintenanceService | None = None,
         webdav_context_service: WebDAVContextService | None = None,
     ) -> None:
         self._workspace = workspace
         self._settings = settings
         self._run_service = run_service
         self._system_log_service = system_log_service
+        self._maintenance_service = maintenance_service
         self._webdav_context_service = webdav_context_service
         self._schedules_dir = workspace / "schedules"
         self._index_path = self._schedules_dir / "index.json"
@@ -154,19 +157,22 @@ class ScheduleService:
         if not isinstance(schedules, list):
             schedules = []
         known_ids = {str(item.get("id")) for item in schedules if isinstance(item, dict)}
-        definition = self._builtin_webdav_definition()
-        self._write_definition(definition)
-        self._ensure_state(definition)
-        if definition.id not in known_ids:
-            schedules.append(self._summary(definition, self._read_state(definition.id)))
-        else:
-            schedules = [
-                self._summary(definition, self._read_state(definition.id))
-                if isinstance(item, dict) and item.get("id") == definition.id
-                else item
-                for item in schedules
-            ]
+        for definition in self._builtin_definitions():
+            self._write_definition(definition)
+            self._ensure_state(definition)
+            if definition.id not in known_ids:
+                schedules.append(self._summary(definition, self._read_state(definition.id)))
+            else:
+                schedules = [
+                    self._summary(definition, self._read_state(definition.id))
+                    if isinstance(item, dict) and item.get("id") == definition.id
+                    else item
+                    for item in schedules
+                ]
         self._write_index_from_summaries(schedules)
+
+    def _builtin_definitions(self) -> tuple[ScheduleDefinition, ...]:
+        return (self._builtin_webdav_definition(), self._builtin_maintenance_definition())
 
     def _builtin_webdav_definition(self) -> ScheduleDefinition:
         return ScheduleDefinition(
@@ -182,6 +188,22 @@ class ScheduleService:
                 kind="interval",
                 seconds=self._settings.context.webdav_sync.interval_seconds,
             ),
+        )
+
+    def _builtin_maintenance_definition(self) -> ScheduleDefinition:
+        return ScheduleDefinition(
+            id="maintenance_cleanup",
+            type="maintenance_cleanup",
+            name="维护清理",
+            enabled=self._settings.maintenance.enabled,
+            trigger=ScheduleTrigger(
+                kind="interval",
+                seconds=self._settings.maintenance.interval_seconds,
+            ),
+            metadata={
+                "retention_days": self._settings.maintenance.retention_days,
+                "dry_run": self._settings.maintenance.dry_run,
+            },
         )
 
     async def _execute(self, definition: ScheduleDefinition, *, due_at: datetime) -> None:
@@ -246,6 +268,17 @@ class ScheduleService:
                 raise RuntimeError("webdav context sync is not enabled")
             await self._webdav_context_service.refresh()
             return {"message": "webdav context synced"}
+        if definition.type == "maintenance_cleanup":
+            if self._maintenance_service is None:
+                raise RuntimeError("maintenance cleanup is not enabled")
+            report = await asyncio.to_thread(self._maintenance_service.cleanup)
+            return {
+                "message": "maintenance cleanup completed",
+                "dry_run": report.get("dry_run", False),
+                "retention_days": report.get("retention_days"),
+                "summary": report.get("summary", {}),
+                "items": len(report.get("items") or []),
+            }
         if definition.type == "agent_run":
             if not definition.prompt.strip():
                 raise RuntimeError("schedule prompt is required")
@@ -413,6 +446,8 @@ class ScheduleService:
             "enabled": definition.enabled,
             "trigger": _trigger_payload(definition.trigger),
         }
+        if definition.metadata:
+            payload["metadata"] = definition.metadata
         if definition.type == "agent_run":
             payload.update(
                 {

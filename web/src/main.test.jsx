@@ -613,6 +613,15 @@ test("shows built-in schedules without the agent task form", async () => {
               trigger: { kind: "interval", seconds: 600 },
             },
           },
+          {
+            summary: {
+              id: "maintenance_cleanup",
+              name: "维护清理",
+              enabled: true,
+              status: "completed",
+              trigger: { kind: "interval", seconds: 86400 },
+            },
+          },
         ],
       });
     }
@@ -638,6 +647,7 @@ test("shows built-in schedules without the agent task form", async () => {
   });
 
   expect(await screen.findByText("内置任务由系统配置驱动，只能在这里查看状态或立即执行。")).toBeInTheDocument();
+  expect(screen.getByText("维护清理")).toBeInTheDocument();
   expect(screen.getByText("webdav_sync")).toBeInTheDocument();
   expect(screen.queryByLabelText("Prompt")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Agent")).not.toBeInTheDocument();

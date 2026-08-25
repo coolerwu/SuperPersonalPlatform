@@ -50,6 +50,20 @@ class FakeWebDAVContextService:
         self.calls += 1
 
 
+class FakeMaintenanceService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def cleanup(self):
+        self.calls += 1
+        return {
+            "dry_run": False,
+            "retention_days": 15,
+            "summary": {"runs": 1, "sessions": 0, "bytes": 128},
+            "items": [{"type": "runs"}],
+        }
+
+
 class FakeRunService:
     def __init__(self) -> None:
         self.created = []
@@ -72,6 +86,7 @@ def test_schedule_service_bootstraps_and_runs_webdav_sync(tmp_path) -> None:
         settings=settings,
         run_service=FakeRunService(),
         system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
         webdav_context_service=fake_webdav,
     )
 
@@ -86,6 +101,32 @@ def test_schedule_service_bootstraps_and_runs_webdav_sync(tmp_path) -> None:
     assert state["status"] == "completed"
     assert state["next_run_at"]
     assert index["schedules"][0]["id"] == "context_webdav_sync"
+    assert any(item["id"] == "maintenance_cleanup" for item in index["schedules"])
+
+
+def test_schedule_service_bootstraps_and_runs_maintenance_cleanup(tmp_path) -> None:
+    settings = parse_settings(_raw_config())
+    fake_maintenance = FakeMaintenanceService()
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=FakeRunService(),
+        system_log_service=SystemLogService(tmp_path),
+        maintenance_service=fake_maintenance,
+        webdav_context_service=FakeWebDAVContextService(),
+    )
+
+    asyncio.run(service.tick())
+
+    definition = _read_json(tmp_path / "schedules" / "maintenance_cleanup" / "definition.json")
+    state = _read_json(tmp_path / "schedules" / "maintenance_cleanup" / "state.json")
+    events = (tmp_path / "schedules" / "maintenance_cleanup" / "events.jsonl").read_text(encoding="utf-8")
+    assert fake_maintenance.calls == 1
+    assert definition["type"] == "maintenance_cleanup"
+    assert definition["trigger"]["seconds"] == 86400
+    assert definition["metadata"] == {"dry_run": False, "retention_days": 15}
+    assert state["status"] == "completed"
+    assert "maintenance cleanup completed" in events
 
 
 def test_schedule_service_runs_agent_schedule_from_files(tmp_path) -> None:
@@ -96,6 +137,7 @@ def test_schedule_service_runs_agent_schedule_from_files(tmp_path) -> None:
         settings=settings,
         run_service=run_service,
         system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
         webdav_context_service=FakeWebDAVContextService(),
     )
     service.bootstrap()
@@ -145,6 +187,7 @@ def test_schedule_service_manages_user_schedules(tmp_path) -> None:
         settings=settings,
         run_service=FakeRunService(),
         system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
         webdav_context_service=FakeWebDAVContextService(),
     )
 
