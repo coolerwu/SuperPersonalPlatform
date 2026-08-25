@@ -1,4 +1,8 @@
+import asyncio
+
+from server.domain.agent_config import ModelDefinition, ModelProvider
 from server.infrastructure.deepagent_runtime import (
+    DeepAgentRuntime,
     DeepAgentRuntimeOptions,
     RuntimeAttachment,
     RuntimeMessage,
@@ -7,7 +11,6 @@ from server.infrastructure.deepagent_runtime import (
     load_agent_files,
     persist_agent_files,
 )
-from server.domain.agent_config import ModelProvider
 
 
 def test_agent_filesystem_sync_is_limited_to_agent_workspace(tmp_path) -> None:
@@ -44,6 +47,56 @@ def test_agent_filesystem_sync_is_limited_to_agent_workspace(tmp_path) -> None:
     assert not (tmp_path / "created.txt").exists()
     assert not (tmp_path / "escape.txt").exists()
     assert not (agent_dir / "relative.txt").exists()
+
+
+def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    class FakeAgent:
+        async def ainvoke(self, input_state, config):
+            captured["input_state"] = input_state
+            captured["config"] = config
+            return {"messages": [type("Message", (), {"content": "ok"})()]}
+
+    def fake_create_deep_agent(**kwargs):
+        captured["create_kwargs"] = kwargs
+        return FakeAgent()
+
+    import deepagents
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", fake_create_deep_agent)
+    model = ModelDefinition(
+        id="default",
+        name="Default",
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="gpt-4o-mini",
+    )
+    agent_dir = tmp_path / "agents" / "default"
+    runtime = DeepAgentRuntime(
+        model,
+        context_workspace=tmp_path / "context",
+        agent_workspace=agent_dir,
+    )
+
+    result = asyncio.run(
+        runtime.run(
+            instructions="base prompt",
+            messages=(RuntimeMessage(role="user", content="hello"),),
+            options=DeepAgentRuntimeOptions(filesystem_enabled=False),
+        )
+    )
+
+    assert result == "ok"
+    assert captured["create_kwargs"]["skills"] == ["/skills/"]
+    assert captured["create_kwargs"]["backend"].cwd == agent_dir.resolve()
+    assert captured["create_kwargs"]["backend"].virtual_mode is True
+    assert type(captured["create_kwargs"]["middleware"][0]).__name__ == "TodoListMiddleware"
+    assert "store" not in captured["create_kwargs"]
+    assert "use_longterm_memory" not in captured["create_kwargs"]
+    assert "files" not in captured["input_state"]
+    assert (agent_dir / "skills").is_dir()
+    assert (agent_dir / "memories").is_dir()
 
 
 def test_longterm_memory_prompt_points_memory_requests_to_memories_path() -> None:

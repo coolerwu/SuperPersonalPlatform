@@ -5,7 +5,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
-from server.infrastructure.json_file_store import JsonFileStore
 from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
 
 
@@ -83,10 +82,14 @@ class DeepAgentRuntime:
             raise ValueError("messages are required")
         try:
             from deepagents import create_deep_agent
+            from deepagents.backends import FilesystemBackend
             from langchain_core.messages import AIMessage, HumanMessage
         except Exception as exc:
             raise RuntimeError("DeepAgent runtime requires the deepagents package") from exc
 
+        self._agent_workspace.mkdir(parents=True, exist_ok=True)
+        (self._agent_workspace / "skills").mkdir(parents=True, exist_ok=True)
+        (self._agent_workspace / "memories").mkdir(parents=True, exist_ok=True)
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
                 options.tools,
@@ -95,32 +98,25 @@ class DeepAgentRuntime:
                 tool_context=self._tool_context,
             ),
             "model": self._chat_model(),
-            "instructions": _runtime_instructions(instructions, options),
+            "system_prompt": _runtime_instructions(instructions, options),
+            "backend": FilesystemBackend(root_dir=self._agent_workspace, virtual_mode=True),
+            "skills": ["/skills/"],
         }
         name = options.name.strip()
         if name:
             create_kwargs["name"] = name
         if options.debug:
             create_kwargs["debug"] = True
-        if options.use_longterm_memory:
-            create_kwargs["store"] = JsonFileStore(self._agent_workspace / "memory" / "store.json")
-            create_kwargs["use_longterm_memory"] = True
         interrupt_on = _normalize_interrupt_on(options.interrupt_on)
         if interrupt_on:
             create_kwargs["interrupt_on"] = interrupt_on
         middleware = _deepagent_builtin_middleware(create_deep_agent, options)
         if middleware:
             create_kwargs["middleware"] = middleware
-        try:
-            agent = create_deep_agent(**create_kwargs)
-        except TypeError:
-            create_kwargs["system_prompt"] = create_kwargs.pop("instructions")
-            agent = create_deep_agent(**create_kwargs)
+        agent = create_deep_agent(**create_kwargs)
 
         input_messages = _to_langchain_messages(messages, HumanMessage, AIMessage, self._model.provider)
         input_state: dict[str, Any] = {"messages": input_messages}
-        if options.filesystem_enabled:
-            input_state["files"] = load_agent_files(self._agent_workspace)
         result = await agent.ainvoke(
             input_state,
             config={
@@ -128,8 +124,6 @@ class DeepAgentRuntime:
                 "metadata": {"assistant_id": self._agent_id},
             },
         )
-        if options.filesystem_enabled and isinstance(result, dict):
-            persist_agent_files(self._agent_workspace, result.get("files"))
         return self._extract_content(result)
 
     def _chat_model(self):
@@ -189,21 +183,11 @@ def _deepagent_builtin_middleware(create_deep_agent: Any, options: DeepAgentRunt
     middleware: list[Any] = []
     if options.todo_list and not _create_deep_agent_has_default_middleware(create_deep_agent, "TodoListMiddleware"):
         try:
-            from deepagents import TodoListMiddleware
+            from langchain.agents.middleware.todo import TodoListMiddleware
         except Exception:
             TodoListMiddleware = None
         if TodoListMiddleware is not None:
             middleware.append(TodoListMiddleware())
-    if (options.filesystem_enabled or options.use_longterm_memory) and not _create_deep_agent_has_default_middleware(
-        create_deep_agent,
-        "FilesystemMiddleware",
-    ):
-        try:
-            from deepagents import FilesystemMiddleware
-        except Exception:
-            FilesystemMiddleware = None
-        if FilesystemMiddleware is not None:
-            middleware.append(FilesystemMiddleware(long_term_memory=options.use_longterm_memory))
     return middleware
 
 

@@ -164,18 +164,22 @@ workspace/
     index.json
     assistant/
       agent.json
+      skills/
+        {skill_id}/
+          SKILL.md
       scratch/
       notes/
       artifacts/
-      memory/
-        store.json
+      memories/
     operator/
       agent.json
+      skills/
+        {skill_id}/
+          SKILL.md
       scratch/
       notes/
       artifacts/
-      memory/
-        store.json
+      memories/
 
   context/
     knowledge/
@@ -213,7 +217,9 @@ workspace/
     platform-YYYY-MM-DD.log
 ```
 
-`workspace/agents/{agent_id}/scratch`、`notes` 和 `artifacts` 是 DeepAgent 普通 filesystem 的落盘工作区；启用 Agent filesystem 后，DeepAgent 自带的 `ls/read_file/write_file/edit_file` 可读写这些文件。`memory/store.json` 是 DeepAgent `/memories/...` 长期记忆的 LangGraph store 落盘文件，不作为普通 filesystem 文件暴露给 Agent 直接编辑。
+DeepAgent 原生 filesystem 通过 `FilesystemBackend(root_dir=workspace/agents/{agent_id}, virtual_mode=True)` 锚定到单个 Agent 私有目录。Agent 看到的 `/` 就是自己的目录，可读写其中的 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/` 等内容，不能访问其它 Agent、Context、Runs、Sessions、配置文件或项目源码。
+
+每个 Agent 的私有 skill 放在 `workspace/agents/{agent_id}/skills/{skill_id}/SKILL.md`，运行时传入 `skills=["/skills/"]`。DeepAgent 会扫描包含 `SKILL.md` 的子目录；没有 skill 时只会提示 Agent 可以在 `/skills/` 创建，是否创建由 Agent 在具体任务中通过文件工具自行决定，新建 skill 通常在下一次执行开始时被重新扫描后生效。
 
 ## Run 快照
 

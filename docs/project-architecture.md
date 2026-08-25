@@ -22,7 +22,7 @@
 - 统一调度器使用 `workspace/schedules/` 落盘调度定义和状态；WebDAV Context 同步和未来 Agent 定时任务共用这一套调度机制。
 - `workspace/sessions/index.json` 维护所有长期会话索引；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
-- `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`filesystem.enabled`、`use_longterm_memory`、`interrupt_on` 和 `tools`。
+- `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`use_longterm_memory`、`interrupt_on` 和 `tools`。`filesystem.enabled` 作为配置兼容字段保留，但 DeepAgent 运行时始终把原生 filesystem 锚定到当前 Agent 私有目录。
 - 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`write_context`、`browser_extract` 和 `schedule`。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
@@ -47,11 +47,13 @@ workspace/
     index.json
     {agent_id}/
       agent.json
+      skills/
+        {skill_id}/
+          SKILL.md
       scratch/
       notes/
       artifacts/
-      memory/
-        store.json
+      memories/
 
   runs/
     index.json
@@ -183,7 +185,7 @@ POST /api/system/maintenance/run
 - 个人微信通过 Tencent iLink Bot HTTP API 接入。
 - 微信文本和图片输入都进入同一长期 session。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` 下的文本和图片统一缓冲 5 秒；窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复。模型未在 Provider 中启用 `supports_images` 时，带图片的 run 不调用 DeepAgent，直接返回清晰的模型能力提示。
 - 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
-- DeepAgent 依赖 `deepagents` 和 LangGraph；后端任务执行结果必须落盘。
+- DeepAgent 依赖 `deepagents>=0.7.8,<0.8` 和 LangGraph；后端任务执行结果必须落盘。生产依赖同时固定 `cryptography>=38,<49`，避免部署时走不兼容本机 Rust 工具链的源码构建路径。
 - `search_context` 检索 `workspace/context/knowledge/files/` 中的 `.md`、`.txt`、`.json`、`.jsonl` 文本知识，返回 `/files/...` 工具路径、分数和片段。
 - `write_context(type, absolute_path, content, mode)` 写入同一知识目录；当前只支持 `type="knowledge"`，`absolute_path` 必须是 `/files/...` 工具路径，`mode` 支持 `append`、`overwrite` 和 `create`，工具说明要求 Agent 仅在用户明确确认后调用。该工具只用于共享知识库、文档和参考资料，不用于“记住我”“存入记忆”“用户偏好”“后续对话规则”等请求。
 - Context 可配置一个坚果云 WebDAV 同步根目录 `context.webdav_sync.root_path`，远端实际路径按 `nutstore.root_path + context.webdav_sync.root_path` 解析；本地文件缓存固定落在 active workspace 的 `workspace/context/webdav/files/`，索引固定写入 `workspace/context/webdav/index.json`。
@@ -194,9 +196,11 @@ POST /api/system/maintenance/run
 - WebDAV 同步会解析 Markdown 里的 `![...](...)` 和 `<img src="...">`，把被引用的 `.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.svg` 按相对目录结构作为二进制资源缓存到 `workspace/context/webdav/files/`；这些资源不进入 `search_context` 文本索引，当前也不通过 `write_context` 写入。
 - `browser_extract(url, include_links, max_chars)` 使用 LangChain `PlayWrightBrowserToolkit` 和 Playwright headless browser 打开公开 `http/https` 页面，提取渲染后的文本和链接；后端封装会拒绝 localhost、私有网段、内网解析地址和非 `http/https` URL。浏览器启动优先使用 `browser.proxy`，未配置时回退到进程环境变量 `HTTPS_PROXY`、`HTTP_PROXY` 或 `ALL_PROXY`，导航超时由 `browser.timeout_ms` 控制，默认 60000ms。当前只暴露聚合提取工具，不直接授权点击、输入或任意导航工具。
 - `schedule(action, ...)` 是单一调度管理工具，支持 `create/list/get/update/delete`。创建时只能使用当前 Agent、当前长期 session 和当前渠道投递上下文，触发器支持 `once`、`interval` 和 `cron`；`list/get/update/delete` 只能作用于 `metadata.created_by.type="agent_tool"` 且 `agent_id/session_id` 与当前 run 一致的任务，避免 Agent 删除页面或其它会话创建的定时任务。微信来源任务执行完成后，ScheduleService 会读取 run 的 `result.json` 并调用微信通道回发结果，同时更新 run 的 `delivery.json`。
-- DeepAgent 内置 `write_todos` 由运行时保持可用；当前依赖版本的 `create_deep_agent` 默认包含 Todo List middleware，后端配置 `deepagent.todo_list` 用于记录并兼容未来需要显式 middleware 的版本。
-- DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file` 仍使用 DeepAgent 的虚拟 filesystem；当 `agents.definitions[].deepagent.filesystem.enabled=true` 时，后端在 run 开始前把 `workspace/agents/{agent_id}/` 内 UTF-8 文本文件加载为 DeepAgent `files` state，run 完成后只把该 state 写回同一 Agent 目录。该机制不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码；`workspace/agents/{agent_id}/memory/store.json` 是长期记忆底层 store 文件，不作为普通 filesystem 文件暴露给 Agent。
-- `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后后端为 DeepAgent 传入文件型 LangGraph store，落盘到 `workspace/agents/{agent_id}/memory/store.json`，并用 `assistant_id={agent_id}` 隔离 namespace；Agent 通过 DeepAgent 原生 `/memories/...` 路径读写长期记忆。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。
+- DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 等工具由 `deepagents` 默认 middleware 提供；`write_todos` 在 `deepagent.todo_list=true` 时由运行时接入 LangChain `TodoListMiddleware`。
+- DeepAgent 原生 filesystem 使用 `FilesystemBackend(root_dir=workspace/agents/{agent_id}, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录，可读写 `workspace/agents/{agent_id}/` 下的 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/` 等内容；不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制已停用。
+- 每个 Agent 的私有 skill 固定放在 `workspace/agents/{agent_id}/skills/{skill_id}/SKILL.md`，运行时传给 DeepAgent 的 `skills` 参数固定为 `["/skills/"]`。DeepAgent 会扫描该目录下包含 `SKILL.md` 的子目录并用 progressive disclosure 暴露 metadata；不再维护产品级 Skill index，也不需要在 `config.yaml` 里配置 Skill 列表。
+- DeepAgent 不会凭空自动生成 skill 文件。没有 skill 时，新版 DeepAgent 会在系统提示里告诉 Agent 可以在 `/skills/` 创建 skill；只要任务需要且模型决定这么做，它可以用内置文件工具写入 `/skills/{skill_id}/SKILL.md`。新建 skill 的 metadata 在下一次 Agent 执行开始时重新扫描后生效。
+- `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后运行时在 system prompt 中要求 Agent 通过 `/memories/...` 路径保存个人偏好、会话规则和 Agent 私有长期记忆；这些文件实际落在 `workspace/agents/{agent_id}/memories/`。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。
 - 运行时会在 Agent system prompt 中注入记忆边界：用户要求保存个人偏好、会话规则或“存入记忆”时，应调用 DeepAgent 内置 `write_file("/memories/...", ...)`；只有用户明确要求保存到知识库、文档或共享资料时才调用 `write_context`。用户询问笔记、最近笔记、同步文档、WebDAV 文件、知识库内容或 notebook 条目时，必须先调用 `search_context`；`/memories/...` 只代表 Agent 自己的长期记忆，不代表用户的同步笔记。
 - 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
 - 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据。自动执行由统一 Scheduler 的内置 `maintenance_cleanup` 任务负责，状态和事件落在 `workspace/schedules/maintenance_cleanup/`，立即清理可使用系统 API 或 `/schedules` 的立即运行按钮。
