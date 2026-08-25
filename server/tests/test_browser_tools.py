@@ -1,7 +1,8 @@
 import pytest
 
 from server.domain.tooling import get_tool_definition
-from server.infrastructure.browser_tools import BrowserToolError, _validate_public_url
+from server.infrastructure.browser_tools import BrowserToolError, _resolve_proxy, _validate_public_url
+from server.infrastructure.config import parse_settings
 from server.infrastructure.tool_runtime import build_platform_tools
 
 
@@ -11,6 +12,31 @@ def test_browser_extract_is_a_platform_tool(tmp_path) -> None:
 
     assert definition.name == "Browser Extract"
     assert tools[0].name == "browser_extract"
+
+
+def test_browser_config_parses_proxy_and_timeout() -> None:
+    settings = parse_settings(
+        {
+            "auth": {"token": "secret-token"},
+            "browser": {"proxy": "http://127.0.0.1:7890", "timeout_ms": 90000},
+        }
+    )
+
+    assert settings.browser.proxy == "http://127.0.0.1:7890"
+    assert settings.browser.timeout_ms == 90000
+
+
+def test_browser_proxy_falls_back_to_environment(monkeypatch) -> None:
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("http_proxy", raising=False)
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    monkeypatch.delenv("all_proxy", raising=False)
+    monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:7890")
+
+    assert _resolve_proxy("") == "socks5://127.0.0.1:7890"
+    assert _resolve_proxy("http://proxy.example:8080") == "http://proxy.example:8080"
 
 
 @pytest.mark.parametrize(

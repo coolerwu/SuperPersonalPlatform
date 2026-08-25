@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import socket
 from typing import Any
 from urllib.parse import urlparse
@@ -11,22 +12,36 @@ class BrowserToolError(ValueError):
     pass
 
 
-def build_browser_extract_tool() -> Any:
+def build_browser_extract_tool(*, proxy: str = "", timeout_ms: int = 60000) -> Any:
     from langchain_core.tools import StructuredTool
 
     async def browser_extract(url: str, include_links: bool = True, max_chars: int = 12000) -> str:
         """Open a public web page in a headless browser and extract rendered text."""
         _validate_public_url(url)
         max_chars = max(1000, min(int(max_chars or 12000), 50000))
+        navigation_timeout_ms = max(1000, int(timeout_ms or 60000))
         try:
             from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
             from playwright.async_api import async_playwright
         except Exception as exc:
             raise RuntimeError("browser_extract requires langchain-community and playwright") from exc
 
+        launch_kwargs: dict[str, Any] = {
+            "headless": True,
+            "args": ["--disable-dev-shm-usage", "--no-sandbox"],
+        }
+        proxy_url = _resolve_proxy(proxy)
+        if proxy_url:
+            launch_kwargs["proxy"] = {"server": proxy_url}
         playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(headless=True, args=["--disable-dev-shm-usage", "--no-sandbox"])
+        browser = await playwright.chromium.launch(**launch_kwargs)
         try:
+            browser_context = await browser.new_context()
+            browser_context.set_default_timeout(navigation_timeout_ms)
+            browser_context.set_default_navigation_timeout(navigation_timeout_ms)
+            page = await browser_context.new_page()
+            page.set_default_timeout(navigation_timeout_ms)
+            page.set_default_navigation_timeout(navigation_timeout_ms)
             toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=browser)
             tools = {tool.name: tool for tool in toolkit.get_tools()}
             navigate = tools["navigate_browser"]
@@ -65,6 +80,17 @@ def build_browser_extract_tool() -> Any:
             "Args: url, include_links=true, max_chars. Private, localhost, and internal network URLs are blocked."
         ),
     )
+
+
+def _resolve_proxy(configured_proxy: str) -> str:
+    proxy = str(configured_proxy or "").strip()
+    if proxy:
+        return proxy
+    for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _validate_public_url(url: str) -> None:

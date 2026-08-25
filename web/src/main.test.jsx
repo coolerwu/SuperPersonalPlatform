@@ -13,6 +13,9 @@ const CONFIG_YAML = [
   "server:",
   '  host: "0.0.0.0"',
   "  port: 8888",
+  "browser:",
+  '  proxy: "http://127.0.0.1:7890"',
+  "  timeout_ms: 60000",
   "llm:",
   '  default_model_id: "default"',
   "  models:",
@@ -63,6 +66,9 @@ const INDENTLESS_SEQUENCE_CONFIG_YAML = [
   "server:",
   '  host: "0.0.0.0"',
   "  port: 8888",
+  "browser:",
+  '  proxy: ""',
+  "  timeout_ms: 60000",
   "llm:",
   '  default_model_id: "ds-pro"',
   "  models:",
@@ -103,6 +109,9 @@ const TWO_PROVIDER_CONFIG_YAML = [
   "server:",
   '  host: "0.0.0.0"',
   "  port: 8888",
+  "browser:",
+  '  proxy: ""',
+  "  timeout_ms: 60000",
   "llm:",
   '  default_model_id: "primary"',
   "  models:",
@@ -330,6 +339,8 @@ test("saves system config from the dedicated config menu", async () => {
   expect(screen.getByRole("tab", { name: /Agents/ })).toBeInTheDocument();
   expect(screen.getByLabelText("访问 Token")).toHaveValue("secret-token");
   expect(screen.getByLabelText("访问 Token")).toHaveAttribute("type", "text");
+  expect(screen.getByText("浏览器抓取")).toBeInTheDocument();
+  expect(screen.getByLabelText("代理")).toHaveValue("http://127.0.0.1:7890");
   expect(screen.getByText("坚果云 WebDAV")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /测试连接/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /立即同步/ })).toBeInTheDocument();
@@ -338,12 +349,14 @@ test("saves system config from the dedicated config menu", async () => {
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("监听端口"), { target: { value: "9999" } });
+  fireEvent.change(screen.getByLabelText("代理"), { target: { value: "socks5://127.0.0.1:7890" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
   await waitFor(() => {
     const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
     expect(writeCall).toBeTruthy();
     expect(JSON.parse(writeCall[1].body).content).toContain("port: 9999");
+    expect(JSON.parse(writeCall[1].body).content).toContain('proxy: "socks5://127.0.0.1:7890"');
   });
 
   fireEvent.click(screen.getByRole("button", { name: /立即同步/ }));

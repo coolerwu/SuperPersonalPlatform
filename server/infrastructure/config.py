@@ -27,6 +27,16 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class BrowserConfig:
+    proxy: str = ""
+    timeout_ms: int = 60000
+
+    def __post_init__(self) -> None:
+        if self.timeout_ms < 1000:
+            raise ValueError("browser.timeout_ms must be at least 1000")
+
+
+@dataclass(frozen=True)
 class NutstoreConfig:
     enabled: bool = False
     base_url: str = "https://dav.jianguoyun.com/dav/"
@@ -95,6 +105,7 @@ class MaintenanceConfig:
 class Settings:
     auth: AuthConfig
     server: ServerConfig
+    browser: BrowserConfig = field(default_factory=BrowserConfig)
     nutstore: NutstoreConfig = field(default_factory=NutstoreConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
@@ -133,6 +144,7 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
             host=str(server_raw.get("host") or "0.0.0.0"),
             port=int(server_raw.get("port") or 8888),
         ),
+        browser=parse_browser_config(raw.get("browser") or {}),
         nutstore=parse_nutstore_config(nutstore_raw),
         context=parse_context_config(raw.get("context") or {}),
         maintenance=parse_maintenance_config(raw.get("maintenance") or {}),
@@ -246,6 +258,17 @@ def parse_nutstore_config(raw: Any) -> NutstoreConfig:
         username=str(raw.get("username") or "").strip(),
         password=str(raw.get("password") or "").strip(),
         root_path=str(raw.get("root_path") or "/").strip() or "/",
+    )
+
+
+def parse_browser_config(raw: Any) -> BrowserConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("browser must be an object")
+    return BrowserConfig(
+        proxy=str(raw.get("proxy") or "").strip(),
+        timeout_ms=int(raw.get("timeout_ms") or 60000),
     )
 
 

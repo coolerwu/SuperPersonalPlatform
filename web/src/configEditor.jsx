@@ -31,6 +31,7 @@ const AGENT_TOOL_CARDS = [
 const DEFAULT_CONFIG = {
   auth: { token: "" },
   server: { host: "0.0.0.0", port: 8888 },
+  browser: { proxy: "", timeout_ms: 60000 },
   llm: {
     default_model_id: "default",
     models: [
@@ -212,6 +213,32 @@ export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav, on
               value={config.server.port}
               readOnly={readOnly}
               onChange={(event) => update((next) => (next.server.port = Number(event.target.value) || 8888))}
+            />
+          </ConfigField>
+        </div>
+      </section>
+
+      <section className="config-section">
+        <div className="config-section-title">
+          <strong>浏览器抓取</strong>
+          <span>browser / Playwright</span>
+        </div>
+        <div className="config-grid">
+          <ConfigField label="代理">
+            <input
+              value={config.browser.proxy}
+              readOnly={readOnly}
+              placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
+              onChange={(event) => update((next) => (next.browser.proxy = event.target.value))}
+            />
+          </ConfigField>
+          <ConfigField label="超时毫秒">
+            <input
+              type="number"
+              min="1000"
+              value={config.browser.timeout_ms}
+              readOnly={readOnly}
+              onChange={(event) => update((next) => (next.browser.timeout_ms = Number(event.target.value) || 60000))}
             />
           </ConfigField>
         </div>
@@ -1025,6 +1052,12 @@ function withDefaults(value) {
         dry_run: Boolean(config.maintenance.dry_run),
       }
     : cloneConfig(DEFAULT_CONFIG.maintenance);
+  config.browser = isPlainObject(config.browser)
+    ? {
+        proxy: String(config.browser.proxy || ""),
+        timeout_ms: Number(config.browser.timeout_ms) || 60000,
+      }
+    : cloneConfig(DEFAULT_CONFIG.browser);
   config.context.webdav_sync.root_path = normalizePath(config.context.webdav_sync.root_path || "/");
   config.context.webdav_sync.extensions = normalizeList(config.context.webdav_sync.extensions);
   config.context.webdav_permissions = Array.isArray(config.context.webdav_permissions)

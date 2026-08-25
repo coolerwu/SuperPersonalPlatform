@@ -34,6 +34,7 @@ def build_platform_tools(
     tools = []
     service = ContextKnowledgeService(context_workspace)
     webdav_service = _webdav_context_service(context_workspace)
+    browser_config = _browser_config(context_workspace)
     for tool_id in tool_ids:
         definition = get_tool_definition(tool_id)
         if definition.id == "search_context":
@@ -41,7 +42,12 @@ def build_platform_tools(
         elif definition.id == "write_context":
             tools.append(_write_context_tool(service, webdav_service))
         elif definition.id == "browser_extract":
-            tools.append(build_browser_extract_tool())
+            tools.append(
+                build_browser_extract_tool(
+                    proxy=browser_config.get("proxy", ""),
+                    timeout_ms=int(browser_config.get("timeout_ms") or 60000),
+                )
+            )
         elif definition.id == "schedule":
             if schedule_service is None or tool_context is None:
                 continue
@@ -64,6 +70,15 @@ def _webdav_context_service(context_workspace: Path) -> WebDAVContextService | N
         nutstore=settings.nutstore,
         context=settings.context,
     )
+
+
+def _browser_config(context_workspace: Path) -> dict[str, Any]:
+    workspace = context_workspace.parent
+    try:
+        settings = load_settings(workspace / "config.yaml")
+    except Exception:
+        return {}
+    return {"proxy": settings.browser.proxy, "timeout_ms": settings.browser.timeout_ms}
 
 
 def _search_context_tool(service: ContextKnowledgeService, webdav_service: WebDAVContextService | None) -> Any:
