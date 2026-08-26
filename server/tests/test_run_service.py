@@ -128,6 +128,53 @@ def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
     assert run_index["runs"][0]["session_id"] == session.session_id
 
 
+def test_run_service_injects_prior_user_messages_as_session_context(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    session_service = SessionService(tmp_path)
+    session = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_demo",
+        agent_id="assistant",
+    )
+    session_service.append_message(
+        session.session_id,
+        role="user",
+        content="以后推荐项目时，每个项目控制在150-200字，并且重点写优点和缺点。",
+    )
+    session_service.append_message(
+        session.session_id,
+        role="assistant",
+        content="收到。",
+    )
+
+    captured = {}
+
+    async def fake_run(self, *, instructions, messages, options):
+        captured["instructions"] = instructions
+        captured["messages"] = messages
+        return "session answer"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path, session_service=session_service)
+    run = asyncio.run(
+        service.create_run(
+            content="再给我几个类似项目",
+            agent_id="assistant",
+            source="wechat",
+            session_id=session.session_id,
+        )
+    )
+    asyncio.run(service.execute_run(run["run_id"]))
+
+    assert "## Recent Session Context" in captured["instructions"]
+    assert "每个项目控制在150-200字" in captured["instructions"]
+    assert "再给我几个类似项目" not in captured["instructions"]
+    assert captured["messages"][-1].content == "再给我几个类似项目"
+
+
 def test_run_service_persists_session_image_attachments(tmp_path, monkeypatch) -> None:
     (tmp_path / "config.yaml").write_text(IMAGE_CONFIG, encoding="utf-8")
     session_service = SessionService(tmp_path)

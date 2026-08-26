@@ -26,7 +26,7 @@
 - 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`write_context`、`browser_extract` 和 `schedule`。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
-- 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 `session_id`，再创建 `source=wechat` 的 run；DeepAgent 执行前读取该 session 的历史消息，完成后由平台投递微信回复。
+- 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 `session_id`，再创建 `source=wechat` 的 run；DeepAgent 执行前读取该 session 的历史消息，并把近期用户要求额外注入 system prompt 作为同会话上下文，完成后由平台投递微信回复。
 
 ## Target Workspace Layout
 
@@ -183,7 +183,7 @@ POST /api/system/maintenance/run
 - 单 token 登录，登录状态通过 HttpOnly cookie 保存。
 - 配置从 active workspace 的 `config.yaml` 读取。
 - 个人微信通过 Tencent iLink Bot HTTP API 接入。
-- 微信文本和图片输入都进入同一长期 session。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` 下的文本和图片统一缓冲 5 秒；窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复。模型未在 Provider 中启用 `supports_images` 时，带图片的 run 不调用 DeepAgent，直接返回清晰的模型能力提示。
+- 微信文本和图片输入都进入同一长期 session。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` 下的文本和图片统一缓冲 5 秒；窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复。DeepAgent 执行时最多读取最近 120 条 session 消息，其中最近 60 条作为普通对话消息传入，同时把当前 run 之前最多 20 条用户消息压缩成 `Recent Session Context` 注入 system prompt，要求 Agent 在未被最新消息明确覆盖时继续遵守这些约束。模型未在 Provider 中启用 `supports_images` 时，带图片的 run 不调用 DeepAgent，直接返回清晰的模型能力提示。
 - 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
 - DeepAgent 依赖 `deepagents>=0.7.8,<0.8` 和 LangGraph；后端任务执行结果必须落盘。生产依赖同时固定 `cryptography>=38,<49`，避免部署时走不兼容本机 Rust 工具链的源码构建路径。
 - `search_context` 检索 `workspace/context/knowledge/files/` 中的 `.md`、`.txt`、`.json`、`.jsonl` 文本知识，返回 `/files/...` 工具路径、分数和片段。
