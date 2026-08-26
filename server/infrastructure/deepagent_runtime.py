@@ -8,10 +8,26 @@ from server.domain.agent_config import ModelDefinition, ModelProvider
 from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
 
 
-LONGTERM_MEMORY_PROMPT = """## Long-term Memory Boundary
+MEMORY_INDEX_PATH = "/memories/AGENTS.md"
+DEFAULT_MEMORY_INDEX = """# Memory Index
 
-When the user asks you to remember something, save a preference, keep a rule for future conversations, or store agent-specific memory, use the built-in `write_file` tool with a `/memories/...` path.
-Do not use `write_context` for these memory requests.
+This file is loaded automatically as the agent's long-term memory index.
+
+## Stable Preferences
+
+- Add durable user preferences and collaboration rules here.
+- Do not store passwords, API keys, access tokens, or other credentials.
+
+## References
+
+- Store larger or task-specific notes in sibling files or subdirectories under `/memories/`.
+- When a detail is not present here, use `ls` and `read_file` to inspect `/memories/` before assuming it is unknown.
+"""
+
+LONGTERM_MEMORY_PROMPT = """## Platform Memory Boundary
+
+DeepAgent memory is loaded from `/memories/AGENTS.md`. Follow the injected memory guidelines for saving agent-specific memory.
+Do not use `write_context` for personal memory, user preferences, future conversation rules, or "remember this" requests.
 
 Use `write_context` only when the user explicitly asks to save shared knowledge, documentation, reference material, or knowledge-base content under workspace/context/knowledge/files.
 
@@ -90,6 +106,7 @@ class DeepAgentRuntime:
         self._agent_workspace.mkdir(parents=True, exist_ok=True)
         (self._agent_workspace / "skills").mkdir(parents=True, exist_ok=True)
         (self._agent_workspace / "memories").mkdir(parents=True, exist_ok=True)
+        memory_sources = _longterm_memory_sources(self._agent_workspace, options)
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
                 options.tools,
@@ -102,6 +119,8 @@ class DeepAgentRuntime:
             "backend": FilesystemBackend(root_dir=self._agent_workspace, virtual_mode=True),
             "skills": ["/skills/"],
         }
+        if memory_sources:
+            create_kwargs["memory"] = memory_sources
         name = options.name.strip()
         if name:
             create_kwargs["name"] = name
@@ -169,6 +188,16 @@ def _runtime_instructions(instructions: str, options: DeepAgentRuntimeOptions) -
     if not options.use_longterm_memory:
         return base
     return f"{base}\n\n{LONGTERM_MEMORY_PROMPT}".strip()
+
+
+def _longterm_memory_sources(agent_workspace: Path, options: DeepAgentRuntimeOptions) -> list[str]:
+    if not options.use_longterm_memory:
+        return []
+    memory_index = agent_workspace / "memories" / "AGENTS.md"
+    if not memory_index.exists():
+        memory_index.parent.mkdir(parents=True, exist_ok=True)
+        memory_index.write_text(DEFAULT_MEMORY_INDEX, encoding="utf-8")
+    return [MEMORY_INDEX_PATH]
 
 
 def _normalize_interrupt_on(value: Any) -> dict[str, bool] | None:

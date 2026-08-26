@@ -54,6 +54,7 @@ workspace/
       notes/
       artifacts/
       memories/
+        AGENTS.md
 
   runs/
     index.json
@@ -203,8 +204,8 @@ POST /api/system/maintenance/run
 - DeepAgent 原生 filesystem 使用 `FilesystemBackend(root_dir=workspace/agents/{agent_id}, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录，可读写 `workspace/agents/{agent_id}/` 下的 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/` 等内容；不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制已停用。
 - 每个 Agent 的私有 skill 固定放在 `workspace/agents/{agent_id}/skills/{skill_id}/SKILL.md`，运行时传给 DeepAgent 的 `skills` 参数固定为 `["/skills/"]`。DeepAgent 会扫描该目录下包含 `SKILL.md` 的子目录并用 progressive disclosure 暴露 metadata；不再维护产品级 Skill index，也不需要在 `config.yaml` 里配置 Skill 列表。
 - DeepAgent 不会凭空自动生成 skill 文件。没有 skill 时，新版 DeepAgent 会在系统提示里告诉 Agent 可以在 `/skills/` 创建 skill；只要任务需要且模型决定这么做，它可以用内置文件工具写入 `/skills/{skill_id}/SKILL.md`。新建 skill 的 metadata 在下一次 Agent 执行开始时重新扫描后生效。
-- `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后运行时在 system prompt 中要求 Agent 通过 `/memories/...` 路径保存个人偏好、会话规则和 Agent 私有长期记忆；这些文件实际落在 `workspace/agents/{agent_id}/memories/`。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。
-- 运行时会在 Agent system prompt 中注入记忆边界：用户要求保存个人偏好、会话规则或“存入记忆”时，应调用 DeepAgent 内置 `write_file("/memories/...", ...)`；只有用户明确要求保存到知识库、文档或共享资料时才调用 `write_context`。用户询问笔记、最近笔记、同步文档、WebDAV 文件、知识库内容或 notebook 条目时，必须先调用 `search_context`；`/memories/...` 只代表 Agent 自己的长期记忆，不代表用户的同步笔记。
+- `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后运行时会确保 `workspace/agents/{agent_id}/memories/AGENTS.md` 存在，并通过 DeepAgent 原生 `memory=["/memories/AGENTS.md"]` 启用 `MemoryMiddleware` 加载和维护这一个长期记忆索引文件；其它 `/memories/...` 细节文件不自动注入，Agent 需要时可用内置文件工具自行查找和读取。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。
+- 运行时会在 Agent system prompt 中注入平台记忆边界：Agent 特定记忆按 DeepAgent `MemoryMiddleware` 注入的 memory guidelines 更新 `/memories/AGENTS.md`；只有用户明确要求保存到知识库、文档或共享资料时才调用 `write_context`。用户询问笔记、最近笔记、同步文档、WebDAV 文件、知识库内容或 notebook 条目时，必须先调用 `search_context`；`/memories/...` 只代表 Agent 自己的长期记忆，不代表用户的同步笔记。
 - 历史 `workspace/agents/{agent_id}/memory/store.json` 是旧版 DeepAgent store 遗留路径，不由运行时代码或迁移脚本自动处理。按用户偏好，旧 workspace 数据收敛直接在目标机器上做一次性文件操作；配置页只展示新版 `workspace/agents/{agent_id}/memories/`。
 - 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
 - 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据。自动执行由统一 Scheduler 的内置 `maintenance_cleanup` 任务负责，状态和事件落在 `workspace/schedules/maintenance_cleanup/`，立即清理可使用系统 API 或 `/schedules` 的立即运行按钮。
