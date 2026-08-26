@@ -159,33 +159,26 @@ class RunService:
             fallback_attachments=fallback_attachments,
             workspace=self._workspace,
         )
+        downgraded_image_count = 0
+        if any(message.has_images for message in runtime_messages) and not model.supports_images:
+            runtime_messages, downgraded_image_count = _textify_image_attachments(
+                runtime_messages,
+                workspace=self._workspace,
+            )
         session_context = _session_context_instructions(history, current_run_id=run_id)
         effective_system_prompt = _join_prompt_sections(system_prompt, session_context)
         runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
         self._set_state(run_id, "running")
         self._append_event(run_id, "running", {"message": "DeepAgent started"})
-
-        if any(message.has_images for message in runtime_messages) and not model.supports_images:
-            result = "当前 Agent 使用的模型未开启图片能力，无法处理微信图片输入。请在 Providers 中选择支持图片的模型并启用 supports_images。"
-            result_payload = {
-                "run_id": run_id,
-                "status": "completed",
-                "content": result,
-                "completed_at": _now(),
-            }
-            _write_json(self._run_dir(run_id) / "result.json", result_payload)
-            if session_id and self._session_service is not None:
-                self._session_service.append_message(
-                    session_id,
-                    role="assistant",
-                    content=result,
-                    run_id=run_id,
-                    metadata={"source": run_input.get("source", "api")},
-                )
-            self._set_state(run_id, "completed")
-            self._append_event(run_id, "completed", {"message": "model does not support image input"})
-            self._set_delivery(run_id, "ready")
-            return self.get_run(run_id)
+        if downgraded_image_count:
+            self._append_event(
+                run_id,
+                "image_attachments_textified",
+                {
+                    "message": "model does not support image input; image binaries were removed and metadata was passed as text",
+                    "items": downgraded_image_count,
+                },
+            )
 
         try:
             result = await DeepAgentRuntime(
@@ -495,6 +488,57 @@ def _runtime_messages(
             )
         )
     return tuple(messages)
+
+
+def _textify_image_attachments(
+    messages: tuple[RuntimeMessage, ...],
+    *,
+    workspace: Path,
+) -> tuple[tuple[RuntimeMessage, ...], int]:
+    textified: list[RuntimeMessage] = []
+    total_images = 0
+    for message in messages:
+        image_attachments = tuple(attachment for attachment in message.attachments if attachment.is_image)
+        if not image_attachments:
+            textified.append(message)
+            continue
+        total_images += len(image_attachments)
+        non_image_attachments = tuple(attachment for attachment in message.attachments if not attachment.is_image)
+        textified.append(
+            RuntimeMessage(
+                role=message.role,
+                content=_join_prompt_sections(message.content, _image_attachment_notice(image_attachments, workspace=workspace)),
+                attachments=non_image_attachments,
+            )
+        )
+    return tuple(textified), total_images
+
+
+def _image_attachment_notice(attachments: tuple[RuntimeAttachment, ...], *, workspace: Path) -> str:
+    lines = [
+        "[系统附件说明]",
+        f"用户发送了 {len(attachments)} 张图片，但当前 Agent 主模型未开启图片能力。系统没有读取图片画面内容，已去掉图片二进制，仅保留附件元信息。",
+    ]
+    for index, attachment in enumerate(attachments, start=1):
+        lines.append(f"- image {index}: {_image_attachment_metadata(attachment, workspace=workspace)}")
+    return "\n".join(lines)
+
+
+def _image_attachment_metadata(attachment: RuntimeAttachment, *, workspace: Path) -> str:
+    parts = [
+        f"filename={attachment.filename or attachment.path.name}",
+        f"mime={attachment.mime}",
+    ]
+    try:
+        parts.append(f"size={attachment.path.stat().st_size} bytes")
+    except OSError:
+        pass
+    try:
+        relative_path = attachment.path.resolve().relative_to(workspace.resolve()).as_posix()
+        parts.append(f"workspace_path={relative_path}")
+    except ValueError:
+        pass
+    return ", ".join(parts)
 
 
 def _session_context_instructions(history: list[dict[str, Any]], *, current_run_id: str) -> str:

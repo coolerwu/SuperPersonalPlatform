@@ -227,7 +227,7 @@ def test_run_service_persists_session_image_attachments(tmp_path, monkeypatch) -
     assert messages[0]["attachments"][0]["filename"] == "photo.png"
 
 
-def test_run_service_returns_clear_message_when_model_does_not_support_images(tmp_path, monkeypatch) -> None:
+def test_run_service_textifies_images_when_model_does_not_support_images(tmp_path, monkeypatch) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
     session_service = SessionService(tmp_path)
     session = session_service.get_or_create(
@@ -238,8 +238,11 @@ def test_run_service_returns_clear_message_when_model_does_not_support_images(tm
         agent_id="assistant",
     )
 
+    captured = {}
+
     async def fake_run(self, *, instructions, messages, options):
-        raise AssertionError("DeepAgent should not run when image input is unsupported")
+        captured["messages"] = messages
+        return "text-only answer"
 
     monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
 
@@ -264,7 +267,16 @@ def test_run_service_returns_clear_message_when_model_does_not_support_images(tm
     completed = asyncio.run(service.execute_run(run["run_id"]))
 
     assert completed["state"]["status"] == "completed"
-    assert "未开启图片能力" in completed["result"]["content"]
+    assert completed["result"]["content"] == "text-only answer"
+    message = captured["messages"][-1]
+    assert message.attachments == ()
+    assert "当前 Agent 主模型未开启图片能力" in message.content
+    assert "系统没有读取图片画面内容" in message.content
+    assert "filename=photo.png" in message.content
+    assert "mime=image/png" in message.content
+    assert f"workspace_path=sessions/{session.session_id}/attachments/" in message.content
+    event_types = [event["type"] for event in service.get_events(run["run_id"], after=0)]
+    assert "image_attachments_textified" in event_types
 
 
 def test_run_service_rejects_unknown_session_before_writing_run(tmp_path) -> None:

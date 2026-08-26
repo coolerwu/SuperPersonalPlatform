@@ -183,7 +183,7 @@ POST /api/system/maintenance/run
 - 单 token 登录，登录状态通过 HttpOnly cookie 保存。
 - 配置从 active workspace 的 `config.yaml` 读取。
 - 个人微信通过 Tencent iLink Bot HTTP API 接入。
-- 微信文本和图片输入都进入同一长期 session。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` 下的文本和图片统一缓冲 5 秒；窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复。图片解析支持 iLink 的 `image_item`/`file_item`、base64/data URL、直接媒体 URL，以及 `media.encrypt_query_param`/`aeskey` 形式的 CDN 加密媒体；下载或解密失败会记录 `image_warning` 日志而不是静默丢失。DeepAgent 执行时最多读取最近 120 条 session 消息，其中最近 60 条作为普通对话消息传入，同时把当前 run 之前最多 20 条用户消息压缩成 `Recent Session Context` 注入 system prompt，要求 Agent 在未被最新消息明确覆盖时继续遵守这些约束。模型未在 Provider 中启用 `supports_images` 时，带图片的 run 不调用 DeepAgent，直接返回清晰的模型能力提示。
+- 微信文本和图片输入都进入同一长期 session。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` 下的文本和图片统一缓冲 5 秒；窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复。图片解析支持 iLink 的 `image_item`/`file_item`、base64/data URL、直接媒体 URL，以及 `media.encrypt_query_param`/`aeskey` 形式的 CDN 加密媒体；下载或解密失败会记录 `image_warning` 日志而不是静默丢失。DeepAgent 执行时最多读取最近 120 条 session 消息，其中最近 60 条作为普通对话消息传入，同时把当前 run 之前最多 20 条用户消息压缩成 `Recent Session Context` 注入 system prompt，要求 Agent 在未被最新消息明确覆盖时继续遵守这些约束。模型未在 Provider 中启用 `supports_images` 时，后端不会把图片二进制或 `image_url` 传给 DeepAgent，而是把图片附件文件名、MIME、大小和 workspace 路径追加为文本说明后继续调用当前主模型；该降级不读取图片画面内容。
 - 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
 - DeepAgent 依赖 `deepagents>=0.7.8,<0.8` 和 LangGraph；后端任务执行结果必须落盘。生产依赖同时固定 `cryptography>=38,<49`，避免部署时走不兼容本机 Rust 工具链的源码构建路径。
 - `search_context` 检索 `workspace/context/knowledge/files/` 中的 `.md`、`.txt`、`.json`、`.jsonl` 文本知识，返回 `/files/...` 工具路径、分数和片段。
