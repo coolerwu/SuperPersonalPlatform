@@ -868,7 +868,7 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                     value={
                       agent.deepagent?.use_longterm_memory === false
                         ? "disabled"
-                        : `workspace/agents/${agent.id || "{agent_id}"}/memory/store.json`
+                        : `workspace/agents/${agent.id || "{agent_id}"}/memories/`
                     }
                     readOnly={readOnly}
                     disabled

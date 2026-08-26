@@ -81,6 +81,10 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
 - Do not commit `config.yaml`, virtualenvs, caches, or dependency directories.
 - Treat `web/dist` as commit-worthy only when the frontend build output changed
   as part of the task or deployment path.
+- For one-time cleanup or consolidation of existing workspace data, do not add
+  runtime migration code or migration scripts unless the user explicitly asks;
+  perform a controlled one-time operation on the target machine and verify
+  non-sensitive before/after state instead.
 - If a user asks to adjust this commit workflow, update both `AGENTS.md` and
   this skill before continuing the commit.
 - Include the exact test commands, push outcome, and production restart outcome

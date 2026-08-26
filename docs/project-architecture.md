@@ -202,6 +202,7 @@ POST /api/system/maintenance/run
 - DeepAgent 不会凭空自动生成 skill 文件。没有 skill 时，新版 DeepAgent 会在系统提示里告诉 Agent 可以在 `/skills/` 创建 skill；只要任务需要且模型决定这么做，它可以用内置文件工具写入 `/skills/{skill_id}/SKILL.md`。新建 skill 的 metadata 在下一次 Agent 执行开始时重新扫描后生效。
 - `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后运行时在 system prompt 中要求 Agent 通过 `/memories/...` 路径保存个人偏好、会话规则和 Agent 私有长期记忆；这些文件实际落在 `workspace/agents/{agent_id}/memories/`。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。
 - 运行时会在 Agent system prompt 中注入记忆边界：用户要求保存个人偏好、会话规则或“存入记忆”时，应调用 DeepAgent 内置 `write_file("/memories/...", ...)`；只有用户明确要求保存到知识库、文档或共享资料时才调用 `write_context`。用户询问笔记、最近笔记、同步文档、WebDAV 文件、知识库内容或 notebook 条目时，必须先调用 `search_context`；`/memories/...` 只代表 Agent 自己的长期记忆，不代表用户的同步笔记。
+- 历史 `workspace/agents/{agent_id}/memory/store.json` 是旧版 DeepAgent store 遗留路径，不由运行时代码或迁移脚本自动处理。按用户偏好，旧 workspace 数据收敛直接在目标机器上做一次性文件操作；配置页只展示新版 `workspace/agents/{agent_id}/memories/`。
 - 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
 - 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据。自动执行由统一 Scheduler 的内置 `maintenance_cleanup` 任务负责，状态和事件落在 `workspace/schedules/maintenance_cleanup/`，立即清理可使用系统 API 或 `/schedules` 的立即运行按钮。
 - 生产更新锁文件固定写入 `workspace/logs/update-service.lock`。历史 `workspace/.run/` 已退役，不再保存微信登录态或更新锁；生产升级前必须把旧 `workspace/.run/wechat_session*.json` 移到 `workspace/channels/wechat/sessions/`，再删除空 `.run` 目录。
