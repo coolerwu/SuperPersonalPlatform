@@ -71,6 +71,72 @@ def test_platform_tool_runtime_builds_search_and_write_tools(tmp_path) -> None:
     assert json.loads(search_result)["hits"][0]["path"] == "/files/runtime.md"
 
 
+def test_search_session_tool_scopes_to_current_session(tmp_path) -> None:
+    from server.app.session_service import SessionService
+
+    session_service = SessionService(tmp_path)
+    current = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_current",
+        agent_id="assistant",
+    )
+    other = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_other",
+        agent_id="assistant",
+    )
+    session_service.append_message(
+        current.session_id,
+        role="user",
+        content="刚才那张截图里提到 Lang Community 和财经新闻。",
+        run_id="run_current",
+    )
+    session_service.append_message(
+        other.session_id,
+        role="user",
+        content="Lang Community 这个词在别的会话里也出现过。",
+        run_id="run_other",
+    )
+    tools = {
+        tool.name: tool
+        for tool in build_platform_tools(
+            ("search_session",),
+            context_workspace=tmp_path / "context",
+            tool_context=PlatformToolContext(
+                run_id="run_current",
+                source="wechat",
+                agent_id="assistant",
+                session_id=current.session_id,
+                metadata={},
+            ),
+        )
+    }
+
+    result = json.loads(tools["search_session"].invoke({"query": "Lang Community", "top_k": 5}))
+
+    assert result["session_id"] == current.session_id
+    assert [hit["run_id"] for hit in result["hits"]] == ["run_current"]
+    assert "财经新闻" in result["hits"][0]["content"]
+
+
+def test_lang_community_tools_are_registered_without_network_calls(tmp_path) -> None:
+    tools = {
+        tool.name: tool
+        for tool in build_platform_tools(
+            ("arxiv", "yahoo_finance_news"),
+            context_workspace=tmp_path / "context",
+        )
+    }
+
+    assert set(tools) == {"arxiv", "yahoo_finance_news"}
+    assert "3 seconds" in tools["arxiv"].description
+    assert "ticker" in tools["yahoo_finance_news"].description
+
+
 def test_search_context_returns_recent_webdav_documents_for_recent_notes(tmp_path) -> None:
     context_workspace = tmp_path / "context"
     webdav_cache = context_workspace / "webdav"

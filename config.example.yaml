@@ -75,7 +75,10 @@ agents:
           root: "agent"
           mode: "read_write"
         use_longterm_memory: true
-        tools: []
+        tools:
+          - search_session
+          - arxiv
+          - yahoo_finance_news
         interrupt_on: []
         middleware: []
         subagents: []

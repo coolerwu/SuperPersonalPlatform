@@ -20,6 +20,21 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         description="Search local context files and synced readable WebDAV permission paths for relevant knowledge.",
     ),
     ToolDefinition(
+        id="search_session",
+        name="Search Session",
+        description="Search the current conversation session history by keyword.",
+    ),
+    ToolDefinition(
+        id="arxiv",
+        name="arXiv",
+        description="Search arXiv papers with a built-in 3 second request interval.",
+    ),
+    ToolDefinition(
+        id="yahoo_finance_news",
+        name="Yahoo Finance News",
+        description="Fetch lightweight Yahoo Finance news for a public ticker.",
+    ),
+    ToolDefinition(
         id="write_context",
         name="Write Context",
         description="Write approved knowledge into local context files or writable non-protected WebDAV permission paths.",

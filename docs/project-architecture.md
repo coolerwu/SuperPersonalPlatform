@@ -23,7 +23,7 @@
 - `workspace/sessions/index.json` 维护所有长期会话索引；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
 - `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`use_longterm_memory`、`interrupt_on` 和 `tools`。`filesystem.enabled` 作为配置兼容字段保留，但 DeepAgent 运行时始终把原生 filesystem 锚定到当前 Agent 私有目录。
-- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`write_context`、`browser_extract` 和 `schedule`。
+- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`search_session`、`arxiv`、`yahoo_finance_news`、`write_context`、`browser_extract` 和 `schedule`。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
 - 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 `session_id`，再创建 `source=wechat` 的 run；DeepAgent 执行前读取该 session 的历史消息，并把近期用户要求额外注入 system prompt 作为同会话上下文，完成后由平台投递微信回复。
@@ -170,7 +170,7 @@ POST /api/system/maintenance/run
 - `/config` 基础配置栏目还维护 `maintenance` 清理配置，默认启用、保留 15 天、每天运行一次；也可设置为 dry run 只预览不删除。
 - `/config` 的 Context WebDAV 同步区域提供“测试连接”和“立即同步”操作；测试连接使用当前表单草稿测试 WebDAV，不保存配置且不回传 secret；立即同步调用后端手动同步接口读取已保存的 `workspace/config.yaml`，立刻把坚果云远端文件缓存到 `workspace/context/webdav/` 并返回文本/图片资源数量；保存配置本身仍只负责校验并写回 `config.yaml`。
 - `/providers` 是配置页内的模型 Provider 栏目直达入口，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
-- `/agent-config` 是配置页内的 Agent 栏目直达入口，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、需要确认的 `write_context`、浏览器提取工具 `browser_extract` 和用于对话式创建定时任务的 `schedule`；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
+- `/agent-config` 是配置页内的 Agent 栏目直达入口，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、当前会话历史检索工具 `search_session`、学术检索工具 `arxiv`、轻量财经新闻工具 `yahoo_finance_news`、需要确认的 `write_context`、浏览器提取工具 `browser_extract` 和用于对话式创建定时任务的 `schedule`；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
 - `/schedules` 是定时任务管理页面，读取 `workspace/schedules/index.json` 和每个任务详情，支持查看内置 WebDAV 同步任务和维护清理任务、创建/编辑/删除 Agent 定时任务、启用/停用、立即运行和查看调度事件；任务创建表单只暴露 `prompt + agent + trigger` 等必要字段，不在前端执行 Agent。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供新增、删除、启动和停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
 - `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录态继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存，不作为聊天历史；长期聊天会话统一写入 `workspace/sessions/{session_id}/`。
@@ -187,6 +187,9 @@ POST /api/system/maintenance/run
 - 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
 - DeepAgent 依赖 `deepagents>=0.7.8,<0.8` 和 LangGraph；后端任务执行结果必须落盘。生产依赖同时固定 `cryptography>=38,<49`，避免部署时走不兼容本机 Rust 工具链的源码构建路径。
 - `search_context` 检索 `workspace/context/knowledge/files/` 中的 `.md`、`.txt`、`.json`、`.jsonl` 文本知识，返回 `/files/...` 工具路径、分数和片段。
+- `search_session(query, top_k, role)` 只检索当前 run 的 `session_id` 对应 `workspace/sessions/{session_id}/messages.jsonl`，不允许 Agent 指定其它 session。该工具用于用户引用“刚才/前面/之前/那张图/那个链接”等同一微信或 API 长期会话中的历史消息时，按关键词返回消息序号、角色、时间、run ID、片段和附件元数据。
+- `arxiv(query, top_k)` 使用 LangChain Community 的 arXiv wrapper 检索论文，依赖 `arxiv` 包，运行时内置全局 3 秒请求间隔，作为免费学术/知识工具授权给需要的 Agent。
+- `yahoo_finance_news(ticker, top_k)` 使用 LangChain Community 的 Yahoo Finance News 工具和 `yfinance` 获取公开股票代码相关新闻，定位为轻量财经新闻上下文，不作为交易级行情或完整市场数据源。
 - `write_context(type, absolute_path, content, mode)` 写入同一知识目录；当前只支持 `type="knowledge"`，`absolute_path` 必须是 `/files/...` 工具路径，`mode` 支持 `append`、`overwrite` 和 `create`，工具说明要求 Agent 仅在用户明确确认后调用。该工具只用于共享知识库、文档和参考资料，不用于“记住我”“存入记忆”“用户偏好”“后续对话规则”等请求。
 - Context 可配置一个坚果云 WebDAV 同步根目录 `context.webdav_sync.root_path`，远端实际路径按 `nutstore.root_path + context.webdav_sync.root_path` 解析；本地文件缓存固定落在 active workspace 的 `workspace/context/webdav/files/`，索引固定写入 `workspace/context/webdav/index.json`。
 - WebDAV 同步触发已纳入统一调度器：启动时后端会根据 `nutstore.enabled`、`context.webdav_sync.enabled`、`context.webdav_sync.interval_seconds` 和权限配置生成/更新内置 `workspace/schedules/context_webdav_sync/definition.json`；调度轮询间隔固定为 5 秒，但实际同步间隔仍由 `context.webdav_sync.interval_seconds` 控制，且配置校验要求不少于 60 秒。
@@ -232,7 +235,7 @@ POST /api/system/maintenance/run
 
 - `AGENTS.md` 是仓库级 Codex 指令入口。
 - `config.example.yaml` 是 workspace 配置模板，不得放入真实密钥。
-- 使用 `browser_extract` 需要安装 Python 依赖 `langchain-community`、`playwright`、`beautifulsoup4` 和 `lxml`；`run.sh dev/prod` 会在依赖安装后检查并执行 `python -m playwright install chromium` 准备浏览器二进制。
+- 使用平台工具需要安装对应 Python 依赖：`browser_extract` 依赖 `langchain-community`、`playwright`、`beautifulsoup4` 和 `lxml`；`arxiv` 依赖 `langchain-community` 和 `arxiv`；`yahoo_finance_news` 依赖 `langchain-community` 和 `yfinance`。`run.sh dev/prod` 会在依赖安装后检查并执行 `python -m playwright install chromium` 准备浏览器二进制。
 - 当前生产 systemd unit 直接运行 `.venv/bin/python -m server`，单独 `systemctl restart` 不会安装新依赖；提交后远端部署必须在 pull 和 HEAD 校验之后执行 `.venv/bin/python -m pip install .`，并确保 Playwright Chromium 已安装，再重启服务。
 - `config.yaml` 属于本地 workspace 数据，不提交。
 - 开发启动使用 `./run-dev.sh` 或 `./run.sh dev`。

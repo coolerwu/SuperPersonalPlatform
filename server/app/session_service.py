@@ -216,6 +216,28 @@ class SessionService:
                 messages.append(item)
         return messages[-limit:]
 
+    def search_messages(
+        self,
+        session_id: str,
+        *,
+        query: str,
+        limit: int = 8,
+        role: str = "",
+    ) -> list[dict[str, Any]]:
+        messages = self.read_messages(session_id, limit=5000)
+        normalized_role = str(role or "").strip().lower()
+        max_items = min(max(int(limit or 8), 1), 20)
+        scored: list[tuple[int, dict[str, Any]]] = []
+        for message in messages:
+            if normalized_role and str(message.get("role") or "").lower() != normalized_role:
+                continue
+            score = _message_search_score(message, query)
+            if score <= 0:
+                continue
+            scored.append((score, message))
+        scored.sort(key=lambda item: (item[0], int(item[1].get("seq") or 0)), reverse=True)
+        return [message for _, message in scored[:max_items]]
+
     def exists(self, session_id: str) -> bool:
         return (self._session_dir(session_id) / "state.json").exists()
 
@@ -271,6 +293,24 @@ def _safe_part(value: str) -> str:
 def _safe_filename(value: str) -> str:
     safe = _SAFE_ID_RE.sub("_", Path(value or "").name).strip("._-")
     return safe[:120] or "attachment"
+
+
+def _message_search_score(message: dict[str, Any], query: str) -> int:
+    content = str(message.get("content") or "")
+    normalized_content = content.lower()
+    normalized_query = str(query or "").strip().lower()
+    if not normalized_query:
+        return 1
+    score = 0
+    if normalized_query in normalized_content:
+        score += 10 + normalized_content.count(normalized_query)
+    terms = [term for term in re.split(r"\s+", normalized_query) if term]
+    for term in terms:
+        if len(term) < 2:
+            continue
+        if term in normalized_content:
+            score += 2 + normalized_content.count(term)
+    return score
 
 
 def _attachment_bytes(attachment: dict[str, Any]) -> bytes:

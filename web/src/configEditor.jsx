@@ -9,6 +9,24 @@ const AGENT_TOOL_CARDS = [
     badge: "只读",
   },
   {
+    id: "search_session",
+    name: "Search Session",
+    summary: "按关键词检索当前会话历史，用于关联前文要求、图片和链接。",
+    badge: "会话",
+  },
+  {
+    id: "arxiv",
+    name: "arXiv",
+    summary: "搜索 arXiv 论文摘要和链接，内置 3 秒请求间隔。",
+    badge: "学术",
+  },
+  {
+    id: "yahoo_finance_news",
+    name: "Yahoo Finance News",
+    summary: "按股票代码获取轻量财经新闻，不作为交易级数据源。",
+    badge: "财经",
+  },
+  {
     id: "write_context",
     name: "Write Context",
     summary: "用户确认后写入 /files/... 或可写 WebDAV 权限路径。",

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,10 +12,16 @@ from pathlib import Path
 from typing import Any
 
 from server.app.context_knowledge_service import ContextKnowledgeService
+from server.app.session_service import SessionService
 from server.app.webdav_context_service import WebDAVContextService, run_async
 from server.domain.tooling import get_tool_definition
 from server.infrastructure.browser_tools import build_browser_extract_tool
 from server.infrastructure.config import load_settings
+
+
+_ARXIV_RATE_LIMIT_SECONDS = 3.0
+_ARXIV_RATE_LIMIT_LOCK = threading.Lock()
+_LAST_ARXIV_REQUEST_AT = 0.0
 
 
 @dataclass(frozen=True)
@@ -39,6 +48,14 @@ def build_platform_tools(
         definition = get_tool_definition(tool_id)
         if definition.id == "search_context":
             tools.append(_search_context_tool(service, webdav_service))
+        elif definition.id == "search_session":
+            if tool_context is None:
+                continue
+            tools.append(_search_session_tool(SessionService(context_workspace.parent), tool_context))
+        elif definition.id == "arxiv":
+            tools.append(_arxiv_tool())
+        elif definition.id == "yahoo_finance_news":
+            tools.append(_yahoo_finance_news_tool())
         elif definition.id == "write_context":
             tools.append(_write_context_tool(service, webdav_service))
         elif definition.id == "browser_extract":
@@ -177,6 +194,145 @@ def _write_context_tool(service: ContextKnowledgeService, webdav_service: WebDAV
             "Only use after explicit user approval."
         ),
     )
+
+
+def _search_session_tool(session_service: SessionService, tool_context: PlatformToolContext) -> Any:
+    from langchain_core.tools import StructuredTool
+
+    def search_session(query: str, top_k: int = 8, role: str = "") -> str:
+        """Search the current conversation's saved session messages by keyword.
+
+        This tool is scoped to the active run's session_id. It cannot search another conversation.
+        Use it when the user refers to earlier messages, constraints, images, links, or decisions from this same chat.
+        """
+        session_id = str(tool_context.session_id or "").strip()
+        if not session_id:
+            return json.dumps(
+                {
+                    "hits": [],
+                    "message": "This run has no session_id, so there is no conversation history to search.",
+                },
+                ensure_ascii=False,
+            )
+        if not session_service.exists(session_id):
+            return json.dumps({"hits": [], "message": "Current session does not exist."}, ensure_ascii=False)
+        hits = session_service.search_messages(
+            session_id,
+            query=str(query or ""),
+            limit=min(max(int(top_k or 8), 1), 20),
+            role=str(role or ""),
+        )
+        return json.dumps(
+            {
+                "session_id": session_id,
+                "hits": [_public_session_message(message) for message in hits],
+            },
+            ensure_ascii=False,
+        )
+
+    return StructuredTool.from_function(
+        search_session,
+        name="search_session",
+        description=(
+            "Search the current conversation session history by keyword. "
+            "The session is automatically scoped to the current run; do not provide a session_id. "
+            "Use this when the user says things like '刚才', '前面', '之前', '那张图', '那个链接', or refers to prior constraints. "
+            "Args: query, top_k, optional role ('user' or 'assistant')."
+        ),
+    )
+
+
+def _public_session_message(message: dict[str, Any]) -> dict[str, Any]:
+    attachments = message.get("attachments") if isinstance(message.get("attachments"), list) else []
+    return {
+        "seq": message.get("seq"),
+        "role": message.get("role", ""),
+        "created_at": message.get("created_at", ""),
+        "run_id": message.get("run_id", ""),
+        "content": _message_snippet(str(message.get("content") or ""), max_chars=900),
+        "attachments": [
+            {
+                "id": item.get("id", ""),
+                "type": item.get("type", ""),
+                "mime": item.get("mime", ""),
+                "filename": item.get("filename", ""),
+                "workspace_path": item.get("workspace_path", ""),
+            }
+            for item in attachments
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _message_snippet(content: str, *, max_chars: int) -> str:
+    text = " ".join(str(content or "").split())
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}..."
+
+
+def _arxiv_tool() -> Any:
+    from langchain_core.tools import StructuredTool
+
+    def arxiv(query: str, top_k: int = 3) -> str:
+        """Search arXiv papers. Consecutive requests are rate-limited to at least 3 seconds."""
+        _ensure_user_agent()
+        _wait_for_arxiv_rate_limit()
+        try:
+            from langchain_community.utilities.arxiv import ArxivAPIWrapper
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("arxiv tool requires langchain-community and the arxiv package") from exc
+        wrapper = ArxivAPIWrapper(
+            top_k_results=min(max(int(top_k or 3), 1), 10),
+            doc_content_chars_max=4000,
+        )
+        return wrapper.run(str(query or "").strip())
+
+    return StructuredTool.from_function(
+        arxiv,
+        name="arxiv",
+        description=(
+            "Search arXiv for academic papers and return titles, authors, summaries, and links. "
+            "Free public source; requests are throttled to one call every 3 seconds. Args: query, top_k."
+        ),
+    )
+
+
+def _wait_for_arxiv_rate_limit() -> None:
+    global _LAST_ARXIV_REQUEST_AT
+    with _ARXIV_RATE_LIMIT_LOCK:
+        now = time.monotonic()
+        wait_seconds = _ARXIV_RATE_LIMIT_SECONDS - (now - _LAST_ARXIV_REQUEST_AT)
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        _LAST_ARXIV_REQUEST_AT = time.monotonic()
+
+
+def _yahoo_finance_news_tool() -> Any:
+    from langchain_core.tools import StructuredTool
+
+    def yahoo_finance_news(ticker: str, top_k: int = 5) -> str:
+        """Fetch lightweight finance news for a public ticker via Yahoo Finance."""
+        _ensure_user_agent()
+        try:
+            from langchain_community.tools.yahoo_finance_news import YahooFinanceNewsTool
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("yahoo_finance_news tool requires langchain-community and yfinance") from exc
+        tool = YahooFinanceNewsTool(top_k=min(max(int(top_k or 5), 1), 10))
+        return str(tool.invoke({"query": str(ticker or "").strip().upper()}))
+
+    return StructuredTool.from_function(
+        yahoo_finance_news,
+        name="yahoo_finance_news",
+        description=(
+            "Fetch lightweight financial news for a public company ticker, for example AAPL or MSFT. "
+            "Use for quick finance-news context, not trading-grade market data. Args: ticker, top_k."
+        ),
+    )
+
+
+def _ensure_user_agent() -> None:
+    os.environ.setdefault("USER_AGENT", "SuperPersonalPlatform/0.1")
 
 
 def _is_recent_context_query(query: str) -> bool:
