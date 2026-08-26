@@ -8,7 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import yaml
 
@@ -469,10 +469,12 @@ class WechatChannelService:
         image_payload = _image_payload(item)
         if image_payload is None:
             return None
+        media_payload = _preferred_image_media(image_payload)
         attachment_id = str(
             image_payload.get("id")
             or image_payload.get("media_id")
             or image_payload.get("file_id")
+            or image_payload.get("md5")
             or image_payload.get("aes_key")
             or "wechat_image"
         )
@@ -482,10 +484,12 @@ class WechatChannelService:
             or image_payload.get("name")
             or f"{attachment_id}.jpg"
         )
+        media_mime = media_payload.get("mime") if media_payload else ""
         mime = str(
             image_payload.get("mime")
             or image_payload.get("mime_type")
             or image_payload.get("content_type")
+            or media_mime
             or mimetypes.guess_type(filename)[0]
             or "image/jpeg"
         )
@@ -513,16 +517,27 @@ class WechatChannelService:
 
         media_url = _image_url(image_payload)
         if media_url and self._client:
-            url = urljoin(self._baseurl, media_url)
-            content, content_type = await self._client.read_media_bytes(url, bot_token=self._bot_token)
-            return {
-                "id": attachment_id,
-                "type": "image",
-                "mime": (content_type.split(";", 1)[0] if content_type else mime) or mime,
-                "filename": filename,
-                "bytes": content,
-            }
+            try:
+                url = urljoin(self._baseurl, media_url)
+                content, content_type = await self._client.read_media_bytes(url, bot_token=self._bot_token)
+                content = _decrypt_wechat_media(content, _image_aes_key(image_payload, media_payload))
+                actual_mime = _guess_image_mime_from_bytes(content) or (content_type.split(";", 1)[0] if content_type else "")
+                return {
+                    "id": attachment_id,
+                    "type": "image",
+                    "mime": actual_mime or mime,
+                    "filename": _ensure_image_filename(filename, actual_mime or mime),
+                    "bytes": content,
+                }
+            except Exception as exc:
+                await self._append_image_warning(f"download failed: {exc.__class__.__name__}: {exc}")
         return None
+
+    async def _append_image_warning(self, message: str) -> None:
+        async with self._lock:
+            self._logs.append({"type": "image_warning", "error": message})
+        if self._system_log_service:
+            self._system_log_service.append_line(f"wechat image account={self._account_id} {message[:240]}")
 
     async def _send_reply(self, to_user_id: str, context_token: str, text: str) -> None:
         try:
@@ -690,10 +705,22 @@ def _payload_looks_like_image(payload: dict[str, Any]) -> bool:
         return True
     if any(payload.get(key) for key in ("image_url", "imageUrl", "thumb_url", "thumbUrl")):
         return True
+    if any(isinstance(payload.get(key), dict) for key in ("media", "thumb_media", "thumbMedia")):
+        return True
+    if any(payload.get(key) for key in ("aeskey", "aes_key", "mid_size", "thumb_size", "hd_size")):
+        return True
     return False
 
 
 def _image_url(payload: dict[str, Any]) -> str:
+    for media in (_preferred_image_media(payload),):
+        if media:
+            direct = _media_direct_url(media)
+            if direct:
+                return direct
+            query = _media_encrypt_query_param(media)
+            if query:
+                return _wechat_cdn_download_url(query)
     for key in (
         "download_url",
         "downloadUrl",
@@ -711,3 +738,139 @@ def _image_url(payload: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _preferred_image_media(payload: dict[str, Any]) -> dict[str, Any] | None:
+    for key in ("media", "Media", "thumb_media", "thumbMedia"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _media_direct_url(media: dict[str, Any]) -> str:
+    for key in (
+        "full_url",
+        "fullUrl",
+        "download_url",
+        "downloadUrl",
+        "url",
+        "cdn_url",
+        "cdnUrl",
+        "file_url",
+        "fileUrl",
+    ):
+        value = media.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _media_encrypt_query_param(media: dict[str, Any]) -> str:
+    for key in (
+        "encrypt_query_param",
+        "encryptQueryParam",
+        "encrypted_query_param",
+        "encryptedQueryParam",
+    ):
+        value = media.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _wechat_cdn_download_url(encrypt_query_param: str) -> str:
+    value = encrypt_query_param.strip()
+    if value.startswith(("http://", "https://")):
+        return value
+    if "encrypted_query_param=" in value:
+        query = value.lstrip("?")
+    else:
+        query = f"encrypted_query_param={quote(value, safe='')}"
+    return f"https://novac2c.cdn.weixin.qq.com/c2c/download?{query}"
+
+
+def _image_aes_key(payload: dict[str, Any], media: dict[str, Any] | None) -> bytes | None:
+    candidates: list[Any] = []
+    for key in ("aeskey", "aes_key", "AESKey", "aesKey"):
+        candidates.append(payload.get(key))
+    if media:
+        for key in ("aes_key", "aeskey", "AESKey", "aesKey"):
+            candidates.append(media.get(key))
+    for candidate in candidates:
+        decoded = _decode_wechat_aes_key(candidate)
+        if decoded:
+            return decoded
+    return None
+
+
+def _decode_wechat_aes_key(value: Any) -> bytes | None:
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if len(raw) == 32 and all(char in "0123456789abcdefABCDEF" for char in raw):
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            return None
+    if len(raw) == 16:
+        return raw.encode("utf-8")
+    try:
+        decoded = base64.b64decode(raw, validate=False)
+    except Exception:
+        return None
+    if len(decoded) == 16:
+        return decoded
+    try:
+        decoded_text = decoded.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    if len(decoded_text) == 32 and all(char in "0123456789abcdefABCDEF" for char in decoded_text):
+        try:
+            return bytes.fromhex(decoded_text)
+        except ValueError:
+            return None
+    return None
+
+
+def _decrypt_wechat_media(content: bytes, aes_key: bytes | None) -> bytes:
+    if not aes_key or _guess_image_mime_from_bytes(content):
+        return content
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except Exception:
+        return content
+    if len(aes_key) != 16:
+        return content
+    decryptor = Cipher(algorithms.AES(aes_key), modes.ECB()).decryptor()
+    decrypted = decryptor.update(content) + decryptor.finalize()
+    if not decrypted:
+        return content
+    padding = decrypted[-1]
+    if 1 <= padding <= 16 and decrypted.endswith(bytes([padding]) * padding):
+        decrypted = decrypted[:-padding]
+    return decrypted or content
+
+
+def _guess_image_mime_from_bytes(content: bytes) -> str:
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "image/webp"
+    if content.lstrip().startswith(b"<svg"):
+        return "image/svg+xml"
+    return ""
+
+
+def _ensure_image_filename(filename: str, mime: str) -> str:
+    suffix = Path(filename).suffix
+    if suffix:
+        return filename
+    extension = mimetypes.guess_extension(mime) or ".jpg"
+    return f"{filename}{extension}"

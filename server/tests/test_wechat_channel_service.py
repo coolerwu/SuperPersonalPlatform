@@ -72,10 +72,17 @@ class FakeRunService:
 class FakeWechatClient:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
+        self.media_reads: list[dict[str, Any]] = []
+        self.media_content = b""
+        self.media_content_type = "application/octet-stream"
 
     async def send_message(self, baseurl: str, bot_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.sent.append({"baseurl": baseurl, "bot_token": bot_token, "payload": payload})
         return {"_debug_status": 200}
+
+    async def read_media_bytes(self, url: str, *, bot_token: str = "", max_bytes: int = 8 * 1024 * 1024):
+        self.media_reads.append({"url": url, "bot_token": bot_token, "max_bytes": max_bytes})
+        return self.media_content, self.media_content_type
 
 
 def _image_message(context_token: str = "imgctx") -> dict[str, Any]:
@@ -91,6 +98,26 @@ def _image_message(context_token: str = "imgctx") -> dict[str, Any]:
                     "mime": "image/png",
                     "content_base64": base64.b64encode(b"image-bytes").decode("ascii"),
                 }
+            }
+        ],
+    }
+
+
+def _encrypted_cdn_image_message(context_token: str = "imgctx") -> dict[str, Any]:
+    return {
+        "from_user_id": "wxid_user",
+        "to_user_id": "wxid_bot",
+        "context_token": context_token,
+        "item_list": [
+            {
+                "type": 2,
+                "image_item": {
+                    "md5": "photo-md5",
+                    "aeskey": "0123456789abcdef",
+                    "media": {
+                        "encrypt_query_param": "encrypted-param",
+                    },
+                },
             }
         ],
     }
@@ -160,6 +187,30 @@ def test_wechat_image_then_text_waits_and_merges_into_one_run(tmp_path) -> None:
     asyncio.run(scenario())
 
 
+def test_wechat_encrypted_cdn_image_then_text_merges_into_one_run(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, client = _service(tmp_path)
+        client.media_content = _encrypt_aes_ecb_pkcs7(b"\x89PNG\r\n\x1a\nimage-bytes", b"0123456789abcdef")
+
+        await service._process_message(_encrypted_cdn_image_message())
+        assert run_service.created == []
+
+        await service._process_message(_text_message("你看看"))
+        assert run_service.created == []
+        await asyncio.sleep(0.05)
+
+        assert len(run_service.created) == 1
+        created = run_service.created[0]
+        assert created["content"] == "你看看"
+        assert len(created["attachments"]) == 1
+        assert created["attachments"][0]["mime"] == "image/png"
+        assert created["attachments"][0]["bytes"] == b"\x89PNG\r\n\x1a\nimage-bytes"
+        assert created["metadata"]["merged_pending_images"] == 1
+        assert client.media_reads[0]["url"].startswith("https://novac2c.cdn.weixin.qq.com/c2c/download?")
+
+    asyncio.run(scenario())
+
+
 def test_wechat_image_only_flushes_after_short_pending_window(tmp_path) -> None:
     async def scenario() -> None:
         service, run_service, client = _service(tmp_path)
@@ -176,3 +227,12 @@ def test_wechat_image_only_flushes_after_short_pending_window(tmp_path) -> None:
         assert client.sent[0]["payload"]["context_token"] == "img-only"
 
     asyncio.run(scenario())
+
+
+def _encrypt_aes_ecb_pkcs7(content: bytes, key: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    padding = 16 - (len(content) % 16)
+    padded = content + bytes([padding]) * padding
+    encryptor = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+    return encryptor.update(padded) + encryptor.finalize()
