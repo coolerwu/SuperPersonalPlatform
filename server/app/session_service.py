@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,42 +52,195 @@ class SessionService:
         agent_id: str,
         metadata: dict[str, Any] | None = None,
     ) -> SessionIdentity:
-        session_id = self.build_session_id(
+        active_key = self.build_session_id(
             channel=channel,
             channel_account_id=channel_account_id,
             peer_type=peer_type,
             peer_id=peer_id,
             agent_id=agent_id,
         )
+        binding = self._find_active_binding(active_key)
+        if binding:
+            session_id = str(binding.get("session_id") or "").strip()
+            if session_id and self.exists(session_id):
+                state = self._touch_session(
+                    session_id,
+                    channel=channel,
+                    channel_account_id=channel_account_id,
+                    peer_type=peer_type,
+                    peer_id=peer_id,
+                    agent_id=agent_id,
+                    active_key=active_key,
+                    generation=int(binding.get("generation") or 1),
+                    metadata=metadata,
+                )
+                self._upsert_active_binding(
+                    active_key=active_key,
+                    session_id=session_id,
+                    channel=channel,
+                    channel_account_id=channel_account_id,
+                    peer_type=peer_type,
+                    peer_id=peer_id,
+                    agent_id=agent_id,
+                    generation=int(state.get("generation") or binding.get("generation") or 1),
+                )
+                return SessionIdentity(
+                    session_id=session_id,
+                    channel=channel,
+                    channel_account_id=channel_account_id,
+                    peer_type=peer_type,
+                    peer_id=peer_id,
+                    agent_id=agent_id,
+                )
+
+        legacy_session_id = active_key
+        if self.exists(legacy_session_id):
+            state = self._touch_session(
+                legacy_session_id,
+                channel=channel,
+                channel_account_id=channel_account_id,
+                peer_type=peer_type,
+                peer_id=peer_id,
+                agent_id=agent_id,
+                active_key=active_key,
+                generation=int(binding.get("generation") or 1) if binding else 1,
+                metadata=metadata,
+            )
+            self._upsert_active_binding(
+                active_key=active_key,
+                session_id=legacy_session_id,
+                channel=channel,
+                channel_account_id=channel_account_id,
+                peer_type=peer_type,
+                peer_id=peer_id,
+                agent_id=agent_id,
+                generation=int(state.get("generation") or 1),
+            )
+            return SessionIdentity(
+                session_id=legacy_session_id,
+                channel=channel,
+                channel_account_id=channel_account_id,
+                peer_type=peer_type,
+                peer_id=peer_id,
+                agent_id=agent_id,
+            )
+
+        generation = int(binding.get("generation") or 0) + 1 if binding else 1
+        session_id = self._new_session_id(
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+        )
+        return self._create_session(
+            session_id=session_id,
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+            active_key=active_key,
+            generation=generation,
+            metadata=metadata,
+        )
+
+    def clear_active(
+        self,
+        *,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+        reason: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> SessionIdentity:
+        active_key = self.build_session_id(
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+        )
+        binding = self._find_active_binding(active_key)
+        generation = int(binding.get("generation") or 0) if binding else 0
+        old_session_id = str(binding.get("session_id") or "").strip() if binding else ""
+        if not old_session_id and self.exists(active_key):
+            old_session_id = active_key
+            generation = 1
+        now = _now()
+        if old_session_id and self.exists(old_session_id):
+            state = self._read_state(old_session_id)
+            state["status"] = "archived"
+            state["cleared_at"] = now
+            state["clear_reason"] = reason
+            state["updated_at"] = now
+            _write_json(self._session_dir(old_session_id) / "state.json", state)
+            self._upsert_index(state)
+
+        return self._create_session(
+            session_id=self._new_session_id(
+                channel=channel,
+                channel_account_id=channel_account_id,
+                peer_type=peer_type,
+                peer_id=peer_id,
+                agent_id=agent_id,
+            ),
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+            active_key=active_key,
+            generation=generation + 1,
+            metadata=metadata,
+        )
+
+    def _create_session(
+        self,
+        *,
+        session_id: str,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+        active_key: str,
+        generation: int,
+        metadata: dict[str, Any] | None,
+    ) -> SessionIdentity:
         now = _now()
         session_dir = self._session_dir(session_id)
         state_path = session_dir / "state.json"
-        if state_path.exists():
-            state = _read_json(state_path)
-            created_at = str(state.get("created_at") or now)
-            message_count = int(state.get("message_count") or 0)
-            run_count = int(state.get("run_count") or 0)
-        else:
-            created_at = now
-            message_count = 0
-            run_count = 0
-
         state = {
             "session_id": session_id,
+            "active_key": active_key,
             "channel": channel,
             "channel_account_id": channel_account_id,
             "peer_type": peer_type,
             "peer_id": peer_id,
             "agent_id": agent_id,
+            "generation": generation,
             "status": "active",
-            "created_at": created_at,
+            "created_at": now,
             "updated_at": now,
-            "message_count": message_count,
-            "run_count": run_count,
+            "message_count": 0,
+            "run_count": 0,
             "metadata": metadata or {},
         }
         _write_json(state_path, state)
         self._upsert_index(state)
+        self._upsert_active_binding(
+            active_key=active_key,
+            session_id=session_id,
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+            generation=generation,
+        )
         return SessionIdentity(
             session_id=session_id,
             channel=channel,
@@ -95,6 +249,48 @@ class SessionService:
             peer_id=peer_id,
             agent_id=agent_id,
         )
+
+    def _touch_session(
+        self,
+        session_id: str,
+        *,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+        active_key: str,
+        generation: int,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        now = _now()
+        session_dir = self._session_dir(session_id)
+        state_path = session_dir / "state.json"
+        state = _read_json(state_path) if state_path.exists() else {}
+        current_metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        if metadata:
+            current_metadata = {**current_metadata, **metadata}
+        state.update(
+            {
+                "session_id": session_id,
+                "active_key": active_key,
+                "channel": channel,
+                "channel_account_id": channel_account_id,
+                "peer_type": peer_type,
+                "peer_id": peer_id,
+                "agent_id": agent_id,
+                "generation": generation,
+                "status": "active",
+                "created_at": str(state.get("created_at") or now),
+                "updated_at": now,
+                "message_count": int(state.get("message_count") or 0),
+                "run_count": int(state.get("run_count") or 0),
+                "metadata": current_metadata,
+            }
+        )
+        _write_json(state_path, state)
+        self._upsert_index(state)
+        return state
 
     def append_message(
         self,
@@ -260,6 +456,8 @@ class SessionService:
             "peer_type": state.get("peer_type", ""),
             "peer_id": state.get("peer_id", ""),
             "agent_id": state.get("agent_id", ""),
+            "active_key": state.get("active_key", ""),
+            "generation": state.get("generation", 1),
             "status": state.get("status", "active"),
             "last_run_id": state.get("last_run_id", ""),
             "updated_at": state.get("updated_at", ""),
@@ -277,12 +475,85 @@ class SessionService:
             return {"schema_version": 1, "sessions": []}
         return _read_json(self._index_path)
 
+    def _find_active_binding(self, active_key: str) -> dict[str, Any] | None:
+        for binding in self._active_bindings():
+            if str(binding.get("key") or "") == active_key:
+                return binding
+        return None
+
+    def _upsert_active_binding(
+        self,
+        *,
+        active_key: str,
+        session_id: str,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+        generation: int,
+    ) -> None:
+        self._sessions_dir.mkdir(parents=True, exist_ok=True)
+        now = _now()
+        existing = self._find_active_binding(active_key)
+        created_at = str(existing.get("created_at") or now) if existing else now
+        binding = {
+            "key": active_key,
+            "session_id": session_id,
+            "channel": channel,
+            "channel_account_id": channel_account_id,
+            "peer_type": peer_type,
+            "peer_id": peer_id,
+            "agent_id": agent_id,
+            "generation": generation,
+            "created_at": created_at,
+            "updated_at": now,
+        }
+        bindings = [item for item in self._active_bindings() if str(item.get("key") or "") != active_key]
+        bindings.insert(0, binding)
+        _write_json(self._active_path, {"schema_version": 1, "bindings": bindings})
+
+    def _active_bindings(self) -> list[dict[str, Any]]:
+        if not self._active_path.exists():
+            return []
+        payload = _read_json(self._active_path)
+        bindings = payload.get("bindings") if isinstance(payload, dict) else []
+        if isinstance(bindings, dict):
+            return [
+                {"key": str(key), **value}
+                for key, value in bindings.items()
+                if isinstance(value, dict)
+            ]
+        if not isinstance(bindings, list):
+            return []
+        return [item for item in bindings if isinstance(item, dict)]
+
+    def _new_session_id(
+        self,
+        *,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+    ) -> str:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        random_part = uuid.uuid4().hex[:8]
+        raw_parts = [channel, channel_account_id, peer_type, peer_id, agent_id, timestamp, random_part]
+        safe_parts = [_safe_part(part) for part in raw_parts[:-2]]
+        digest = hashlib.sha1(":".join(raw_parts).encode("utf-8")).hexdigest()[:10]
+        return "_".join(["sess", *safe_parts, timestamp, digest])
+
     def _session_dir(self, session_id: str) -> Path:
         return self._sessions_dir / session_id
 
     @property
     def _index_path(self) -> Path:
         return self._sessions_dir / "index.json"
+
+    @property
+    def _active_path(self) -> Path:
+        return self._sessions_dir / "active.json"
 
 
 def _safe_part(value: str) -> str:

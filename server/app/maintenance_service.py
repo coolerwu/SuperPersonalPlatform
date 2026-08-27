@@ -31,6 +31,7 @@ class MaintenanceService:
         protected_session_ids = self._protected_session_ids(cutoff)
         self._clean_runs(cutoff, report, dry_run=effective_dry_run)
         self._clean_sessions(cutoff, protected_session_ids, report, dry_run=effective_dry_run)
+        self._clean_active_session_bindings(report, dry_run=effective_dry_run)
         self._trim_schedule_events(cutoff, report, dry_run=effective_dry_run)
         self._clean_logs(cutoff, report, dry_run=effective_dry_run)
         self._clean_agent_scratch(cutoff, report, dry_run=effective_dry_run)
@@ -47,6 +48,22 @@ class MaintenanceService:
             status = str(item.get("status") or "").strip()
             updated_at = _parse_dt(str(item.get("updated_at") or item.get("created_at") or ""))
             if status not in TERMINAL_RUN_STATUSES or (updated_at is not None and updated_at >= cutoff):
+                protected.add(session_id)
+        active_payload = _read_index(self._workspace / "sessions" / "active.json", "bindings")
+        active_bindings = active_payload.get("bindings") if isinstance(active_payload, dict) else []
+        if isinstance(active_bindings, dict):
+            active_bindings = [
+                {"key": str(key), **value}
+                for key, value in active_bindings.items()
+                if isinstance(value, dict)
+            ]
+        if not isinstance(active_bindings, list):
+            active_bindings = []
+        for item in active_bindings:
+            if not isinstance(item, dict):
+                continue
+            session_id = str(item.get("session_id") or "").strip()
+            if session_id and "/" not in session_id and "\\" not in session_id:
                 protected.add(session_id)
         return protected
 
@@ -115,6 +132,33 @@ class MaintenanceService:
             kept.append(item)
         if changed and not dry_run:
             _write_json(index_path, {"schema_version": 1, "sessions": kept})
+
+    def _clean_active_session_bindings(self, report: dict[str, Any], *, dry_run: bool) -> None:
+        active_path = self._workspace / "sessions" / "active.json"
+        if not active_path.exists():
+            return
+        original = _read_index(active_path, "bindings")
+        bindings = original.get("bindings") if isinstance(original, dict) else []
+        if isinstance(bindings, dict):
+            bindings = [{"key": str(key), **value} for key, value in bindings.items() if isinstance(value, dict)]
+        if not isinstance(bindings, list):
+            bindings = []
+        kept: list[Any] = []
+        changed = False
+        for item in bindings:
+            if not isinstance(item, dict):
+                changed = True
+                continue
+            session_id = str(item.get("session_id") or "").strip()
+            if session_id and "/" not in session_id and "\\" not in session_id:
+                session_path = self._workspace / "sessions" / session_id / "state.json"
+                if session_path.exists():
+                    kept.append(item)
+                    continue
+            _add_item(report, "session_bindings", active_path, "active binding points to missing session", 0)
+            changed = True
+        if changed and not dry_run:
+            _write_json(active_path, {"schema_version": 1, "bindings": kept})
 
     def _trim_schedule_events(self, cutoff: datetime, report: dict[str, Any], *, dry_run: bool) -> None:
         schedules_dir = self._workspace / "schedules"
@@ -211,6 +255,7 @@ def _empty_report(*, dry_run: bool, retention_days: int, cutoff: datetime) -> di
         "summary": {
             "runs": 0,
             "sessions": 0,
+            "session_bindings": 0,
             "schedule_events": 0,
             "logs": 0,
             "agent_scratch": 0,

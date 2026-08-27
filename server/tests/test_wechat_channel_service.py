@@ -229,6 +229,30 @@ def test_wechat_image_only_flushes_after_short_pending_window(tmp_path) -> None:
     asyncio.run(scenario())
 
 
+def test_wechat_clear_session_command_rotates_active_session_without_run(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, client = _service(tmp_path)
+
+        await service._process_message(_text_message("第一句", context_token="first"))
+        await asyncio.sleep(0.06)
+        first_session_id = run_service.created[0]["session_id"]
+
+        await service._process_message(_text_message("清空上下文", context_token="clear"))
+        await asyncio.sleep(0.06)
+
+        assert len(run_service.created) == 1
+        assert client.sent[-1]["payload"]["context_token"] == "clear"
+        assert "已清空上下文" in client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
+
+        await service._process_message(_text_message("第二句", context_token="second"))
+        await asyncio.sleep(0.06)
+
+        assert len(run_service.created) == 2
+        assert run_service.created[1]["session_id"] != first_session_id
+
+    asyncio.run(scenario())
+
+
 def _encrypt_aes_ecb_pkcs7(content: bytes, key: bytes) -> bytes:
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 

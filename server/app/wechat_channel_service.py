@@ -291,6 +291,17 @@ class WechatChannelService:
 
         peer_id = _wechat_peer_id(from_user_id, to_user_id)
         peer_type = _wechat_peer_type(peer_id)
+        if _is_clear_session_command(text) and not attachments:
+            await self._clear_wechat_session(
+                from_user_id=from_user_id,
+                to_user_id=to_user_id,
+                context_token=context_token,
+                agent_id=agent_id,
+                peer_id=peer_id,
+                peer_type=peer_type,
+                text=text,
+            )
+            return
         pending_key = _pending_key(self._account_id, agent_id, peer_type, peer_id)
 
         await self._queue_pending_message(
@@ -464,6 +475,44 @@ class WechatChannelService:
                 self._logs.append({"type": "error", "error": reply})
 
         await self._send_reply(from_user_id, context_token, reply)
+
+    async def _clear_wechat_session(
+        self,
+        *,
+        from_user_id: str,
+        to_user_id: str,
+        context_token: str,
+        agent_id: str,
+        peer_id: str,
+        peer_type: str,
+        text: str,
+    ) -> None:
+        if self._session_service is None:
+            await self._send_reply(from_user_id, context_token, "当前没有启用长期会话。")
+            return
+        session = self._session_service.clear_active(
+            channel="wechat",
+            channel_account_id=self._account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+            reason=text,
+            metadata={"to_user_id": to_user_id},
+        )
+        async with self._lock:
+            self._logs.append(
+                {
+                    "type": "session_cleared",
+                    "session_id": session.session_id,
+                    "peer_id": peer_id,
+                    "peer_type": peer_type,
+                }
+            )
+        if self._system_log_service:
+            self._system_log_service.append_line(
+                f"wechat session cleared account={self._account_id} peer={peer_type}:{peer_id} session={session.session_id}"
+            )
+        await self._send_reply(from_user_id, context_token, "已清空上下文，并开启新的会话。")
 
     async def _image_attachment_from_item(self, item: dict[str, Any]) -> dict[str, Any] | None:
         image_payload = _image_payload(item)
@@ -672,6 +721,24 @@ def _message_has_processable_content(msg: dict[str, Any]) -> bool:
         if _image_payload(item) is not None:
             return True
     return False
+
+
+def _is_clear_session_command(text: str) -> bool:
+    normalized = "".join(str(text or "").strip().lower().split())
+    return normalized in {
+        "/clear",
+        "/new",
+        "clear",
+        "new",
+        "清空",
+        "清空上下文",
+        "清空会话",
+        "重置上下文",
+        "重置会话",
+        "开启新会话",
+        "开始新会话",
+        "新会话",
+    }
 
 
 def _image_payload(item: dict[str, Any]) -> dict[str, Any] | None:

@@ -217,7 +217,7 @@ workspace/
     platform-YYYY-MM-DD.log
 ```
 
-微信和未来渠道都把连续对话写入 `workspace/sessions/{session_id}/messages.jsonl`。微信图片输入会兼容 iLink 的 base64/data URL、直接媒体 URL 和 `media.encrypt_query_param`/`aeskey` CDN 加密媒体，下载或解密失败时写入 `image_warning` 日志。DeepAgent 执行前最多读取最近 120 条消息：最近 60 条作为普通对话历史传入，同时把当前 run 之前最多 20 条用户消息压缩成 `Recent Session Context` 注入 system prompt，让用户前面提出的约束、偏好和评价标准在后续短指令中继续生效，除非最新消息明确覆盖。
+微信和未来渠道都把连续对话写入 `workspace/sessions/{session_id}/messages.jsonl`，当前活跃会话由 `workspace/sessions/active.json` 维护。微信按 `wechat + account + peer + agent` 生成稳定 active key，再取该 key 指向的 `session_id`；用户发送“清空上下文 / 清空会话 / 开启新会话 / 新会话 / /clear / /new”时，通道层归档旧 session 并切换到新 session。微信图片输入会兼容 iLink 的 base64/data URL、直接媒体 URL 和 `media.encrypt_query_param`/`aeskey` CDN 加密媒体，下载或解密失败时写入 `image_warning` 日志。DeepAgent 执行前最多读取最近 120 条消息：最近 60 条作为普通对话历史传入，同时把当前 run 之前最多 20 条用户消息压缩成 `Recent Session Context` 注入 system prompt，让用户前面提出的约束、偏好和评价标准在后续短指令中继续生效，除非最新消息明确覆盖。
 
 DeepAgent 原生 filesystem 通过 `FilesystemBackend(root_dir=workspace/agents/{agent_id}, virtual_mode=True)` 锚定到单个 Agent 私有目录。Agent 看到的 `/` 就是自己的目录，可读写其中的 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/` 等内容，不能访问其它 Agent、Context、Runs、Sessions、配置文件或项目源码。
 

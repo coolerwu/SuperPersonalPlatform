@@ -67,6 +67,30 @@ def test_maintenance_deletes_inactive_sessions_except_active_run_references(tmp_
     ]
 
 
+def test_maintenance_keeps_active_bound_session_and_removes_stale_binding(tmp_path: Path) -> None:
+    old = datetime.now(timezone.utc) - timedelta(days=16)
+    _write_session(tmp_path, "session_current", old)
+    active_path = tmp_path / "sessions" / "active.json"
+    _write_json(
+        active_path,
+        {
+            "schema_version": 1,
+            "bindings": [
+                {"key": "current", "session_id": "session_current", "updated_at": old.isoformat()},
+                {"key": "stale", "session_id": "missing_session", "updated_at": old.isoformat()},
+            ],
+        },
+    )
+
+    report = MaintenanceService(tmp_path, MaintenanceConfig(retention_days=15)).cleanup(dry_run=False)
+
+    assert report["summary"]["sessions"] == 0
+    assert report["summary"]["session_bindings"] == 1
+    assert (tmp_path / "sessions" / "session_current").exists()
+    active = _read_json(active_path)
+    assert [item["key"] for item in active["bindings"]] == ["current"]
+
+
 def test_maintenance_trims_schedule_events_logs_scratch_and_cache(tmp_path: Path) -> None:
     old = datetime.now(timezone.utc) - timedelta(days=16)
     recent = datetime.now(timezone.utc) - timedelta(days=1)
