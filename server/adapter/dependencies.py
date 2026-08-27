@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from server.app.auth_service import AuthService
+from server.app.browser_profile_service import BrowserProfileService
 from server.app.config_file_service import ConfigFileService
 from server.app.maintenance_service import MaintenanceService
 from server.app.nutstore_service import NutstoreService
@@ -18,6 +19,7 @@ from server.infrastructure.session import SessionCodec
 class AppContainer:
     workspace: Path
     auth_service: AuthService
+    browser_profile_service: BrowserProfileService
     config_file_service: ConfigFileService
     run_service: RunService
     maintenance_service: MaintenanceService

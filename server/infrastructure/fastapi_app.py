@@ -15,6 +15,7 @@ from server.adapter.static_routes import mount_frontend
 from server.adapter.system_routes import create_system_router
 from server.adapter.workspace_routes import create_workspace_router
 from server.app.auth_service import AuthService
+from server.app.browser_profile_service import BrowserProfileService
 from server.app.config_file_service import ConfigFileService
 from server.app.maintenance_service import MaintenanceService
 from server.app.nutstore_service import NutstoreService
@@ -68,6 +69,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     return AppContainer(
         workspace=active_workspace,
         auth_service=AuthService(AuthToken(settings.auth.token)),
+        browser_profile_service=BrowserProfileService(active_workspace),
         config_file_service=ConfigFileService(active_workspace),
         run_service=run_service,
         maintenance_service=maintenance_service,
@@ -131,6 +133,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
                 await schedule_task
             if container.wechat_channel_manager is not None:
                 await container.wechat_channel_manager.stop_all()
+            await container.browser_profile_service.close_all()
 
     app = FastAPI(title="Super Personal Platform", lifespan=lifespan)
     install_request_logging(app, container)

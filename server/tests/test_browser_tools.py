@@ -3,7 +3,7 @@ import pytest
 from server.domain.tooling import get_tool_definition
 from server.infrastructure.browser_tools import BrowserToolError, _resolve_proxy, _validate_public_url
 from server.infrastructure.config import parse_settings
-from server.infrastructure.tool_runtime import build_platform_tools
+from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
 
 
 def test_browser_extract_is_a_platform_tool(tmp_path) -> None:
@@ -37,6 +37,36 @@ def test_browser_proxy_falls_back_to_environment(monkeypatch) -> None:
 
     assert _resolve_proxy("") == "socks5://127.0.0.1:7890"
     assert _resolve_proxy("http://proxy.example:8080") == "http://proxy.example:8080"
+
+
+def test_browser_extract_receives_agent_profile_context(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    def fake_build_browser_extract_tool(**kwargs):
+        captured.update(kwargs)
+
+        class Tool:
+            name = "browser_extract"
+
+        return Tool()
+
+    monkeypatch.setattr("server.infrastructure.tool_runtime.build_browser_extract_tool", fake_build_browser_extract_tool)
+
+    tools = build_platform_tools(
+        ("browser_extract",),
+        context_workspace=tmp_path / "context",
+        tool_context=PlatformToolContext(
+            run_id="run_1",
+            source="wechat",
+            agent_id="assistant",
+            session_id="session_1",
+            metadata={},
+        ),
+    )
+
+    assert tools[0].name == "browser_extract"
+    assert captured["workspace"] == tmp_path
+    assert captured["agent_id"] == "assistant"
 
 
 @pytest.mark.parametrize(

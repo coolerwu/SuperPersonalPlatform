@@ -3,7 +3,12 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import socket
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -12,7 +17,32 @@ class BrowserToolError(ValueError):
     pass
 
 
-def build_browser_extract_tool(*, proxy: str = "", timeout_ms: int = 60000) -> Any:
+class BrowserProfileInUseError(RuntimeError):
+    pass
+
+
+@dataclass
+class BrowserProfileLock:
+    profile_dir: Path
+    lock_path: Path
+    owner: str
+
+    def release(self) -> None:
+        try:
+            current = json.loads(self.lock_path.read_text(encoding="utf-8"))
+        except Exception:
+            current = {}
+        if current.get("owner") == self.owner:
+            self.lock_path.unlink(missing_ok=True)
+
+
+def build_browser_extract_tool(
+    *,
+    proxy: str = "",
+    timeout_ms: int = 60000,
+    workspace: Path | None = None,
+    agent_id: str = "",
+) -> Any:
     from langchain_core.tools import StructuredTool
 
     async def browser_extract(url: str, include_links: bool = True, max_chars: int = 12000) -> str:
@@ -34,28 +64,55 @@ def build_browser_extract_tool(*, proxy: str = "", timeout_ms: int = 60000) -> A
         if proxy_url:
             launch_kwargs["proxy"] = {"server": proxy_url}
         playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(**launch_kwargs)
+        profile_lock: BrowserProfileLock | None = None
+        browser = None
+        browser_context = None
         try:
-            browser_context = await browser.new_context()
+            if workspace is not None and agent_id:
+                profile_dir = browser_profile_dir(workspace, agent_id)
+                profile_lock = acquire_browser_profile_lock(
+                    profile_dir,
+                    owner=f"browser_extract_{uuid.uuid4().hex}",
+                    agent_id=agent_id,
+                    purpose="browser_extract",
+                )
+                browser_context = await playwright.chromium.launch_persistent_context(
+                    str(profile_dir),
+                    **launch_kwargs,
+                )
+            else:
+                browser = await playwright.chromium.launch(**launch_kwargs)
+                browser_context = await browser.new_context()
             browser_context.set_default_timeout(navigation_timeout_ms)
             browser_context.set_default_navigation_timeout(navigation_timeout_ms)
-            page = await browser_context.new_page()
+            page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
             page.set_default_timeout(navigation_timeout_ms)
             page.set_default_navigation_timeout(navigation_timeout_ms)
-            toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=browser)
-            tools = {tool.name: tool for tool in toolkit.get_tools()}
-            navigate = tools["navigate_browser"]
-            extract_text = tools["extract_text"]
-            extract_links = tools.get("extract_hyperlinks")
-
-            status = await navigate.ainvoke({"url": url})
-            text = await extract_text.ainvoke({})
-            links: list[str] = []
-            if include_links and extract_links is not None:
-                raw_links = await extract_links.ainvoke({"absolute_urls": True})
-                parsed_links = json.loads(raw_links)
-                if isinstance(parsed_links, list):
-                    links = [str(link) for link in parsed_links if _is_http_url(str(link))][:100]
+            if browser is not None:
+                toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=browser)
+                tools = {tool.name: tool for tool in toolkit.get_tools()}
+                navigate = tools["navigate_browser"]
+                extract_text = tools["extract_text"]
+                extract_links = tools.get("extract_hyperlinks")
+                status = await navigate.ainvoke({"url": url})
+                text = await extract_text.ainvoke({})
+                links: list[str] = []
+                if include_links and extract_links is not None:
+                    raw_links = await extract_links.ainvoke({"absolute_urls": True})
+                    parsed_links = json.loads(raw_links)
+                    if isinstance(parsed_links, list):
+                        links = [str(link) for link in parsed_links if _is_http_url(str(link))][:100]
+            else:
+                response = await page.goto(url, wait_until="domcontentloaded")
+                status = f"HTTP {response.status}" if response is not None else "navigated"
+                text = await page.locator("body").inner_text(timeout=navigation_timeout_ms)
+                links = []
+                if include_links:
+                    raw_links = await page.locator("a[href]").evaluate_all(
+                        """elements => elements.map((element) => element.href).filter(Boolean)"""
+                    )
+                    if isinstance(raw_links, list):
+                        links = [str(link) for link in raw_links if _is_http_url(str(link))][:100]
 
             return json.dumps(
                 {
@@ -68,7 +125,12 @@ def build_browser_extract_tool(*, proxy: str = "", timeout_ms: int = 60000) -> A
                 ensure_ascii=False,
             )
         finally:
-            await browser.close()
+            if browser_context is not None:
+                await browser_context.close()
+            if browser is not None:
+                await browser.close()
+            if profile_lock is not None:
+                profile_lock.release()
             await playwright.stop()
 
     return StructuredTool.from_function(
@@ -77,9 +139,65 @@ def build_browser_extract_tool(*, proxy: str = "", timeout_ms: int = 60000) -> A
         description=(
             "Open a public http/https web page in a headless Playwright browser and extract rendered text and links. "
             "Use this for JavaScript-rendered pages when normal context search is insufficient. "
+            "For Agent runs, the browser reuses that Agent's persistent profile under workspace/browser_profiles/{agent_id}. "
             "Args: url, include_links=true, max_chars. Private, localhost, and internal network URLs are blocked."
         ),
     )
+
+
+def browser_profile_dir(workspace: Path, agent_id: str) -> Path:
+    safe_agent_id = validate_browser_agent_id(agent_id)
+    return workspace.resolve() / "browser_profiles" / safe_agent_id
+
+
+def validate_browser_agent_id(agent_id: str) -> str:
+    value = str(agent_id or "").strip()
+    if not value or not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
+        raise BrowserToolError("invalid agent_id for browser profile")
+    return value
+
+
+def acquire_browser_profile_lock(
+    profile_dir: Path,
+    *,
+    owner: str,
+    agent_id: str,
+    purpose: str,
+) -> BrowserProfileLock:
+    safe_agent_id = validate_browser_agent_id(agent_id)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = profile_dir / "profile.lock.json"
+    _clear_stale_profile_lock(lock_path)
+    payload = {
+        "owner": owner,
+        "agent_id": safe_agent_id,
+        "purpose": purpose,
+        "created_at": time.time(),
+    }
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise BrowserProfileInUseError(f"browser profile for agent {safe_agent_id} is already in use") from exc
+    with os.fdopen(fd, "w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+    return BrowserProfileLock(profile_dir=profile_dir, lock_path=lock_path, owner=owner)
+
+
+def read_browser_profile_lock(profile_dir: Path) -> dict[str, Any] | None:
+    lock_path = profile_dir / "profile.lock.json"
+    if not lock_path.exists():
+        return None
+    try:
+        return json.loads(lock_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"owner": "unknown", "purpose": "unknown", "created_at": lock_path.stat().st_mtime}
+
+
+def _clear_stale_profile_lock(lock_path: Path, *, stale_seconds: int = 3600) -> None:
+    if not lock_path.exists():
+        return
+    if time.time() - lock_path.stat().st_mtime > stale_seconds:
+        lock_path.unlink(missing_ok=True)
 
 
 def _resolve_proxy(configured_proxy: str) -> str:

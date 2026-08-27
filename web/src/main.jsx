@@ -6,10 +6,12 @@ import {
   ChevronRight,
   Clock3,
   Cpu,
+  ExternalLink,
   FileJson,
   FileText,
   FolderOpen,
   FolderTree,
+  Keyboard,
   LogOut,
   Play,
   Plus,
@@ -1575,6 +1577,13 @@ function ConfigFieldLite({ label, children }) {
 function SystemPage({ onNavigate }) {
   const [logs, setLogs] = useState([]);
   const [activeLog, setActiveLog] = useState("");
+  const [browserProfiles, setBrowserProfiles] = useState([]);
+  const [browserAgents, setBrowserAgents] = useState([]);
+  const [browserAgentId, setBrowserAgentId] = useState("");
+  const [browserUrl, setBrowserUrl] = useState("https://mp.weixin.qq.com/");
+  const [browserSession, setBrowserSession] = useState(null);
+  const [browserInput, setBrowserInput] = useState("");
+  const [screenshotVersion, setScreenshotVersion] = useState(0);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -1596,9 +1605,86 @@ function SystemPage({ onNavigate }) {
     setMessage(data.message || "更新已开始");
   }
 
+  async function loadBrowserProfiles() {
+    const data = await api("/api/system/browser-profiles");
+    const agents = data.agents || [];
+    setBrowserAgents(agents);
+    setBrowserProfiles(data.profiles || []);
+    setBrowserAgentId((current) => (agents.some((agent) => agent.id === current) ? current : agents[0]?.id || ""));
+  }
+
+  async function startBrowserAuth() {
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/api/system/browser-auth/sessions", {
+        method: "POST",
+        body: JSON.stringify({ agent_id: browserAgentId, url: browserUrl.trim() }),
+      });
+      setBrowserSession(data.session);
+      setScreenshotVersion(Date.now());
+      setMessage("浏览器授权会话已启动");
+      await loadBrowserProfiles();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function browserSessionAction(path, payload = {}) {
+    if (!browserSession?.id) return;
+    setError("");
+    try {
+      const data = await api(`/api/system/browser-auth/sessions/${encodeURIComponent(browserSession.id)}/${path}`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setBrowserSession(data.session);
+      setScreenshotVersion(Date.now());
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function clickBrowserScreenshot(event) {
+    if (!browserSession?.id) return;
+    const image = event.currentTarget;
+    const rect = image.getBoundingClientRect();
+    const scaleX = image.naturalWidth / rect.width;
+    const scaleY = image.naturalHeight / rect.height;
+    await browserSessionAction("click", {
+      x: Math.round((event.clientX - rect.left) * scaleX),
+      y: Math.round((event.clientY - rect.top) * scaleY),
+    });
+  }
+
+  async function typeBrowserText() {
+    if (!browserInput) return;
+    await browserSessionAction("type", { text: browserInput });
+    setBrowserInput("");
+  }
+
+  async function finishBrowserAuth() {
+    if (!browserSession?.id) return;
+    await browserSessionAction("finish");
+    setBrowserSession(null);
+    setMessage("浏览器 profile 已保存");
+    await loadBrowserProfiles();
+  }
+
+  async function cancelBrowserAuth() {
+    if (!browserSession?.id) return;
+    await browserSessionAction("cancel");
+    setBrowserSession(null);
+    setMessage("浏览器授权会话已取消");
+    await loadBrowserProfiles();
+  }
+
   useEffect(() => {
     loadLogs();
+    loadBrowserProfiles();
   }, []);
+
+  const activeProfile = browserProfiles.find((profile) => profile.agent_id === browserAgentId) || null;
 
   return (
     <section className="console-screen system-screen">
@@ -1624,6 +1710,90 @@ function SystemPage({ onNavigate }) {
           <PathBox label="配置文件" value="workspace/config.yaml（受保护，不可删除）" />
           <PathBox label="服务更新" value="/api/system/update-service" />
           <PathBox label="运行日志" value="workspace/logs/platform-YYYY-MM-DD.log" />
+        </div>
+      </section>
+
+      <section className="panel browser-auth-panel">
+        <div className="panel-title">
+          <div>
+            <span>浏览器授权</span>
+            <small>workspace/browser_profiles/{browserAgentId || "{agent_id}"}</small>
+          </div>
+          <div className="config-inline-actions">
+            <button className="icon-button" onClick={loadBrowserProfiles} title="刷新 profile">
+              <RefreshCw size={15} />
+            </button>
+            <button onClick={startBrowserAuth} disabled={!browserAgentId || Boolean(browserSession)}>
+              <ExternalLink size={15} />
+              启动授权
+            </button>
+          </div>
+        </div>
+        <div className="browser-auth-controls">
+          <ConfigFieldLite label="Agent">
+            <select value={browserAgentId} disabled={Boolean(browserSession)} onChange={(event) => setBrowserAgentId(event.target.value)}>
+              {browserAgents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name || agent.id}
+                </option>
+              ))}
+            </select>
+          </ConfigFieldLite>
+          <ConfigFieldLite label="打开 URL">
+            <div className="browser-url-row">
+              <input value={browserUrl} disabled={Boolean(browserSession)} onChange={(event) => setBrowserUrl(event.target.value)} />
+              <button
+                className="icon-button"
+                title="跳转"
+                disabled={!browserSession}
+                onClick={() => browserSessionAction("navigate", { url: browserUrl.trim() })}
+              >
+                <ExternalLink size={15} />
+              </button>
+            </div>
+          </ConfigFieldLite>
+          <ConfigFieldLite label="输入文本">
+            <div className="browser-url-row">
+              <input value={browserInput} disabled={!browserSession} onChange={(event) => setBrowserInput(event.target.value)} />
+              <button className="icon-button" title="输入" disabled={!browserSession || !browserInput} onClick={typeBrowserText}>
+                <Keyboard size={15} />
+              </button>
+            </div>
+          </ConfigFieldLite>
+        </div>
+        <div className="browser-profile-state">
+          <PathBox label="Profile" value={activeProfile?.profile_path || "-"} />
+          <Kv label="状态" value={browserSession?.status || (activeProfile?.locked ? "locked" : activeProfile?.exists ? "saved" : "empty")} />
+          <Kv label="当前 URL" value={browserSession?.url || "-"} />
+        </div>
+        {browserSession ? (
+          <div className="browser-session-actions">
+            <button onClick={() => browserSessionAction("press", { key: "Enter" })}>Enter</button>
+            <button onClick={() => browserSessionAction("press", { key: "Escape" })}>Esc</button>
+            <button onClick={() => setScreenshotVersion(Date.now())}>
+              <RefreshCw size={15} />
+              刷新截图
+            </button>
+            <button className="primary" onClick={finishBrowserAuth}>
+              完成授权
+            </button>
+            <button className="delete-button" onClick={cancelBrowserAuth}>取消</button>
+          </div>
+        ) : null}
+        <div className="browser-screenshot-stage">
+          {browserSession ? (
+            <img
+              src={`/api/system/browser-auth/sessions/${encodeURIComponent(browserSession.id)}/screenshot?v=${screenshotVersion}`}
+              alt="浏览器授权截图"
+              onClick={clickBrowserScreenshot}
+            />
+          ) : (
+            <div className="workspace-empty-editor">
+              <TerminalSquare size={30} />
+              <strong>启动授权会话</strong>
+              <span>这里会显示服务器 Playwright 浏览器截图，点击截图即可操作当前 Agent 的 profile。</span>
+            </div>
+          )}
         </div>
       </section>
 

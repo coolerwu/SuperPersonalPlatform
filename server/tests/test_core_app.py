@@ -11,6 +11,7 @@ from server.adapter.dependencies import AppContainer
 from server.adapter.system_routes import create_system_router
 from server.adapter.workspace_routes import create_workspace_router
 from server.app.auth_service import AuthService
+from server.app.browser_profile_service import BrowserProfileService
 from server.app.config_file_service import ConfigFileService
 from server.app.maintenance_service import MaintenanceService
 from server.app.nutstore_service import NutstoreService
@@ -102,6 +103,7 @@ def make_system_client(tmp_path: Path, update_service: FakeUpdateService | None 
     container = AppContainer(
         workspace=tmp_path,
         auth_service=AuthService(AuthToken(token)),
+        browser_profile_service=BrowserProfileService(tmp_path),
         config_file_service=ConfigFileService(tmp_path),
         run_service=RunService(tmp_path),
         maintenance_service=MaintenanceService(
@@ -283,6 +285,19 @@ def test_system_maintenance_routes_preview_and_run(tmp_path) -> None:
     assert not run_dir.exists()
 
 
+def test_system_browser_profiles_lists_agents(tmp_path) -> None:
+    client = make_system_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    response = client.get("/api/system/browser-profiles")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agents"][0]["id"] == "assistant"
+    assert body["profiles"][0]["agent_id"] == "assistant"
+    assert body["profiles"][0]["profile_path"].endswith("/browser_profiles/assistant")
+
+
 def test_manual_webdav_context_sync_uses_saved_config(tmp_path, monkeypatch) -> None:
     class FakeWebDAVContextService:
         def __init__(self, *, workspace, nutstore, context):
@@ -435,6 +450,7 @@ def test_workspace_delete_protects_config_and_root_skeleton(tmp_path) -> None:
     client = make_system_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})
     (tmp_path / "runs").mkdir()
+    (tmp_path / "browser_profiles").mkdir()
     scratch_dir = tmp_path / "scratch"
     scratch_dir.mkdir()
     (scratch_dir / "note.txt").write_text("delete me", encoding="utf-8")
@@ -442,11 +458,13 @@ def test_workspace_delete_protects_config_and_root_skeleton(tmp_path) -> None:
     root_response = client.post("/api/workspace/list", json={"path": ""})
     root_entries = {entry["path"]: entry for entry in root_response.json()["entries"]}
     assert root_entries["config.yaml"]["deletable"] is False
+    assert root_entries["browser_profiles"]["deletable"] is False
     assert root_entries["runs"]["deletable"] is False
     assert root_entries["scratch"]["deletable"] is True
 
     assert client.post("/api/workspace/delete", json={"path": "config.yaml"}).status_code == 400
     assert client.post("/api/workspace/delete", json={"path": "context"}).status_code == 400
+    assert client.post("/api/workspace/delete", json={"path": "browser_profiles"}).status_code == 400
     assert client.post("/api/workspace/delete", json={"path": "runs"}).status_code == 400
     assert client.post("/api/workspace/delete", json={"path": "schedules"}).status_code == 400
 

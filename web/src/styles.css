@@ -1766,6 +1766,85 @@ pre {
   padding-bottom: 14px;
 }
 
+.browser-auth-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+  padding-bottom: 14px;
+}
+
+.browser-auth-controls,
+.browser-profile-state,
+.browser-session-actions,
+.browser-screenshot-stage {
+  margin-inline: 14px;
+}
+
+.browser-auth-controls {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.34fr) minmax(260px, 1fr) minmax(220px, 0.7fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.browser-auth-controls select {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0d141d;
+  color: var(--text);
+  outline: none;
+  padding: 0 10px;
+}
+
+.browser-url-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.browser-profile-state {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(110px, 0.28fr) minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.browser-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.browser-session-actions button {
+  flex: 0 0 auto;
+  min-width: 62px;
+  white-space: nowrap;
+}
+
+.browser-screenshot-stage {
+  display: grid;
+  min-height: 360px;
+  max-height: 620px;
+  overflow: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #080e15;
+}
+
+.browser-screenshot-stage img {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: crosshair;
+  user-select: none;
+}
+
 .logs-panel .log-files,
 .logs-panel .log-output,
 .logs-panel .update-button {
@@ -1860,6 +1939,11 @@ pre {
 
   .status-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .browser-auth-controls,
+  .browser-profile-state {
+    grid-template-columns: 1fr;
   }
 }
 

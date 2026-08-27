@@ -42,7 +42,16 @@ class WorkspaceFileService:
     max_read_bytes = 1_000_000
     max_write_bytes = 1_000_000
     protected_root_files = {"config.yaml"}
-    protected_root_directories = {"agents", "context", "runs", "sessions", "channels", "logs", "schedules"}
+    protected_root_directories = {
+        "agents",
+        "browser_profiles",
+        "context",
+        "runs",
+        "sessions",
+        "channels",
+        "logs",
+        "schedules",
+    }
 
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace.resolve()

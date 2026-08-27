@@ -59,10 +59,14 @@ def build_platform_tools(
         elif definition.id == "write_context":
             tools.append(_write_context_tool(service, webdav_service))
         elif definition.id == "browser_extract":
+            tool_workspace = context_workspace.parent if tool_context is not None else None
+            tool_agent_id = tool_context.agent_id if tool_context is not None else ""
             tools.append(
                 build_browser_extract_tool(
                     proxy=browser_config.get("proxy", ""),
                     timeout_ms=int(browser_config.get("timeout_ms") or 60000),
+                    workspace=tool_workspace,
+                    agent_id=tool_agent_id,
                 )
             )
         elif definition.id == "schedule":

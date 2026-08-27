@@ -56,6 +56,9 @@ workspace/
       memories/
         AGENTS.md
 
+  browser_profiles/
+    {agent_id}/
+
   runs/
     index.json
     {run_id}/
@@ -148,7 +151,7 @@ PUT /api/workspace/write
 POST /api/workspace/delete
 ```
 
-这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`context/`、`runs/`、`schedules/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
+这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`browser_profiles/`、`context/`、`runs/`、`schedules/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
 
 System API 额外保留：
 
@@ -157,11 +160,23 @@ POST /api/system/webdav-context/test
 POST /api/system/webdav-context/sync
 POST /api/system/maintenance/preview
 POST /api/system/maintenance/run
+GET /api/system/browser-profiles
+POST /api/system/browser-auth/sessions
+GET /api/system/browser-auth/sessions/{session_id}
+GET /api/system/browser-auth/sessions/{session_id}/screenshot
+POST /api/system/browser-auth/sessions/{session_id}/navigate
+POST /api/system/browser-auth/sessions/{session_id}/click
+POST /api/system/browser-auth/sessions/{session_id}/type
+POST /api/system/browser-auth/sessions/{session_id}/press
+POST /api/system/browser-auth/sessions/{session_id}/finish
+POST /api/system/browser-auth/sessions/{session_id}/cancel
 ```
 
 `/webdav-context/test` 可使用配置页当前草稿或已保存配置测试坚果云 WebDAV 连接，只返回目标 URL、HTTP 状态和是否成功，不回传账号密码；`/webdav-context/sync` 现读已保存的 `workspace/config.yaml`，手动执行一次 Context WebDAV 同步，用于配置变更后立即制作本地缓存，而不必等待后台间隔或重启服务。
 
 `/maintenance/preview` 只计算清理计划不删除文件；`/maintenance/run` 执行清理。当前默认保留期统一为 15 天：删除超过保留期且已终态的 run、超过保留期未活跃且没有活动 run 引用、也没有被 `workspace/sessions/active.json` 指向的 session、这些已删 session 在 `workspace/sessions/checkpoints.sqlite` 里的 checkpoint/writes 行、旧调度事件、旧平台日志、Agent scratch 和 Context cache 里的旧文件，以及很旧的孤立 lock；同时会清理 `active.json` 中指向已不存在 session 的脏 binding。知识库、WebDAV 文本/图片缓存、微信登录态和 Agent 长期记忆不做自动删除。自动清理不再使用单独后台 loop，而是作为 `workspace/schedules/maintenance_cleanup/` 内置定时任务落盘并显示在 `/schedules`。
+
+浏览器授权 API 用于后台管理员操作服务器上的 Playwright persistent browser profile。Profile 固定按 Agent 隔离在 `workspace/browser_profiles/{agent_id}/`，不再按微信账号或单独 service 目录拆分；授权会话启动后前端通过截图、点击、键盘输入和跳转 API 操作同一个 headless browser context，完成或取消时关闭浏览器并释放 `profile.lock.json`。Agent 不能直接调用这些授权 API，也不能选择 profile 路径。
 
 ## Frontend Routes
 
@@ -177,7 +192,7 @@ POST /api/system/maintenance/run
 - `/schedules` 是定时任务管理页面，读取 `workspace/schedules/index.json` 和每个任务详情，支持查看内置 WebDAV 同步任务和维护清理任务、创建/编辑/删除 Agent 定时任务、启用/停用、立即运行和查看调度事件；任务创建表单只暴露 `prompt + agent + trigger` 等必要字段，不在前端执行 Agent。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供新增、删除、启动和停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
 - `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录态继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存，不作为聊天历史；长期聊天会话统一写入 `workspace/sessions/{session_id}/`。
-- `/system` 是运维页，只展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，文件级查看/编辑入口保留在 `/workspace`。
+- `/system` 是运维页，展示生产更新、工作目录入口、浏览器授权和系统日志；不再承载系统配置编辑或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，文件级查看/编辑入口保留在 `/workspace`。浏览器授权区读取 `config.yaml` 中的 Agent 列表，允许管理员按 Agent 启动一个截图式 Playwright 授权会话，profile 路径固定为 `workspace/browser_profiles/{agent_id}/`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
 - Runs 工作区通过 1 分钟一次的轮询读取后端落盘状态，但前端必须保留当前详情快照、只在返回内容实际变化时更新状态，避免每次拉取 `workspace/runs/index.json` 时出现短暂重刷或 `unknown` 状态闪动。
 
@@ -200,7 +215,7 @@ POST /api/system/maintenance/run
 - `context.webdav_permissions[]` 是同步根目录下的相对路径权限规则，使用最长前缀匹配。父级可设为 `readable=true, protected=true`，子目录可单独设为 `writable=true, protected=false`；这样只需要同步一次，检索结果不会因为父子 root 重叠而重复。
 - `search_context` 合并本地 `/files/...` 与 WebDAV `/webdav/...` 缓存检索；WebDAV 工具路径不再包含 root ID。同步根目录下的远端相对路径会原样保留到本地，例如远端 `/notebook/96备忘录/OpenWrt.md` 会缓存为 `workspace/context/webdav/files/96备忘录/OpenWrt.md`，工具路径为 `/webdav/96备忘录/OpenWrt.md`，`index.json` 记录 remote path、tool path、cache path、etag、mtime、权限和类型。用户询问“最近笔记/最新文档/recent notes”时，`search_context` 会额外返回按 WebDAV `modified` 排序的 `recent_documents`，避免纯 BM25 因没有关键词命中而误判没有笔记。`write_context` 只能写匹配到 `writable=true` 且 `protected=false` 权限规则的 `/webdav/...` 路径；`protected=true` 路径可读可检索但不可写、覆盖或删除。
 - WebDAV 同步会解析 Markdown 里的 `![...](...)` 和 `<img src="...">`，把被引用的 `.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.svg` 按相对目录结构作为二进制资源缓存到 `workspace/context/webdav/files/`；这些资源不进入 `search_context` 文本索引，当前也不通过 `write_context` 写入。
-- `browser_extract(url, include_links, max_chars)` 使用 LangChain `PlayWrightBrowserToolkit` 和 Playwright headless browser 打开公开 `http/https` 页面，提取渲染后的文本和链接；后端封装会拒绝 localhost、私有网段、内网解析地址和非 `http/https` URL。浏览器启动优先使用 `browser.proxy`，未配置时回退到进程环境变量 `HTTPS_PROXY`、`HTTP_PROXY` 或 `ALL_PROXY`，导航超时由 `browser.timeout_ms` 控制，默认 60000ms。当前只暴露聚合提取工具，不直接授权点击、输入或任意导航工具。
+- `browser_extract(url, include_links, max_chars)` 使用 LangChain `PlayWrightBrowserToolkit` 和 Playwright headless browser 打开公开 `http/https` 页面，提取渲染后的文本和链接；后端封装会拒绝 localhost、私有网段、内网解析地址和非 `http/https` URL。浏览器启动优先使用 `browser.proxy`，未配置时回退到进程环境变量 `HTTPS_PROXY`、`HTTP_PROXY` 或 `ALL_PROXY`，导航超时由 `browser.timeout_ms` 控制，默认 60000ms。带 `tool_context` 的 Agent run 会自动复用 `workspace/browser_profiles/{agent_id}/` 的 Playwright persistent profile，并用 `profile.lock.json` 避免授权会话和后台抓取并发占用；工具参数仍只有 `url/include_links/max_chars`，Agent 不能传 profile ID 或路径。没有 tool context 时保持一次性无状态浏览器。
 - `schedule(action, ...)` 是单一调度管理工具，支持 `create/list/get/update/delete`。创建时只能使用当前 Agent、当前长期 session 和当前渠道投递上下文，触发器支持 `once`、`interval` 和 `cron`；`list/get/update/delete` 只能作用于 `metadata.created_by.type="agent_tool"` 且 `agent_id/session_id` 与当前 run 一致的任务，避免 Agent 删除页面或其它会话创建的定时任务。微信来源任务执行完成后，ScheduleService 会读取 run 的 `result.json` 并调用微信通道回发结果，同时更新 run 的 `delivery.json`。
 - DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 等工具由 `deepagents` 默认 middleware 提供；`deepagent.todo_list` 默认开启，`write_todos` 由运行时接入 LangChain `TodoListMiddleware`，只有 Agent 显式配置 `todo_list=false` 时关闭。
 - DeepAgent 原生 filesystem 使用 `FilesystemBackend(root_dir=workspace/agents/{agent_id}, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录，可读写 `workspace/agents/{agent_id}/` 下的 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/` 等内容；不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制已停用。
