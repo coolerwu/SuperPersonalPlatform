@@ -373,6 +373,68 @@ test("saves system config from the dedicated config menu", async () => {
   });
 });
 
+test("keeps browser authorization on a dedicated page", async () => {
+  window.history.replaceState({}, "", "/browser");
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/system/browser-profiles")) {
+      return response({
+        agents: [{ id: "assistant", name: "默认助手" }],
+        profiles: [
+          {
+            agent_id: "assistant",
+            profile_path: "/workspace/browser_profiles/assistant",
+            exists: true,
+            locked: false,
+          },
+        ],
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect(await screen.findByText("授权会话")).toBeInTheDocument();
+  expect(screen.getAllByText("/workspace/browser_profiles/assistant").length).toBeGreaterThan(0);
+  expect(screen.getByRole("button", { name: /启动授权/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^浏览器$/ })).toHaveClass("active");
+});
+
+test("system page no longer contains browser authorization", async () => {
+  window.history.replaceState({}, "", "/system");
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({ runs: [] });
+    }
+    if (path.endsWith("/api/system/logs/list")) {
+      return response({ logs: [] });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect((await screen.findAllByText("运维")).length).toBeGreaterThan(0);
+  expect(screen.getByText("生产更新、运行日志、工作目录入口")).toBeInTheDocument();
+  expect(screen.queryByText("浏览器授权")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /启动授权/ })).not.toBeInTheDocument();
+});
+
 test("saves provider config from the provider menu", async () => {
   window.history.replaceState({}, "", "/providers");
   global.fetch = vi.fn(async (url, options = {}) => {

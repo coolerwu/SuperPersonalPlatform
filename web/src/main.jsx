@@ -11,6 +11,7 @@ import {
   FileText,
   FolderOpen,
   FolderTree,
+  Globe2,
   Keyboard,
   LogOut,
   Play,
@@ -33,6 +34,7 @@ const NAV_ITEMS = [
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
   { id: "config", path: "/config", label: "配置", icon: SlidersHorizontal },
   { id: "schedules", path: "/schedules", label: "定时任务", icon: Clock3 },
+  { id: "browser", path: "/browser", label: "浏览器", icon: Globe2 },
   { id: "wechat", path: "/wechat", label: "微信", icon: Smartphone },
   { id: "system", path: "/system", label: "运维", icon: Settings },
 ];
@@ -241,6 +243,7 @@ function App() {
         {page === "providers" ? <ProviderPage onNavigate={navigate} /> : null}
         {page === "agent-config" ? <AgentConfigPage onNavigate={navigate} /> : null}
         {page === "schedules" ? <SchedulesPage /> : null}
+        {page === "browser" ? <BrowserProfilesPage /> : null}
         {page === "wechat" ? <WechatPage /> : null}
         {page === "system" ? <SystemPage onNavigate={navigate} /> : null}
       </main>
@@ -1577,13 +1580,6 @@ function ConfigFieldLite({ label, children }) {
 function SystemPage({ onNavigate }) {
   const [logs, setLogs] = useState([]);
   const [activeLog, setActiveLog] = useState("");
-  const [browserProfiles, setBrowserProfiles] = useState([]);
-  const [browserAgents, setBrowserAgents] = useState([]);
-  const [browserAgentId, setBrowserAgentId] = useState("");
-  const [browserUrl, setBrowserUrl] = useState("https://mp.weixin.qq.com/");
-  const [browserSession, setBrowserSession] = useState(null);
-  const [browserInput, setBrowserInput] = useState("");
-  const [screenshotVersion, setScreenshotVersion] = useState(0);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -1604,6 +1600,72 @@ function SystemPage({ onNavigate }) {
     const data = await api("/api/system/update-service", { method: "POST" });
     setMessage(data.message || "更新已开始");
   }
+
+  useEffect(() => {
+    loadLogs();
+  }, []);
+
+  return (
+    <section className="console-screen system-screen">
+      <section className="panel system-control-panel">
+        <div className="panel-title">
+          <div>
+            <span>运维</span>
+            <small>生产更新、运行日志、工作目录入口</small>
+          </div>
+        </div>
+        {message ? <p className="ok">{message}</p> : null}
+        {error ? <p className="error">{error}</p> : null}
+        <div className="system-actions">
+          <button className="primary" onClick={updateService}>
+            生产更新
+          </button>
+          <button onClick={() => onNavigate("workspace")}>
+            <FolderTree size={15} />
+            打开工作目录
+          </button>
+        </div>
+        <div className="ops-stack">
+          <PathBox label="配置文件" value="workspace/config.yaml（受保护，不可删除）" />
+          <PathBox label="服务更新" value="/api/system/update-service" />
+          <PathBox label="运行日志" value="workspace/logs/platform-YYYY-MM-DD.log" />
+        </div>
+      </section>
+
+      <section className="panel logs-panel">
+        <div className="panel-title">
+          <div>
+            <span>platform logs</span>
+            <small>workspace/logs/platform-YYYY-MM-DD.log</small>
+          </div>
+          <button onClick={loadLogs}>
+            <RefreshCw size={15} />
+          </button>
+        </div>
+        <div className="log-files">
+          {logs.map((log) => (
+            <button key={log.name} onClick={() => readLog(log.name)}>
+              <Clock3 size={14} />
+              {log.name}
+            </button>
+          ))}
+        </div>
+        <pre className="log-output">{activeLog || "暂无日志"}</pre>
+      </section>
+    </section>
+  );
+}
+
+function BrowserProfilesPage() {
+  const [browserProfiles, setBrowserProfiles] = useState([]);
+  const [browserAgents, setBrowserAgents] = useState([]);
+  const [browserAgentId, setBrowserAgentId] = useState("");
+  const [browserUrl, setBrowserUrl] = useState("https://mp.weixin.qq.com/");
+  const [browserSession, setBrowserSession] = useState(null);
+  const [browserInput, setBrowserInput] = useState("");
+  const [screenshotVersion, setScreenshotVersion] = useState(0);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
 
   async function loadBrowserProfiles() {
     const data = await api("/api/system/browser-profiles");
@@ -1680,55 +1742,60 @@ function SystemPage({ onNavigate }) {
   }
 
   useEffect(() => {
-    loadLogs();
     loadBrowserProfiles();
   }, []);
 
   const activeProfile = browserProfiles.find((profile) => profile.agent_id === browserAgentId) || null;
+  const profileStatus = browserSession?.status || (activeProfile?.locked ? "locked" : activeProfile?.exists ? "saved" : "empty");
 
   return (
-    <section className="console-screen system-screen">
-      <section className="panel system-control-panel">
+    <section className="console-screen browser-screen">
+      <section className="panel browser-list-panel">
         <div className="panel-title">
           <div>
-            <span>运维</span>
-            <small>生产更新、运行日志、工作目录入口</small>
+            <span>浏览器</span>
+            <small>workspace/browser_profiles/</small>
           </div>
-        </div>
-        {message ? <p className="ok">{message}</p> : null}
-        {error ? <p className="error">{error}</p> : null}
-        <div className="system-actions">
-          <button className="primary" onClick={updateService}>
-            生产更新
-          </button>
-          <button onClick={() => onNavigate("workspace")}>
-            <FolderTree size={15} />
-            打开工作目录
+          <button className="icon-button" onClick={loadBrowserProfiles} title="刷新 profile">
+            <RefreshCw size={15} />
           </button>
         </div>
-        <div className="ops-stack">
-          <PathBox label="配置文件" value="workspace/config.yaml（受保护，不可删除）" />
-          <PathBox label="服务更新" value="/api/system/update-service" />
-          <PathBox label="运行日志" value="workspace/logs/platform-YYYY-MM-DD.log" />
+        <div className="browser-profile-list">
+          {browserAgents.map((agent) => {
+            const profile = browserProfiles.find((item) => item.agent_id === agent.id);
+            const status = profile?.locked ? "locked" : profile?.exists ? "saved" : "empty";
+            return (
+              <button
+                key={agent.id}
+                className={agent.id === browserAgentId ? "browser-profile-card active" : "browser-profile-card"}
+                disabled={Boolean(browserSession)}
+                onClick={() => setBrowserAgentId(agent.id)}
+              >
+                <span>{agent.name || agent.id}</span>
+                <Status status={status} />
+                <small>{profile?.profile_path || `workspace/browser_profiles/${agent.id}`}</small>
+              </button>
+            );
+          })}
+          {browserAgents.length === 0 ? <p className="empty-state">暂无 Agent</p> : null}
         </div>
       </section>
 
-      <section className="panel browser-auth-panel">
+      <section className="panel browser-auth-panel browser-auth-workspace">
         <div className="panel-title">
           <div>
-            <span>浏览器授权</span>
-            <small>workspace/browser_profiles/{browserAgentId || "{agent_id}"}</small>
+            <span>授权会话</span>
+            <small>当前 Agent: {browserAgentId || "-"}</small>
           </div>
           <div className="config-inline-actions">
-            <button className="icon-button" onClick={loadBrowserProfiles} title="刷新 profile">
-              <RefreshCw size={15} />
-            </button>
             <button onClick={startBrowserAuth} disabled={!browserAgentId || Boolean(browserSession)}>
               <ExternalLink size={15} />
               启动授权
             </button>
           </div>
         </div>
+        {message ? <p className="ok browser-feedback">{message}</p> : null}
+        {error ? <p className="error browser-feedback">{error}</p> : null}
         <div className="browser-auth-controls">
           <ConfigFieldLite label="Agent">
             <select value={browserAgentId} disabled={Boolean(browserSession)} onChange={(event) => setBrowserAgentId(event.target.value)}>
@@ -1763,7 +1830,7 @@ function SystemPage({ onNavigate }) {
         </div>
         <div className="browser-profile-state">
           <PathBox label="Profile" value={activeProfile?.profile_path || "-"} />
-          <Kv label="状态" value={browserSession?.status || (activeProfile?.locked ? "locked" : activeProfile?.exists ? "saved" : "empty")} />
+          <Kv label="状态" value={profileStatus} />
           <Kv label="当前 URL" value={browserSession?.url || "-"} />
         </div>
         {browserSession ? (
@@ -1777,7 +1844,9 @@ function SystemPage({ onNavigate }) {
             <button className="primary" onClick={finishBrowserAuth}>
               完成授权
             </button>
-            <button className="delete-button" onClick={cancelBrowserAuth}>取消</button>
+            <button className="delete-button" onClick={cancelBrowserAuth}>
+              取消
+            </button>
           </div>
         ) : null}
         <div className="browser-screenshot-stage">
@@ -1795,27 +1864,6 @@ function SystemPage({ onNavigate }) {
             </div>
           )}
         </div>
-      </section>
-
-      <section className="panel logs-panel">
-        <div className="panel-title">
-          <div>
-            <span>platform logs</span>
-            <small>workspace/logs/platform-YYYY-MM-DD.log</small>
-          </div>
-          <button onClick={loadLogs}>
-            <RefreshCw size={15} />
-          </button>
-        </div>
-        <div className="log-files">
-          {logs.map((log) => (
-            <button key={log.name} onClick={() => readLog(log.name)}>
-              <Clock3 size={14} />
-              {log.name}
-            </button>
-          ))}
-        </div>
-        <pre className="log-output">{activeLog || "暂无日志"}</pre>
       </section>
     </section>
   );

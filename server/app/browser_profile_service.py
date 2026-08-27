@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from server.infrastructure.browser_tools import BrowserToolError, _resolve_proxy, _validate_public_url, browser_profile_dir
+from server.infrastructure.browser_tools import BrowserToolError, _validate_public_url, browser_playwright_options, browser_profile_dir, prepare_browser_context
 
 
 class BrowserAuthSessionNotFoundError(KeyError):
@@ -203,21 +203,16 @@ class BrowserProfileService:
         except Exception as exc:
             raise BrowserAuthUnavailableError("browser auth requires playwright") from exc
 
-        launch_kwargs: dict[str, Any] = {
-            "headless": True,
-            "args": ["--disable-dev-shm-usage", "--no-sandbox"],
-            "viewport": {"width": 1280, "height": 900},
-        }
-        proxy_url = _resolve_proxy(proxy)
-        if proxy_url:
-            launch_kwargs["proxy"] = {"server": proxy_url}
+        launch_kwargs, context_kwargs = browser_playwright_options(proxy)
 
         timeout = max(1000, int(timeout_ms or 60000))
         session.playwright = await async_playwright().start()
         session.context = await session.playwright.chromium.launch_persistent_context(
             str(session.profile_dir),
             **launch_kwargs,
+            **context_kwargs,
         )
+        await prepare_browser_context(session.context)
         session.context.set_default_timeout(timeout)
         session.context.set_default_navigation_timeout(timeout)
         session.page = session.context.pages[0] if session.context.pages else await session.context.new_page()

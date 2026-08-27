@@ -660,11 +660,24 @@ pre {
   white-space: nowrap;
 }
 
-.workspace-layout,
-.system-screen {
+.workspace-layout {
   display: grid;
   grid-template-columns: minmax(480px, 1.2fr) minmax(360px, 0.8fr);
   gap: 14px;
+}
+
+.system-screen {
+  display: grid;
+  grid-template-columns: minmax(380px, 0.8fr) minmax(520px, 1.2fr);
+  gap: 14px;
+}
+
+.browser-screen {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.35fr) minmax(680px, 1fr);
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .workspace-screen {
@@ -1775,6 +1788,66 @@ pre {
   padding-bottom: 14px;
 }
 
+.browser-auth-workspace {
+  min-height: calc(100vh - 56px);
+}
+
+.browser-list-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.browser-profile-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+.browser-profile-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  justify-content: stretch;
+  min-height: 86px;
+  border-color: var(--line);
+  background: #0b121a;
+  text-align: left;
+}
+
+.browser-profile-card.active {
+  border-color: rgba(23, 168, 245, 0.72);
+  background: rgba(23, 168, 245, 0.12);
+}
+
+.browser-profile-card span,
+.browser-profile-card small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-profile-card span {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.browser-profile-card small {
+  grid-column: 1 / -1;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.browser-feedback {
+  margin-inline: 14px;
+}
+
 .browser-auth-controls,
 .browser-profile-state,
 .browser-session-actions,
@@ -1933,7 +2006,8 @@ pre {
   .workspace-file-layout,
   .schedules-grid,
   .wechat-layout,
-  .system-screen {
+  .system-screen,
+  .browser-screen {
     grid-template-columns: 1fr;
   }
 

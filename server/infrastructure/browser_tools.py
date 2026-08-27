@@ -21,6 +21,12 @@ class BrowserProfileInUseError(RuntimeError):
     pass
 
 
+_DESKTOP_CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+
 @dataclass
 class BrowserProfileLock:
     profile_dir: Path
@@ -51,18 +57,11 @@ def build_browser_extract_tool(
         max_chars = max(1000, min(int(max_chars or 12000), 50000))
         navigation_timeout_ms = max(1000, int(timeout_ms or 60000))
         try:
-            from langchain_community.agent_toolkits import PlayWrightBrowserToolkit
             from playwright.async_api import async_playwright
         except Exception as exc:
-            raise RuntimeError("browser_extract requires langchain-community and playwright") from exc
+            raise RuntimeError("browser_extract requires playwright") from exc
 
-        launch_kwargs: dict[str, Any] = {
-            "headless": True,
-            "args": ["--disable-dev-shm-usage", "--no-sandbox"],
-        }
-        proxy_url = _resolve_proxy(proxy)
-        if proxy_url:
-            launch_kwargs["proxy"] = {"server": proxy_url}
+        launch_kwargs, context_kwargs = browser_playwright_options(proxy)
         playwright = await async_playwright().start()
         profile_lock: BrowserProfileLock | None = None
         browser = None
@@ -79,51 +78,42 @@ def build_browser_extract_tool(
                 browser_context = await playwright.chromium.launch_persistent_context(
                     str(profile_dir),
                     **launch_kwargs,
+                    **context_kwargs,
                 )
             else:
                 browser = await playwright.chromium.launch(**launch_kwargs)
-                browser_context = await browser.new_context()
+                browser_context = await browser.new_context(**context_kwargs)
+            await prepare_browser_context(browser_context)
             browser_context.set_default_timeout(navigation_timeout_ms)
             browser_context.set_default_navigation_timeout(navigation_timeout_ms)
             page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
             page.set_default_timeout(navigation_timeout_ms)
             page.set_default_navigation_timeout(navigation_timeout_ms)
-            if browser is not None:
-                toolkit = PlayWrightBrowserToolkit.from_browser(async_browser=browser)
-                tools = {tool.name: tool for tool in toolkit.get_tools()}
-                navigate = tools["navigate_browser"]
-                extract_text = tools["extract_text"]
-                extract_links = tools.get("extract_hyperlinks")
-                status = await navigate.ainvoke({"url": url})
-                text = await extract_text.ainvoke({})
-                links: list[str] = []
-                if include_links and extract_links is not None:
-                    raw_links = await extract_links.ainvoke({"absolute_urls": True})
-                    parsed_links = json.loads(raw_links)
-                    if isinstance(parsed_links, list):
-                        links = [str(link) for link in parsed_links if _is_http_url(str(link))][:100]
-            else:
-                response = await page.goto(url, wait_until="domcontentloaded")
-                status = f"HTTP {response.status}" if response is not None else "navigated"
-                text = await page.locator("body").inner_text(timeout=navigation_timeout_ms)
-                links = []
-                if include_links:
-                    raw_links = await page.locator("a[href]").evaluate_all(
-                        """elements => elements.map((element) => element.href).filter(Boolean)"""
-                    )
-                    if isinstance(raw_links, list):
-                        links = [str(link) for link in raw_links if _is_http_url(str(link))][:100]
+            response = await page.goto(url, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=min(navigation_timeout_ms, 5000))
+            except Exception:
+                pass
+            status = f"HTTP {response.status}" if response is not None else "navigated"
+            text = await page.locator("body").inner_text(timeout=navigation_timeout_ms)
+            links = []
+            if include_links:
+                raw_links = await page.locator("a[href]").evaluate_all(
+                    """elements => elements.map((element) => element.href).filter(Boolean)"""
+                )
+                if isinstance(raw_links, list):
+                    links = [str(link) for link in raw_links if _is_http_url(str(link))][:100]
 
-            return json.dumps(
-                {
-                    "url": url,
-                    "status": status,
-                    "text": str(text)[:max_chars],
-                    "truncated": len(str(text)) > max_chars,
-                    "links": links,
-                },
-                ensure_ascii=False,
-            )
+            payload = {
+                "url": url,
+                "status": status,
+                "text": str(text)[:max_chars],
+                "truncated": len(str(text)) > max_chars,
+                "links": links,
+            }
+            if workspace is not None and agent_id:
+                payload["profile_path"] = browser_profile_dir(workspace, agent_id).as_posix()
+            return json.dumps(payload, ensure_ascii=False)
         finally:
             if browser_context is not None:
                 await browser_context.close()
@@ -148,6 +138,43 @@ def build_browser_extract_tool(
 def browser_profile_dir(workspace: Path, agent_id: str) -> Path:
     safe_agent_id = validate_browser_agent_id(agent_id)
     return workspace.resolve() / "browser_profiles" / safe_agent_id
+
+
+def browser_playwright_options(proxy: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
+    launch_kwargs: dict[str, Any] = {
+        "headless": True,
+        "args": [
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-infobars",
+            "--no-default-browser-check",
+            "--no-first-run",
+        ],
+    }
+    context_kwargs: dict[str, Any] = {
+        "viewport": {"width": 1365, "height": 900},
+        "user_agent": _DESKTOP_CHROME_USER_AGENT,
+        "locale": "zh-CN",
+        "timezone_id": "Asia/Shanghai",
+        "color_scheme": "light",
+        "extra_http_headers": {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+    }
+    proxy_url = _resolve_proxy(proxy)
+    if proxy_url:
+        launch_kwargs["proxy"] = {"server": proxy_url}
+    return launch_kwargs, context_kwargs
+
+
+async def prepare_browser_context(context: Any) -> None:
+    await context.add_init_script(
+        """
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        window.chrome = window.chrome || { runtime: {} };
+        """
+    )
 
 
 def validate_browser_agent_id(agent_id: str) -> str:
