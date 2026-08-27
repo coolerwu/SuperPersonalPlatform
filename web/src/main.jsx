@@ -1541,6 +1541,7 @@ function ScheduleStatePanel({ detail }) {
         <ScheduleFact label="下次运行" value={formatDateTime(state.next_run_at)} />
         <ScheduleFact label="上次运行" value={formatDateTime(state.last_run_at)} />
         <ScheduleFact label="最近 Run" value={state.last_run_id || "-"} />
+        <ScheduleFact label="重试" value={formatRetryState(state)} />
       </div>
       {state.last_error ? <PathBox label="最近错误" value={state.last_error.message || JSON.stringify(state.last_error)} /> : null}
       <div className="event-list schedule-events">
@@ -1566,6 +1567,13 @@ function ScheduleFact({ label, value }) {
       <strong title={String(displayValue)}>{displayValue}</strong>
     </div>
   );
+}
+
+function formatRetryState(state) {
+  const attempts = Number(state.retry_attempts || 0);
+  const maxAttempts = Number(state.retry_max_attempts || 0);
+  if (!attempts && !maxAttempts) return "-";
+  return `${attempts}/${maxAttempts || 3}`;
 }
 
 function ConfigFieldLite({ label, children }) {

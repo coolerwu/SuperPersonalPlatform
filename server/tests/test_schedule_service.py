@@ -82,6 +82,19 @@ class FakeRunService:
         self.delivery_statuses.append({"run_id": run_id, "status": status, "extra": extra, "error": error})
 
 
+class FlakyRunService(FakeRunService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures_remaining = 1
+
+    async def execute_run(self, run_id: str):
+        self.executed.append(run_id)
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise TimeoutError("browser timed out")
+        return {"run_id": run_id, "state": {"status": "completed"}, "result": {"content": "ok"}}
+
+
 class FakeChannelDeliveryService:
     def __init__(self) -> None:
         self.deliveries = []
@@ -191,6 +204,66 @@ def test_schedule_service_runs_agent_schedule_from_files(tmp_path) -> None:
     state = _read_json(schedule_dir / "state.json")
     assert state["status"] == "completed"
     assert state["last_run_id"] == "run_test"
+
+
+def test_schedule_service_retries_failed_agent_schedule(tmp_path) -> None:
+    settings = parse_settings(_raw_config())
+    run_service = FlakyRunService()
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=run_service,
+        system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
+        webdav_context_service=FakeWebDAVContextService(),
+    )
+    service.bootstrap()
+    due_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    schedule_dir = tmp_path / "schedules" / "retry_browser"
+    schedule_dir.mkdir(parents=True)
+    _write_json(
+        schedule_dir / "definition.json",
+        {
+            "schema_version": 1,
+            "id": "retry_browser",
+            "type": "agent_run",
+            "enabled": True,
+            "trigger": {"kind": "interval", "seconds": 3600},
+            "agent_id": "assistant",
+            "prompt": "抓取 HN",
+        },
+    )
+    _write_json(
+        schedule_dir / "state.json",
+        {
+            "schema_version": 1,
+            "schedule_id": "retry_browser",
+            "status": "idle",
+            "next_run_at": due_at,
+        },
+    )
+    index = _read_json(tmp_path / "schedules" / "index.json")
+    index["schedules"].append({"id": "retry_browser", "type": "agent_run", "enabled": True})
+    _write_json(tmp_path / "schedules" / "index.json", index)
+
+    asyncio.run(service.tick())
+
+    state = _read_json(schedule_dir / "state.json")
+    assert state["status"] == "retrying"
+    assert state["retry_attempts"] == 1
+    assert state["retry_max_attempts"] == 3
+    assert _parse_time(state["next_run_at"]) <= datetime.now(timezone.utc) + timedelta(seconds=65)
+    events = (schedule_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert "retry_scheduled" in events
+
+    state["next_run_at"] = due_at
+    _write_json(schedule_dir / "state.json", state)
+    asyncio.run(service.tick())
+
+    state = _read_json(schedule_dir / "state.json")
+    assert state["status"] == "completed"
+    assert state["retry_attempts"] == 0
+    assert run_service.executed == ["run_test", "run_test"]
 
 
 def test_schedule_service_delivers_agent_schedule_result_to_wechat(tmp_path) -> None:
@@ -324,3 +397,8 @@ def _read_json(path):
 def _write_json(path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+
+
+def _parse_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)

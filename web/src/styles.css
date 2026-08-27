@@ -1988,6 +1988,7 @@ pre {
 
 .status-running,
 .status-queued,
+.status-retrying,
 .status-scan,
 .status-connecting {
   border-color: rgba(23, 168, 245, 0.44);

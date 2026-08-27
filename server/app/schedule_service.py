@@ -17,8 +17,10 @@ from server.app.webdav_context_service import WebDAVContextService
 from server.infrastructure.config import Settings
 
 
-SCHEDULE_STATUSES = {"idle", "running", "completed", "failed", "disabled"}
+SCHEDULE_STATUSES = {"idle", "running", "retrying", "completed", "failed", "disabled"}
 BUILTIN_SCHEDULE_IDS = {"context_webdav_sync", "maintenance_cleanup"}
+SCHEDULE_RETRY_MAX_ATTEMPTS = 3
+SCHEDULE_RETRY_DELAY_SECONDS = 60
 
 
 class ScheduleNotFoundError(Exception):
@@ -227,21 +229,41 @@ class ScheduleService:
             result = await self._execute_type(definition)
         except Exception as exc:  # noqa: BLE001
             completed_at = _now()
-            next_run_at = self._next_run_at(definition, due_at=due_at, completed_at=_now_dt())
+            completed_dt = _now_dt()
+            previous_state = self._read_state(definition.id)
+            retry_attempts = int(previous_state.get("retry_attempts") or 0) + 1
+            retrying = retry_attempts <= SCHEDULE_RETRY_MAX_ATTEMPTS
+            next_run_at = (
+                (completed_dt + timedelta(seconds=SCHEDULE_RETRY_DELAY_SECONDS)).isoformat()
+                if retrying
+                else self._next_run_at(definition, due_at=due_at, completed_at=completed_dt)
+            )
             error = {"type": exc.__class__.__name__, "message": str(exc)}
             state = {
-                **self._read_state(definition.id),
-                "status": "failed",
+                **previous_state,
+                "status": "retrying" if retrying else "failed",
                 "last_status": "failed",
                 "last_error": error,
                 "last_run_at": completed_at,
                 "next_run_at": next_run_at,
+                "retry_attempts": retry_attempts,
+                "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
                 "updated_at": completed_at,
             }
             self._write_state(definition.id, state)
-            self._append_event(definition.id, "failed", error)
+            self._append_event(
+                definition.id,
+                "retry_scheduled" if retrying else "failed",
+                {
+                    **error,
+                    "retry_attempts": retry_attempts,
+                    "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
+                    "next_run_at": next_run_at,
+                },
+            )
             self._system_log_service.append_line(
-                f"schedule id={definition.id} type={definition.type} status=failed error={exc}"
+                f"schedule id={definition.id} type={definition.type} status={'retrying' if retrying else 'failed'} "
+                f"retry={retry_attempts}/{SCHEDULE_RETRY_MAX_ATTEMPTS} error={exc}"
             )
         else:
             completed_at = _now()
@@ -253,6 +275,8 @@ class ScheduleService:
                 "last_error": None,
                 "last_run_at": completed_at,
                 "next_run_at": next_run_at,
+                "retry_attempts": 0,
+                "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
                 "updated_at": completed_at,
             }
             if isinstance(result, dict) and result.get("run_id"):
@@ -382,6 +406,8 @@ class ScheduleService:
                 "last_status": "",
                 "last_error": None,
                 "last_run_id": "",
+                "retry_attempts": 0,
+                "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
                 "updated_at": now,
             },
         )
@@ -400,6 +426,8 @@ class ScheduleService:
                 "last_status": "",
                 "last_error": None,
                 "last_run_id": "",
+                "retry_attempts": 0,
+                "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
                 "seq": int(existing.get("seq") or 0),
                 "updated_at": now,
             },
@@ -475,6 +503,8 @@ class ScheduleService:
             "last_status": state.get("last_status", ""),
             "last_error": state.get("last_error"),
             "last_run_id": state.get("last_run_id", ""),
+            "retry_attempts": state.get("retry_attempts", 0),
+            "retry_max_attempts": state.get("retry_max_attempts", SCHEDULE_RETRY_MAX_ATTEMPTS),
             "updated_at": state.get("updated_at", ""),
         }
 
