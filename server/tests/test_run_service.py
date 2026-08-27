@@ -49,7 +49,7 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
         captured["options"] = options
         captured["messages"] = messages
         return f"answer: {messages[-1].content}"
@@ -98,8 +98,10 @@ def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
         captured["messages"] = messages
+        captured["checkpoint_path"] = checkpoint_path
+        captured["thread_id"] = thread_id
         return "session answer"
 
     monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
@@ -112,6 +114,8 @@ def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
     assert completed["input"]["session_id"] == session.session_id
     assert completed["state"]["session_id"] == session.session_id
     assert completed["delivery"]["session_id"] == session.session_id
+    assert captured["checkpoint_path"] == tmp_path / "sessions" / "checkpoints.sqlite"
+    assert captured["thread_id"] == session.session_id
     assert captured["messages"][-1].role == "user"
     assert captured["messages"][-1].content == "第二句"
 
@@ -151,9 +155,10 @@ def test_run_service_injects_prior_user_messages_as_session_context(tmp_path, mo
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
         captured["instructions"] = instructions
         captured["messages"] = messages
+        captured["thread_id"] = thread_id
         return "session answer"
 
     monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
@@ -172,7 +177,9 @@ def test_run_service_injects_prior_user_messages_as_session_context(tmp_path, mo
     assert "## Recent Session Context" in captured["instructions"]
     assert "每个项目控制在150-200字" in captured["instructions"]
     assert "再给我几个类似项目" not in captured["instructions"]
+    assert len(captured["messages"]) == 1
     assert captured["messages"][-1].content == "再给我几个类似项目"
+    assert captured["thread_id"] == session.session_id
 
 
 def test_run_service_persists_session_image_attachments(tmp_path, monkeypatch) -> None:
@@ -188,7 +195,7 @@ def test_run_service_persists_session_image_attachments(tmp_path, monkeypatch) -
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
         captured["messages"] = messages
         return "image answer"
 
@@ -240,7 +247,7 @@ def test_run_service_textifies_images_when_model_does_not_support_images(tmp_pat
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
         captured["messages"] = messages
         return "text-only answer"
 

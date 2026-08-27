@@ -153,8 +153,10 @@ class RunService:
             else []
         )
         fallback_attachments = _runtime_attachments(run_input.get("attachments") or [], workspace=self._workspace)
+        checkpoint_path = self._workspace / "sessions" / "checkpoints.sqlite" if session_id else None
+        runtime_history = _current_run_messages(history, run_id) if checkpoint_path is not None else history[-SESSION_RUNTIME_MESSAGE_LIMIT:]
         runtime_messages = _runtime_messages(
-            history[-SESSION_RUNTIME_MESSAGE_LIMIT:],
+            runtime_history,
             fallback_content=content,
             fallback_attachments=fallback_attachments,
             workspace=self._workspace,
@@ -197,6 +199,8 @@ class RunService:
                 instructions=effective_system_prompt,
                 messages=runtime_messages,
                 options=runtime_options,
+                checkpoint_path=checkpoint_path,
+                thread_id=session_id,
             )
         except Exception as exc:
             error = {"message": str(exc), "type": exc.__class__.__name__}
@@ -488,6 +492,11 @@ def _runtime_messages(
             )
         )
     return tuple(messages)
+
+
+def _current_run_messages(history: list[dict[str, Any]], run_id: str) -> list[dict[str, Any]]:
+    current = [item for item in history if isinstance(item, dict) and str(item.get("run_id") or "") == run_id]
+    return current[-1:] if current else []
 
 
 def _textify_image_attachments(

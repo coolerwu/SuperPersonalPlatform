@@ -93,6 +93,8 @@ class DeepAgentRuntime:
         instructions: str,
         messages: tuple[RuntimeMessage, ...],
         options: DeepAgentRuntimeOptions,
+        checkpoint_path: Path | None = None,
+        thread_id: str = "",
     ) -> str:
         if not messages:
             raise ValueError("messages are required")
@@ -132,17 +134,22 @@ class DeepAgentRuntime:
         middleware = _deepagent_builtin_middleware(create_deep_agent, options)
         if middleware:
             create_kwargs["middleware"] = middleware
-        agent = create_deep_agent(**create_kwargs)
-
         input_messages = _to_langchain_messages(messages, HumanMessage, AIMessage, self._model.provider)
         input_state: dict[str, Any] = {"messages": input_messages}
-        result = await agent.ainvoke(
-            input_state,
-            config={
-                "recursion_limit": options.max_iterations,
-                "metadata": {"assistant_id": self._agent_id},
-            },
-        )
+        invoke_config = _invoke_config(options, assistant_id=self._agent_id, thread_id=thread_id)
+        if checkpoint_path is not None and thread_id.strip():
+            try:
+                from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+            except Exception as exc:
+                raise RuntimeError("DeepAgent checkpointing requires langgraph-checkpoint-sqlite") from exc
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
+                create_kwargs["checkpointer"] = checkpointer
+                agent = create_deep_agent(**create_kwargs)
+                result = await agent.ainvoke(input_state, config=invoke_config)
+        else:
+            agent = create_deep_agent(**create_kwargs)
+            result = await agent.ainvoke(input_state, config=invoke_config)
         return self._extract_content(result)
 
     def _chat_model(self):
@@ -188,6 +195,17 @@ def _runtime_instructions(instructions: str, options: DeepAgentRuntimeOptions) -
     if not options.use_longterm_memory:
         return base
     return f"{base}\n\n{LONGTERM_MEMORY_PROMPT}".strip()
+
+
+def _invoke_config(options: DeepAgentRuntimeOptions, *, assistant_id: str, thread_id: str) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "recursion_limit": options.max_iterations,
+        "metadata": {"assistant_id": assistant_id},
+    }
+    normalized_thread_id = thread_id.strip()
+    if normalized_thread_id:
+        config["configurable"] = {"thread_id": normalized_thread_id}
+    return config
 
 
 def _longterm_memory_sources(agent_workspace: Path, options: DeepAgentRuntimeOptions) -> list[str]:

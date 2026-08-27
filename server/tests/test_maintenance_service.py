@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -91,6 +92,30 @@ def test_maintenance_keeps_active_bound_session_and_removes_stale_binding(tmp_pa
     assert [item["key"] for item in active["bindings"]] == ["current"]
 
 
+def test_maintenance_deletes_checkpoint_rows_for_deleted_sessions(tmp_path: Path) -> None:
+    old = datetime.now(timezone.utc) - timedelta(days=16)
+    _write_session(tmp_path, "session_old", old)
+    _write_session(tmp_path, "session_kept", old)
+    _write_run(tmp_path, "run_active", "running", old, session_id="session_kept")
+    checkpoint_path = tmp_path / "sessions" / "checkpoints.sqlite"
+    _write_checkpoint_rows(checkpoint_path, "session_old")
+    _write_checkpoint_rows(checkpoint_path, "session_kept")
+
+    report = MaintenanceService(tmp_path, MaintenanceConfig(retention_days=15)).cleanup(dry_run=False)
+
+    conn = sqlite3.connect(checkpoint_path)
+    try:
+        old_rows = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", ("session_old",)).fetchone()[0]
+        kept_rows = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", ("session_kept",)).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert report["summary"]["sessions"] == 1
+    assert report["summary"]["checkpoints"] == 1
+    assert old_rows == 0
+    assert kept_rows == 1
+
+
 def test_maintenance_trims_schedule_events_logs_scratch_and_cache(tmp_path: Path) -> None:
     old = datetime.now(timezone.utc) - timedelta(days=16)
     recent = datetime.now(timezone.utc) - timedelta(days=1)
@@ -172,6 +197,52 @@ def _write_session(workspace: Path, session_id: str, updated_at: datetime) -> No
     index = _read_json(index_path) if index_path.exists() else {"schema_version": 1, "sessions": []}
     index["sessions"].append({"session_id": session_id, "status": "active", "updated_at": updated_at.isoformat()})
     _write_json(index_path, index)
+
+
+def _write_checkpoint_rows(path: Path, thread_id: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL,
+                parent_checkpoint_id TEXT,
+                type TEXT,
+                checkpoint BLOB,
+                metadata BLOB,
+                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+            );
+            CREATE TABLE IF NOT EXISTS writes (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                idx INTEGER NOT NULL,
+                channel TEXT NOT NULL,
+                type TEXT,
+                value BLOB,
+                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+            );
+            """
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO checkpoints "
+            "(thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+            "VALUES (?, '', 'checkpoint-1', NULL, 'msgpack', x'00', x'00')",
+            (thread_id,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO writes "
+            "(thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) "
+            "VALUES (?, '', 'checkpoint-1', 'task-1', 0, 'messages', 'msgpack', x'00')",
+            (thread_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _append_jsonl(path: Path, payload: dict) -> None:

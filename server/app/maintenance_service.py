@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,8 @@ class MaintenanceService:
         )
         protected_session_ids = self._protected_session_ids(cutoff)
         self._clean_runs(cutoff, report, dry_run=effective_dry_run)
-        self._clean_sessions(cutoff, protected_session_ids, report, dry_run=effective_dry_run)
+        deleted_session_ids = self._clean_sessions(cutoff, protected_session_ids, report, dry_run=effective_dry_run)
+        self._clean_session_checkpoints(deleted_session_ids, report, dry_run=effective_dry_run)
         self._clean_active_session_bindings(report, dry_run=effective_dry_run)
         self._trim_schedule_events(cutoff, report, dry_run=effective_dry_run)
         self._clean_logs(cutoff, report, dry_run=effective_dry_run)
@@ -104,13 +106,14 @@ class MaintenanceService:
         report: dict[str, Any],
         *,
         dry_run: bool,
-    ) -> None:
+    ) -> set[str]:
         index_path = self._workspace / "sessions" / "index.json"
         original = _read_index(index_path, "sessions")
         sessions = original.get("sessions") if isinstance(original, dict) else []
         if not isinstance(sessions, list):
             sessions = []
         kept: list[Any] = []
+        deleted_session_ids: set[str] = set()
         changed = False
         for item in sessions:
             if not isinstance(item, dict):
@@ -127,11 +130,59 @@ class MaintenanceService:
                 _add_item(report, "sessions", path, "inactive session older than retention", size)
                 if not dry_run:
                     shutil.rmtree(path, ignore_errors=True)
+                deleted_session_ids.add(session_id)
                 changed = True
                 continue
             kept.append(item)
         if changed and not dry_run:
             _write_json(index_path, {"schema_version": 1, "sessions": kept})
+        return deleted_session_ids
+
+    def _clean_session_checkpoints(
+        self,
+        session_ids: set[str],
+        report: dict[str, Any],
+        *,
+        dry_run: bool,
+    ) -> None:
+        checkpoint_path = self._workspace / "sessions" / "checkpoints.sqlite"
+        if not session_ids or not checkpoint_path.exists():
+            return
+        safe_session_ids = {item for item in session_ids if item and "/" not in item and "\\" not in item}
+        if not safe_session_ids:
+            return
+        try:
+            conn = sqlite3.connect(checkpoint_path, timeout=1)
+        except sqlite3.Error:
+            return
+        try:
+            deleted_rows = 0
+            for table in ("checkpoints", "writes"):
+                if not _sqlite_table_exists(conn, table):
+                    continue
+                for session_id in safe_session_ids:
+                    row = conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE thread_id = ?",
+                        (session_id,),
+                    ).fetchone()
+                    deleted_rows += int(row[0])
+                    if not dry_run:
+                        conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (session_id,))
+            if deleted_rows:
+                _add_item(
+                    report,
+                    "checkpoints",
+                    checkpoint_path,
+                    f"checkpoint rows for {len(safe_session_ids)} deleted sessions",
+                    0,
+                )
+                report["items"][-1]["rows"] = deleted_rows
+            if not dry_run:
+                conn.commit()
+        except sqlite3.Error:
+            return
+        finally:
+            conn.close()
 
     def _clean_active_session_bindings(self, report: dict[str, Any], *, dry_run: bool) -> None:
         active_path = self._workspace / "sessions" / "active.json"
@@ -256,6 +307,7 @@ def _empty_report(*, dry_run: bool, retention_days: int, cutoff: datetime) -> di
             "runs": 0,
             "sessions": 0,
             "session_bindings": 0,
+            "checkpoints": 0,
             "schedule_events": 0,
             "logs": 0,
             "agent_scratch": 0,
@@ -303,6 +355,14 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp_path.replace(path)
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
 
 
 def _parse_dt(value: str) -> datetime | None:

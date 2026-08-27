@@ -102,6 +102,63 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     assert (agent_dir / "memories" / "AGENTS.md").is_file()
 
 
+def test_runtime_uses_sqlite_checkpointer_when_thread_id_is_provided(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    class FakeAgent:
+        async def ainvoke(self, input_state, config):
+            await captured["create_kwargs"]["checkpointer"].setup()
+            captured["input_state"] = input_state
+            captured["config"] = config
+            return {"messages": [type("Message", (), {"content": "checkpoint ok"})()]}
+
+    def fake_create_deep_agent(**kwargs):
+        captured["create_kwargs"] = kwargs
+        return FakeAgent()
+
+    import deepagents
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", fake_create_deep_agent)
+    model = ModelDefinition(
+        id="default",
+        name="Default",
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="gpt-4o-mini",
+    )
+    checkpoint_path = tmp_path / "sessions" / "checkpoints.sqlite"
+    runtime = DeepAgentRuntime(
+        model,
+        context_workspace=tmp_path / "context",
+        agent_workspace=tmp_path / "agents" / "assistant",
+    )
+
+    result = asyncio.run(
+        runtime.run(
+            instructions="base prompt",
+            messages=(RuntimeMessage(role="user", content="hello"),),
+            options=DeepAgentRuntimeOptions(),
+            checkpoint_path=checkpoint_path,
+            thread_id="session_1",
+        )
+    )
+
+    assert result == "checkpoint ok"
+    assert checkpoint_path.exists()
+    assert type(captured["create_kwargs"]["checkpointer"]).__name__ == "AsyncSqliteSaver"
+    assert captured["config"]["configurable"]["thread_id"] == "session_1"
+    assert captured["config"]["metadata"]["assistant_id"] == "assistant"
+    import sqlite3
+
+    conn = sqlite3.connect(checkpoint_path)
+    try:
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'checkpoints'",
+        ).fetchone()
+    finally:
+        conn.close()
+
+
 def test_longterm_memory_prompt_points_memory_requests_to_memories_path() -> None:
     prompt = _runtime_instructions("base prompt", DeepAgentRuntimeOptions(use_longterm_memory=True))
 

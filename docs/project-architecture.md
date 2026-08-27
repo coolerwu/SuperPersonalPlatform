@@ -20,13 +20,13 @@
 - `workspace/runs/index.json` 维护所有 run 的摘要和当前状态。
 - 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json`、`lock.json` 和 `delivery.json`。
 - 统一调度器使用 `workspace/schedules/` 落盘调度定义和状态；WebDAV Context 同步和未来 Agent 定时任务共用这一套调度机制。
-- `workspace/sessions/index.json` 维护所有长期会话索引；`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`。
+- `workspace/sessions/index.json` 维护所有长期会话索引；`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`，DeepAgent/LangGraph 运行时状态统一写入 `workspace/sessions/checkpoints.sqlite`。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
 - `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`use_longterm_memory`、`interrupt_on` 和 `tools`。`filesystem.enabled` 作为配置兼容字段保留，但 DeepAgent 运行时始终把原生 filesystem 锚定到当前 Agent 私有目录。
 - 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`search_session`、`arxiv`、`yahoo_finance_news`、`write_context`、`browser_extract` 和 `schedule`。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
-- 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 active key，通过 `workspace/sessions/active.json` 找到当前 `session_id`，再创建 `source=wechat` 的 run；用户在微信发送“清空上下文 / 清空会话 / 开启新会话 / 新会话 / /clear / /new”时，通道层会归档旧 session 并为同一渠道身份切换到新的 active session。DeepAgent 执行前读取当前 session 的历史消息，并把近期用户要求额外注入 system prompt 作为同会话上下文，完成后由平台投递微信回复。
+- 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 active key，通过 `workspace/sessions/active.json` 找到当前 `session_id`，再创建 `source=wechat` 的 run；用户在微信发送“清空上下文 / 清空会话 / 开启新会话 / 新会话 / /clear / /new”时，通道层会归档旧 session 并为同一渠道身份切换到新的 active session。带 `session_id` 的 DeepAgent run 使用同一个 SQLite checkpointer 恢复 LangGraph 状态，只把当前 run 消息作为本次输入；`messages.jsonl` 继续保存渠道历史、审计和 `search_session` 检索数据，并把近期用户要求额外注入 system prompt 作为同会话上下文，完成后由平台投递微信回复。
 
 ## Target Workspace Layout
 
@@ -77,6 +77,7 @@ workspace/
   sessions/
     index.json
     active.json
+    checkpoints.sqlite
     {session_id}/
       state.json
       messages.jsonl
@@ -111,7 +112,7 @@ GET /api/runs/{run_id}
 GET /api/runs/{run_id}/events?after={seq}
 ```
 
-`POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`。未传 `session_id` 时按独立一次性 run 处理；微信通道会传入全局长期会话 ID，并把图片等附件保存到 `workspace/sessions/{session_id}/attachments/` 后再执行 run。该接口保留给渠道接入、自动化和后端集成使用，当前前端 Runs 页面不暴露手动创建入口。
+`POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`。未传 `session_id` 时按独立一次性 run 处理，不启用 checkpoint；传入 `session_id` 时，运行时使用 `workspace/sessions/checkpoints.sqlite` 作为 LangGraph SQLite checkpointer，并把 `configurable.thread_id` 设为该 `session_id`。微信通道会传入全局长期会话 ID，并把图片等附件保存到 `workspace/sessions/{session_id}/attachments/` 后再执行 run。该接口保留给渠道接入、自动化和后端集成使用，当前前端 Runs 页面不暴露手动创建入口。
 
 Schedule 落盘模型：
 
@@ -160,7 +161,7 @@ POST /api/system/maintenance/run
 
 `/webdav-context/test` 可使用配置页当前草稿或已保存配置测试坚果云 WebDAV 连接，只返回目标 URL、HTTP 状态和是否成功，不回传账号密码；`/webdav-context/sync` 现读已保存的 `workspace/config.yaml`，手动执行一次 Context WebDAV 同步，用于配置变更后立即制作本地缓存，而不必等待后台间隔或重启服务。
 
-`/maintenance/preview` 只计算清理计划不删除文件；`/maintenance/run` 执行清理。当前默认保留期统一为 15 天：删除超过保留期且已终态的 run、超过保留期未活跃且没有活动 run 引用、也没有被 `workspace/sessions/active.json` 指向的 session、旧调度事件、旧平台日志、Agent scratch 和 Context cache 里的旧文件，以及很旧的孤立 lock；同时会清理 `active.json` 中指向已不存在 session 的脏 binding。知识库、WebDAV 文本/图片缓存、微信登录态和 Agent 长期记忆不做自动删除。自动清理不再使用单独后台 loop，而是作为 `workspace/schedules/maintenance_cleanup/` 内置定时任务落盘并显示在 `/schedules`。
+`/maintenance/preview` 只计算清理计划不删除文件；`/maintenance/run` 执行清理。当前默认保留期统一为 15 天：删除超过保留期且已终态的 run、超过保留期未活跃且没有活动 run 引用、也没有被 `workspace/sessions/active.json` 指向的 session、这些已删 session 在 `workspace/sessions/checkpoints.sqlite` 里的 checkpoint/writes 行、旧调度事件、旧平台日志、Agent scratch 和 Context cache 里的旧文件，以及很旧的孤立 lock；同时会清理 `active.json` 中指向已不存在 session 的脏 binding。知识库、WebDAV 文本/图片缓存、微信登录态和 Agent 长期记忆不做自动删除。自动清理不再使用单独后台 loop，而是作为 `workspace/schedules/maintenance_cleanup/` 内置定时任务落盘并显示在 `/schedules`。
 
 ## Frontend Routes
 
@@ -185,9 +186,9 @@ POST /api/system/maintenance/run
 - 单 token 登录，登录状态通过 HttpOnly cookie 保存。
 - 配置从 active workspace 的 `config.yaml` 读取。
 - 个人微信通过 Tencent iLink Bot HTTP API 接入。
-- 微信文本和图片输入都进入当前活跃长期 session。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` active key 下的文本和图片统一缓冲 5 秒；窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复。用户发出明确清空/新会话命令时不会创建 run，而是直接轮换 `workspace/sessions/active.json` 中对应 binding，让后续消息进入新的 `workspace/sessions/{session_id}/`。图片解析支持 iLink 的 `image_item`/`file_item`、base64/data URL、直接媒体 URL，以及 `media.encrypt_query_param`/`aeskey` 形式的 CDN 加密媒体；下载或解密失败会记录 `image_warning` 日志而不是静默丢失。DeepAgent 执行时最多读取最近 120 条 session 消息，其中最近 60 条作为普通对话消息传入，同时把当前 run 之前最多 20 条用户消息压缩成 `Recent Session Context` 注入 system prompt，要求 Agent 在未被最新消息明确覆盖时继续遵守这些约束。模型未在 Provider 中启用 `supports_images` 时，后端不会把图片二进制或 `image_url` 传给 DeepAgent，而是把图片附件文件名、MIME、大小和 workspace 路径追加为文本说明后继续调用当前主模型；该降级不读取图片画面内容。
+- 微信文本和图片输入都进入当前活跃长期 session。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` active key 下的文本和图片统一缓冲 5 秒；窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复。用户发出明确清空/新会话命令时不会创建 run，而是直接轮换 `workspace/sessions/active.json` 中对应 binding，让后续消息进入新的 `workspace/sessions/{session_id}/`。图片解析支持 iLink 的 `image_item`/`file_item`、base64/data URL、直接媒体 URL，以及 `media.encrypt_query_param`/`aeskey` 形式的 CDN 加密媒体；下载或解密失败会记录 `image_warning` 日志而不是静默丢失。带 `session_id` 的 DeepAgent 执行使用 `workspace/sessions/checkpoints.sqlite` 恢复同一 `session_id` 的 LangGraph checkpoint，运行时只传当前 run 消息，避免把 `messages.jsonl` 历史和 checkpoint 状态重复叠加；同时把当前 run 之前最多 20 条用户消息压缩成 `Recent Session Context` 注入 system prompt，要求 Agent 在未被最新消息明确覆盖时继续遵守这些约束。模型未在 Provider 中启用 `supports_images` 时，后端不会把图片二进制或 `image_url` 传给 DeepAgent，而是把图片附件文件名、MIME、大小和 workspace 路径追加为文本说明后继续调用当前主模型；该降级不读取图片画面内容。
 - 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
-- DeepAgent 依赖 `deepagents>=0.7.8,<0.8` 和 LangGraph；后端任务执行结果必须落盘。生产依赖同时固定 `cryptography>=38,<49`，避免部署时走不兼容本机 Rust 工具链的源码构建路径。
+- DeepAgent 依赖 `deepagents>=0.7.8,<0.8`、LangGraph 和 `langgraph-checkpoint-sqlite`；后端任务执行结果必须落盘，带 `session_id` 的任务还会把 LangGraph checkpoint 写入统一 SQLite 文件。生产依赖同时固定 `cryptography>=38,<49`，避免部署时走不兼容本机 Rust 工具链的源码构建路径。
 - `search_context` 检索 `workspace/context/knowledge/files/` 中的 `.md`、`.txt`、`.json`、`.jsonl` 文本知识，返回 `/files/...` 工具路径、分数和片段。
 - `search_session(query, top_k, role)` 只检索当前 run 的 `session_id` 对应 `workspace/sessions/{session_id}/messages.jsonl`，不允许 Agent 指定其它 session。该工具用于用户引用“刚才/前面/之前/那张图/那个链接”等同一微信或 API 长期会话中的历史消息时，按关键词返回消息序号、角色、时间、run ID、片段和附件元数据。
 - `arxiv(query, top_k)` 使用 LangChain Community 的 arXiv wrapper 检索论文，依赖 `arxiv` 包，运行时内置全局 3 秒请求间隔，作为免费学术/知识工具授权给需要的 Agent。
@@ -209,7 +210,7 @@ POST /api/system/maintenance/run
 - 运行时会在 Agent system prompt 中注入平台记忆边界：Agent 特定记忆按 DeepAgent `MemoryMiddleware` 注入的 memory guidelines 更新 `/memories/AGENTS.md`；只有用户明确要求保存到知识库、文档或共享资料时才调用 `write_context`。用户询问笔记、最近笔记、同步文档、WebDAV 文件、知识库内容或 notebook 条目时，必须先调用 `search_context`；`/memories/...` 只代表 Agent 自己的长期记忆，不代表用户的同步笔记。
 - 历史 `workspace/agents/{agent_id}/memory/store.json` 是旧版 DeepAgent store 遗留路径，不由运行时代码或迁移脚本自动处理。按用户偏好，旧 workspace 数据收敛直接在目标机器上做一次性文件操作；配置页只展示新版 `workspace/agents/{agent_id}/memories/`。
 - 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
-- 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据，但不会删除 `workspace/sessions/active.json` 仍指向的当前会话。自动执行由统一 Scheduler 的内置 `maintenance_cleanup` 任务负责，状态和事件落在 `workspace/schedules/maintenance_cleanup/`，立即清理可使用系统 API 或 `/schedules` 的立即运行按钮。
+- 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据，但不会删除 `workspace/sessions/active.json` 仍指向的当前会话。删除过期 session 时，同步删除 `workspace/sessions/checkpoints.sqlite` 里该 `thread_id` 的 checkpoint/writes 行。自动执行由统一 Scheduler 的内置 `maintenance_cleanup` 任务负责，状态和事件落在 `workspace/schedules/maintenance_cleanup/`，立即清理可使用系统 API 或 `/schedules` 的立即运行按钮。
 - 生产更新锁文件固定写入 `workspace/logs/update-service.lock`。历史 `workspace/.run/` 已退役，不再保存微信登录态或更新锁；生产升级前必须把旧 `workspace/.run/wechat_session*.json` 移到 `workspace/channels/wechat/sessions/`，再删除空 `.run` 目录。
 
 ## Removed From Target Architecture
@@ -237,7 +238,7 @@ POST /api/system/maintenance/run
 
 - `AGENTS.md` 是仓库级 Codex 指令入口。
 - `config.example.yaml` 是 workspace 配置模板，不得放入真实密钥。
-- 使用平台工具需要安装对应 Python 依赖：`browser_extract` 依赖 `langchain-community`、`playwright`、`beautifulsoup4` 和 `lxml`；`arxiv` 依赖 `langchain-community` 和 `arxiv`；`yahoo_finance_news` 依赖 `langchain-community` 和 `yfinance`。`run.sh dev/prod` 会在依赖安装后检查并执行 `python -m playwright install chromium` 准备浏览器二进制。
+- 使用平台工具和运行时能力需要安装对应 Python 依赖：会话 checkpoint 依赖 `langgraph-checkpoint-sqlite`；`browser_extract` 依赖 `langchain-community`、`playwright`、`beautifulsoup4` 和 `lxml`；`arxiv` 依赖 `langchain-community` 和 `arxiv`；`yahoo_finance_news` 依赖 `langchain-community` 和 `yfinance`。`run.sh dev/prod` 会在依赖安装后检查并执行 `python -m playwright install chromium` 准备浏览器二进制。
 - 当前生产 systemd unit 直接运行 `.venv/bin/python -m server`，单独 `systemctl restart` 不会安装新依赖；提交后远端部署必须在 pull 和 HEAD 校验之后执行 `.venv/bin/python -m pip install .`，并确保 Playwright Chromium 已安装，再重启服务。
 - `config.yaml` 属于本地 workspace 数据，不提交。
 - 开发启动使用 `./run-dev.sh` 或 `./run.sh dev`。
