@@ -434,6 +434,71 @@ class SessionService:
         scored.sort(key=lambda item: (item[0], int(item[1].get("seq") or 0)), reverse=True)
         return [message for _, message in scored[:max_items]]
 
+    def search_related_sessions(
+        self,
+        session_id: str,
+        *,
+        query: str,
+        limit: int = 8,
+        role: str = "",
+    ) -> list[dict[str, Any]]:
+        current = self.session_summary(session_id)
+        if not current:
+            return []
+        normalized_role = str(role or "").strip().lower()
+        max_items = min(max(int(limit or 8), 1), 20)
+        active_session_ids = self._active_session_ids()
+        groups: list[dict[str, Any]] = []
+        for summary in self._related_session_summaries(current):
+            candidate_id = str(summary.get("session_id") or "").strip()
+            if not candidate_id or not self.exists(candidate_id):
+                continue
+            hits: list[dict[str, Any]] = []
+            score = 0
+            for message in self.read_messages(candidate_id, limit=5000):
+                if normalized_role and str(message.get("role") or "").lower() != normalized_role:
+                    continue
+                message_score = _message_search_score(message, query)
+                if message_score <= 0:
+                    continue
+                score += message_score
+                enriched = dict(message)
+                enriched["_score"] = message_score
+                hits.append(enriched)
+            if not hits:
+                continue
+            hits.sort(key=lambda item: (int(item.get("_score") or 0), int(item.get("seq") or 0)), reverse=True)
+            groups.append(
+                {
+                    "session": {
+                        "session_id": candidate_id,
+                        "channel": summary.get("channel", ""),
+                        "channel_account_id": summary.get("channel_account_id", ""),
+                        "peer_type": summary.get("peer_type", ""),
+                        "peer_id": summary.get("peer_id", ""),
+                        "agent_id": summary.get("agent_id", ""),
+                        "status": summary.get("status", ""),
+                        "updated_at": summary.get("updated_at", ""),
+                        "active": candidate_id in active_session_ids,
+                    },
+                    "score": score,
+                    "hits": hits[: min(max_items, 5)],
+                }
+            )
+        groups.sort(key=lambda item: (int(item.get("score") or 0), str(item.get("session", {}).get("updated_at") or "")), reverse=True)
+        return groups[:max_items]
+
+    def session_summary(self, session_id: str) -> dict[str, Any]:
+        normalized = str(session_id or "").strip()
+        if not normalized:
+            return {}
+        for item in self._read_index().get("sessions", []):
+            if isinstance(item, dict) and str(item.get("session_id") or "") == normalized:
+                return dict(item)
+        if self.exists(normalized):
+            return self._read_state(normalized)
+        return {}
+
     def exists(self, session_id: str) -> bool:
         return (self._session_dir(session_id) / "state.json").exists()
 
@@ -528,6 +593,39 @@ class SessionService:
             return []
         return [item for item in bindings if isinstance(item, dict)]
 
+    def _active_session_ids(self) -> set[str]:
+        return {
+            session_id
+            for session_id in (str(item.get("session_id") or "").strip() for item in self._active_bindings())
+            if session_id
+        }
+
+    def _related_session_summaries(self, current: dict[str, Any]) -> list[dict[str, Any]]:
+        active_key = str(current.get("active_key") or "").strip()
+        channel = str(current.get("channel") or "").strip()
+        channel_account_id = str(current.get("channel_account_id") or "").strip()
+        peer_type = str(current.get("peer_type") or "").strip()
+        peer_id = str(current.get("peer_id") or "").strip()
+        agent_id = str(current.get("agent_id") or "").strip()
+        related: list[dict[str, Any]] = []
+        for item in self._read_index().get("sessions", []):
+            if not isinstance(item, dict):
+                continue
+            if active_key and str(item.get("active_key") or "").strip() == active_key:
+                related.append(item)
+                continue
+            if (
+                channel
+                and str(item.get("channel") or "").strip() == channel
+                and str(item.get("channel_account_id") or "").strip() == channel_account_id
+                and str(item.get("peer_type") or "").strip() == peer_type
+                and str(item.get("peer_id") or "").strip() == peer_id
+                and str(item.get("agent_id") or "").strip() == agent_id
+            ):
+                related.append(item)
+        related.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+        return related
+
     def _new_session_id(
         self,
         *,
@@ -575,13 +673,43 @@ def _message_search_score(message: dict[str, Any], query: str) -> int:
     score = 0
     if normalized_query in normalized_content:
         score += 10 + normalized_content.count(normalized_query)
-    terms = [term for term in re.split(r"\s+", normalized_query) if term]
+    terms = _search_terms(normalized_query)
     for term in terms:
-        if len(term) < 2:
-            continue
         if term in normalized_content:
             score += 2 + normalized_content.count(term)
     return score
+
+
+def _search_terms(query: str) -> list[str]:
+    terms: list[str] = []
+    for term in re.split(r"\s+", query):
+        if _is_search_term(term):
+            terms.append(term)
+    try:
+        import jieba
+    except Exception:
+        jieba = None
+    if jieba is not None:
+        for term in jieba.cut(query):
+            normalized = str(term or "").strip().lower()
+            if _is_search_term(normalized):
+                terms.append(normalized)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        if term in seen:
+            continue
+        seen.add(term)
+        deduped.append(term)
+    return deduped
+
+
+def _is_search_term(term: str) -> bool:
+    if not term:
+        return False
+    if len(term) >= 2:
+        return True
+    return bool(re.fullmatch(r"[a-zA-Z0-9]", term))
 
 
 def _attachment_bytes(attachment: dict[str, Any]) -> bytes:

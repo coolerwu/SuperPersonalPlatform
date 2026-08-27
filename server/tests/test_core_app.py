@@ -191,6 +191,41 @@ def test_legacy_workspace_config_fields_are_ignored() -> None:
     assert settings.agent_workspace.get_agent("assistant").context_ids == ()
 
 
+def test_deepagent_defaults_enable_todo_list_and_longterm_memory() -> None:
+    settings = parse_settings(
+        {
+            "auth": {"token": "secret-token"},
+            "llm": {
+                "default_model_id": "default",
+                "models": [
+                    {
+                        "id": "default",
+                        "name": "Default",
+                        "provider": "openai_compatible",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "test-key",
+                        "model": "gpt-4o-mini",
+                    }
+                ],
+            },
+            "agents": {
+                "definitions": [
+                    {
+                        "id": "assistant",
+                        "name": "Assistant",
+                        "system_prompt": "Be direct.",
+                        "model_id": "default",
+                    }
+                ],
+            },
+        }
+    )
+
+    deepagent = settings.agent_workspace.get_agent("assistant").deepagent
+    assert deepagent.todo_list is True
+    assert deepagent.use_longterm_memory is True
+
+
 def test_system_update_routes_do_not_expose_config_editor(tmp_path) -> None:
     update_service = FakeUpdateService()
     client = make_system_client(tmp_path, update_service)

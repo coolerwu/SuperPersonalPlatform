@@ -118,9 +118,82 @@ def test_search_session_tool_scopes_to_current_session(tmp_path) -> None:
 
     result = json.loads(tools["search_session"].invoke({"query": "Lang Community", "top_k": 5}))
 
+    assert result["scope"] == "current"
     assert result["session_id"] == current.session_id
     assert [hit["run_id"] for hit in result["hits"]] == ["run_current"]
     assert "财经新闻" in result["hits"][0]["content"]
+
+
+def test_search_session_tool_searches_related_sessions_with_jieba_terms(tmp_path) -> None:
+    from server.app.session_service import SessionService
+
+    session_service = SessionService(tmp_path)
+    archived = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_current",
+        agent_id="assistant",
+    )
+    session_service.append_message(
+        archived.session_id,
+        role="user",
+        content="每天早上九点从知识库里挑十篇随机文章发给我。",
+        run_id="run_archived",
+    )
+    current = session_service.clear_active(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_current",
+        agent_id="assistant",
+    )
+    session_service.append_message(
+        current.session_id,
+        role="user",
+        content="当前会话只有普通闲聊。",
+        run_id="run_current",
+    )
+    other = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_other",
+        agent_id="assistant",
+    )
+    session_service.append_message(
+        other.session_id,
+        role="user",
+        content="知识库文章这个词在其它微信联系人里出现过。",
+        run_id="run_other",
+    )
+    tools = {
+        tool.name: tool
+        for tool in build_platform_tools(
+            ("search_session",),
+            context_workspace=tmp_path / "context",
+            tool_context=PlatformToolContext(
+                run_id="run_current",
+                source="wechat",
+                agent_id="assistant",
+                session_id=current.session_id,
+                metadata={},
+            ),
+        )
+    }
+
+    result = json.loads(
+        tools["search_session"].invoke({"query": "知识库文章", "top_k": 5, "scope": "related"})
+    )
+
+    assert result["scope"] == "related"
+    session_ids = [group["session"]["session_id"] for group in result["sessions"]]
+    assert archived.session_id in session_ids
+    assert other.session_id not in session_ids
+    archived_group = next(group for group in result["sessions"] if group["session"]["session_id"] == archived.session_id)
+    assert archived_group["session"]["active"] is False
+    assert archived_group["hits"][0]["run_id"] == "run_archived"
+    assert "知识库里挑十篇随机文章" in archived_group["hits"][0]["content"]
 
 
 def test_lang_community_tools_are_registered_without_network_calls(tmp_path) -> None:

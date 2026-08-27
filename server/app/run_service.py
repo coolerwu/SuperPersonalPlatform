@@ -23,9 +23,6 @@ from server.infrastructure.tool_runtime import PlatformToolContext
 RUN_STATUSES = {"queued", "running", "completed", "failed"}
 SESSION_HISTORY_READ_LIMIT = 120
 SESSION_RUNTIME_MESSAGE_LIMIT = 60
-SESSION_CONTEXT_USER_MESSAGE_LIMIT = 20
-SESSION_CONTEXT_MAX_CHARS = 4000
-SESSION_CONTEXT_ITEM_MAX_CHARS = 360
 
 
 class RunNotFoundError(Exception):
@@ -167,8 +164,7 @@ class RunService:
                 runtime_messages,
                 workspace=self._workspace,
             )
-        session_context = _session_context_instructions(history, current_run_id=run_id)
-        effective_system_prompt = _join_prompt_sections(system_prompt, session_context)
+        effective_system_prompt = system_prompt
         runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
         self._set_state(run_id, "running")
         self._append_event(run_id, "running", {"message": "DeepAgent started"})
@@ -550,66 +546,8 @@ def _image_attachment_metadata(attachment: RuntimeAttachment, *, workspace: Path
     return ", ".join(parts)
 
 
-def _session_context_instructions(history: list[dict[str, Any]], *, current_run_id: str) -> str:
-    user_items: list[tuple[str, str]] = []
-    for item in history:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role") or "").strip().lower()
-        if role not in {"user", "human"}:
-            continue
-        if str(item.get("run_id") or "") == current_run_id:
-            continue
-        content = _compact_session_text(str(item.get("content") or ""))
-        if not content and item.get("attachments"):
-            content = "[用户发送了附件]"
-        if content:
-            user_items.append((str(item.get("seq") or ""), content))
-
-    if not user_items:
-        return ""
-
-    selected: list[str] = []
-    remaining = SESSION_CONTEXT_MAX_CHARS
-    for seq, content in reversed(user_items[-SESSION_CONTEXT_USER_MESSAGE_LIMIT:]):
-        text = _truncate_session_text(content, SESSION_CONTEXT_ITEM_MAX_CHARS)
-        prefix = f"- seq {seq}: " if seq else "- "
-        line = f"{prefix}{text}"
-        if len(line) > remaining:
-            if remaining < 120:
-                break
-            line = _truncate_session_text(line, remaining)
-        selected.append(line)
-        remaining -= len(line) + 1
-        if remaining <= 0:
-            break
-
-    if not selected:
-        return ""
-
-    return "\n".join(
-        [
-            "## Recent Session Context",
-            "",
-            "These are earlier user messages from the same long-running session. Treat concrete requirements, constraints, preferences, and evaluation criteria here as active for this run unless the latest user message explicitly changes them.",
-            "",
-            *reversed(selected),
-        ]
-    )
-
-
 def _join_prompt_sections(*sections: str) -> str:
     return "\n\n".join(section.strip() for section in sections if section and section.strip())
-
-
-def _compact_session_text(value: str) -> str:
-    return " ".join(value.strip().split())
-
-
-def _truncate_session_text(value: str, max_chars: int) -> str:
-    if len(value) <= max_chars:
-        return value
-    return value[: max(0, max_chars - 3)].rstrip() + "..."
 
 
 def _runtime_attachments(raw: Any, *, workspace: Path) -> tuple[RuntimeAttachment, ...]:

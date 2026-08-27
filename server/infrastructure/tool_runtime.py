@@ -199,10 +199,11 @@ def _write_context_tool(service: ContextKnowledgeService, webdav_service: WebDAV
 def _search_session_tool(session_service: SessionService, tool_context: PlatformToolContext) -> Any:
     from langchain_core.tools import StructuredTool
 
-    def search_session(query: str, top_k: int = 8, role: str = "") -> str:
-        """Search the current conversation's saved session messages by keyword.
+    def search_session(query: str, top_k: int = 8, role: str = "", scope: str = "current") -> str:
+        """Search saved session messages by keyword.
 
-        This tool is scoped to the active run's session_id. It cannot search another conversation.
+        By default this searches the active run's current session. Set scope="related" to search
+        sessions from the same channel/account/peer/agent, including archived sessions after context clears.
         Use it when the user refers to earlier messages, constraints, images, links, or decisions from this same chat.
         """
         session_id = str(tool_context.session_id or "").strip()
@@ -216,6 +217,29 @@ def _search_session_tool(session_service: SessionService, tool_context: Platform
             )
         if not session_service.exists(session_id):
             return json.dumps({"hits": [], "message": "Current session does not exist."}, ensure_ascii=False)
+        normalized_scope = str(scope or "current").strip().lower()
+        if normalized_scope in {"related", "all_related", "sessions"}:
+            sessions = session_service.search_related_sessions(
+                session_id,
+                query=str(query or ""),
+                limit=min(max(int(top_k or 8), 1), 20),
+                role=str(role or ""),
+            )
+            return json.dumps(
+                {
+                    "scope": "related",
+                    "session_id": session_id,
+                    "sessions": [
+                        {
+                            "session": group["session"],
+                            "score": group["score"],
+                            "hits": [_public_session_message(message) for message in group["hits"]],
+                        }
+                        for group in sessions
+                    ],
+                },
+                ensure_ascii=False,
+            )
         hits = session_service.search_messages(
             session_id,
             query=str(query or ""),
@@ -224,6 +248,7 @@ def _search_session_tool(session_service: SessionService, tool_context: Platform
         )
         return json.dumps(
             {
+                "scope": "current",
                 "session_id": session_id,
                 "hits": [_public_session_message(message) for message in hits],
             },
@@ -234,10 +259,11 @@ def _search_session_tool(session_service: SessionService, tool_context: Platform
         search_session,
         name="search_session",
         description=(
-            "Search the current conversation session history by keyword. "
-            "The session is automatically scoped to the current run; do not provide a session_id. "
+            "Search conversation session history by keyword. "
+            "By default this searches the current session; set scope='related' to search sessions from the same channel/account/peer/agent, including archived sessions after a context clear. "
+            "The session identity is automatically scoped to the current run; do not provide a session_id. "
             "Use this when the user says things like '刚才', '前面', '之前', '那张图', '那个链接', or refers to prior constraints. "
-            "Args: query, top_k, optional role ('user' or 'assistant')."
+            "Args: query, top_k, optional role ('user' or 'assistant'), optional scope ('current' or 'related')."
         ),
     )
 

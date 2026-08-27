@@ -132,7 +132,7 @@ def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
     assert run_index["runs"][0]["session_id"] == session.session_id
 
 
-def test_run_service_injects_prior_user_messages_as_session_context(tmp_path, monkeypatch) -> None:
+def test_run_service_uses_checkpoint_without_injecting_prior_session_context(tmp_path, monkeypatch) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
     session_service = SessionService(tmp_path)
     session = session_service.get_or_create(
@@ -174,8 +174,8 @@ def test_run_service_injects_prior_user_messages_as_session_context(tmp_path, mo
     )
     asyncio.run(service.execute_run(run["run_id"]))
 
-    assert "## Recent Session Context" in captured["instructions"]
-    assert "每个项目控制在150-200字" in captured["instructions"]
+    assert "## Recent Session Context" not in captured["instructions"]
+    assert "每个项目控制在150-200字" not in captured["instructions"]
     assert "再给我几个类似项目" not in captured["instructions"]
     assert len(captured["messages"]) == 1
     assert captured["messages"][-1].content == "再给我几个类似项目"
