@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 
 class BrowserToolError(ValueError):
@@ -25,6 +25,7 @@ _DESKTOP_CHROME_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
+_BING_SEARCH_URL = "https://www.bing.com/search"
 
 
 @dataclass
@@ -131,6 +132,117 @@ def build_browser_extract_tool(
             "Use this for JavaScript-rendered pages when normal context search is insufficient. "
             "For Agent runs, the browser reuses that Agent's persistent profile under workspace/browser_profiles/{agent_id}. "
             "Args: url, include_links=true, max_chars. Private, localhost, and internal network URLs are blocked."
+        ),
+    )
+
+
+def build_browser_search_tool(
+    *,
+    proxy: str = "",
+    timeout_ms: int = 60000,
+    workspace: Path | None = None,
+    agent_id: str = "",
+) -> Any:
+    from langchain_core.tools import StructuredTool
+
+    async def browser_search(query: str, top_k: int = 5) -> str:
+        """Search the public web in a headless browser using the built-in Bing page."""
+        normalized_query = " ".join(str(query or "").split())
+        if not normalized_query:
+            raise BrowserToolError("browser_search query must contain searchable text")
+        limit = max(1, min(int(top_k or 5), 10))
+        navigation_timeout_ms = max(1000, int(timeout_ms or 60000))
+        try:
+            from playwright.async_api import async_playwright
+        except Exception as exc:
+            raise RuntimeError("browser_search requires playwright") from exc
+
+        launch_kwargs, context_kwargs = browser_playwright_options(proxy)
+        search_url = f"{_BING_SEARCH_URL}?{urlencode({'q': normalized_query, 'setlang': 'zh-CN', 'mkt': 'zh-CN'})}"
+        playwright = await async_playwright().start()
+        profile_lock: BrowserProfileLock | None = None
+        browser = None
+        browser_context = None
+        try:
+            if workspace is not None and agent_id:
+                profile_dir = browser_profile_dir(workspace, agent_id)
+                profile_lock = acquire_browser_profile_lock(
+                    profile_dir,
+                    owner=f"browser_search_{uuid.uuid4().hex}",
+                    agent_id=agent_id,
+                    purpose="browser_search",
+                )
+                browser_context = await playwright.chromium.launch_persistent_context(
+                    str(profile_dir),
+                    **launch_kwargs,
+                    **context_kwargs,
+                )
+            else:
+                browser = await playwright.chromium.launch(**launch_kwargs)
+                browser_context = await browser.new_context(**context_kwargs)
+            await prepare_browser_context(browser_context)
+            browser_context.set_default_timeout(navigation_timeout_ms)
+            browser_context.set_default_navigation_timeout(navigation_timeout_ms)
+            page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
+            page.set_default_timeout(navigation_timeout_ms)
+            page.set_default_navigation_timeout(navigation_timeout_ms)
+            response = await page.goto(search_url, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=min(navigation_timeout_ms, 5000))
+            except Exception:
+                pass
+            raw_results = await page.evaluate(
+                """limit => {
+                    const primary = Array.from(document.querySelectorAll('li.b_algo'));
+                    const rows = primary.length
+                        ? primary.map((item) => {
+                            const anchor = item.querySelector('h2 a[href], a[href]');
+                            const caption = item.querySelector('.b_caption p, p');
+                            return {
+                                title: anchor ? anchor.innerText : '',
+                                url: anchor ? anchor.href : '',
+                                snippet: caption ? caption.innerText : '',
+                            };
+                        })
+                        : Array.from(document.querySelectorAll('a[href]')).map((anchor) => ({
+                            title: anchor.innerText,
+                            url: anchor.href,
+                            snippet: '',
+                        }));
+                    return rows.slice(0, limit * 4);
+                }""",
+                limit,
+            )
+            results = _normalize_search_results(raw_results, limit=limit)
+            payload = {
+                "query": normalized_query,
+                "engine": "bing",
+                "search_url": search_url,
+                "status": f"HTTP {response.status}" if response is not None else "navigated",
+                "results": results,
+            }
+            if workspace is not None and agent_id:
+                payload["profile_path"] = browser_profile_dir(workspace, agent_id).as_posix()
+            return json.dumps(payload, ensure_ascii=False)
+        finally:
+            if browser_context is not None:
+                await browser_context.close()
+            if browser is not None:
+                await browser.close()
+            if profile_lock is not None:
+                profile_lock.release()
+            await playwright.stop()
+
+    return StructuredTool.from_function(
+        coroutine=browser_search,
+        name="browser_search",
+        description=(
+            "Search the public web in a headless Playwright browser using the built-in Bing search page. "
+            "The search engine is fixed by the platform and is not configurable. "
+            "Use this to discover source URLs for recent information, web evidence, and open-web research; "
+            "then call browser_extract on relevant result URLs before making claims. "
+            "For Agent runs, the browser reuses that Agent's persistent profile under workspace/browser_profiles/{agent_id}. "
+            "Args: query, top_k."
         ),
     )
 
@@ -255,6 +367,44 @@ def _validate_public_url(url: str) -> None:
 
 def _is_http_url(url: str) -> bool:
     return urlparse(url).scheme in {"http", "https"}
+
+
+def _normalize_search_results(raw_results: Any, *, limit: int) -> list[dict[str, str]]:
+    if not isinstance(raw_results, list):
+        return []
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        title = " ".join(str(item.get("title") or "").split())
+        url = str(item.get("url") or "").strip()
+        snippet = " ".join(str(item.get("snippet") or "").split())
+        if not title or not _is_http_url(url):
+            continue
+        if _is_search_page_url(url):
+            continue
+        if url in seen:
+            continue
+        try:
+            _validate_public_url(url)
+        except BrowserToolError:
+            continue
+        seen.add(url)
+        results.append({"title": title[:300], "url": url, "snippet": snippet[:800]})
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _is_search_page_url(url: str) -> bool:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if hostname in {"www.bing.com", "bing.com", "cn.bing.com"}:
+        return True
+    if hostname.endswith(".bing.com"):
+        return True
+    return False
 
 
 def _is_blocked_host(hostname: str) -> bool:

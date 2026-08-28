@@ -15,7 +15,7 @@ from server.app.context_knowledge_service import ContextKnowledgeService
 from server.app.session_service import SessionService
 from server.app.webdav_context_service import WebDAVContextService, run_async
 from server.domain.tooling import get_tool_definition
-from server.infrastructure.browser_tools import build_browser_extract_tool
+from server.infrastructure.browser_tools import build_browser_extract_tool, build_browser_search_tool
 from server.infrastructure.config import load_settings
 
 
@@ -61,14 +61,16 @@ def build_platform_tools(
         elif definition.id == "browser_extract":
             tool_workspace = context_workspace.parent if tool_context is not None else None
             tool_agent_id = tool_context.agent_id if tool_context is not None else ""
+            browser_kwargs = {
+                "proxy": browser_config.get("proxy", ""),
+                "timeout_ms": int(browser_config.get("timeout_ms") or 60000),
+                "workspace": tool_workspace,
+                "agent_id": tool_agent_id,
+            }
             tools.append(
-                build_browser_extract_tool(
-                    proxy=browser_config.get("proxy", ""),
-                    timeout_ms=int(browser_config.get("timeout_ms") or 60000),
-                    workspace=tool_workspace,
-                    agent_id=tool_agent_id,
-                )
+                build_browser_extract_tool(**browser_kwargs)
             )
+            tools.append(build_browser_search_tool(**browser_kwargs))
         elif definition.id == "schedule":
             if schedule_service is None or tool_context is None:
                 continue

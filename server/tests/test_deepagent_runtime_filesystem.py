@@ -167,6 +167,17 @@ def test_longterm_memory_prompt_points_memory_requests_to_memories_path() -> Non
     assert "Do not use `write_context`" in prompt
 
 
+def test_browser_extract_tool_enables_browser_research_prompt() -> None:
+    prompt = _runtime_instructions(
+        "base prompt",
+        DeepAgentRuntimeOptions(tools=("browser_extract",), use_longterm_memory=False),
+    )
+
+    assert "browser_search" in prompt
+    assert "browser_extract" in prompt
+    assert "current, recent, latest" in prompt
+
+
 def test_runtime_skips_memory_when_longterm_memory_is_disabled(tmp_path, monkeypatch) -> None:
     captured = {}
 

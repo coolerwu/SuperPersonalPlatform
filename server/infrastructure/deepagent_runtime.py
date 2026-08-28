@@ -34,6 +34,13 @@ Use `write_context` only when the user explicitly asks to save shared knowledge,
 When the user asks to look up notes, recent notes, synced documents, WebDAV files, knowledge-base content, or notebook entries, call `search_context` first. `/memories/...` is only your own long-term memory, not the user's synced notebook.
 """
 
+BROWSER_RESEARCH_PROMPT = """## Platform Browser Research
+
+When the user asks for current, recent, latest, news, open-web, or source-backed information, use `browser_search` first to discover source URLs, then call `browser_extract` on the most relevant result URLs before making claims.
+Use `browser_search` for discovery only; use `browser_extract` to read page content. Cite the source URLs you used in the answer.
+If browser search or extraction is blocked by a login, captcha, verification page, or anti-bot page, say that browser authorization or manual source text is needed instead of guessing.
+"""
+
 
 @dataclass(frozen=True)
 class RuntimeAttachment:
@@ -191,10 +198,12 @@ class DeepAgentRuntime:
 
 
 def _runtime_instructions(instructions: str, options: DeepAgentRuntimeOptions) -> str:
-    base = instructions.strip()
-    if not options.use_longterm_memory:
-        return base
-    return f"{base}\n\n{LONGTERM_MEMORY_PROMPT}".strip()
+    sections = [instructions.strip()]
+    if "browser_extract" in options.tools:
+        sections.append(BROWSER_RESEARCH_PROMPT)
+    if options.use_longterm_memory:
+        sections.append(LONGTERM_MEMORY_PROMPT)
+    return "\n\n".join(section for section in sections if section).strip()
 
 
 def _invoke_config(options: DeepAgentRuntimeOptions, *, assistant_id: str, thread_id: str) -> dict[str, Any]:

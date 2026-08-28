@@ -35,7 +35,7 @@ const AGENT_TOOL_CARDS = [
   {
     id: "browser_extract",
     name: "Browser Extract",
-    summary: "用 Playwright 打开公开网页，提取渲染后的文本和链接。",
+    summary: "用 Playwright 搜索 Bing、打开公开网页，并提取渲染后的文本和链接。",
     badge: "浏览器",
   },
   {
