@@ -85,6 +85,42 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert service.get_events(run_id, after=0)[-1]["type"] == "completed"
 
 
+def test_run_service_finds_latest_active_schedule_run(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    service = RunService(tmp_path)
+    first = asyncio.run(
+        service.create_run(
+            content="first",
+            agent_id="assistant",
+            source="schedule",
+            metadata={"schedule_id": "daily"},
+        )
+    )
+    asyncio.run(
+        service.create_run(
+            content="other",
+            agent_id="assistant",
+            source="schedule",
+            metadata={"schedule_id": "other"},
+        )
+    )
+    latest = asyncio.run(
+        service.create_run(
+            content="latest",
+            agent_id="assistant",
+            source="schedule",
+            metadata={"schedule_id": "daily"},
+        )
+    )
+
+    assert service.latest_active_run_for_schedule("daily") == latest["run_id"]
+
+    service.fail_run(latest["run_id"], error={"type": "ScheduleStaleLockError", "message": "stale"})
+
+    assert service.latest_active_run_for_schedule("daily") == first["run_id"]
+
+
 def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
     session_service = SessionService(tmp_path)

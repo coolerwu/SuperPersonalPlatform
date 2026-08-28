@@ -364,7 +364,9 @@ class ScheduleService:
             "type": "ScheduleStaleLockError",
             "message": "schedule was left running by a stale worker lock",
         }
-        current_run_id = str(state.get("current_run_id") or "").strip()
+        current_run_id = str(state.get("current_run_id") or "").strip() or self._run_service.latest_active_run_for_schedule(
+            definition.id
+        )
         if current_run_id:
             self._run_service.fail_run(current_run_id, error=error)
         self._clear_lock(definition.id)

@@ -257,6 +257,25 @@ class RunService:
         self._append_event(run_id, "failed", error)
         self._set_delivery(run_id, "failed", error=error)
 
+    def latest_active_run_for_schedule(self, schedule_id: str) -> str:
+        target_schedule_id = str(schedule_id or "").strip()
+        if not target_schedule_id:
+            return ""
+        for item in self.list_runs():
+            run_id = str(item.get("run_id") or "").strip()
+            status = str(item.get("status") or "").strip()
+            if not run_id or status in {"completed", "failed"}:
+                continue
+            try:
+                run_input = self._load_input(run_id)
+                state = _read_json(self._run_dir(run_id) / "state.json")
+            except Exception:
+                continue
+            metadata = run_input.get("metadata") if isinstance(run_input.get("metadata"), dict) else {}
+            if metadata.get("schedule_id") == target_schedule_id and state.get("status") not in {"completed", "failed"}:
+                return run_id
+        return ""
+
     def list_runs(self) -> list[dict[str, Any]]:
         index = self._read_index()
         runs = index.get("runs") if isinstance(index, dict) else []
