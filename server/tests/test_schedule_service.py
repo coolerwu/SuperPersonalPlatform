@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 from server.app.schedule_service import ScheduleService
@@ -100,6 +101,13 @@ class FlakyRunService(FakeRunService):
         if self.failures_remaining:
             self.failures_remaining -= 1
             raise TimeoutError("browser timed out")
+        return {"run_id": run_id, "state": {"status": "completed"}, "result": {"content": "ok"}}
+
+
+class SlowRunService(FakeRunService):
+    async def execute_run(self, run_id: str):
+        self.executed.append(run_id)
+        await asyncio.sleep(0.05)
         return {"run_id": run_id, "state": {"status": "completed"}, "result": {"content": "ok"}}
 
 
@@ -212,6 +220,55 @@ def test_schedule_service_runs_agent_schedule_from_files(tmp_path) -> None:
     state = _read_json(schedule_dir / "state.json")
     assert state["status"] == "completed"
     assert state["last_run_id"] == "run_test"
+
+
+def test_schedule_service_refreshes_running_heartbeat(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("server.app.schedule_service.SCHEDULE_LOCK_HEARTBEAT_SECONDS", 0.01)
+    settings = parse_settings(_raw_config())
+    run_service = SlowRunService()
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=run_service,
+        system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
+        webdav_context_service=FakeWebDAVContextService(),
+    )
+    service.bootstrap()
+    due_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    schedule_dir = tmp_path / "schedules" / "heartbeat_browser"
+    schedule_dir.mkdir(parents=True)
+    _write_json(
+        schedule_dir / "definition.json",
+        {
+            "schema_version": 1,
+            "id": "heartbeat_browser",
+            "type": "agent_run",
+            "enabled": True,
+            "trigger": {"kind": "interval", "seconds": 3600},
+            "agent_id": "assistant",
+            "prompt": "抓取网页",
+        },
+    )
+    _write_json(
+        schedule_dir / "state.json",
+        {
+            "schema_version": 1,
+            "schedule_id": "heartbeat_browser",
+            "status": "idle",
+            "next_run_at": due_at,
+        },
+    )
+    index = _read_json(tmp_path / "schedules" / "index.json")
+    index["schedules"].append({"id": "heartbeat_browser", "type": "agent_run", "enabled": True})
+    _write_json(tmp_path / "schedules" / "index.json", index)
+
+    asyncio.run(service.tick())
+
+    state = _read_json(schedule_dir / "state.json")
+    assert state["status"] == "completed"
+    assert state["heartbeat_at"]
+    assert _parse_time(state["heartbeat_at"]) >= _parse_time(state["started_at"])
 
 
 def test_schedule_service_retries_failed_agent_schedule(tmp_path) -> None:
@@ -333,6 +390,61 @@ def test_schedule_service_recovers_stale_running_schedule(tmp_path, monkeypatch)
     assert run_service.executed == []
     events = (schedule_dir / "events.jsonl").read_text(encoding="utf-8")
     assert "ScheduleStaleLockError" in events
+
+
+def test_schedule_service_recovers_stale_heartbeat_with_live_pid(tmp_path) -> None:
+    settings = parse_settings(_raw_config())
+    run_service = FakeRunService()
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=run_service,
+        system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
+        webdav_context_service=FakeWebDAVContextService(),
+    )
+    service.bootstrap()
+    due_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    heartbeat_at = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    schedule_dir = tmp_path / "schedules" / "stale_heartbeat"
+    schedule_dir.mkdir(parents=True)
+    _write_json(
+        schedule_dir / "definition.json",
+        {
+            "schema_version": 1,
+            "id": "stale_heartbeat",
+            "type": "agent_run",
+            "enabled": True,
+            "trigger": {"kind": "interval", "seconds": 3600},
+            "agent_id": "assistant",
+            "prompt": "抓取网页",
+        },
+    )
+    _write_json(
+        schedule_dir / "state.json",
+        {
+            "schema_version": 1,
+            "schedule_id": "stale_heartbeat",
+            "status": "running",
+            "next_run_at": due_at,
+            "current_run_id": "run_stale_heartbeat",
+            "retry_attempts": 0,
+        },
+    )
+    _write_json(
+        schedule_dir / "lock.json",
+        {"pid": os.getpid(), "created_at": due_at, "heartbeat_at": heartbeat_at},
+    )
+    index = _read_json(tmp_path / "schedules" / "index.json")
+    index["schedules"].append({"id": "stale_heartbeat", "type": "agent_run", "enabled": True})
+    _write_json(tmp_path / "schedules" / "index.json", index)
+
+    asyncio.run(service.tick())
+
+    state = _read_json(schedule_dir / "state.json")
+    assert state["status"] == "retrying"
+    assert not (schedule_dir / "lock.json").exists()
+    assert run_service.failed_runs[0]["run_id"] == "run_stale_heartbeat"
 
 
 def test_schedule_service_recovers_legacy_stale_running_schedule_run(tmp_path, monkeypatch) -> None:

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import shutil
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,7 +22,8 @@ SCHEDULE_STATUSES = {"idle", "running", "retrying", "completed", "failed", "disa
 BUILTIN_SCHEDULE_IDS = {"context_webdav_sync", "maintenance_cleanup"}
 SCHEDULE_RETRY_MAX_ATTEMPTS = 3
 SCHEDULE_RETRY_DELAY_SECONDS = 60
-SCHEDULE_AGENT_RUN_TIMEOUT_SECONDS = 30 * 60
+SCHEDULE_LOCK_HEARTBEAT_SECONDS = 15
+SCHEDULE_LOCK_STALE_AFTER_SECONDS = 120
 
 
 class ScheduleNotFoundError(Exception):
@@ -218,17 +220,20 @@ class ScheduleService:
         if not locked:
             return
         started_at = _now()
+        heartbeat_task: asyncio.Task[None] | None = None
         self._write_state(
             definition.id,
             {
                 **self._read_state(definition.id),
                 "status": "running",
                 "started_at": started_at,
+                "heartbeat_at": started_at,
                 "current_run_id": "",
                 "updated_at": started_at,
             },
         )
         self._append_event(definition.id, "running", {"message": "schedule started"})
+        heartbeat_task = asyncio.create_task(self._heartbeat_running_schedule(definition.id))
         try:
             result = await self._execute_type(definition)
         except Exception as exc:  # noqa: BLE001
@@ -294,6 +299,10 @@ class ScheduleService:
             self._append_event(definition.id, "completed", result if isinstance(result, dict) else {})
             self._system_log_service.append_line(f"schedule id={definition.id} type={definition.type} status=ok")
         finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_task
             self._clear_lock(definition.id)
             self._upsert_index(definition)
 
@@ -327,13 +336,25 @@ class ScheduleService:
             )
             run_id = str(run["run_id"])
             self._set_current_run(definition.id, run_id)
-            completed = await asyncio.wait_for(
-                self._run_service.execute_run(run_id),
-                timeout=SCHEDULE_AGENT_RUN_TIMEOUT_SECONDS,
-            )
+            completed = await self._run_service.execute_run(run_id)
             delivery = await self._deliver_agent_run_result(definition, completed)
             return {"message": "agent run completed", "run_id": run_id, "delivery": delivery}
         raise RuntimeError(f"unsupported schedule type: {definition.type}")
+
+    async def _heartbeat_running_schedule(self, schedule_id: str) -> None:
+        while True:
+            await asyncio.sleep(SCHEDULE_LOCK_HEARTBEAT_SECONDS)
+            heartbeat_at = _now()
+            lock_path = self._lock_path(schedule_id)
+            lock = _read_json(lock_path)
+            if isinstance(lock, dict):
+                lock["pid"] = os.getpid()
+                lock["heartbeat_at"] = heartbeat_at
+                _write_json(lock_path, lock)
+            state = self._read_state(schedule_id)
+            if state.get("status") == "running":
+                state["heartbeat_at"] = heartbeat_at
+                self._write_state(schedule_id, state)
 
     def _set_current_run(self, schedule_id: str, run_id: str) -> None:
         state = self._read_state(schedule_id)
@@ -531,7 +552,13 @@ class ScheduleService:
         except FileExistsError:
             return False
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"pid": os.getpid(), "created_at": _now()}, handle, ensure_ascii=False, sort_keys=True)
+            now = _now()
+            json.dump(
+                {"pid": os.getpid(), "created_at": now, "heartbeat_at": now},
+                handle,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
         return True
 
     def _clear_lock(self, schedule_id: str) -> None:
@@ -868,8 +895,11 @@ def _lock_is_stale(path: Path) -> bool:
     except ProcessLookupError:
         return True
     except PermissionError:
+        pass
+    heartbeat_at = _parse_dt(str(payload.get("heartbeat_at") or ""))
+    if heartbeat_at is None:
         return False
-    return False
+    return _now_dt() - heartbeat_at > timedelta(seconds=SCHEDULE_LOCK_STALE_AFTER_SECONDS)
 
 
 def _parse_dt(value: str) -> datetime | None:
