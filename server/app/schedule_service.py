@@ -21,6 +21,7 @@ SCHEDULE_STATUSES = {"idle", "running", "retrying", "completed", "failed", "disa
 BUILTIN_SCHEDULE_IDS = {"context_webdav_sync", "maintenance_cleanup"}
 SCHEDULE_RETRY_MAX_ATTEMPTS = 3
 SCHEDULE_RETRY_DELAY_SECONDS = 60
+SCHEDULE_AGENT_RUN_TIMEOUT_SECONDS = 30 * 60
 
 
 class ScheduleNotFoundError(Exception):
@@ -91,7 +92,9 @@ class ScheduleService:
                 continue
             state = self._read_state(definition.id)
             if state.get("status") == "running":
-                continue
+                if not self._recover_stale_running(definition, state, now=now):
+                    continue
+                state = self._read_state(definition.id)
             raw_next_run_at = str(state.get("next_run_at") or "")
             if not raw_next_run_at:
                 continue
@@ -221,6 +224,7 @@ class ScheduleService:
                 **self._read_state(definition.id),
                 "status": "running",
                 "started_at": started_at,
+                "current_run_id": "",
                 "updated_at": started_at,
             },
         )
@@ -239,6 +243,9 @@ class ScheduleService:
                 else self._next_run_at(definition, due_at=due_at, completed_at=completed_dt)
             )
             error = {"type": exc.__class__.__name__, "message": str(exc)}
+            current_run_id = str(previous_state.get("current_run_id") or "").strip()
+            if current_run_id:
+                self._run_service.fail_run(current_run_id, error=error)
             state = {
                 **previous_state,
                 "status": "retrying" if retrying else "failed",
@@ -248,6 +255,7 @@ class ScheduleService:
                 "next_run_at": next_run_at,
                 "retry_attempts": retry_attempts,
                 "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
+                "current_run_id": "",
                 "updated_at": completed_at,
             }
             self._write_state(definition.id, state)
@@ -277,6 +285,7 @@ class ScheduleService:
                 "next_run_at": next_run_at,
                 "retry_attempts": 0,
                 "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
+                "current_run_id": "",
                 "updated_at": completed_at,
             }
             if isinstance(result, dict) and result.get("run_id"):
@@ -317,10 +326,79 @@ class ScheduleService:
                 metadata={"schedule_id": definition.id, **(definition.metadata or {})},
             )
             run_id = str(run["run_id"])
-            completed = await self._run_service.execute_run(run_id)
+            self._set_current_run(definition.id, run_id)
+            completed = await asyncio.wait_for(
+                self._run_service.execute_run(run_id),
+                timeout=SCHEDULE_AGENT_RUN_TIMEOUT_SECONDS,
+            )
             delivery = await self._deliver_agent_run_result(definition, completed)
             return {"message": "agent run completed", "run_id": run_id, "delivery": delivery}
         raise RuntimeError(f"unsupported schedule type: {definition.type}")
+
+    def _set_current_run(self, schedule_id: str, run_id: str) -> None:
+        state = self._read_state(schedule_id)
+        state["current_run_id"] = run_id
+        state["updated_at"] = _now()
+        self._write_state(schedule_id, state)
+
+    def _recover_stale_running(
+        self,
+        definition: ScheduleDefinition,
+        state: dict[str, Any],
+        *,
+        now: datetime,
+    ) -> bool:
+        lock_path = self._lock_path(definition.id)
+        if lock_path.exists() and not _lock_is_stale(lock_path):
+            return False
+        completed_at = now.isoformat()
+        due_at = _parse_dt(str(state.get("next_run_at") or "")) or now
+        retry_attempts = int(state.get("retry_attempts") or 0) + 1
+        retrying = retry_attempts <= SCHEDULE_RETRY_MAX_ATTEMPTS
+        next_run_at = (
+            (now + timedelta(seconds=SCHEDULE_RETRY_DELAY_SECONDS)).isoformat()
+            if retrying
+            else self._next_run_at(definition, due_at=due_at, completed_at=now)
+        )
+        error = {
+            "type": "ScheduleStaleLockError",
+            "message": "schedule was left running by a stale worker lock",
+        }
+        current_run_id = str(state.get("current_run_id") or "").strip()
+        if current_run_id:
+            self._run_service.fail_run(current_run_id, error=error)
+        self._clear_lock(definition.id)
+        self._write_state(
+            definition.id,
+            {
+                **state,
+                "status": "retrying" if retrying else "failed",
+                "last_status": "failed",
+                "last_error": error,
+                "last_run_at": completed_at,
+                "next_run_at": next_run_at,
+                "retry_attempts": retry_attempts,
+                "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
+                "current_run_id": "",
+                "updated_at": completed_at,
+            },
+        )
+        self._append_event(
+            definition.id,
+            "retry_scheduled" if retrying else "failed",
+            {
+                **error,
+                "retry_attempts": retry_attempts,
+                "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
+                "next_run_at": next_run_at,
+            },
+        )
+        self._upsert_index(definition)
+        self._system_log_service.append_line(
+            f"schedule id={definition.id} type={definition.type} status={'retrying' if retrying else 'failed'} "
+            f"retry={retry_attempts}/{SCHEDULE_RETRY_MAX_ATTEMPTS} error=stale running lock"
+        )
+        return True
 
     async def _deliver_agent_run_result(
         self,

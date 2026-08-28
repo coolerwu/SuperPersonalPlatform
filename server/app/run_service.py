@@ -239,6 +239,24 @@ class RunService:
     ) -> None:
         self._set_delivery(run_id, status, extra=extra, error=error)
 
+    def fail_run(self, run_id: str, *, error: dict[str, Any]) -> None:
+        run_dir = self._run_dir(run_id)
+        if not run_dir.exists():
+            return
+        state_path = run_dir / "state.json"
+        state = _read_json(state_path)
+        if state.get("status") in {"completed", "failed"}:
+            return
+        existing_result = run_dir / "result.json"
+        if not existing_result.exists():
+            _write_json(
+                existing_result,
+                {"run_id": run_id, "status": "failed", "error": error, "completed_at": _now()},
+            )
+        self._set_state(run_id, "failed", error=error)
+        self._append_event(run_id, "failed", error)
+        self._set_delivery(run_id, "failed", error=error)
+
     def list_runs(self) -> list[dict[str, Any]]:
         index = self._read_index()
         runs = index.get("runs") if isinstance(index, dict) else []

@@ -69,6 +69,7 @@ class FakeRunService:
         self.created = []
         self.executed = []
         self.delivery_statuses = []
+        self.failed_runs = []
 
     async def create_run(self, **kwargs):
         self.created.append(kwargs)
@@ -80,6 +81,9 @@ class FakeRunService:
 
     def set_delivery_status(self, run_id: str, status: str, *, extra=None, error=None) -> None:
         self.delivery_statuses.append({"run_id": run_id, "status": status, "extra": extra, "error": error})
+
+    def fail_run(self, run_id: str, *, error: dict) -> None:
+        self.failed_runs.append({"run_id": run_id, "error": error})
 
 
 class FlakyRunService(FakeRunService):
@@ -264,6 +268,67 @@ def test_schedule_service_retries_failed_agent_schedule(tmp_path) -> None:
     assert state["status"] == "completed"
     assert state["retry_attempts"] == 0
     assert run_service.executed == ["run_test", "run_test"]
+
+
+def test_schedule_service_recovers_stale_running_schedule(tmp_path, monkeypatch) -> None:
+    settings = parse_settings(_raw_config())
+    run_service = FakeRunService()
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=run_service,
+        system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
+        webdav_context_service=FakeWebDAVContextService(),
+    )
+    service.bootstrap()
+    due_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    schedule_dir = tmp_path / "schedules" / "stale_browser"
+    schedule_dir.mkdir(parents=True)
+    _write_json(
+        schedule_dir / "definition.json",
+        {
+            "schema_version": 1,
+            "id": "stale_browser",
+            "type": "agent_run",
+            "enabled": True,
+            "trigger": {"kind": "interval", "seconds": 3600},
+            "agent_id": "assistant",
+            "prompt": "抓取网页",
+        },
+    )
+    _write_json(
+        schedule_dir / "state.json",
+        {
+            "schema_version": 1,
+            "schedule_id": "stale_browser",
+            "status": "running",
+            "next_run_at": due_at,
+            "current_run_id": "run_stale",
+            "retry_attempts": 0,
+        },
+    )
+    _write_json(schedule_dir / "lock.json", {"pid": 999999, "created_at": due_at})
+    index = _read_json(tmp_path / "schedules" / "index.json")
+    index["schedules"].append({"id": "stale_browser", "type": "agent_run", "enabled": True})
+    _write_json(tmp_path / "schedules" / "index.json", index)
+
+    def fake_kill(pid, signal):
+        raise ProcessLookupError(pid)
+
+    monkeypatch.setattr("server.app.schedule_service.os.kill", fake_kill)
+
+    asyncio.run(service.tick())
+
+    state = _read_json(schedule_dir / "state.json")
+    assert state["status"] == "retrying"
+    assert state["current_run_id"] == ""
+    assert state["retry_attempts"] == 1
+    assert not (schedule_dir / "lock.json").exists()
+    assert run_service.failed_runs[0]["run_id"] == "run_stale"
+    assert run_service.executed == []
+    events = (schedule_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert "ScheduleStaleLockError" in events
 
 
 def test_schedule_service_delivers_agent_schedule_result_to_wechat(tmp_path) -> None:

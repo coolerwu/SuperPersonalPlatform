@@ -259,6 +259,7 @@ def _acquire_profile_lock(profile_dir: Path, *, agent_id: str, owner: str, purpo
         "owner": owner,
         "agent_id": agent_id,
         "purpose": purpose,
+        "pid": os.getpid(),
         "created_at": time.time(),
     }
     try:
@@ -283,6 +284,31 @@ def _read_profile_lock(profile_dir: Path) -> dict[str, Any] | None:
 def _clear_stale_lock(lock_path: Path, *, stale_seconds: int = 3600) -> None:
     if not lock_path.exists():
         return
-    age = time.time() - lock_path.stat().st_mtime
-    if age > stale_seconds:
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    if _lock_owner_process_is_dead(payload):
         lock_path.unlink(missing_ok=True)
+        return
+    age = time.time() - lock_path.stat().st_mtime
+    if "pid" not in payload and age > stale_seconds:
+        lock_path.unlink(missing_ok=True)
+
+
+def _lock_owner_process_is_dead(payload: Any) -> bool:
+    if not isinstance(payload, dict) or "pid" not in payload:
+        return False
+    try:
+        pid = int(payload.get("pid") or 0)
+    except (TypeError, ValueError):
+        return True
+    if pid < 1:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False

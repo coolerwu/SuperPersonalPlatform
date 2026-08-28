@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import os
@@ -26,6 +27,7 @@ _DESKTOP_CHROME_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 _BING_SEARCH_URL = "https://www.bing.com/search"
+_PROFILE_LOCK_WAIT_POLL_SECONDS = 0.5
 
 
 @dataclass
@@ -63,25 +65,28 @@ def build_browser_extract_tool(
             raise RuntimeError("browser_extract requires playwright") from exc
 
         launch_kwargs, context_kwargs = browser_playwright_options(proxy)
-        playwright = await async_playwright().start()
+        playwright = None
         profile_lock: BrowserProfileLock | None = None
         browser = None
         browser_context = None
         try:
             if workspace is not None and agent_id:
                 profile_dir = browser_profile_dir(workspace, agent_id)
-                profile_lock = acquire_browser_profile_lock(
+                profile_lock = await acquire_browser_profile_lock_wait(
                     profile_dir,
                     owner=f"browser_extract_{uuid.uuid4().hex}",
                     agent_id=agent_id,
                     purpose="browser_extract",
+                    timeout_ms=navigation_timeout_ms,
                 )
+                playwright = await async_playwright().start()
                 browser_context = await playwright.chromium.launch_persistent_context(
                     str(profile_dir),
                     **launch_kwargs,
                     **context_kwargs,
                 )
             else:
+                playwright = await async_playwright().start()
                 browser = await playwright.chromium.launch(**launch_kwargs)
                 browser_context = await browser.new_context(**context_kwargs)
             await prepare_browser_context(browser_context)
@@ -122,7 +127,8 @@ def build_browser_extract_tool(
                 await browser.close()
             if profile_lock is not None:
                 profile_lock.release()
-            await playwright.stop()
+            if playwright is not None:
+                await playwright.stop()
 
     return StructuredTool.from_function(
         coroutine=browser_extract,
@@ -159,25 +165,28 @@ def build_browser_search_tool(
 
         launch_kwargs, context_kwargs = browser_playwright_options(proxy)
         search_url = f"{_BING_SEARCH_URL}?{urlencode({'q': normalized_query, 'setlang': 'zh-CN', 'mkt': 'zh-CN'})}"
-        playwright = await async_playwright().start()
+        playwright = None
         profile_lock: BrowserProfileLock | None = None
         browser = None
         browser_context = None
         try:
             if workspace is not None and agent_id:
                 profile_dir = browser_profile_dir(workspace, agent_id)
-                profile_lock = acquire_browser_profile_lock(
+                profile_lock = await acquire_browser_profile_lock_wait(
                     profile_dir,
                     owner=f"browser_search_{uuid.uuid4().hex}",
                     agent_id=agent_id,
                     purpose="browser_search",
+                    timeout_ms=navigation_timeout_ms,
                 )
+                playwright = await async_playwright().start()
                 browser_context = await playwright.chromium.launch_persistent_context(
                     str(profile_dir),
                     **launch_kwargs,
                     **context_kwargs,
                 )
             else:
+                playwright = await async_playwright().start()
                 browser = await playwright.chromium.launch(**launch_kwargs)
                 browser_context = await browser.new_context(**context_kwargs)
             await prepare_browser_context(browser_context)
@@ -231,7 +240,8 @@ def build_browser_search_tool(
                 await browser.close()
             if profile_lock is not None:
                 profile_lock.release()
-            await playwright.stop()
+            if playwright is not None:
+                await playwright.stop()
 
     return StructuredTool.from_function(
         coroutine=browser_search,
@@ -311,6 +321,7 @@ def acquire_browser_profile_lock(
         "owner": owner,
         "agent_id": safe_agent_id,
         "purpose": purpose,
+        "pid": os.getpid(),
         "created_at": time.time(),
     }
     try:
@@ -320,6 +331,30 @@ def acquire_browser_profile_lock(
     with os.fdopen(fd, "w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=False, indent=2)
     return BrowserProfileLock(profile_dir=profile_dir, lock_path=lock_path, owner=owner)
+
+
+async def acquire_browser_profile_lock_wait(
+    profile_dir: Path,
+    *,
+    owner: str,
+    agent_id: str,
+    purpose: str,
+    timeout_ms: int,
+    poll_seconds: float = _PROFILE_LOCK_WAIT_POLL_SECONDS,
+) -> BrowserProfileLock:
+    deadline = time.monotonic() + max(int(timeout_ms or 60000), 1000) / 1000
+    while True:
+        try:
+            return acquire_browser_profile_lock(
+                profile_dir,
+                owner=owner,
+                agent_id=agent_id,
+                purpose=purpose,
+            )
+        except BrowserProfileInUseError:
+            if time.monotonic() >= deadline:
+                raise
+            await asyncio.sleep(max(float(poll_seconds), 0.05))
 
 
 def read_browser_profile_lock(profile_dir: Path) -> dict[str, Any] | None:
@@ -335,8 +370,32 @@ def read_browser_profile_lock(profile_dir: Path) -> dict[str, Any] | None:
 def _clear_stale_profile_lock(lock_path: Path, *, stale_seconds: int = 3600) -> None:
     if not lock_path.exists():
         return
-    if time.time() - lock_path.stat().st_mtime > stale_seconds:
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    if _lock_owner_process_is_dead(payload) or (
+        "pid" not in payload and time.time() - lock_path.stat().st_mtime > stale_seconds
+    ):
         lock_path.unlink(missing_ok=True)
+
+
+def _lock_owner_process_is_dead(payload: Any) -> bool:
+    if not isinstance(payload, dict) or "pid" not in payload:
+        return False
+    try:
+        pid = int(payload.get("pid") or 0)
+    except (TypeError, ValueError):
+        return True
+    if pid < 1:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
 
 
 def _resolve_proxy(configured_proxy: str) -> str:

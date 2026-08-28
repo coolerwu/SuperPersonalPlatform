@@ -1,7 +1,17 @@
+import asyncio
+import json
+
 import pytest
 
 from server.domain.tooling import get_tool_definition
-from server.infrastructure.browser_tools import BrowserToolError, _normalize_search_results, _resolve_proxy, _validate_public_url
+from server.infrastructure.browser_tools import (
+    BrowserToolError,
+    acquire_browser_profile_lock,
+    acquire_browser_profile_lock_wait,
+    _normalize_search_results,
+    _resolve_proxy,
+    _validate_public_url,
+)
 from server.infrastructure.config import parse_settings
 from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
 
@@ -101,6 +111,62 @@ def test_browser_extract_receives_agent_profile_context(tmp_path, monkeypatch) -
     assert captured["extract"]["agent_id"] == "assistant"
     assert captured["search"]["workspace"] == tmp_path
     assert captured["search"]["agent_id"] == "assistant"
+
+
+def test_browser_profile_lock_waits_for_same_agent_profile(tmp_path) -> None:
+    profile_dir = tmp_path / "browser_profiles" / "assistant"
+    first_lock = acquire_browser_profile_lock(
+        profile_dir,
+        owner="first",
+        agent_id="assistant",
+        purpose="browser_extract",
+    )
+    payload = json.loads((profile_dir / "profile.lock.json").read_text(encoding="utf-8"))
+    assert payload["pid"] > 0
+
+    async def run_waiter():
+        task = asyncio.create_task(
+            acquire_browser_profile_lock_wait(
+                profile_dir,
+                owner="second",
+                agent_id="assistant",
+                purpose="browser_search",
+                timeout_ms=1000,
+                poll_seconds=0.01,
+            )
+        )
+        await asyncio.sleep(0.05)
+        first_lock.release()
+        second_lock = await task
+        second_payload = json.loads((profile_dir / "profile.lock.json").read_text(encoding="utf-8"))
+        assert second_payload["owner"] == "second"
+        second_lock.release()
+
+    asyncio.run(run_waiter())
+
+
+def test_browser_profile_lock_clears_dead_owner_pid(tmp_path, monkeypatch) -> None:
+    profile_dir = tmp_path / "browser_profiles" / "assistant"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "profile.lock.json").write_text(
+        json.dumps({"owner": "dead", "agent_id": "assistant", "purpose": "browser_extract", "pid": 999999}),
+        encoding="utf-8",
+    )
+
+    def fake_kill(pid, signal):
+        raise ProcessLookupError(pid)
+
+    monkeypatch.setattr("server.infrastructure.browser_tools.os.kill", fake_kill)
+
+    lock = acquire_browser_profile_lock(
+        profile_dir,
+        owner="live",
+        agent_id="assistant",
+        purpose="browser_extract",
+    )
+
+    assert json.loads((profile_dir / "profile.lock.json").read_text(encoding="utf-8"))["owner"] == "live"
+    lock.release()
 
 
 @pytest.mark.parametrize(
