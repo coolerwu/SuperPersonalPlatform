@@ -572,6 +572,99 @@ def test_schedule_service_delivers_agent_schedule_result_to_wechat(tmp_path) -> 
     assert "delivered" in events
 
 
+def test_schedule_service_queues_rhythmic_delivery_items(tmp_path) -> None:
+    settings = parse_settings(_raw_config())
+    run_service = FakeRunService()
+    delivery_service = FakeChannelDeliveryService()
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=run_service,
+        system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
+        webdav_context_service=FakeWebDAVContextService(),
+        channel_delivery_service=delivery_service,
+    )
+
+    async def execute_run(run_id: str):
+        run_service.executed.append(run_id)
+        return {
+            "run_id": run_id,
+            "input": {"snapshot": {"agent": {"deepagent": {"middleware": ["rhythmic_delivery"]}}}},
+            "state": {"status": "completed"},
+            "result": {
+                "content": (
+                    "<delivery-item>第一条</delivery-item>\n"
+                    "<delivery-item>第二条</delivery-item>"
+                )
+            },
+        }
+
+    run_service.execute_run = execute_run
+    service.bootstrap()
+    due_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    schedule_dir = tmp_path / "schedules" / "agent_tool_digest"
+    schedule_dir.mkdir(parents=True)
+    _write_json(
+        schedule_dir / "definition.json",
+        {
+            "schema_version": 1,
+            "id": "agent_tool_digest",
+            "type": "agent_run",
+            "enabled": True,
+            "trigger": {"kind": "once", "expr": due_at},
+            "agent_id": "assistant",
+            "prompt": "生成两条推送",
+            "session_id": "wechat_default_private_wxid",
+            "metadata": {
+                "delivery_middleware": {
+                    "id": "rhythmic_delivery",
+                    "interval_seconds": 60,
+                    "max_items": 10,
+                },
+                "delivery": {
+                    "channel": "wechat",
+                    "account_id": "default",
+                    "to_user_id": "wxid",
+                    "context_token": "reply-token",
+                },
+            },
+        },
+    )
+    _write_json(
+        schedule_dir / "state.json",
+        {
+            "schema_version": 1,
+            "schedule_id": "agent_tool_digest",
+            "status": "idle",
+            "next_run_at": due_at,
+        },
+    )
+    index = _read_json(tmp_path / "schedules" / "index.json")
+    index["schedules"].append({"id": "agent_tool_digest", "type": "agent_run", "enabled": True})
+    _write_json(tmp_path / "schedules" / "index.json", index)
+
+    asyncio.run(service.tick())
+    asyncio.run(service.tick_delivery_queue())
+
+    assert delivery_service.deliveries == [
+        {
+            "channel": "wechat",
+            "account_id": "default",
+            "to_user_id": "wxid",
+            "context_token": "reply-token",
+            "text": "第一条",
+        }
+    ]
+    assert run_service.delivery_statuses[-1]["status"] == "queued"
+    delivery_index = _read_json(tmp_path / "deliveries" / "index.json")
+    delivery_id = delivery_index["deliveries"][0]["id"]
+    delivery_state = _read_json(tmp_path / "deliveries" / delivery_id / "state.json")
+    assert delivery_state["status"] == "pending"
+    assert delivery_state["sent_count"] == 1
+    assert delivery_state["items"][1]["status"] == "pending"
+
+
 def test_schedule_service_manages_user_schedules(tmp_path) -> None:
     settings = parse_settings(_raw_config())
     service = ScheduleService(

@@ -121,8 +121,11 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         schedule_task: asyncio.Task | None = None
+        delivery_task: asyncio.Task | None = None
         schedule_stop = asyncio.Event()
+        delivery_stop = asyncio.Event()
         schedule_task = asyncio.create_task(container.schedule_service.run_forever(schedule_stop))
+        delivery_task = asyncio.create_task(container.schedule_service.run_delivery_forever(delivery_stop))
         if container.wechat_channel_manager is not None:
             await container.wechat_channel_manager.auto_start_all()
         try:
@@ -131,6 +134,9 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
             if schedule_task is not None:
                 schedule_stop.set()
                 await schedule_task
+            if delivery_task is not None:
+                delivery_stop.set()
+                await delivery_task
             if container.wechat_channel_manager is not None:
                 await container.wechat_channel_manager.stop_all()
             await container.browser_profile_service.close_all()

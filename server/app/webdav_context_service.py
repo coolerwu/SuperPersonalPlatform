@@ -17,7 +17,9 @@ from server.infrastructure.nutstore_webdav import NutstoreWebDAVClient, WebDAVEn
 
 
 class WebDAVContextError(ValueError):
-    pass
+    def __init__(self, message: str, *, diagnostics: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics or {}
 
 
 @dataclass(frozen=True)
@@ -232,16 +234,67 @@ class WebDAVContextService:
         relative = self._resolve_write_path(absolute_path)
         permission = _permission_for_path("/" + relative, self._context.webdav_permissions)
         if permission is None or permission.protected or not permission.writable:
-            raise WebDAVContextError("webdav path is protected or not writable")
+            raise WebDAVContextError(
+                "webdav path is protected or not writable",
+                diagnostics=self._write_diagnostics(
+                    absolute_path=absolute_path,
+                    relative_path=relative,
+                    permission=permission,
+                    reason="permission_denied",
+                ),
+            )
         write_mode = str(mode or "append").strip().lower()
         if write_mode not in {"append", "overwrite", "create"}:
-            raise WebDAVContextError("mode must be append, overwrite, or create")
+            raise WebDAVContextError(
+                "mode must be append, overwrite, or create",
+                diagnostics=self._write_diagnostics(
+                    absolute_path=absolute_path,
+                    relative_path=relative,
+                    permission=permission,
+                    reason="invalid_mode",
+                ),
+            )
         if not content:
-            raise WebDAVContextError("content is required")
+            raise WebDAVContextError(
+                "content is required",
+                diagnostics=self._write_diagnostics(
+                    absolute_path=absolute_path,
+                    relative_path=relative,
+                    permission=permission,
+                    reason="empty_content",
+                ),
+            )
         if len(content.encode("utf-8")) > self._sync.max_file_size_bytes:
-            raise WebDAVContextError("content is too large")
-        if PurePosixPath(relative).suffix.lower() not in set(self._sync.extensions):
-            raise WebDAVContextError("absolute_path suffix is not allowed")
+            raise WebDAVContextError(
+                "content is too large",
+                diagnostics=self._write_diagnostics(
+                    absolute_path=absolute_path,
+                    relative_path=relative,
+                    permission=permission,
+                    reason="content_too_large",
+                ),
+            )
+        suffix = PurePosixPath(relative).suffix.lower()
+        if not suffix:
+            raise WebDAVContextError(
+                "absolute_path must include a file suffix",
+                diagnostics=self._write_diagnostics(
+                    absolute_path=absolute_path,
+                    relative_path=relative,
+                    permission=permission,
+                    reason="missing_file_suffix",
+                ),
+            )
+        if suffix not in set(self._sync.extensions):
+            raise WebDAVContextError(
+                "absolute_path suffix is not allowed",
+                diagnostics=self._write_diagnostics(
+                    absolute_path=absolute_path,
+                    relative_path=relative,
+                    permission=permission,
+                    reason="unsupported_suffix",
+                ),
+            )
 
         remote_path = _join_remote(self._sync.root_path, relative)
         if write_mode == "append":
@@ -299,14 +352,67 @@ class WebDAVContextService:
     def _resolve_write_path(self, absolute_path: str) -> str:
         value = str(absolute_path or "").strip()
         if not value.startswith("/webdav/"):
-            raise WebDAVContextError("webdav absolute_path must start with /webdav/")
+            raise WebDAVContextError(
+                "webdav absolute_path must start with /webdav/",
+                diagnostics=self._write_diagnostics(
+                    absolute_path=value,
+                    relative_path="",
+                    permission=None,
+                    reason="invalid_prefix",
+                ),
+            )
         parts = PurePosixPath(value).parts
         if len(parts) < 3:
-            raise WebDAVContextError("webdav absolute_path must include file path")
+            raise WebDAVContextError(
+                "webdav absolute_path must include file path",
+                diagnostics=self._write_diagnostics(
+                    absolute_path=value,
+                    relative_path="",
+                    permission=None,
+                    reason="missing_file_path",
+                ),
+            )
         relative_parts = parts[2:]
         if any(part in {"", ".", ".."} for part in relative_parts):
-            raise WebDAVContextError("webdav absolute_path must not contain . or ..")
+            raise WebDAVContextError(
+                "webdav absolute_path must not contain . or ..",
+                diagnostics=self._write_diagnostics(
+                    absolute_path=value,
+                    relative_path="/".join(relative_parts),
+                    permission=None,
+                    reason="unsafe_path",
+                ),
+            )
         return "/".join(relative_parts)
+
+    def _write_diagnostics(
+        self,
+        *,
+        absolute_path: str,
+        relative_path: str,
+        permission: WebDAVPermission | None,
+        reason: str,
+    ) -> dict[str, object]:
+        relative = str(relative_path or "").strip("/")
+        payload: dict[str, object] = {
+            "reason": reason,
+            "absolute_path": str(absolute_path or "").strip(),
+            "expected_prefix": "/webdav/",
+            "sync_root_path": self._sync.root_path,
+            "allowed_extensions": list(self._sync.extensions),
+            "resolved_relative_path": f"/{relative}" if relative else "",
+            "remote_path": _join_remote(self._sync.root_path, relative) if relative else "",
+            "matched_permission_path": permission.path if permission is not None else "",
+            "matched_permission": _permission_payload(permission) if permission is not None else None,
+        }
+        suggested = _suggest_tool_path_without_sync_root(
+            absolute_path=str(absolute_path or "").strip(),
+            relative_path=relative,
+            sync_root_path=self._sync.root_path,
+        )
+        if suggested:
+            payload["suggested_tool_path"] = suggested
+        return payload
 
     def _is_stale(self) -> bool:
         index = _read_json(self._index_path)
@@ -390,6 +496,33 @@ def _entry_metadata(permission: WebDAVPermission, entry: WebDAVEntry, tool_path:
         "protected": permission.protected,
         "writable": permission.writable,
     }
+
+
+def _permission_payload(permission: WebDAVPermission | None) -> dict[str, object] | None:
+    if permission is None:
+        return None
+    return {
+        "path": permission.path,
+        "readable": permission.readable,
+        "writable": permission.writable,
+        "protected": permission.protected,
+    }
+
+
+def _suggest_tool_path_without_sync_root(*, absolute_path: str, relative_path: str, sync_root_path: str) -> str:
+    if not absolute_path.startswith("/webdav/") or not relative_path:
+        return ""
+    sync_parts = _path_parts(sync_root_path)
+    relative_parts = _path_parts(relative_path)
+    if not sync_parts or len(relative_parts) <= len(sync_parts):
+        return ""
+    if relative_parts[: len(sync_parts)] != sync_parts:
+        return ""
+    return "/webdav/" + "/".join(relative_parts[len(sync_parts) :])
+
+
+def _path_parts(path: str) -> tuple[str, ...]:
+    return tuple(part for part in PurePosixPath(str(path or "").strip("/")).parts if part not in {"", "."})
 
 
 def _metadata_changed(old: Any, new: dict[str, Any]) -> bool:

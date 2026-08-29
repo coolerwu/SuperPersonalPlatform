@@ -644,6 +644,7 @@ def _runtime_options(raw: Any) -> DeepAgentRuntimeOptions:
         debug=bool(options.get("debug", False)),
         tools=tuple(str(item).strip() for item in options.get("tools") or [] if str(item).strip()),
         interrupt_on=tuple(str(item).strip() for item in options.get("interrupt_on") or [] if str(item).strip()),
+        middleware=tuple(str(item).strip() for item in options.get("middleware") or [] if str(item).strip()),
         todo_list=bool(options.get("todo_list", True)),
         filesystem_enabled=bool((options.get("filesystem") or {}).get("enabled", False))
         if isinstance(options.get("filesystem") or {}, dict)

@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
+import uuid
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -24,6 +26,9 @@ SCHEDULE_RETRY_MAX_ATTEMPTS = 3
 SCHEDULE_RETRY_DELAY_SECONDS = 60
 SCHEDULE_LOCK_HEARTBEAT_SECONDS = 15
 SCHEDULE_LOCK_STALE_AFTER_SECONDS = 120
+RHYTHMIC_DELIVERY_ID = "rhythmic_delivery"
+RHYTHMIC_DELIVERY_DEFAULT_INTERVAL_SECONDS = 180
+RHYTHMIC_DELIVERY_DEFAULT_MAX_ITEMS = 20
 
 
 class ScheduleNotFoundError(Exception):
@@ -75,11 +80,21 @@ class ScheduleService:
         self._channel_delivery_service = channel_delivery_service
         self._schedules_dir = workspace / "schedules"
         self._index_path = self._schedules_dir / "index.json"
+        self._deliveries_dir = workspace / "deliveries"
+        self._delivery_index_path = self._deliveries_dir / "index.json"
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         self.bootstrap()
         while not stop.is_set():
             await self.tick()
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=self.poll_interval_seconds)
+            except asyncio.TimeoutError:
+                pass
+
+    async def run_delivery_forever(self, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            await self.tick_delivery_queue()
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self.poll_interval_seconds)
             except asyncio.TimeoutError:
@@ -104,6 +119,16 @@ class ScheduleService:
             if next_run_at > now:
                 continue
             await self._execute(definition, due_at=next_run_at)
+
+    async def tick_delivery_queue(self) -> None:
+        for definition in self._delivery_definitions():
+            state = self._read_delivery_state(definition["id"])
+            if state.get("status") in {"completed", "failed"}:
+                continue
+            next_run_at = _parse_dt(str(state.get("next_run_at") or "")) or _now_dt()
+            if next_run_at > _now_dt():
+                continue
+            await self._execute_delivery(definition, state)
 
     def list_schedules(self) -> list[dict[str, Any]]:
         self.bootstrap()
@@ -442,6 +467,20 @@ class ScheduleService:
             return result
         result_payload = completed.get("result") if isinstance(completed.get("result"), dict) else {}
         result_text = str(result_payload.get("content") or result_payload.get("error") or "定时任务没有返回内容")
+        rhythmic_config = _rhythmic_delivery_config(definition, completed)
+        if rhythmic_config is not None:
+            queued = self._enqueue_rhythmic_delivery(
+                definition,
+                completed,
+                delivery=delivery,
+                text=result_text,
+                interval_seconds=rhythmic_config["interval_seconds"],
+                max_items=rhythmic_config["max_items"],
+            )
+            if run_id:
+                self._run_service.set_delivery_status(run_id, "queued", extra={"delivery": delivery, "queue": queued})
+            self._append_event(definition.id, "delivery_queued", queued)
+            return queued
         try:
             await self._channel_delivery_service.deliver_text(
                 channel="wechat",
@@ -460,6 +499,145 @@ class ScheduleService:
             self._run_service.set_delivery_status(run_id, "delivered", extra={"delivery": delivery})
         self._append_event(definition.id, "delivered", {"channel": "wechat", "run_id": run_id})
         return {"status": "delivered", "channel": "wechat"}
+
+    def _enqueue_rhythmic_delivery(
+        self,
+        definition: ScheduleDefinition,
+        completed: dict[str, Any],
+        *,
+        delivery: dict[str, Any],
+        text: str,
+        interval_seconds: int,
+        max_items: int,
+    ) -> dict[str, Any]:
+        items = _extract_delivery_items(text, max_items=max_items)
+        if not items:
+            items = [text.strip() or "定时任务没有返回内容"]
+        delivery_id = f"delivery_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        now = _now_dt()
+        item_states = []
+        definition_items = []
+        for index, item_text in enumerate(items):
+            scheduled_at = (now + timedelta(seconds=interval_seconds * index)).isoformat()
+            definition_items.append({"index": index, "text": item_text, "scheduled_at": scheduled_at})
+            item_states.append({"index": index, "status": "pending", "scheduled_at": scheduled_at})
+        payload = {
+            "schema_version": 1,
+            "id": delivery_id,
+            "source_schedule_id": definition.id,
+            "source_run_id": str(completed.get("run_id") or ""),
+            "agent_id": definition.agent_id,
+            "session_id": definition.session_id,
+            "middleware": {
+                "id": RHYTHMIC_DELIVERY_ID,
+                "interval_seconds": interval_seconds,
+                "max_items": max_items,
+            },
+            "delivery": delivery,
+            "items": definition_items,
+            "created_at": now.isoformat(),
+        }
+        _write_json(self._delivery_definition_path(delivery_id), payload)
+        self._write_delivery_state(
+            delivery_id,
+            {
+                "schema_version": 1,
+                "delivery_id": delivery_id,
+                "status": "pending",
+                "next_run_at": item_states[0]["scheduled_at"],
+                "items": item_states,
+                "sent_count": 0,
+                "failed_count": 0,
+                "updated_at": now.isoformat(),
+            },
+        )
+        self._append_delivery_event(delivery_id, "created", {"items": len(items)})
+        self._upsert_delivery_index(payload, self._read_delivery_state(delivery_id))
+        return {
+            "status": "queued",
+            "channel": "wechat",
+            "delivery_id": delivery_id,
+            "items": len(items),
+            "interval_seconds": interval_seconds,
+        }
+
+    async def _execute_delivery(self, definition: dict[str, Any], state: dict[str, Any]) -> None:
+        delivery_id = str(definition.get("id") or "")
+        if not delivery_id:
+            return
+        delivery = definition.get("delivery") if isinstance(definition.get("delivery"), dict) else {}
+        if delivery.get("channel") != "wechat" or self._channel_delivery_service is None:
+            state["status"] = "failed"
+            state["failed_count"] = len(state.get("items") or [])
+            state["updated_at"] = _now()
+            self._write_delivery_state(delivery_id, state)
+            self._append_delivery_event(delivery_id, "failed", {"reason": "delivery target unavailable"})
+            self._upsert_delivery_index(definition, state)
+            return
+        items = definition.get("items") if isinstance(definition.get("items"), list) else []
+        item_states = state.get("items") if isinstance(state.get("items"), list) else []
+        item_state_by_index = {
+            int(item.get("index") or 0): item for item in item_states if isinstance(item, dict)
+        }
+        now = _now_dt()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            index = int(item.get("index") or 0)
+            item_state = item_state_by_index.get(index)
+            if not isinstance(item_state, dict) or item_state.get("status") != "pending":
+                continue
+            scheduled_at = _parse_dt(str(item_state.get("scheduled_at") or "")) or now
+            if scheduled_at > now:
+                continue
+            item_state["status"] = "running"
+            item_state["updated_at"] = _now()
+            state["status"] = "running"
+            state["updated_at"] = item_state["updated_at"]
+            self._write_delivery_state(delivery_id, state)
+            try:
+                await self._channel_delivery_service.deliver_text(
+                    channel="wechat",
+                    account_id=str(delivery.get("account_id") or ""),
+                    to_user_id=str(delivery.get("to_user_id") or delivery.get("peer_id") or ""),
+                    context_token=str(delivery.get("context_token") or ""),
+                    text=str(item.get("text") or ""),
+                )
+            except Exception as exc:  # noqa: BLE001
+                error = {"type": exc.__class__.__name__, "message": str(exc)}
+                item_state["status"] = "failed"
+                item_state["error"] = error
+                item_state["updated_at"] = _now()
+                state["failed_count"] = int(state.get("failed_count") or 0) + 1
+                self._append_delivery_event(delivery_id, "item_failed", {"index": index, "error": error})
+            else:
+                item_state["status"] = "sent"
+                item_state["sent_at"] = _now()
+                item_state["updated_at"] = item_state["sent_at"]
+                state["sent_count"] = int(state.get("sent_count") or 0) + 1
+                self._append_delivery_event(delivery_id, "item_sent", {"index": index})
+
+        pending_items = [item for item in item_states if isinstance(item, dict) and item.get("status") == "pending"]
+        failed_count = int(state.get("failed_count") or 0)
+        if pending_items:
+            next_pending = min(
+                (_parse_dt(str(item.get("scheduled_at") or "")) or now for item in pending_items),
+                default=now,
+            )
+            state["status"] = "pending" if failed_count == 0 else "partial_failed"
+            state["next_run_at"] = next_pending.isoformat()
+        elif failed_count:
+            state["status"] = "partial_failed" if int(state.get("sent_count") or 0) else "failed"
+            state["next_run_at"] = ""
+        else:
+            state["status"] = "completed"
+            state["next_run_at"] = ""
+        latest_state = self._read_delivery_state(delivery_id)
+        if isinstance(latest_state, dict) and "seq" in latest_state:
+            state["seq"] = latest_state["seq"]
+        state["updated_at"] = _now()
+        self._write_delivery_state(delivery_id, state)
+        self._upsert_delivery_index(definition, state)
 
     def _next_run_at(self, definition: ScheduleDefinition, *, due_at: datetime, completed_at: datetime) -> str:
         trigger = definition.trigger
@@ -733,6 +911,87 @@ class ScheduleService:
     def _lock_path(self, schedule_id: str) -> Path:
         return self._schedule_dir(schedule_id) / "lock.json"
 
+    def _delivery_definitions(self) -> list[dict[str, Any]]:
+        index = self._read_delivery_index()
+        raw_deliveries = index.get("deliveries")
+        if not isinstance(raw_deliveries, list):
+            return []
+        definitions: list[dict[str, Any]] = []
+        for item in raw_deliveries:
+            if not isinstance(item, dict):
+                continue
+            delivery_id = str(item.get("id") or "").strip()
+            if not _valid_schedule_id(delivery_id):
+                continue
+            definition = _read_json(self._delivery_definition_path(delivery_id))
+            if isinstance(definition, dict):
+                definitions.append(definition)
+        return definitions
+
+    def _read_delivery_state(self, delivery_id: str) -> dict[str, Any]:
+        value = _read_json(self._delivery_state_path(delivery_id))
+        return value if isinstance(value, dict) else {}
+
+    def _write_delivery_state(self, delivery_id: str, state: dict[str, Any]) -> None:
+        _write_json(self._delivery_state_path(delivery_id), state)
+
+    def _append_delivery_event(self, delivery_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        delivery_dir = self._delivery_dir(delivery_id)
+        delivery_dir.mkdir(parents=True, exist_ok=True)
+        state = self._read_delivery_state(delivery_id)
+        seq = int(state.get("seq") or 0) + 1
+        state["seq"] = seq
+        state["updated_at"] = _now()
+        self._write_delivery_state(delivery_id, state)
+        event = {
+            "seq": seq,
+            "delivery_id": delivery_id,
+            "type": event_type,
+            "created_at": state["updated_at"],
+            "payload": payload,
+        }
+        with (delivery_dir / "events.jsonl").open("a", encoding="utf-8") as event_file:
+            event_file.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def _read_delivery_index(self) -> dict[str, Any]:
+        value = _read_json(self._delivery_index_path)
+        if not isinstance(value, dict):
+            return {"schema_version": 1, "deliveries": []}
+        if "deliveries" not in value:
+            value["deliveries"] = []
+        return value
+
+    def _upsert_delivery_index(self, definition: dict[str, Any], state: dict[str, Any]) -> None:
+        summary = {
+            "id": definition.get("id", ""),
+            "source_schedule_id": definition.get("source_schedule_id", ""),
+            "source_run_id": definition.get("source_run_id", ""),
+            "agent_id": definition.get("agent_id", ""),
+            "session_id": definition.get("session_id", ""),
+            "middleware": definition.get("middleware", {}),
+            "status": state.get("status", "pending"),
+            "next_run_at": state.get("next_run_at", ""),
+            "sent_count": state.get("sent_count", 0),
+            "failed_count": state.get("failed_count", 0),
+            "updated_at": state.get("updated_at", ""),
+        }
+        index = self._read_delivery_index()
+        deliveries = index.get("deliveries") if isinstance(index, dict) else []
+        if not isinstance(deliveries, list):
+            deliveries = []
+        next_deliveries = [item for item in deliveries if isinstance(item, dict) and item.get("id") != summary["id"]]
+        next_deliveries.insert(0, summary)
+        _write_json(self._delivery_index_path, {"schema_version": 1, "deliveries": next_deliveries})
+
+    def _delivery_dir(self, delivery_id: str) -> Path:
+        return self._deliveries_dir / delivery_id
+
+    def _delivery_definition_path(self, delivery_id: str) -> Path:
+        return self._delivery_dir(delivery_id) / "definition.json"
+
+    def _delivery_state_path(self, delivery_id: str) -> Path:
+        return self._delivery_dir(delivery_id) / "state.json"
+
 
 def _parse_definition(raw: Any) -> ScheduleDefinition | None:
     if not isinstance(raw, dict):
@@ -778,6 +1037,109 @@ def _definition_payload(definition: ScheduleDefinition) -> dict[str, Any]:
         "session_id": definition.session_id,
         "metadata": definition.metadata or {},
     }
+
+
+def _rhythmic_delivery_config(definition: ScheduleDefinition, completed: dict[str, Any]) -> dict[str, int] | None:
+    config = _extract_rhythmic_delivery_config(definition.metadata or {})
+    if config is None:
+        agent = ((completed.get("input") or {}).get("snapshot") or {}).get("agent")
+        deepagent = agent.get("deepagent") if isinstance(agent, dict) else {}
+        config = _extract_rhythmic_delivery_config(deepagent if isinstance(deepagent, dict) else {})
+    if config is None:
+        return None
+    return {
+        "interval_seconds": max(int(config.get("interval_seconds") or RHYTHMIC_DELIVERY_DEFAULT_INTERVAL_SECONDS), 1),
+        "max_items": max(int(config.get("max_items") or RHYTHMIC_DELIVERY_DEFAULT_MAX_ITEMS), 1),
+    }
+
+
+def _extract_rhythmic_delivery_config(raw: dict[str, Any]) -> dict[str, Any] | None:
+    candidates = [
+        raw.get("delivery_middleware"),
+        raw.get("middleware"),
+        raw.get("middlewares"),
+    ]
+    delivery = raw.get("delivery") if isinstance(raw.get("delivery"), dict) else {}
+    candidates.extend([delivery.get("middleware"), delivery.get("delivery_middleware")])
+    for candidate in candidates:
+        config = _candidate_rhythmic_delivery_config(candidate)
+        if config is not None:
+            return config
+    return None
+
+
+def _candidate_rhythmic_delivery_config(candidate: Any) -> dict[str, Any] | None:
+    if isinstance(candidate, str):
+        return {} if candidate.strip() == RHYTHMIC_DELIVERY_ID else None
+    if isinstance(candidate, dict):
+        if str(candidate.get("id") or candidate.get("name") or "").strip() == RHYTHMIC_DELIVERY_ID:
+            return candidate
+        return None
+    if isinstance(candidate, list | tuple):
+        for item in candidate:
+            config = _candidate_rhythmic_delivery_config(item)
+            if config is not None:
+                return config
+    return None
+
+
+def _extract_delivery_items(text: str, *, max_items: int) -> list[str]:
+    raw_text = str(text or "").strip()
+    if not raw_text:
+        return []
+    tagged = [_clean_delivery_item(match.group(1)) for match in _DELIVERY_ITEM_RE.finditer(raw_text)]
+    tagged_items = [item for item in tagged if item]
+    if tagged_items:
+        return tagged_items[:max_items]
+    json_items = _extract_json_delivery_items(raw_text)
+    if json_items:
+        return json_items[:max_items]
+    markdown_items = _extract_markdown_delivery_items(raw_text)
+    if len(markdown_items) > 1:
+        return markdown_items[:max_items]
+    return [raw_text[:8000]]
+
+
+_DELIVERY_ITEM_RE = re.compile(r"<delivery-item>(.*?)</delivery-item>", re.IGNORECASE | re.DOTALL)
+
+
+def _extract_json_delivery_items(text: str) -> list[str]:
+    with suppress(json.JSONDecodeError):
+        parsed = json.loads(text)
+        raw_items: Any = parsed
+        if isinstance(parsed, dict):
+            for key in ("delivery_items", "items", "messages"):
+                if isinstance(parsed.get(key), list):
+                    raw_items = parsed[key]
+                    break
+        if isinstance(raw_items, list):
+            items = []
+            for item in raw_items:
+                if isinstance(item, str):
+                    items.append(_clean_delivery_item(item))
+                elif isinstance(item, dict):
+                    items.append(_clean_delivery_item(str(item.get("text") or item.get("content") or item.get("message") or "")))
+            return [item for item in items if item]
+    return []
+
+
+def _extract_markdown_delivery_items(text: str) -> list[str]:
+    sections: list[str] = []
+    current: list[str] = []
+    marker = re.compile(r"^\s*(?:#{1,6}\s+|\d+[.、]\s+|[-*]\s+)")
+    for line in text.splitlines():
+        if marker.match(line) and current:
+            sections.append(_clean_delivery_item("\n".join(current)))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        sections.append(_clean_delivery_item("\n".join(current)))
+    return [item for item in sections if item]
+
+
+def _clean_delivery_item(text: str) -> str:
+    return str(text or "").strip().strip("-").strip()
 
 
 def _trigger_payload(trigger: ScheduleTrigger) -> dict[str, Any]:

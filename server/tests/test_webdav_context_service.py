@@ -126,6 +126,70 @@ def test_webdav_context_refresh_uses_single_root_and_permission_paths(tmp_path) 
     assert requested_urls.count("https://dav.jianguoyun.com/dav/notebook/00AgentInbox/") == 1
 
 
+def test_webdav_context_write_permission_error_includes_diagnostics_for_extra_sync_root(tmp_path) -> None:
+    settings = parse_settings(
+        {
+            "auth": {"token": "secret-token"},
+            "nutstore": {
+                "enabled": True,
+                "username": "u",
+                "password": "p",
+                "root_path": "/",
+            },
+            "context": {
+                "webdav_sync": {
+                    "enabled": True,
+                    "root_path": "/notebook",
+                    "interval_seconds": 600,
+                    "max_files_per_root": 50,
+                    "max_file_size_bytes": 10000,
+                    "extensions": [".md", ".txt", ".json", ".jsonl"],
+                },
+                "webdav_permissions": [
+                    {
+                        "path": "/",
+                        "readable": True,
+                        "writable": False,
+                        "protected": True,
+                    },
+                    {
+                        "path": "/02日记",
+                        "readable": True,
+                        "writable": True,
+                        "protected": False,
+                    },
+                ],
+            },
+        }
+    )
+    service = WebDAVContextService(
+        workspace=tmp_path,
+        nutstore=settings.nutstore,
+        context=settings.context,
+        client=NutstoreWebDAVClient(settings.nutstore, transport=httpx.MockTransport(lambda request: httpx.Response(500))),
+    )
+
+    with pytest.raises(WebDAVContextError) as exc_info:
+        asyncio.run(
+            service.write(
+                absolute_path="/webdav/notebook/02日记/2026-08-30.md",
+                content="日记",
+                mode="append",
+            )
+        )
+
+    assert exc_info.value.diagnostics["reason"] == "permission_denied"
+    assert exc_info.value.diagnostics["resolved_relative_path"] == "/notebook/02日记/2026-08-30.md"
+    assert exc_info.value.diagnostics["matched_permission_path"] == "/"
+    assert exc_info.value.diagnostics["matched_permission"] == {
+        "path": "/",
+        "readable": True,
+        "writable": False,
+        "protected": True,
+    }
+    assert exc_info.value.diagnostics["suggested_tool_path"] == "/webdav/02日记/2026-08-30.md"
+
+
 def test_webdav_context_refresh_caches_markdown_referenced_assets(tmp_path) -> None:
     png_bytes = b"\x89PNG\r\n\x1a\nasset"
 

@@ -187,19 +187,20 @@ def _write_context_tool(service: ContextKnowledgeService, webdav_service: WebDAV
             else:
                 result = service.write(type=type, absolute_path=absolute_path, content=content, mode=mode)
         except (ContextKnowledgeError, WebDAVContextError, RuntimeError, ValueError) as exc:
-            return json.dumps(
-                {
-                    "ok": False,
-                    "path": str(absolute_path or ""),
-                    "error": {"type": exc.__class__.__name__, "message": str(exc)},
-                    "message": (
-                        "write_context could not write this path. "
-                        "If this is a protected WebDAV source note, write to /files/... "
-                        "or to an explicitly writable WebDAV inbox such as /webdav/00AgentInbox/..."
-                    ),
-                },
-                ensure_ascii=False,
-            )
+            payload: dict[str, Any] = {
+                "ok": False,
+                "path": str(absolute_path or ""),
+                "error": {"type": exc.__class__.__name__, "message": str(exc)},
+                "message": (
+                    "write_context could not write this path. "
+                    "Inspect diagnostics.reason, diagnostics.resolved_relative_path, and "
+                    "diagnostics.matched_permission before choosing a fallback path."
+                ),
+            }
+            diagnostics = getattr(exc, "diagnostics", None)
+            if isinstance(diagnostics, dict) and diagnostics:
+                payload["diagnostics"] = diagnostics
+            return json.dumps(payload, ensure_ascii=False)
         result = {"ok": True, **result}
         return json.dumps(result, ensure_ascii=False)
 

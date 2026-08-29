@@ -41,6 +41,17 @@ Use `browser_search` for discovery only; use `browser_extract` to read page cont
 If browser search or extraction is blocked by a login, captcha, verification page, or anti-bot page, say that browser authorization or manual source text is needed instead of guessing.
 """
 
+RHYTHMIC_DELIVERY_PROMPT = """## Rhythmic Delivery Middleware
+
+When the current task asks you to produce multiple messages for scheduled or paced delivery, write each deliverable message inside its own XML-style block:
+
+<delivery-item>
+message text
+</delivery-item>
+
+Do not put introductions, summaries, or extra prose outside the delivery-item blocks unless the user specifically asked for a single combined response. Each block should be readable as a standalone message.
+"""
+
 
 @dataclass(frozen=True)
 class RuntimeAttachment:
@@ -75,6 +86,7 @@ class DeepAgentRuntimeOptions:
     use_longterm_memory: bool = True
     tools: tuple[str, ...] = ()
     interrupt_on: tuple[str, ...] = ()
+    middleware: tuple[str, ...] = ()
 
 
 class DeepAgentRuntime:
@@ -203,6 +215,8 @@ def _runtime_instructions(instructions: str, options: DeepAgentRuntimeOptions) -
         sections.append(BROWSER_RESEARCH_PROMPT)
     if options.use_longterm_memory:
         sections.append(LONGTERM_MEMORY_PROMPT)
+    if "rhythmic_delivery" in options.middleware:
+        sections.append(RHYTHMIC_DELIVERY_PROMPT)
     return "\n\n".join(section for section in sections if section).strip()
 
 

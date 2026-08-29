@@ -75,7 +75,15 @@ def test_platform_tool_runtime_builds_search_and_write_tools(tmp_path) -> None:
 def test_write_context_tool_returns_error_for_protected_webdav_path(tmp_path) -> None:
     class FakeWebDAVService:
         async def write(self, **kwargs):
-            raise WebDAVContextError("webdav path is protected or not writable")
+            raise WebDAVContextError(
+                "webdav path is protected or not writable",
+                diagnostics={
+                    "reason": "permission_denied",
+                    "resolved_relative_path": "/rules.md",
+                    "matched_permission_path": "/",
+                    "matched_permission": {"path": "/", "readable": True, "writable": False, "protected": True},
+                },
+            )
 
     tool = _write_context_tool(ContextKnowledgeService(tmp_path / "context"), FakeWebDAVService())
 
@@ -93,7 +101,9 @@ def test_write_context_tool_returns_error_for_protected_webdav_path(tmp_path) ->
     assert result["ok"] is False
     assert result["path"] == "/webdav/rules.md"
     assert result["error"]["type"] == "WebDAVContextError"
-    assert "protected WebDAV source note" in result["message"]
+    assert result["diagnostics"]["reason"] == "permission_denied"
+    assert result["diagnostics"]["matched_permission_path"] == "/"
+    assert "Inspect diagnostics" in result["message"]
 
 
 def test_search_session_tool_scopes_to_current_session(tmp_path) -> None:
