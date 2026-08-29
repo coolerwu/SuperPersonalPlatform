@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from server.app.context_knowledge_service import ContextKnowledgeService
+from server.app.context_knowledge_service import ContextKnowledgeError, ContextKnowledgeService
 from server.app.session_service import SessionService
-from server.app.webdav_context_service import WebDAVContextService, run_async
+from server.app.webdav_context_service import WebDAVContextError, WebDAVContextService, run_async
 from server.domain.tooling import get_tool_definition
 from server.infrastructure.browser_tools import build_browser_extract_tool, build_browser_search_tool
 from server.infrastructure.config import load_settings
@@ -177,14 +177,30 @@ def _write_context_tool(service: ContextKnowledgeService, webdav_service: WebDAV
         absolute_path is a tool path such as /files/wechat.md, not a filesystem path.
         mode must be append, overwrite, or create.
         """
-        if str(absolute_path or "").strip().startswith("/webdav/"):
-            if webdav_service is None:
-                raise RuntimeError("webdav context is not enabled")
-            if type.strip() != "knowledge":
-                raise RuntimeError("type must be knowledge")
-            result = run_async(webdav_service.write(absolute_path=absolute_path, content=content, mode=mode))
-        else:
-            result = service.write(type=type, absolute_path=absolute_path, content=content, mode=mode)
+        try:
+            if str(absolute_path or "").strip().startswith("/webdav/"):
+                if webdav_service is None:
+                    raise RuntimeError("webdav context is not enabled")
+                if type.strip() != "knowledge":
+                    raise RuntimeError("type must be knowledge")
+                result = run_async(webdav_service.write(absolute_path=absolute_path, content=content, mode=mode))
+            else:
+                result = service.write(type=type, absolute_path=absolute_path, content=content, mode=mode)
+        except (ContextKnowledgeError, WebDAVContextError, RuntimeError, ValueError) as exc:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "path": str(absolute_path or ""),
+                    "error": {"type": exc.__class__.__name__, "message": str(exc)},
+                    "message": (
+                        "write_context could not write this path. "
+                        "If this is a protected WebDAV source note, write to /files/... "
+                        "or to an explicitly writable WebDAV inbox such as /webdav/00AgentInbox/..."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        result = {"ok": True, **result}
         return json.dumps(result, ensure_ascii=False)
 
     return StructuredTool.from_function(
@@ -193,6 +209,9 @@ def _write_context_tool(service: ContextKnowledgeService, webdav_service: WebDAV
         description=(
             "Write approved knowledge to workspace/context/knowledge/files. "
             "For writable WebDAV permission paths, use /webdav/path.ext; protected paths cannot be written. "
+            "Do not write back to protected WebDAV source notes returned by search_context; use /files/... "
+            "or an explicitly writable WebDAV inbox such as /webdav/00AgentInbox/... instead. "
+            "If the tool returns ok=false, explain the permission issue to the user and continue. "
             "Do not use for personal memory, user preferences, future conversation rules, or 'remember this' requests; "
             "use built-in write_file('/memories/...') for those. "
             "Args: type='knowledge', absolute_path like '/files/wechat.md' or '/webdav/00AgentInbox/wechat.md', "

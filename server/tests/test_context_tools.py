@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 import pytest
 
 from server.app.context_knowledge_service import ContextKnowledgeError, ContextKnowledgeService
-from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
+from server.app.webdav_context_service import WebDAVContextError
+from server.infrastructure.tool_runtime import PlatformToolContext, _write_context_tool, build_platform_tools
 
 
 def test_search_context_returns_relevant_context_files(tmp_path) -> None:
@@ -69,6 +70,30 @@ def test_platform_tool_runtime_builds_search_and_write_tools(tmp_path) -> None:
 
     search_result = tools["search_context"].invoke({"query": "runtime", "top_k": 1})
     assert json.loads(search_result)["hits"][0]["path"] == "/files/runtime.md"
+
+
+def test_write_context_tool_returns_error_for_protected_webdav_path(tmp_path) -> None:
+    class FakeWebDAVService:
+        async def write(self, **kwargs):
+            raise WebDAVContextError("webdav path is protected or not writable")
+
+    tool = _write_context_tool(ContextKnowledgeService(tmp_path / "context"), FakeWebDAVService())
+
+    result = json.loads(
+        tool.invoke(
+            {
+                "type": "knowledge",
+                "absolute_path": "/webdav/rules.md",
+                "content": "不能写",
+                "mode": "overwrite",
+            }
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["path"] == "/webdav/rules.md"
+    assert result["error"]["type"] == "WebDAVContextError"
+    assert "protected WebDAV source note" in result["message"]
 
 
 def test_search_session_tool_scopes_to_current_session(tmp_path) -> None:
