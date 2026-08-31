@@ -259,9 +259,9 @@ def _deepagent_builtin_middleware(create_deep_agent: Any, options: DeepAgentRunt
             TodoListMiddleware = None
         if TodoListMiddleware is not None:
             middleware.append(TodoListMiddleware())
-    from server.infrastructure.self_improvement_middleware import SelfImprovementMiddleware
+    from server.infrastructure.skill_improvement_middleware import SkillImprovementMiddleware
 
-    middleware.append(SelfImprovementMiddleware())
+    middleware.append(SkillImprovementMiddleware())
     return middleware
 
 

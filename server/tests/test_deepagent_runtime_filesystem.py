@@ -12,9 +12,9 @@ from server.infrastructure.deepagent_runtime import (
     load_agent_files,
     persist_agent_files,
 )
-from server.infrastructure.self_improvement_middleware import (
-    SELF_IMPROVEMENT_PROMPT,
-    SelfImprovementMiddleware,
+from server.infrastructure.skill_improvement_middleware import (
+    SKILL_IMPROVEMENT_PROMPT,
+    SkillImprovementMiddleware,
 )
 
 
@@ -99,7 +99,7 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     assert captured["create_kwargs"]["backend"].virtual_mode is True
     middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
     assert middleware_names[0] == "TodoListMiddleware"
-    assert "SelfImprovementMiddleware" in middleware_names
+    assert "SkillImprovementMiddleware" in middleware_names
     assert "store" not in captured["create_kwargs"]
     assert "use_longterm_memory" not in captured["create_kwargs"]
     assert "files" not in captured["input_state"]
@@ -109,7 +109,7 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     assert (agent_dir / "memories" / "AGENTS.md").is_file()
 
 
-def test_runtime_adds_self_improvement_middleware_by_default(tmp_path, monkeypatch) -> None:
+def test_runtime_adds_skill_improvement_middleware_by_default(tmp_path, monkeypatch) -> None:
     captured = {}
 
     class FakeAgent:
@@ -146,10 +146,10 @@ def test_runtime_adds_self_improvement_middleware_by_default(tmp_path, monkeypat
 
     assert result == "ok"
     middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
-    assert "SelfImprovementMiddleware" in middleware_names
+    assert "SkillImprovementMiddleware" in middleware_names
 
 
-def test_self_improvement_middleware_appends_prompt() -> None:
+def test_skill_improvement_middleware_appends_prompt() -> None:
     from langchain_core.messages import SystemMessage
 
     class FakeRequest:
@@ -158,11 +158,11 @@ def test_self_improvement_middleware_appends_prompt() -> None:
         def override(self, **kwargs):
             return kwargs["system_message"]
 
-    system_message = SelfImprovementMiddleware().modify_request(FakeRequest())
+    system_message = SkillImprovementMiddleware().modify_request(FakeRequest())
 
     assert "base" in system_message.text
-    assert SELF_IMPROVEMENT_PROMPT in system_message.text
-    assert "Memory is handled by MemoryMiddleware" in system_message.text
+    assert SKILL_IMPROVEMENT_PROMPT in system_message.text
+    assert "Memory is handled separately by MemoryMiddleware" in system_message.text
     assert "/skills/{skill_id}/SKILL.md" in system_message.text
     assert "/improvements/changes/{timestamp}_{change_id}.json" in system_message.text
 

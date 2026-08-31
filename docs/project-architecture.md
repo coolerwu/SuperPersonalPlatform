@@ -22,7 +22,7 @@
 - 统一调度器使用 `workspace/schedules/` 落盘调度定义和状态；WebDAV Context 同步和未来 Agent 定时任务共用这一套调度机制。
 - `workspace/sessions/index.json` 维护所有长期会话索引；长期 session 对微信和未来渠道默认开启。`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`，DeepAgent/LangGraph 运行时状态统一写入 `workspace/sessions/checkpoints.sqlite`。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
-- `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`use_longterm_memory`、`interrupt_on`、`tools` 和 `middleware` 中的 `rhythmic_delivery`。`SelfImprovementMiddleware` 在运行时代码中默认启用，不需要 workspace 配置开关。`filesystem.enabled` 作为配置兼容字段保留，但 DeepAgent 运行时始终把原生 filesystem 锚定到当前 Agent 私有目录。
+- `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、middleware、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`use_longterm_memory`、`interrupt_on`、`tools` 和 `middleware` 中的 `rhythmic_delivery`。`SkillImprovementMiddleware` 在运行时代码中默认启用，不需要 workspace 配置开关。`filesystem.enabled` 作为配置兼容字段保留，但 DeepAgent 运行时始终把原生 filesystem 锚定到当前 Agent 私有目录。
 - 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`search_session`、`arxiv`、`yahoo_finance_news`、`write_context`、`browser_extract` 和 `schedule`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
@@ -56,10 +56,14 @@ workspace/
       memories/
         AGENTS.md
       improvements/
+        reflections/
+          {run_id}.md
         reviews/
           {run_id}.md
         changes/
           {timestamp}_{change_id}.json
+      meditations/
+        {timestamp}_{run_id}.json
 
   browser_profiles/
     {agent_id}/
@@ -146,9 +150,9 @@ workspace/schedules/{schedule_id}/events.jsonl
 workspace/schedules/{schedule_id}/lock.json
 ```
 
-后台统一 Scheduler 每 5 秒扫描轻量调度索引，只判断 `next_run_at` 是否到期，不执行高频 WebDAV 同步。到期后按 `definition.type` 分发：`webdav_sync` 执行 Context WebDAV 同步并写调度事件；`maintenance_cleanup` 执行 15 天保留期清理并写调度事件；`agent_run` 创建普通 `workspace/runs/{run_id}/` 并执行 DeepAgent。`lock.json` 用于避免重复执行，并记录 `pid`、`created_at` 和 `heartbeat_at`；执行期间每 15 秒刷新 heartbeat。服务崩溃或 worker 卡死后，如果状态停在 `running` 且 lock 持有进程已不存在，或 heartbeat 超过 120 秒未刷新，下一次 tick 会把当前 run 标记失败、清理 lock，并按同一重试策略继续。调度执行失败后会进入 `retrying` 状态，默认 1 分钟后重试，最多 3 次；重试耗尽后才标记 `failed` 并进入下一次正式触发周期，成功后重试计数清零。Delivery 队列由独立后台 loop 每 5 秒扫描 `workspace/deliveries/`，避免慢速 Agent run 阻塞已排队的消息投递。
+后台统一 Scheduler 每 5 秒扫描轻量调度索引，只判断 `next_run_at` 是否到期，不执行高频 WebDAV 同步。到期后按 `definition.type` 分发：`webdav_sync` 执行 Context WebDAV 同步并写调度事件；`maintenance_cleanup` 执行 15 天保留期清理并写调度事件；`agent_meditation` 每 86400 秒执行一次每日冥想，每个配置中的用户 Agent 都有独立的内置 `agent_meditation_{agent_id}` 任务、状态、事件和手动运行入口，在该 Agent 没有 queued/running run、未完成投递队列或浏览器 profile lock 时，为该 Agent 创建 `source=system`、`metadata.kind=meditation` 的普通 DeepAgent run；`agent_run` 创建普通 `workspace/runs/{run_id}/` 并执行 DeepAgent。`lock.json` 用于避免重复执行，并记录 `pid`、`created_at` 和 `heartbeat_at`；执行期间每 15 秒刷新 heartbeat。服务崩溃或 worker 卡死后，如果状态停在 `running` 且 lock 持有进程已不存在，或 heartbeat 超过 120 秒未刷新，下一次 tick 会把当前 run 标记失败、清理 lock，并按同一重试策略继续。调度执行失败后会进入 `retrying` 状态，默认 1 分钟后重试，最多 3 次；重试耗尽后才标记 `failed` 并进入下一次正式触发周期，成功后重试计数清零。Delivery 队列由独立后台 loop 每 5 秒扫描 `workspace/deliveries/`，避免慢速 Agent run 阻塞已排队的消息投递。
 
-`/api/schedules` 是定时任务管理页面使用的后端入口。前端只允许创建、编辑和删除 `agent_run` 类型任务，字段核心为 `prompt + agent_id + trigger`；内置 `context_webdav_sync` 和 `maintenance_cleanup` 由配置自动生成，只能查看状态和手动 `run-now`，不能通过页面编辑或删除。当前触发器支持 `interval`、5 字段 `cron` 和 `once`。Agent 也可以在被授权 `schedule` 平台工具后，通过同一个 ScheduleService 创建、查看、更新和删除定时任务；工具只允许管理由该工具在当前 `agent_id + session_id` 下创建的任务，并把微信来源 run 创建的定时任务结果回发到原微信会话。
+`/api/schedules` 是定时任务管理页面使用的后端入口。前端只允许创建、编辑和删除 `agent_run` 类型任务，字段核心为 `prompt + agent_id + trigger`；内置 `context_webdav_sync`、`maintenance_cleanup` 和每个 Agent 各自的 `agent_meditation_{agent_id}` 由系统自动生成，只能查看状态和手动 `run-now`，不能通过页面编辑或删除。当前触发器支持 `interval`、5 字段 `cron` 和 `once`。Agent 也可以在被授权 `schedule` 平台工具后，通过同一个 ScheduleService 创建、查看、更新和删除定时任务；工具只允许管理由该工具在当前 `agent_id + session_id` 下创建的任务，并把微信来源 run 创建的定时任务结果回发到原微信会话。
 
 微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
 
@@ -233,7 +237,7 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 - DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 等工具由 `deepagents` 默认 middleware 提供；`deepagent.todo_list` 默认开启，`write_todos` 由运行时接入 LangChain `TodoListMiddleware`，只有 Agent 显式配置 `todo_list=false` 时关闭。
 - DeepAgent 原生 filesystem 使用 `FilesystemBackend(root_dir=workspace/agents/{agent_id}, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录，可读写 `workspace/agents/{agent_id}/` 下的 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/`、`improvements/` 等内容；不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制已停用。
 - 每个 Agent 的私有 skill 固定放在 `workspace/agents/{agent_id}/skills/{skill_id}/SKILL.md`，运行时传给 DeepAgent 的 `skills` 参数固定为 `["/skills/"]`。DeepAgent 会扫描该目录下包含 `SKILL.md` 的子目录并用 progressive disclosure 暴露 metadata；不再维护产品级 Skill index，也不需要在 `config.yaml` 里配置 Skill 列表。
-- DeepAgent 运行时默认注入 `SelfImprovementMiddleware`，用同步 middleware 方式把自我维护规则追加到模型请求；该 middleware 不负责 memory，长期记忆仍由 DeepAgent 原生 `MemoryMiddleware` 维护 `/memories/AGENTS.md`。`SelfImprovementMiddleware` 只管 Agent 自己的 `/skills/` 和 `/improvements/`：Agent 可以自动创建或更新 `/skills/{skill_id}/SKILL.md` 来沉淀可复用能力，并在 `/improvements/reviews/{run_id}.md` 或 `/improvements/changes/{timestamp}_{change_id}.json` 记录原因、来源和变更摘要。`/improvements/` 是审计材料，不是 active skill；只有 `/skills/{skill_id}/SKILL.md` 会在下一次 Agent 执行开始时作为 skill metadata 被扫描。
+- DeepAgent 运行时默认注入 `SkillImprovementMiddleware`，用同步 middleware 方式把技能维护规则追加到模型请求；该 middleware 不负责 memory，长期记忆仍由 DeepAgent 原生 `MemoryMiddleware` 维护 `/memories/AGENTS.md`。`SkillImprovementMiddleware` 只管 Agent 自己的 `/skills/` 和 `/improvements/`：Agent 可以自动创建或更新 `/skills/{skill_id}/SKILL.md` 来沉淀可复用能力，并在 `/improvements/reflections/{run_id}.md`、`/improvements/reviews/{run_id}.md` 或 `/improvements/changes/{timestamp}_{change_id}.json` 记录原因、来源和变更摘要。`/improvements/` 是审计材料，不是 active skill；只有 `/skills/{skill_id}/SKILL.md` 会在下一次 Agent 执行开始时作为 skill metadata 被扫描。
 - `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后运行时会确保 `workspace/agents/{agent_id}/memories/AGENTS.md` 存在，并通过 DeepAgent 原生 `memory=["/memories/AGENTS.md"]` 启用 `MemoryMiddleware` 加载和维护这一个长期记忆索引文件；其它 `/memories/...` 细节文件不自动注入，Agent 需要时可用内置文件工具自行查找和读取。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。
 - 运行时会在 Agent system prompt 中注入平台记忆边界：Agent 特定记忆按 DeepAgent `MemoryMiddleware` 注入的 memory guidelines 更新 `/memories/AGENTS.md`；只有用户明确要求保存到知识库、文档或共享资料时才调用 `write_context`。用户询问笔记、最近笔记、同步文档、WebDAV 文件、知识库内容或 notebook 条目时，必须先调用 `search_context`；`/memories/...` 只代表 Agent 自己的长期记忆，不代表用户的同步笔记。
 - 历史 `workspace/agents/{agent_id}/memory/store.json` 是旧版 DeepAgent store 遗留路径，不由运行时代码或迁移脚本自动处理。按用户偏好，旧 workspace 数据收敛直接在目标机器上做一次性文件操作；配置页只展示新版 `workspace/agents/{agent_id}/memories/`。
