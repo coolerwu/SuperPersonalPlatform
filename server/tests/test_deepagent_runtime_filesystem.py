@@ -12,6 +12,10 @@ from server.infrastructure.deepagent_runtime import (
     load_agent_files,
     persist_agent_files,
 )
+from server.infrastructure.self_improvement_middleware import (
+    SELF_IMPROVEMENT_PROMPT,
+    SelfImprovementMiddleware,
+)
 
 
 def test_agent_filesystem_sync_is_limited_to_agent_workspace(tmp_path) -> None:
@@ -93,13 +97,74 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     assert captured["create_kwargs"]["memory"] == [MEMORY_INDEX_PATH]
     assert captured["create_kwargs"]["backend"].cwd == agent_dir.resolve()
     assert captured["create_kwargs"]["backend"].virtual_mode is True
-    assert type(captured["create_kwargs"]["middleware"][0]).__name__ == "TodoListMiddleware"
+    middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
+    assert middleware_names[0] == "TodoListMiddleware"
+    assert "SelfImprovementMiddleware" in middleware_names
     assert "store" not in captured["create_kwargs"]
     assert "use_longterm_memory" not in captured["create_kwargs"]
     assert "files" not in captured["input_state"]
     assert (agent_dir / "skills").is_dir()
     assert (agent_dir / "memories").is_dir()
+    assert (agent_dir / "improvements").is_dir()
     assert (agent_dir / "memories" / "AGENTS.md").is_file()
+
+
+def test_runtime_adds_self_improvement_middleware_by_default(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    class FakeAgent:
+        async def ainvoke(self, input_state, config):
+            return {"messages": [type("Message", (), {"content": "ok"})()]}
+
+    def fake_create_deep_agent(**kwargs):
+        captured["create_kwargs"] = kwargs
+        return FakeAgent()
+
+    import deepagents
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", fake_create_deep_agent)
+    model = ModelDefinition(
+        id="default",
+        name="Default",
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="gpt-4o-mini",
+    )
+    runtime = DeepAgentRuntime(
+        model,
+        context_workspace=tmp_path / "context",
+        agent_workspace=tmp_path / "agents" / "assistant",
+    )
+
+    result = asyncio.run(
+        runtime.run(
+            instructions="base prompt",
+            messages=(RuntimeMessage(role="user", content="hello"),),
+            options=DeepAgentRuntimeOptions(),
+        )
+    )
+
+    assert result == "ok"
+    middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
+    assert "SelfImprovementMiddleware" in middleware_names
+
+
+def test_self_improvement_middleware_appends_prompt() -> None:
+    from langchain_core.messages import SystemMessage
+
+    class FakeRequest:
+        system_message = SystemMessage(content="base")
+
+        def override(self, **kwargs):
+            return kwargs["system_message"]
+
+    system_message = SelfImprovementMiddleware().modify_request(FakeRequest())
+
+    assert "base" in system_message.text
+    assert SELF_IMPROVEMENT_PROMPT in system_message.text
+    assert "Memory is handled by MemoryMiddleware" in system_message.text
+    assert "/skills/{skill_id}/SKILL.md" in system_message.text
+    assert "/improvements/changes/{timestamp}_{change_id}.json" in system_message.text
 
 
 def test_runtime_uses_sqlite_checkpointer_when_thread_id_is_provided(tmp_path, monkeypatch) -> None:

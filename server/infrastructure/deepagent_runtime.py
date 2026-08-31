@@ -127,6 +127,7 @@ class DeepAgentRuntime:
         self._agent_workspace.mkdir(parents=True, exist_ok=True)
         (self._agent_workspace / "skills").mkdir(parents=True, exist_ok=True)
         (self._agent_workspace / "memories").mkdir(parents=True, exist_ok=True)
+        (self._agent_workspace / "improvements").mkdir(parents=True, exist_ok=True)
         memory_sources = _longterm_memory_sources(self._agent_workspace, options)
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
@@ -258,6 +259,9 @@ def _deepagent_builtin_middleware(create_deep_agent: Any, options: DeepAgentRunt
             TodoListMiddleware = None
         if TodoListMiddleware is not None:
             middleware.append(TodoListMiddleware())
+    from server.infrastructure.self_improvement_middleware import SelfImprovementMiddleware
+
+    middleware.append(SelfImprovementMiddleware())
     return middleware
 
 
