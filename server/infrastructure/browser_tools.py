@@ -57,7 +57,7 @@ def build_browser_extract_tool(
 
     async def browser_extract(url: str, include_links: bool = True, max_chars: int = 12000) -> str:
         """Open a public web page in a headless browser and extract rendered text."""
-        _validate_public_url(url, allow_private_hosts=allow_private_hosts)
+        _validate_public_url(url, allow_private_hosts=allow_private_hosts, proxy=proxy)
         max_chars = max(1000, min(int(max_chars or 12000), 50000))
         navigation_timeout_ms = max(1000, int(timeout_ms or 60000))
         try:
@@ -411,7 +411,12 @@ def _resolve_proxy(configured_proxy: str) -> str:
     return ""
 
 
-def _validate_public_url(url: str, *, allow_private_hosts: tuple[str, ...] = ()) -> None:
+def _validate_public_url(
+    url: str,
+    *,
+    allow_private_hosts: tuple[str, ...] = (),
+    proxy: str = "",
+) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise BrowserToolError("browser_extract only supports absolute http/https URLs")
@@ -420,11 +425,15 @@ def _validate_public_url(url: str, *, allow_private_hosts: tuple[str, ...] = ())
         raise BrowserToolError(
             f"browser_extract blocked local/private/internal host: host={parsed.hostname}"
         )
+    if _resolve_proxy(proxy):
+        return
     try:
         addresses = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, parsed.port or None, type=socket.SOCK_STREAM)}
     except socket.gaierror as exc:
         raise BrowserToolError(f"browser_extract cannot resolve host: {parsed.hostname}") from exc
     for address in addresses:
+        if _is_unspecified_ip(address) and not _host_is_ip_literal(parsed.hostname):
+            continue
         if _is_blocked_ip(address) and not host_allowed:
             raise BrowserToolError(
                 f"browser_extract blocked host resolving to private/internal address: host={parsed.hostname}, address={address}"
@@ -483,6 +492,14 @@ def _is_blocked_host(hostname: str) -> bool:
         return False
 
 
+def _host_is_ip_literal(hostname: str) -> bool:
+    try:
+        ipaddress.ip_address(hostname.strip().lower().rstrip("."))
+    except ValueError:
+        return False
+    return True
+
+
 def _is_allowed_private_host(hostname: str, allow_private_hosts: tuple[str, ...]) -> bool:
     normalized = hostname.strip().lower().rstrip(".")
     for raw_host in allow_private_hosts:
@@ -496,6 +513,13 @@ def _is_allowed_private_host(hostname: str, allow_private_hosts: tuple[str, ...]
         elif normalized == allowed:
             return True
     return False
+
+
+def _is_unspecified_ip(value: str) -> bool:
+    try:
+        return ipaddress.ip_address(value).is_unspecified
+    except ValueError:
+        return False
 
 
 def _is_blocked_ip(value: str) -> bool:

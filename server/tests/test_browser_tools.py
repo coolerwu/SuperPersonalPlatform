@@ -114,8 +114,60 @@ def test_browser_extract_receives_agent_profile_context(tmp_path, monkeypatch) -
     assert [tool.name for tool in tools] == ["browser_extract", "browser_search"]
     assert captured["extract"]["workspace"] == tmp_path
     assert captured["extract"]["agent_id"] == "assistant"
+    assert captured["extract"]["allow_private_hosts"] == ()
     assert captured["search"]["workspace"] == tmp_path
     assert captured["search"]["agent_id"] == "assistant"
+    assert captured["search"]["allow_private_hosts"] == ()
+
+
+def test_browser_extract_passes_configured_private_hosts_to_browser_tools(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+auth:
+  token: secret-token
+browser:
+  allow_private_hosts:
+    - finance.wulang.vip
+""",
+        encoding="utf-8",
+    )
+    captured = {"extract": {}, "search": {}}
+
+    def fake_build_browser_extract_tool(**kwargs):
+        captured["extract"].update(kwargs)
+
+        class Tool:
+            name = "browser_extract"
+
+        return Tool()
+
+    def fake_build_browser_search_tool(**kwargs):
+        captured["search"].update(kwargs)
+
+        class Tool:
+            name = "browser_search"
+
+        return Tool()
+
+    monkeypatch.setattr("server.infrastructure.tool_runtime.build_browser_extract_tool", fake_build_browser_extract_tool)
+    monkeypatch.setattr("server.infrastructure.tool_runtime.build_browser_search_tool", fake_build_browser_search_tool)
+
+    tools = build_platform_tools(
+        ("browser_extract",),
+        context_workspace=tmp_path / "context",
+        tool_context=PlatformToolContext(
+            run_id="run_1",
+            source="wechat",
+            agent_id="assistant",
+            session_id="session_1",
+            metadata={},
+        ),
+    )
+
+    assert [tool.name for tool in tools] == ["browser_extract", "browser_search"]
+    assert captured["extract"]["allow_private_hosts"] == ("finance.wulang.vip",)
+    assert captured["search"]["allow_private_hosts"] == ("finance.wulang.vip",)
 
 
 def test_browser_profile_lock_waits_for_same_agent_profile(tmp_path) -> None:
@@ -180,6 +232,7 @@ def test_browser_profile_lock_clears_dead_owner_pid(tmp_path, monkeypatch) -> No
         "http://localhost:8888",
         "http://127.0.0.1:8888",
         "http://192.168.1.3",
+        "http://0.0.0.0",
         "file:///etc/passwd",
         "/relative/path",
     ],
@@ -200,6 +253,24 @@ def test_browser_extract_private_dns_error_includes_host_and_address(monkeypatch
 
     assert "host=example.test" in str(exc_info.value)
     assert "address=192.168.1.3" in str(exc_info.value)
+
+
+def test_browser_extract_skips_local_dns_private_check_when_proxy_is_configured(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "server.infrastructure.browser_tools.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, "", ("192.168.1.3", 443))],
+    )
+
+    _validate_public_url("https://example.test/page", proxy="socks5://127.0.0.1:7890")
+
+
+def test_browser_extract_allows_unspecified_dns_for_public_hostname(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "server.infrastructure.browser_tools.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, "", ("0.0.0.0", 443))],
+    )
+
+    _validate_public_url("https://raw.githubusercontent.com/example/repo/main/file.txt")
 
 
 def test_browser_extract_allows_configured_private_hostname(monkeypatch) -> None:

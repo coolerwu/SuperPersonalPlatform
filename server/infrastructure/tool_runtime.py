@@ -64,6 +64,7 @@ def build_platform_tools(
             browser_kwargs = {
                 "proxy": browser_config.get("proxy", ""),
                 "timeout_ms": int(browser_config.get("timeout_ms") or 60000),
+                "allow_private_hosts": tuple(browser_config.get("allow_private_hosts") or ()),
                 "workspace": tool_workspace,
                 "agent_id": tool_agent_id,
             }

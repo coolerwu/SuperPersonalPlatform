@@ -51,6 +51,7 @@ class BrowserAuthSession:
     updated_at: float
     status: str = "running"
     error: str = ""
+    proxy: str = ""
     playwright: Any = None
     context: Any = None
     page: Any = None
@@ -115,6 +116,7 @@ class BrowserProfileService:
             url=url,
             created_at=time.time(),
             updated_at=time.time(),
+            proxy=proxy,
             lock=lock,
         )
         self.sessions[session_id] = session
@@ -137,8 +139,8 @@ class BrowserProfileService:
             return await session.page.screenshot(type="png", full_page=False)
 
     async def navigate(self, session_id: str, url: str) -> dict[str, Any]:
-        _validate_public_url(url)
         session = self._session(session_id)
+        _validate_public_url(url, proxy=session.proxy)
         async with session.mutex:
             await session.page.goto(url, wait_until="domcontentloaded")
             session.url = session.page.url
@@ -219,7 +221,7 @@ class BrowserProfileService:
         session.page.set_default_timeout(timeout)
         session.page.set_default_navigation_timeout(timeout)
         if url:
-            _validate_public_url(url)
+            _validate_public_url(url, proxy=proxy)
             await session.page.goto(url, wait_until="domcontentloaded")
             session.url = session.page.url
 
