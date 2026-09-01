@@ -11,7 +11,9 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
+
+import httpx
 
 
 class BrowserToolError(ValueError):
@@ -28,6 +30,38 @@ _DESKTOP_CHROME_USER_AGENT = (
 )
 _BING_SEARCH_URL = "https://www.bing.com/search"
 _PROFILE_LOCK_WAIT_POLL_SECONDS = 0.5
+_TEXT_FALLBACK_HOSTS = {"raw.githubusercontent.com", "gist.githubusercontent.com"}
+_TEXT_FALLBACK_EXTENSIONS = {
+    ".css",
+    ".csv",
+    ".html",
+    ".ini",
+    ".ipynb",
+    ".js",
+    ".json",
+    ".jsonl",
+    ".jsx",
+    ".log",
+    ".md",
+    ".py",
+    ".rs",
+    ".sh",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+_TEXT_RESPONSE_CONTENT_TYPES = (
+    "application/javascript",
+    "application/json",
+    "application/x-ndjson",
+    "application/xml",
+    "application/yaml",
+    "text/",
+)
 
 
 @dataclass
@@ -60,6 +94,18 @@ def build_browser_extract_tool(
         _validate_public_url(url, allow_private_hosts=allow_private_hosts, proxy=proxy)
         max_chars = max(1000, min(int(max_chars or 12000), 50000))
         navigation_timeout_ms = max(1000, int(timeout_ms or 60000))
+        text_fallback_error = ""
+        if _should_try_http_text_extract(url):
+            try:
+                return await _http_text_extract(
+                    url,
+                    include_links=include_links,
+                    max_chars=max_chars,
+                    timeout_ms=navigation_timeout_ms,
+                    proxy=proxy,
+                )
+            except Exception as exc:  # noqa: BLE001
+                text_fallback_error = f"{exc.__class__.__name__}: {exc}"
         try:
             from playwright.async_api import async_playwright
         except Exception as exc:
@@ -96,7 +142,16 @@ def build_browser_extract_tool(
             page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
             page.set_default_timeout(navigation_timeout_ms)
             page.set_default_navigation_timeout(navigation_timeout_ms)
-            response = await page.goto(url, wait_until="domcontentloaded")
+            try:
+                response = await page.goto(url, wait_until="domcontentloaded")
+            except Exception as exc:
+                if text_fallback_error:
+                    raise BrowserToolError(
+                        "browser_extract failed in browser navigation and HTTP text fallback: "
+                        f"browser_error={exc.__class__.__name__}: {exc}; "
+                        f"fallback_error={text_fallback_error}"
+                    ) from exc
+                raise
             try:
                 await page.wait_for_load_state("networkidle", timeout=min(navigation_timeout_ms, 5000))
             except Exception:
@@ -141,6 +196,91 @@ def build_browser_extract_tool(
             "Args: url, include_links=true, max_chars. Private, localhost, and internal network URLs are blocked unless the host is allowed by browser.allow_private_hosts."
         ),
     )
+
+
+async def _http_text_extract(
+    url: str,
+    *,
+    include_links: bool,
+    max_chars: int,
+    timeout_ms: int,
+    proxy: str = "",
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> str:
+    headers = {
+        "Accept": "text/plain,text/markdown,text/html,application/json,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "User-Agent": _DESKTOP_CHROME_USER_AGENT,
+    }
+    client_kwargs: dict[str, Any] = {
+        "follow_redirects": True,
+        "headers": headers,
+        "timeout": max(int(timeout_ms or 60000), 1000) / 1000,
+    }
+    configured_proxy = str(proxy or "").strip()
+    if configured_proxy:
+        client_kwargs["proxy"] = configured_proxy
+    if transport is not None:
+        client_kwargs["transport"] = transport
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        response = await client.get(url)
+
+    content_type = response.headers.get("content-type", "")
+    if not _is_text_response(content_type) and not _should_try_http_text_extract(str(response.url)):
+        raise BrowserToolError(
+            f"browser_extract HTTP fallback received non-text content: content_type={content_type or 'unknown'}"
+        )
+    text = response.text
+    links = _extract_html_links(text, base_url=str(response.url)) if include_links and _is_html_response(content_type) else []
+    payload = {
+        "url": str(response.url),
+        "status": f"HTTP {response.status_code}",
+        "source": "http_text_fallback",
+        "content_type": content_type,
+        "text": text[:max_chars],
+        "truncated": len(text) > max_chars,
+        "links": links,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _should_try_http_text_extract(url: str) -> bool:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if hostname in _TEXT_FALLBACK_HOSTS:
+        return True
+    path = parsed.path.lower()
+    return any(path.endswith(extension) for extension in _TEXT_FALLBACK_EXTENSIONS)
+
+
+def _is_text_response(content_type: str) -> bool:
+    normalized = content_type.split(";", 1)[0].strip().lower()
+    if not normalized:
+        return False
+    return normalized.startswith(_TEXT_RESPONSE_CONTENT_TYPES)
+
+
+def _is_html_response(content_type: str) -> bool:
+    return content_type.split(";", 1)[0].strip().lower() in {"text/html", "application/xhtml+xml"}
+
+
+def _extract_html_links(html: str, *, base_url: str) -> list[str]:
+    try:
+        from bs4 import BeautifulSoup
+    except Exception:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    links: list[str] = []
+    seen: set[str] = set()
+    for anchor in soup.find_all("a", href=True):
+        href = urljoin(base_url, str(anchor.get("href") or "").strip())
+        if not _is_http_url(href) or href in seen:
+            continue
+        seen.add(href)
+        links.append(href)
+        if len(links) >= 100:
+            break
+    return links
 
 
 def build_browser_search_tool(

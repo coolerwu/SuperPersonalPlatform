@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import httpx
 import pytest
 
 from server.domain.tooling import get_tool_definition
@@ -8,8 +9,11 @@ from server.infrastructure.browser_tools import (
     BrowserToolError,
     acquire_browser_profile_lock,
     acquire_browser_profile_lock_wait,
+    build_browser_extract_tool,
+    _http_text_extract,
     _normalize_search_results,
     _resolve_proxy,
+    _should_try_http_text_extract,
     _validate_public_url,
 )
 from server.infrastructure.config import parse_settings
@@ -75,6 +79,100 @@ def test_browser_search_normalizes_public_results(monkeypatch) -> None:
         {"title": "Example", "url": "https://example.com/a", "snippet": "first result"},
         {"title": "Second", "url": "https://example.org/b", "snippet": ""},
     ]
+
+
+def test_browser_extract_prefers_http_text_for_raw_github(monkeypatch) -> None:
+    captured = {}
+
+    async def fake_http_text_extract(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return json.dumps(
+            {
+                "url": url,
+                "status": "HTTP 200",
+                "source": "http_text_fallback",
+                "text": "print('ok')",
+                "truncated": False,
+                "links": [],
+            }
+        )
+
+    monkeypatch.setattr("server.infrastructure.browser_tools._http_text_extract", fake_http_text_extract)
+    monkeypatch.setattr(
+        "server.infrastructure.browser_tools.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, "", ("0.0.0.0", 443))],
+    )
+
+    tool = build_browser_extract_tool(timeout_ms=30000)
+    result = asyncio.run(
+        tool.ainvoke(
+            {
+                "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/tools/code_execution_tool.py",
+                "include_links": True,
+                "max_chars": 12000,
+            }
+        )
+    )
+
+    payload = json.loads(result)
+    assert payload["source"] == "http_text_fallback"
+    assert payload["text"] == "print('ok')"
+    assert captured["timeout_ms"] == 30000
+
+
+def test_http_text_extract_reads_text_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://raw.githubusercontent.com/example/repo/main/tool.py"
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain; charset=utf-8"},
+            text="def run():\n    return 'ok'\n",
+        )
+
+    result = asyncio.run(
+        _http_text_extract(
+            "https://raw.githubusercontent.com/example/repo/main/tool.py",
+            include_links=True,
+            max_chars=1000,
+            timeout_ms=30000,
+            transport=httpx.MockTransport(handler),
+        )
+    )
+
+    payload = json.loads(result)
+    assert payload["source"] == "http_text_fallback"
+    assert payload["status"] == "HTTP 200"
+    assert "def run" in payload["text"]
+    assert payload["links"] == []
+
+
+def test_http_text_extract_collects_html_links() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text='<html><body><a href="/a">A</a><a href="https://example.org/b">B</a></body></html>',
+        )
+
+    result = asyncio.run(
+        _http_text_extract(
+            "https://example.com/index.html",
+            include_links=True,
+            max_chars=1000,
+            timeout_ms=30000,
+            transport=httpx.MockTransport(handler),
+        )
+    )
+
+    payload = json.loads(result)
+    assert payload["links"] == ["https://example.com/a", "https://example.org/b"]
+
+
+def test_should_try_http_text_extract_for_raw_and_code_urls() -> None:
+    assert _should_try_http_text_extract("https://raw.githubusercontent.com/org/repo/main/file")
+    assert _should_try_http_text_extract("https://example.com/source.py")
+    assert not _should_try_http_text_extract("https://example.com/article")
 
 
 def test_browser_extract_receives_agent_profile_context(tmp_path, monkeypatch) -> None:
