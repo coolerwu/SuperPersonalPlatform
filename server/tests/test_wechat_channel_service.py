@@ -141,6 +141,7 @@ def _service(tmp_path: Path) -> tuple[WechatChannelService, FakeRunService, Fake
     service._baseurl = "https://ilink.example"
     service._bot_token = "bot-token"
     service._pending_input_delay_seconds = 0.03
+    service._pending_multi_message_delay_seconds = 0.03
     return service, run_service, client
 
 
@@ -183,6 +184,26 @@ def test_wechat_image_then_text_waits_and_merges_into_one_run(tmp_path) -> None:
         assert created["metadata"]["batched_messages"] == 2
         assert created["metadata"]["context_token"] == "textctx"
         assert client.sent[0]["payload"]["context_token"] == "textctx"
+
+    asyncio.run(scenario())
+
+
+def test_wechat_multiple_messages_wait_from_last_message_with_extended_delay(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, _client = _service(tmp_path)
+        service._pending_input_delay_seconds = 0.02
+        service._pending_multi_message_delay_seconds = 0.08
+
+        await service._process_message(_text_message("第一段"))
+        await service._process_message(_text_message("第二段"))
+        await asyncio.sleep(0.04)
+        assert run_service.created == []
+
+        await asyncio.sleep(0.06)
+        assert len(run_service.created) == 1
+        assert run_service.created[0]["content"] == "第一段\n第二段"
+        assert run_service.created[0]["metadata"]["batched_messages"] == 2
+        assert run_service.created[0]["metadata"]["delay_seconds"] == 0.08
 
     asyncio.run(scenario())
 
@@ -249,6 +270,104 @@ def test_wechat_clear_session_command_rotates_active_session_without_run(tmp_pat
 
         assert len(run_service.created) == 2
         assert run_service.created[1]["session_id"] != first_session_id
+
+    asyncio.run(scenario())
+
+
+def test_wechat_session_status_command_does_not_create_run(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, client = _service(tmp_path)
+
+        await service._process_message(_text_message("/session status", context_token="status"))
+        await asyncio.sleep(0.06)
+
+        assert run_service.created == []
+        assert client.sent[-1]["payload"]["context_token"] == "status"
+        assert "当前还没有 active session" in client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
+
+    asyncio.run(scenario())
+
+
+def test_wechat_session_new_command_rotates_active_session_without_run(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, client = _service(tmp_path)
+
+        await service._process_message(_text_message("第一句", context_token="first"))
+        await asyncio.sleep(0.06)
+        first_session_id = run_service.created[0]["session_id"]
+
+        await service._process_message(_text_message("/session new", context_token="new"))
+        await asyncio.sleep(0.06)
+
+        assert len(run_service.created) == 1
+        assert client.sent[-1]["payload"]["context_token"] == "new"
+        assert "已清空上下文" in client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
+
+        await service._process_message(_text_message("第二句", context_token="second"))
+        await asyncio.sleep(0.06)
+
+        assert len(run_service.created) == 2
+        assert run_service.created[1]["session_id"] != first_session_id
+
+    asyncio.run(scenario())
+
+
+def test_wechat_session_list_and_change_commands_switch_current_identity_session(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, client = _service(tmp_path)
+
+        await service._process_message(_text_message("第一句", context_token="first"))
+        await asyncio.sleep(0.06)
+        first_session_id = run_service.created[0]["session_id"]
+
+        await service._process_message(_text_message("/session new", context_token="new"))
+        await asyncio.sleep(0.06)
+        await service._process_message(_text_message("第二句", context_token="second"))
+        await asyncio.sleep(0.06)
+
+        await service._process_message(_text_message("/session list", context_token="list"))
+        await asyncio.sleep(0.06)
+        list_text = client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
+        assert "当前微信身份相关会话" in list_text
+        assert "/session change <编号或 session_id 前缀>" in list_text
+
+        await service._process_message(_text_message("/session change 2", context_token="change"))
+        await asyncio.sleep(0.06)
+        assert "已切换会话" in client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
+
+        await service._process_message(_text_message("回到第一段", context_token="third"))
+        await asyncio.sleep(0.06)
+
+        assert len(run_service.created) == 3
+        assert run_service.created[2]["session_id"] == first_session_id
+
+    asyncio.run(scenario())
+
+
+def test_wechat_session_new_cancels_pending_input(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, _client = _service(tmp_path)
+
+        await service._process_message(_text_message("还没 flush", context_token="pending"))
+        await service._process_message(_text_message("/session new", context_token="new"))
+        await asyncio.sleep(0.06)
+
+        assert run_service.created == []
+
+    asyncio.run(scenario())
+
+
+def test_wechat_done_command_flushes_pending_input_immediately(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, _client = _service(tmp_path)
+        service._pending_input_delay_seconds = 0.5
+        service._pending_multi_message_delay_seconds = 0.5
+
+        await service._process_message(_text_message("第一段", context_token="pending"))
+        await service._process_message(_text_message("/done", context_token="done"))
+
+        assert len(run_service.created) == 1
+        assert run_service.created[0]["content"] == "第一段"
 
     asyncio.run(scenario())
 

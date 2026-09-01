@@ -28,12 +28,17 @@ def test_browser_config_parses_proxy_and_timeout() -> None:
     settings = parse_settings(
         {
             "auth": {"token": "secret-token"},
-            "browser": {"proxy": "http://127.0.0.1:7890", "timeout_ms": 90000},
+            "browser": {
+                "proxy": "http://127.0.0.1:7890",
+                "timeout_ms": 90000,
+                "allow_private_hosts": ["finance.wulang.vip", ".internal.test"],
+            },
         }
     )
 
     assert settings.browser.proxy == "http://127.0.0.1:7890"
     assert settings.browser.timeout_ms == 90000
+    assert settings.browser.allow_private_hosts == ("finance.wulang.vip", ".internal.test")
 
 
 def test_browser_proxy_falls_back_to_environment(monkeypatch) -> None:
@@ -182,3 +187,29 @@ def test_browser_profile_lock_clears_dead_owner_pid(tmp_path, monkeypatch) -> No
 def test_browser_extract_rejects_local_and_non_http_urls(url) -> None:
     with pytest.raises(BrowserToolError):
         _validate_public_url(url)
+
+
+def test_browser_extract_private_dns_error_includes_host_and_address(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "server.infrastructure.browser_tools.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, "", ("192.168.1.3", 443))],
+    )
+
+    with pytest.raises(BrowserToolError) as exc_info:
+        _validate_public_url("https://example.test/page")
+
+    assert "host=example.test" in str(exc_info.value)
+    assert "address=192.168.1.3" in str(exc_info.value)
+
+
+def test_browser_extract_allows_configured_private_hostname(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "server.infrastructure.browser_tools.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, "", ("192.168.1.3", 443))],
+    )
+
+    with pytest.raises(BrowserToolError):
+        _validate_public_url("https://finance.wulang.vip/page")
+
+    _validate_public_url("https://finance.wulang.vip/page", allow_private_hosts=("finance.wulang.vip",))
+    _validate_public_url("https://sub.wulang.vip/page", allow_private_hosts=(".wulang.vip",))

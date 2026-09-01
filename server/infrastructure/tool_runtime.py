@@ -101,7 +101,11 @@ def _browser_config(context_workspace: Path) -> dict[str, Any]:
         settings = load_settings(workspace / "config.yaml")
     except Exception:
         return {}
-    return {"proxy": settings.browser.proxy, "timeout_ms": settings.browser.timeout_ms}
+    return {
+        "proxy": settings.browser.proxy,
+        "timeout_ms": settings.browser.timeout_ms,
+        "allow_private_hosts": settings.browser.allow_private_hosts,
+    }
 
 
 def _search_context_tool(service: ContextKnowledgeService, webdav_service: WebDAVContextService | None) -> Any:

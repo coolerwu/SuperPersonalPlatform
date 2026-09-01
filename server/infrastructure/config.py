@@ -30,10 +30,14 @@ class ServerConfig:
 class BrowserConfig:
     proxy: str = ""
     timeout_ms: int = 60000
+    allow_private_hosts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.timeout_ms < 1000:
             raise ValueError("browser.timeout_ms must be at least 1000")
+        for host in self.allow_private_hosts:
+            if not host or "://" in host or "/" in host:
+                raise ValueError("browser.allow_private_hosts[] must be hostnames, not URLs")
 
 
 @dataclass(frozen=True)
@@ -269,6 +273,7 @@ def parse_browser_config(raw: Any) -> BrowserConfig:
     return BrowserConfig(
         proxy=str(raw.get("proxy") or "").strip(),
         timeout_ms=int(raw.get("timeout_ms") or 60000),
+        allow_private_hosts=_string_tuple(raw.get("allow_private_hosts") or [], field_name="browser.allow_private_hosts"),
     )
 
 
@@ -350,11 +355,11 @@ def _normalize_extension(value: Any) -> str:
     return extension
 
 
-def _string_tuple(value: Any) -> tuple[str, ...]:
+def _string_tuple(value: Any, *, field_name: str = "deepagent list options") -> tuple[str, ...]:
     if isinstance(value, str):
         return tuple(item.strip() for item in value.split(",") if item.strip())
     if not isinstance(value, list):
-        raise ValueError("deepagent list options must be lists")
+        raise ValueError(f"{field_name} must be a list")
     return tuple(str(item).strip() for item in value if str(item).strip())
 
 

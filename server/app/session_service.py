@@ -197,6 +197,143 @@ class SessionService:
             metadata=metadata,
         )
 
+    def active_summary(
+        self,
+        *,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+    ) -> dict[str, Any]:
+        active_key = self.build_session_id(
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+        )
+        binding = self._find_active_binding(active_key)
+        session_id = str(binding.get("session_id") or "").strip() if binding else ""
+        if session_id and self.exists(session_id):
+            return self.session_summary(session_id)
+        legacy_session_id = active_key
+        if self.exists(legacy_session_id):
+            return self.session_summary(legacy_session_id)
+        return {}
+
+    def related_summaries_for_identity(
+        self,
+        *,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        active_key = self.build_session_id(
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+        )
+        active_session_ids = self._active_session_ids()
+        related: list[dict[str, Any]] = []
+        for item in self._read_index().get("sessions", []):
+            if not isinstance(item, dict):
+                continue
+            if not self._summary_matches_identity(
+                item,
+                active_key=active_key,
+                channel=channel,
+                channel_account_id=channel_account_id,
+                peer_type=peer_type,
+                peer_id=peer_id,
+                agent_id=agent_id,
+            ):
+                continue
+            session_id = str(item.get("session_id") or "").strip()
+            if not session_id or not self.exists(session_id):
+                continue
+            summary = dict(item)
+            summary["active"] = session_id in active_session_ids
+            related.append(summary)
+        related.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+        max_items = min(max(int(limit or 10), 1), 30)
+        return related[:max_items]
+
+    def switch_active(
+        self,
+        *,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+        selector: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        related = self.related_summaries_for_identity(
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+            limit=30,
+        )
+        target = _select_session_summary(related, selector)
+        if target is None:
+            raise ValueError("session not found for current identity")
+        active_key = self.build_session_id(
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+        )
+        target_id = str(target.get("session_id") or "").strip()
+        current = self.active_summary(
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+        )
+        current_id = str(current.get("session_id") or "").strip()
+        now = _now()
+        if current_id and current_id != target_id and self.exists(current_id):
+            current_state = self._read_state(current_id)
+            current_state["status"] = "archived"
+            current_state["updated_at"] = now
+            _write_json(self._session_dir(current_id) / "state.json", current_state)
+            self._upsert_index(current_state)
+        target_state = self._touch_session(
+            target_id,
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+            active_key=active_key,
+            generation=int(target.get("generation") or 1),
+            metadata=metadata,
+        )
+        self._upsert_active_binding(
+            active_key=active_key,
+            session_id=target_id,
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+            generation=int(target_state.get("generation") or target.get("generation") or 1),
+        )
+        summary = dict(target_state)
+        summary["active"] = True
+        return summary
+
     def _create_session(
         self,
         *,
@@ -626,6 +763,27 @@ class SessionService:
         related.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
         return related
 
+    def _summary_matches_identity(
+        self,
+        summary: dict[str, Any],
+        *,
+        active_key: str,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+    ) -> bool:
+        if active_key and str(summary.get("active_key") or "").strip() == active_key:
+            return True
+        return (
+            str(summary.get("channel") or "").strip() == channel
+            and str(summary.get("channel_account_id") or "").strip() == channel_account_id
+            and str(summary.get("peer_type") or "").strip() == peer_type
+            and str(summary.get("peer_id") or "").strip() == peer_id
+            and str(summary.get("agent_id") or "").strip() == agent_id
+        )
+
     def _new_session_id(
         self,
         *,
@@ -662,6 +820,31 @@ def _safe_part(value: str) -> str:
 def _safe_filename(value: str) -> str:
     safe = _SAFE_ID_RE.sub("_", Path(value or "").name).strip("._-")
     return safe[:120] or "attachment"
+
+
+def _select_session_summary(summaries: list[dict[str, Any]], selector: str) -> dict[str, Any] | None:
+    normalized = str(selector or "").strip()
+    if not normalized:
+        return None
+    if normalized.isdigit():
+        index = int(normalized) - 1
+        if 0 <= index < len(summaries):
+            return summaries[index]
+    exact = [
+        item
+        for item in summaries
+        if str(item.get("session_id") or "").strip() == normalized
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    prefix = [
+        item
+        for item in summaries
+        if str(item.get("session_id") or "").strip().startswith(normalized)
+    ]
+    if len(prefix) == 1:
+        return prefix[0]
+    return None
 
 
 def _message_search_score(message: dict[str, Any], query: str) -> int:

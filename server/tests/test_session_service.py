@@ -100,3 +100,75 @@ def test_session_service_adopts_legacy_deterministic_session_before_rotation(tmp
     assert rotated.session_id != legacy_id
     assert legacy_state["status"] == "archived"
     assert legacy_state["message_count"] == 3
+
+
+def test_session_service_lists_and_switches_only_matching_identity(tmp_path) -> None:
+    service = SessionService(tmp_path)
+    first = service.get_or_create(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+    second = service.clear_active(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+    other = service.get_or_create(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_other",
+        agent_id="assistant",
+    )
+
+    related = service.related_summaries_for_identity(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+    related_ids = {item["session_id"] for item in related}
+
+    assert first.session_id in related_ids
+    assert second.session_id in related_ids
+    assert other.session_id not in related_ids
+
+    switched = service.switch_active(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+        selector=first.session_id,
+    )
+    current = service.active_summary(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+
+    assert switched["session_id"] == first.session_id
+    assert switched["active"] is True
+    assert current["session_id"] == first.session_id
+
+    try:
+        service.switch_active(
+            channel="wechat",
+            channel_account_id="default",
+            peer_type="private",
+            peer_id="wxid_user",
+            agent_id="assistant",
+            selector=other.session_id,
+        )
+    except ValueError as exc:
+        assert "session not found" in str(exc)
+    else:
+        raise AssertionError("expected identity boundary to reject unrelated session")

@@ -49,7 +49,7 @@ const AGENT_TOOL_CARDS = [
 const DEFAULT_CONFIG = {
   auth: { token: "" },
   server: { host: "0.0.0.0", port: 8888 },
-  browser: { proxy: "", timeout_ms: 60000 },
+  browser: { proxy: "", timeout_ms: 60000, allow_private_hosts: [] },
   llm: {
     default_model_id: "default",
     models: [
@@ -257,6 +257,18 @@ export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav, on
               value={config.browser.timeout_ms}
               readOnly={readOnly}
               onChange={(event) => update((next) => (next.browser.timeout_ms = Number(event.target.value) || 60000))}
+            />
+          </ConfigField>
+          <ConfigField label="允许内网 Host">
+            <input
+              value={normalizeList(config.browser.allow_private_hosts).join(", ")}
+              readOnly={readOnly}
+              placeholder="finance.wulang.vip, .wulang.vip"
+              onChange={(event) =>
+                update((next) => {
+                  next.browser.allow_private_hosts = normalizeList(event.target.value);
+                })
+              }
             />
           </ConfigField>
         </div>
@@ -1074,6 +1086,7 @@ function withDefaults(value) {
     ? {
         proxy: String(config.browser.proxy || ""),
         timeout_ms: Number(config.browser.timeout_ms) || 60000,
+        allow_private_hosts: normalizeList(config.browser.allow_private_hosts),
       }
     : cloneConfig(DEFAULT_CONFIG.browser);
   config.context.webdav_sync.root_path = normalizePath(config.context.webdav_sync.root_path || "/");

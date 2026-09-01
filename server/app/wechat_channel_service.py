@@ -12,6 +12,7 @@ from urllib.parse import quote, urljoin
 
 import yaml
 
+from server.app.debounce_executor import DebouncedTaskExecutor
 from server.infrastructure.ilink_client import (
     ILinkAPIError,
     ILinkClient,
@@ -30,6 +31,12 @@ class WechatChannelStatus:
     user: str
     error: str
     logs: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class WechatSessionCommand:
+    action: str
+    selector: str = ""
 
 
 class WechatChannelService:
@@ -59,8 +66,9 @@ class WechatChannelService:
         self._bot_token = ""
         self._baseurl = ""
         self._pending_inputs: dict[str, dict[str, Any]] = {}
-        self._pending_tasks: dict[str, asyncio.Task[None]] = {}
+        self._pending_executor = DebouncedTaskExecutor(self._flush_pending_input)
         self._pending_input_delay_seconds = 5.0
+        self._pending_multi_message_delay_seconds = 15.0
 
     async def status(self) -> WechatChannelStatus:
         async with self._lock:
@@ -291,7 +299,28 @@ class WechatChannelService:
 
         peer_id = _wechat_peer_id(from_user_id, to_user_id)
         peer_type = _wechat_peer_type(peer_id)
+        pending_key = _pending_key(self._account_id, agent_id, peer_type, peer_id)
+        command = _parse_session_command(text) if not attachments else None
+        if command is not None:
+            await self._handle_session_command(
+                command,
+                from_user_id=from_user_id,
+                to_user_id=to_user_id,
+                context_token=context_token,
+                agent_id=agent_id,
+                peer_id=peer_id,
+                peer_type=peer_type,
+                pending_key=pending_key,
+                raw_text=text,
+            )
+            return
+        if _is_pending_flush_command(text) and not attachments:
+            flushed = await self._flush_pending_input_now(pending_key)
+            if not flushed:
+                await self._send_reply(from_user_id, context_token, "当前没有待处理消息。")
+            return
         if _is_clear_session_command(text) and not attachments:
+            await self._cancel_pending_input(pending_key)
             await self._clear_wechat_session(
                 from_user_id=from_user_id,
                 to_user_id=to_user_id,
@@ -302,7 +331,6 @@ class WechatChannelService:
                 text=text,
             )
             return
-        pending_key = _pending_key(self._account_id, agent_id, peer_type, peer_id)
 
         await self._queue_pending_message(
             key=pending_key,
@@ -354,74 +382,147 @@ class WechatChannelService:
             pending["agent_id"] = agent_id
             pending["peer_id"] = peer_id
             pending["peer_type"] = peer_type
-
-            old_task = self._pending_tasks.get(key)
-            if old_task and not old_task.done():
-                old_task.cancel()
-            self._pending_tasks[key] = asyncio.create_task(self._flush_pending_input_after_delay(key))
+            delay_seconds = (
+                self._pending_multi_message_delay_seconds
+                if int(pending["message_count"]) > 1
+                else self._pending_input_delay_seconds
+            )
+            pending["delay_seconds"] = delay_seconds
             self._logs.append(
                 {
                     "type": "message_pending",
                     "texts": len(pending["text_parts"]),
                     "attachments": len(pending["attachments"]),
                     "message_count": pending["message_count"],
+                    "delay_seconds": delay_seconds,
                     "peer_id": peer_id,
                     "context_token": context_token,
                 }
             )
+        await self._pending_executor.schedule(key, delay_seconds=delay_seconds)
 
-    async def _flush_pending_input_after_delay(self, key: str) -> None:
-        try:
-            await asyncio.sleep(self._pending_input_delay_seconds)
-            pending = await self._take_pending_input(key)
-            if not pending:
-                return
-            text = "\n".join(str(part) for part in pending["text_parts"] if str(part).strip()).strip()
-            image_only = not text and bool(pending["attachments"])
-            if image_only:
-                text = "用户发送了一张图片。"
-            if not text and not pending["attachments"]:
-                return
-            await self._execute_wechat_run(
-                text=text,
-                attachments=tuple(pending["attachments"]),
-                from_user_id=str(pending["from_user_id"]),
-                to_user_id=str(pending["to_user_id"]),
-                context_token=str(pending["context_token"]),
-                agent_id=str(pending["agent_id"]),
-                peer_id=str(pending["peer_id"]),
-                peer_type=str(pending["peer_type"]),
-                metadata_extra={
-                    "batched_messages": int(pending["message_count"]),
-                    "merged_pending_images": len(pending["attachments"]),
-                    "image_only_flush": image_only,
-                    "delay_seconds": self._pending_input_delay_seconds,
-                },
-            )
-        except asyncio.CancelledError:
-            pass
+    async def _cancel_pending_input(self, key: str) -> None:
+        async with self._lock:
+            self._pending_inputs.pop(key, None)
+        await self._pending_executor.cancel(key)
+
+    async def _flush_pending_input_now(self, key: str) -> bool:
+        async with self._lock:
+            has_pending = key in self._pending_inputs
+        if not has_pending:
+            return False
+        await self._pending_executor.flush(key)
+        return True
+
+    async def _flush_pending_input(self, key: str) -> None:
+        pending = await self._take_pending_input(key)
+        if not pending:
+            return
+        text = "\n".join(str(part) for part in pending["text_parts"] if str(part).strip()).strip()
+        image_only = not text and bool(pending["attachments"])
+        if image_only:
+            text = "用户发送了一张图片。"
+        if not text and not pending["attachments"]:
+            return
+        await self._execute_wechat_run(
+            text=text,
+            attachments=tuple(pending["attachments"]),
+            from_user_id=str(pending["from_user_id"]),
+            to_user_id=str(pending["to_user_id"]),
+            context_token=str(pending["context_token"]),
+            agent_id=str(pending["agent_id"]),
+            peer_id=str(pending["peer_id"]),
+            peer_type=str(pending["peer_type"]),
+            metadata_extra={
+                "batched_messages": int(pending["message_count"]),
+                "merged_pending_images": len(pending["attachments"]),
+                "image_only_flush": image_only,
+                "delay_seconds": float(pending.get("delay_seconds") or self._pending_input_delay_seconds),
+            },
+        )
 
     async def _take_pending_input(self, key: str) -> dict[str, Any] | None:
         async with self._lock:
-            pending = self._pending_inputs.pop(key, None)
-            task = self._pending_tasks.pop(key, None)
-            if task and task is not asyncio.current_task() and not task.done():
-                task.cancel()
-            return pending
+            return self._pending_inputs.pop(key, None)
 
     async def _cancel_pending_inputs(self) -> None:
         async with self._lock:
-            tasks = list(self._pending_tasks.values())
-            self._pending_tasks.clear()
             self._pending_inputs.clear()
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        for task in tasks:
+        await self._pending_executor.cancel_all()
+
+    async def _handle_session_command(
+        self,
+        command: WechatSessionCommand,
+        *,
+        from_user_id: str,
+        to_user_id: str,
+        context_token: str,
+        agent_id: str,
+        peer_id: str,
+        peer_type: str,
+        pending_key: str,
+        raw_text: str,
+    ) -> None:
+        if command.action in {"new", "change"}:
+            await self._cancel_pending_input(pending_key)
+        if command.action == "help":
+            await self._send_reply(from_user_id, context_token, _session_help_text())
+            return
+        if self._session_service is None:
+            await self._send_reply(from_user_id, context_token, "当前没有启用长期会话。")
+            return
+        identity = {
+            "channel": "wechat",
+            "channel_account_id": self._account_id,
+            "peer_type": peer_type,
+            "peer_id": peer_id,
+            "agent_id": agent_id,
+        }
+        if command.action == "new":
+            await self._clear_wechat_session(
+                from_user_id=from_user_id,
+                to_user_id=to_user_id,
+                context_token=context_token,
+                agent_id=agent_id,
+                peer_id=peer_id,
+                peer_type=peer_type,
+                text=raw_text,
+            )
+            return
+        if command.action == "status":
+            summary = self._session_service.active_summary(**identity)
+            await self._send_reply(from_user_id, context_token, _session_status_text(summary, agent_id=agent_id))
+            return
+        if command.action == "list":
+            summaries = self._session_service.related_summaries_for_identity(**identity, limit=10)
+            await self._send_reply(from_user_id, context_token, _session_list_text(summaries))
+            return
+        if command.action == "change":
+            selector = command.selector.strip()
+            if not selector:
+                await self._send_reply(from_user_id, context_token, "用法：/session change <编号或 session_id 前缀>")
+                return
             try:
-                await task
-            except asyncio.CancelledError:
-                pass
+                summary = self._session_service.switch_active(
+                    **identity,
+                    selector=selector,
+                    metadata={"to_user_id": to_user_id},
+                )
+            except ValueError:
+                await self._send_reply(
+                    from_user_id,
+                    context_token,
+                    "没找到可切换的会话。先发 /session list 查看当前微信身份下的 session 编号。",
+                )
+                return
+            if self._system_log_service:
+                self._system_log_service.append_line(
+                    f"wechat session changed account={self._account_id} peer={peer_type}:{peer_id} "
+                    f"session={summary.get('session_id', '')}"
+                )
+            await self._send_reply(from_user_id, context_token, _session_changed_text(summary))
+            return
+        await self._send_reply(from_user_id, context_token, "未知 session 指令。\n\n" + _session_help_text())
 
     async def _execute_wechat_run(
         self,
@@ -713,6 +814,91 @@ def _pending_key(account_id: str, agent_id: str, peer_type: str, peer_id: str) -
     return f"{account_id}:{agent_id}:{peer_type}:{peer_id}"
 
 
+def _parse_session_command(text: str) -> WechatSessionCommand | None:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    if _is_clear_session_command(value):
+        return WechatSessionCommand(action="new")
+    parts = value.split(maxsplit=2)
+    root = parts[0].lower() if parts else ""
+    if root not in {"/session", "session"}:
+        return None
+    if len(parts) == 1:
+        return WechatSessionCommand(action="help")
+    action = parts[1].lower()
+    selector = parts[2].strip() if len(parts) > 2 else ""
+    if action in {"help", "h", "-h", "--help", "说明", "帮助"}:
+        return WechatSessionCommand(action="help")
+    if action in {"status", "current", "info", "状态", "当前"}:
+        return WechatSessionCommand(action="status")
+    if action in {"new", "clear", "reset", "新建", "清空", "重置", "新会话"}:
+        return WechatSessionCommand(action="new")
+    if action in {"list", "ls", "history", "历史", "列表"}:
+        return WechatSessionCommand(action="list")
+    if action in {"change", "switch", "use", "切换"}:
+        return WechatSessionCommand(action="change", selector=selector)
+    return WechatSessionCommand(action="unknown")
+
+
+def _session_help_text() -> str:
+    return (
+        "微信会话指令：\n"
+        "/session status 查看当前会话\n"
+        "/session new 开启新会话\n"
+        "/session list 查看当前微信身份的历史会话\n"
+        "/session change <编号或 session_id 前缀> 切换会话\n\n"
+        "兼容：/clear、/new、清空上下文、新会话。"
+    )
+
+
+def _session_status_text(summary: dict[str, Any], *, agent_id: str) -> str:
+    if not summary:
+        return f"当前还没有 active session。发送普通消息会为 Agent `{agent_id}` 自动创建。"
+    return (
+        "当前会话：\n"
+        f"ID: {_short_session_id(summary.get('session_id', ''))}\n"
+        f"Agent: {summary.get('agent_id', agent_id)}\n"
+        f"Generation: {summary.get('generation', 1)}\n"
+        f"消息数: {summary.get('message_count', 0)}\n"
+        f"Run 数: {summary.get('run_count', 0)}\n"
+        f"状态: {summary.get('status', '')}\n"
+        f"更新时间: {summary.get('updated_at', '')}"
+    )
+
+
+def _session_list_text(summaries: list[dict[str, Any]]) -> str:
+    if not summaries:
+        return "当前微信身份下还没有历史会话。"
+    lines = ["当前微信身份相关会话："]
+    for index, item in enumerate(summaries, start=1):
+        marker = "*" if item.get("active") else " "
+        lines.append(
+            f"{index}. {marker} {_short_session_id(item.get('session_id', ''))} "
+            f"gen={item.get('generation', 1)} msg={item.get('message_count', 0)} "
+            f"run={item.get('run_count', 0)} {item.get('updated_at', '')}"
+        )
+    lines.append("\n切换：/session change <编号或 session_id 前缀>")
+    return "\n".join(lines)
+
+
+def _session_changed_text(summary: dict[str, Any]) -> str:
+    return (
+        "已切换会话：\n"
+        f"ID: {_short_session_id(summary.get('session_id', ''))}\n"
+        f"Generation: {summary.get('generation', 1)}\n"
+        f"消息数: {summary.get('message_count', 0)}\n"
+        f"Run 数: {summary.get('run_count', 0)}"
+    )
+
+
+def _short_session_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) <= 28:
+        return text
+    return f"{text[:24]}..."
+
+
 def _message_has_processable_content(msg: dict[str, Any]) -> bool:
     for item in msg.get("item_list") or []:
         if item.get("type") == 1 and item.get("text_item"):
@@ -738,6 +924,21 @@ def _is_clear_session_command(text: str) -> bool:
         "开启新会话",
         "开始新会话",
         "新会话",
+    }
+
+
+def _is_pending_flush_command(text: str) -> bool:
+    normalized = "".join(str(text or "").strip().lower().split())
+    return normalized in {
+        "/done",
+        "/flush",
+        "done",
+        "flush",
+        "发完了",
+        "发完",
+        "完了",
+        "结束输入",
+        "可以了",
     }
 
 

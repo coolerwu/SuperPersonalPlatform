@@ -49,6 +49,7 @@ def build_browser_extract_tool(
     *,
     proxy: str = "",
     timeout_ms: int = 60000,
+    allow_private_hosts: tuple[str, ...] = (),
     workspace: Path | None = None,
     agent_id: str = "",
 ) -> Any:
@@ -56,7 +57,7 @@ def build_browser_extract_tool(
 
     async def browser_extract(url: str, include_links: bool = True, max_chars: int = 12000) -> str:
         """Open a public web page in a headless browser and extract rendered text."""
-        _validate_public_url(url)
+        _validate_public_url(url, allow_private_hosts=allow_private_hosts)
         max_chars = max(1000, min(int(max_chars or 12000), 50000))
         navigation_timeout_ms = max(1000, int(timeout_ms or 60000))
         try:
@@ -137,7 +138,7 @@ def build_browser_extract_tool(
             "Open a public http/https web page in a headless Playwright browser and extract rendered text and links. "
             "Use this for JavaScript-rendered pages when normal context search is insufficient. "
             "For Agent runs, the browser reuses that Agent's persistent profile under workspace/browser_profiles/{agent_id}. "
-            "Args: url, include_links=true, max_chars. Private, localhost, and internal network URLs are blocked."
+            "Args: url, include_links=true, max_chars. Private, localhost, and internal network URLs are blocked unless the host is allowed by browser.allow_private_hosts."
         ),
     )
 
@@ -146,6 +147,7 @@ def build_browser_search_tool(
     *,
     proxy: str = "",
     timeout_ms: int = 60000,
+    allow_private_hosts: tuple[str, ...] = (),
     workspace: Path | None = None,
     agent_id: str = "",
 ) -> Any:
@@ -409,19 +411,24 @@ def _resolve_proxy(configured_proxy: str) -> str:
     return ""
 
 
-def _validate_public_url(url: str) -> None:
+def _validate_public_url(url: str, *, allow_private_hosts: tuple[str, ...] = ()) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise BrowserToolError("browser_extract only supports absolute http/https URLs")
-    if _is_blocked_host(parsed.hostname):
-        raise BrowserToolError("browser_extract cannot access localhost, private, or internal network addresses")
+    host_allowed = _is_allowed_private_host(parsed.hostname, allow_private_hosts)
+    if _is_blocked_host(parsed.hostname) and not host_allowed:
+        raise BrowserToolError(
+            f"browser_extract blocked local/private/internal host: host={parsed.hostname}"
+        )
     try:
         addresses = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, parsed.port or None, type=socket.SOCK_STREAM)}
     except socket.gaierror as exc:
         raise BrowserToolError(f"browser_extract cannot resolve host: {parsed.hostname}") from exc
     for address in addresses:
-        if _is_blocked_ip(address):
-            raise BrowserToolError("browser_extract cannot access hosts resolving to private or internal addresses")
+        if _is_blocked_ip(address) and not host_allowed:
+            raise BrowserToolError(
+                f"browser_extract blocked host resolving to private/internal address: host={parsed.hostname}, address={address}"
+            )
 
 
 def _is_http_url(url: str) -> bool:
@@ -474,6 +481,21 @@ def _is_blocked_host(hostname: str) -> bool:
         return _is_blocked_ip(normalized)
     except ValueError:
         return False
+
+
+def _is_allowed_private_host(hostname: str, allow_private_hosts: tuple[str, ...]) -> bool:
+    normalized = hostname.strip().lower().rstrip(".")
+    for raw_host in allow_private_hosts:
+        allowed = str(raw_host or "").strip().lower().rstrip(".")
+        if not allowed:
+            continue
+        if allowed.startswith("."):
+            suffix = allowed[1:]
+            if normalized == suffix or normalized.endswith(allowed):
+                return True
+        elif normalized == allowed:
+            return True
+    return False
 
 
 def _is_blocked_ip(value: str) -> bool:

@@ -6,6 +6,7 @@ server:
 browser:
   proxy: ""
   timeout_ms: 60000
+  allow_private_hosts: []
 llm:
   default_model_id: "default"
   models:
