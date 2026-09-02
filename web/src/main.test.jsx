@@ -475,6 +475,47 @@ test("chat page renders assistant markdown and follows the latest message", asyn
   });
 });
 
+test("chat page renders assistant markdown tables", async () => {
+  window.history.replaceState({}, "", "/chat");
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/chat/session")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 1 },
+        messages: [
+          {
+            seq: 1,
+            role: "assistant",
+            content: "方案：\n\n| 顺序 | 动作 | 为什么 |\n| --- | --- | --- |\n| 1 | 保底线 | 避免击穿 |\n| 2 | 提收益 | 增加弹性 |",
+            created_at: "2026-08-20T07:01:04Z",
+          },
+        ],
+      });
+    }
+    if (path.startsWith("/api/chat/sessions?")) {
+      return response({ sessions: [{ session_id: "session_web", agent_id: "assistant", active: true, message_count: 1 }] });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  expect(await screen.findByRole("table")).toBeInTheDocument();
+  expect(screen.getByRole("columnheader", { name: "顺序" })).toBeInTheDocument();
+  expect(screen.getByRole("columnheader", { name: "动作" })).toBeInTheDocument();
+  expect(screen.getByRole("cell", { name: "保底线" })).toBeInTheDocument();
+  expect(screen.getByRole("cell", { name: "增加弹性" })).toBeInTheDocument();
+});
+
 test("chat page shows thinking events while running and folds them after completion", async () => {
   vi.useFakeTimers();
   window.history.replaceState({}, "", "/chat");

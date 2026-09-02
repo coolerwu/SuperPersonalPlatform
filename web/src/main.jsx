@@ -2543,7 +2543,8 @@ function renderMarkdownBlocks(content) {
     code = null;
   }
 
-  for (const rawLine of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const rawLine = lines[lineIndex];
     const line = rawLine.trimEnd();
     const fenceMatch = line.match(/^```(\w+)?\s*$/);
     if (fenceMatch) {
@@ -2596,6 +2597,29 @@ function renderMarkdownBlocks(content) {
       quote.push(quoted[1].trim());
       continue;
     }
+    const nextLine = lines[lineIndex + 1]?.trimEnd() || "";
+    if (isMarkdownTableStart(line, nextLine)) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      const header = splitMarkdownTableRow(line);
+      const rows = [];
+      lineIndex += 2;
+      while (lineIndex < lines.length) {
+        const rowLine = lines[lineIndex].trimEnd();
+        if (!rowLine.trim() || rowLine.match(/^```/) || !rowLine.includes("|")) {
+          lineIndex -= 1;
+          break;
+        }
+        rows.push(splitMarkdownTableRow(rowLine));
+        lineIndex += 1;
+      }
+      if (lineIndex >= lines.length) {
+        lineIndex = lines.length - 1;
+      }
+      blocks.push(renderMarkdownTable(header, rows, `table-${blocks.length}`));
+      continue;
+    }
     paragraph.push(line.trim());
   }
   flushCode();
@@ -2603,6 +2627,54 @@ function renderMarkdownBlocks(content) {
   flushList();
   flushQuote();
   return blocks.length ? blocks : <p>{content}</p>;
+}
+
+function isMarkdownTableStart(line, nextLine) {
+  const header = splitMarkdownTableRow(line);
+  const separator = splitMarkdownTableRow(nextLine);
+  return header.length >= 2 && separator.length === header.length && separator.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitMarkdownTableRow(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed.includes("|")) return [];
+  return trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function normalizeMarkdownTableRow(row, width) {
+  const cells = Array.isArray(row) ? row.slice(0, width) : [];
+  while (cells.length < width) {
+    cells.push("");
+  }
+  return cells;
+}
+
+function renderMarkdownTable(header, rows, keyPrefix) {
+  const width = header.length;
+  return (
+    <div className="markdown-table-wrap" key={keyPrefix}>
+      <table>
+        <thead>
+          <tr>
+            {header.map((cell, index) => (
+              <th key={`${keyPrefix}-h-${index}`}>{renderMarkdownInline(cell, `${keyPrefix}-h-${index}`)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={`${keyPrefix}-r-${rowIndex}`}>
+              {normalizeMarkdownTableRow(row, width).map((cell, cellIndex) => (
+                <td key={`${keyPrefix}-r-${rowIndex}-${cellIndex}`}>
+                  {renderMarkdownInline(cell, `${keyPrefix}-r-${rowIndex}-${cellIndex}`)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function renderMarkdownInline(text, keyPrefix) {

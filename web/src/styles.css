@@ -694,6 +694,42 @@ pre {
   padding: 0;
 }
 
+.markdown-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: rgba(6, 11, 18, 0.42);
+}
+
+.markdown-table-wrap table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.markdown-table-wrap th,
+.markdown-table-wrap td {
+  border-bottom: 1px solid rgba(123, 145, 170, 0.16);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-table-wrap th {
+  color: #dff3ff;
+  background: rgba(23, 168, 245, 0.08);
+  font-weight: 800;
+}
+
+.markdown-table-wrap tr:last-child td {
+  border-bottom: 0;
+}
+
 .chat-bubble small {
   color: var(--blue);
   font-size: 11px;
