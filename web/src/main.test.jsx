@@ -697,7 +697,8 @@ test("chat page switches between related sessions", async () => {
   await flushReact();
 
   await waitFor(() => expect(screen.getByTitle("切换历史会话")).not.toBeDisabled());
-  fireEvent.change(screen.getByTitle("切换历史会话"), { target: { value: "session_old" } });
+  fireEvent.click(screen.getByTitle("切换历史会话"));
+  fireEvent.click(screen.getByRole("button", { name: /历史 2/ }));
 
   expect(await screen.findByText("旧问题")).toBeInTheDocument();
   expect(await screen.findByText("旧回答")).toBeInTheDocument();

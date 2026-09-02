@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import {
   Bot,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Clock3,
   Cpu,
@@ -263,6 +264,7 @@ function ChatPage() {
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
   const [activeRunId, setActiveRunId] = useState("");
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [error, setError] = useState("");
   const messagesRef = useRef(null);
   const chatEventSeqRef = useRef(0);
@@ -471,6 +473,7 @@ function ChatPage() {
 
   async function newSession() {
     if (activeRunId) return;
+    setSessionMenuOpen(false);
     setError("");
     const data = await api("/api/chat/session/new", {
       method: "POST",
@@ -485,6 +488,7 @@ function ChatPage() {
 
   async function changeSession(selector) {
     if (!selector || activeRunId) return;
+    setSessionMenuOpen(false);
     setError("");
     const data = await api("/api/chat/session/change", {
       method: "POST",
@@ -518,6 +522,7 @@ function ChatPage() {
   }
 
   function changeAgent(nextAgentId) {
+    setSessionMenuOpen(false);
     setAgentId(nextAgentId);
     setActiveRunId("");
     chatEventSeqRef.current = 0;
@@ -543,19 +548,40 @@ function ChatPage() {
                 </option>
               ))}
             </select>
-            <select
-              value={session?.session_id || ""}
-              onChange={(event) => changeSession(event.target.value).catch((exc) => setError(exc.message))}
-              disabled={Boolean(activeRunId) || chatSessions.length === 0}
-              title="切换历史会话"
-            >
-              {chatSessions.length === 0 ? <option value="">当前会话</option> : null}
-              {chatSessions.map((item, index) => (
-                <option key={item.session_id} value={item.session_id}>
-                  {formatSessionOption(item, index)}
-                </option>
-              ))}
-            </select>
+            <div className="session-switcher">
+              <button
+                type="button"
+                className="session-switch-button"
+                onClick={() => setSessionMenuOpen((open) => !open)}
+                disabled={Boolean(activeRunId) || chatSessions.length === 0}
+                aria-expanded={sessionMenuOpen}
+                title="切换历史会话"
+              >
+                <span>{formatSessionButton(session, chatSessions)}</span>
+                <small>同身份 {chatSessions.length || 1}</small>
+                <ChevronDown size={15} />
+              </button>
+              {sessionMenuOpen && !activeRunId ? (
+                <div className="session-menu" role="listbox" aria-label="历史会话">
+                  {chatSessions.map((item, index) => (
+                    <button
+                      key={item.session_id}
+                      type="button"
+                      className={`session-option ${item.session_id === session?.session_id ? "selected" : ""}`}
+                      onClick={() => changeSession(item.session_id).catch((exc) => setError(exc.message))}
+                    >
+                      <span className="session-option-title">
+                        <strong>{item.active ? "当前会话" : `历史 ${index + 1}`}</strong>
+                        <code>{shortSessionId(item.session_id)}</code>
+                      </span>
+                      <span className="session-option-meta">
+                        {Number(item.message_count || 0)} 条消息 · {formatTime(item.updated_at || item.created_at)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <button className="chat-secondary-button" onClick={newSession} disabled={Boolean(activeRunId)}>
               新会话
             </button>
@@ -615,8 +641,9 @@ function ChatPage() {
       <aside className="status-rail chat-rail">
         <RailCard title="当前会话" status={activeRunId ? "运行中" : "就绪"} tone={activeRunId ? "cyan" : "green"}>
           <RailRow label="Agent" value={agentId || "-"} />
-          <RailRow label="Session" value={session?.session_id || "-"} />
+          <RailRow label="Session" value={shortSessionId(session?.session_id || "") || "-"} />
           <RailRow label="消息数" value={session?.message_count ?? messages.length} />
+          <RailRow label="同身份会话" value={chatSessions.length || 1} />
           <RailRow label="当前 Run" value={activeRunId || "-"} />
         </RailCard>
         <RailCard title="落盘路径" status="Context" tone="blue">
@@ -2273,11 +2300,18 @@ function normalizeChatMessages(items) {
     }));
 }
 
-function formatSessionOption(item, index) {
-  const prefix = item.active ? "当前" : `历史 ${index + 1}`;
-  const count = Number(item.message_count || 0);
-  const updated = formatTime(item.updated_at || item.created_at);
-  return `${prefix} · ${count}条 · ${updated}`;
+function formatSessionButton(session, sessions) {
+  const current = sessions.find((item) => item.session_id === session?.session_id) || session || {};
+  const prefix = current.active === false ? "历史会话" : "当前会话";
+  const count = Number(current.message_count ?? session?.message_count ?? 0);
+  const updated = formatTime(current.updated_at || current.created_at || session?.updated_at || session?.created_at);
+  return `${prefix} · ${count} 条 · ${updated}`;
+}
+
+function shortSessionId(value) {
+  const text = String(value || "").trim();
+  if (text.length <= 18) return text;
+  return `${text.slice(0, 10)}…${text.slice(-6)}`;
 }
 
 async function hydrateChatRunSnapshots(messages) {
