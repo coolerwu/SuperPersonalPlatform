@@ -91,7 +91,15 @@ def build_browser_extract_tool(
 
     async def browser_extract(url: str, include_links: bool = True, max_chars: int = 12000) -> str:
         """Open a public web page in a headless browser and extract rendered text."""
-        _validate_public_url(url, allow_private_hosts=allow_private_hosts, proxy=proxy)
+        try:
+            _validate_public_url(url, allow_private_hosts=allow_private_hosts, proxy=proxy)
+        except BrowserToolError as exc:
+            return _browser_tool_error_result(
+                "browser_extract",
+                exc,
+                url=url,
+                suggestions=["Tell the user the URL is blocked or invalid.", "Use browser_search for a public alternative if appropriate."],
+            )
         max_chars = max(1000, min(int(max_chars or 12000), 50000))
         navigation_timeout_ms = max(1000, int(timeout_ms or 60000))
         text_fallback_error = ""
@@ -109,7 +117,13 @@ def build_browser_extract_tool(
         try:
             from playwright.async_api import async_playwright
         except Exception as exc:
-            raise RuntimeError("browser_extract requires playwright") from exc
+            return _browser_tool_error_result(
+                "browser_extract",
+                exc,
+                url=url,
+                message="browser_extract is unavailable because Playwright could not be loaded.",
+                recoverable=False,
+            )
 
         launch_kwargs, context_kwargs = browser_playwright_options(proxy)
         playwright = None
@@ -119,13 +133,24 @@ def build_browser_extract_tool(
         try:
             if workspace is not None and agent_id:
                 profile_dir = browser_profile_dir(workspace, agent_id)
-                profile_lock = await acquire_browser_profile_lock_wait(
-                    profile_dir,
-                    owner=f"browser_extract_{uuid.uuid4().hex}",
-                    agent_id=agent_id,
-                    purpose="browser_extract",
-                    timeout_ms=navigation_timeout_ms,
-                )
+                try:
+                    profile_lock = await acquire_browser_profile_lock_wait(
+                        profile_dir,
+                        owner=f"browser_extract_{uuid.uuid4().hex}",
+                        agent_id=agent_id,
+                        purpose="browser_extract",
+                        timeout_ms=navigation_timeout_ms,
+                    )
+                except BrowserProfileInUseError as exc:
+                    return _browser_tool_error_result(
+                        "browser_extract",
+                        exc,
+                        url=url,
+                        suggestions=[
+                            "Try browser_search first or use another source.",
+                            "Tell the user the Agent browser profile is currently busy if no fallback source is available.",
+                        ],
+                    )
                 playwright = await async_playwright().start()
                 browser_context = await playwright.chromium.launch_persistent_context(
                     str(profile_dir),
@@ -146,25 +171,43 @@ def build_browser_extract_tool(
                 response = await page.goto(url, wait_until="domcontentloaded")
             except Exception as exc:
                 if text_fallback_error:
-                    raise BrowserToolError(
-                        "browser_extract failed in browser navigation and HTTP text fallback: "
-                        f"browser_error={exc.__class__.__name__}: {exc}; "
-                        f"fallback_error={text_fallback_error}"
-                    ) from exc
-                raise
+                    return _browser_tool_error_result(
+                        "browser_extract",
+                        BrowserToolError(
+                            "browser_extract failed in browser navigation and HTTP text fallback: "
+                            f"browser_error={exc.__class__.__name__}: {exc}; "
+                            f"fallback_error={text_fallback_error}"
+                        ),
+                        url=url,
+                        suggestions=["Use browser_search to find another source URL.", "Explain that this source could not be read if alternatives fail."],
+                    )
+                return _browser_tool_error_result(
+                    "browser_extract",
+                    exc,
+                    url=url,
+                    suggestions=["Use browser_search to find another source URL.", "Try a simpler or canonical URL for the same source."],
+                )
             try:
                 await page.wait_for_load_state("networkidle", timeout=min(navigation_timeout_ms, 5000))
             except Exception:
                 pass
-            status = f"HTTP {response.status}" if response is not None else "navigated"
-            text = await page.locator("body").inner_text(timeout=navigation_timeout_ms)
-            links = []
-            if include_links:
-                raw_links = await page.locator("a[href]").evaluate_all(
-                    """elements => elements.map((element) => element.href).filter(Boolean)"""
+            try:
+                status = f"HTTP {response.status}" if response is not None else "navigated"
+                text = await page.locator("body").inner_text(timeout=navigation_timeout_ms)
+                links = []
+                if include_links:
+                    raw_links = await page.locator("a[href]").evaluate_all(
+                        """elements => elements.map((element) => element.href).filter(Boolean)"""
+                    )
+                    if isinstance(raw_links, list):
+                        links = [str(link) for link in raw_links if _is_http_url(str(link))][:100]
+            except Exception as exc:
+                return _browser_tool_error_result(
+                    "browser_extract",
+                    exc,
+                    url=url,
+                    suggestions=["Use browser_search to find another readable source.", "Report that the page opened but content extraction failed."],
                 )
-                if isinstance(raw_links, list):
-                    links = [str(link) for link in raw_links if _is_http_url(str(link))][:100]
 
             payload = {
                 "url": url,
@@ -193,6 +236,7 @@ def build_browser_extract_tool(
             "Open a public http/https web page in a headless Playwright browser and extract rendered text and links. "
             "Use this for JavaScript-rendered pages when normal context search is insufficient. "
             "For Agent runs, the browser reuses that Agent's persistent profile under workspace/browser_profiles/{agent_id}. "
+            "If navigation, extraction, DNS validation, or profile locking fails, the tool returns ok=false JSON so the Agent can try a fallback instead of ending the run. "
             "Args: url, include_links=true, max_chars. Private, localhost, and internal network URLs are blocked unless the host is allowed by browser.allow_private_hosts."
         ),
     )
@@ -297,13 +341,24 @@ def build_browser_search_tool(
         """Search the public web in a headless browser using the built-in Bing page."""
         normalized_query = " ".join(str(query or "").split())
         if not normalized_query:
-            raise BrowserToolError("browser_search query must contain searchable text")
+            return _browser_tool_error_result(
+                "browser_search",
+                BrowserToolError("browser_search query must contain searchable text"),
+                query=normalized_query,
+                recoverable=False,
+            )
         limit = max(1, min(int(top_k or 5), 10))
         navigation_timeout_ms = max(1000, int(timeout_ms or 60000))
         try:
             from playwright.async_api import async_playwright
         except Exception as exc:
-            raise RuntimeError("browser_search requires playwright") from exc
+            return _browser_tool_error_result(
+                "browser_search",
+                exc,
+                query=normalized_query,
+                message="browser_search is unavailable because Playwright could not be loaded.",
+                recoverable=False,
+            )
 
         launch_kwargs, context_kwargs = browser_playwright_options(proxy)
         search_url = f"{_BING_SEARCH_URL}?{urlencode({'q': normalized_query, 'setlang': 'zh-CN', 'mkt': 'zh-CN'})}"
@@ -314,13 +369,24 @@ def build_browser_search_tool(
         try:
             if workspace is not None and agent_id:
                 profile_dir = browser_profile_dir(workspace, agent_id)
-                profile_lock = await acquire_browser_profile_lock_wait(
-                    profile_dir,
-                    owner=f"browser_search_{uuid.uuid4().hex}",
-                    agent_id=agent_id,
-                    purpose="browser_search",
-                    timeout_ms=navigation_timeout_ms,
-                )
+                try:
+                    profile_lock = await acquire_browser_profile_lock_wait(
+                        profile_dir,
+                        owner=f"browser_search_{uuid.uuid4().hex}",
+                        agent_id=agent_id,
+                        purpose="browser_search",
+                        timeout_ms=navigation_timeout_ms,
+                    )
+                except BrowserProfileInUseError as exc:
+                    return _browser_tool_error_result(
+                        "browser_search",
+                        exc,
+                        query=normalized_query,
+                        suggestions=[
+                            "Use already available context or explain that browser search is temporarily busy.",
+                            "Retry later only if the user explicitly asks.",
+                        ],
+                    )
                 playwright = await async_playwright().start()
                 browser_context = await playwright.chromium.launch_persistent_context(
                     str(profile_dir),
@@ -337,33 +403,52 @@ def build_browser_search_tool(
             page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
             page.set_default_timeout(navigation_timeout_ms)
             page.set_default_navigation_timeout(navigation_timeout_ms)
-            response = await page.goto(search_url, wait_until="domcontentloaded")
+            try:
+                response = await page.goto(search_url, wait_until="domcontentloaded")
+            except Exception as exc:
+                return _browser_tool_error_result(
+                    "browser_search",
+                    exc,
+                    query=normalized_query,
+                    suggestions=[
+                        "Use any already provided source URLs.",
+                        "Tell the user public web search timed out if no alternate source is available.",
+                    ],
+                )
             try:
                 await page.wait_for_load_state("networkidle", timeout=min(navigation_timeout_ms, 5000))
             except Exception:
                 pass
-            raw_results = await page.evaluate(
-                """limit => {
-                    const primary = Array.from(document.querySelectorAll('li.b_algo'));
-                    const rows = primary.length
-                        ? primary.map((item) => {
-                            const anchor = item.querySelector('h2 a[href], a[href]');
-                            const caption = item.querySelector('.b_caption p, p');
-                            return {
-                                title: anchor ? anchor.innerText : '',
-                                url: anchor ? anchor.href : '',
-                                snippet: caption ? caption.innerText : '',
-                            };
-                        })
-                        : Array.from(document.querySelectorAll('a[href]')).map((anchor) => ({
-                            title: anchor.innerText,
-                            url: anchor.href,
-                            snippet: '',
-                        }));
-                    return rows.slice(0, limit * 4);
-                }""",
-                limit,
-            )
+            try:
+                raw_results = await page.evaluate(
+                    """limit => {
+                        const primary = Array.from(document.querySelectorAll('li.b_algo'));
+                        const rows = primary.length
+                            ? primary.map((item) => {
+                                const anchor = item.querySelector('h2 a[href], a[href]');
+                                const caption = item.querySelector('.b_caption p, p');
+                                return {
+                                    title: anchor ? anchor.innerText : '',
+                                    url: anchor ? anchor.href : '',
+                                    snippet: caption ? caption.innerText : '',
+                                };
+                            })
+                            : Array.from(document.querySelectorAll('a[href]')).map((anchor) => ({
+                                title: anchor.innerText,
+                                url: anchor.href,
+                                snippet: '',
+                            }));
+                        return rows.slice(0, limit * 4);
+                    }""",
+                    limit,
+                )
+            except Exception as exc:
+                return _browser_tool_error_result(
+                    "browser_search",
+                    exc,
+                    query=normalized_query,
+                    suggestions=["Try a narrower search query.", "Use already available sources if present."],
+                )
             results = _normalize_search_results(raw_results, limit=limit)
             payload = {
                 "query": normalized_query,
@@ -394,6 +479,7 @@ def build_browser_search_tool(
             "Use this to discover source URLs for recent information, web evidence, and open-web research; "
             "then call browser_extract on relevant result URLs before making claims. "
             "For Agent runs, the browser reuses that Agent's persistent profile under workspace/browser_profiles/{agent_id}. "
+            "If search navigation or profile locking fails, the tool returns ok=false JSON so the Agent can use another source or explain the limitation. "
             "Args: query, top_k."
         ),
     )
@@ -402,6 +488,35 @@ def build_browser_search_tool(
 def browser_profile_dir(workspace: Path, agent_id: str) -> Path:
     safe_agent_id = validate_browser_agent_id(agent_id)
     return workspace.resolve() / "browser_profiles" / safe_agent_id
+
+
+def _browser_tool_error_result(
+    tool: str,
+    exc: Exception,
+    *,
+    url: str = "",
+    query: str = "",
+    message: str = "",
+    recoverable: bool = True,
+    suggestions: list[str] | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "ok": False,
+        "tool": tool,
+        "recoverable": recoverable,
+        "error": {"type": exc.__class__.__name__, "message": str(exc)},
+        "message": message or f"{tool} could not complete. Treat this as a tool observation and choose a fallback.",
+        "suggestions": suggestions
+        or [
+            "Try another public source or search query.",
+            "Explain the limitation to the user if no fallback source is available.",
+        ],
+    }
+    if url:
+        payload["url"] = str(url)
+    if query:
+        payload["query"] = str(query)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def browser_playwright_options(proxy: str = "") -> tuple[dict[str, Any], dict[str, Any]]:

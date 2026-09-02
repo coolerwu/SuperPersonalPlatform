@@ -515,6 +515,52 @@ test("chat page shows thinking events while running and folds them after complet
   expect(screen.getByText("思考过程").closest("details").open).toBe(false);
 });
 
+test("chat page restores folded thinking from run partial after refresh", async () => {
+  window.history.replaceState({}, "", "/chat");
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/chat/session")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 2 },
+        messages: [
+          { seq: 1, role: "user", content: "生成一段话", run_id: "run_restored", created_at: "2026-08-20T07:01:00Z" },
+          { seq: 2, role: "assistant", content: "最终正文", run_id: "run_restored", created_at: "2026-08-20T07:01:04Z" },
+        ],
+      });
+    }
+    if (path.endsWith("/api/runs/run_restored")) {
+      return response({
+        run_id: "run_restored",
+        input: { agent_id: "assistant", source: "web_chat", session_id: "session_web" },
+        state: { status: "completed", seq: 4 },
+        result: { status: "completed", content: "最终正文" },
+        partial: {
+          status: "completed",
+          content: "最终正文",
+          thinking: ["DeepAgent started", "正在搜索资料"],
+          thinking_collapsed: true,
+        },
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  expect(await screen.findByText("最终正文")).toBeInTheDocument();
+  expect(await screen.findByText("正在搜索资料")).toBeInTheDocument();
+  expect(screen.getByText("思考过程").closest("details").open).toBe(false);
+});
+
 test("opens config.yaml as a native workspace text file", async () => {
   window.history.replaceState({}, "", "/workspace");
   global.fetch = vi.fn(async (url) => {

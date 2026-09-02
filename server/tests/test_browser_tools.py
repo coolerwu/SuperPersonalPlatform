@@ -7,6 +7,7 @@ import pytest
 from server.domain.tooling import get_tool_definition
 from server.infrastructure.browser_tools import (
     BrowserToolError,
+    BrowserProfileInUseError,
     acquire_browser_profile_lock,
     acquire_browser_profile_lock_wait,
     build_browser_extract_tool,
@@ -216,6 +217,113 @@ def test_browser_extract_receives_agent_profile_context(tmp_path, monkeypatch) -
     assert captured["search"]["workspace"] == tmp_path
     assert captured["search"]["agent_id"] == "assistant"
     assert captured["search"]["allow_private_hosts"] == ()
+
+
+def test_browser_extract_returns_tool_error_when_profile_is_busy(tmp_path, monkeypatch) -> None:
+    async def fake_acquire_browser_profile_lock_wait(*args, **kwargs):
+        raise BrowserProfileInUseError("browser profile for agent assistant is already in use")
+
+    monkeypatch.setattr(
+        "server.infrastructure.browser_tools.acquire_browser_profile_lock_wait",
+        fake_acquire_browser_profile_lock_wait,
+    )
+    monkeypatch.setattr(
+        "server.infrastructure.browser_tools.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, "", ("93.184.216.34", 443))],
+    )
+
+    tool = build_browser_extract_tool(workspace=tmp_path, agent_id="assistant", timeout_ms=1000)
+    result = json.loads(
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    "url": "https://example.com/article",
+                    "include_links": True,
+                    "max_chars": 12000,
+                }
+            )
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["tool"] == "browser_extract"
+    assert result["error"]["type"] == "BrowserProfileInUseError"
+    assert result["recoverable"] is True
+
+
+def test_browser_extract_returns_tool_error_when_navigation_times_out(monkeypatch) -> None:
+    class FakePage:
+        def set_default_timeout(self, timeout):
+            pass
+
+        def set_default_navigation_timeout(self, timeout):
+            pass
+
+        async def goto(self, url, wait_until):
+            raise TimeoutError("navigation timed out")
+
+    class FakeBrowserContext:
+        pages = []
+
+        async def new_page(self):
+            return FakePage()
+
+        async def close(self):
+            pass
+
+        def set_default_timeout(self, timeout):
+            pass
+
+        def set_default_navigation_timeout(self, timeout):
+            pass
+
+        async def add_init_script(self, script):
+            pass
+
+    class FakeBrowser:
+        async def new_context(self, **kwargs):
+            return FakeBrowserContext()
+
+        async def close(self):
+            pass
+
+    class FakeChromium:
+        async def launch(self, **kwargs):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        async def stop(self):
+            pass
+
+    class FakeStarter:
+        async def start(self):
+            return FakePlaywright()
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: FakeStarter())
+    monkeypatch.setattr(
+        "server.infrastructure.browser_tools.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, "", ("93.184.216.34", 443))],
+    )
+
+    tool = build_browser_extract_tool(timeout_ms=1000)
+    result = json.loads(
+        asyncio.run(
+            tool.ainvoke(
+                {
+                    "url": "https://example.com/article",
+                    "include_links": True,
+                    "max_chars": 12000,
+                }
+            )
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["tool"] == "browser_extract"
+    assert result["error"]["type"] == "TimeoutError"
+    assert "fallback" in result["suggestions"][0].lower() or result["suggestions"]
 
 
 def test_browser_extract_passes_configured_private_hosts_to_browser_tools(tmp_path, monkeypatch) -> None:

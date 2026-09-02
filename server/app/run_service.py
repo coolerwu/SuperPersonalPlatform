@@ -12,6 +12,7 @@ from typing import Any
 from server.app.session_service import SessionService
 from server.domain.agent_config import AgentConfigError, AgentDefinition, ModelDefinition
 from server.domain.run_events import (
+    DeepAgentGraphUpdatePayload,
     DeepAgentMessageDeltaPayload,
     ImageAttachmentsTextifiedPayload,
     RunErrorPayload,
@@ -180,18 +181,22 @@ class RunService:
             )
         effective_system_prompt = system_prompt
         runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
+        stream_recorder = _RunStreamRecorder(run_id=run_id, run_dir=self._run_dir(run_id), append_event=self._append_event)
         self._set_state(run_id, "running")
-        self._append_event(run_id, RunEventType.RUNNING, RunLifecyclePayload(message="DeepAgent started"))
+        running_payload = RunLifecyclePayload(message="DeepAgent started")
+        self._append_event(run_id, RunEventType.RUNNING, running_payload)
+        stream_recorder.record_snapshot_event(RunEventType.RUNNING, running_payload)
         if downgraded_image_count:
+            image_payload = ImageAttachmentsTextifiedPayload(
+                message="model does not support image input; image binaries were removed and metadata was passed as text",
+                items=downgraded_image_count,
+            )
             self._append_event(
                 run_id,
                 RunEventType.IMAGE_ATTACHMENTS_TEXTIFIED,
-                ImageAttachmentsTextifiedPayload(
-                    message="model does not support image input; image binaries were removed and metadata was passed as text",
-                    items=downgraded_image_count,
-                ),
+                image_payload,
             )
-        stream_recorder = _RunStreamRecorder(run_id=run_id, run_dir=self._run_dir(run_id), append_event=self._append_event)
+            stream_recorder.record_snapshot_event(RunEventType.IMAGE_ATTACHMENTS_TEXTIFIED, image_payload)
 
         try:
             result = await DeepAgentRuntime(
@@ -217,6 +222,7 @@ class RunService:
             stream_recorder.finish(result)
         except Exception as exc:
             error = {"message": str(exc), "type": exc.__class__.__name__}
+            stream_recorder.fail(error)
             _write_json(
                 self._run_dir(run_id) / "result.json",
                 {"run_id": run_id, "status": "failed", "error": error, "completed_at": _now()},
@@ -494,6 +500,8 @@ class _RunStreamRecorder:
     source_class: str = ""
     last_flush_at: float = 0.0
     had_delta: bool = False
+    thinking: tuple[str, ...] = ()
+    snapshot_dirty: bool = False
 
     def record(self, event: DeepAgentStreamEvent) -> None:
         try:
@@ -501,11 +509,20 @@ class _RunStreamRecorder:
                 self._record_delta(event.payload)
                 return
             self.append_event(self.run_id, event.type, event.payload)
+            self.record_snapshot_event(event.type, event.payload)
         except Exception:
             return
 
+    def record_snapshot_event(self, event_type: RunEventType | str, payload: RunEventPayload) -> None:
+        text = _thinking_text(event_type, payload)
+        if not text:
+            return
+        self.thinking = _merge_thinking(self.thinking, (text,))
+        self.snapshot_dirty = True
+        self._flush()
+
     def finish(self, final_content: str) -> None:
-        if not self.had_delta:
+        if not self.had_delta and not self.thinking:
             return
         if final_content:
             self.content = final_content
@@ -516,6 +533,25 @@ class _RunStreamRecorder:
                 "run_id": self.run_id,
                 "status": "completed",
                 "content": self.content,
+                "thinking": list(self.thinking),
+                "thinking_status": "completed",
+                "thinking_collapsed": True,
+                "updated_at": _now(),
+            },
+        )
+
+    def fail(self, error: dict[str, Any]) -> None:
+        self.thinking = _merge_thinking(self.thinking, ("运行失败，已停止生成正文",))
+        _write_json(
+            self.run_dir / "partial.json",
+            {
+                "run_id": self.run_id,
+                "status": "failed",
+                "content": self.content,
+                "thinking": list(self.thinking),
+                "thinking_status": "failed",
+                "thinking_collapsed": True,
+                "error": error,
                 "updated_at": _now(),
             },
         )
@@ -533,17 +569,19 @@ class _RunStreamRecorder:
         self._flush()
 
     def _flush(self, *, force: bool = False) -> None:
-        if not force and not self.buffer:
+        if not force and not self.buffer and not self.snapshot_dirty:
             return
         now_monotonic = time.monotonic()
         if (
             not force
             and len(self.buffer) < STREAM_PARTIAL_FLUSH_CHARS
+            and not self.snapshot_dirty
             and now_monotonic - self.last_flush_at < STREAM_PARTIAL_FLUSH_SECONDS
         ):
             return
         delta = self.buffer
         self.buffer = ""
+        self.snapshot_dirty = False
         self.last_flush_at = now_monotonic
         _write_json(
             self.run_dir / "partial.json",
@@ -551,6 +589,9 @@ class _RunStreamRecorder:
                 "run_id": self.run_id,
                 "status": "streaming",
                 "content": self.content,
+                "thinking": list(self.thinking),
+                "thinking_status": "running",
+                "thinking_collapsed": False,
                 "updated_at": _now(),
             },
         )
@@ -565,6 +606,32 @@ class _RunStreamRecorder:
                     source_class=self.source_class,
                 ),
             )
+
+
+def _thinking_text(event_type: RunEventType | str, payload: RunEventPayload) -> str:
+    if event_type == RunEventType.RUNNING and isinstance(payload, RunLifecyclePayload):
+        return payload.message or "DeepAgent 已开始处理"
+    if event_type == RunEventType.AGENT_UPDATE and isinstance(payload, DeepAgentGraphUpdatePayload):
+        if payload.preview:
+            return payload.preview
+        nodes = ", ".join(item for item in payload.nodes if item)
+        return f"图节点更新：{nodes}" if nodes else "DeepAgent 状态已更新"
+    if event_type == RunEventType.STREAM_FALLBACK:
+        message = getattr(payload, "message", "")
+        return str(message or "当前运行时不支持增量流，已切换为最终结果模式")
+    if event_type == RunEventType.IMAGE_ATTACHMENTS_TEXTIFIED and isinstance(payload, ImageAttachmentsTextifiedPayload):
+        return payload.message or "图片已转为文本附件说明"
+    return ""
+
+
+def _merge_thinking(current: tuple[str, ...], updates: tuple[str, ...]) -> tuple[str, ...]:
+    merged = [item for item in current if item]
+    for update in updates:
+        text = str(update or "").strip()
+        if not text or (merged and merged[-1] == text):
+            continue
+        merged.append(text)
+    return tuple(merged[-20:])
 
 
 def _public_agent(agent: AgentDefinition) -> dict[str, Any]:

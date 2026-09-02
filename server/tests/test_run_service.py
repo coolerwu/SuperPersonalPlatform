@@ -3,7 +3,7 @@ import json
 
 from server.app.run_service import RunService
 from server.app.session_service import SessionService
-from server.domain.run_events import DeepAgentMessageDeltaPayload, RunEventType
+from server.domain.run_events import DeepAgentGraphUpdatePayload, DeepAgentMessageDeltaPayload, RunEventType
 from server.infrastructure.deepagent_runtime import DeepAgentStreamEvent
 
 
@@ -110,6 +110,33 @@ def test_run_service_persists_streaming_partial_output(tmp_path, monkeypatch) ->
     assert delta_events
     assert "".join(event["payload"]["delta"] for event in delta_events) == "正在回答"
     assert delta_events[0]["payload"]["kind"] == "deepagent_message_delta"
+
+
+def test_run_service_persists_streaming_thinking_snapshot(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
+        assert stream_callback is not None
+        stream_callback(
+            DeepAgentStreamEvent(
+                RunEventType.AGENT_UPDATE,
+                DeepAgentGraphUpdatePayload(nodes=("agent",), preview="正在搜索资料"),
+            )
+        )
+        stream_callback(DeepAgentStreamEvent(RunEventType.ASSISTANT_DELTA, DeepAgentMessageDeltaPayload(delta="正文")))
+        return "最终正文"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    completed = asyncio.run(service.execute_run(run["run_id"]))
+
+    assert completed["partial"]["status"] == "completed"
+    assert completed["partial"]["content"] == "最终正文"
+    assert completed["partial"]["thinking"] == ["DeepAgent started", "正在搜索资料"]
+    assert completed["partial"]["thinking_status"] == "completed"
+    assert completed["partial"]["thinking_collapsed"] is True
 
 
 def test_run_service_finds_latest_active_schedule_run(tmp_path) -> None:

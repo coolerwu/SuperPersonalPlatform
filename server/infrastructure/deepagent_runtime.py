@@ -45,6 +45,7 @@ BROWSER_RESEARCH_PROMPT = """## Platform Browser Research
 
 When the user asks for current, recent, latest, news, open-web, or source-backed information, use `browser_search` first to discover source URLs, then call `browser_extract` on the most relevant result URLs before making claims.
 Use `browser_search` for discovery only; use `browser_extract` to read page content. Cite the source URLs you used in the answer.
+If a browser tool returns `ok:false`, treat it as a tool observation: try another query or source URL when useful, and only tell the user the limitation when no reasonable fallback remains.
 If browser search or extraction is blocked by a login, captcha, verification page, or anti-bot page, say that browser authorization or manual source text is needed instead of guessing.
 """
 

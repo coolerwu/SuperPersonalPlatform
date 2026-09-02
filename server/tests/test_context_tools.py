@@ -393,8 +393,10 @@ def test_schedule_tool_manages_only_current_agent_session(tmp_path) -> None:
             }
         },
     }
-    with pytest.raises(Exception):
-        tools["schedule"].invoke({"action": "delete", "schedule_id": "foreign"})
+    denied = json.loads(tools["schedule"].invoke({"action": "delete", "schedule_id": "foreign"}))
+    assert denied["ok"] is False
+    assert denied["tool"] == "schedule"
+    assert denied["error"]["message"] == "schedule is not owned by this agent/session"
 
     deleted = json.loads(tools["schedule"].invoke({"action": "delete", "schedule_id": "morning_review"}))
     assert deleted == {"schedule_id": "morning_review", "status": "deleted"}

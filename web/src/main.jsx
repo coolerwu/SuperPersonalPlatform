@@ -285,8 +285,14 @@ function ChatPage() {
       method: "POST",
       body: JSON.stringify({ agent_id: nextAgentId || "" }),
     });
+    const normalizedMessages = normalizeChatMessages(data.messages || []);
     setSession(data.session || null);
-    setMessages(normalizeChatMessages(data.messages || []));
+    setMessages(normalizedMessages);
+    hydrateChatRunSnapshots(normalizedMessages)
+      .then((hydratedMessages) => {
+        setMessages((current) => mergeHydratedChatMessages(current, normalizedMessages, hydratedMessages));
+      })
+      .catch(() => {});
     if (data.session?.agent_id) {
       setAgentId(data.session.agent_id);
     }
@@ -2206,6 +2212,67 @@ function normalizeChatMessages(items) {
       created_at: item.created_at || "",
       run_id: item.run_id || "",
     }));
+}
+
+async function hydrateChatRunSnapshots(messages) {
+  const runIds = [
+    ...new Set(
+      messages
+        .filter((message) => message.role === "assistant" && message.run_id)
+        .slice(-8)
+        .map((message) => message.run_id),
+    ),
+  ];
+  if (runIds.length === 0) return messages;
+  const runs = await Promise.all(
+    runIds.map(async (runId) => {
+      try {
+        return await api(`/api/runs/${encodeURIComponent(runId)}`);
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return runs.reduce((nextMessages, run) => applyChatRunSnapshot(nextMessages, run), messages);
+}
+
+function applyChatRunSnapshot(messages, run) {
+  if (!run?.run_id || !run.partial) return messages;
+  const partial = run.partial || {};
+  const thinking = Array.isArray(partial.thinking) ? partial.thinking.filter(Boolean) : [];
+  if (thinking.length === 0 && !partial.content) return messages;
+  const status = String(partial.status || runStatus(run) || "");
+  const streaming = status === "streaming" || runStatus(run) === "running";
+  const id = `assistant_${run.run_id}`;
+  return messages.map((message) => {
+    if (message.id !== id) return message;
+    return {
+      ...message,
+      content: message.content || partial.content || "",
+      thinking: thinking.length ? thinking : message.thinking,
+      thinkingCollapsed: partial.thinking_collapsed !== undefined ? Boolean(partial.thinking_collapsed) : !streaming,
+      streaming,
+      failed: status === "failed" || message.failed,
+    };
+  });
+}
+
+function mergeHydratedChatMessages(current, base, hydrated) {
+  if (current.length === base.length && current.every((message, index) => message.id === base[index]?.id)) {
+    return hydrated;
+  }
+  const hydratedById = new Map(hydrated.map((message) => [message.id, message]));
+  return current.map((message) => {
+    const restored = hydratedById.get(message.id);
+    if (!restored) return message;
+    return {
+      ...message,
+      thinking: restored.thinking || message.thinking,
+      thinkingCollapsed: restored.thinkingCollapsed ?? message.thinkingCollapsed,
+      streaming: restored.streaming || message.streaming,
+      failed: restored.failed || message.failed,
+    };
+  });
 }
 
 function upsertChatAssistantMessage(messages, runId, patch) {

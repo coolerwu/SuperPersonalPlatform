@@ -33,6 +33,31 @@ class PlatformToolContext:
     metadata: dict[str, Any]
 
 
+def _tool_error_result(
+    tool: str,
+    exc: Exception,
+    *,
+    message: str | None = None,
+    recoverable: bool = True,
+    suggestions: list[str] | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "ok": False,
+            "tool": tool,
+            "recoverable": recoverable,
+            "error": {"type": exc.__class__.__name__, "message": str(exc)},
+            "message": message or f"{tool} could not complete. Treat this as a tool observation and choose a fallback.",
+            "suggestions": suggestions
+            or [
+                "Try another available tool or source.",
+                "Explain the limitation to the user if no fallback is available.",
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
 def build_platform_tools(
     tool_ids: tuple[str, ...],
     *,
@@ -337,13 +362,20 @@ def _arxiv_tool() -> Any:
         _wait_for_arxiv_rate_limit()
         try:
             from langchain_community.utilities.arxiv import ArxivAPIWrapper
+            wrapper = ArxivAPIWrapper(
+                top_k_results=min(max(int(top_k or 3), 1), 10),
+                doc_content_chars_max=4000,
+            )
+            return wrapper.run(str(query or "").strip())
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError("arxiv tool requires langchain-community and the arxiv package") from exc
-        wrapper = ArxivAPIWrapper(
-            top_k_results=min(max(int(top_k or 3), 1), 10),
-            doc_content_chars_max=4000,
-        )
-        return wrapper.run(str(query or "").strip())
+            return _tool_error_result(
+                "arxiv",
+                exc,
+                suggestions=[
+                    "Use browser_search for public web discovery if available.",
+                    "Answer from existing context and state that arXiv lookup failed if no fallback is available.",
+                ],
+            )
 
     return StructuredTool.from_function(
         arxiv,
@@ -373,10 +405,17 @@ def _yahoo_finance_news_tool() -> Any:
         _ensure_user_agent()
         try:
             from langchain_community.tools.yahoo_finance_news import YahooFinanceNewsTool
+            tool = YahooFinanceNewsTool(top_k=min(max(int(top_k or 5), 1), 10))
+            return str(tool.invoke({"query": str(ticker or "").strip().upper()}))
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError("yahoo_finance_news tool requires langchain-community and yfinance") from exc
-        tool = YahooFinanceNewsTool(top_k=min(max(int(top_k or 5), 1), 10))
-        return str(tool.invoke({"query": str(ticker or "").strip().upper()}))
+            return _tool_error_result(
+                "yahoo_finance_news",
+                exc,
+                suggestions=[
+                    "Use browser_search for public company news if available.",
+                    "Answer from existing context and state that Yahoo Finance lookup failed if no fallback is available.",
+                ],
+            )
 
     return StructuredTool.from_function(
         yahoo_finance_news,
@@ -422,48 +461,58 @@ def _schedule_tool(schedule_service: Any, tool_context: PlatformToolContext) -> 
         Use list/get/update/delete only for schedules previously created by this tool in the current conversation.
         Scheduled Agent results are delivered back to the current channel when channel delivery context is available.
         """
-        normalized_action = str(action or "").strip().lower()
-        if normalized_action == "create":
-            return json.dumps(
-                _schedule_create(
-                    schedule_service,
-                    tool_context,
-                    schedule_id=schedule_id,
-                    name=name,
-                    prompt=prompt,
-                    trigger_kind=trigger_kind,
-                    interval_minutes=interval_minutes,
-                    run_at=run_at,
-                    cron=cron,
-                    timezone=timezone,
-                    enabled=enabled,
-                ),
-                ensure_ascii=False,
+        try:
+            normalized_action = str(action or "").strip().lower()
+            if normalized_action == "create":
+                return json.dumps(
+                    _schedule_create(
+                        schedule_service,
+                        tool_context,
+                        schedule_id=schedule_id,
+                        name=name,
+                        prompt=prompt,
+                        trigger_kind=trigger_kind,
+                        interval_minutes=interval_minutes,
+                        run_at=run_at,
+                        cron=cron,
+                        timezone=timezone,
+                        enabled=enabled,
+                    ),
+                    ensure_ascii=False,
+                )
+            if normalized_action == "list":
+                return json.dumps(_schedule_list(schedule_service, tool_context), ensure_ascii=False)
+            if normalized_action == "get":
+                return json.dumps(_schedule_get(schedule_service, tool_context, schedule_id), ensure_ascii=False)
+            if normalized_action == "update":
+                return json.dumps(
+                    _schedule_update(
+                        schedule_service,
+                        tool_context,
+                        schedule_id=schedule_id,
+                        name=name,
+                        prompt=prompt,
+                        trigger_kind=trigger_kind,
+                        interval_minutes=interval_minutes,
+                        run_at=run_at,
+                        cron=cron,
+                        timezone=timezone,
+                        enabled=enabled,
+                    ),
+                    ensure_ascii=False,
+                )
+            if normalized_action == "delete":
+                return json.dumps(_schedule_delete(schedule_service, tool_context, schedule_id), ensure_ascii=False)
+            raise RuntimeError("action must be create, list, get, update, or delete")
+        except Exception as exc:  # noqa: BLE001
+            return _tool_error_result(
+                "schedule",
+                exc,
+                suggestions=[
+                    "Ask the user for missing schedule fields if validation failed.",
+                    "Do not try to manage schedules outside the current agent/session ownership boundary.",
+                ],
             )
-        if normalized_action == "list":
-            return json.dumps(_schedule_list(schedule_service, tool_context), ensure_ascii=False)
-        if normalized_action == "get":
-            return json.dumps(_schedule_get(schedule_service, tool_context, schedule_id), ensure_ascii=False)
-        if normalized_action == "update":
-            return json.dumps(
-                _schedule_update(
-                    schedule_service,
-                    tool_context,
-                    schedule_id=schedule_id,
-                    name=name,
-                    prompt=prompt,
-                    trigger_kind=trigger_kind,
-                    interval_minutes=interval_minutes,
-                    run_at=run_at,
-                    cron=cron,
-                    timezone=timezone,
-                    enabled=enabled,
-                ),
-                ensure_ascii=False,
-            )
-        if normalized_action == "delete":
-            return json.dumps(_schedule_delete(schedule_service, tool_context, schedule_id), ensure_ascii=False)
-        raise RuntimeError("action must be create, list, get, update, or delete")
 
     return StructuredTool.from_function(
         schedule,
