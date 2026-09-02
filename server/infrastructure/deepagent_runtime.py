@@ -2,9 +2,16 @@ import base64
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
+from server.domain.run_events import (
+    DeepAgentGraphUpdatePayload,
+    DeepAgentMessageDeltaPayload,
+    RunEventPayload,
+    RunEventType,
+    StreamFallbackPayload,
+)
 from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
 
 
@@ -89,6 +96,12 @@ class DeepAgentRuntimeOptions:
     middleware: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class DeepAgentStreamEvent:
+    type: RunEventType
+    payload: RunEventPayload
+
+
 class DeepAgentRuntime:
     def __init__(
         self,
@@ -114,6 +127,7 @@ class DeepAgentRuntime:
         options: DeepAgentRuntimeOptions,
         checkpoint_path: Path | None = None,
         thread_id: str = "",
+        stream_callback: Callable[[DeepAgentStreamEvent], None] | None = None,
     ) -> str:
         if not messages:
             raise ValueError("messages are required")
@@ -166,11 +180,67 @@ class DeepAgentRuntime:
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
                 create_kwargs["checkpointer"] = checkpointer
                 agent = create_deep_agent(**create_kwargs)
-                result = await agent.ainvoke(input_state, config=invoke_config)
+                result = await self._run_agent(agent, input_state, invoke_config, stream_callback=stream_callback)
         else:
             agent = create_deep_agent(**create_kwargs)
-            result = await agent.ainvoke(input_state, config=invoke_config)
+            result = await self._run_agent(agent, input_state, invoke_config, stream_callback=stream_callback)
         return self._extract_content(result)
+
+    async def _run_agent(
+        self,
+        agent: Any,
+        input_state: dict[str, Any],
+        invoke_config: dict[str, Any],
+        *,
+        stream_callback: Callable[[DeepAgentStreamEvent], None] | None,
+    ) -> Any:
+        if stream_callback is None or not hasattr(agent, "astream"):
+            return await agent.ainvoke(input_state, config=invoke_config)
+
+        final_result: Any = None
+        stream_started = False
+        try:
+            async for chunk in agent.astream(
+                input_state,
+                config=invoke_config,
+                stream_mode=["messages", "updates", "values"],
+            ):
+                stream_started = True
+                mode, data = _split_langgraph_stream_part(chunk)
+                if mode == "messages":
+                    event = _message_delta_event(data)
+                    if event:
+                        _emit_stream_event(stream_callback, event)
+                    continue
+                if mode == "updates":
+                    event = _update_event(data)
+                    if event:
+                        _emit_stream_event(stream_callback, event)
+                    continue
+                if mode == "values":
+                    final_result = data
+        except TypeError as exc:
+            if stream_started:
+                raise
+            _emit_stream_event(
+                stream_callback,
+                DeepAgentStreamEvent(
+                    RunEventType.STREAM_FALLBACK,
+                    StreamFallbackPayload(message="agent stream unsupported; falling back to ainvoke", error=str(exc)),
+                ),
+            )
+            return await agent.ainvoke(input_state, config=invoke_config)
+
+        if final_result is not None:
+            return final_result
+        _emit_stream_event(
+            stream_callback,
+            DeepAgentStreamEvent(
+                RunEventType.STREAM_FALLBACK,
+                StreamFallbackPayload(message="agent stream returned no final state; falling back to ainvoke"),
+            ),
+        )
+        return await agent.ainvoke(input_state, config=invoke_config)
 
     def _chat_model(self):
         model = self._model
@@ -208,6 +278,91 @@ class DeepAgentRuntime:
                 if key in result:
                     return str(result[key])
         return str(result)
+
+
+def _split_langgraph_stream_part(chunk: Any) -> tuple[str, Any]:
+    if isinstance(chunk, dict):
+        stream_type = chunk.get("type")
+        if stream_type in {"messages", "updates", "values"} and "data" in chunk:
+            return str(stream_type), chunk["data"]
+    if isinstance(chunk, tuple) and len(chunk) == 2 and isinstance(chunk[0], str):
+        return chunk[0], chunk[1]
+    return "values", chunk
+
+
+def _emit_stream_event(callback: Callable[[DeepAgentStreamEvent], None], event: DeepAgentStreamEvent) -> None:
+    try:
+        callback(event)
+    except Exception:
+        return
+
+
+def _message_delta_event(data: Any) -> DeepAgentStreamEvent | None:
+    message = data
+    metadata: dict[str, Any] = {}
+    if isinstance(data, tuple) and len(data) == 2:
+        message, raw_metadata = data
+        if isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+    text = _content_to_text(getattr(message, "content", message))
+    if not text:
+        return None
+    node = str(metadata.get("langgraph_node") or "").strip()
+    agent_name = str(metadata.get("lc_agent_name") or metadata.get("checkpoint_ns") or "").strip()
+    return DeepAgentStreamEvent(
+        RunEventType.ASSISTANT_DELTA,
+        DeepAgentMessageDeltaPayload(
+            delta=text,
+            node=node,
+            agent=agent_name,
+            source_class=message.__class__.__name__,
+        ),
+    )
+
+
+def _update_event(data: Any) -> DeepAgentStreamEvent | None:
+    if not isinstance(data, dict) or not data:
+        return None
+    nodes = tuple(str(key) for key in data.keys())
+    preview = _content_to_text(_latest_message_content(data))
+    return DeepAgentStreamEvent(
+        RunEventType.AGENT_UPDATE,
+        DeepAgentGraphUpdatePayload(
+            nodes=nodes,
+            preview=preview[-500:] if preview else "",
+            source_class=data.__class__.__name__,
+        ),
+    )
+
+
+def _latest_message_content(value: Any) -> Any:
+    if isinstance(value, dict):
+        messages = value.get("messages")
+        if isinstance(messages, list) and messages:
+            return getattr(messages[-1], "content", messages[-1])
+        for item in value.values():
+            content = _latest_message_content(item)
+            if content:
+                return content
+    return None
+
+
+def _content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
 
 
 def _runtime_instructions(instructions: str, options: DeepAgentRuntimeOptions) -> str:

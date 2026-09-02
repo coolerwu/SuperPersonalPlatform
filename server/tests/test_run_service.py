@@ -3,6 +3,8 @@ import json
 
 from server.app.run_service import RunService
 from server.app.session_service import SessionService
+from server.domain.run_events import DeepAgentMessageDeltaPayload, RunEventType
+from server.infrastructure.deepagent_runtime import DeepAgentStreamEvent
 
 
 CONFIG = """\
@@ -49,7 +51,7 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
         captured["options"] = options
         captured["messages"] = messages
         return f"answer: {messages[-1].content}"
@@ -83,6 +85,31 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert index["runs"][0]["run_id"] == run_id
     assert index["runs"][0]["status"] == "completed"
     assert service.get_events(run_id, after=0)[-1]["type"] == "completed"
+
+
+def test_run_service_persists_streaming_partial_output(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
+        assert stream_callback is not None
+        stream_callback(DeepAgentStreamEvent(RunEventType.ASSISTANT_DELTA, DeepAgentMessageDeltaPayload(delta="正在")))
+        stream_callback(DeepAgentStreamEvent(RunEventType.ASSISTANT_DELTA, DeepAgentMessageDeltaPayload(delta="回答")))
+        return "最终回答"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    completed = asyncio.run(service.execute_run(run["run_id"]))
+
+    assert completed["result"]["content"] == "最终回答"
+    assert completed["partial"]["status"] == "completed"
+    assert completed["partial"]["content"] == "最终回答"
+    events = service.get_events(run["run_id"], after=0)
+    delta_events = [event for event in events if event["type"] == "assistant_delta"]
+    assert delta_events
+    assert "".join(event["payload"]["delta"] for event in delta_events) == "正在回答"
+    assert delta_events[0]["payload"]["kind"] == "deepagent_message_delta"
 
 
 def test_run_service_finds_latest_active_schedule_run(tmp_path) -> None:
@@ -134,7 +161,7 @@ def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
         captured["messages"] = messages
         captured["checkpoint_path"] = checkpoint_path
         captured["thread_id"] = thread_id
@@ -191,7 +218,7 @@ def test_run_service_uses_checkpoint_without_injecting_prior_session_context(tmp
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
         captured["instructions"] = instructions
         captured["messages"] = messages
         captured["thread_id"] = thread_id
@@ -231,7 +258,7 @@ def test_run_service_persists_session_image_attachments(tmp_path, monkeypatch) -
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
         captured["messages"] = messages
         return "image answer"
 
@@ -283,7 +310,7 @@ def test_run_service_textifies_images_when_model_does_not_support_images(tmp_pat
 
     captured = {}
 
-    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id=""):
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
         captured["messages"] = messages
         return "text-only answer"
 

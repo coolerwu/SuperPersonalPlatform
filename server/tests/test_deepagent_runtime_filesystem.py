@@ -1,9 +1,11 @@
 import asyncio
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
+from server.domain.run_events import DeepAgentMessageDeltaPayload, RunEventType
 from server.infrastructure.deepagent_runtime import (
     DeepAgentRuntime,
     DeepAgentRuntimeOptions,
+    DeepAgentStreamEvent,
     MEMORY_INDEX_PATH,
     RuntimeAttachment,
     RuntimeMessage,
@@ -147,6 +149,64 @@ def test_runtime_adds_skill_improvement_middleware_by_default(tmp_path, monkeypa
     assert result == "ok"
     middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
     assert "SkillImprovementMiddleware" in middleware_names
+
+
+def test_runtime_streams_agent_messages_when_available(tmp_path, monkeypatch) -> None:
+    captured = {"events": []}
+
+    class FakeAgent:
+        async def astream(self, input_state, config, stream_mode):
+            captured["input_state"] = input_state
+            captured["config"] = config
+            captured["stream_mode"] = stream_mode
+            yield ("messages", (type("Chunk", (), {"content": "hel"})(), {"langgraph_node": "model"}))
+            yield ("messages", (type("Chunk", (), {"content": "lo"})(), {}))
+            yield ("updates", {"agent": {"messages": [type("Message", (), {"content": "hello"})()]}})
+            yield ("values", {"messages": [type("Message", (), {"content": "hello final"})()]})
+
+        async def ainvoke(self, input_state, config):
+            raise AssertionError("streaming path should not call ainvoke")
+
+    def fake_create_deep_agent(**kwargs):
+        captured["create_kwargs"] = kwargs
+        return FakeAgent()
+
+    import deepagents
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", fake_create_deep_agent)
+    model = ModelDefinition(
+        id="default",
+        name="Default",
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+        model="gpt-4o-mini",
+    )
+    runtime = DeepAgentRuntime(
+        model,
+        context_workspace=tmp_path / "context",
+        agent_workspace=tmp_path / "agents" / "assistant",
+    )
+
+    result = asyncio.run(
+        runtime.run(
+            instructions="base prompt",
+            messages=(RuntimeMessage(role="user", content="hello"),),
+            options=DeepAgentRuntimeOptions(),
+            stream_callback=lambda event: captured["events"].append(event),
+        )
+    )
+
+    assert result == "hello final"
+    assert captured["stream_mode"] == ["messages", "updates", "values"]
+    assert all(isinstance(event, DeepAgentStreamEvent) for event in captured["events"])
+    assert [event.type for event in captured["events"]] == [
+        RunEventType.ASSISTANT_DELTA,
+        RunEventType.ASSISTANT_DELTA,
+        RunEventType.AGENT_UPDATE,
+    ]
+    assert isinstance(captured["events"][0].payload, DeepAgentMessageDeltaPayload)
+    assert captured["events"][0].payload.delta == "hel"
+    assert captured["events"][0].payload.node == "model"
 
 
 def test_skill_improvement_middleware_appends_prompt() -> None:

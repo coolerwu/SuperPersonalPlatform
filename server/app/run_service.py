@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -10,10 +11,21 @@ from typing import Any
 
 from server.app.session_service import SessionService
 from server.domain.agent_config import AgentConfigError, AgentDefinition, ModelDefinition
+from server.domain.run_events import (
+    DeepAgentMessageDeltaPayload,
+    ImageAttachmentsTextifiedPayload,
+    RunErrorPayload,
+    RunEventPayload,
+    RunEventRecord,
+    RunEventType,
+    RunLifecyclePayload,
+    run_event_from_json,
+)
 from server.infrastructure.config import load_settings
 from server.infrastructure.deepagent_runtime import (
     DeepAgentRuntime,
     DeepAgentRuntimeOptions,
+    DeepAgentStreamEvent,
     RuntimeAttachment,
     RuntimeMessage,
 )
@@ -23,6 +35,8 @@ from server.infrastructure.tool_runtime import PlatformToolContext
 RUN_STATUSES = {"queued", "running", "completed", "failed"}
 SESSION_HISTORY_READ_LIMIT = 120
 SESSION_RUNTIME_MESSAGE_LIMIT = 60
+STREAM_PARTIAL_FLUSH_SECONDS = 0.5
+STREAM_PARTIAL_FLUSH_CHARS = 160
 
 
 class RunNotFoundError(Exception):
@@ -131,7 +145,7 @@ class RunService:
                 source=source,
                 agent_id=agent.id,
             )
-        self._append_event(run_id, "queued", {"message": "run queued"})
+        self._append_event(run_id, RunEventType.QUEUED, RunLifecyclePayload(message="run queued"))
         self._upsert_index(self._summary_from_state(run_id))
         return self.get_run(run_id)
 
@@ -167,16 +181,17 @@ class RunService:
         effective_system_prompt = system_prompt
         runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
         self._set_state(run_id, "running")
-        self._append_event(run_id, "running", {"message": "DeepAgent started"})
+        self._append_event(run_id, RunEventType.RUNNING, RunLifecyclePayload(message="DeepAgent started"))
         if downgraded_image_count:
             self._append_event(
                 run_id,
-                "image_attachments_textified",
-                {
-                    "message": "model does not support image input; image binaries were removed and metadata was passed as text",
-                    "items": downgraded_image_count,
-                },
+                RunEventType.IMAGE_ATTACHMENTS_TEXTIFIED,
+                ImageAttachmentsTextifiedPayload(
+                    message="model does not support image input; image binaries were removed and metadata was passed as text",
+                    items=downgraded_image_count,
+                ),
             )
+        stream_recorder = _RunStreamRecorder(run_id=run_id, run_dir=self._run_dir(run_id), append_event=self._append_event)
 
         try:
             result = await DeepAgentRuntime(
@@ -197,7 +212,9 @@ class RunService:
                 options=runtime_options,
                 checkpoint_path=checkpoint_path,
                 thread_id=session_id,
+                stream_callback=stream_recorder.record,
             )
+            stream_recorder.finish(result)
         except Exception as exc:
             error = {"message": str(exc), "type": exc.__class__.__name__}
             _write_json(
@@ -205,7 +222,7 @@ class RunService:
                 {"run_id": run_id, "status": "failed", "error": error, "completed_at": _now()},
             )
             self._set_state(run_id, "failed", error=error)
-            self._append_event(run_id, "failed", error)
+            self._append_event(run_id, RunEventType.FAILED, RunErrorPayload(message=error["message"], type=error["type"]))
             self._set_delivery(run_id, "failed", error=error)
             raise
 
@@ -225,7 +242,7 @@ class RunService:
                 metadata={"source": run_input.get("source", "api")},
             )
         self._set_state(run_id, "completed")
-        self._append_event(run_id, "completed", {"message": "run completed"})
+        self._append_event(run_id, RunEventType.COMPLETED, RunLifecyclePayload(message="run completed"))
         self._set_delivery(run_id, "ready")
         return self.get_run(run_id)
 
@@ -254,7 +271,11 @@ class RunService:
                 {"run_id": run_id, "status": "failed", "error": error, "completed_at": _now()},
             )
         self._set_state(run_id, "failed", error=error)
-        self._append_event(run_id, "failed", error)
+        self._append_event(
+            run_id,
+            RunEventType.FAILED,
+            RunErrorPayload(message=str(error.get("message") or ""), type=str(error.get("type") or "")),
+        )
         self._set_delivery(run_id, "failed", error=error)
 
     def latest_active_run_for_schedule(self, schedule_id: str) -> str:
@@ -293,10 +314,14 @@ class RunService:
             "state": _read_json(run_dir / "state.json"),
             "delivery": _read_json(run_dir / "delivery.json") if (run_dir / "delivery.json").exists() else {},
             "result": None,
+            "partial": None,
         }
         result_path = run_dir / "result.json"
         if result_path.exists():
             payload["result"] = _read_json(result_path)
+        partial_path = run_dir / "partial.json"
+        if partial_path.exists():
+            payload["partial"] = _read_json(partial_path)
         return payload
 
     def get_events(self, run_id: str, after: int = 0) -> list[dict[str, Any]]:
@@ -311,7 +336,7 @@ class RunService:
                 continue
             item = json.loads(line)
             if int(item.get("seq") or 0) > after:
-                events.append(item)
+                events.append(run_event_from_json(item).to_json())
         return events
 
     def _resolve_agent(
@@ -387,7 +412,7 @@ class RunService:
             payload["error"] = error
         _write_json(self._run_dir(run_id) / "delivery.json", payload)
 
-    def _append_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    def _append_event(self, run_id: str, event_type: RunEventType | str, payload: RunEventPayload) -> None:
         run_dir = self._run_dir(run_id)
         state_path = run_dir / "state.json"
         state = _read_json(state_path)
@@ -395,15 +420,15 @@ class RunService:
         state["seq"] = seq
         state["updated_at"] = _now()
         _write_json(state_path, state)
-        event = {
-            "seq": seq,
-            "run_id": run_id,
-            "type": event_type,
-            "created_at": state["updated_at"],
-            "payload": payload,
-        }
+        event = RunEventRecord(
+            seq=seq,
+            run_id=run_id,
+            type=event_type,
+            created_at=state["updated_at"],
+            payload=payload,
+        )
         with (run_dir / "events.jsonl").open("a", encoding="utf-8") as event_file:
-            event_file.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+            event_file.write(json.dumps(event.to_json(), ensure_ascii=False, sort_keys=True) + "\n")
 
     def _summary_from_state(self, run_id: str) -> dict[str, Any]:
         run_input = self._load_input(run_id)
@@ -455,6 +480,91 @@ class RunService:
     def _new_run_id(self) -> str:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         return f"run_{timestamp}_{uuid.uuid4().hex[:10]}"
+
+
+@dataclass
+class _RunStreamRecorder:
+    run_id: str
+    run_dir: Path
+    append_event: Any
+    content: str = ""
+    buffer: str = ""
+    node: str = ""
+    agent: str = ""
+    source_class: str = ""
+    last_flush_at: float = 0.0
+    had_delta: bool = False
+
+    def record(self, event: DeepAgentStreamEvent) -> None:
+        try:
+            if event.type == RunEventType.ASSISTANT_DELTA and isinstance(event.payload, DeepAgentMessageDeltaPayload):
+                self._record_delta(event.payload)
+                return
+            self.append_event(self.run_id, event.type, event.payload)
+        except Exception:
+            return
+
+    def finish(self, final_content: str) -> None:
+        if not self.had_delta:
+            return
+        if final_content:
+            self.content = final_content
+        self._flush(force=True)
+        _write_json(
+            self.run_dir / "partial.json",
+            {
+                "run_id": self.run_id,
+                "status": "completed",
+                "content": self.content,
+                "updated_at": _now(),
+            },
+        )
+
+    def _record_delta(self, payload: DeepAgentMessageDeltaPayload) -> None:
+        delta = payload.delta
+        if not delta:
+            return
+        self.content += delta
+        self.buffer += delta
+        self.node = payload.node
+        self.agent = payload.agent
+        self.source_class = payload.source_class
+        self.had_delta = True
+        self._flush()
+
+    def _flush(self, *, force: bool = False) -> None:
+        if not force and not self.buffer:
+            return
+        now_monotonic = time.monotonic()
+        if (
+            not force
+            and len(self.buffer) < STREAM_PARTIAL_FLUSH_CHARS
+            and now_monotonic - self.last_flush_at < STREAM_PARTIAL_FLUSH_SECONDS
+        ):
+            return
+        delta = self.buffer
+        self.buffer = ""
+        self.last_flush_at = now_monotonic
+        _write_json(
+            self.run_dir / "partial.json",
+            {
+                "run_id": self.run_id,
+                "status": "streaming",
+                "content": self.content,
+                "updated_at": _now(),
+            },
+        )
+        if delta:
+            self.append_event(
+                self.run_id,
+                RunEventType.ASSISTANT_DELTA,
+                DeepAgentMessageDeltaPayload(
+                    delta=delta,
+                    node=self.node,
+                    agent=self.agent,
+                    source_class=self.source_class,
+                ),
+            )
 
 
 def _public_agent(agent: AgentDefinition) -> dict[str, Any]:

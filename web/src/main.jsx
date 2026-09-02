@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Bot,
@@ -30,6 +30,7 @@ import { AgentConfigEditor, ConfigVisualEditor, ProviderConfigEditor, parseConfi
 import "./styles.css";
 
 const NAV_ITEMS = [
+  { id: "chat", path: "/chat", label: "Chat", icon: Send },
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
   { id: "config", path: "/config", label: "配置", icon: SlidersHorizontal },
@@ -54,6 +55,7 @@ const WORKSPACE_TREE = [
   ["workspace/runs/{run_id}/input.json", "创建时输入与 Agent/Context 快照"],
   ["workspace/runs/{run_id}/state.json", "当前状态、更新时间、事件序号"],
   ["workspace/runs/{run_id}/events.jsonl", "前端轮询读取的事件流"],
+  ["workspace/runs/{run_id}/partial.json", "DeepAgent stream 运行中的聚合输出"],
   ["workspace/runs/{run_id}/result.json", "DeepAgent 最终输出"],
   ["workspace/runs/{run_id}/delivery.json", "微信等渠道投递状态"],
   ["workspace/schedules/index.json", "统一调度索引，WebDAV 同步和未来 Agent 定时任务共用"],
@@ -66,6 +68,7 @@ const WORKSPACE_TREE = [
 ];
 
 const RUN_POLL_INTERVAL_MS = 60_000;
+const RUN_DETAIL_POLL_INTERVAL_MS = 2_000;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -237,6 +240,7 @@ function App() {
         </button>
       </aside>
       <main className="content">
+        {page === "chat" ? <ChatPage /> : null}
         {page === "runs" ? <RunsPage /> : null}
         {page === "workspace" ? <WorkspacePage /> : null}
         {page === "config" ? <ConfigPage onNavigate={navigate} /> : null}
@@ -248,6 +252,277 @@ function App() {
         {page === "system" ? <SystemPage onNavigate={navigate} /> : null}
       </main>
     </div>
+  );
+}
+
+function ChatPage() {
+  const [agents, setAgents] = useState([]);
+  const [agentId, setAgentId] = useState("");
+  const [session, setSession] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [activeRunId, setActiveRunId] = useState("");
+  const [error, setError] = useState("");
+  const chatEventSeqRef = useRef(0);
+  const chatRunContentRef = useRef("");
+
+  async function loadAgents() {
+    const data = await api("/api/workspace/read", {
+      method: "POST",
+      body: JSON.stringify({ path: "config.yaml" }),
+    });
+    const parsed = parseConfigDraft(data.content || "");
+    const nextAgents = parsed.config?.agents?.definitions || [];
+    setAgents(nextAgents);
+    if (!agentId && nextAgents[0]?.id) {
+      setAgentId(nextAgents[0].id);
+    }
+  }
+
+  async function loadSession(nextAgentId = agentId) {
+    const data = await api("/api/chat/session", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: nextAgentId || "" }),
+    });
+    setSession(data.session || null);
+    setMessages(normalizeChatMessages(data.messages || []));
+    if (data.session?.agent_id) {
+      setAgentId(data.session.agent_id);
+    }
+  }
+
+  useEffect(() => {
+    loadAgents().catch((exc) => setError(exc.message));
+    loadSession("").catch((exc) => setError(exc.message));
+  }, []);
+
+  useEffect(() => {
+    if (!activeRunId) return undefined;
+    let cancelled = false;
+    const runId = activeRunId;
+
+    async function finalizeRun(status) {
+      let content = "";
+      let failed = status === "failed";
+      try {
+        const run = await api(`/api/runs/${runId}`);
+        if (cancelled) return;
+        failed = runStatus(run) === "failed";
+        content = failed ? run.result?.error?.message || run.state?.error?.message || "运行失败" : run.result?.content || "";
+      } catch (exc) {
+        if (!cancelled) setError(exc.message);
+      }
+      if (cancelled) return;
+      setMessages((current) =>
+        upsertChatAssistantMessage(current, runId, {
+          content: content || chatRunContentRef.current,
+          streaming: false,
+          failed,
+        }),
+      );
+      setActiveRunId("");
+      if (session?.session_id) {
+        api(`/api/chat/sessions/${encodeURIComponent(session.session_id)}/messages`)
+          .then((data) => {
+            if (!cancelled) setMessages(normalizeChatMessages(data.messages || []));
+          })
+          .catch(() => {});
+      }
+    }
+
+    async function poll() {
+      try {
+        const data = await api(`/api/runs/${runId}/events?after=${chatEventSeqRef.current}`);
+        if (cancelled) return;
+        const events = data.events || [];
+        let completedStatus = "";
+        let nextContent = chatRunContentRef.current;
+        for (const event of events) {
+          chatEventSeqRef.current = Math.max(chatEventSeqRef.current, Number(event.seq || 0));
+          if (event.type === "assistant_delta") {
+            const delta = String(event.payload?.delta || "");
+            if (delta) {
+              nextContent += delta;
+            }
+          }
+          if (event.type === "failed" || event.type === "completed") {
+            completedStatus = event.type;
+          }
+        }
+        if (nextContent !== chatRunContentRef.current) {
+          chatRunContentRef.current = nextContent;
+          setMessages((current) =>
+            upsertChatAssistantMessage(current, runId, {
+              content: nextContent,
+              streaming: true,
+            }),
+          );
+        }
+        if (completedStatus) {
+          await finalizeRun(completedStatus);
+        }
+      } catch (exc) {
+        if (!cancelled) setError(exc.message);
+      }
+    }
+    poll();
+    const timer = window.setInterval(poll, 1_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeRunId, session?.session_id]);
+
+  async function sendMessage() {
+    const content = draft.trim();
+    if (!content || activeRunId) return;
+    setDraft("");
+    setError("");
+    setMessages((current) => [
+      ...current,
+      {
+        id: `local_user_${Date.now()}`,
+        role: "user",
+        content,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    try {
+      const data = await api("/api/chat/messages", {
+        method: "POST",
+        body: JSON.stringify({
+          content,
+          agent_id: agentId || "",
+          session_id: session?.session_id || "",
+        }),
+      });
+      const runId = data.run?.run_id || "";
+      setSession(data.session || session);
+      if (runId) {
+        chatEventSeqRef.current = 0;
+        chatRunContentRef.current = "";
+        setMessages((current) =>
+          upsertChatAssistantMessage(current, runId, {
+            content: "",
+            streaming: true,
+          }),
+        );
+        setActiveRunId(runId);
+      }
+    } catch (exc) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `local_error_${Date.now()}`,
+          role: "assistant",
+          content: exc.message || "发送失败",
+          failed: true,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      setError(exc.message);
+    }
+  }
+
+  async function newSession() {
+    if (activeRunId) return;
+    setError("");
+    const data = await api("/api/chat/session/new", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId || "" }),
+    });
+    chatEventSeqRef.current = 0;
+    chatRunContentRef.current = "";
+    setSession(data.session || null);
+    setMessages([]);
+  }
+
+  function changeAgent(nextAgentId) {
+    setAgentId(nextAgentId);
+    setActiveRunId("");
+    chatEventSeqRef.current = 0;
+    chatRunContentRef.current = "";
+    loadSession(nextAgentId).catch((exc) => setError(exc.message));
+  }
+
+  return (
+    <section className="console-screen chat-screen">
+      <section className="panel chat-panel">
+        <div className="chat-toolbar">
+          <div>
+            <span className="section-label">Web Chat</span>
+            <h2>DeepAgent 对话</h2>
+          </div>
+          <div className="chat-actions">
+            <select value={agentId} onChange={(event) => changeAgent(event.target.value)} disabled={Boolean(activeRunId)}>
+              {agents.length === 0 ? <option value="">default</option> : null}
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name || agent.id}
+                </option>
+              ))}
+            </select>
+            <button className="chat-secondary-button" onClick={newSession} disabled={Boolean(activeRunId)}>
+              新会话
+            </button>
+          </div>
+        </div>
+
+        <div className="chat-messages">
+          {messages.length === 0 ? (
+            <div className="chat-empty">
+              <TerminalSquare size={30} />
+              <strong>开始一次页面对话</strong>
+              <span>消息会进入长期 session；运行中输出会在这里实时刷新。</span>
+            </div>
+          ) : null}
+          {messages.map((message) => (
+            <div
+              key={message.id}
+              className={`chat-message ${message.role === "user" ? "user" : "assistant"} ${message.failed ? "failed" : ""}`}
+            >
+              <div className="chat-bubble">
+                <pre>{message.content || (message.streaming ? "正在生成..." : "")}</pre>
+                {message.streaming ? <small>streaming</small> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {error ? <div className="error chat-error">{error}</div> : null}
+        <div className="chat-composer">
+          <textarea
+            value={draft}
+            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+              }
+            }}
+          />
+          <button className="primary chat-send-button" onClick={sendMessage} disabled={!draft.trim() || Boolean(activeRunId)}>
+            <Send size={18} />
+            发送
+          </button>
+        </div>
+      </section>
+
+      <aside className="status-rail chat-rail">
+        <RailCard title="当前会话" status={activeRunId ? "运行中" : "就绪"} tone={activeRunId ? "cyan" : "green"}>
+          <RailRow label="Agent" value={agentId || "-"} />
+          <RailRow label="Session" value={session?.session_id || "-"} />
+          <RailRow label="消息数" value={session?.message_count ?? messages.length} />
+          <RailRow label="当前 Run" value={activeRunId || "-"} />
+        </RailCard>
+        <RailCard title="落盘路径" status="Context" tone="blue">
+          <RailRow label="会话" value={session?.session_id ? `sessions/${session.session_id}` : "sessions/"} />
+          <RailRow label="检查点" value="sessions/checkpoints.sqlite" />
+          <RailRow label="流式预览" value="runs/{run_id}/partial.json" />
+        </RailCard>
+      </aside>
+    </section>
   );
 }
 
@@ -303,7 +578,7 @@ function RunsPage() {
       setEvents((current) => replaceWhenChanged(current, eventData.events || []));
     }
     poll();
-    const timer = window.setInterval(poll, RUN_POLL_INTERVAL_MS);
+    const timer = window.setInterval(poll, RUN_DETAIL_POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -393,10 +668,12 @@ function RunDetail({ run, events }) {
   }
   const input = run.input || {};
   const state = run.state || {};
-  const result = run.result?.content || run.result?.error?.message || "";
+  const partial = run.partial?.content || "";
+  const result = run.result?.content || partial || run.result?.error?.message || "";
   const runId = run.run_id || input.run_id;
   const sessionId = input.session_id || state.session_id || run.session_id || "";
   const status = runStatus(run);
+  const resultLabel = run.result?.content ? "结果预览" : partial ? "正在生成" : "结果预览";
 
   return (
     <section className="panel run-detail">
@@ -437,8 +714,12 @@ function RunDetail({ run, events }) {
       </div>
       <div className="result-preview">
         <div>
-          <span className="section-label">结果预览</span>
-          <small>{`workspace/runs/${runId}/result.json`}</small>
+          <span className="section-label">{resultLabel}</span>
+          <small>
+            {partial && !run.result?.content
+              ? `workspace/runs/${runId}/partial.json`
+              : `workspace/runs/${runId}/result.json`}
+          </small>
         </div>
         <pre>{result || "暂无结果"}</pre>
       </div>
@@ -1875,6 +2156,40 @@ function BrowserProfilesPage() {
       </section>
     </section>
   );
+}
+
+function normalizeChatMessages(items) {
+  return items
+    .filter((item) => item && (item.role === "user" || item.role === "assistant"))
+    .map((item, index) => ({
+      id: item.run_id ? `${item.role}_${item.run_id}_${item.seq || index}` : `${item.role}_${item.seq || index}`,
+      role: item.role,
+      content: item.content || "",
+      created_at: item.created_at || "",
+      run_id: item.run_id || "",
+    }));
+}
+
+function upsertChatAssistantMessage(messages, runId, patch) {
+  const id = `assistant_${runId}`;
+  let replaced = false;
+  const next = messages.map((message) => {
+    if (message.id !== id) return message;
+    replaced = true;
+    return { ...message, ...patch };
+  });
+  if (replaced) return next;
+  return [
+    ...next,
+    {
+      id,
+      role: "assistant",
+      content: "",
+      run_id: runId,
+      created_at: new Date().toISOString(),
+      ...patch,
+    },
+  ];
 }
 
 function Status({ status }) {

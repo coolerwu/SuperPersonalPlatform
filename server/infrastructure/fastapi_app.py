@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 
 from server.adapter.auth_routes import create_auth_router
+from server.adapter.chat_routes import create_chat_router
 from server.adapter.channel_routes import create_channel_router
 from server.adapter.dependencies import AppContainer
 from server.adapter.run_routes import create_run_router
@@ -144,6 +145,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     app = FastAPI(title="Super Personal Platform", lifespan=lifespan)
     install_request_logging(app, container)
     app.include_router(create_auth_router(container))
+    app.include_router(create_chat_router(container))
     app.include_router(create_run_router(container))
     app.include_router(create_schedule_router(container))
     app.include_router(create_channel_router(container))

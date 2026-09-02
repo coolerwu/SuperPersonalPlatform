@@ -249,6 +249,108 @@ test("keeps run details stable when index polling returns only summaries", async
   expect(screen.queryByText("unknown")).not.toBeInTheDocument();
 });
 
+test("shows streaming partial output while a run is active", async () => {
+  window.history.replaceState({}, "", "/runs");
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/runs")) {
+      return response({
+        runs: [
+          {
+            run_id: "run_streaming",
+            agent_id: "default",
+            status: "running",
+            created_at: "2026-08-20T07:01:02Z",
+            updated_at: "2026-08-20T07:01:09Z",
+          },
+        ],
+      });
+    }
+    if (path.endsWith("/api/runs/run_streaming/events")) {
+      return response({
+        events: [
+          { seq: 1, type: "running", created_at: "2026-08-20T07:01:02Z", payload: { message: "DeepAgent started" } },
+          { seq: 2, type: "assistant_delta", created_at: "2026-08-20T07:01:03Z", payload: { delta: "正在回答" } },
+        ],
+      });
+    }
+    if (path.endsWith("/api/runs/run_streaming")) {
+      return response({
+        run_id: "run_streaming",
+        agent_id: "default",
+        input: { agent_id: "default", source: "wechat", created_at: "2026-08-20T07:01:02Z" },
+        state: { status: "running", seq: 2 },
+        partial: { status: "streaming", content: "正在回答" },
+        result: null,
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  expect(screen.getByText("正在生成")).toBeInTheDocument();
+  expect(screen.getByText("正在回答")).toBeInTheDocument();
+  expect(screen.getByText("workspace/runs/run_streaming/partial.json")).toBeInTheDocument();
+});
+
+test("chat page sends a message and renders the streaming assistant bubble", async () => {
+  window.history.replaceState({}, "", "/chat");
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/chat/session")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 0 },
+        messages: [],
+      });
+    }
+    if (path.endsWith("/api/chat/messages")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 1 },
+        run: { run_id: "run_chat", input: { source: "web_chat", session_id: "session_web" }, state: { status: "queued" } },
+      });
+    }
+    if (path.startsWith("/api/runs/run_chat/events")) {
+      return response({
+        events: [
+          {
+            seq: 1,
+            type: "assistant_delta",
+            created_at: "2026-08-20T07:01:02Z",
+            payload: { kind: "deepagent_message_delta", delta: "正在回答" },
+          },
+        ],
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行"), {
+    target: { value: "你好" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+
+  expect(await screen.findByText("你好")).toBeInTheDocument();
+  expect(await screen.findByText("正在回答")).toBeInTheDocument();
+});
+
 test("opens config.yaml as a native workspace text file", async () => {
   window.history.replaceState({}, "", "/workspace");
   global.fetch = vi.fn(async (url) => {

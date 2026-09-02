@@ -15,8 +15,9 @@
 
 `docs/architecture-qa.md` 是本轮重构的产品和技术问答来源，已确定：
 
-- 前端不使用 WebSocket 聊天，不执行 Agent；Runs 页面只查看落盘任务、状态、事件和结果，不提供手动创建 Run 入口。
+- 前端 Chat 页面不直接执行 Agent，而是通过后端创建 `source=web_chat` 的 run；Runs 页面只查看落盘任务、状态、事件和结果，不提供手动创建 Run 入口。
 - DeepAgent 在后端运行，状态、事件、结果全部落盘。
+- DeepAgent 运行时优先使用 LangGraph/DeepAgent `astream` 读取模型增量和图更新；运行时先把 LangGraph stream chunk 转换成明确的 `DeepAgentStreamEvent` / `RunEventPayload` 对象，再追加到 `workspace/runs/{run_id}/events.jsonl`。增量内容以 `assistant_delta` 事件作为唯一实时入口，并节流写入 `workspace/runs/{run_id}/partial.json` 快照；若当前 deepagents 版本或 fake agent 不支持 stream，则自动回退到 `ainvoke`，不影响最终结果。
 - `workspace/runs/index.json` 维护所有 run 的摘要和当前状态。
 - 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json`、`lock.json` 和 `delivery.json`。
 - 统一调度器使用 `workspace/schedules/` 落盘调度定义和状态；WebDAV Context 同步和未来 Agent 定时任务共用这一套调度机制。
@@ -74,6 +75,7 @@ workspace/
       input.json
       state.json
       events.jsonl
+      partial.json
       result.json
       lock.json
       delivery.json
@@ -132,6 +134,17 @@ GET /api/runs/{run_id}/events?after={seq}
 ```
 
 `POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`。未传 `session_id` 时按独立一次性 run 处理，不启用 checkpoint；传入 `session_id` 时，运行时使用 `workspace/sessions/checkpoints.sqlite` 作为 LangGraph SQLite checkpointer，并把 `configurable.thread_id` 设为该 `session_id`。微信通道会传入全局长期会话 ID，并把图片等附件保存到 `workspace/sessions/{session_id}/attachments/` 后再执行 run。该接口保留给渠道接入、自动化和后端集成使用，当前前端 Runs 页面不暴露手动创建入口。
+
+Chat API：
+
+```text
+POST /api/chat/session
+POST /api/chat/session/new
+GET /api/chat/sessions/{session_id}/messages
+POST /api/chat/messages
+```
+
+页面 Chat 使用 `channel=web`、`channel_account_id=default`、`peer_type=private`、`peer_id=browser` 和当前 `agent_id` 在 `workspace/sessions/active.json` 中维护活跃长期会话。`POST /api/chat/messages` 创建 `source=web_chat` 的普通 DeepAgent run 并后台执行；前端随后只轮询 `/api/runs/{run_id}/events?after={seq}`，按 `assistant_delta` 事件增量更新 assistant 气泡，完成或失败后再读取 run 详情和 session messages 对齐最终历史。
 
 Schedule 落盘模型：
 
@@ -196,7 +209,8 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 
 ## Frontend Routes
 
-- `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent Chat/Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮。
+- `/chat` 是页面 Chat 工作区，提供 Agent 选择、新会话、文本输入和 assistant 流式气泡；消息进入长期 session，执行仍由后端 DeepAgent run 完成。
+- `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。
 - `/config` 基础配置栏目只承载访问 Token、服务监听和坚果云 WebDAV 等基础配置；访问 Token 按明文输入展示。
@@ -212,6 +226,7 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 - `/system` 是运维页，展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑、浏览器授权或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，浏览器授权入口在 `/browser`，文件级查看/编辑入口保留在 `/workspace`。
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
 - Runs 工作区通过 1 分钟一次的轮询读取后端落盘状态，但前端必须保留当前详情快照、只在返回内容实际变化时更新状态，避免每次拉取 `workspace/runs/index.json` 时出现短暂重刷或 `unknown` 状态闪动。
+- Runs 详情区使用更短的 2 秒轮询读取选中 run 的详情和事件；运行中若存在 `partial.json` 且尚无最终 `result.json`，结果预览显示 partial 内容和“正在生成”状态。
 
 ## Retained Capabilities
 
