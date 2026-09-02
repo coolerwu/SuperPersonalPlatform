@@ -561,6 +561,88 @@ test("chat page restores folded thinking from run partial after refresh", async 
   expect(screen.getByText("思考过程").closest("details").open).toBe(false);
 });
 
+test("chat page restores an active run after refresh and keeps polling", async () => {
+  window.history.replaceState({}, "", "/chat");
+  let eventPolls = 0;
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/chat/session")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 1, last_run_id: "run_active" },
+        messages: [{ seq: 1, role: "user", content: "继续", run_id: "run_active", created_at: "2026-08-20T07:01:00Z" }],
+        active_run: {
+          run_id: "run_active",
+          input: { agent_id: "assistant", source: "web_chat", session_id: "session_web" },
+          state: { status: "running", seq: 1 },
+          partial: {
+            status: "streaming",
+            content: "已生成一半",
+            thinking: ["DeepAgent started"],
+            thinking_collapsed: false,
+          },
+        },
+      });
+    }
+    if (path.startsWith("/api/chat/sessions?")) {
+      return response({ sessions: [{ session_id: "session_web", agent_id: "assistant", active: true, message_count: 1 }] });
+    }
+    if (path.startsWith("/api/runs/run_active/events")) {
+      eventPolls += 1;
+      if (eventPolls === 1) {
+        return response({ events: [] });
+      }
+      return response({
+        events: [
+          { seq: 1, type: "running", created_at: "2026-08-20T07:01:01Z", payload: { message: "DeepAgent started" } },
+          {
+            seq: 2,
+            type: "assistant_delta",
+            created_at: "2026-08-20T07:01:02Z",
+            payload: { kind: "deepagent_message_delta", delta: "最终正文" },
+          },
+          { seq: 3, type: "completed", created_at: "2026-08-20T07:01:03Z", payload: { message: "run completed" } },
+        ],
+      });
+    }
+    if (path.endsWith("/api/runs/run_active")) {
+      return response({
+        run_id: "run_active",
+        input: { agent_id: "assistant", source: "web_chat", session_id: "session_web" },
+        state: { status: "completed", seq: 3 },
+        result: { status: "completed", content: "最终正文" },
+      });
+    }
+    if (path.endsWith("/api/chat/sessions/session_web/messages")) {
+      return response({
+        messages: [
+          { seq: 1, role: "user", content: "继续", run_id: "run_active", created_at: "2026-08-20T07:01:00Z" },
+          { seq: 2, role: "assistant", content: "最终正文", run_id: "run_active", created_at: "2026-08-20T07:01:03Z" },
+        ],
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  expect(await screen.findByText("已生成一半")).toBeInTheDocument();
+  expect(screen.getByText("DeepAgent started")).toBeInTheDocument();
+  expect(screen.getByText("思考过程").closest("details").open).toBe(true);
+
+  expect(await screen.findByText("最终正文")).toBeInTheDocument();
+  expect(screen.getByText("思考过程").closest("details").open).toBe(false);
+  expect(screen.getAllByText("DeepAgent started")).toHaveLength(1);
+});
+
 test("chat page switches between related sessions", async () => {
   window.history.replaceState({}, "", "/chat");
   global.fetch = vi.fn(async (url, options = {}) => {

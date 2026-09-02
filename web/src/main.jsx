@@ -287,11 +287,13 @@ function ChatPage() {
       body: JSON.stringify({ agent_id: nextAgentId || "" }),
     });
     const normalizedMessages = normalizeChatMessages(data.messages || []);
+    const restoredMessages = applyActiveChatRun(normalizedMessages, data.active_run);
     setSession(data.session || null);
-    setMessages(normalizedMessages);
-    hydrateChatRunSnapshots(normalizedMessages)
+    setMessages(restoredMessages);
+    restoreActiveChatRun(data.active_run);
+    hydrateChatRunSnapshots(restoredMessages)
       .then((hydratedMessages) => {
-        setMessages((current) => mergeHydratedChatMessages(current, normalizedMessages, hydratedMessages));
+        setMessages((current) => mergeHydratedChatMessages(current, restoredMessages, hydratedMessages));
       })
       .catch(() => {});
     if (data.session?.agent_id) {
@@ -488,17 +490,31 @@ function ChatPage() {
       method: "POST",
       body: JSON.stringify({ agent_id: agentId || "", selector }),
     });
-    chatEventSeqRef.current = 0;
-    chatRunContentRef.current = "";
     const normalizedMessages = normalizeChatMessages(data.messages || []);
+    const restoredMessages = applyActiveChatRun(normalizedMessages, data.active_run);
     setSession(data.session || null);
-    setMessages(normalizedMessages);
-    hydrateChatRunSnapshots(normalizedMessages)
+    setMessages(restoredMessages);
+    restoreActiveChatRun(data.active_run);
+    hydrateChatRunSnapshots(restoredMessages)
       .then((hydratedMessages) => {
-        setMessages((current) => mergeHydratedChatMessages(current, normalizedMessages, hydratedMessages));
+        setMessages((current) => mergeHydratedChatMessages(current, restoredMessages, hydratedMessages));
       })
       .catch(() => {});
     loadChatSessions(data.session?.agent_id || agentId || "").catch(() => {});
+  }
+
+  function restoreActiveChatRun(run) {
+    const runId = run?.run_id || "";
+    const status = runStatus(run);
+    if (!runId || (status !== "queued" && status !== "running")) {
+      setActiveRunId("");
+      chatEventSeqRef.current = 0;
+      chatRunContentRef.current = "";
+      return;
+    }
+    chatEventSeqRef.current = 0;
+    chatRunContentRef.current = "";
+    setActiveRunId(runId);
   }
 
   function changeAgent(nextAgentId) {
@@ -2307,6 +2323,23 @@ function applyChatRunSnapshot(messages, run) {
   });
 }
 
+function applyActiveChatRun(messages, run) {
+  const runId = run?.run_id || "";
+  const status = runStatus(run);
+  if (!runId || (status !== "queued" && status !== "running")) return messages;
+  const partial = run.partial || {};
+  const thinking = Array.isArray(partial.thinking)
+    ? partial.thinking.filter(Boolean)
+    : ["后台运行中，已恢复事件轮询"];
+  return upsertChatAssistantMessage(messages, runId, {
+    content: partial.content || "",
+    streaming: true,
+    failed: false,
+    thinkingAppend: thinking.length ? thinking : ["后台运行中，已恢复事件轮询"],
+    thinkingCollapsed: false,
+  });
+}
+
 function mergeHydratedChatMessages(current, base, hydrated) {
   if (current.length === base.length && current.every((message, index) => message.id === base[index]?.id)) {
     return hydrated;
@@ -2353,7 +2386,7 @@ function mergeChatThinking(current = [], updates = []) {
   const merged = Array.isArray(current) ? [...current] : [];
   for (const update of Array.isArray(updates) ? updates : []) {
     const text = String(update || "").trim();
-    if (!text || merged[merged.length - 1] === text) continue;
+    if (!text || merged.includes(text)) continue;
     merged.push(text);
   }
   return merged.slice(-10);

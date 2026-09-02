@@ -55,9 +55,11 @@ def create_chat_router(container: AppContainer) -> APIRouter:
             agent_id=agent_id,
             metadata={"source": "web_chat"},
         )
+        session_summary = session_service.session_summary(session.session_id)
         return {
-            "session": session_service.session_summary(session.session_id),
+            "session": session_summary,
             "messages": session_service.read_messages(session.session_id, limit=80),
+            "active_run": _active_session_run(container, session_summary),
         }
 
     @router.get("/sessions")
@@ -93,6 +95,7 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         return {
             "session": session,
             "messages": session_service.read_messages(str(session.get("session_id") or ""), limit=80),
+            "active_run": _active_session_run(container, session),
         }
 
     @router.post("/session/new")
@@ -108,7 +111,7 @@ def create_chat_router(container: AppContainer) -> APIRouter:
             reason="web chat new session",
             metadata={"source": "web_chat"},
         )
-        return {"session": session_service.session_summary(session.session_id), "messages": []}
+        return {"session": session_service.session_summary(session.session_id), "messages": [], "active_run": None}
 
     @router.get("/sessions/{session_id}/messages")
     def get_chat_messages(session_id: str) -> dict[str, object]:
@@ -170,3 +173,17 @@ def _resolve_agent_id(workspace, raw_agent_id: str) -> str:
     if not agents:
         raise HTTPException(status_code=400, detail="no agents configured")
     return agents[0].id
+
+
+def _active_session_run(container: AppContainer, session: dict[str, object]) -> dict[str, object] | None:
+    run_id = str(session.get("last_run_id") or "").strip()
+    if not run_id:
+        return None
+    try:
+        run = container.run_service.get_run(run_id)
+    except RunNotFoundError:
+        return None
+    status = str((run.get("state") or {}).get("status") or "")
+    if status not in {"queued", "running"}:
+        return None
+    return run

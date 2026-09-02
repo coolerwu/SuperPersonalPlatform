@@ -52,6 +52,12 @@ def test_chat_routes_create_web_session_and_run(tmp_path, monkeypatch) -> None:
     assert payload["run"]["input"]["source"] == "web_chat"
     assert payload["run"]["input"]["session_id"] == session_id
 
+    restored_response = client.post("/api/chat/session", json={"agent_id": "assistant"})
+    assert restored_response.status_code == 200
+    active_run = restored_response.json()["active_run"]
+    assert active_run["run_id"] == payload["run"]["run_id"]
+    assert active_run["state"]["status"] == "queued"
+
     messages_response = client.get(f"/api/chat/sessions/{session_id}/messages")
     assert messages_response.status_code == 200
     messages = messages_response.json()["messages"]
