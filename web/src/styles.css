@@ -331,13 +331,15 @@ pre {
 
 .chat-actions {
   display: grid;
-  grid-template-columns: minmax(150px, 220px) auto;
+  grid-template-columns: minmax(120px, 190px) minmax(150px, 220px) auto;
   gap: 8px;
   align-items: center;
+  min-width: 0;
 }
 
 .chat-actions select {
   width: 100%;
+  min-width: 0;
   height: 36px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -2324,6 +2326,7 @@ pre {
 
 @media (max-width: 1180px) {
   .runs-grid,
+  .chat-screen,
   .workspace-layout,
   .workspace-file-layout,
   .schedules-grid,
@@ -2416,11 +2419,21 @@ pre {
 
   .content,
   .runs-screen,
+  .chat-screen,
   .workspace-screen,
   .schedules-screen {
     height: auto;
     min-height: 100vh;
     overflow: visible;
+  }
+
+  .chat-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .chat-actions {
+    grid-template-columns: 1fr;
   }
 
   .run-table {

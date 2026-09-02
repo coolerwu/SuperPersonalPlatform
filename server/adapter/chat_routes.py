@@ -21,6 +21,11 @@ class ChatSessionRequest(BaseModel):
     agent_id: str = ""
 
 
+class ChatSessionChangeRequest(BaseModel):
+    agent_id: str = ""
+    selector: str
+
+
 class ChatMessageRequest(BaseModel):
     content: str
     agent_id: str = ""
@@ -53,6 +58,41 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         return {
             "session": session_service.session_summary(session.session_id),
             "messages": session_service.read_messages(session.session_id, limit=80),
+        }
+
+    @router.get("/sessions")
+    def list_chat_sessions(agent_id: str = "") -> dict[str, object]:
+        session_service = SessionService(container.workspace)
+        resolved_agent_id = _resolve_agent_id(container.workspace, agent_id)
+        sessions = session_service.related_summaries_for_identity(
+            channel=WEB_CHAT_CHANNEL,
+            channel_account_id=WEB_CHAT_ACCOUNT,
+            peer_type=WEB_CHAT_PEER_TYPE,
+            peer_id=WEB_CHAT_PEER_ID,
+            agent_id=resolved_agent_id,
+            limit=30,
+        )
+        return {"sessions": sessions}
+
+    @router.post("/session/change")
+    def change_chat_session(payload: ChatSessionChangeRequest) -> dict[str, object]:
+        session_service = SessionService(container.workspace)
+        agent_id = _resolve_agent_id(container.workspace, payload.agent_id)
+        try:
+            session = session_service.switch_active(
+                channel=WEB_CHAT_CHANNEL,
+                channel_account_id=WEB_CHAT_ACCOUNT,
+                peer_type=WEB_CHAT_PEER_TYPE,
+                peer_id=WEB_CHAT_PEER_ID,
+                agent_id=agent_id,
+                selector=payload.selector,
+                metadata={"source": "web_chat"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "session": session,
+            "messages": session_service.read_messages(str(session.get("session_id") or ""), limit=80),
         }
 
     @router.post("/session/new")

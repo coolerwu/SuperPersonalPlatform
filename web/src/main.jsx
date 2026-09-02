@@ -259,6 +259,7 @@ function ChatPage() {
   const [agents, setAgents] = useState([]);
   const [agentId, setAgentId] = useState("");
   const [session, setSession] = useState(null);
+  const [chatSessions, setChatSessions] = useState([]);
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
   const [activeRunId, setActiveRunId] = useState("");
@@ -296,6 +297,12 @@ function ChatPage() {
     if (data.session?.agent_id) {
       setAgentId(data.session.agent_id);
     }
+    loadChatSessions(data.session?.agent_id || nextAgentId || "").catch(() => {});
+  }
+
+  async function loadChatSessions(nextAgentId = agentId) {
+    const data = await api(`/api/chat/sessions?agent_id=${encodeURIComponent(nextAgentId || "")}`);
+    setChatSessions(data.sessions || []);
   }
 
   useEffect(() => {
@@ -431,6 +438,7 @@ function ChatPage() {
       });
       const runId = data.run?.run_id || "";
       setSession(data.session || session);
+      loadChatSessions(data.session?.agent_id || agentId || "").catch(() => {});
       if (runId) {
         chatEventSeqRef.current = 0;
         chatRunContentRef.current = "";
@@ -470,6 +478,27 @@ function ChatPage() {
     chatRunContentRef.current = "";
     setSession(data.session || null);
     setMessages([]);
+    loadChatSessions(data.session?.agent_id || agentId || "").catch(() => {});
+  }
+
+  async function changeSession(selector) {
+    if (!selector || activeRunId) return;
+    setError("");
+    const data = await api("/api/chat/session/change", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId || "", selector }),
+    });
+    chatEventSeqRef.current = 0;
+    chatRunContentRef.current = "";
+    const normalizedMessages = normalizeChatMessages(data.messages || []);
+    setSession(data.session || null);
+    setMessages(normalizedMessages);
+    hydrateChatRunSnapshots(normalizedMessages)
+      .then((hydratedMessages) => {
+        setMessages((current) => mergeHydratedChatMessages(current, normalizedMessages, hydratedMessages));
+      })
+      .catch(() => {});
+    loadChatSessions(data.session?.agent_id || agentId || "").catch(() => {});
   }
 
   function changeAgent(nextAgentId) {
@@ -477,6 +506,7 @@ function ChatPage() {
     setActiveRunId("");
     chatEventSeqRef.current = 0;
     chatRunContentRef.current = "";
+    setChatSessions([]);
     loadSession(nextAgentId).catch((exc) => setError(exc.message));
   }
 
@@ -494,6 +524,19 @@ function ChatPage() {
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>
                   {agent.name || agent.id}
+                </option>
+              ))}
+            </select>
+            <select
+              value={session?.session_id || ""}
+              onChange={(event) => changeSession(event.target.value).catch((exc) => setError(exc.message))}
+              disabled={Boolean(activeRunId) || chatSessions.length === 0}
+              title="切换历史会话"
+            >
+              {chatSessions.length === 0 ? <option value="">当前会话</option> : null}
+              {chatSessions.map((item, index) => (
+                <option key={item.session_id} value={item.session_id}>
+                  {formatSessionOption(item, index)}
                 </option>
               ))}
             </select>
@@ -2212,6 +2255,13 @@ function normalizeChatMessages(items) {
       created_at: item.created_at || "",
       run_id: item.run_id || "",
     }));
+}
+
+function formatSessionOption(item, index) {
+  const prefix = item.active ? "当前" : `历史 ${index + 1}`;
+  const count = Number(item.message_count || 0);
+  const updated = formatTime(item.updated_at || item.created_at);
+  return `${prefix} · ${count}条 · ${updated}`;
 }
 
 async function hydrateChatRunSnapshots(messages) {
