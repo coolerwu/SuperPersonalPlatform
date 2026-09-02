@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Bot,
@@ -263,6 +263,7 @@ function ChatPage() {
   const [draft, setDraft] = useState("");
   const [activeRunId, setActiveRunId] = useState("");
   const [error, setError] = useState("");
+  const messagesRef = useRef(null);
   const chatEventSeqRef = useRef(0);
   const chatRunContentRef = useRef("");
 
@@ -295,6 +296,21 @@ function ChatPage() {
     loadAgents().catch((exc) => setError(exc.message));
     loadSession("").catch((exc) => setError(exc.message));
   }, []);
+
+  useLayoutEffect(() => {
+    const node = messagesRef.current;
+    if (!node) return undefined;
+    function scrollToBottom() {
+      node.scrollTop = node.scrollHeight;
+    }
+    scrollToBottom();
+    const frame = window.requestAnimationFrame ? window.requestAnimationFrame(scrollToBottom) : 0;
+    return () => {
+      if (frame && window.cancelAnimationFrame) {
+        window.cancelAnimationFrame(frame);
+      }
+    };
+  }, [messages, activeRunId]);
 
   useEffect(() => {
     if (!activeRunId) return undefined;
@@ -468,7 +484,7 @@ function ChatPage() {
           </div>
         </div>
 
-        <div className="chat-messages">
+        <div className="chat-messages" ref={messagesRef}>
           {messages.length === 0 ? (
             <div className="chat-empty">
               <TerminalSquare size={30} />
@@ -482,7 +498,11 @@ function ChatPage() {
               className={`chat-message ${message.role === "user" ? "user" : "assistant"} ${message.failed ? "failed" : ""}`}
             >
               <div className="chat-bubble">
-                <pre>{message.content || (message.streaming ? "正在生成..." : "")}</pre>
+                {message.role === "assistant" && message.content ? (
+                  <MarkdownMessage content={message.content} />
+                ) : (
+                  <pre>{message.content || (message.streaming ? "正在生成..." : "")}</pre>
+                )}
                 {message.streaming ? <small>streaming</small> : null}
               </div>
             </div>
@@ -2190,6 +2210,158 @@ function upsertChatAssistantMessage(messages, runId, patch) {
       ...patch,
     },
   ];
+}
+
+function MarkdownMessage({ content }) {
+  return <div className="markdown-message">{renderMarkdownBlocks(content)}</div>;
+}
+
+function renderMarkdownBlocks(content) {
+  const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+  const blocks = [];
+  let paragraph = [];
+  let list = null;
+  let quote = [];
+  let code = null;
+
+  function flushParagraph() {
+    if (paragraph.length === 0) return;
+    const text = paragraph.join(" ").trim();
+    if (text) {
+      blocks.push(<p key={`p-${blocks.length}`}>{renderMarkdownInline(text, `p-${blocks.length}`)}</p>);
+    }
+    paragraph = [];
+  }
+
+  function flushList() {
+    if (!list) return;
+    const Tag = list.ordered ? "ol" : "ul";
+    blocks.push(
+      <Tag key={`list-${blocks.length}`}>
+        {list.items.map((item, index) => (
+          <li key={index}>{renderMarkdownInline(item, `li-${blocks.length}-${index}`)}</li>
+        ))}
+      </Tag>,
+    );
+    list = null;
+  }
+
+  function flushQuote() {
+    if (quote.length === 0) return;
+    blocks.push(<blockquote key={`quote-${blocks.length}`}>{renderMarkdownInline(quote.join(" "), `quote-${blocks.length}`)}</blockquote>);
+    quote = [];
+  }
+
+  function flushCode() {
+    if (!code) return;
+    blocks.push(
+      <pre className="markdown-code" key={`code-${blocks.length}`}>
+        <code>{code.lines.join("\n")}</code>
+      </pre>,
+    );
+    code = null;
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const fenceMatch = line.match(/^```(\w+)?\s*$/);
+    if (fenceMatch) {
+      if (code) {
+        flushCode();
+      } else {
+        flushParagraph();
+        flushList();
+        flushQuote();
+        code = { language: fenceMatch[1] || "", lines: [] };
+      }
+      continue;
+    }
+    if (code) {
+      code.lines.push(rawLine);
+      continue;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      const Tag = `h${heading[1].length + 2}`;
+      blocks.push(<Tag key={`h-${blocks.length}`}>{renderMarkdownInline(heading[2], `h-${blocks.length}`)}</Tag>);
+      continue;
+    }
+    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      flushParagraph();
+      flushQuote();
+      const orderedList = Boolean(ordered);
+      if (!list || list.ordered !== orderedList) {
+        flushList();
+        list = { ordered: orderedList, items: [] };
+      }
+      list.items.push((unordered?.[1] || ordered?.[1] || "").trim());
+      continue;
+    }
+    const quoted = line.match(/^\s*>\s?(.+)$/);
+    if (quoted) {
+      flushParagraph();
+      flushList();
+      quote.push(quoted[1].trim());
+      continue;
+    }
+    paragraph.push(line.trim());
+  }
+  flushCode();
+  flushParagraph();
+  flushList();
+  flushQuote();
+  return blocks.length ? blocks : <p>{content}</p>;
+}
+
+function renderMarkdownInline(text, keyPrefix) {
+  const value = String(text || "");
+  const matcher = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)\s]+\)|https?:\/\/[^\s]+)/g;
+  const nodes = [];
+  let cursor = 0;
+  let match;
+  while ((match = matcher.exec(value)) !== null) {
+    if (match.index > cursor) {
+      nodes.push(value.slice(cursor, match.index));
+    }
+    const token = match[0];
+    const key = `${keyPrefix}-${nodes.length}`;
+    const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+    if (link) {
+      nodes.push(
+        <a key={key} href={link[2]} target="_blank" rel="noreferrer">
+          {link[1]}
+        </a>,
+      );
+    } else if (token.startsWith("http://") || token.startsWith("https://")) {
+      nodes.push(
+        <a key={key} href={token} target="_blank" rel="noreferrer">
+          {token}
+        </a>,
+      );
+    } else if (token.startsWith("**") && token.endsWith("**")) {
+      nodes.push(<strong key={key}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith("`") && token.endsWith("`")) {
+      nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
+    } else {
+      nodes.push(token);
+    }
+    cursor = match.index + token.length;
+  }
+  if (cursor < value.length) {
+    nodes.push(value.slice(cursor));
+  }
+  return nodes;
 }
 
 function Status({ status }) {

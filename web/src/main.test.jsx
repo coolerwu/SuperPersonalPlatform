@@ -150,6 +150,8 @@ const TWO_PROVIDER_CONFIG_YAML = [
   "      context_ids: []",
 ].join("\n");
 
+let scrollHeightDescriptor;
+
 async function flushReact() {
   for (let index = 0; index < 6; index += 1) {
     await act(async () => {
@@ -161,6 +163,7 @@ async function flushReact() {
 beforeEach(() => {
   vi.resetModules();
   vi.useRealTimers();
+  scrollHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
   document.body.innerHTML = '<div id="root"></div>';
   window.history.replaceState({}, "", "/agents");
   global.fetch = vi.fn(async (url, options = {}) => {
@@ -177,6 +180,11 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  if (scrollHeightDescriptor) {
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", scrollHeightDescriptor);
+  } else {
+    delete HTMLElement.prototype.scrollHeight;
+  }
 });
 
 test("renders the DeepAgent console shell", async () => {
@@ -349,6 +357,67 @@ test("chat page sends a message and renders the streaming assistant bubble", asy
 
   expect(await screen.findByText("你好")).toBeInTheDocument();
   expect(await screen.findByText("正在回答")).toBeInTheDocument();
+});
+
+test("chat page renders assistant markdown and follows the latest message", async () => {
+  window.history.replaceState({}, "", "/chat");
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get() {
+      return 900;
+    },
+  });
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/chat/session")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 0 },
+        messages: [],
+      });
+    }
+    if (path.endsWith("/api/chat/messages")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 1 },
+        run: { run_id: "run_markdown", input: { source: "web_chat", session_id: "session_web" }, state: { status: "queued" } },
+      });
+    }
+    if (path.startsWith("/api/runs/run_markdown/events")) {
+      return response({
+        events: [
+          {
+            seq: 1,
+            type: "assistant_delta",
+            created_at: "2026-08-20T07:01:02Z",
+            payload: { kind: "deepagent_message_delta", delta: "**重点**\n- 第一条" },
+          },
+        ],
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行"), {
+    target: { value: "给我 markdown" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+
+  expect(await screen.findByText("重点")).toBeInTheDocument();
+  expect(screen.getByText("重点").tagName).toBe("STRONG");
+  expect(screen.getByText("第一条").tagName).toBe("LI");
+  await waitFor(() => {
+    expect(document.querySelector(".chat-messages").scrollTop).toBe(900);
+  });
 });
 
 test("opens config.yaml as a native workspace text file", async () => {
