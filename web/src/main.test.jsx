@@ -359,6 +359,61 @@ test("chat page sends a message and renders the streaming assistant bubble", asy
   expect(await screen.findByText("正在回答")).toBeInTheDocument();
 });
 
+test("chat page does not send when enter confirms ime composition", async () => {
+  window.history.replaceState({}, "", "/chat");
+  let messageCalls = 0;
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/chat/session")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 0 },
+        messages: [],
+      });
+    }
+    if (path.startsWith("/api/chat/sessions?")) {
+      return response({
+        sessions: [{ session_id: "session_web", agent_id: "assistant", active: true, message_count: 0 }],
+      });
+    }
+    if (path.endsWith("/api/chat/messages")) {
+      messageCalls += 1;
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 1 },
+        run: { run_id: "run_ime", input: { source: "web_chat", session_id: "session_web" }, state: { status: "queued" } },
+      });
+    }
+    if (path.startsWith("/api/runs/run_ime/events")) {
+      return response({ events: [] });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  const textarea = screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行");
+  fireEvent.change(textarea, { target: { value: "nihao" } });
+  fireEvent.compositionStart(textarea);
+  fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 229, isComposing: true });
+  await flushReact();
+
+  expect(messageCalls).toBe(0);
+
+  fireEvent.compositionEnd(textarea);
+  fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 13 });
+  await flushReact();
+
+  expect(messageCalls).toBe(1);
+});
+
 test("chat page renders assistant markdown and follows the latest message", async () => {
   window.history.replaceState({}, "", "/chat");
   Object.defineProperty(HTMLElement.prototype, "scrollHeight", {

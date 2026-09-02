@@ -267,6 +267,7 @@ function ChatPage() {
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [error, setError] = useState("");
   const messagesRef = useRef(null);
+  const composingRef = useRef(false);
   const chatEventSeqRef = useRef(0);
   const chatRunContentRef = useRef("");
 
@@ -471,6 +472,10 @@ function ChatPage() {
     }
   }
 
+  function isComposingMessage(event) {
+    return composingRef.current || event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229;
+  }
+
   async function newSession() {
     if (activeRunId) return;
     setSessionMenuOpen(false);
@@ -624,8 +629,15 @@ function ChatPage() {
             value={draft}
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
             onChange={(event) => setDraft(event.target.value)}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
+                if (isComposingMessage(event)) return;
                 event.preventDefault();
                 sendMessage();
               }
