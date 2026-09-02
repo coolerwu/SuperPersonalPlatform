@@ -334,13 +334,17 @@ function ChatPage() {
           content: content || chatRunContentRef.current,
           streaming: false,
           failed,
+          thinkingAppend: [failed ? "运行失败，已停止生成正文" : "已完成，正文已生成"],
+          thinkingCollapsed: true,
         }),
       );
       setActiveRunId("");
       if (session?.session_id) {
         api(`/api/chat/sessions/${encodeURIComponent(session.session_id)}/messages`)
           .then((data) => {
-            if (!cancelled) setMessages(normalizeChatMessages(data.messages || []));
+            if (!cancelled) {
+              setMessages((current) => carryChatAssistantRuntimeState(normalizeChatMessages(data.messages || []), current, runId));
+            }
           })
           .catch(() => {});
       }
@@ -353,8 +357,13 @@ function ChatPage() {
         const events = data.events || [];
         let completedStatus = "";
         let nextContent = chatRunContentRef.current;
+        const thinkingUpdates = [];
         for (const event of events) {
           chatEventSeqRef.current = Math.max(chatEventSeqRef.current, Number(event.seq || 0));
+          const thinkingText = runEventThinkingText(event);
+          if (thinkingText) {
+            thinkingUpdates.push(thinkingText);
+          }
           if (event.type === "assistant_delta") {
             const delta = String(event.payload?.delta || "");
             if (delta) {
@@ -365,12 +374,14 @@ function ChatPage() {
             completedStatus = event.type;
           }
         }
-        if (nextContent !== chatRunContentRef.current) {
+        if (nextContent !== chatRunContentRef.current || thinkingUpdates.length > 0) {
           chatRunContentRef.current = nextContent;
           setMessages((current) =>
             upsertChatAssistantMessage(current, runId, {
               content: nextContent,
               streaming: true,
+              thinkingAppend: thinkingUpdates,
+              thinkingCollapsed: false,
             }),
           );
         }
@@ -421,6 +432,8 @@ function ChatPage() {
           upsertChatAssistantMessage(current, runId, {
             content: "",
             streaming: true,
+            thinking: ["等待 DeepAgent 响应"],
+            thinkingCollapsed: false,
           }),
         );
         setActiveRunId(runId);
@@ -498,10 +511,15 @@ function ChatPage() {
               className={`chat-message ${message.role === "user" ? "user" : "assistant"} ${message.failed ? "failed" : ""}`}
             >
               <div className="chat-bubble">
+                {message.role === "assistant" && message.thinking?.length ? (
+                  <ThinkingPanel items={message.thinking} running={message.streaming} collapsed={message.thinkingCollapsed !== false} />
+                ) : null}
                 {message.role === "assistant" && message.content ? (
                   <MarkdownMessage content={message.content} />
                 ) : (
-                  <pre>{message.content || (message.streaming ? "正在生成..." : "")}</pre>
+                  <pre className={message.streaming ? "chat-answer-placeholder" : ""}>
+                    {message.content || (message.streaming ? "正在生成正文..." : "")}
+                  </pre>
                 )}
                 {message.streaming ? <small>streaming</small> : null}
               </div>
@@ -2182,7 +2200,7 @@ function normalizeChatMessages(items) {
   return items
     .filter((item) => item && (item.role === "user" || item.role === "assistant"))
     .map((item, index) => ({
-      id: item.run_id ? `${item.role}_${item.run_id}_${item.seq || index}` : `${item.role}_${item.seq || index}`,
+      id: item.run_id ? `${item.role}_${item.run_id}` : `${item.role}_${item.seq || index}`,
       role: item.role,
       content: item.content || "",
       created_at: item.created_at || "",
@@ -2192,11 +2210,12 @@ function normalizeChatMessages(items) {
 
 function upsertChatAssistantMessage(messages, runId, patch) {
   const id = `assistant_${runId}`;
+  const { thinkingAppend, ...rest } = patch;
   let replaced = false;
   const next = messages.map((message) => {
     if (message.id !== id) return message;
     replaced = true;
-    return { ...message, ...patch };
+    return { ...message, ...rest, thinking: mergeChatThinking(message.thinking, thinkingAppend) };
   });
   if (replaced) return next;
   return [
@@ -2207,9 +2226,75 @@ function upsertChatAssistantMessage(messages, runId, patch) {
       content: "",
       run_id: runId,
       created_at: new Date().toISOString(),
-      ...patch,
+      ...rest,
+      thinking: mergeChatThinking(rest.thinking, thinkingAppend),
     },
   ];
+}
+
+function mergeChatThinking(current = [], updates = []) {
+  const merged = Array.isArray(current) ? [...current] : [];
+  for (const update of Array.isArray(updates) ? updates : []) {
+    const text = String(update || "").trim();
+    if (!text || merged[merged.length - 1] === text) continue;
+    merged.push(text);
+  }
+  return merged.slice(-10);
+}
+
+function carryChatAssistantRuntimeState(nextMessages, currentMessages, runId) {
+  const id = `assistant_${runId}`;
+  const runtimeMessage = currentMessages.find((message) => message.id === id);
+  if (!runtimeMessage?.thinking?.length) return nextMessages;
+  return nextMessages.map((message) => {
+    if (message.id !== id) return message;
+    return {
+      ...message,
+      thinking: runtimeMessage.thinking,
+      thinkingCollapsed: true,
+      streaming: false,
+      failed: runtimeMessage.failed,
+    };
+  });
+}
+
+function runEventThinkingText(event) {
+  const payload = event?.payload || {};
+  if (event?.type === "running") {
+    return payload.message || "DeepAgent 已开始处理";
+  }
+  if (event?.type === "agent_update") {
+    if (payload.preview) return payload.preview;
+    const nodes = Array.isArray(payload.nodes) ? payload.nodes.filter(Boolean).join(", ") : "";
+    return nodes ? `图节点更新：${nodes}` : "DeepAgent 状态已更新";
+  }
+  if (event?.type === "stream_fallback") {
+    return payload.message || "当前运行时不支持增量流，已切换为最终结果模式";
+  }
+  if (event?.type === "image_attachments_textified") {
+    return payload.message || "图片已转为文本附件说明";
+  }
+  return "";
+}
+
+function ThinkingPanel({ items, running, collapsed }) {
+  const visibleItems = Array.isArray(items) ? items.slice(-10) : [];
+  if (visibleItems.length === 0) return null;
+  return (
+    <details className={`thinking-panel ${running ? "running" : ""}`} open={running || !collapsed}>
+      <summary>
+        <span>思考过程</span>
+        <small>{running ? "运行中" : "已折叠"}</small>
+      </summary>
+      <div className="thinking-body">
+        {visibleItems.map((item, index) => (
+          <div className="thinking-row" key={`${index}-${item}`}>
+            {item}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
 }
 
 function MarkdownMessage({ content }) {

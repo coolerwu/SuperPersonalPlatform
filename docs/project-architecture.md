@@ -209,7 +209,7 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 
 ## Frontend Routes
 
-- `/chat` 是页面 Chat 工作区，提供 Agent 选择、新会话、文本输入和 assistant 流式气泡；消息进入长期 session，执行仍由后端 DeepAgent run 完成。
+- `/chat` 是页面 Chat 工作区，提供 Agent 选择、新会话、文本输入和 assistant 流式气泡；消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。

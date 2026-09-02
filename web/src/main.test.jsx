@@ -420,6 +420,101 @@ test("chat page renders assistant markdown and follows the latest message", asyn
   });
 });
 
+test("chat page shows thinking events while running and folds them after completion", async () => {
+  vi.useFakeTimers();
+  window.history.replaceState({}, "", "/chat");
+  let eventPolls = 0;
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/chat/session")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 0 },
+        messages: [],
+      });
+    }
+    if (path.endsWith("/api/chat/messages")) {
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 1 },
+        run: { run_id: "run_thinking", input: { source: "web_chat", session_id: "session_web" }, state: { status: "queued" } },
+      });
+    }
+    if (path.startsWith("/api/runs/run_thinking/events")) {
+      eventPolls += 1;
+      if (eventPolls === 1) {
+        return response({
+          events: [
+            { seq: 1, type: "running", created_at: "2026-08-20T07:01:01Z", payload: { message: "DeepAgent started" } },
+            {
+              seq: 2,
+              type: "agent_update",
+              created_at: "2026-08-20T07:01:02Z",
+              payload: { kind: "deepagent_graph_update", preview: "正在搜索资料" },
+            },
+          ],
+        });
+      }
+      return response({
+        events: [
+          {
+            seq: 3,
+            type: "assistant_delta",
+            created_at: "2026-08-20T07:01:03Z",
+            payload: { kind: "deepagent_message_delta", delta: "最终正文" },
+          },
+          { seq: 4, type: "completed", created_at: "2026-08-20T07:01:04Z", payload: { message: "run completed" } },
+        ],
+      });
+    }
+    if (path.endsWith("/api/runs/run_thinking")) {
+      return response({
+        run_id: "run_thinking",
+        agent_id: "assistant",
+        input: { agent_id: "assistant", source: "web_chat", session_id: "session_web" },
+        state: { status: "completed", seq: 4 },
+        result: { status: "completed", content: "最终正文" },
+      });
+    }
+    if (path.endsWith("/api/chat/sessions/session_web/messages")) {
+      return response({
+        messages: [
+          { seq: 1, role: "user", content: "生成一段话", run_id: "run_thinking", created_at: "2026-08-20T07:01:00Z" },
+          { seq: 2, role: "assistant", content: "最终正文", run_id: "run_thinking", created_at: "2026-08-20T07:01:04Z" },
+        ],
+      });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  fireEvent.change(screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行"), {
+    target: { value: "生成一段话" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+
+  await flushReact();
+
+  expect(screen.getByText("正在搜索资料")).toBeInTheDocument();
+  expect(screen.getByText("思考过程").closest("details").open).toBe(true);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  await flushReact();
+
+  expect(screen.getByText("最终正文")).toBeInTheDocument();
+  expect(screen.getByText("思考过程").closest("details").open).toBe(false);
+});
+
 test("opens config.yaml as a native workspace text file", async () => {
   window.history.replaceState({}, "", "/workspace");
   global.fetch = vi.fn(async (url) => {
