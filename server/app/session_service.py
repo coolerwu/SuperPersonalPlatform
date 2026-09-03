@@ -274,7 +274,7 @@ class SessionService:
         *,
         agent_id: str,
         selected_active_key: str = "",
-        limit: int = 100,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         normalized_agent_id = str(agent_id or "").strip()
         selected_binding = self._find_active_binding(selected_active_key) if selected_active_key else None
@@ -294,8 +294,9 @@ class SessionService:
             summary["selected"] = session_id == selected_session_id
             sessions.append(summary)
         sessions.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
-        max_items = min(max(int(limit or 100), 1), 200)
-        return sessions[:max_items]
+        if limit is None:
+            return sessions
+        return sessions[: max(int(limit), 1)]
 
     def select_active_for_agent(
         self,
@@ -315,7 +316,7 @@ class SessionService:
             agent_id=agent_id,
         )
         target = _select_session_summary(
-            self.summaries_for_agent(agent_id=agent_id, selected_active_key=active_key, limit=200),
+            self.summaries_for_agent(agent_id=agent_id, selected_active_key=active_key),
             selector,
         )
         if target is None:

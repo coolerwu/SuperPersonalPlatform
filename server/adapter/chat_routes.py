@@ -76,7 +76,6 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         sessions = session_service.summaries_for_agent(
             agent_id=resolved_agent_id,
             selected_active_key=active_key,
-            limit=200,
         )
         return {"sessions": sessions}
 
