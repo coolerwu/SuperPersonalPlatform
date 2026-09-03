@@ -66,13 +66,17 @@ def create_chat_router(container: AppContainer) -> APIRouter:
     def list_chat_sessions(agent_id: str = "") -> dict[str, object]:
         session_service = SessionService(container.workspace)
         resolved_agent_id = _resolve_agent_id(container.workspace, agent_id)
-        sessions = session_service.related_summaries_for_identity(
+        active_key = session_service.build_session_id(
             channel=WEB_CHAT_CHANNEL,
             channel_account_id=WEB_CHAT_ACCOUNT,
             peer_type=WEB_CHAT_PEER_TYPE,
             peer_id=WEB_CHAT_PEER_ID,
             agent_id=resolved_agent_id,
-            limit=30,
+        )
+        sessions = session_service.summaries_for_agent(
+            agent_id=resolved_agent_id,
+            selected_active_key=active_key,
+            limit=200,
         )
         return {"sessions": sessions}
 
@@ -81,14 +85,13 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         session_service = SessionService(container.workspace)
         agent_id = _resolve_agent_id(container.workspace, payload.agent_id)
         try:
-            session = session_service.switch_active(
+            session = session_service.select_active_for_agent(
                 channel=WEB_CHAT_CHANNEL,
                 channel_account_id=WEB_CHAT_ACCOUNT,
                 peer_type=WEB_CHAT_PEER_TYPE,
                 peer_id=WEB_CHAT_PEER_ID,
                 agent_id=agent_id,
                 selector=payload.selector,
-                metadata={"source": "web_chat"},
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -114,10 +117,10 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         return {"session": session_service.session_summary(session.session_id), "messages": [], "active_run": None}
 
     @router.get("/sessions/{session_id}/messages")
-    def get_chat_messages(session_id: str) -> dict[str, object]:
+    def get_chat_messages(session_id: str, agent_id: str = "") -> dict[str, object]:
         session_service = SessionService(container.workspace)
-        if not session_service.exists(session_id):
-            raise HTTPException(status_code=404, detail="session not found")
+        resolved_agent_id = _resolve_agent_id(container.workspace, agent_id)
+        _require_session_for_agent(session_service, session_id, resolved_agent_id)
         return {"messages": session_service.read_messages(session_id, limit=120)}
 
     @router.post("/messages")
@@ -135,6 +138,8 @@ def create_chat_router(container: AppContainer) -> APIRouter:
                 metadata={"source": "web_chat"},
             )
             session_id = session.session_id
+        else:
+            _require_session_for_agent(session_service, session_id, agent_id)
         try:
             run = await container.run_service.create_run(
                 content=payload.content,
@@ -173,6 +178,15 @@ def _resolve_agent_id(workspace, raw_agent_id: str) -> str:
     if not agents:
         raise HTTPException(status_code=400, detail="no agents configured")
     return agents[0].id
+
+
+def _require_session_for_agent(session_service: SessionService, session_id: str, agent_id: str) -> dict[str, object]:
+    summary = session_service.session_summary(session_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="session not found")
+    if str(summary.get("agent_id") or "").strip() != agent_id:
+        raise HTTPException(status_code=404, detail="session not found for current agent")
+    return summary
 
 
 def _active_session_run(container: AppContainer, session: dict[str, object]) -> dict[str, object] | None:

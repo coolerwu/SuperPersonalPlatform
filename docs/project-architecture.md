@@ -142,11 +142,11 @@ POST /api/chat/session
 POST /api/chat/session/new
 GET /api/chat/sessions?agent_id={agent_id}
 POST /api/chat/session/change
-GET /api/chat/sessions/{session_id}/messages
+GET /api/chat/sessions/{session_id}/messages?agent_id={agent_id}
 POST /api/chat/messages
 ```
 
-页面 Chat 使用 `channel=web`、`channel_account_id=default`、`peer_type=private`、`peer_id=browser` 和当前 `agent_id` 在 `workspace/sessions/active.json` 中维护活跃长期会话。`GET /api/chat/sessions` 只列出同一 web 身份和当前 Agent 下的相关 session；`POST /api/chat/session/change` 复用 `SessionService.switch_active` 切换 active session，不允许前端打开任意 session ID。`POST /api/chat/session` 和 `POST /api/chat/session/change` 会在当前 session 的 `last_run_id` 仍处于 `queued/running` 时额外返回 `active_run`，让页面刷新或切换回来后可以显示 `partial.json` 并重新轮询事件。`POST /api/chat/messages` 创建 `source=web_chat` 的普通 DeepAgent run 并后台执行；前端随后只轮询 `/api/runs/{run_id}/events?after={seq}`，按 `assistant_delta` 事件增量更新 assistant 气泡，完成或失败后再读取 run 详情和 session messages 对齐最终历史。
+页面 Chat 使用 `channel=web`、`channel_account_id=default`、`peer_type=private`、`peer_id=browser` 和当前 `agent_id` 在 `workspace/sessions/active.json` 中维护页面当前选中的长期会话。`GET /api/chat/sessions` 列出当前 Agent 名下最多 200 个长期 session，包括微信、Web 和未来渠道；`POST /api/chat/session/change` 可以把 Web Chat 绑定到其中任意一个 session，但只更新 Web Chat 的 active binding，不改写 session 原始的渠道、账号和 peer 身份，也不改变微信侧 active binding。读取消息、切换和发送消息都校验 session 必须属于当前 Agent。`POST /api/chat/session` 和 `POST /api/chat/session/change` 会在当前 session 的 `last_run_id` 仍处于 `queued/running` 时额外返回 `active_run`，让页面刷新或切换回来后可以显示 `partial.json` 并重新轮询事件。`POST /api/chat/messages` 创建 `source=web_chat` 的普通 DeepAgent run 并后台执行；前端随后只轮询 `/api/runs/{run_id}/events?after={seq}`，按 `assistant_delta` 事件增量更新 assistant 气泡，完成或失败后再读取 run 详情和 session messages 对齐最终历史。
 
 Schedule 落盘模型：
 
@@ -211,7 +211,7 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 
 ## Frontend Routes
 
-- `/chat` 是页面 Chat 工作区，提供 Agent 选择、同身份历史 session 切换、新会话、文本输入和 assistant 流式气泡；消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 的 session 切换器使用应用内弹层列表，只展示当前 `web/default/private/browser + agent_id` 身份下的相关 session，并显示当前/历史、消息数、更新时间和短 session ID，不把微信或其它 Agent 的 session 混入当前对话。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。
+- `/chat` 是页面 Chat 工作区，提供 Agent 选择、该 Agent 全部长期 session 切换、新会话、文本输入和 assistant 流式气泡；session 列表展示微信/Web 等来源、渠道身份、消息数和更新时间，不展示其它 Agent 的 session。页面可以打开并续聊微信 session，但只改变 Web Chat 当前选择，不切换微信通道本身的活跃会话。消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。

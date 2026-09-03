@@ -358,7 +358,9 @@ function ChatPage() {
       );
       setActiveRunId("");
       if (session?.session_id) {
-        api(`/api/chat/sessions/${encodeURIComponent(session.session_id)}/messages`)
+        api(
+          `/api/chat/sessions/${encodeURIComponent(session.session_id)}/messages?agent_id=${encodeURIComponent(agentId || "")}`,
+        )
           .then((data) => {
             if (!cancelled) {
               setMessages((current) => carryChatAssistantRuntimeState(normalizeChatMessages(data.messages || []), current, runId));
@@ -560,15 +562,15 @@ function ChatPage() {
                 onClick={() => setSessionMenuOpen((open) => !open)}
                 disabled={Boolean(activeRunId) || chatSessions.length === 0}
                 aria-expanded={sessionMenuOpen}
-                title="切换历史会话"
+                title="切换 Agent 会话"
               >
                 <span>{formatSessionButton(session, chatSessions)}</span>
-                <small>同身份 {chatSessions.length || 1}</small>
+                <small>全部 {chatSessions.length || 1}</small>
                 <ChevronDown size={15} />
               </button>
               {sessionMenuOpen && !activeRunId ? (
-                <div className="session-menu" role="listbox" aria-label="历史会话">
-                  {chatSessions.map((item, index) => (
+                <div className="session-menu" role="listbox" aria-label="Agent 会话">
+                  {chatSessions.map((item) => (
                     <button
                       key={item.session_id}
                       type="button"
@@ -576,11 +578,12 @@ function ChatPage() {
                       onClick={() => changeSession(item.session_id).catch((exc) => setError(exc.message))}
                     >
                       <span className="session-option-title">
-                        <strong>{item.active ? "当前会话" : `历史 ${index + 1}`}</strong>
+                        <strong>{formatSessionSource(item)}</strong>
+                        {item.selected ? <span className="session-selected-badge">当前</span> : null}
                         <code>{shortSessionId(item.session_id)}</code>
                       </span>
                       <span className="session-option-meta">
-                        {Number(item.message_count || 0)} 条消息 · {formatTime(item.updated_at || item.created_at)}
+                        {formatSessionIdentity(item)} · {Number(item.message_count || 0)} 条消息 · {formatTime(item.updated_at || item.created_at)}
                       </span>
                     </button>
                   ))}
@@ -655,7 +658,7 @@ function ChatPage() {
           <RailRow label="Agent" value={agentId || "-"} />
           <RailRow label="Session" value={shortSessionId(session?.session_id || "") || "-"} />
           <RailRow label="消息数" value={session?.message_count ?? messages.length} />
-          <RailRow label="同身份会话" value={chatSessions.length || 1} />
+          <RailRow label="Agent 会话" value={chatSessions.length || 1} />
           <RailRow label="当前 Run" value={activeRunId || "-"} />
         </RailCard>
         <RailCard title="落盘路径" status="Context" tone="blue">
@@ -2314,10 +2317,27 @@ function normalizeChatMessages(items) {
 
 function formatSessionButton(session, sessions) {
   const current = sessions.find((item) => item.session_id === session?.session_id) || session || {};
-  const prefix = current.active === false ? "历史会话" : "当前会话";
+  const prefix = formatSessionSource(current);
   const count = Number(current.message_count ?? session?.message_count ?? 0);
   const updated = formatTime(current.updated_at || current.created_at || session?.updated_at || session?.created_at);
   return `${prefix} · ${count} 条 · ${updated}`;
+}
+
+function formatSessionSource(session) {
+  const channel = String(session?.channel || "").trim().toLowerCase();
+  if (channel === "wechat") return "微信";
+  if (channel === "web") return "Web Chat";
+  return channel || "会话";
+}
+
+function formatSessionIdentity(session) {
+  const channel = String(session?.channel || "").trim().toLowerCase();
+  if (channel === "web") return "浏览器";
+  const peerType = String(session?.peer_type || "").trim().toLowerCase();
+  const peerLabel = peerType === "group" ? "群聊" : peerType === "private" ? "私聊" : peerType || "未知身份";
+  const account = String(session?.channel_account_id || "").trim();
+  const peer = shortSessionId(session?.peer_id || "");
+  return [account && account !== "default" ? account : "", peerLabel, peer].filter(Boolean).join(" · ");
 }
 
 function shortSessionId(value) {

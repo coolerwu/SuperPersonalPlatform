@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from server.app.session_service import SessionService
 from server.infrastructure.fastapi_app import create_app
 
 
@@ -107,3 +108,80 @@ def test_chat_routes_list_and_change_web_sessions(tmp_path, monkeypatch) -> None
     assert payload["session"]["session_id"] == first_session_id
     assert payload["session"]["active"] is True
     assert payload["messages"][-1]["content"] == "旧会话内容"
+
+
+def test_chat_routes_include_wechat_sessions_for_agent_and_preserve_channel_identity(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    async def fake_execute_background(container, run_id: str) -> None:
+        container.system_log_service.append_line(f"fake chat run {run_id}")
+
+    monkeypatch.setattr("server.adapter.chat_routes._execute_background", fake_execute_background)
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+
+    web_response = client.post("/api/chat/session", json={"agent_id": "assistant"})
+    assert web_response.status_code == 200
+
+    session_service = SessionService(tmp_path)
+    wechat = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+    session_service.append_message(wechat.session_id, role="user", content="微信里的问题")
+
+    sessions_response = client.get("/api/chat/sessions?agent_id=assistant")
+    assert sessions_response.status_code == 200
+    wechat_summary = next(
+        item for item in sessions_response.json()["sessions"] if item["session_id"] == wechat.session_id
+    )
+    assert wechat_summary["channel"] == "wechat"
+    assert wechat_summary["selected"] is False
+
+    change_response = client.post(
+        "/api/chat/session/change",
+        json={"agent_id": "assistant", "selector": wechat.session_id},
+    )
+    assert change_response.status_code == 200
+    assert change_response.json()["messages"][-1]["content"] == "微信里的问题"
+
+    restored_response = client.post("/api/chat/session", json={"agent_id": "assistant"})
+    assert restored_response.status_code == 200
+    assert restored_response.json()["session"]["session_id"] == wechat.session_id
+    persisted = session_service.session_summary(wechat.session_id)
+    assert persisted["channel"] == "wechat"
+    assert persisted["peer_id"] == "wxid_user"
+
+
+def test_chat_routes_reject_sessions_owned_by_another_agent(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    async def fake_execute_background(container, run_id: str) -> None:
+        container.system_log_service.append_line(f"fake chat run {run_id}")
+
+    monkeypatch.setattr("server.adapter.chat_routes._execute_background", fake_execute_background)
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+
+    other = SessionService(tmp_path).get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_other",
+        agent_id="other",
+    )
+
+    assert client.get(
+        f"/api/chat/sessions/{other.session_id}/messages?agent_id=assistant"
+    ).status_code == 404
+    assert client.post(
+        "/api/chat/session/change",
+        json={"agent_id": "assistant", "selector": other.session_id},
+    ).status_code == 404
+    assert client.post(
+        "/api/chat/messages",
+        json={"agent_id": "assistant", "session_id": other.session_id, "content": "越界消息"},
+    ).status_code == 404

@@ -63,35 +63,48 @@ class SessionService:
         if binding:
             session_id = str(binding.get("session_id") or "").strip()
             if session_id and self.exists(session_id):
-                state = self._touch_session(
-                    session_id,
-                    channel=channel,
-                    channel_account_id=channel_account_id,
-                    peer_type=peer_type,
-                    peer_id=peer_id,
-                    agent_id=agent_id,
-                    active_key=active_key,
-                    generation=int(binding.get("generation") or 1),
-                    metadata=metadata,
-                )
-                self._upsert_active_binding(
-                    active_key=active_key,
-                    session_id=session_id,
-                    channel=channel,
-                    channel_account_id=channel_account_id,
-                    peer_type=peer_type,
-                    peer_id=peer_id,
-                    agent_id=agent_id,
-                    generation=int(state.get("generation") or binding.get("generation") or 1),
-                )
-                return SessionIdentity(
-                    session_id=session_id,
-                    channel=channel,
-                    channel_account_id=channel_account_id,
-                    peer_type=peer_type,
-                    peer_id=peer_id,
-                    agent_id=agent_id,
-                )
+                current = self._read_state(session_id)
+                if str(current.get("agent_id") or "").strip() == agent_id:
+                    if self._summary_matches_identity(
+                        current,
+                        active_key=active_key,
+                        channel=channel,
+                        channel_account_id=channel_account_id,
+                        peer_type=peer_type,
+                        peer_id=peer_id,
+                        agent_id=agent_id,
+                    ):
+                        self._touch_session(
+                            session_id,
+                            channel=channel,
+                            channel_account_id=channel_account_id,
+                            peer_type=peer_type,
+                            peer_id=peer_id,
+                            agent_id=agent_id,
+                            active_key=active_key,
+                            generation=int(binding.get("generation") or 1),
+                            metadata=metadata,
+                        )
+                    else:
+                        self._activate_session(session_id)
+                    self._upsert_active_binding(
+                        active_key=active_key,
+                        session_id=session_id,
+                        channel=channel,
+                        channel_account_id=channel_account_id,
+                        peer_type=peer_type,
+                        peer_id=peer_id,
+                        agent_id=agent_id,
+                        generation=int(binding.get("generation") or 1),
+                    )
+                    return SessionIdentity(
+                        session_id=session_id,
+                        channel=channel,
+                        channel_account_id=channel_account_id,
+                        peer_type=peer_type,
+                        peer_id=peer_id,
+                        agent_id=agent_id,
+                    )
 
         legacy_session_id = active_key
         if self.exists(legacy_session_id):
@@ -169,17 +182,7 @@ class SessionService:
         if not old_session_id and self.exists(active_key):
             old_session_id = active_key
             generation = 1
-        now = _now()
-        if old_session_id and self.exists(old_session_id):
-            state = self._read_state(old_session_id)
-            state["status"] = "archived"
-            state["cleared_at"] = now
-            state["clear_reason"] = reason
-            state["updated_at"] = now
-            _write_json(self._session_dir(old_session_id) / "state.json", state)
-            self._upsert_index(state)
-
-        return self._create_session(
+        session = self._create_session(
             session_id=self._new_session_id(
                 channel=channel,
                 channel_account_id=channel_account_id,
@@ -196,6 +199,8 @@ class SessionService:
             generation=generation + 1,
             metadata=metadata,
         )
+        self._archive_if_unbound(old_session_id, reason=reason)
+        return session
 
     def active_summary(
         self,
@@ -264,6 +269,80 @@ class SessionService:
         max_items = min(max(int(limit or 10), 1), 30)
         return related[:max_items]
 
+    def summaries_for_agent(
+        self,
+        *,
+        agent_id: str,
+        selected_active_key: str = "",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        normalized_agent_id = str(agent_id or "").strip()
+        selected_binding = self._find_active_binding(selected_active_key) if selected_active_key else None
+        selected_session_id = str(selected_binding.get("session_id") or "").strip() if selected_binding else ""
+        active_session_ids = self._active_session_ids()
+        sessions: list[dict[str, Any]] = []
+        for item in self._read_index().get("sessions", []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("agent_id") or "").strip() != normalized_agent_id:
+                continue
+            session_id = str(item.get("session_id") or "").strip()
+            if not session_id or not self.exists(session_id):
+                continue
+            summary = dict(item)
+            summary["active"] = session_id in active_session_ids
+            summary["selected"] = session_id == selected_session_id
+            sessions.append(summary)
+        sessions.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+        max_items = min(max(int(limit or 100), 1), 200)
+        return sessions[:max_items]
+
+    def select_active_for_agent(
+        self,
+        *,
+        channel: str,
+        channel_account_id: str,
+        peer_type: str,
+        peer_id: str,
+        agent_id: str,
+        selector: str,
+    ) -> dict[str, Any]:
+        active_key = self.build_session_id(
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+        )
+        target = _select_session_summary(
+            self.summaries_for_agent(agent_id=agent_id, selected_active_key=active_key, limit=200),
+            selector,
+        )
+        if target is None:
+            raise ValueError("session not found for current agent")
+
+        target_id = str(target.get("session_id") or "").strip()
+        current_binding = self._find_active_binding(active_key)
+        current_id = str(current_binding.get("session_id") or "").strip() if current_binding else ""
+        generation = int(current_binding.get("generation") or 1) if current_binding else 1
+        self._activate_session(target_id)
+        self._upsert_active_binding(
+            active_key=active_key,
+            session_id=target_id,
+            channel=channel,
+            channel_account_id=channel_account_id,
+            peer_type=peer_type,
+            peer_id=peer_id,
+            agent_id=agent_id,
+            generation=generation,
+        )
+        if current_id and current_id != target_id:
+            self._archive_if_unbound(current_id)
+        summary = self.session_summary(target_id)
+        summary["active"] = True
+        summary["selected"] = True
+        return summary
+
     def switch_active(
         self,
         *,
@@ -302,13 +381,6 @@ class SessionService:
             agent_id=agent_id,
         )
         current_id = str(current.get("session_id") or "").strip()
-        now = _now()
-        if current_id and current_id != target_id and self.exists(current_id):
-            current_state = self._read_state(current_id)
-            current_state["status"] = "archived"
-            current_state["updated_at"] = now
-            _write_json(self._session_dir(current_id) / "state.json", current_state)
-            self._upsert_index(current_state)
         target_state = self._touch_session(
             target_id,
             channel=channel,
@@ -330,6 +402,8 @@ class SessionService:
             agent_id=agent_id,
             generation=int(target_state.get("generation") or target.get("generation") or 1),
         )
+        if current_id and current_id != target_id:
+            self._archive_if_unbound(current_id)
         summary = dict(target_state)
         summary["active"] = True
         return summary
@@ -428,6 +502,28 @@ class SessionService:
         _write_json(state_path, state)
         self._upsert_index(state)
         return state
+
+    def _activate_session(self, session_id: str) -> dict[str, Any]:
+        state = self._read_state(session_id)
+        if str(state.get("status") or "") != "active":
+            state["status"] = "active"
+            state["updated_at"] = _now()
+            _write_json(self._session_dir(session_id) / "state.json", state)
+            self._upsert_index(state)
+        return state
+
+    def _archive_if_unbound(self, session_id: str, *, reason: str = "") -> None:
+        if not session_id or not self.exists(session_id) or session_id in self._active_session_ids():
+            return
+        state = self._read_state(session_id)
+        now = _now()
+        state["status"] = "archived"
+        state["updated_at"] = now
+        if reason:
+            state["cleared_at"] = now
+            state["clear_reason"] = reason
+        _write_json(self._session_dir(session_id) / "state.json", state)
+        self._upsert_index(state)
 
     def append_message(
         self,

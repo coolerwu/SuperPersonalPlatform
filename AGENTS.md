@@ -36,7 +36,7 @@
 
 ## 本轮重构易错点
 
-- “session”一词要区分清楚：`workspace/channels/wechat/sessions/{account_id}.json` 只表示微信登录态；长期聊天历史统一放在 `workspace/sessions/{session_id}/`，run 只引用 `session_id`。
+- “session”一词要区分清楚：`workspace/channels/wechat/sessions/{account_id}.json` 只表示微信登录态；长期聊天历史统一放在 `workspace/sessions/{session_id}/`，run 只引用 `session_id`。`sessions/active.json` 的多个渠道 binding 可以指向同一个长期 session；Web Chat 选择微信 session 时只能更新 Web binding，不能改写该 session 原始的渠道、账号和 peer 身份。
 - `/workspace` 是原生文件浏览和文本编辑，不承载 `config.yaml` 的可视化表单；配置可视化只放在 `/config` 主菜单下的基础配置、Providers、Agents 栏目。
 - Runs 页面通过 1 分钟轮询读取落盘状态；轮询更新必须保留当前详情快照，只在内容实际变化时替换，避免短暂重刷、`unknown` 闪动或结果预览丢失。
 - React 表单列表不要用会随输入变化的字段作为 key，例如 Provider/Agent 的 `id`；否则输入一个字符会 remount 并丢焦点。

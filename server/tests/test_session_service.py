@@ -172,3 +172,104 @@ def test_session_service_lists_and_switches_only_matching_identity(tmp_path) -> 
         assert "session not found" in str(exc)
     else:
         raise AssertionError("expected identity boundary to reject unrelated session")
+
+
+def test_session_service_lists_and_selects_all_sessions_for_agent_without_rewriting_origin(tmp_path) -> None:
+    service = SessionService(tmp_path)
+    web = service.get_or_create(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+    )
+    wechat = service.get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+    other_agent = service.get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_other",
+        agent_id="other",
+    )
+    web_active_key = service.build_session_id(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+    )
+
+    sessions = service.summaries_for_agent(
+        agent_id="assistant",
+        selected_active_key=web_active_key,
+    )
+    session_ids = {item["session_id"] for item in sessions}
+
+    assert web.session_id in session_ids
+    assert wechat.session_id in session_ids
+    assert other_agent.session_id not in session_ids
+    assert next(item for item in sessions if item["session_id"] == web.session_id)["selected"] is True
+
+    selected = service.select_active_for_agent(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+        selector=wechat.session_id,
+    )
+    restored = service.get_or_create(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+    )
+    wechat_state = json.loads(
+        (tmp_path / "sessions" / wechat.session_id / "state.json").read_text(encoding="utf-8")
+    )
+
+    assert selected["session_id"] == wechat.session_id
+    assert restored.session_id == wechat.session_id
+    assert wechat_state["channel"] == "wechat"
+    assert wechat_state["channel_account_id"] == "main"
+    assert wechat_state["peer_id"] == "wxid_user"
+    assert wechat_state["active_key"] != web_active_key
+    assert service.session_summary(web.session_id)["status"] == "archived"
+
+
+def test_clearing_web_binding_does_not_archive_session_still_active_in_wechat(tmp_path) -> None:
+    service = SessionService(tmp_path)
+    wechat = service.get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+    service.select_active_for_agent(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+        selector=wechat.session_id,
+    )
+
+    created = service.clear_active(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+        reason="web chat new session",
+    )
+
+    assert created.session_id != wechat.session_id
+    assert service.session_summary(wechat.session_id)["status"] == "active"
