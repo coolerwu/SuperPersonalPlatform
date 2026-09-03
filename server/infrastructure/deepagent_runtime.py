@@ -12,6 +12,10 @@ from server.domain.run_events import (
     RunEventType,
     StreamFallbackPayload,
 )
+from server.infrastructure.agent_filesystem_backend import (
+    AGENT_WORKSPACE_DIRECTORIES,
+    AgentFilesystemBackend,
+)
 from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
 
 
@@ -58,6 +62,14 @@ message text
 </delivery-item>
 
 Do not put introductions, summaries, or extra prose outside the delivery-item blocks unless the user specifically asked for a single combined response. Each block should be readable as a standalone message.
+"""
+
+AGENT_FILESYSTEM_PROMPT = """## Agent Filesystem
+
+The virtual `/` is already your private agent workspace. Do not create another `/workspace` directory.
+You may create and modify content only inside these managed directories: `/artifacts/`, `/improvements/`, `/meditations/`, `/memories/`, `/notes/`, `/scratch/`, and `/skills/`.
+Use `/artifacts/` for durable task outputs and `/scratch/` for temporary working files.
+Filesystem permission errors are recoverable tool observations. Use one of the managed paths instead of retrying the denied path.
 """
 
 
@@ -134,15 +146,13 @@ class DeepAgentRuntime:
             raise ValueError("messages are required")
         try:
             from deepagents import create_deep_agent
-            from deepagents.backends import FilesystemBackend
             from langchain_core.messages import AIMessage, HumanMessage
         except Exception as exc:
             raise RuntimeError("DeepAgent runtime requires the deepagents package") from exc
 
         self._agent_workspace.mkdir(parents=True, exist_ok=True)
-        (self._agent_workspace / "skills").mkdir(parents=True, exist_ok=True)
-        (self._agent_workspace / "memories").mkdir(parents=True, exist_ok=True)
-        (self._agent_workspace / "improvements").mkdir(parents=True, exist_ok=True)
+        for directory in AGENT_WORKSPACE_DIRECTORIES:
+            (self._agent_workspace / directory).mkdir(parents=True, exist_ok=True)
         memory_sources = _longterm_memory_sources(self._agent_workspace, options)
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
@@ -153,7 +163,7 @@ class DeepAgentRuntime:
             ),
             "model": self._chat_model(),
             "system_prompt": _runtime_instructions(instructions, options),
-            "backend": FilesystemBackend(root_dir=self._agent_workspace, virtual_mode=True),
+            "backend": AgentFilesystemBackend(root_dir=self._agent_workspace, virtual_mode=True),
             "skills": ["/skills/"],
         }
         if memory_sources:
@@ -367,7 +377,7 @@ def _content_to_text(content: Any) -> str:
 
 
 def _runtime_instructions(instructions: str, options: DeepAgentRuntimeOptions) -> str:
-    sections = [instructions.strip()]
+    sections = [instructions.strip(), AGENT_FILESYSTEM_PROMPT]
     if "browser_extract" in options.tools:
         sections.append(BROWSER_RESEARCH_PROMPT)
     if options.use_longterm_memory:

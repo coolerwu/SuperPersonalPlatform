@@ -2,6 +2,10 @@ import asyncio
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
 from server.domain.run_events import DeepAgentMessageDeltaPayload, RunEventType
+from server.infrastructure.agent_filesystem_backend import (
+    AGENT_WORKSPACE_DIRECTORIES,
+    AgentFilesystemBackend,
+)
 from server.infrastructure.deepagent_runtime import (
     DeepAgentRuntime,
     DeepAgentRuntimeOptions,
@@ -98,6 +102,7 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     assert captured["create_kwargs"]["skills"] == ["/skills/"]
     assert captured["create_kwargs"]["memory"] == [MEMORY_INDEX_PATH]
     assert captured["create_kwargs"]["backend"].cwd == agent_dir.resolve()
+    assert isinstance(captured["create_kwargs"]["backend"], AgentFilesystemBackend)
     assert captured["create_kwargs"]["backend"].virtual_mode is True
     middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
     assert middleware_names[0] == "TodoListMiddleware"
@@ -105,10 +110,64 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     assert "store" not in captured["create_kwargs"]
     assert "use_longterm_memory" not in captured["create_kwargs"]
     assert "files" not in captured["input_state"]
-    assert (agent_dir / "skills").is_dir()
-    assert (agent_dir / "memories").is_dir()
-    assert (agent_dir / "improvements").is_dir()
+    assert all((agent_dir / directory).is_dir() for directory in AGENT_WORKSPACE_DIRECTORIES)
     assert (agent_dir / "memories" / "AGENTS.md").is_file()
+
+
+def test_agent_filesystem_backend_restricts_mutations_to_managed_directories(tmp_path) -> None:
+    backend = AgentFilesystemBackend(root_dir=tmp_path, virtual_mode=True)
+    for directory in AGENT_WORKSPACE_DIRECTORIES:
+        (tmp_path / directory).mkdir()
+
+    allowed = backend.write("/artifacts/web-dev/index.html", "ok")
+    denied_nested_workspace = backend.write("/workspace/web-dev/index.html", "bad")
+    denied_root_file = backend.write("/README.md", "bad")
+    denied_traversal = backend.write("/artifacts/../../outside.txt", "bad")
+
+    assert allowed.error is None
+    assert (tmp_path / "artifacts" / "web-dev" / "index.html").read_text(encoding="utf-8") == "ok"
+    assert "Permission denied" in str(denied_nested_workspace.error)
+    assert "virtual '/' is already" in str(denied_nested_workspace.error)
+    assert "Writable directories" in str(denied_root_file.error)
+    assert "invalid or escapes" in str(denied_traversal.error)
+    assert not (tmp_path / "workspace").exists()
+    assert not (tmp_path / "README.md").exists()
+
+
+def test_agent_filesystem_backend_keeps_legacy_top_level_content_read_only(tmp_path) -> None:
+    backend = AgentFilesystemBackend(root_dir=tmp_path, virtual_mode=True)
+    legacy_file = tmp_path / "workspace" / "web-dev" / "index.html"
+    legacy_file.parent.mkdir(parents=True)
+    legacy_file.write_text("legacy", encoding="utf-8")
+
+    read_result = backend.read("/workspace/web-dev/index.html")
+    edit_result = backend.edit("/workspace/web-dev/index.html", "legacy", "changed")
+    delete_result = backend.delete("/workspace/web-dev/index.html")
+
+    assert read_result.error is None
+    assert read_result.file_data["content"] == "legacy"
+    assert "Permission denied" in str(edit_result.error)
+    assert "Permission denied" in str(delete_result.error)
+    assert legacy_file.read_text(encoding="utf-8") == "legacy"
+
+
+def test_agent_filesystem_backend_protects_managed_roots_and_uploaded_files(tmp_path) -> None:
+    backend = AgentFilesystemBackend(root_dir=tmp_path, virtual_mode=True)
+    (tmp_path / "notes").mkdir()
+
+    uploaded = backend.upload_files(
+        [
+            ("/notes/reference.bin", b"ok"),
+            ("/workspace/reference.bin", b"bad"),
+        ]
+    )
+    delete_root = backend.delete("/notes")
+
+    assert uploaded[0].error is None
+    assert uploaded[1].error is not None
+    assert (tmp_path / "notes" / "reference.bin").read_bytes() == b"ok"
+    assert not (tmp_path / "workspace").exists()
+    assert "cannot be deleted" in str(delete_root.error)
 
 
 def test_runtime_adds_skill_improvement_middleware_by_default(tmp_path, monkeypatch) -> None:
