@@ -268,22 +268,55 @@ def test_runtime_streams_agent_messages_when_available(tmp_path, monkeypatch) ->
     assert captured["events"][0].payload.node == "model"
 
 
-def test_skill_improvement_middleware_appends_prompt() -> None:
+def test_skill_improvement_middleware_wraps_sync_model_call() -> None:
     from langchain_core.messages import SystemMessage
 
     class FakeRequest:
         system_message = SystemMessage(content="base")
 
         def override(self, **kwargs):
-            return kwargs["system_message"]
+            request = FakeRequest()
+            request.system_message = kwargs["system_message"]
+            return request
 
-    system_message = SkillImprovementMiddleware().modify_request(FakeRequest())
+    captured = {}
 
+    def handler(request):
+        captured["request"] = request
+        return "sync response"
+
+    response = SkillImprovementMiddleware().wrap_model_call(FakeRequest(), handler)
+    system_message = captured["request"].system_message
+
+    assert response == "sync response"
     assert "base" in system_message.text
     assert SKILL_IMPROVEMENT_PROMPT in system_message.text
     assert "Memory is handled separately by MemoryMiddleware" in system_message.text
     assert "/skills/{skill_id}/SKILL.md" in system_message.text
     assert "/improvements/changes/{timestamp}_{change_id}.json" in system_message.text
+
+
+def test_skill_improvement_middleware_wraps_async_model_call() -> None:
+    from langchain_core.messages import SystemMessage
+
+    class FakeRequest:
+        system_message = SystemMessage(content="base")
+
+        def override(self, **kwargs):
+            request = FakeRequest()
+            request.system_message = kwargs["system_message"]
+            return request
+
+    captured = {}
+
+    async def handler(request):
+        captured["request"] = request
+        return "async response"
+
+    response = asyncio.run(SkillImprovementMiddleware().awrap_model_call(FakeRequest(), handler))
+
+    assert response == "async response"
+    assert SKILL_IMPROVEMENT_PROMPT in captured["request"].system_message.text
 
 
 def test_runtime_uses_sqlite_checkpointer_when_thread_id_is_provided(tmp_path, monkeypatch) -> None:
