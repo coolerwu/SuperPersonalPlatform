@@ -3,7 +3,12 @@ import json
 
 from server.app.run_service import RunService
 from server.app.session_service import SessionService
-from server.domain.run_events import DeepAgentGraphUpdatePayload, DeepAgentMessageDeltaPayload, RunEventType
+from server.domain.run_events import (
+    DeepAgentGraphUpdatePayload,
+    DeepAgentMessageDeltaPayload,
+    DeepAgentSubagentResponsePayload,
+    RunEventType,
+)
 from server.infrastructure.deepagent_runtime import DeepAgentStreamEvent
 
 
@@ -123,6 +128,18 @@ def test_run_service_persists_streaming_thinking_snapshot(tmp_path, monkeypatch)
                 DeepAgentGraphUpdatePayload(nodes=("agent",), preview="正在搜索资料"),
             )
         )
+        stream_callback(
+            DeepAgentStreamEvent(
+                RunEventType.SUBAGENT_RESPONSE,
+                DeepAgentSubagentResponsePayload(
+                    content="已完成资料核对",
+                    namespace=("tools:task-123",),
+                    agent="researcher",
+                    node="model",
+                    source_class="AIMessage",
+                ),
+            )
+        )
         stream_callback(DeepAgentStreamEvent(RunEventType.ASSISTANT_DELTA, DeepAgentMessageDeltaPayload(delta="正文")))
         return "最终正文"
 
@@ -134,9 +151,22 @@ def test_run_service_persists_streaming_thinking_snapshot(tmp_path, monkeypatch)
 
     assert completed["partial"]["status"] == "completed"
     assert completed["partial"]["content"] == "最终正文"
-    assert completed["partial"]["thinking"] == ["DeepAgent started", "正在搜索资料"]
+    assert completed["partial"]["thinking"] == [
+        "DeepAgent started",
+        "正在搜索资料",
+        "子 Agent researcher：已完成资料核对",
+    ]
     assert completed["partial"]["thinking_status"] == "completed"
     assert completed["partial"]["thinking_collapsed"] is True
+    subagent_events = [event for event in service.get_events(run["run_id"], after=0) if event["type"] == "subagent_response"]
+    assert subagent_events[0]["payload"] == {
+        "agent": "researcher",
+        "content": "已完成资料核对",
+        "kind": "deepagent_subagent_response",
+        "namespace": ("tools:task-123",),
+        "node": "model",
+        "source_class": "AIMessage",
+    }
 
 
 def test_run_service_finds_latest_active_schedule_run(tmp_path) -> None:

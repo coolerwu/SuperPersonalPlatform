@@ -10,6 +10,7 @@ class RunEventType(StrEnum):
     RUNNING = "running"
     ASSISTANT_DELTA = "assistant_delta"
     AGENT_UPDATE = "agent_update"
+    SUBAGENT_RESPONSE = "subagent_response"
     STREAM_FALLBACK = "stream_fallback"
     IMAGE_ATTACHMENTS_TEXTIFIED = "image_attachments_textified"
     COMPLETED = "completed"
@@ -70,6 +71,17 @@ class DeepAgentGraphUpdatePayload(RunEventPayload):
 
 
 @dataclass(frozen=True)
+class DeepAgentSubagentResponsePayload(RunEventPayload):
+    kind = "deepagent_subagent_response"
+
+    content: str
+    namespace: tuple[str, ...]
+    agent: str = ""
+    node: str = ""
+    source_class: str = ""
+
+
+@dataclass(frozen=True)
 class StreamFallbackPayload(RunEventPayload):
     kind = "deepagent_stream_fallback"
 
@@ -122,6 +134,16 @@ def run_event_payload_from_json(event_type: str, payload: Any) -> RunEventPayloa
         return DeepAgentGraphUpdatePayload(
             nodes=nodes,
             preview=str(data.get("preview") or ""),
+            source_class=str(data.get("source_class") or ""),
+        )
+    if event_type == RunEventType.SUBAGENT_RESPONSE:
+        raw_namespace = data.get("namespace") or ()
+        namespace = tuple(str(item) for item in raw_namespace) if isinstance(raw_namespace, list | tuple) else ()
+        return DeepAgentSubagentResponsePayload(
+            content=str(data.get("content") or ""),
+            namespace=namespace,
+            agent=str(data.get("agent") or ""),
+            node=str(data.get("node") or ""),
             source_class=str(data.get("source_class") or ""),
         )
     if event_type == RunEventType.STREAM_FALLBACK:

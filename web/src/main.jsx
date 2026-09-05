@@ -2484,6 +2484,12 @@ function runEventThinkingText(event) {
     const nodes = Array.isArray(payload.nodes) ? payload.nodes.filter(Boolean).join(", ") : "";
     return nodes ? `图节点更新：${nodes}` : "DeepAgent 状态已更新";
   }
+  if (event?.type === "subagent_response") {
+    const label = String(payload.agent || "sub-agent");
+    const content = String(payload.content || "").trim();
+    const preview = content.length > 1_000 ? `${content.slice(0, 1_000)}...` : content;
+    return preview ? `子 Agent ${label}：${preview}` : `子 Agent ${label} 已完成`;
+  }
   if (event?.type === "stream_fallback") {
     return payload.message || "当前运行时不支持增量流，已切换为最终结果模式";
   }

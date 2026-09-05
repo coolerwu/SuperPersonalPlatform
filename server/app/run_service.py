@@ -14,6 +14,7 @@ from server.domain.agent_config import AgentConfigError, AgentDefinition, ModelD
 from server.domain.run_events import (
     DeepAgentGraphUpdatePayload,
     DeepAgentMessageDeltaPayload,
+    DeepAgentSubagentResponsePayload,
     ImageAttachmentsTextifiedPayload,
     RunErrorPayload,
     RunEventPayload,
@@ -616,6 +617,12 @@ def _thinking_text(event_type: RunEventType | str, payload: RunEventPayload) -> 
             return payload.preview
         nodes = ", ".join(item for item in payload.nodes if item)
         return f"图节点更新：{nodes}" if nodes else "DeepAgent 状态已更新"
+    if event_type == RunEventType.SUBAGENT_RESPONSE and isinstance(payload, DeepAgentSubagentResponsePayload):
+        label = payload.agent or "sub-agent"
+        content = payload.content.strip()
+        if len(content) > 1000:
+            content = f"{content[:1000]}..."
+        return f"子 Agent {label}：{content}" if content else f"子 Agent {label} 已完成"
     if event_type == RunEventType.STREAM_FALLBACK:
         message = getattr(payload, "message", "")
         return str(message or "当前运行时不支持增量流，已切换为最终结果模式")

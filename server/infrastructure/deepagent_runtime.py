@@ -8,6 +8,7 @@ from server.domain.agent_config import ModelDefinition, ModelProvider
 from server.domain.run_events import (
     DeepAgentGraphUpdatePayload,
     DeepAgentMessageDeltaPayload,
+    DeepAgentSubagentResponsePayload,
     RunEventPayload,
     RunEventType,
     StreamFallbackPayload,
@@ -115,6 +116,13 @@ class DeepAgentStreamEvent:
     payload: RunEventPayload
 
 
+@dataclass(frozen=True)
+class _LangGraphStreamPart:
+    namespace: tuple[str, ...]
+    mode: str
+    data: Any
+
+
 class DeepAgentRuntime:
     def __init__(
         self,
@@ -210,26 +218,45 @@ class DeepAgentRuntime:
 
         final_result: Any = None
         stream_started = False
+        subagent_names: dict[tuple[str, ...], str] = {}
+        subagent_responses: set[str] = set()
         try:
             async for chunk in agent.astream(
                 input_state,
                 config=invoke_config,
                 stream_mode=["messages", "updates", "values"],
+                subgraphs=True,
             ):
                 stream_started = True
-                mode, data = _split_langgraph_stream_part(chunk)
-                if mode == "messages":
-                    event = _message_delta_event(data)
+                part = _split_langgraph_stream_part(chunk)
+                if part.namespace:
+                    if part.mode == "messages":
+                        agent_name = _message_agent_name(part.data)
+                        if agent_name:
+                            subagent_names[part.namespace] = agent_name
+                    elif part.mode == "updates":
+                        event = _subagent_response_event(
+                            part.data,
+                            namespace=part.namespace,
+                            agent=subagent_names.get(part.namespace, ""),
+                        )
+                        if event:
+                            if isinstance(event.payload, DeepAgentSubagentResponsePayload):
+                                subagent_responses.add(event.payload.content)
+                            _emit_stream_event(stream_callback, event)
+                    continue
+                if part.mode == "messages":
+                    event = _message_delta_event(part.data)
                     if event:
                         _emit_stream_event(stream_callback, event)
                     continue
-                if mode == "updates":
-                    event = _update_event(data)
+                if part.mode == "updates":
+                    event = _update_event(part.data, suppressed_previews=subagent_responses)
                     if event:
                         _emit_stream_event(stream_callback, event)
                     continue
-                if mode == "values":
-                    final_result = data
+                if part.mode == "values":
+                    final_result = part.data
         except TypeError as exc:
             if stream_started:
                 raise
@@ -291,14 +318,27 @@ class DeepAgentRuntime:
         return str(result)
 
 
-def _split_langgraph_stream_part(chunk: Any) -> tuple[str, Any]:
+def _split_langgraph_stream_part(chunk: Any) -> _LangGraphStreamPart:
     if isinstance(chunk, dict):
         stream_type = chunk.get("type")
         if stream_type in {"messages", "updates", "values"} and "data" in chunk:
-            return str(stream_type), chunk["data"]
+            raw_namespace = chunk.get("namespace") or ()
+            namespace = tuple(str(item) for item in raw_namespace) if isinstance(raw_namespace, list | tuple) else ()
+            return _LangGraphStreamPart(namespace=namespace, mode=str(stream_type), data=chunk["data"])
+    if (
+        isinstance(chunk, tuple)
+        and len(chunk) == 3
+        and isinstance(chunk[0], tuple)
+        and isinstance(chunk[1], str)
+    ):
+        return _LangGraphStreamPart(
+            namespace=tuple(str(item) for item in chunk[0]),
+            mode=chunk[1],
+            data=chunk[2],
+        )
     if isinstance(chunk, tuple) and len(chunk) == 2 and isinstance(chunk[0], str):
-        return chunk[0], chunk[1]
-    return "values", chunk
+        return _LangGraphStreamPart(namespace=(), mode=chunk[0], data=chunk[1])
+    return _LangGraphStreamPart(namespace=(), mode="values", data=chunk)
 
 
 def _emit_stream_event(callback: Callable[[DeepAgentStreamEvent], None], event: DeepAgentStreamEvent) -> None:
@@ -309,12 +349,7 @@ def _emit_stream_event(callback: Callable[[DeepAgentStreamEvent], None], event: 
 
 
 def _message_delta_event(data: Any) -> DeepAgentStreamEvent | None:
-    message = data
-    metadata: dict[str, Any] = {}
-    if isinstance(data, tuple) and len(data) == 2:
-        message, raw_metadata = data
-        if isinstance(raw_metadata, dict):
-            metadata = raw_metadata
+    message, metadata = _message_and_metadata(data)
     text = _content_to_text(getattr(message, "content", message))
     if not text:
         return None
@@ -331,11 +366,64 @@ def _message_delta_event(data: Any) -> DeepAgentStreamEvent | None:
     )
 
 
-def _update_event(data: Any) -> DeepAgentStreamEvent | None:
+def _message_and_metadata(data: Any) -> tuple[Any, dict[str, Any]]:
+    if isinstance(data, tuple) and len(data) == 2:
+        message, raw_metadata = data
+        return message, raw_metadata if isinstance(raw_metadata, dict) else {}
+    return data, {}
+
+
+def _message_agent_name(data: Any) -> str:
+    _, metadata = _message_and_metadata(data)
+    return str(metadata.get("lc_agent_name") or metadata.get("checkpoint_ns") or "").strip()
+
+
+def _subagent_response_event(
+    data: Any,
+    *,
+    namespace: tuple[str, ...],
+    agent: str,
+) -> DeepAgentStreamEvent | None:
+    node, message = _latest_ai_message(data)
+    if message is None:
+        return None
+    content = _content_to_text(getattr(message, "content", None)).strip()
+    if not content:
+        return None
+    return DeepAgentStreamEvent(
+        RunEventType.SUBAGENT_RESPONSE,
+        DeepAgentSubagentResponsePayload(
+            content=content,
+            namespace=namespace,
+            agent=agent,
+            node=node,
+            source_class=message.__class__.__name__,
+        ),
+    )
+
+
+def _latest_ai_message(value: Any) -> tuple[str, Any | None]:
+    if not isinstance(value, dict):
+        return "", None
+    messages = value.get("messages")
+    if isinstance(messages, list) and messages:
+        message = messages[-1]
+        if getattr(message, "type", "") == "ai":
+            return "", message
+    for key, item in reversed(tuple(value.items())):
+        node, message = _latest_ai_message(item)
+        if message is not None:
+            return node or str(key), message
+    return "", None
+
+
+def _update_event(data: Any, *, suppressed_previews: set[str] | None = None) -> DeepAgentStreamEvent | None:
     if not isinstance(data, dict) or not data:
         return None
     nodes = tuple(str(key) for key in data.keys())
     preview = _content_to_text(_latest_message_content(data))
+    if preview.strip() in (suppressed_previews or set()):
+        preview = ""
     return DeepAgentStreamEvent(
         RunEventType.AGENT_UPDATE,
         DeepAgentGraphUpdatePayload(

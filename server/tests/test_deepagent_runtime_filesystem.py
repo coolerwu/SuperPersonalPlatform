@@ -1,7 +1,7 @@
 import asyncio
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
-from server.domain.run_events import DeepAgentMessageDeltaPayload, RunEventType
+from server.domain.run_events import DeepAgentMessageDeltaPayload, DeepAgentSubagentResponsePayload, RunEventType
 from server.infrastructure.agent_filesystem_backend import (
     AGENT_WORKSPACE_DIRECTORIES,
     AgentFilesystemBackend,
@@ -214,10 +214,11 @@ def test_runtime_streams_agent_messages_when_available(tmp_path, monkeypatch) ->
     captured = {"events": []}
 
     class FakeAgent:
-        async def astream(self, input_state, config, stream_mode):
+        async def astream(self, input_state, config, stream_mode, subgraphs):
             captured["input_state"] = input_state
             captured["config"] = config
             captured["stream_mode"] = stream_mode
+            captured["subgraphs"] = subgraphs
             yield ("messages", (type("Chunk", (), {"content": "hel"})(), {"langgraph_node": "model"}))
             yield ("messages", (type("Chunk", (), {"content": "lo"})(), {}))
             yield ("updates", {"agent": {"messages": [type("Message", (), {"content": "hello"})()]}})
@@ -257,6 +258,7 @@ def test_runtime_streams_agent_messages_when_available(tmp_path, monkeypatch) ->
 
     assert result == "hello final"
     assert captured["stream_mode"] == ["messages", "updates", "values"]
+    assert captured["subgraphs"] is True
     assert all(isinstance(event, DeepAgentStreamEvent) for event in captured["events"])
     assert [event.type for event in captured["events"]] == [
         RunEventType.ASSISTANT_DELTA,
@@ -266,6 +268,80 @@ def test_runtime_streams_agent_messages_when_available(tmp_path, monkeypatch) ->
     assert isinstance(captured["events"][0].payload, DeepAgentMessageDeltaPayload)
     assert captured["events"][0].payload.delta == "hel"
     assert captured["events"][0].payload.node == "model"
+
+
+def test_runtime_persists_subagent_responses_without_merging_them_into_main_output(tmp_path, monkeypatch) -> None:
+    from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+
+    captured = {"events": []}
+
+    class FakeAgent:
+        async def astream(self, input_state, config, stream_mode, subgraphs):
+            assert subgraphs is True
+            namespace = ("tools:task-123",)
+            yield (
+                namespace,
+                "messages",
+                (AIMessageChunk(content="子任务流"), {"langgraph_node": "model", "lc_agent_name": "researcher"}),
+            )
+            yield (namespace, "updates", {"model": {"messages": [AIMessage(content="子任务最终响应")]}})
+            yield (
+                (),
+                "updates",
+                {"tools": {"messages": [ToolMessage(content="子任务最终响应", name="task", tool_call_id="call-1")]}},
+            )
+            yield (
+                (),
+                "updates",
+                {"tools": {"messages": [ToolMessage(content="另一个子任务失败", name="task", tool_call_id="call-2")]}},
+            )
+            yield ((), "messages", (AIMessageChunk(content="主回答"), {"langgraph_node": "model"}))
+            yield ((), "values", {"messages": [AIMessage(content="主回答最终内容")]})
+
+        async def ainvoke(self, input_state, config):
+            raise AssertionError("streaming path should not call ainvoke")
+
+    def fake_create_deep_agent(**kwargs):
+        return FakeAgent()
+
+    import deepagents
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", fake_create_deep_agent)
+    runtime = DeepAgentRuntime(
+        ModelDefinition(
+            id="default",
+            name="Default",
+            base_url="https://api.openai.com/v1",
+            api_key="test-key",
+            model="gpt-4o-mini",
+        ),
+        context_workspace=tmp_path / "context",
+        agent_workspace=tmp_path / "agents" / "assistant",
+    )
+
+    result = asyncio.run(
+        runtime.run(
+            instructions="base prompt",
+            messages=(RuntimeMessage(role="user", content="hello"),),
+            options=DeepAgentRuntimeOptions(),
+            stream_callback=lambda event: captured["events"].append(event),
+        )
+    )
+
+    assert result == "主回答最终内容"
+    assert [event.type for event in captured["events"]] == [
+        RunEventType.SUBAGENT_RESPONSE,
+        RunEventType.AGENT_UPDATE,
+        RunEventType.AGENT_UPDATE,
+        RunEventType.ASSISTANT_DELTA,
+    ]
+    payload = captured["events"][0].payload
+    assert isinstance(payload, DeepAgentSubagentResponsePayload)
+    assert payload.content == "子任务最终响应"
+    assert payload.namespace == ("tools:task-123",)
+    assert payload.agent == "researcher"
+    assert captured["events"][1].payload.preview == ""
+    assert captured["events"][2].payload.preview == "另一个子任务失败"
 
 
 def test_skill_improvement_middleware_wraps_sync_model_call() -> None:
