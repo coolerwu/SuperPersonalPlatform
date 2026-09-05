@@ -234,7 +234,6 @@ def parse_deepagent_options(raw: Any) -> DeepAgentOptions:
         response_format=str(raw.get("response_format") or "").strip(),
         context_schema=str(raw.get("context_schema") or "").strip(),
         checkpointer=bool(raw.get("checkpointer", False)),
-        store=str(raw.get("store") or "").strip(),
         cache=str(raw.get("cache") or "").strip(),
     )
 

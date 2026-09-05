@@ -56,7 +56,6 @@ const CONFIG_YAML = [
   '        response_format: ""',
   '        context_schema: ""',
   "        checkpointer: false",
-  '        store: ""',
   '        cache: ""',
 ].join("\n");
 

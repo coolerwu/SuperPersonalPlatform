@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -39,6 +40,7 @@ SESSION_HISTORY_READ_LIMIT = 120
 SESSION_RUNTIME_MESSAGE_LIMIT = 60
 STREAM_PARTIAL_FLUSH_SECONDS = 0.5
 STREAM_PARTIAL_FLUSH_CHARS = 160
+RUN_EXECUTION_TIMEOUT_SECONDS = 30 * 60
 
 
 class RunNotFoundError(Exception):
@@ -68,6 +70,29 @@ class RunService:
 
     def set_schedule_service(self, schedule_service: Any) -> None:
         self._schedule_service = schedule_service
+
+    def reconcile_incomplete_runs(self) -> int:
+        """Fail runs left non-terminal by a previous service process."""
+        reconciled = 0
+        for item in self.list_runs():
+            run_id = str(item.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            try:
+                state = _read_json(self._run_dir(run_id) / "state.json")
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                continue
+            if state.get("status") not in {"queued", "running"}:
+                continue
+            self.fail_run(
+                run_id,
+                error={
+                    "type": "RunInterruptedError",
+                    "message": "service restarted before run completion",
+                },
+            )
+            reconciled += 1
+        return reconciled
 
     async def create_run(
         self,
@@ -200,29 +225,37 @@ class RunService:
             stream_recorder.record_snapshot_event(RunEventType.IMAGE_ATTACHMENTS_TEXTIFIED, image_payload)
 
         try:
-            result = await DeepAgentRuntime(
-                model,
-                context_workspace=self._workspace / "context",
-                agent_workspace=self._agent_workspace(str(run_input.get("agent_id") or "")),
-                schedule_service=self._schedule_service,
-                tool_context=PlatformToolContext(
-                    run_id=str(run_input.get("run_id") or run_id),
-                    source=str(run_input.get("source") or "api"),
-                    agent_id=str(run_input.get("agent_id") or ""),
-                    session_id=session_id,
-                    metadata=run_input.get("metadata") if isinstance(run_input.get("metadata"), dict) else {},
-                ),
-            ).run(
-                instructions=effective_system_prompt,
-                messages=runtime_messages,
-                options=runtime_options,
-                checkpoint_path=checkpoint_path,
-                thread_id=session_id,
-                stream_callback=stream_recorder.record,
-            )
+            async with asyncio.timeout(RUN_EXECUTION_TIMEOUT_SECONDS):
+                result = await DeepAgentRuntime(
+                    model,
+                    context_workspace=self._workspace / "context",
+                    agent_workspace=self._agent_workspace(str(run_input.get("agent_id") or "")),
+                    schedule_service=self._schedule_service,
+                    tool_context=PlatformToolContext(
+                        run_id=str(run_input.get("run_id") or run_id),
+                        source=str(run_input.get("source") or "api"),
+                        agent_id=str(run_input.get("agent_id") or ""),
+                        session_id=session_id,
+                        metadata=run_input.get("metadata") if isinstance(run_input.get("metadata"), dict) else {},
+                    ),
+                ).run(
+                    instructions=effective_system_prompt,
+                    messages=runtime_messages,
+                    options=runtime_options,
+                    checkpoint_path=checkpoint_path,
+                    thread_id=session_id,
+                    stream_callback=stream_recorder.record,
+                )
             stream_recorder.finish(result)
         except Exception as exc:
-            error = {"message": str(exc), "type": exc.__class__.__name__}
+            error = {
+                "message": (
+                    f"run exceeded the {RUN_EXECUTION_TIMEOUT_SECONDS}-second execution limit"
+                    if isinstance(exc, TimeoutError)
+                    else str(exc)
+                ),
+                "type": "RunExecutionTimeoutError" if isinstance(exc, TimeoutError) else exc.__class__.__name__,
+            }
             stream_recorder.fail(error)
             _write_json(
                 self._run_dir(run_id) / "result.json",
@@ -231,6 +264,7 @@ class RunService:
             self._set_state(run_id, "failed", error=error)
             self._append_event(run_id, RunEventType.FAILED, RunErrorPayload(message=error["message"], type=error["type"]))
             self._set_delivery(run_id, "failed", error=error)
+            self._release_lock(run_id)
             raise
 
         result_payload = {
@@ -251,6 +285,7 @@ class RunService:
         self._set_state(run_id, "completed")
         self._append_event(run_id, RunEventType.COMPLETED, RunLifecyclePayload(message="run completed"))
         self._set_delivery(run_id, "ready")
+        self._release_lock(run_id)
         return self.get_run(run_id)
 
     def set_delivery_status(
@@ -284,6 +319,31 @@ class RunService:
             RunErrorPayload(message=str(error.get("message") or ""), type=str(error.get("type") or "")),
         )
         self._set_delivery(run_id, "failed", error=error)
+        self._mark_partial_failed(run_id, error)
+        self._release_lock(run_id)
+
+    def _mark_partial_failed(self, run_id: str, error: dict[str, Any]) -> None:
+        partial_path = self._run_dir(run_id) / "partial.json"
+        partial = _read_json(partial_path) if partial_path.exists() else {}
+        thinking = partial.get("thinking") if isinstance(partial.get("thinking"), list) else []
+        if not thinking or thinking[-1] != "运行中断，未生成最终正文":
+            thinking.append("运行中断，未生成最终正文")
+        _write_json(
+            partial_path,
+            {
+                "run_id": run_id,
+                "status": "failed",
+                "content": str(partial.get("content") or ""),
+                "thinking": thinking[-20:],
+                "thinking_status": "failed",
+                "thinking_collapsed": True,
+                "error": error,
+                "updated_at": _now(),
+            },
+        )
+
+    def _release_lock(self, run_id: str) -> None:
+        (self._run_dir(run_id) / "lock.json").unlink(missing_ok=True)
 
     def latest_active_run_for_schedule(self, schedule_id: str) -> str:
         target_schedule_id = str(schedule_id or "").strip()
@@ -666,7 +726,6 @@ def _public_agent(agent: AgentDefinition) -> dict[str, Any]:
             "response_format": agent.deepagent.response_format,
             "context_schema": agent.deepagent.context_schema,
             "checkpointer": agent.deepagent.checkpointer,
-            "store": agent.deepagent.store,
             "cache": agent.deepagent.cache,
         },
     }

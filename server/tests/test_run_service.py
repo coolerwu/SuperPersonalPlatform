@@ -81,7 +81,7 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert (tmp_path / "runs" / run_id / "state.json").exists()
     assert (tmp_path / "runs" / run_id / "events.jsonl").exists()
     assert (tmp_path / "runs" / run_id / "result.json").exists()
-    assert (tmp_path / "runs" / run_id / "lock.json").exists()
+    assert not (tmp_path / "runs" / run_id / "lock.json").exists()
     assert (tmp_path / "runs" / run_id / "delivery.json").exists()
     run_input = json.loads((tmp_path / "runs" / run_id / "input.json").read_text(encoding="utf-8"))
     assert run_input["snapshot"]["context"]["files"][0]["path"] == "/files/profile.md"
@@ -90,6 +90,54 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert index["runs"][0]["run_id"] == run_id
     assert index["runs"][0]["status"] == "completed"
     assert service.get_events(run_id, after=0)[-1]["type"] == "completed"
+
+
+def test_run_service_reconciles_runs_interrupted_by_restart(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    run_id = run["run_id"]
+
+    assert service.reconcile_incomplete_runs() == 1
+
+    reconciled = service.get_run(run_id)
+    assert reconciled["state"]["status"] == "failed"
+    assert reconciled["state"]["error"]["type"] == "RunInterruptedError"
+    assert reconciled["partial"]["status"] == "failed"
+    assert reconciled["delivery"]["status"] == "failed"
+    assert not (tmp_path / "runs" / run_id / "lock.json").exists()
+    assert service.reconcile_incomplete_runs() == 0
+
+
+def test_run_service_times_out_and_releases_lock(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
+        await asyncio.sleep(1)
+        return "late answer"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+    monkeypatch.setattr("server.app.run_service.RUN_EXECUTION_TIMEOUT_SECONDS", 0.01)
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    run_id = run["run_id"]
+
+    try:
+        asyncio.run(service.execute_run(run_id))
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("run should time out")
+
+    failed = service.get_run(run_id)
+    assert failed["state"]["status"] == "failed"
+    assert failed["state"]["error"] == {
+        "message": "run exceeded the 0.01-second execution limit",
+        "type": "RunExecutionTimeoutError",
+    }
+    assert failed["partial"]["status"] == "failed"
+    assert not (tmp_path / "runs" / run_id / "lock.json").exists()
 
 
 def test_run_service_persists_streaming_partial_output(tmp_path, monkeypatch) -> None:

@@ -134,7 +134,6 @@ const DEFAULT_CONFIG = {
           response_format: "",
           context_schema: "",
           checkpointer: false,
-          store: "",
           cache: "",
         },
       },

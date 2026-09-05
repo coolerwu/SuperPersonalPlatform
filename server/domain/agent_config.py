@@ -64,7 +64,6 @@ class DeepAgentOptions:
     response_format: str = ""
     context_schema: str = ""
     checkpointer: bool = False
-    store: str = ""
     cache: str = ""
 
     def __post_init__(self) -> None:

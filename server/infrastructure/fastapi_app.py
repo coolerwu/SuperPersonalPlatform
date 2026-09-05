@@ -125,6 +125,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
         delivery_task: asyncio.Task | None = None
         schedule_stop = asyncio.Event()
         delivery_stop = asyncio.Event()
+        container.run_service.reconcile_incomplete_runs()
         schedule_task = asyncio.create_task(container.schedule_service.run_forever(schedule_stop))
         delivery_task = asyncio.create_task(container.schedule_service.run_delivery_forever(delivery_stop))
         if container.wechat_channel_manager is not None:
