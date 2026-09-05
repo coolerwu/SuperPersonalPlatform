@@ -15,6 +15,7 @@ import {
   Globe2,
   Keyboard,
   LogOut,
+  Menu,
   Play,
   Plus,
   RefreshCw,
@@ -25,6 +26,7 @@ import {
   Smartphone,
   TerminalSquare,
   Trash2,
+  X,
   XCircle,
 } from "lucide-react";
 import { AgentConfigEditor, ConfigVisualEditor, ProviderConfigEditor, parseConfigDraft } from "./configEditor.jsx";
@@ -175,6 +177,7 @@ function LoginPage({ onLogin }) {
 function App() {
   const [authenticated, setAuthenticated] = useState(null);
   const [page, setPage] = useState(routeFromPath(window.location.pathname));
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     api("/api/auth/me")
@@ -192,6 +195,7 @@ function App() {
 
   function navigate(nextPage) {
     setPage(nextPage);
+    setMobileNavOpen(false);
     const nextPath = pathForPage(nextPage);
     if (window.location.pathname !== nextPath) {
       window.history.pushState({}, "", nextPath);
@@ -211,14 +215,45 @@ function App() {
     return <LoginPage onLogin={() => setAuthenticated(true)} />;
   }
 
+  const currentNavItem = [...NAV_ITEMS, ...CONFIG_SECTIONS].find((item) => item.id === page);
+
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <header className="mobile-topbar">
+        <div className="mobile-brand">
+          <div className="cube-mark small">
+            <Bot size={18} />
+          </div>
+          <strong>DeepAgent</strong>
+        </div>
+        <span>{currentNavItem?.label || "控制台"}</span>
+        <button
+          type="button"
+          className="mobile-menu-button"
+          aria-label="打开导航"
+          aria-expanded={mobileNavOpen}
+          aria-controls="primary-navigation"
+          onClick={() => setMobileNavOpen(true)}
+        >
+          <Menu size={20} />
+        </button>
+      </header>
+      <button
+        type="button"
+        className={`mobile-nav-backdrop ${mobileNavOpen ? "visible" : ""}`}
+        aria-label="关闭导航"
+        tabIndex={mobileNavOpen ? 0 : -1}
+        onClick={() => setMobileNavOpen(false)}
+      />
+      <aside id="primary-navigation" className={`sidebar ${mobileNavOpen ? "mobile-open" : ""}`}>
         <div className="brand">
           <div className="cube-mark small">
             <Bot size={18} />
           </div>
           <span>DeepAgent</span>
+          <button type="button" className="sidebar-close" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)}>
+            <X size={19} />
+          </button>
         </div>
         <nav>
           {NAV_ITEMS.map((item) => {
@@ -590,8 +625,15 @@ function ChatPage() {
                 </div>
               ) : null}
             </div>
-            <button className="chat-secondary-button" onClick={newSession} disabled={Boolean(activeRunId)}>
-              新会话
+            <button
+              className="chat-secondary-button"
+              onClick={newSession}
+              disabled={Boolean(activeRunId)}
+              aria-label="新会话"
+              title="新会话"
+            >
+              <Plus size={16} />
+              <span>新会话</span>
             </button>
           </div>
         </div>
@@ -648,7 +690,7 @@ function ChatPage() {
           />
           <button className="primary chat-send-button" onClick={sendMessage} disabled={!draft.trim() || Boolean(activeRunId)}>
             <Send size={18} />
-            发送
+            <span>发送</span>
           </button>
         </div>
       </section>

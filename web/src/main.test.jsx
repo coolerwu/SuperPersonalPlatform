@@ -192,13 +192,31 @@ test("renders the DeepAgent console shell", async () => {
     await import("./main.jsx");
   });
 
-  expect(await screen.findByText("DeepAgent")).toBeInTheDocument();
+  expect((await screen.findAllByText("DeepAgent")).length).toBeGreaterThan(1);
   expect((await screen.findAllByText("Runs")).length).toBeGreaterThan(1);
   expect(await screen.findByText("workspace/runs/index.json")).toBeInTheDocument();
   expect(await screen.findByText("配置")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Providers/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Agents/ })).not.toBeInTheDocument();
   expect(await screen.findByText("微信")).toBeInTheDocument();
+});
+
+test("opens and closes the compact navigation drawer", async () => {
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  const menuButton = await screen.findByRole("button", { name: "打开导航" });
+  const sidebar = document.querySelector(".sidebar");
+  expect(sidebar).not.toHaveClass("mobile-open");
+
+  fireEvent.click(menuButton);
+  expect(menuButton).toHaveAttribute("aria-expanded", "true");
+  expect(sidebar).toHaveClass("mobile-open");
+
+  fireEvent.click(document.querySelector(".mobile-nav-backdrop"));
+  expect(menuButton).toHaveAttribute("aria-expanded", "false");
+  expect(sidebar).not.toHaveClass("mobile-open");
 });
 
 test("keeps run details stable when index polling returns only summaries", async () => {
