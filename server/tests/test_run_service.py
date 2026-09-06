@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 from server.app.run_service import RunService
 from server.app.session_service import SessionService
@@ -137,6 +138,82 @@ def test_run_service_times_out_and_releases_lock(tmp_path, monkeypatch) -> None:
         "type": "RunExecutionTimeoutError",
     }
     assert failed["partial"]["status"] == "failed"
+    assert not (tmp_path / "runs" / run_id / "lock.json").exists()
+
+
+def test_run_service_reconciles_timed_out_run_when_reading_list(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    run_id = run["run_id"]
+    stale_at = (datetime.now(timezone.utc) - timedelta(seconds=31 * 60)).isoformat()
+    run_dir = tmp_path / "runs" / run_id
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    state["status"] = "running"
+    state["created_at"] = stale_at
+    state["updated_at"] = stale_at
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    runs = service.list_runs()
+
+    assert runs[0]["status"] == "failed"
+    failed = service.get_run(run_id)
+    assert failed["state"]["error"] == {
+        "message": "run exceeded the 1800-second execution limit",
+        "type": "RunExecutionTimeoutError",
+    }
+    assert failed["partial"]["status"] == "failed"
+    assert not (run_dir / "lock.json").exists()
+
+
+def test_run_service_reconciles_stale_heartbeat_when_reading_run(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    run_id = run["run_id"]
+    stale_heartbeat = (datetime.now(timezone.utc) - timedelta(seconds=121)).isoformat()
+    run_dir = tmp_path / "runs" / run_id
+    lock = json.loads((run_dir / "lock.json").read_text(encoding="utf-8"))
+    lock["heartbeat_at"] = stale_heartbeat
+    (run_dir / "lock.json").write_text(json.dumps(lock), encoding="utf-8")
+
+    failed = service.get_run(run_id)
+
+    assert failed["state"]["status"] == "failed"
+    assert failed["state"]["error"] == {
+        "message": "run heartbeat is older than 120 seconds",
+        "type": "RunStaleHeartbeatError",
+    }
+    assert not (run_dir / "lock.json").exists()
+
+
+def test_run_service_marks_cancelled_execution_failed(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    run_id = run["run_id"]
+
+    try:
+        asyncio.run(service.execute_run(run_id))
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("run should propagate cancellation")
+
+    failed = service.get_run(run_id)
+    assert failed["state"]["status"] == "failed"
+    assert failed["state"]["error"] == {
+        "message": "run execution task was cancelled before completion",
+        "type": "RunExecutionCancelledError",
+    }
     assert not (tmp_path / "runs" / run_id / "lock.json").exists()
 
 

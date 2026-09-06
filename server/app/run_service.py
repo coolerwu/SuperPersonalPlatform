@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,8 @@ SESSION_RUNTIME_MESSAGE_LIMIT = 60
 STREAM_PARTIAL_FLUSH_SECONDS = 0.5
 STREAM_PARTIAL_FLUSH_CHARS = 160
 RUN_EXECUTION_TIMEOUT_SECONDS = 30 * 60
+RUN_LOCK_HEARTBEAT_SECONDS = 15
+RUN_STALE_HEARTBEAT_SECONDS = 120
 
 
 class RunNotFoundError(Exception):
@@ -74,7 +77,7 @@ class RunService:
     def reconcile_incomplete_runs(self) -> int:
         """Fail runs left non-terminal by a previous service process."""
         reconciled = 0
-        for item in self.list_runs():
+        for item in self._list_runs_no_reconcile():
             run_id = str(item.get("run_id") or "").strip()
             if not run_id:
                 continue
@@ -154,7 +157,7 @@ class RunService:
                 "seq": 0,
             },
         )
-        _write_json(run_dir / "lock.json", {"pid": os.getpid(), "created_at": now})
+        _write_json(run_dir / "lock.json", {"pid": os.getpid(), "created_at": now, "heartbeat_at": now})
         _write_json(run_dir / "delivery.json", {"source": source, "session_id": session_id, "status": "pending"})
         if session_id and self._session_service is not None:
             self._session_service.append_message(
@@ -224,6 +227,7 @@ class RunService:
             )
             stream_recorder.record_snapshot_event(RunEventType.IMAGE_ATTACHMENTS_TEXTIFIED, image_payload)
 
+        heartbeat_task = asyncio.create_task(self._heartbeat_run_lock(run_id))
         try:
             async with asyncio.timeout(RUN_EXECUTION_TIMEOUT_SECONDS):
                 result = await DeepAgentRuntime(
@@ -247,6 +251,14 @@ class RunService:
                     stream_callback=stream_recorder.record,
                 )
             stream_recorder.finish(result)
+        except asyncio.CancelledError:
+            error = {
+                "message": "run execution task was cancelled before completion",
+                "type": "RunExecutionCancelledError",
+            }
+            stream_recorder.fail(error)
+            self._fail_executing_run(run_id, error)
+            raise
         except Exception as exc:
             error = {
                 "message": (
@@ -257,15 +269,15 @@ class RunService:
                 "type": "RunExecutionTimeoutError" if isinstance(exc, TimeoutError) else exc.__class__.__name__,
             }
             stream_recorder.fail(error)
-            _write_json(
-                self._run_dir(run_id) / "result.json",
-                {"run_id": run_id, "status": "failed", "error": error, "completed_at": _now()},
-            )
-            self._set_state(run_id, "failed", error=error)
-            self._append_event(run_id, RunEventType.FAILED, RunErrorPayload(message=error["message"], type=error["type"]))
-            self._set_delivery(run_id, "failed", error=error)
-            self._release_lock(run_id)
+            self._fail_executing_run(run_id, error)
             raise
+        finally:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+        if self._run_has_terminal_state(run_id):
+            return self.get_run(run_id)
 
         result_payload = {
             "run_id": run_id,
@@ -322,6 +334,16 @@ class RunService:
         self._mark_partial_failed(run_id, error)
         self._release_lock(run_id)
 
+    def reconcile_stale_active_runs(self) -> int:
+        reconciled = 0
+        for item in self._list_runs_no_reconcile():
+            run_id = str(item.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            if self._reconcile_run_if_stale(run_id):
+                reconciled += 1
+        return reconciled
+
     def _mark_partial_failed(self, run_id: str, error: dict[str, Any]) -> None:
         partial_path = self._run_dir(run_id) / "partial.json"
         partial = _read_json(partial_path) if partial_path.exists() else {}
@@ -346,6 +368,7 @@ class RunService:
         (self._run_dir(run_id) / "lock.json").unlink(missing_ok=True)
 
     def latest_active_run_for_schedule(self, schedule_id: str) -> str:
+        self.reconcile_stale_active_runs()
         target_schedule_id = str(schedule_id or "").strip()
         if not target_schedule_id:
             return ""
@@ -365,6 +388,10 @@ class RunService:
         return ""
 
     def list_runs(self) -> list[dict[str, Any]]:
+        self.reconcile_stale_active_runs()
+        return self._list_runs_no_reconcile()
+
+    def _list_runs_no_reconcile(self) -> list[dict[str, Any]]:
         index = self._read_index()
         runs = index.get("runs") if isinstance(index, dict) else []
         if not isinstance(runs, list):
@@ -375,6 +402,7 @@ class RunService:
         run_dir = self._run_dir(run_id)
         if not run_dir.exists():
             raise RunNotFoundError(run_id)
+        self._reconcile_run_if_stale(run_id)
         payload = {
             "run_id": run_id,
             "input": _read_json(run_dir / "input.json"),
@@ -392,6 +420,8 @@ class RunService:
         return payload
 
     def get_events(self, run_id: str, after: int = 0) -> list[dict[str, Any]]:
+        if self._run_dir(run_id).exists():
+            self._reconcile_run_if_stale(run_id)
         events_path = self._run_dir(run_id) / "events.jsonl"
         if not events_path.exists():
             if not self._run_dir(run_id).exists():
@@ -478,6 +508,80 @@ class RunService:
         if error is not None:
             payload["error"] = error
         _write_json(self._run_dir(run_id) / "delivery.json", payload)
+
+    def _fail_executing_run(self, run_id: str, error: dict[str, Any]) -> None:
+        if self._run_has_terminal_state(run_id):
+            return
+        _write_json(
+            self._run_dir(run_id) / "result.json",
+            {"run_id": run_id, "status": "failed", "error": error, "completed_at": _now()},
+        )
+        self._set_state(run_id, "failed", error=error)
+        self._append_event(run_id, RunEventType.FAILED, RunErrorPayload(message=error["message"], type=error["type"]))
+        self._set_delivery(run_id, "failed", error=error)
+        self._release_lock(run_id)
+
+    def _run_has_terminal_state(self, run_id: str) -> bool:
+        try:
+            state = _read_json(self._run_dir(run_id) / "state.json")
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return False
+        return state.get("status") in {"completed", "failed"}
+
+    async def _heartbeat_run_lock(self, run_id: str) -> None:
+        while True:
+            await asyncio.sleep(RUN_LOCK_HEARTBEAT_SECONDS)
+            run_dir = self._run_dir(run_id)
+            lock_path = run_dir / "lock.json"
+            try:
+                state = _read_json(run_dir / "state.json")
+                if state.get("status") not in {"queued", "running"}:
+                    return
+                lock = _read_json(lock_path) if lock_path.exists() else {}
+                created_at = str(lock.get("created_at") or state.get("created_at") or _now())
+                _write_json(lock_path, {"pid": os.getpid(), "created_at": created_at, "heartbeat_at": _now()})
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                return
+
+    def _reconcile_run_if_stale(self, run_id: str) -> bool:
+        run_dir = self._run_dir(run_id)
+        try:
+            state = _read_json(run_dir / "state.json")
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return False
+        if state.get("status") not in {"queued", "running"}:
+            return False
+
+        now = datetime.now(timezone.utc)
+        created_at = _parse_datetime(state.get("created_at")) or _parse_datetime(state.get("updated_at"))
+        if created_at is not None and (now - created_at).total_seconds() > RUN_EXECUTION_TIMEOUT_SECONDS:
+            self.fail_run(
+                run_id,
+                error={
+                    "type": "RunExecutionTimeoutError",
+                    "message": f"run exceeded the {RUN_EXECUTION_TIMEOUT_SECONDS}-second execution limit",
+                },
+            )
+            return True
+
+        lock_path = run_dir / "lock.json"
+        if not lock_path.exists():
+            return False
+        try:
+            lock = _read_json(lock_path)
+        except (json.JSONDecodeError, OSError):
+            return False
+        heartbeat_at = _parse_datetime(lock.get("heartbeat_at"))
+        if heartbeat_at is not None and (now - heartbeat_at).total_seconds() > RUN_STALE_HEARTBEAT_SECONDS:
+            self.fail_run(
+                run_id,
+                error={
+                    "type": "RunStaleHeartbeatError",
+                    "message": f"run heartbeat is older than {RUN_STALE_HEARTBEAT_SECONDS} seconds",
+                },
+            )
+            return True
+        return False
 
     def _append_event(self, run_id: str, event_type: RunEventType | str, payload: RunEventPayload) -> None:
         run_dir = self._run_dir(run_id)
@@ -912,3 +1016,15 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
