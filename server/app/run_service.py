@@ -1083,7 +1083,6 @@ def _public_agent(agent: AgentDefinition) -> dict[str, Any]:
             "use_longterm_memory": agent.deepagent.use_longterm_memory,
             "tools": list(agent.deepagent.tools),
             "interrupt_on": list(agent.deepagent.interrupt_on),
-            "middleware": list(agent.deepagent.middleware),
             "subagents": list(agent.deepagent.subagents),
             "response_format": agent.deepagent.response_format,
             "context_schema": agent.deepagent.context_schema,
@@ -1249,7 +1248,6 @@ def _runtime_options(raw: Any) -> DeepAgentRuntimeOptions:
         debug=bool(options.get("debug", False)),
         tools=tuple(str(item).strip() for item in options.get("tools") or [] if str(item).strip()),
         interrupt_on=tuple(str(item).strip() for item in options.get("interrupt_on") or [] if str(item).strip()),
-        middleware=tuple(str(item).strip() for item in options.get("middleware") or [] if str(item).strip()),
         todo_list=bool(options.get("todo_list", True)),
         filesystem_enabled=bool((options.get("filesystem") or {}).get("enabled", False))
         if isinstance(options.get("filesystem") or {}, dict)

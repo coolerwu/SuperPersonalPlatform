@@ -21,58 +21,6 @@ from server.infrastructure.tool_runtime import PlatformToolContext, build_platfo
 
 
 MEMORY_INDEX_PATH = "/memories/AGENTS.md"
-DEFAULT_MEMORY_INDEX = """# Memory Index
-
-This file is loaded automatically as the agent's long-term memory index.
-
-## Stable Preferences
-
-- Add durable user preferences and collaboration rules here.
-- Do not store passwords, API keys, access tokens, or other credentials.
-
-## References
-
-- Store larger or task-specific notes in sibling files or subdirectories under `/memories/`.
-- When a detail is not present here, use `ls` and `read_file` to inspect `/memories/` before assuming it is unknown.
-"""
-
-LONGTERM_MEMORY_PROMPT = """## Platform Memory Boundary
-
-DeepAgent memory is loaded from `/memories/AGENTS.md`. Follow the injected memory guidelines for saving agent-specific memory.
-Do not use `write_context` for personal memory, user preferences, future conversation rules, or "remember this" requests.
-
-Use `write_context` only when the user explicitly asks to save shared knowledge, documentation, reference material, or knowledge-base content under workspace/context/knowledge/files.
-
-When the user asks to look up notes, recent notes, synced documents, WebDAV files, knowledge-base content, or notebook entries, call `search_context` first. `/memories/...` is only your own long-term memory, not the user's synced notebook.
-"""
-
-BROWSER_RESEARCH_PROMPT = """## Platform Browser Research
-
-When the user asks for current, recent, latest, news, open-web, or source-backed information, use `browser_search` first to discover source URLs, then call `browser_extract` on the most relevant result URLs before making claims.
-Use `browser_search` for discovery only; use `browser_extract` to read page content. Cite the source URLs you used in the answer.
-If a browser tool returns `ok:false`, treat it as a tool observation: try another query or source URL when useful, and only tell the user the limitation when no reasonable fallback remains.
-If browser search or extraction is blocked by a login, captcha, verification page, or anti-bot page, say that browser authorization or manual source text is needed instead of guessing.
-"""
-
-RHYTHMIC_DELIVERY_PROMPT = """## Rhythmic Delivery Middleware
-
-When the current task asks you to produce multiple messages for scheduled or paced delivery, write each deliverable message inside its own XML-style block:
-
-<delivery-item>
-message text
-</delivery-item>
-
-Do not put introductions, summaries, or extra prose outside the delivery-item blocks unless the user specifically asked for a single combined response. Each block should be readable as a standalone message.
-"""
-
-AGENT_FILESYSTEM_PROMPT = """## Agent Filesystem
-
-The virtual `/` is already your private agent workspace. Do not create another `/workspace` directory.
-You may create and modify content only inside these managed directories: `/artifacts/`, `/improvements/`, `/meditations/`, `/memories/`, `/notes/`, `/scratch/`, and `/skills/`.
-Use `/artifacts/` for durable task outputs and `/scratch/` for temporary working files.
-Filesystem permission errors are recoverable tool observations. Use one of the managed paths instead of retrying the denied path.
-"""
-
 GENERAL_PURPOSE_SKILL_PROMPT = (
     "Access a skill only when the delegated task explicitly specifies that skill; "
     "otherwise, do not access any skills."
@@ -112,7 +60,6 @@ class DeepAgentRuntimeOptions:
     use_longterm_memory: bool = True
     tools: tuple[str, ...] = ()
     interrupt_on: tuple[str, ...] = ()
-    middleware: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -167,13 +114,11 @@ class DeepAgentRuntime:
         self._agent_workspace.mkdir(parents=True, exist_ok=True)
         for directory in AGENT_WORKSPACE_DIRECTORIES:
             (self._agent_workspace / directory).mkdir(parents=True, exist_ok=True)
-        memory_sources = _longterm_memory_sources(self._agent_workspace, options)
         general_purpose_subagent = dict(GENERAL_PURPOSE_SUBAGENT)
         default_subagent_prompt = str(general_purpose_subagent.get("system_prompt") or "").strip()
         general_purpose_subagent["system_prompt"] = (
             f"{default_subagent_prompt}\n\n{GENERAL_PURPOSE_SKILL_PROMPT}"
         )
-        general_purpose_subagent["skills"] = []
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
                 options.tools,
@@ -182,13 +127,13 @@ class DeepAgentRuntime:
                 tool_context=self._tool_context,
             ),
             "model": self._chat_model(),
-            "system_prompt": _runtime_instructions(instructions, options),
+            "system_prompt": instructions.strip(),
             "backend": AgentFilesystemBackend(root_dir=self._agent_workspace, virtual_mode=True),
             "skills": ["/skills/"],
             "subagents": [general_purpose_subagent],
         }
-        if memory_sources:
-            create_kwargs["memory"] = memory_sources
+        if options.use_longterm_memory:
+            create_kwargs["memory"] = [MEMORY_INDEX_PATH]
         name = options.name.strip()
         if name:
             create_kwargs["name"] = name
@@ -477,17 +422,6 @@ def _content_to_text(content: Any) -> str:
     return ""
 
 
-def _runtime_instructions(instructions: str, options: DeepAgentRuntimeOptions) -> str:
-    sections = [instructions.strip(), AGENT_FILESYSTEM_PROMPT]
-    if "browser_extract" in options.tools:
-        sections.append(BROWSER_RESEARCH_PROMPT)
-    if options.use_longterm_memory:
-        sections.append(LONGTERM_MEMORY_PROMPT)
-    if "rhythmic_delivery" in options.middleware:
-        sections.append(RHYTHMIC_DELIVERY_PROMPT)
-    return "\n\n".join(section for section in sections if section).strip()
-
-
 def _invoke_config(options: DeepAgentRuntimeOptions, *, assistant_id: str, thread_id: str) -> dict[str, Any]:
     config: dict[str, Any] = {
         "recursion_limit": options.max_iterations,
@@ -497,16 +431,6 @@ def _invoke_config(options: DeepAgentRuntimeOptions, *, assistant_id: str, threa
     if normalized_thread_id:
         config["configurable"] = {"thread_id": normalized_thread_id}
     return config
-
-
-def _longterm_memory_sources(agent_workspace: Path, options: DeepAgentRuntimeOptions) -> list[str]:
-    if not options.use_longterm_memory:
-        return []
-    memory_index = agent_workspace / "memories" / "AGENTS.md"
-    if not memory_index.exists():
-        memory_index.parent.mkdir(parents=True, exist_ok=True)
-        memory_index.write_text(DEFAULT_MEMORY_INDEX, encoding="utf-8")
-    return [MEMORY_INDEX_PATH]
 
 
 def _normalize_interrupt_on(value: Any) -> dict[str, bool] | None:

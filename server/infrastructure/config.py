@@ -229,7 +229,6 @@ def parse_deepagent_options(raw: Any) -> DeepAgentOptions:
         use_longterm_memory=bool(raw.get("use_longterm_memory", True)),
         tools=_string_tuple(raw.get("tools") or []),
         interrupt_on=_string_tuple(raw.get("interrupt_on") or []),
-        middleware=_string_tuple(raw.get("middleware") or []),
         subagents=_dict_tuple(raw.get("subagents") or []),
         response_format=str(raw.get("response_format") or "").strip(),
         context_schema=str(raw.get("context_schema") or "").strip(),

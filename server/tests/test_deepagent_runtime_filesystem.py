@@ -14,7 +14,6 @@ from server.infrastructure.deepagent_runtime import (
     MEMORY_INDEX_PATH,
     RuntimeAttachment,
     RuntimeMessage,
-    _runtime_instructions,
     _to_langchain_messages,
     load_agent_files,
     persist_agent_files,
@@ -106,13 +105,14 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     general_purpose = captured["create_kwargs"]["subagents"][0]
     assert general_purpose["name"] == GENERAL_PURPOSE_SUBAGENT["name"]
     assert general_purpose["description"] == GENERAL_PURPOSE_SUBAGENT["description"]
-    assert general_purpose["skills"] == []
+    assert "skills" not in general_purpose
     assert general_purpose["system_prompt"] == (
         f"{GENERAL_PURPOSE_SUBAGENT['system_prompt']}\n\n{GENERAL_PURPOSE_SKILL_PROMPT}"
     )
     assert "model" not in general_purpose
     assert "tools" not in general_purpose
     assert captured["create_kwargs"]["memory"] == [MEMORY_INDEX_PATH]
+    assert captured["create_kwargs"]["system_prompt"] == "base prompt"
     assert captured["create_kwargs"]["backend"].cwd == agent_dir.resolve()
     assert isinstance(captured["create_kwargs"]["backend"], AgentFilesystemBackend)
     assert captured["create_kwargs"]["backend"].virtual_mode is True
@@ -123,7 +123,7 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     assert "use_longterm_memory" not in captured["create_kwargs"]
     assert "files" not in captured["input_state"]
     assert all((agent_dir / directory).is_dir() for directory in AGENT_WORKSPACE_DIRECTORIES)
-    assert (agent_dir / "memories" / "AGENTS.md").is_file()
+    assert not (agent_dir / "memories" / "AGENTS.md").exists()
 
 
 def test_agent_filesystem_backend_restricts_mutations_to_managed_directories(tmp_path) -> None:
@@ -462,25 +462,6 @@ def test_runtime_uses_sqlite_checkpointer_when_thread_id_is_provided(tmp_path, m
         ).fetchone()
     finally:
         conn.close()
-
-
-def test_longterm_memory_prompt_points_memory_requests_to_memories_path() -> None:
-    prompt = _runtime_instructions("base prompt", DeepAgentRuntimeOptions(use_longterm_memory=True))
-
-    assert "/memories/AGENTS.md" in prompt
-    assert "Follow the injected memory guidelines" in prompt
-    assert "Do not use `write_context`" in prompt
-
-
-def test_browser_extract_tool_enables_browser_research_prompt() -> None:
-    prompt = _runtime_instructions(
-        "base prompt",
-        DeepAgentRuntimeOptions(tools=("browser_extract",), use_longterm_memory=False),
-    )
-
-    assert "browser_search" in prompt
-    assert "browser_extract" in prompt
-    assert "current, recent, latest" in prompt
 
 
 def test_runtime_skips_memory_when_longterm_memory_is_disabled(tmp_path, monkeypatch) -> None:

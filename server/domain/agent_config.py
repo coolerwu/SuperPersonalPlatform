@@ -59,7 +59,6 @@ class DeepAgentOptions:
     use_longterm_memory: bool = True
     tools: tuple[str, ...] = ()
     interrupt_on: tuple[str, ...] = ()
-    middleware: tuple[str, ...] = ()
     subagents: tuple[dict[str, Any], ...] = ()
     response_format: str = ""
     context_schema: str = ""

@@ -81,7 +81,6 @@ agents:
           - arxiv
           - yahoo_finance_news
         interrupt_on: []
-        middleware: []
         subagents: []
         response_format: ""
         context_schema: ""

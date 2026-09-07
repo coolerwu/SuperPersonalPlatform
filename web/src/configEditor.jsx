@@ -129,7 +129,6 @@ const DEFAULT_CONFIG = {
           use_longterm_memory: true,
           tools: [],
           interrupt_on: [],
-          middleware: [],
           subagents: [],
           response_format: "",
           context_schema: "",
@@ -1136,7 +1135,6 @@ function normalizeDeepAgent(value) {
   const next = mergeObjects(defaults, isPlainObject(value) ? value : {});
   next.tools = normalizeList(next.tools);
   next.interrupt_on = normalizeList(next.interrupt_on);
-  next.middleware = normalizeList(next.middleware);
   next.todo_list = true;
   next.use_longterm_memory = next.use_longterm_memory !== false;
   next.filesystem = isPlainObject(next.filesystem)

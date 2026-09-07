@@ -51,7 +51,6 @@ const CONFIG_YAML = [
   "        use_longterm_memory: true",
   "        tools: []",
   "        interrupt_on: []",
-  "        middleware: []",
   "        subagents: []",
   '        response_format: ""',
   '        context_schema: ""',
