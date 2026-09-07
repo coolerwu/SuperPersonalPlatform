@@ -826,6 +826,11 @@ pre {
   padding: 0;
 }
 
+.icon-button.danger {
+  border-color: rgba(255, 93, 93, 0.34);
+  color: #ffaaaa;
+}
+
 .run-index {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -913,6 +918,13 @@ pre {
 .detail-header > div,
 .workspace-header > div {
   min-width: 0;
+}
+
+.detail-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
 }
 
 .detail-header h2,
@@ -2468,6 +2480,7 @@ pre {
 }
 
 .status-failed,
+.status-cancelled,
 .status-exited {
   border-color: rgba(255, 93, 93, 0.42);
   color: #ffaaaa;

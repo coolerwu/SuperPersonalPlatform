@@ -72,6 +72,7 @@ class ScheduleService:
         workspace: Path,
         settings: Settings,
         run_service: RunService,
+        run_worker_service: Any = None,
         system_log_service: SystemLogService,
         maintenance_service: MaintenanceService | None = None,
         webdav_context_service: WebDAVContextService | None = None,
@@ -80,6 +81,7 @@ class ScheduleService:
         self._workspace = workspace
         self._settings = settings
         self._run_service = run_service
+        self._run_worker_service = run_worker_service
         self._system_log_service = system_log_service
         self._maintenance_service = maintenance_service
         self._webdav_context_service = webdav_context_service
@@ -415,7 +417,7 @@ class ScheduleService:
             )
             run_id = str(run["run_id"])
             self._set_current_run(definition.id, run_id)
-            completed = await self._run_service.execute_run(run_id)
+            completed = await self._execute_or_wait_for_run(run_id)
             delivery = await self._deliver_agent_run_result(definition, completed)
             return {"message": "agent run completed", "run_id": run_id, "delivery": delivery}
         raise RuntimeError(f"unsupported schedule type: {definition.type}")
@@ -439,13 +441,26 @@ class ScheduleService:
         )
         run_id = str(run["run_id"])
         self._set_current_run(definition.id, run_id)
-        completed = await self._run_service.execute_run(run_id)
+        completed = await self._execute_or_wait_for_run(run_id)
         self._write_meditation_record(agent.id, run_id, completed)
         return {
             "message": "agent meditation completed",
             "agent_id": agent.id,
             "run_id": run_id,
         }
+
+    async def _execute_or_wait_for_run(self, run_id: str) -> dict[str, Any]:
+        if self._run_worker_service is not None:
+            self._run_worker_service.wake()
+            completed = await self._run_worker_service.wait_for_run(run_id)
+        else:
+            completed = await self._run_service.execute_run(run_id)
+        state = completed.get("state") if isinstance(completed.get("state"), dict) else {}
+        if state.get("status") != "completed":
+            error = completed.get("result", {}).get("error") if isinstance(completed.get("result"), dict) else None
+            message = str(error.get("message") if isinstance(error, dict) else "") or f"agent run {run_id} did not complete"
+            raise RuntimeError(message)
+        return completed
 
     def _meditation_busy_reason(self, agent_id: str) -> str:
         for run in self._run_service.list_runs():

@@ -22,11 +22,13 @@ class WechatChannelManager:
         self,
         workspace: Path,
         run_service: Any,
+        run_worker_service: Any = None,
         session_service: Any = None,
         system_log_service: Any = None,
     ) -> None:
         self._workspace = workspace
         self._run_service = run_service
+        self._run_worker_service = run_worker_service
         self._session_service = session_service
         self._system_log_service = system_log_service
         self._instances: dict[str, WechatChannelService] = {}
@@ -166,6 +168,7 @@ class WechatChannelManager:
             self._instances[account_id] = WechatChannelService(
                 workspace=self._workspace,
                 run_service=self._run_service,
+                run_worker_service=self._run_worker_service,
                 session_service=self._session_service,
                 system_log_service=self._system_log_service,
                 account_id=account_id,

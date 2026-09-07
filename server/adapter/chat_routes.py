@@ -1,5 +1,3 @@
-import asyncio
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -150,20 +148,14 @@ def create_chat_router(container: AppContainer) -> APIRouter:
             )
         except (ValueError, AgentConfigError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        asyncio.create_task(_execute_background(container, str(run["run_id"])))
+        if container.run_worker_service is not None:
+            container.run_worker_service.wake()
         return {
             "session": session_service.session_summary(session_id),
             "run": run,
         }
 
     return router
-
-
-async def _execute_background(container: AppContainer, run_id: str) -> None:
-    try:
-        await container.run_service.execute_run(run_id)
-    except Exception as exc:
-        container.system_log_service.append_line(f"chat run {run_id} failed: {exc}")
 
 
 def _resolve_agent_id(workspace, raw_agent_id: str) -> str:

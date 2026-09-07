@@ -1,11 +1,9 @@
-import asyncio
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
-from server.app.run_service import RunNotFoundError
+from server.app.run_service import RunNotFoundError, RunStateError
 from server.domain.agent_config import AgentConfigError
 
 
@@ -43,7 +41,8 @@ def create_run_router(container: AppContainer) -> APIRouter:
             )
         except (ValueError, AgentConfigError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        asyncio.create_task(_execute_background(container, str(run["run_id"])))
+        if container.run_worker_service is not None:
+            container.run_worker_service.wake()
         return run
 
     @router.get("")
@@ -64,11 +63,25 @@ def create_run_router(container: AppContainer) -> APIRouter:
         except RunNotFoundError as exc:
             raise HTTPException(status_code=404, detail="run not found") from exc
 
+    @router.post("/{run_id}/cancel")
+    async def cancel_run(run_id: str) -> dict[str, object]:
+        try:
+            if container.run_worker_service is not None:
+                return await container.run_worker_service.cancel_run(run_id)
+            return container.run_service.cancel_run(run_id)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="run not found") from exc
+
+    @router.post("/{run_id}/rerun")
+    async def rerun(run_id: str) -> dict[str, object]:
+        try:
+            rerun_payload = container.run_service.rerun(run_id)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="run not found") from exc
+        except RunStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if container.run_worker_service is not None:
+            container.run_worker_service.wake()
+        return rerun_payload
+
     return router
-
-
-async def _execute_background(container: AppContainer, run_id: str) -> None:
-    try:
-        await container.run_service.execute_run(run_id)
-    except Exception as exc:
-        container.system_log_service.append_line(f"run {run_id} failed: {exc}")

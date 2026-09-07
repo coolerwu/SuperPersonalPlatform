@@ -15,6 +15,7 @@ class RunEventType(StrEnum):
     IMAGE_ATTACHMENTS_TEXTIFIED = "image_attachments_textified"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class RunEventPayload:
@@ -119,7 +120,7 @@ def run_event_payload_from_json(event_type: str, payload: Any) -> RunEventPayloa
     data = payload if isinstance(payload, dict) else {}
     if event_type in {RunEventType.QUEUED, RunEventType.RUNNING, RunEventType.COMPLETED}:
         return RunLifecyclePayload(message=str(data.get("message") or ""))
-    if event_type == RunEventType.FAILED:
+    if event_type in {RunEventType.FAILED, RunEventType.CANCELLED}:
         return RunErrorPayload(message=str(data.get("message") or ""), type=str(data.get("type") or ""))
     if event_type == RunEventType.ASSISTANT_DELTA:
         return DeepAgentMessageDeltaPayload(

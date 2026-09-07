@@ -21,6 +21,7 @@ from server.app.config_file_service import ConfigFileService
 from server.app.maintenance_service import MaintenanceService
 from server.app.nutstore_service import NutstoreService
 from server.app.run_service import RunService
+from server.app.run_worker_service import RunWorkerService
 from server.app.schedule_service import ScheduleService
 from server.app.session_service import SessionService
 from server.app.system_log_service import SystemLogService
@@ -43,9 +44,14 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     system_log_service = SystemLogService(active_workspace)
     session_service = SessionService(active_workspace)
     run_service = RunService(active_workspace, session_service=session_service)
+    run_worker_service = RunWorkerService(
+        run_service=run_service,
+        system_log_service=system_log_service,
+    )
     wechat_channel_manager = WechatChannelManager(
         workspace=active_workspace,
         run_service=run_service,
+        run_worker_service=run_worker_service,
         session_service=session_service,
         system_log_service=system_log_service,
     )
@@ -61,6 +67,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         workspace=active_workspace,
         settings=settings,
         run_service=run_service,
+        run_worker_service=run_worker_service,
         system_log_service=system_log_service,
         maintenance_service=maintenance_service,
         webdav_context_service=webdav_context_service,
@@ -73,6 +80,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         browser_profile_service=BrowserProfileService(active_workspace),
         config_file_service=ConfigFileService(active_workspace),
         run_service=run_service,
+        run_worker_service=run_worker_service,
         maintenance_service=maintenance_service,
         nutstore_service=NutstoreService(settings.nutstore),
         schedule_service=schedule_service,
@@ -123,9 +131,16 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     async def lifespan(app: FastAPI):
         schedule_task: asyncio.Task | None = None
         delivery_task: asyncio.Task | None = None
+        run_worker_task: asyncio.Task | None = None
         schedule_stop = asyncio.Event()
         delivery_stop = asyncio.Event()
+        run_worker_stop = asyncio.Event()
         container.run_service.reconcile_incomplete_runs()
+        run_worker_task = (
+            asyncio.create_task(container.run_worker_service.run_forever(run_worker_stop))
+            if container.run_worker_service
+            else None
+        )
         schedule_task = asyncio.create_task(container.schedule_service.run_forever(schedule_stop))
         delivery_task = asyncio.create_task(container.schedule_service.run_delivery_forever(delivery_stop))
         if container.wechat_channel_manager is not None:
@@ -139,6 +154,11 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
             if delivery_task is not None:
                 delivery_stop.set()
                 await delivery_task
+            if run_worker_task is not None:
+                run_worker_stop.set()
+                container.run_worker_service.wake()
+                await run_worker_task
+                await container.run_worker_service.stop_active()
             if container.wechat_channel_manager is not None:
                 await container.wechat_channel_manager.stop_all()
             await container.browser_profile_service.close_all()

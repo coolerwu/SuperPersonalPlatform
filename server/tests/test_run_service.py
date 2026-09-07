@@ -3,7 +3,9 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from server.app.run_service import RunService
+from server.app.run_worker_service import RunWorkerService
 from server.app.session_service import SessionService
+from server.app.system_log_service import SystemLogService
 from server.domain.run_events import (
     DeepAgentGraphUpdatePayload,
     DeepAgentMessageDeltaPayload,
@@ -93,19 +95,43 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert service.get_events(run_id, after=0)[-1]["type"] == "completed"
 
 
-def test_run_service_reconciles_runs_interrupted_by_restart(tmp_path) -> None:
+def test_run_service_create_run_only_enqueues_until_claimed(tmp_path) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
     service = RunService(tmp_path)
     run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
     run_id = run["run_id"]
 
+    assert run["state"]["status"] == "queued"
+    assert run["state"]["attempts"] == 0
+    assert not (tmp_path / "runs" / run_id / "lock.json").exists()
+
+    claim = service.claim_run(run_id, worker_id="worker-a")
+
+    assert claim is not None
+    claimed = service.get_run(run_id)
+    assert claimed["state"]["status"] == "running"
+    assert claimed["state"]["attempts"] == 1
+    assert claimed["state"]["worker_id"] == "worker-a"
+    lock = json.loads((tmp_path / "runs" / run_id / "lock.json").read_text(encoding="utf-8"))
+    assert lock["lease_id"] == claim["lease_id"]
+    assert lock["worker_id"] == "worker-a"
+
+
+def test_run_service_requeues_runs_interrupted_by_restart(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    run_id = run["run_id"]
+    service.claim_run(run_id, worker_id="worker-a")
+
     assert service.reconcile_incomplete_runs() == 1
 
     reconciled = service.get_run(run_id)
-    assert reconciled["state"]["status"] == "failed"
-    assert reconciled["state"]["error"]["type"] == "RunInterruptedError"
-    assert reconciled["partial"]["status"] == "failed"
-    assert reconciled["delivery"]["status"] == "failed"
+    assert reconciled["state"]["status"] == "queued"
+    assert reconciled["state"]["attempts"] == 1
+    assert reconciled["state"]["last_error"]["type"] == "RunInterruptedError"
+    assert reconciled["delivery"]["status"] == "pending"
     assert not (tmp_path / "runs" / run_id / "lock.json").exists()
     assert service.reconcile_incomplete_runs() == 0
 
@@ -123,6 +149,10 @@ def test_run_service_times_out_and_releases_lock(tmp_path, monkeypatch) -> None:
     service = RunService(tmp_path)
     run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
     run_id = run["run_id"]
+    run_dir = tmp_path / "runs" / run_id
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    state["max_attempts"] = 1
+    (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
     try:
         asyncio.run(service.execute_run(run_id))
@@ -141,7 +171,83 @@ def test_run_service_times_out_and_releases_lock(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "runs" / run_id / "lock.json").exists()
 
 
-def test_run_service_reconciles_timed_out_run_when_reading_list(tmp_path) -> None:
+def test_run_service_requeues_failed_attempt_before_retry_limit(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
+        raise RuntimeError("temporary failure")
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    run_id = run["run_id"]
+
+    try:
+        asyncio.run(service.execute_run(run_id))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("run should raise temporary failure")
+
+    queued = service.get_run(run_id)
+    assert queued["state"]["status"] == "queued"
+    assert queued["state"]["attempts"] == 1
+    assert queued["state"]["last_error"] == {"message": "temporary failure", "type": "RuntimeError"}
+    assert queued["result"] is None
+    assert not (tmp_path / "runs" / run_id / "lock.json").exists()
+
+
+def test_run_service_cancel_and_rerun(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    run_id = run["run_id"]
+
+    cancelled = service.cancel_run(run_id)
+    assert cancelled["state"]["status"] == "cancelled"
+    assert cancelled["result"]["status"] == "cancelled"
+    assert cancelled["partial"]["status"] == "cancelled"
+
+    rerun = service.rerun(run_id)
+    assert rerun["state"]["status"] == "queued"
+    assert rerun["state"]["attempts"] == 0
+    assert rerun["state"]["rerun_count"] == 1
+    assert rerun["result"] is None
+    assert rerun["partial"] is None
+
+
+def test_run_worker_executes_queued_run(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
+        return "worker answer"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path)
+    worker = RunWorkerService(
+        run_service=service,
+        system_log_service=SystemLogService(tmp_path),
+        worker_id="worker-a",
+        poll_interval_seconds=0.01,
+    )
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+
+    async def run_once():
+        await worker.tick()
+        return await service.wait_for_terminal(run["run_id"], poll_seconds=0.01)
+
+    completed = asyncio.run(run_once())
+
+    assert completed["state"]["status"] == "completed"
+    assert completed["state"]["worker_id"] == "worker-a"
+    assert completed["result"]["content"] == "worker answer"
+    assert not (tmp_path / "runs" / run["run_id"] / "lock.json").exists()
+
+
+def test_run_service_reconciles_exhausted_timed_out_run_when_reading_list(tmp_path) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
 
     service = RunService(tmp_path)
@@ -153,6 +259,8 @@ def test_run_service_reconciles_timed_out_run_when_reading_list(tmp_path) -> Non
     state["status"] = "running"
     state["created_at"] = stale_at
     state["updated_at"] = stale_at
+    state["attempts"] = 2
+    state["max_attempts"] = 2
     (run_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
     runs = service.list_runs()
@@ -167,29 +275,27 @@ def test_run_service_reconciles_timed_out_run_when_reading_list(tmp_path) -> Non
     assert not (run_dir / "lock.json").exists()
 
 
-def test_run_service_reconciles_stale_heartbeat_when_reading_run(tmp_path) -> None:
+def test_run_service_requeues_stale_heartbeat_when_reading_run(tmp_path) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
 
     service = RunService(tmp_path)
     run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
     run_id = run["run_id"]
+    service.claim_run(run_id, worker_id="worker-a")
     stale_heartbeat = (datetime.now(timezone.utc) - timedelta(seconds=121)).isoformat()
     run_dir = tmp_path / "runs" / run_id
     lock = json.loads((run_dir / "lock.json").read_text(encoding="utf-8"))
     lock["heartbeat_at"] = stale_heartbeat
     (run_dir / "lock.json").write_text(json.dumps(lock), encoding="utf-8")
 
-    failed = service.get_run(run_id)
+    recovered = service.get_run(run_id)
 
-    assert failed["state"]["status"] == "failed"
-    assert failed["state"]["error"] == {
-        "message": "run heartbeat is older than 120 seconds",
-        "type": "RunStaleHeartbeatError",
-    }
+    assert recovered["state"]["status"] == "queued"
+    assert recovered["state"]["last_error"]["type"] == "RunStaleHeartbeatError"
     assert not (run_dir / "lock.json").exists()
 
 
-def test_run_service_marks_cancelled_execution_failed(tmp_path, monkeypatch) -> None:
+def test_run_service_marks_cancelled_execution_cancelled(tmp_path, monkeypatch) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
 
     async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
@@ -208,9 +314,9 @@ def test_run_service_marks_cancelled_execution_failed(tmp_path, monkeypatch) -> 
     else:
         raise AssertionError("run should propagate cancellation")
 
-    failed = service.get_run(run_id)
-    assert failed["state"]["status"] == "failed"
-    assert failed["state"]["error"] == {
+    cancelled = service.get_run(run_id)
+    assert cancelled["state"]["status"] == "cancelled"
+    assert cancelled["state"]["error"] == {
         "message": "run execution task was cancelled before completion",
         "type": "RunExecutionCancelledError",
     }

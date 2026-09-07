@@ -726,7 +726,7 @@ function RunsPage() {
         acc[status] = (acc[status] || 0) + 1;
         return acc;
       },
-      { total: 0, queued: 0, running: 0, completed: 0, failed: 0 },
+      { total: 0, queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 },
     );
   }, [runs]);
 
@@ -779,6 +779,12 @@ function RunsPage() {
     setActiveRun((current) => mergeRunSnapshot(current, run));
   }
 
+  async function runAction(runId, action) {
+    const run = await api(`/api/runs/${runId}/${action}`, { method: "POST" });
+    setActiveRun((current) => (current?.run_id === run.run_id ? mergeRunSnapshot(current, run) : run));
+    await load();
+  }
+
   return (
     <section className="console-screen runs-screen">
       <div className="metrics-row">
@@ -786,11 +792,12 @@ function RunsPage() {
         <Metric label="运行中" value={counts.running} tone="cyan" />
         <Metric label="已完成" value={counts.completed} tone="green" />
         <Metric label="失败" value={counts.failed} tone="red" />
+        <Metric label="已取消" value={counts.cancelled} tone="red" />
       </div>
 
       <div className="runs-grid">
         <RunIndex runs={runs} activeRunId={activeRun?.run_id} onSelect={selectRun} onRefresh={load} />
-        <RunDetail run={activeRun} events={events} />
+        <RunDetail run={activeRun} events={events} onRunAction={runAction} />
         <StatusRail runs={runs} />
       </div>
     </section>
@@ -843,7 +850,7 @@ function RunIndex({ runs, activeRunId, onSelect, onRefresh }) {
   );
 }
 
-function RunDetail({ run, events }) {
+function RunDetail({ run, events, onRunAction }) {
   if (!run) {
     return (
       <section className="panel run-detail empty-detail">
@@ -861,6 +868,8 @@ function RunDetail({ run, events }) {
   const sessionId = input.session_id || state.session_id || run.session_id || "";
   const status = runStatus(run);
   const resultLabel = run.result?.content ? "结果预览" : partial ? "正在生成" : "结果预览";
+  const canCancel = status === "queued" || status === "running";
+  const canRerun = status === "completed" || status === "failed" || status === "cancelled";
 
   return (
     <section className="panel run-detail">
@@ -869,7 +878,19 @@ function RunDetail({ run, events }) {
           <span className="section-label">Run 详情</span>
           <h2>{runId}</h2>
         </div>
-        <Status status={status} />
+        <div className="detail-actions">
+          <Status status={status} />
+          {canCancel ? (
+            <button className="icon-button danger" onClick={() => onRunAction?.(runId, "cancel")} title="取消 Run">
+              <XCircle size={15} />
+            </button>
+          ) : null}
+          {canRerun ? (
+            <button className="icon-button" onClick={() => onRunAction?.(runId, "rerun")} title="重跑 Run">
+              <RefreshCw size={15} />
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="kv-grid">
         <Kv label="Agent" value={input.agent_id || run.agent_id || "-"} />
@@ -2787,7 +2808,7 @@ function renderMarkdownInline(text, keyPrefix) {
 
 function Status({ status }) {
   const value = normalizeStatus(status);
-  const icon = value === "failed" || value === "exited" ? <XCircle size={12} /> : <CheckCircle2 size={12} />;
+  const icon = value === "failed" || value === "cancelled" || value === "exited" ? <XCircle size={12} /> : <CheckCircle2 size={12} />;
   return (
     <span className={`status status-${String(value)}`}>
       {icon}

@@ -36,7 +36,8 @@ from server.infrastructure.deepagent_runtime import (
 from server.infrastructure.tool_runtime import PlatformToolContext
 
 
-RUN_STATUSES = {"queued", "running", "completed", "failed"}
+RUN_STATUSES = {"queued", "running", "completed", "failed", "cancelled"}
+TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 SESSION_HISTORY_READ_LIMIT = 120
 SESSION_RUNTIME_MESSAGE_LIMIT = 60
 STREAM_PARTIAL_FLUSH_SECONDS = 0.5
@@ -44,9 +45,15 @@ STREAM_PARTIAL_FLUSH_CHARS = 160
 RUN_EXECUTION_TIMEOUT_SECONDS = 30 * 60
 RUN_LOCK_HEARTBEAT_SECONDS = 15
 RUN_STALE_HEARTBEAT_SECONDS = 120
+RUN_RETRY_MAX_ATTEMPTS = 2
+RUN_WORKER_POLL_SECONDS = 1
 
 
 class RunNotFoundError(Exception):
+    pass
+
+
+class RunStateError(Exception):
     pass
 
 
@@ -75,7 +82,7 @@ class RunService:
         self._schedule_service = schedule_service
 
     def reconcile_incomplete_runs(self) -> int:
-        """Fail runs left non-terminal by a previous service process."""
+        """Recover runs left non-terminal by a previous service process."""
         reconciled = 0
         for item in self._list_runs_no_reconcile():
             run_id = str(item.get("run_id") or "").strip()
@@ -85,16 +92,19 @@ class RunService:
                 state = _read_json(self._run_dir(run_id) / "state.json")
             except (FileNotFoundError, json.JSONDecodeError, OSError):
                 continue
-            if state.get("status") not in {"queued", "running"}:
+            status = state.get("status")
+            if status == "queued":
                 continue
-            self.fail_run(
+            if status != "running":
+                continue
+            if self._recover_active_run(
                 run_id,
                 error={
                     "type": "RunInterruptedError",
                     "message": "service restarted before run completion",
                 },
-            )
-            reconciled += 1
+            ):
+                reconciled += 1
         return reconciled
 
     async def create_run(
@@ -155,9 +165,10 @@ class RunService:
                 "created_at": now,
                 "updated_at": now,
                 "seq": 0,
+                "attempts": 0,
+                "max_attempts": RUN_RETRY_MAX_ATTEMPTS,
             },
         )
-        _write_json(run_dir / "lock.json", {"pid": os.getpid(), "created_at": now, "heartbeat_at": now})
         _write_json(run_dir / "delivery.json", {"source": source, "session_id": session_id, "status": "pending"})
         if session_id and self._session_service is not None:
             self._session_service.append_message(
@@ -179,7 +190,8 @@ class RunService:
         self._upsert_index(self._summary_from_state(run_id))
         return self.get_run(run_id)
 
-    async def execute_run(self, run_id: str) -> dict[str, Any]:
+    async def execute_run(self, run_id: str, *, lease_id: str = "") -> dict[str, Any]:
+        execution_lease_id = self._ensure_execution_lease(run_id, lease_id=lease_id)
         run_input = self._load_input(run_id)
         settings = load_settings(self._workspace / "config.yaml")
         model_id = str(run_input["snapshot"]["agent"].get("model_id") or settings.agent_workspace.default_model_id)
@@ -211,7 +223,7 @@ class RunService:
         effective_system_prompt = system_prompt
         runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
         stream_recorder = _RunStreamRecorder(run_id=run_id, run_dir=self._run_dir(run_id), append_event=self._append_event)
-        self._set_state(run_id, "running")
+        self._set_state(run_id, "running", extra={"worker_lease_id": execution_lease_id})
         running_payload = RunLifecyclePayload(message="DeepAgent started")
         self._append_event(run_id, RunEventType.RUNNING, running_payload)
         stream_recorder.record_snapshot_event(RunEventType.RUNNING, running_payload)
@@ -227,7 +239,7 @@ class RunService:
             )
             stream_recorder.record_snapshot_event(RunEventType.IMAGE_ATTACHMENTS_TEXTIFIED, image_payload)
 
-        heartbeat_task = asyncio.create_task(self._heartbeat_run_lock(run_id))
+        heartbeat_task = asyncio.create_task(self._heartbeat_run_lock(run_id, lease_id=execution_lease_id))
         try:
             async with asyncio.timeout(RUN_EXECUTION_TIMEOUT_SECONDS):
                 result = await DeepAgentRuntime(
@@ -256,8 +268,15 @@ class RunService:
                 "message": "run execution task was cancelled before completion",
                 "type": "RunExecutionCancelledError",
             }
-            stream_recorder.fail(error)
-            self._fail_executing_run(run_id, error)
+            if not self._run_has_terminal_state(run_id):
+                stream_recorder.fail(error)
+                self._fail_executing_run(
+                    run_id,
+                    error,
+                    lease_id=execution_lease_id,
+                    status="cancelled",
+                    retryable=False,
+                )
             raise
         except Exception as exc:
             error = {
@@ -269,14 +288,21 @@ class RunService:
                 "type": "RunExecutionTimeoutError" if isinstance(exc, TimeoutError) else exc.__class__.__name__,
             }
             stream_recorder.fail(error)
-            self._fail_executing_run(run_id, error)
+            self._fail_executing_run(run_id, error, lease_id=execution_lease_id, retryable=True)
             raise
         finally:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
 
-        if self._run_has_terminal_state(run_id):
+        cancel_requested_at = self._cancel_requested_at(run_id)
+        if cancel_requested_at:
+            error = {"message": "run was cancelled", "type": "RunCancelledError"}
+            stream_recorder.fail(error)
+            self._fail_executing_run(run_id, error, lease_id=execution_lease_id, status="cancelled", retryable=False)
+            return self.get_run(run_id)
+
+        if self._run_has_terminal_state(run_id) or not self._lease_matches(run_id, execution_lease_id):
             return self.get_run(run_id)
 
         result_payload = {
@@ -316,7 +342,7 @@ class RunService:
             return
         state_path = run_dir / "state.json"
         state = _read_json(state_path)
-        if state.get("status") in {"completed", "failed"}:
+        if state.get("status") in TERMINAL_RUN_STATUSES:
             return
         existing_result = run_dir / "result.json"
         if not existing_result.exists():
@@ -334,6 +360,130 @@ class RunService:
         self._mark_partial_failed(run_id, error)
         self._release_lock(run_id)
 
+    def claim_next_run(self, *, worker_id: str) -> dict[str, str] | None:
+        self.reconcile_stale_active_runs()
+        for item in reversed(self._list_runs_no_reconcile()):
+            run_id = str(item.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            claim = self.claim_run(run_id, worker_id=worker_id)
+            if claim is not None:
+                return claim
+        return None
+
+    def claim_run(self, run_id: str, *, worker_id: str) -> dict[str, str] | None:
+        run_dir = self._run_dir(run_id)
+        if not run_dir.exists():
+            raise RunNotFoundError(run_id)
+        state = _read_json(run_dir / "state.json")
+        if state.get("status") != "queued":
+            return None
+        if state.get("cancel_requested_at"):
+            self.cancel_run(run_id)
+            return None
+        lock_path = run_dir / "lock.json"
+        if lock_path.exists():
+            if _lock_is_stale(lock_path):
+                lock_path.unlink(missing_ok=True)
+            else:
+                return None
+        lease_id = uuid.uuid4().hex
+        now = _now()
+        payload = {
+            "pid": os.getpid(),
+            "worker_id": worker_id,
+            "lease_id": lease_id,
+            "created_at": now,
+            "heartbeat_at": now,
+        }
+        try:
+            fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            return None
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+                lock_file.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        except Exception:
+            with suppress(OSError):
+                lock_path.unlink()
+            raise
+        attempts = int(state.get("attempts") or 0) + 1
+        self._set_state(
+            run_id,
+            "running",
+            extra={
+                "attempts": attempts,
+                "max_attempts": int(state.get("max_attempts") or RUN_RETRY_MAX_ATTEMPTS),
+                "worker_id": worker_id,
+                "worker_lease_id": lease_id,
+                "started_at": now,
+                "heartbeat_at": now,
+                "cancel_requested_at": None,
+            },
+        )
+        return {"run_id": run_id, "lease_id": lease_id}
+
+    def cancel_run(self, run_id: str) -> dict[str, Any]:
+        run_dir = self._run_dir(run_id)
+        if not run_dir.exists():
+            raise RunNotFoundError(run_id)
+        state = _read_json(run_dir / "state.json")
+        if state.get("status") in TERMINAL_RUN_STATUSES:
+            return self.get_run(run_id)
+        now = _now()
+        error = {"type": "RunCancelledError", "message": "run was cancelled"}
+        if state.get("status") in {"queued", "running"}:
+            _write_json(
+                run_dir / "result.json",
+                {"run_id": run_id, "status": "cancelled", "error": error, "completed_at": now},
+            )
+            self._set_state(run_id, "cancelled", error=error, extra={"cancel_requested_at": now})
+            self._append_event(run_id, RunEventType.CANCELLED, RunErrorPayload(message=error["message"], type=error["type"]))
+            self._set_delivery(run_id, "cancelled", error=error)
+            self._mark_partial_failed(run_id, error, status="cancelled")
+            self._release_lock(run_id)
+            return self.get_run(run_id)
+        return self.get_run(run_id)
+
+    def rerun(self, run_id: str) -> dict[str, Any]:
+        run_dir = self._run_dir(run_id)
+        if not run_dir.exists():
+            raise RunNotFoundError(run_id)
+        state = _read_json(run_dir / "state.json")
+        if state.get("status") not in TERMINAL_RUN_STATUSES:
+            raise RunStateError("only terminal runs can be rerun")
+        now = _now()
+        for filename in ("result.json", "partial.json"):
+            with suppress(OSError):
+                (run_dir / filename).unlink()
+        next_state = {
+            **state,
+            "status": "queued",
+            "updated_at": now,
+            "attempts": 0,
+            "max_attempts": int(state.get("max_attempts") or RUN_RETRY_MAX_ATTEMPTS),
+            "last_error": state.get("error"),
+            "error": None,
+            "cancel_requested_at": None,
+            "worker_id": "",
+            "worker_lease_id": "",
+            "rerun_count": int(state.get("rerun_count") or 0) + 1,
+        }
+        _write_json(run_dir / "state.json", next_state)
+        self._set_delivery(run_id, "pending")
+        self._append_event(run_id, RunEventType.QUEUED, RunLifecyclePayload(message="run rerun queued"))
+        self._release_lock(run_id)
+        self._upsert_index(self._summary_from_state(run_id))
+        return self.get_run(run_id)
+
+    async def wait_for_terminal(self, run_id: str, *, poll_seconds: float = RUN_WORKER_POLL_SECONDS) -> dict[str, Any]:
+        while True:
+            run = self.get_run(run_id)
+            state = run.get("state") if isinstance(run.get("state"), dict) else {}
+            if state.get("status") in TERMINAL_RUN_STATUSES:
+                return run
+            await asyncio.sleep(poll_seconds)
+
     def reconcile_stale_active_runs(self) -> int:
         reconciled = 0
         for item in self._list_runs_no_reconcile():
@@ -344,20 +494,21 @@ class RunService:
                 reconciled += 1
         return reconciled
 
-    def _mark_partial_failed(self, run_id: str, error: dict[str, Any]) -> None:
+    def _mark_partial_failed(self, run_id: str, error: dict[str, Any], *, status: str = "failed") -> None:
         partial_path = self._run_dir(run_id) / "partial.json"
         partial = _read_json(partial_path) if partial_path.exists() else {}
         thinking = partial.get("thinking") if isinstance(partial.get("thinking"), list) else []
-        if not thinking or thinking[-1] != "运行中断，未生成最终正文":
-            thinking.append("运行中断，未生成最终正文")
+        message = "运行已取消，未生成最终正文" if status == "cancelled" else "运行中断，未生成最终正文"
+        if not thinking or thinking[-1] != message:
+            thinking.append(message)
         _write_json(
             partial_path,
             {
                 "run_id": run_id,
-                "status": "failed",
+                "status": status,
                 "content": str(partial.get("content") or ""),
                 "thinking": thinking[-20:],
-                "thinking_status": "failed",
+                "thinking_status": status,
                 "thinking_collapsed": True,
                 "error": error,
                 "updated_at": _now(),
@@ -375,7 +526,7 @@ class RunService:
         for item in self.list_runs():
             run_id = str(item.get("run_id") or "").strip()
             status = str(item.get("status") or "").strip()
-            if not run_id or status in {"completed", "failed"}:
+            if not run_id or status in TERMINAL_RUN_STATUSES:
                 continue
             try:
                 run_input = self._load_input(run_id)
@@ -383,7 +534,7 @@ class RunService:
             except Exception:
                 continue
             metadata = run_input.get("metadata") if isinstance(run_input.get("metadata"), dict) else {}
-            if metadata.get("schedule_id") == target_schedule_id and state.get("status") not in {"completed", "failed"}:
+            if metadata.get("schedule_id") == target_schedule_id and state.get("status") not in TERMINAL_RUN_STATUSES:
                 return run_id
         return ""
 
@@ -477,6 +628,7 @@ class RunService:
         status: str,
         *,
         error: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         if status not in RUN_STATUSES:
             raise ValueError("invalid run status")
@@ -486,6 +638,8 @@ class RunService:
         state["updated_at"] = _now()
         if error is not None:
             state["error"] = error
+        if extra:
+            state.update(extra)
         _write_json(state_path, state)
         self._upsert_index(self._summary_from_state(run_id))
 
@@ -509,16 +663,47 @@ class RunService:
             payload["error"] = error
         _write_json(self._run_dir(run_id) / "delivery.json", payload)
 
-    def _fail_executing_run(self, run_id: str, error: dict[str, Any]) -> None:
-        if self._run_has_terminal_state(run_id):
+    def _fail_executing_run(
+        self,
+        run_id: str,
+        error: dict[str, Any],
+        *,
+        lease_id: str,
+        status: str = "failed",
+        retryable: bool = False,
+    ) -> None:
+        if self._run_has_terminal_state(run_id) or not self._lease_matches(run_id, lease_id):
+            return
+        state = _read_json(self._run_dir(run_id) / "state.json")
+        attempts = int(state.get("attempts") or 0)
+        max_attempts = int(state.get("max_attempts") or RUN_RETRY_MAX_ATTEMPTS)
+        if retryable and status == "failed" and attempts < max_attempts:
+            self._release_lock(run_id)
+            self._set_state(
+                run_id,
+                "queued",
+                extra={
+                    "last_error": error,
+                    "worker_id": "",
+                    "worker_lease_id": "",
+                    "heartbeat_at": None,
+                    "cancel_requested_at": None,
+                },
+            )
+            self._append_event(
+                run_id,
+                RunEventType.QUEUED,
+                RunLifecyclePayload(message=f"run retry queued: {error.get('type') or 'execution error'}"),
+            )
             return
         _write_json(
             self._run_dir(run_id) / "result.json",
-            {"run_id": run_id, "status": "failed", "error": error, "completed_at": _now()},
+            {"run_id": run_id, "status": status, "error": error, "completed_at": _now()},
         )
-        self._set_state(run_id, "failed", error=error)
-        self._append_event(run_id, RunEventType.FAILED, RunErrorPayload(message=error["message"], type=error["type"]))
-        self._set_delivery(run_id, "failed", error=error)
+        self._set_state(run_id, status, error=error)
+        event_type = RunEventType.CANCELLED if status == "cancelled" else RunEventType.FAILED
+        self._append_event(run_id, event_type, RunErrorPayload(message=error["message"], type=error["type"]))
+        self._set_delivery(run_id, status, error=error)
         self._release_lock(run_id)
 
     def _run_has_terminal_state(self, run_id: str) -> bool:
@@ -526,9 +711,30 @@ class RunService:
             state = _read_json(self._run_dir(run_id) / "state.json")
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return False
-        return state.get("status") in {"completed", "failed"}
+        return state.get("status") in TERMINAL_RUN_STATUSES
 
-    async def _heartbeat_run_lock(self, run_id: str) -> None:
+    def _cancel_requested_at(self, run_id: str) -> str:
+        try:
+            state = _read_json(self._run_dir(run_id) / "state.json")
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return ""
+        return str(state.get("cancel_requested_at") or "").strip()
+
+    def _ensure_execution_lease(self, run_id: str, *, lease_id: str) -> str:
+        run_dir = self._run_dir(run_id)
+        if not run_dir.exists():
+            raise RunNotFoundError(run_id)
+        if lease_id and self._lease_matches(run_id, lease_id):
+            return lease_id
+        state = _read_json(run_dir / "state.json")
+        if state.get("status") in TERMINAL_RUN_STATUSES:
+            raise RunStateError("terminal run cannot be executed")
+        claim = self.claim_run(run_id, worker_id="direct")
+        if claim is None:
+            raise RunStateError("run could not be claimed for execution")
+        return claim["lease_id"]
+
+    async def _heartbeat_run_lock(self, run_id: str, *, lease_id: str) -> None:
         while True:
             await asyncio.sleep(RUN_LOCK_HEARTBEAT_SECONDS)
             run_dir = self._run_dir(run_id)
@@ -538,10 +744,32 @@ class RunService:
                 if state.get("status") not in {"queued", "running"}:
                     return
                 lock = _read_json(lock_path) if lock_path.exists() else {}
+                if str(lock.get("lease_id") or "").strip() != lease_id:
+                    return
                 created_at = str(lock.get("created_at") or state.get("created_at") or _now())
-                _write_json(lock_path, {"pid": os.getpid(), "created_at": created_at, "heartbeat_at": _now()})
+                now = _now()
+                _write_json(
+                    lock_path,
+                    {
+                        "pid": os.getpid(),
+                        "worker_id": str(lock.get("worker_id") or ""),
+                        "lease_id": lease_id,
+                        "created_at": created_at,
+                        "heartbeat_at": now,
+                    },
+                )
+                self._set_state(run_id, "running", extra={"heartbeat_at": now})
             except (FileNotFoundError, json.JSONDecodeError, OSError):
                 return
+
+    def _lease_matches(self, run_id: str, lease_id: str) -> bool:
+        if not lease_id:
+            return False
+        try:
+            lock = _read_json(self._run_dir(run_id) / "lock.json")
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return False
+        return str(lock.get("lease_id") or "").strip() == lease_id
 
     def _reconcile_run_if_stale(self, run_id: str) -> bool:
         run_dir = self._run_dir(run_id)
@@ -549,20 +777,19 @@ class RunService:
             state = _read_json(run_dir / "state.json")
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return False
-        if state.get("status") not in {"queued", "running"}:
+        if state.get("status") != "running":
             return False
 
         now = datetime.now(timezone.utc)
         created_at = _parse_datetime(state.get("created_at")) or _parse_datetime(state.get("updated_at"))
         if created_at is not None and (now - created_at).total_seconds() > RUN_EXECUTION_TIMEOUT_SECONDS:
-            self.fail_run(
+            return self._recover_active_run(
                 run_id,
                 error={
                     "type": "RunExecutionTimeoutError",
                     "message": f"run exceeded the {RUN_EXECUTION_TIMEOUT_SECONDS}-second execution limit",
                 },
             )
-            return True
 
         lock_path = run_dir / "lock.json"
         if not lock_path.exists():
@@ -573,15 +800,46 @@ class RunService:
             return False
         heartbeat_at = _parse_datetime(lock.get("heartbeat_at"))
         if heartbeat_at is not None and (now - heartbeat_at).total_seconds() > RUN_STALE_HEARTBEAT_SECONDS:
-            self.fail_run(
+            return self._recover_active_run(
                 run_id,
                 error={
                     "type": "RunStaleHeartbeatError",
                     "message": f"run heartbeat is older than {RUN_STALE_HEARTBEAT_SECONDS} seconds",
                 },
             )
-            return True
         return False
+
+    def _recover_active_run(self, run_id: str, *, error: dict[str, Any]) -> bool:
+        run_dir = self._run_dir(run_id)
+        try:
+            state = _read_json(run_dir / "state.json")
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return False
+        if state.get("status") in TERMINAL_RUN_STATUSES:
+            return False
+        attempts = int(state.get("attempts") or 0)
+        max_attempts = int(state.get("max_attempts") or RUN_RETRY_MAX_ATTEMPTS)
+        if attempts < max_attempts:
+            self._release_lock(run_id)
+            self._set_state(
+                run_id,
+                "queued",
+                extra={
+                    "last_error": error,
+                    "worker_id": "",
+                    "worker_lease_id": "",
+                    "heartbeat_at": None,
+                    "cancel_requested_at": None,
+                },
+            )
+            self._append_event(
+                run_id,
+                RunEventType.QUEUED,
+                RunLifecyclePayload(message=f"run recovered and requeued: {error.get('type') or 'stale run'}"),
+            )
+            return True
+        self.fail_run(run_id, error=error)
+        return True
 
     def _append_event(self, run_id: str, event_type: RunEventType | str, payload: RunEventPayload) -> None:
         run_dir = self._run_dir(run_id)
@@ -1028,3 +1286,14 @@ def _parse_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _lock_is_stale(path: Path) -> bool:
+    try:
+        payload = _read_json(path)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return True
+    heartbeat = _parse_datetime(payload.get("heartbeat_at")) or _parse_datetime(payload.get("created_at"))
+    if heartbeat is None:
+        return True
+    return (datetime.now(timezone.utc) - heartbeat).total_seconds() > RUN_STALE_HEARTBEAT_SECONDS

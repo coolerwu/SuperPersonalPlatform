@@ -44,12 +44,14 @@ class WechatChannelService:
         self,
         workspace: Path,
         run_service: Any,
+        run_worker_service: Any = None,
         session_service: Any = None,
         system_log_service: Any = None,
         account_id: str = "default",
     ) -> None:
         self._workspace = workspace
         self._run_service = run_service
+        self._run_worker_service = run_worker_service
         self._session_service = session_service
         self._system_log_service = system_log_service
         self._account_id = account_id
@@ -567,7 +569,12 @@ class WechatChannelService:
                 attachments=tuple(attachments),
                 metadata=metadata,
             )
-            completed = await self._run_service.execute_run(str(run["run_id"]))
+            run_id = str(run["run_id"])
+            if self._run_worker_service is not None:
+                self._run_worker_service.wake()
+                completed = await self._run_worker_service.wait_for_run(run_id)
+            else:
+                completed = await self._run_service.execute_run(run_id)
             result = completed.get("result") or {}
             reply = str(result.get("content") or result.get("error") or "任务没有返回内容")
         except Exception as exc:
