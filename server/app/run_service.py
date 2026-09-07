@@ -200,14 +200,16 @@ class RunService:
         system_prompt = str(agent_snapshot.get("system_prompt") or "")
         content = str(run_input.get("content") or "")
         session_id = str(run_input.get("session_id") or "")
+        runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
+        use_session_checkpoint = bool(session_id and _agent_checkpointer_enabled(agent_snapshot))
         history = (
             self._session_service.read_messages(session_id, limit=SESSION_HISTORY_READ_LIMIT)
             if session_id and self._session_service is not None
             else []
         )
         fallback_attachments = _runtime_attachments(run_input.get("attachments") or [], workspace=self._workspace)
-        checkpoint_path = self._workspace / "sessions" / "checkpoints.sqlite" if session_id else None
-        runtime_history = _current_run_messages(history, run_id) if checkpoint_path is not None else history[-SESSION_RUNTIME_MESSAGE_LIMIT:]
+        checkpoint_path = self._workspace / "sessions" / "checkpoints.sqlite" if use_session_checkpoint else None
+        runtime_history = _current_run_messages(history, run_id) if use_session_checkpoint else history[-SESSION_RUNTIME_MESSAGE_LIMIT:]
         runtime_messages = _runtime_messages(
             runtime_history,
             fallback_content=content,
@@ -221,7 +223,6 @@ class RunService:
                 workspace=self._workspace,
             )
         effective_system_prompt = system_prompt
-        runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
         stream_recorder = _RunStreamRecorder(run_id=run_id, run_dir=self._run_dir(run_id), append_event=self._append_event)
         self._set_state(run_id, "running", extra={"worker_lease_id": execution_lease_id})
         running_payload = RunLifecyclePayload(message="DeepAgent started")
@@ -259,7 +260,7 @@ class RunService:
                     messages=runtime_messages,
                     options=runtime_options,
                     checkpoint_path=checkpoint_path,
-                    thread_id=session_id,
+                    thread_id=session_id if use_session_checkpoint else "",
                     stream_callback=stream_recorder.record,
                 )
             stream_recorder.finish(result)
@@ -1134,6 +1135,13 @@ def _runtime_messages(
 def _current_run_messages(history: list[dict[str, Any]], run_id: str) -> list[dict[str, Any]]:
     current = [item for item in history if isinstance(item, dict) and str(item.get("run_id") or "") == run_id]
     return current[-1:] if current else []
+
+
+def _agent_checkpointer_enabled(agent_snapshot: Any) -> bool:
+    if not isinstance(agent_snapshot, dict):
+        return False
+    deepagent = agent_snapshot.get("deepagent")
+    return bool(deepagent.get("checkpointer")) if isinstance(deepagent, dict) else False
 
 
 def _textify_image_attachments(

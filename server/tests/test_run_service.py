@@ -49,6 +49,7 @@ agents:
 
 
 IMAGE_CONFIG = CONFIG.replace("model: gpt-4o-mini", "model: gpt-4o-mini\n      supports_images: true")
+CHECKPOINT_CONFIG = CONFIG.replace("        tools:\n          - search_context\n", "        tools:\n          - search_context\n        checkpointer: true\n")
 
 
 def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatch) -> None:
@@ -437,7 +438,7 @@ def test_run_service_finds_latest_active_schedule_run(tmp_path) -> None:
 
 
 def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
-    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(CHECKPOINT_CONFIG, encoding="utf-8")
     session_service = SessionService(tmp_path)
     session = session_service.get_or_create(
         channel="wechat",
@@ -484,7 +485,7 @@ def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
 
 
 def test_run_service_uses_checkpoint_without_injecting_prior_session_context(tmp_path, monkeypatch) -> None:
-    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(CHECKPOINT_CONFIG, encoding="utf-8")
     session_service = SessionService(tmp_path)
     session = session_service.get_or_create(
         channel="wechat",
@@ -531,6 +532,45 @@ def test_run_service_uses_checkpoint_without_injecting_prior_session_context(tmp
     assert len(captured["messages"]) == 1
     assert captured["messages"][-1].content == "再给我几个类似项目"
     assert captured["thread_id"] == session.session_id
+
+
+def test_run_service_uses_recent_history_when_checkpointer_is_disabled(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    session_service = SessionService(tmp_path)
+    session = session_service.get_or_create(
+        channel="wechat",
+        channel_account_id="main",
+        peer_type="private",
+        peer_id="wxid_demo",
+        agent_id="assistant",
+    )
+    session_service.append_message(session.session_id, role="user", content="第一句")
+    session_service.append_message(session.session_id, role="assistant", content="第一答")
+
+    captured = {}
+
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
+        captured["messages"] = messages
+        captured["checkpoint_path"] = checkpoint_path
+        captured["thread_id"] = thread_id
+        return "session answer"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path, session_service=session_service)
+    run = asyncio.run(
+        service.create_run(
+            content="第二句",
+            agent_id="assistant",
+            source="wechat",
+            session_id=session.session_id,
+        )
+    )
+    asyncio.run(service.execute_run(run["run_id"]))
+
+    assert captured["checkpoint_path"] is None
+    assert captured["thread_id"] == ""
+    assert [message.content for message in captured["messages"]] == ["第一句", "第一答", "第二句"]
 
 
 def test_run_service_persists_session_image_attachments(tmp_path, monkeypatch) -> None:
