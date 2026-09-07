@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from server.app.context_knowledge_service import ContextKnowledgeError, ContextKnowledgeService
+from server.app.code_execution_service import CodeExecutionService
 from server.app.session_service import SessionService
 from server.app.webdav_context_service import WebDAVContextError, WebDAVContextService, run_async
 from server.domain.tooling import get_tool_definition
@@ -101,6 +102,10 @@ def build_platform_tools(
             if schedule_service is None or tool_context is None:
                 continue
             tools.append(_schedule_tool(schedule_service, tool_context))
+        elif definition.id == "execute_code":
+            if tool_context is None:
+                continue
+            tools.append(_execute_code_tool(context_workspace.parent, tool_context))
     return tools
 
 
@@ -132,6 +137,49 @@ def _browser_config(context_workspace: Path) -> dict[str, Any]:
         "timeout_ms": settings.browser.timeout_ms,
         "allow_private_hosts": settings.browser.allow_private_hosts,
     }
+
+
+def _execute_code_tool(workspace: Path, tool_context: PlatformToolContext) -> Any:
+    from langchain_core.tools import StructuredTool
+
+    def execute_code(language: str, code: str, files: list[dict[str, Any]] | None = None) -> str:
+        """Run short Python or shell code inside the configured Docker + gVisor sandbox.
+
+        Use this for calculation, text/data transformation, small script experiments, and artifact generation.
+        The sandbox has no network and can only access the input/work/output mounts prepared for this execution.
+        Write files that should be returned to /workspace/output.
+        """
+        try:
+            settings = load_settings(workspace / "config.yaml")
+            service = CodeExecutionService(workspace, settings.code_execution)
+            return service.execute_sync(
+                language=language,
+                code=code,
+                files=tuple(files or ()),
+                agent_id=tool_context.agent_id,
+                run_id=tool_context.run_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _tool_error_result(
+                "execute_code",
+                exc,
+                suggestions=[
+                    "If code execution is disabled or unavailable, solve the task without running code when practical.",
+                    "If Docker/gVisor is missing, tell the user the configured sandbox runtime is unavailable.",
+                ],
+            )
+
+    return StructuredTool.from_function(
+        execute_code,
+        name="execute_code",
+        description=(
+            "Execute short Python or POSIX shell code inside Docker using the configured gVisor runtime. "
+            "The tool never falls back to host subprocess. It requires code_execution.enabled=true, Docker, runsc, and the configured image. "
+            "Network is disabled, no host secrets are passed, and only prepared /workspace/input, /workspace/work, and /workspace/output mounts are visible. "
+            "Use language='python' for Python 3.12 scripts or language='shell' for /bin/sh scripts. "
+            "Write generated files to /workspace/output to receive artifact paths. Args: language, code, optional files=[{path, content}]."
+        ),
+    )
 
 
 def _search_context_tool(service: ContextKnowledgeService, webdav_service: WebDAVContextService | None) -> Any:

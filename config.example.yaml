@@ -7,6 +7,24 @@ browser:
   proxy: ""
   timeout_ms: 60000
   allow_private_hosts: []
+code_execution:
+  enabled: false
+  runtime: "docker_gvisor"
+  languages:
+    - "python"
+    - "shell"
+  timeout_seconds: 20
+  max_stdout_chars: 20000
+  max_stderr_chars: 20000
+  max_file_bytes: 10485760
+  max_files: 20
+  docker:
+    runtime: "runsc"
+    image: "python:3.12-slim-bookworm"
+    network: "none"
+    memory: "512m"
+    cpus: "1"
+    pids_limit: 64
 llm:
   default_model_id: "default"
   models:

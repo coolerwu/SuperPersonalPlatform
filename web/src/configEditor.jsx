@@ -44,12 +44,36 @@ const AGENT_TOOL_CARDS = [
     summary: "创建、查看、修改或删除当前会话自己创建的定时任务，并回发到渠道。",
     badge: "调度",
   },
+  {
+    id: "execute_code",
+    name: "Execute Code",
+    summary: "在 Docker + gVisor 沙箱中运行短 Python 或 shell 代码，输出 artifacts。",
+    badge: "沙箱",
+  },
 ];
 
 const DEFAULT_CONFIG = {
   auth: { token: "" },
   server: { host: "0.0.0.0", port: 8888 },
   browser: { proxy: "", timeout_ms: 60000, allow_private_hosts: [] },
+  code_execution: {
+    enabled: false,
+    runtime: "docker_gvisor",
+    languages: ["python", "shell"],
+    timeout_seconds: 20,
+    max_stdout_chars: 20000,
+    max_stderr_chars: 20000,
+    max_file_bytes: 10485760,
+    max_files: 20,
+    docker: {
+      runtime: "runsc",
+      image: "python:3.12-slim-bookworm",
+      network: "none",
+      memory: "512m",
+      cpus: "1",
+      pids_limit: 64,
+    },
+  },
   llm: {
     default_model_id: "default",
     models: [
@@ -1087,6 +1111,7 @@ function withDefaults(value) {
         allow_private_hosts: normalizeList(config.browser.allow_private_hosts),
       }
     : cloneConfig(DEFAULT_CONFIG.browser);
+  config.code_execution = normalizeCodeExecution(config.code_execution);
   config.context.webdav_sync.root_path = normalizePath(config.context.webdav_sync.root_path || "/");
   config.context.webdav_sync.extensions = normalizeList(config.context.webdav_sync.extensions);
   config.context.webdav_permissions = Array.isArray(config.context.webdav_permissions)
@@ -1145,6 +1170,29 @@ function normalizeDeepAgent(value) {
       }
     : cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent.filesystem);
   next.subagents = Array.isArray(next.subagents) ? next.subagents.filter(isPlainObject) : [];
+  return next;
+}
+
+function normalizeCodeExecution(value) {
+  const next = mergeObjects(cloneConfig(DEFAULT_CONFIG.code_execution), isPlainObject(value) ? value : {});
+  next.enabled = Boolean(next.enabled);
+  next.runtime = String(next.runtime || "docker_gvisor");
+  next.languages = normalizeList(next.languages);
+  next.timeout_seconds = Number(next.timeout_seconds) || 20;
+  next.max_stdout_chars = Number(next.max_stdout_chars) || 20000;
+  next.max_stderr_chars = Number(next.max_stderr_chars) || 20000;
+  next.max_file_bytes = Number(next.max_file_bytes) || 10485760;
+  next.max_files = Number(next.max_files) || 20;
+  next.docker = isPlainObject(next.docker)
+    ? {
+        runtime: String(next.docker.runtime || "runsc"),
+        image: String(next.docker.image || "python:3.12-slim-bookworm"),
+        network: String(next.docker.network || "none"),
+        memory: String(next.docker.memory || "512m"),
+        cpus: String(next.docker.cpus || "1"),
+        pids_limit: Number(next.docker.pids_limit) || 64,
+      }
+    : cloneConfig(DEFAULT_CONFIG.code_execution.docker);
   return next;
 }
 

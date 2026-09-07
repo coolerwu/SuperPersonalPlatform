@@ -50,6 +50,11 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         name="Schedule",
         description="Create, list, get, update, and delete this Agent's own scheduled tasks with current-channel delivery.",
     ),
+    ToolDefinition(
+        id="execute_code",
+        name="Execute Code",
+        description="Run short Python or shell code in a Docker + gVisor sandbox with no network and artifact collection.",
+    ),
 )
 
 

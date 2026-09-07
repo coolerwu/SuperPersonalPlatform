@@ -41,6 +41,56 @@ class BrowserConfig:
 
 
 @dataclass(frozen=True)
+class CodeExecutionDockerConfig:
+    runtime: str = "runsc"
+    image: str = "python:3.12-slim-bookworm"
+    network: str = "none"
+    memory: str = "512m"
+    cpus: str = "1"
+    pids_limit: int = 64
+
+    def __post_init__(self) -> None:
+        if not self.runtime:
+            raise ValueError("code_execution.docker.runtime is required")
+        if not self.image:
+            raise ValueError("code_execution.docker.image is required")
+        if self.network != "none":
+            raise ValueError("code_execution.docker.network must be none")
+        if self.pids_limit < 1:
+            raise ValueError("code_execution.docker.pids_limit must be greater than zero")
+
+
+@dataclass(frozen=True)
+class CodeExecutionConfig:
+    enabled: bool = False
+    runtime: str = "docker_gvisor"
+    languages: tuple[str, ...] = ("python", "shell")
+    timeout_seconds: int = 20
+    max_stdout_chars: int = 20000
+    max_stderr_chars: int = 20000
+    max_file_bytes: int = 10 * 1024 * 1024
+    max_files: int = 20
+    docker: CodeExecutionDockerConfig = field(default_factory=CodeExecutionDockerConfig)
+
+    def __post_init__(self) -> None:
+        if self.runtime != "docker_gvisor":
+            raise ValueError("code_execution.runtime must be docker_gvisor")
+        if not self.languages:
+            raise ValueError("code_execution.languages must not be empty")
+        invalid = [language for language in self.languages if language not in {"python", "shell"}]
+        if invalid:
+            raise ValueError("code_execution.languages may only contain python or shell")
+        if self.timeout_seconds < 1:
+            raise ValueError("code_execution.timeout_seconds must be greater than zero")
+        if self.max_stdout_chars < 100 or self.max_stderr_chars < 100:
+            raise ValueError("code_execution stdout/stderr limits must be at least 100 chars")
+        if self.max_file_bytes < 1:
+            raise ValueError("code_execution.max_file_bytes must be greater than zero")
+        if self.max_files < 0:
+            raise ValueError("code_execution.max_files must not be negative")
+
+
+@dataclass(frozen=True)
 class NutstoreConfig:
     enabled: bool = False
     base_url: str = "https://dav.jianguoyun.com/dav/"
@@ -110,6 +160,7 @@ class Settings:
     auth: AuthConfig
     server: ServerConfig
     browser: BrowserConfig = field(default_factory=BrowserConfig)
+    code_execution: CodeExecutionConfig = field(default_factory=CodeExecutionConfig)
     nutstore: NutstoreConfig = field(default_factory=NutstoreConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
@@ -149,6 +200,7 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
             port=int(server_raw.get("port") or 8888),
         ),
         browser=parse_browser_config(raw.get("browser") or {}),
+        code_execution=parse_code_execution_config(raw.get("code_execution") or {}),
         nutstore=parse_nutstore_config(nutstore_raw),
         context=parse_context_config(raw.get("context") or {}),
         maintenance=parse_maintenance_config(raw.get("maintenance") or {}),
@@ -272,6 +324,34 @@ def parse_browser_config(raw: Any) -> BrowserConfig:
         proxy=str(raw.get("proxy") or "").strip(),
         timeout_ms=int(raw.get("timeout_ms") or 60000),
         allow_private_hosts=_string_tuple(raw.get("allow_private_hosts") or [], field_name="browser.allow_private_hosts"),
+    )
+
+
+def parse_code_execution_config(raw: Any) -> CodeExecutionConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("code_execution must be an object")
+    docker_raw = raw.get("docker") or {}
+    if not isinstance(docker_raw, dict):
+        raise ValueError("code_execution.docker must be an object")
+    return CodeExecutionConfig(
+        enabled=bool(raw.get("enabled", False)),
+        runtime=str(raw.get("runtime") or "docker_gvisor").strip(),
+        languages=_string_tuple(raw.get("languages") or ["python", "shell"], field_name="code_execution.languages"),
+        timeout_seconds=int(raw.get("timeout_seconds") or 20),
+        max_stdout_chars=int(raw.get("max_stdout_chars") or 20000),
+        max_stderr_chars=int(raw.get("max_stderr_chars") or 20000),
+        max_file_bytes=int(raw.get("max_file_bytes") or 10 * 1024 * 1024),
+        max_files=int(raw.get("max_files") if raw.get("max_files") is not None else 20),
+        docker=CodeExecutionDockerConfig(
+            runtime=str(docker_raw.get("runtime") or "runsc").strip(),
+            image=str(docker_raw.get("image") or "python:3.12-slim-bookworm").strip(),
+            network=str(docker_raw.get("network") or "none").strip(),
+            memory=str(docker_raw.get("memory") or "512m").strip(),
+            cpus=str(docker_raw.get("cpus") or "1").strip(),
+            pids_limit=int(docker_raw.get("pids_limit") or 64),
+        ),
     )
 
 

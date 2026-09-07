@@ -24,7 +24,7 @@
 - `workspace/sessions/index.json` 维护所有长期会话索引；长期 session 对微信和未来渠道默认开启。`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`，DeepAgent/LangGraph 运行时状态统一写入 `workspace/sessions/checkpoints.sqlite`。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
 - `Agent` 还保存 DeepAgent 运行选项，包括 `max_iterations`、运行名、debug、Todo List、Agent 私有 filesystem、长期记忆开关、工具 ID、tool interrupt、subagents 和结构化输出等配置；当前后端实际执行已消费 `max_iterations`、`name`、`debug`、`todo_list`、`use_longterm_memory`、`interrupt_on` 和 `tools`。未接入运行时的 `store` 配置和旧版自建 `JsonFileStore` 已删除；当前长期文件统一由 Agent 私有 `AgentFilesystemBackend` 落盘。`SkillImprovementMiddleware` 在运行时代码中默认启用，不需要 workspace 配置开关。`filesystem.enabled` 作为配置兼容字段保留，但 DeepAgent 运行时始终把原生 filesystem 锚定到当前 Agent 私有目录。
-- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`search_session`、`arxiv`、`yahoo_finance_news`、`write_context`、`browser_extract` 和 `schedule`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
+- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_context`、`search_session`、`arxiv`、`yahoo_finance_news`、`write_context`、`browser_extract`、`schedule` 和 `execute_code`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
 - 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 active key，通过 `workspace/sessions/active.json` 找到当前 `session_id`，再创建 `source=wechat` 的 run；用户在微信发送“清空上下文 / 清空会话 / 开启新会话 / 新会话 / /clear / /new”或 `/session new` 时，通道层会归档旧 session 并为同一渠道身份切换到新的 active session。微信通道还内置 `/session help`、`/session status`、`/session list` 和 `/session change <编号或 session_id>`；这些指令由通道层直接消费，不创建 DeepAgent run。`/session change` 只能切换同一个 `wechat + account + peer + agent` 身份下的历史 session，不能跨用户、跨群、跨微信账号或跨 Agent。带 `session_id` 的 DeepAgent run 使用同一个 SQLite checkpointer 恢复 LangGraph 状态，只把当前 run 消息作为本次输入；`messages.jsonl` 继续保存渠道历史、审计和 `search_session` 检索数据，完成后由平台投递微信回复。
@@ -68,6 +68,9 @@ workspace/
 
   browser_profiles/
     {agent_id}/
+
+  code_runs/
+    {run_id}/
 
   runs/
     index.json
@@ -204,6 +207,20 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 
 浏览器授权 API 用于后台管理员操作服务器上的 Playwright persistent browser profile。Profile 固定按 Agent 隔离在 `workspace/browser_profiles/{agent_id}/`，不再按微信账号或单独 service 目录拆分；授权会话启动后前端通过截图、点击、键盘输入和跳转 API 操作同一个 headless browser context，完成或取消时关闭浏览器并释放 `profile.lock.json`。Agent 不能直接调用这些授权 API，也不能选择 profile 路径。
 
+Code Execution 配置：
+
+```yaml
+code_execution:
+  enabled: false
+  runtime: docker_gvisor
+  languages: ["python", "shell"]
+  timeout_seconds: 20
+  docker:
+    runtime: runsc
+    image: python:3.12-slim-bookworm
+    network: none
+```
+
 ## Frontend Routes
 
 - `/chat` 是页面 Chat 工作区，提供 Agent 选择、该 Agent 全部长期 session 切换、新会话、文本输入和 assistant 流式气泡；session 列表展示微信/Web 等来源、渠道身份、消息数和更新时间，不展示其它 Agent 的 session。页面可以打开并续聊微信 session，但只改变 Web Chat 当前选择，不切换微信通道本身的活跃会话。消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。`820px` 以下使用独立移动布局：全局侧栏收进顶部菜单控制的抽屉，Chat 占满剩余动态视口，会话诊断栏隐藏，Agent、session 和新会话操作保持在紧凑工具行，消息区独立滚动且输入框固定在工作区底部。
@@ -215,7 +232,7 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 - `/config` 基础配置栏目还维护 `maintenance` 清理配置，默认启用、保留 15 天、每天运行一次；也可设置为 dry run 只预览不删除。
 - `/config` 的 Context WebDAV 同步区域提供“测试连接”和“立即同步”操作；测试连接使用当前表单草稿测试 WebDAV，不保存配置且不回传 secret；立即同步调用后端手动同步接口读取已保存的 `workspace/config.yaml`，立刻把坚果云远端文件缓存到 `workspace/context/webdav/` 并返回文本/图片资源数量；保存配置本身仍只负责校验并写回 `config.yaml`。
 - `/providers` 是配置页内的模型 Provider 栏目直达入口，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
-- `/agent-config` 是配置页内的 Agent 栏目直达入口，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、会话历史检索工具 `search_session`、学术检索工具 `arxiv`、轻量财经新闻工具 `yahoo_finance_news`、需要确认的 `write_context`、浏览器能力 `browser_extract` 和用于对话式创建定时任务的 `schedule`；授权 `browser_extract` 会同时提供固定 Bing 的 `browser_search`，前端不单独展示搜索引擎或搜索工具选择；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
+- `/agent-config` 是配置页内的 Agent 栏目直达入口，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、会话历史检索工具 `search_session`、学术检索工具 `arxiv`、轻量财经新闻工具 `yahoo_finance_news`、需要确认的 `write_context`、浏览器能力 `browser_extract`、用于对话式创建定时任务的 `schedule` 和 Docker/gVisor 沙箱代码执行器 `execute_code`；授权 `browser_extract` 会同时提供固定 Bing 的 `browser_search`，前端不单独展示搜索引擎或搜索工具选择；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
 - `/schedules` 是定时任务管理页面，读取 `workspace/schedules/index.json` 和每个任务详情，支持查看内置 WebDAV 同步任务和维护清理任务、创建/编辑/删除 Agent 定时任务、启用/停用、立即运行和查看调度事件；任务创建表单只暴露 `prompt + agent + trigger` 等必要字段，不在前端执行 Agent。
 - `/browser` 是浏览器授权页，读取 `config.yaml` 中的 Agent 列表，允许管理员按 Agent 启动一个截图式 Playwright 授权会话，profile 路径固定为 `workspace/browser_profiles/{agent_id}/`；授权页提供 Agent/profile 列表、目标 URL、截图点击、文本输入、按键、完成和取消操作，不放入 `/config` 或 `/system`。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供新增、删除、启动和停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
@@ -247,6 +264,7 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 - WebDAV 同步会解析 Markdown 里的 `![...](...)` 和 `<img src="...">`，把被引用的 `.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.svg` 按相对目录结构作为二进制资源缓存到 `workspace/context/webdav/files/`；这些资源不进入 `search_context` 文本索引，当前也不通过 `write_context` 写入。
 - `browser_extract(url, include_links, max_chars)` 使用 Playwright headless browser 打开公开 `http/https` 页面，提取渲染后的文本和链接；对 `raw.githubusercontent.com`、`gist.githubusercontent.com` 和常见源码/文本扩展名 URL，会先用 HTTP 客户端按文本资源直接读取，避免纯文本文件因 Chromium SSL/导航问题失败，只有文本直取失败时才回退到浏览器导航。授权该浏览器能力时还会注入 `browser_search(query, top_k)`，它固定用同一个 Playwright 浏览器打开 Bing 搜索页并提取公开结果 URL、标题和片段，不新增 `web_search` provider、搜索引擎配置或 Agent 可选 `engine` 参数。浏览器工具的导航超时、页面提取失败、DNS/私网拦截、profile 占用等下游异常不再向上抛出导致整个 run failed，而是返回 `ok=false` 的 JSON 观察结果，交给 DeepAgent 改用其它搜索词、其它来源或向用户解释限制；真正的 RunService/落盘/配置加载等平台级异常仍会让 run failed。后端封装会拒绝 URL 主机本身为 localhost、私有网段、内网地址或非 `http/https` URL；未配置浏览器代理时，本机 DNS 若把公开 hostname 解析到私网/内网地址也会拦截，但公开 hostname 被 DNS 污染成 `0.0.0.0` 不作为私网拦截处理，而是交给文本直取或浏览器实际导航返回结果/错误；配置 `browser.proxy` 或进程代理环境变量时，不做本机 DNS 私网预解析，由浏览器代理负责解析。若 `browser.allow_private_hosts` 显式列出目标 hostname，或用 `.wulang.vip` 这类后缀匹配目标 hostname，则允许该 host 解析到内网/私有 IP 后继续访问。浏览器启动优先使用 `browser.proxy`，未配置时回退到进程环境变量 `HTTPS_PROXY`、`HTTP_PROXY` 或 `ALL_PROXY`，导航超时由 `browser.timeout_ms` 控制，默认 60000ms。带 `tool_context` 的 Agent run 会自动复用 `workspace/browser_profiles/{agent_id}/` 的 Playwright persistent profile，并用 `profile.lock.json` 避免授权会话和后台抓取并发占用；同一个 Agent 的后台 `browser_extract`/`browser_search` 会先等待 profile lock，按任务串行排队，最多等待 `browser.timeout_ms`，不同 Agent 仍使用各自 profile 并行。profile lock 记录持有进程 pid，pid 不存在时会立即清理；旧版无 pid lock 才继续使用 1 小时兜底清理。授权、搜索和抓取使用同一组桌面 Chrome UA、中文语言、上海时区和基础自动化隐藏参数。工具参数仍只有网页读取所需的 `url/include_links/max_chars` 和搜索所需的 `query/top_k`，Agent 不能传 profile ID、路径或搜索引擎。没有 tool context 时保持一次性无状态浏览器。
 - `schedule(action, ...)` 是单一调度管理工具，支持 `create/list/get/update/delete`。创建时只能使用当前 Agent、当前长期 session 和当前渠道投递上下文，触发器支持 `once`、`interval` 和 `cron`；`list/get/update/delete` 只能作用于 `metadata.created_by.type="agent_tool"` 且 `agent_id/session_id` 与当前 run 一致的任务，避免 Agent 删除页面或其它会话创建的定时任务。每次触发只运行一个 Agent run；微信来源任务执行完成后，ScheduleService 读取该 run 的完整 `result.json`，调用微信通道投递最终结果一次，并更新 run 的 `delivery.json`。
+- `execute_code(language, code, files)` 是可选平台工具，只在 `code_execution.enabled=true` 且 Agent 授权 `execute_code` 时注入。它只支持 `language="python"` 和 `language="shell"`，通过 Docker 运行配置镜像，强制 `--runtime=runsc`、`--network=none`、`--read-only`、`--cap-drop=ALL`、`--security-opt no-new-privileges`、CPU/内存/pids 限制和只读/读写的临时目录挂载；默认镜像为 Docker Hub 官方 `python:3.12-slim-bookworm`，Python 使用 `python /workspace/work/main.py`，shell 使用 `/bin/sh /workspace/work/script.sh`。执行器不允许 Agent 指定镜像、runtime、volume、env 或 Docker 参数；缺 Docker、缺 `runsc` 或缺镜像时返回 `ok=false` 工具观察，不降级为宿主机 subprocess。输入文件只写入本次 `/workspace/input`，生成文件必须写到 `/workspace/output`，完成后复制到 `workspace/agents/{agent_id}/artifacts/code_runs/{run_id}/{exec_id}/` 并以 `/artifacts/...` 虚拟路径返回。
 - DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 等工具由 `deepagents` 默认 middleware 提供；`deepagent.todo_list` 默认开启，`write_todos` 由运行时接入 LangChain `TodoListMiddleware`，只有 Agent 显式配置 `todo_list=false` 时关闭。当前不启用 DeepAgent `LocalShellBackend`，因此不向 Agent 暴露非沙箱 shell `execute`。
 - DeepAgent 原生 filesystem 使用受限的 `AgentFilesystemBackend(root_dir=workspace/agents/{agent_id}, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录；工具层只允许修改 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/`、`improvements/` 和 `meditations/`，并保护这些固定顶层目录本身不被删除。Agent 不能创建 `/workspace/` 或其它未声明顶层目录；越界写入、编辑、删除和上传返回带允许目录列表的 permission 诊断，作为可恢复工具观察交给 Agent 改用正确路径，不让整个 run 失败。升级前已经存在的未声明顶层目录仍可读取但不可修改，后续按 workspace 数据偏好做受控的一次性整理。Agent 不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制已停用。
 - 每个 Agent 的私有 skill 固定放在 `workspace/agents/{agent_id}/skills/{skill_id}/SKILL.md`，运行时传给主 DeepAgent 的 `skills` 参数固定为 `["/skills/"]`。平台会复制 DeepAgents 原版同名 `general-purpose` subagent 配置来覆盖自动生成版本，保留原版 description 和 system prompt，只在其提示词末尾追加“派发任务明确指定 skill 时才访问，否则不访问任何 skill”的约束。该显式 subagent 未声明 `skills`，因此不安装 `SkillsMiddleware`、不自动发现或激活主 Agent 的 skill；它继续继承主 Agent 的模型和工具，避免 workflow skill 派发 subagent 后再次命中自身形成递归。DeepAgent 主 Agent 会扫描该目录下包含 `SKILL.md` 的子目录并用 progressive disclosure 暴露 metadata；不再维护产品级 Skill index，也不需要在 `config.yaml` 里配置 Skill 列表。
@@ -283,7 +301,7 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 
 - `AGENTS.md` 是仓库级 Codex 指令入口。
 - `config.example.yaml` 是 workspace 配置模板，不得放入真实密钥。
-- 使用平台工具和运行时能力需要安装对应 Python 依赖：会话 checkpoint 依赖 `langgraph-checkpoint-sqlite`；`search_session` 中文关键词分词依赖 `jieba`；`browser_extract`/`browser_search` 依赖 `langchain-community`、`playwright`、`beautifulsoup4` 和 `lxml`；`arxiv` 依赖 `langchain-community` 和 `arxiv`；`yahoo_finance_news` 依赖 `langchain-community` 和 `yfinance`。`run.sh dev/prod` 会在依赖安装后检查并执行 `python -m playwright install chromium` 准备浏览器二进制。
+- 使用平台工具和运行时能力需要安装对应依赖：会话 checkpoint 依赖 `langgraph-checkpoint-sqlite`；`search_session` 中文关键词分词依赖 `jieba`；`browser_extract`/`browser_search` 依赖 `langchain-community`、`playwright`、`beautifulsoup4` 和 `lxml`；`arxiv` 依赖 `langchain-community` 和 `arxiv`；`yahoo_finance_news` 依赖 `langchain-community` 和 `yfinance`；`execute_code` 依赖生产机 Docker、已注册的 gVisor `runsc` runtime，以及已拉取的 `python:3.12-slim-bookworm` 或配置中的等价镜像。`run.sh dev/prod` 会在依赖安装后检查并执行 `python -m playwright install chromium` 准备浏览器二进制。
 - 当前生产 systemd unit 直接运行 `.venv/bin/python -m server`，单独 `systemctl restart` 不会安装新依赖；提交后远端部署必须在 pull 和 HEAD 校验之后执行 `.venv/bin/python -m pip install .`，并确保 Playwright Chromium 已安装，再重启服务。
 - `config.yaml` 属于本地 workspace 数据，不提交。
 - 开发启动使用 `./run-dev.sh` 或 `./run.sh dev`。
