@@ -62,7 +62,7 @@ class CodeExecutionDockerConfig:
 
 @dataclass(frozen=True)
 class CodeExecutionConfig:
-    enabled: bool = False
+    enabled: bool = True
     runtime: str = "docker_gvisor"
     languages: tuple[str, ...] = ("python", "shell")
     timeout_seconds: int = 20
@@ -295,7 +295,7 @@ def _parse_deepagent_filesystem(raw: Any) -> DeepAgentFilesystemOptions:
     if not isinstance(raw, dict):
         raise ValueError("agents.definitions[].deepagent.filesystem must be an object")
     return DeepAgentFilesystemOptions(
-        enabled=bool(raw.get("enabled", False)),
+        enabled=bool(raw.get("enabled", True)),
         root=str(raw.get("root") or "agent").strip() or "agent",
         mode=str(raw.get("mode") or "read_write").strip() or "read_write",
     )
@@ -307,7 +307,7 @@ def parse_nutstore_config(raw: Any) -> NutstoreConfig:
     if not isinstance(raw, dict):
         raise ValueError("nutstore must be an object")
     return NutstoreConfig(
-        enabled=bool(raw.get("enabled", False)),
+        enabled=bool(raw.get("enabled", True)),
         base_url=str(raw.get("base_url") or "https://dav.jianguoyun.com/dav/").strip(),
         username=str(raw.get("username") or "").strip(),
         password=str(raw.get("password") or "").strip(),
@@ -336,7 +336,7 @@ def parse_code_execution_config(raw: Any) -> CodeExecutionConfig:
     if not isinstance(docker_raw, dict):
         raise ValueError("code_execution.docker must be an object")
     return CodeExecutionConfig(
-        enabled=bool(raw.get("enabled", False)),
+        enabled=bool(raw.get("enabled", True)),
         runtime=str(raw.get("runtime") or "docker_gvisor").strip(),
         languages=_string_tuple(raw.get("languages") or ["python", "shell"], field_name="code_execution.languages"),
         timeout_seconds=int(raw.get("timeout_seconds") or 20),

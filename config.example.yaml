@@ -8,7 +8,7 @@ browser:
   timeout_ms: 60000
   allow_private_hosts: []
 code_execution:
-  enabled: false
+  enabled: true
   runtime: "docker_gvisor"
   languages:
     - "python"

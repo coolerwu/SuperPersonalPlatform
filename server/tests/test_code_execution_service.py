@@ -7,10 +7,10 @@ from server.infrastructure.docker_gvisor_sandbox import DockerGVisorSandbox, San
 from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
 
 
-def test_code_execution_config_defaults_to_docker_gvisor_off() -> None:
+def test_code_execution_config_defaults_to_docker_gvisor_on() -> None:
     settings = parse_settings({"auth": {"token": "secret-token"}})
 
-    assert settings.code_execution.enabled is False
+    assert settings.code_execution.enabled is True
     assert settings.code_execution.runtime == "docker_gvisor"
     assert settings.code_execution.languages == ("python", "shell")
     assert settings.code_execution.docker.runtime == "runsc"
@@ -85,7 +85,10 @@ def test_execute_code_copies_output_files_to_agent_artifacts(tmp_path) -> None:
 
 
 def test_execute_code_platform_tool_is_authorized_explicitly(tmp_path) -> None:
-    (tmp_path / "config.yaml").write_text("auth:\n  token: secret-token\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "auth:\n  token: secret-token\ncode_execution:\n  enabled: false\n",
+        encoding="utf-8",
+    )
 
     tools = build_platform_tools(
         ("execute_code",),

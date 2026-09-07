@@ -57,7 +57,7 @@ const DEFAULT_CONFIG = {
   server: { host: "0.0.0.0", port: 8888 },
   browser: { proxy: "", timeout_ms: 60000, allow_private_hosts: [] },
   code_execution: {
-    enabled: false,
+    enabled: true,
     runtime: "docker_gvisor",
     languages: ["python", "shell"],
     timeout_seconds: 20,
