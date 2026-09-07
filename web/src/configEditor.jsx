@@ -156,7 +156,7 @@ const DEFAULT_CONFIG = {
           subagents: [],
           response_format: "",
           context_schema: "",
-          checkpointer: false,
+          checkpointer: true,
           cache: "",
         },
       },

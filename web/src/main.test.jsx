@@ -54,7 +54,7 @@ const CONFIG_YAML = [
   "        subagents: []",
   '        response_format: ""',
   '        context_schema: ""',
-  "        checkpointer: false",
+  "        checkpointer: true",
   '        cache: ""',
 ].join("\n");
 

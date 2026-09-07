@@ -102,6 +102,6 @@ agents:
         subagents: []
         response_format: ""
         context_schema: ""
-        checkpointer: false
+        checkpointer: true
         store: ""
         cache: ""

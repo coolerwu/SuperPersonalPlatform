@@ -50,6 +50,10 @@ agents:
 
 IMAGE_CONFIG = CONFIG.replace("model: gpt-4o-mini", "model: gpt-4o-mini\n      supports_images: true")
 CHECKPOINT_CONFIG = CONFIG.replace("        tools:\n          - search_context\n", "        tools:\n          - search_context\n        checkpointer: true\n")
+NO_CHECKPOINT_CONFIG = CONFIG.replace(
+    "        tools:\n          - search_context\n",
+    "        tools:\n          - search_context\n        checkpointer: false\n",
+)
 
 
 def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatch) -> None:
@@ -535,7 +539,7 @@ def test_run_service_uses_checkpoint_without_injecting_prior_session_context(tmp
 
 
 def test_run_service_uses_recent_history_when_checkpointer_is_disabled(tmp_path, monkeypatch) -> None:
-    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(NO_CHECKPOINT_CONFIG, encoding="utf-8")
     session_service = SessionService(tmp_path)
     session = session_service.get_or_create(
         channel="wechat",

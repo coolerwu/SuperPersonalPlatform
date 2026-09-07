@@ -1139,9 +1139,9 @@ def _current_run_messages(history: list[dict[str, Any]], run_id: str) -> list[di
 
 def _agent_checkpointer_enabled(agent_snapshot: Any) -> bool:
     if not isinstance(agent_snapshot, dict):
-        return False
+        return True
     deepagent = agent_snapshot.get("deepagent")
-    return bool(deepagent.get("checkpointer")) if isinstance(deepagent, dict) else False
+    return bool(deepagent.get("checkpointer", True)) if isinstance(deepagent, dict) else True
 
 
 def _textify_image_attachments(

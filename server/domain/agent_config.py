@@ -62,7 +62,7 @@ class DeepAgentOptions:
     subagents: tuple[dict[str, Any], ...] = ()
     response_format: str = ""
     context_schema: str = ""
-    checkpointer: bool = False
+    checkpointer: bool = True
     cache: str = ""
 
     def __post_init__(self) -> None:

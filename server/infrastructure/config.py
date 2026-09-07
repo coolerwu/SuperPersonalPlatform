@@ -284,7 +284,7 @@ def parse_deepagent_options(raw: Any) -> DeepAgentOptions:
         subagents=_dict_tuple(raw.get("subagents") or []),
         response_format=str(raw.get("response_format") or "").strip(),
         context_schema=str(raw.get("context_schema") or "").strip(),
-        checkpointer=bool(raw.get("checkpointer", False)),
+        checkpointer=bool(raw.get("checkpointer", True)),
         cache=str(raw.get("cache") or "").strip(),
     )
 
