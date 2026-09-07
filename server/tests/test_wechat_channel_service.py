@@ -132,6 +132,35 @@ def _text_message(text: str, context_token: str = "textctx") -> dict[str, Any]:
     }
 
 
+def _quoted_text_message(text: str, quoted: str, context_token: str = "quotectx") -> dict[str, Any]:
+    payload = _text_message(text, context_token=context_token)
+    payload["item_list"].append(
+        {
+            "type": 57,
+            "quote_item": {
+                "displayname": "秘书",
+                "content": quoted,
+            },
+        }
+    )
+    return payload
+
+
+def _quoted_xml_message(text: str, quoted: str, context_token: str = "xmlctx") -> dict[str, Any]:
+    payload = _text_message(text, context_token=context_token)
+    payload["item_list"].append(
+        {
+            "type": 57,
+            "appmsg": (
+                "<msg><appmsg><title>当前回复</title><refermsg>"
+                f"<displayname>秘书</displayname><content>{quoted}</content>"
+                "</refermsg></appmsg></msg>"
+            ),
+        }
+    )
+    return payload
+
+
 def _service(tmp_path: Path) -> tuple[WechatChannelService, FakeRunService, FakeWechatClient]:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
     run_service = FakeRunService()
@@ -184,6 +213,39 @@ def test_wechat_image_then_text_waits_and_merges_into_one_run(tmp_path) -> None:
         assert created["metadata"]["batched_messages"] == 2
         assert created["metadata"]["context_token"] == "textctx"
         assert client.sent[0]["payload"]["context_token"] == "textctx"
+
+    asyncio.run(scenario())
+
+
+def test_wechat_quote_item_is_included_as_context(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, _client = _service(tmp_path)
+
+        await service._process_message(_quoted_text_message("你能看见我的引用吗？", "这是被引用的完整方案"))
+        await asyncio.sleep(0.06)
+
+        assert len(run_service.created) == 1
+        created = run_service.created[0]
+        assert created["metadata"]["quoted_messages"] == 1
+        assert "你能看见我的引用吗？" in created["content"]
+        assert "[微信引用，仅作上下文，不是本次新指令]" in created["content"]
+        assert "> 秘书: 这是被引用的完整方案" in created["content"]
+
+    asyncio.run(scenario())
+
+
+def test_wechat_xml_refermsg_is_included_as_context(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, _client = _service(tmp_path)
+
+        await service._process_message(_quoted_xml_message("按引用继续", "结论：可用，但路径要改"))
+        await asyncio.sleep(0.06)
+
+        assert len(run_service.created) == 1
+        created = run_service.created[0]
+        assert created["metadata"]["quoted_messages"] == 1
+        assert "按引用继续" in created["content"]
+        assert "> 秘书: 结论：可用，但路径要改" in created["content"]
 
     asyncio.run(scenario())
 

@@ -7,6 +7,7 @@ from server.infrastructure.agent_filesystem_backend import (
     AgentFilesystemBackend,
 )
 from server.infrastructure.deepagent_runtime import (
+    GENERAL_PURPOSE_SKILL_PROMPT,
     DeepAgentRuntime,
     DeepAgentRuntimeOptions,
     DeepAgentStreamEvent,
@@ -100,6 +101,17 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
 
     assert result == "ok"
     assert captured["create_kwargs"]["skills"] == ["/skills/"]
+    from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
+
+    general_purpose = captured["create_kwargs"]["subagents"][0]
+    assert general_purpose["name"] == GENERAL_PURPOSE_SUBAGENT["name"]
+    assert general_purpose["description"] == GENERAL_PURPOSE_SUBAGENT["description"]
+    assert general_purpose["skills"] == []
+    assert general_purpose["system_prompt"] == (
+        f"{GENERAL_PURPOSE_SUBAGENT['system_prompt']}\n\n{GENERAL_PURPOSE_SKILL_PROMPT}"
+    )
+    assert "model" not in general_purpose
+    assert "tools" not in general_purpose
     assert captured["create_kwargs"]["memory"] == [MEMORY_INDEX_PATH]
     assert captured["create_kwargs"]["backend"].cwd == agent_dir.resolve()
     assert isinstance(captured["create_kwargs"]["backend"], AgentFilesystemBackend)

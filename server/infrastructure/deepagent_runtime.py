@@ -73,6 +73,11 @@ Use `/artifacts/` for durable task outputs and `/scratch/` for temporary working
 Filesystem permission errors are recoverable tool observations. Use one of the managed paths instead of retrying the denied path.
 """
 
+GENERAL_PURPOSE_SKILL_PROMPT = (
+    "Access a skill only when the delegated task explicitly specifies that skill; "
+    "otherwise, do not access any skills."
+)
+
 
 @dataclass(frozen=True)
 class RuntimeAttachment:
@@ -154,6 +159,7 @@ class DeepAgentRuntime:
             raise ValueError("messages are required")
         try:
             from deepagents import create_deep_agent
+            from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
             from langchain_core.messages import AIMessage, HumanMessage
         except Exception as exc:
             raise RuntimeError("DeepAgent runtime requires the deepagents package") from exc
@@ -162,6 +168,12 @@ class DeepAgentRuntime:
         for directory in AGENT_WORKSPACE_DIRECTORIES:
             (self._agent_workspace / directory).mkdir(parents=True, exist_ok=True)
         memory_sources = _longterm_memory_sources(self._agent_workspace, options)
+        general_purpose_subagent = dict(GENERAL_PURPOSE_SUBAGENT)
+        default_subagent_prompt = str(general_purpose_subagent.get("system_prompt") or "").strip()
+        general_purpose_subagent["system_prompt"] = (
+            f"{default_subagent_prompt}\n\n{GENERAL_PURPOSE_SKILL_PROMPT}"
+        )
+        general_purpose_subagent["skills"] = []
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
                 options.tools,
@@ -173,6 +185,7 @@ class DeepAgentRuntime:
             "system_prompt": _runtime_instructions(instructions, options),
             "backend": AgentFilesystemBackend(root_dir=self._agent_workspace, virtual_mode=True),
             "skills": ["/skills/"],
+            "subagents": [general_purpose_subagent],
         }
         if memory_sources:
             create_kwargs["memory"] = memory_sources
