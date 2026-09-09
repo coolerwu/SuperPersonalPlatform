@@ -36,6 +36,13 @@ class WechatChannelStatus:
 
 
 @dataclass(frozen=True)
+class WechatApprovalCommand:
+    action: str
+    selector: str = ""
+    message: str = ""
+
+
+@dataclass(frozen=True)
 class WechatSessionCommand:
     action: str
     selector: str = ""
@@ -50,6 +57,7 @@ class WechatChannelService:
         session_service: Any = None,
         system_log_service: Any = None,
         account_id: str = "default",
+        run_delivery_service: Any = None,
     ) -> None:
         self._workspace = workspace
         self._run_service = run_service
@@ -57,6 +65,7 @@ class WechatChannelService:
         self._session_service = session_service
         self._system_log_service = system_log_service
         self._account_id = account_id
+        self._run_delivery_service = run_delivery_service
         self._client: ILinkClient | None = None
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
@@ -73,6 +82,9 @@ class WechatChannelService:
         self._pending_executor = DebouncedTaskExecutor(self._flush_pending_input)
         self._pending_input_delay_seconds = 5.0
         self._pending_multi_message_delay_seconds = 15.0
+
+    def set_run_delivery_service(self, run_delivery_service: Any) -> None:
+        self._run_delivery_service = run_delivery_service
 
     async def status(self) -> WechatChannelStatus:
         async with self._lock:
@@ -306,6 +318,17 @@ class WechatChannelService:
         peer_id = _wechat_peer_id(from_user_id, to_user_id)
         peer_type = _wechat_peer_type(peer_id)
         pending_key = _pending_key(self._account_id, agent_id, peer_type, peer_id)
+        approval_command = _parse_approval_command(text) if not attachments else None
+        if approval_command is not None:
+            await self._handle_approval_command(
+                approval_command,
+                from_user_id=from_user_id,
+                context_token=context_token,
+                agent_id=agent_id,
+                peer_id=peer_id,
+                peer_type=peer_type,
+            )
+            return
         command = _parse_session_command(text) if not attachments else None
         if command is not None:
             await self._handle_session_command(
@@ -581,6 +604,9 @@ class WechatChannelService:
             run_id = str(run["run_id"])
             if self._run_worker_service is not None:
                 self._run_worker_service.wake()
+                if self._run_delivery_service is not None:
+                    self._run_delivery_service.wake()
+                    return
                 completed = await self._run_worker_service.wait_for_run(run_id)
             else:
                 completed = await self._run_service.execute_run(run_id)
@@ -592,6 +618,83 @@ class WechatChannelService:
                 self._logs.append({"type": "error", "error": reply})
 
         await self._send_reply(from_user_id, context_token, reply)
+
+    async def _handle_approval_command(
+        self,
+        command: WechatApprovalCommand,
+        *,
+        from_user_id: str,
+        context_token: str,
+        agent_id: str,
+        peer_id: str,
+        peer_type: str,
+    ) -> None:
+        matches = self._matching_pending_approvals(
+            selector=command.selector,
+            agent_id=agent_id,
+            peer_id=peer_id,
+            peer_type=peer_type,
+        )
+        if not matches:
+            await self._send_reply(from_user_id, context_token, "没有找到当前微信会话可审批的任务。")
+            return
+        if len(matches) > 1:
+            run_ids = "\n".join(f"- {item['run_id']}" for item in matches[:5])
+            await self._send_reply(
+                from_user_id,
+                context_token,
+                f"有多个待审批任务，请在命令后指定完整 Run ID：\n{run_ids}",
+            )
+            return
+        run_id = str(matches[0]["run_id"])
+        try:
+            if command.action == "approve":
+                self._run_service.approve_run(run_id)
+            else:
+                self._run_service.reject_run(run_id, message=command.message)
+        except Exception as exc:  # noqa: BLE001
+            await self._send_reply(from_user_id, context_token, f"审批失败：{exc}")
+            return
+        if self._run_worker_service is not None:
+            self._run_worker_service.wake()
+        if self._run_delivery_service is not None:
+            self._run_delivery_service.wake()
+        action_text = "已批准" if command.action == "approve" else "已拒绝"
+        await self._send_reply(from_user_id, context_token, f"{action_text}任务 {run_id}，Agent 将继续运行。")
+
+    def _matching_pending_approvals(
+        self,
+        *,
+        selector: str,
+        agent_id: str,
+        peer_id: str,
+        peer_type: str,
+    ) -> list[dict[str, Any]]:
+        matches: list[dict[str, Any]] = []
+        for summary in reversed(self._run_service.list_runs()):
+            run_id = str(summary.get("run_id") or "").strip()
+            if not run_id or (selector and not run_id.startswith(selector)):
+                continue
+            try:
+                run = self._run_service.get_run(run_id)
+            except Exception:
+                continue
+            state = run.get("state") if isinstance(run.get("state"), dict) else {}
+            approval = run.get("approval") if isinstance(run.get("approval"), dict) else {}
+            run_input = run.get("input") if isinstance(run.get("input"), dict) else {}
+            if state.get("status") != "waiting_approval" or approval.get("status") != "pending":
+                continue
+            if str(run_input.get("agent_id") or "") != agent_id:
+                continue
+            target = _run_wechat_target(run_input)
+            if (
+                target.get("account_id") != self._account_id
+                or target.get("peer_id") != peer_id
+                or target.get("peer_type") != peer_type
+            ):
+                continue
+            matches.append(run)
+        return matches
 
     async def _clear_wechat_session(
         self,
@@ -712,20 +815,30 @@ class WechatChannelService:
             async with self._lock:
                 self._logs.append({"type": "error", "error": f"send reply failed: {exc}"})
 
-    async def deliver_text(self, *, to_user_id: str, context_token: str, text: str) -> dict[str, Any]:
+    async def deliver_text(
+        self,
+        *,
+        to_user_id: str,
+        context_token: str,
+        text: str,
+        client_id: str = "",
+    ) -> dict[str, Any]:
         if not to_user_id:
             raise RuntimeError("wechat to_user_id is required")
         await self._ensure_delivery_client()
+        message = {
+            "to_user_id": to_user_id,
+            "message_type": 2,
+            "message_state": 2,
+            "context_token": context_token,
+            "item_list": [{"type": 1, "text_item": {"text": text}}],
+        }
+        if client_id:
+            message["client_id"] = client_id
         resp = await self._client.send_message(  # type: ignore[union-attr]
             self._baseurl,
             self._bot_token,
-            {
-                "to_user_id": to_user_id,
-                "message_type": 2,
-                "message_state": 2,
-                "context_token": context_token,
-                "item_list": [{"type": 1, "text_item": {"text": text}}],
-            },
+            message,
         )
         if self._system_log_service:
             status = resp.get("_debug_status", "") if isinstance(resp, dict) else ""
@@ -828,6 +941,34 @@ def _wechat_peer_type(peer_id: str) -> str:
 
 def _pending_key(account_id: str, agent_id: str, peer_type: str, peer_id: str) -> str:
     return f"{account_id}:{agent_id}:{peer_type}:{peer_id}"
+
+
+def _parse_approval_command(text: str) -> WechatApprovalCommand | None:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    parts = value.split(maxsplit=2)
+    root = parts[0].lower()
+    if root not in {"/approve", "approve", "/reject", "reject"}:
+        return None
+    action = "approve" if root in {"/approve", "approve"} else "reject"
+    return WechatApprovalCommand(
+        action=action,
+        selector=parts[1].strip() if len(parts) > 1 else "",
+        message=parts[2].strip() if len(parts) > 2 else "",
+    )
+
+
+def _run_wechat_target(run_input: dict[str, Any]) -> dict[str, str]:
+    metadata = run_input.get("metadata") if isinstance(run_input.get("metadata"), dict) else {}
+    nested = metadata.get("delivery") if isinstance(metadata.get("delivery"), dict) else {}
+    source = str(run_input.get("source") or "")
+    raw = nested if nested else metadata if source == "wechat" else {}
+    return {
+        "account_id": str(raw.get("account_id") or "").strip(),
+        "peer_id": str(raw.get("peer_id") or raw.get("from_user_id") or raw.get("to_user_id") or "").strip(),
+        "peer_type": str(raw.get("peer_type") or "private").strip(),
+    }
 
 
 def _parse_session_command(text: str) -> WechatSessionCommand | None:

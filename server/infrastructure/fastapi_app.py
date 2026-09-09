@@ -1,5 +1,5 @@
-import os
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,6 +20,7 @@ from server.app.browser_profile_service import BrowserProfileService
 from server.app.config_file_service import ConfigFileService
 from server.app.maintenance_service import MaintenanceService
 from server.app.nutstore_service import NutstoreService
+from server.app.run_delivery_service import RunDeliveryService
 from server.app.run_service import RunService
 from server.app.run_worker_service import RunWorkerService
 from server.app.schedule_service import ScheduleService
@@ -55,6 +56,12 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         session_service=session_service,
         system_log_service=system_log_service,
     )
+    run_delivery_service = RunDeliveryService(
+        run_service=run_service,
+        channel_delivery_service=wechat_channel_manager,
+        system_log_service=system_log_service,
+    )
+    wechat_channel_manager.set_run_delivery_service(run_delivery_service)
     webdav_context_service = None
     if settings.nutstore.enabled and settings.context.webdav_sync.enabled:
         webdav_context_service = WebDAVContextService(
@@ -72,6 +79,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         maintenance_service=maintenance_service,
         webdav_context_service=webdav_context_service,
         channel_delivery_service=wechat_channel_manager,
+        run_delivery_service=run_delivery_service,
     )
     run_service.set_schedule_service(schedule_service)
     return AppContainer(
@@ -81,6 +89,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         config_file_service=ConfigFileService(active_workspace),
         run_service=run_service,
         run_worker_service=run_worker_service,
+        run_delivery_service=run_delivery_service,
         maintenance_service=maintenance_service,
         nutstore_service=NutstoreService(settings.nutstore),
         schedule_service=schedule_service,
@@ -131,12 +140,19 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     async def lifespan(app: FastAPI):
         schedule_task: asyncio.Task | None = None
         run_worker_task: asyncio.Task | None = None
+        run_delivery_task: asyncio.Task | None = None
         schedule_stop = asyncio.Event()
         run_worker_stop = asyncio.Event()
+        run_delivery_stop = asyncio.Event()
         container.run_service.reconcile_incomplete_runs()
         run_worker_task = (
             asyncio.create_task(container.run_worker_service.run_forever(run_worker_stop))
             if container.run_worker_service
+            else None
+        )
+        run_delivery_task = (
+            asyncio.create_task(container.run_delivery_service.run_forever(run_delivery_stop))
+            if container.run_delivery_service
             else None
         )
         schedule_task = asyncio.create_task(container.schedule_service.run_forever(schedule_stop))
@@ -148,11 +164,16 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
             if schedule_task is not None:
                 schedule_stop.set()
                 await schedule_task
+                await container.schedule_service.stop_active()
             if run_worker_task is not None:
                 run_worker_stop.set()
                 container.run_worker_service.wake()
                 await run_worker_task
                 await container.run_worker_service.stop_active()
+            if run_delivery_task is not None:
+                run_delivery_stop.set()
+                container.run_delivery_service.wake()
+                await run_delivery_task
             if container.wechat_channel_manager is not None:
                 await container.wechat_channel_manager.stop_all()
             await container.browser_profile_service.close_all()

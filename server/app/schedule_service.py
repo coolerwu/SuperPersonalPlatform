@@ -73,6 +73,7 @@ class ScheduleService:
         maintenance_service: MaintenanceService | None = None,
         webdav_context_service: WebDAVContextService | None = None,
         channel_delivery_service: Any = None,
+        run_delivery_service: Any = None,
     ) -> None:
         self._workspace = workspace
         self._settings = settings
@@ -82,22 +83,26 @@ class ScheduleService:
         self._maintenance_service = maintenance_service
         self._webdav_context_service = webdav_context_service
         self._channel_delivery_service = channel_delivery_service
+        self._run_delivery_service = run_delivery_service
         self._schedules_dir = workspace / "schedules"
         self._index_path = self._schedules_dir / "index.json"
+        self._active_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         self.bootstrap()
         while not stop.is_set():
-            await self.tick()
+            await self.tick(wait_for_completion=False)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self.poll_interval_seconds)
             except asyncio.TimeoutError:
                 pass
 
-    async def tick(self) -> None:
+    async def tick(self, *, wait_for_completion: bool = True) -> None:
         self.bootstrap()
         now = _now_dt()
         for definition in self._definitions():
+            if definition.id in self._active_tasks:
+                continue
             if not definition.enabled:
                 self._set_disabled(definition)
                 continue
@@ -112,7 +117,20 @@ class ScheduleService:
             next_run_at = _parse_dt(raw_next_run_at) or now
             if next_run_at > now:
                 continue
-            await self._execute(definition, due_at=next_run_at)
+            if wait_for_completion:
+                await self._execute(definition, due_at=next_run_at)
+                continue
+            task = asyncio.create_task(self._execute(definition, due_at=next_run_at))
+            self._active_tasks[definition.id] = task
+            task.add_done_callback(lambda _, schedule_id=definition.id: self._active_tasks.pop(schedule_id, None))
+
+    async def stop_active(self) -> None:
+        tasks = list(self._active_tasks.values())
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
 
     def list_schedules(self) -> list[dict[str, Any]]:
         self.bootstrap()
@@ -269,14 +287,15 @@ class ScheduleService:
             return
         started_at = _now()
         heartbeat_task: asyncio.Task[None] | None = None
+        previous_state = self._read_state(definition.id)
         self._write_state(
             definition.id,
             {
-                **self._read_state(definition.id),
+                **previous_state,
                 "status": "running",
                 "started_at": started_at,
                 "heartbeat_at": started_at,
-                "current_run_id": "",
+                "current_run_id": str(previous_state.get("current_run_id") or ""),
                 "updated_at": started_at,
             },
         )
@@ -329,11 +348,18 @@ class ScheduleService:
         else:
             completed_at = _now()
             next_run_at = self._next_run_at(definition, due_at=due_at, completed_at=_now_dt())
+            result_delivery = (
+                result.get("delivery")
+                if isinstance(result, dict) and isinstance(result.get("delivery"), dict)
+                else {}
+            )
+            delivery_dead_letter = result_delivery.get("status") == "dead_letter"
+            delivery_error = result_delivery.get("error") if isinstance(result_delivery.get("error"), dict) else None
             state = {
                 **self._read_state(definition.id),
-                "status": "completed",
-                "last_status": "completed",
-                "last_error": None,
+                "status": "failed" if delivery_dead_letter else "completed",
+                "last_status": "failed" if delivery_dead_letter else "completed",
+                "last_error": delivery_error if delivery_dead_letter else None,
                 "last_run_at": completed_at,
                 "next_run_at": next_run_at,
                 "retry_attempts": 0,
@@ -344,8 +370,12 @@ class ScheduleService:
             if isinstance(result, dict) and result.get("run_id"):
                 state["last_run_id"] = result["run_id"]
             self._write_state(definition.id, state)
-            self._append_event(definition.id, "completed", result if isinstance(result, dict) else {})
-            self._system_log_service.append_line(f"schedule id={definition.id} type={definition.type} status=ok")
+            event_type = "delivery_failed" if delivery_dead_letter else "completed"
+            self._append_event(definition.id, event_type, result if isinstance(result, dict) else {})
+            self._system_log_service.append_line(
+                f"schedule id={definition.id} type={definition.type} "
+                f"status={'delivery_failed' if delivery_dead_letter else 'ok'}"
+            )
         finally:
             if heartbeat_task is not None:
                 heartbeat_task.cancel()
@@ -383,18 +413,24 @@ class ScheduleService:
         if definition.type == "agent_run":
             if not definition.prompt.strip():
                 raise RuntimeError("schedule prompt is required")
-            run = await self._run_service.create_run(
-                content=definition.prompt,
-                agent_id=definition.agent_id,
-                context_ids=definition.context_ids,
-                source="schedule",
-                session_id=definition.session_id,
-                metadata={"schedule_id": definition.id, **(definition.metadata or {})},
-            )
-            run_id = str(run["run_id"])
-            self._set_current_run(definition.id, run_id)
+            run_id = self._resumable_current_run_id(definition.id)
+            if not run_id:
+                run = await self._run_service.create_run(
+                    content=definition.prompt,
+                    agent_id=definition.agent_id,
+                    context_ids=definition.context_ids,
+                    source="schedule",
+                    session_id=definition.session_id,
+                    metadata={"schedule_id": definition.id, **(definition.metadata or {})},
+                )
+                run_id = str(run["run_id"])
+                self._set_current_run(definition.id, run_id)
             completed = await self._execute_or_wait_for_run(run_id)
-            delivery = await self._deliver_agent_run_result(definition, completed)
+            if self._run_delivery_service is not None:
+                self._run_delivery_service.wake()
+                delivery = await self._run_delivery_service.wait_for_delivery(run_id)
+            else:
+                delivery = await self._deliver_agent_run_result(definition, completed)
             return {"message": "agent run completed", "run_id": run_id, "delivery": delivery}
         raise RuntimeError(f"unsupported schedule type: {definition.type}")
 
@@ -610,6 +646,24 @@ class ScheduleService:
         state["updated_at"] = _now()
         self._write_state(schedule_id, state)
 
+    def _resumable_current_run_id(self, schedule_id: str) -> str:
+        run_id = str(self._read_state(schedule_id).get("current_run_id") or "").strip()
+        if not run_id:
+            return ""
+        try:
+            run = self._run_service.get_run(run_id)
+        except Exception:
+            return ""
+        state = run.get("state") if isinstance(run.get("state"), dict) else {}
+        if run.get("run_id") == run_id and state.get("status") in {
+            "queued",
+            "running",
+            "waiting_approval",
+            "completed",
+        }:
+            return run_id
+        return ""
+
     def _recover_stale_running(
         self,
         definition: ScheduleDefinition,
@@ -622,19 +676,60 @@ class ScheduleService:
             return False
         completed_at = now.isoformat()
         due_at = _parse_dt(str(state.get("next_run_at") or "")) or now
+        error = {
+            "type": "ScheduleStaleLockError",
+            "message": "schedule was left running by a stale worker lock",
+        }
+        current_run_id = str(state.get("current_run_id") or "").strip()
+        if not current_run_id:
+            current_run_id = self._run_service.latest_active_run_for_schedule(definition.id)
+        resumable = False
+        if current_run_id:
+            try:
+                current_run = self._run_service.get_run(current_run_id)
+            except Exception:
+                current_run = {}
+            current_state = current_run.get("state") if isinstance(current_run.get("state"), dict) else {}
+            resumable = current_run.get("run_id") == current_run_id and current_state.get("status") in {
+                "queued",
+                "running",
+                "waiting_approval",
+                "completed",
+            }
+        if resumable:
+            retry_attempts = int(state.get("retry_attempts") or 0)
+            self._clear_lock(definition.id)
+            self._write_state(
+                definition.id,
+                {
+                    **state,
+                    "status": "retrying",
+                    "last_status": "recovered",
+                    "last_error": None,
+                    "next_run_at": completed_at,
+                    "retry_attempts": retry_attempts,
+                    "retry_max_attempts": SCHEDULE_RETRY_MAX_ATTEMPTS,
+                    "current_run_id": current_run_id,
+                    "updated_at": completed_at,
+                },
+            )
+            self._append_event(
+                definition.id,
+                "run_recovered",
+                {"run_id": current_run_id, "next_run_at": completed_at},
+            )
+            self._upsert_index(definition)
+            self._system_log_service.append_line(
+                f"schedule id={definition.id} type={definition.type} status=recovered run={current_run_id}"
+            )
+            return True
+
         retry_attempts = int(state.get("retry_attempts") or 0) + 1
         retrying = retry_attempts <= SCHEDULE_RETRY_MAX_ATTEMPTS
         next_run_at = (
             (now + timedelta(seconds=SCHEDULE_RETRY_DELAY_SECONDS)).isoformat()
             if retrying
             else self._next_run_at(definition, due_at=due_at, completed_at=now)
-        )
-        error = {
-            "type": "ScheduleStaleLockError",
-            "message": "schedule was left running by a stale worker lock",
-        }
-        current_run_id = str(state.get("current_run_id") or "").strip() or self._run_service.latest_active_run_for_schedule(
-            definition.id
         )
         if current_run_id:
             self._run_service.fail_run(current_run_id, error=error)

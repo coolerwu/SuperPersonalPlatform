@@ -52,6 +52,8 @@ def create_run_router(container: AppContainer) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if container.run_worker_service is not None:
             container.run_worker_service.wake()
+        if container.run_delivery_service is not None:
+            container.run_delivery_service.wake()
         return resumed
 
     @router.post("")

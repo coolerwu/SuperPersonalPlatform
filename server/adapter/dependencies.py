@@ -6,6 +6,7 @@ from server.app.browser_profile_service import BrowserProfileService
 from server.app.config_file_service import ConfigFileService
 from server.app.maintenance_service import MaintenanceService
 from server.app.nutstore_service import NutstoreService
+from server.app.run_delivery_service import RunDeliveryService
 from server.app.run_service import RunService
 from server.app.run_worker_service import RunWorkerService
 from server.app.schedule_service import ScheduleService
@@ -32,3 +33,4 @@ class AppContainer:
     session_codec: SessionCodec
     wechat_channel_manager: WechatChannelManager | None = None
     run_worker_service: RunWorkerService | None = None
+    run_delivery_service: RunDeliveryService | None = None

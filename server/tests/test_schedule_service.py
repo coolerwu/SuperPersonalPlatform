@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 
-from server.app.schedule_service import ScheduleService
+from server.app.schedule_service import ScheduleDefinition, ScheduleService, ScheduleTrigger
 from server.app.system_log_service import SystemLogService
 from server.infrastructure.config import parse_settings
 
@@ -133,6 +133,100 @@ class FakeChannelDeliveryService:
     async def deliver_text(self, **kwargs):
         self.deliveries.append(kwargs)
         return {"ok": True}
+
+
+class DeadLetterRunDeliveryService:
+    def __init__(self) -> None:
+        self.run_ids = []
+
+    def wake(self) -> None:
+        pass
+
+    async def wait_for_delivery(self, run_id: str):
+        self.run_ids.append(run_id)
+        return {
+            "status": "dead_letter",
+            "error": {"type": "TimeoutError", "message": "WeChat unavailable"},
+        }
+
+
+def test_schedule_run_forever_dispatch_does_not_block_other_due_tasks(tmp_path, monkeypatch) -> None:
+    async def scenario() -> None:
+        service = ScheduleService(
+            workspace=tmp_path,
+            settings=parse_settings(_raw_config()),
+            run_service=FakeRunService(),
+            system_log_service=SystemLogService(tmp_path),
+        )
+        due_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        definitions = (
+            ScheduleDefinition(
+                id="approval_waiting",
+                type="agent_run",
+                enabled=True,
+                trigger=ScheduleTrigger(kind="interval", seconds=60),
+                agent_id="assistant",
+                prompt="first",
+            ),
+            ScheduleDefinition(
+                id="other_due_task",
+                type="agent_run",
+                enabled=True,
+                trigger=ScheduleTrigger(kind="interval", seconds=60),
+                agent_id="assistant",
+                prompt="second",
+            ),
+        )
+        blocker = asyncio.Event()
+
+        async def fake_execute(definition, *, due_at):
+            await blocker.wait()
+
+        monkeypatch.setattr(service, "_definitions", lambda: definitions)
+        monkeypatch.setattr(service, "_read_state", lambda schedule_id: {"status": "idle", "next_run_at": due_at})
+        monkeypatch.setattr(service, "_execute", fake_execute)
+
+        await service.tick(wait_for_completion=False)
+        await asyncio.sleep(0)
+
+        assert set(service._active_tasks) == {"approval_waiting", "other_due_task"}
+        await service.stop_active()
+
+    asyncio.run(scenario())
+
+
+def test_schedule_marks_delivery_dead_letter_failed_without_rerunning_agent(tmp_path) -> None:
+    settings = parse_settings(_raw_config())
+    run_service = FakeRunService()
+    run_delivery_service = DeadLetterRunDeliveryService()
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=run_service,
+        system_log_service=SystemLogService(tmp_path),
+        run_delivery_service=run_delivery_service,
+    )
+    due_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    service.create_schedule(
+        {
+            "id": "delivery_dead_letter",
+            "name": "Delivery dead letter",
+            "enabled": True,
+            "trigger": {"kind": "once", "expr": due_at},
+            "agent_id": "assistant",
+            "prompt": "send result",
+        }
+    )
+
+    asyncio.run(service.tick())
+    asyncio.run(service.tick())
+
+    detail = service.get_schedule("delivery_dead_letter")
+    assert detail["state"]["status"] == "failed"
+    assert detail["state"]["last_error"]["message"] == "WeChat unavailable"
+    assert len(run_service.created) == 1
+    assert run_service.executed == ["run_test"]
+    assert run_delivery_service.run_ids == ["run_test"]
 
 
 def test_schedule_service_bootstraps_and_runs_webdav_sync(tmp_path) -> None:
@@ -645,6 +739,67 @@ def test_schedule_service_recovers_legacy_stale_running_schedule_run(tmp_path, m
     asyncio.run(service.tick())
 
     assert run_service.failed_runs[0]["run_id"] == "run_legacy"
+
+
+def test_schedule_service_reuses_waiting_approval_run_after_restart(tmp_path, monkeypatch) -> None:
+    settings = parse_settings(_raw_config())
+    run_service = FakeRunService()
+    run_service.run_details["run_waiting"] = {
+        "run_id": "run_waiting",
+        "state": {"status": "waiting_approval"},
+        "result": None,
+    }
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=settings,
+        run_service=run_service,
+        system_log_service=SystemLogService(tmp_path),
+        maintenance_service=FakeMaintenanceService(),
+        webdav_context_service=FakeWebDAVContextService(),
+    )
+    service.bootstrap()
+    due_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    schedule_dir = tmp_path / "schedules" / "approval_resume"
+    schedule_dir.mkdir(parents=True)
+    _write_json(
+        schedule_dir / "definition.json",
+        {
+            "schema_version": 1,
+            "id": "approval_resume",
+            "type": "agent_run",
+            "enabled": True,
+            "trigger": {"kind": "interval", "seconds": 3600},
+            "agent_id": "assistant",
+            "prompt": "写入文档",
+        },
+    )
+    _write_json(
+        schedule_dir / "state.json",
+        {
+            "schema_version": 1,
+            "schedule_id": "approval_resume",
+            "status": "running",
+            "next_run_at": due_at,
+            "current_run_id": "run_waiting",
+            "retry_attempts": 0,
+        },
+    )
+    _write_json(schedule_dir / "lock.json", {"pid": 999999, "created_at": due_at})
+    index = _read_json(tmp_path / "schedules" / "index.json")
+    index["schedules"].append({"id": "approval_resume", "type": "agent_run", "enabled": True})
+    _write_json(tmp_path / "schedules" / "index.json", index)
+
+    def fake_kill(pid, signal):
+        raise ProcessLookupError(pid)
+
+    monkeypatch.setattr("server.app.schedule_service.os.kill", fake_kill)
+
+    asyncio.run(service.tick())
+
+    assert run_service.created == []
+    assert run_service.executed == ["run_waiting"]
+    assert run_service.failed_runs == []
+    assert _read_json(schedule_dir / "state.json")["last_run_id"] == "run_waiting"
 
 
 def test_schedule_service_delivers_agent_schedule_result_to_wechat(tmp_path) -> None:

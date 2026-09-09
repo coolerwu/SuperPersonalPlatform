@@ -31,6 +31,7 @@ class WechatChannelManager:
         self._run_worker_service = run_worker_service
         self._session_service = session_service
         self._system_log_service = system_log_service
+        self._run_delivery_service: Any = None
         self._instances: dict[str, WechatChannelService] = {}
         self._lock = asyncio.Lock()
 
@@ -139,6 +140,11 @@ class WechatChannelManager:
             except Exception:
                 pass
 
+    def set_run_delivery_service(self, run_delivery_service: Any) -> None:
+        self._run_delivery_service = run_delivery_service
+        for instance in self._instances.values():
+            instance.set_run_delivery_service(run_delivery_service)
+
     async def deliver_text(
         self,
         *,
@@ -147,6 +153,7 @@ class WechatChannelManager:
         to_user_id: str,
         context_token: str,
         text: str,
+        client_id: str = "",
     ) -> dict[str, Any]:
         if channel != "wechat":
             raise WechatChannelManagerError(f"unsupported channel: {channel}")
@@ -156,6 +163,7 @@ class WechatChannelManager:
             to_user_id=to_user_id,
             context_token=context_token,
             text=text,
+            client_id=client_id,
         )
 
     def first_account_id(self) -> str | None:
@@ -172,6 +180,7 @@ class WechatChannelManager:
                 session_service=self._session_service,
                 system_log_service=self._system_log_service,
                 account_id=account_id,
+                run_delivery_service=self._run_delivery_service,
             )
         return self._instances[account_id]
 

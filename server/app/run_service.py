@@ -177,7 +177,18 @@ class RunService:
                 "max_attempts": RUN_RETRY_MAX_ATTEMPTS,
             },
         )
-        _write_json(run_dir / "delivery.json", {"source": source, "session_id": session_id, "status": "pending"})
+        delivery_target = _initial_delivery_target(source, run_input.metadata, agent_id=agent.id)
+        delivery_payload: dict[str, Any] = {
+            "schema_version": 1,
+            "source": source,
+            "session_id": session_id,
+            "status": "pending",
+            "attempts": 0,
+            "updated_at": now,
+        }
+        if delivery_target:
+            delivery_payload["target"] = delivery_target
+        _write_json(run_dir / "delivery.json", delivery_payload)
         if session_id and self._session_service is not None:
             self._session_service.append_message(
                 session_id,
@@ -857,16 +868,24 @@ class RunService:
         error: dict[str, Any] | None = None,
     ) -> None:
         run_input = self._load_input(run_id)
+        delivery_path = self._run_dir(run_id) / "delivery.json"
+        previous = _read_json(delivery_path) if delivery_path.exists() else {}
         payload: dict[str, Any] = {
+            **previous,
+            "schema_version": 1,
             "source": run_input.get("source", "api"),
             "session_id": run_input.get("session_id", ""),
             "status": status,
+            "updated_at": _now(),
         }
         if extra:
             payload.update(extra)
         if error is not None:
             payload["error"] = error
-        _write_json(self._run_dir(run_id) / "delivery.json", payload)
+        if error is None and status in {"pending", "ready", "sending", "delivered", "skipped"}:
+            payload.pop("error", None)
+        _write_json(delivery_path, payload)
+        self._upsert_index(self._summary_from_state(run_id))
 
     def _fail_executing_run(
         self,
@@ -1066,7 +1085,9 @@ class RunService:
 
     def _summary_from_state(self, run_id: str) -> dict[str, Any]:
         run_input = self._load_input(run_id)
-        state = _read_json(self._run_dir(run_id) / "state.json")
+        run_dir = self._run_dir(run_id)
+        state = _read_json(run_dir / "state.json")
+        delivery = _read_json(run_dir / "delivery.json") if (run_dir / "delivery.json").exists() else {}
         return {
             "run_id": run_id,
             "status": state.get("status", "queued"),
@@ -1076,6 +1097,7 @@ class RunService:
             "created_at": run_input.get("created_at", ""),
             "updated_at": state.get("updated_at", ""),
             "seq": state.get("seq", 0),
+            "delivery_status": delivery.get("status", ""),
         }
 
     def _upsert_index(self, summary: dict[str, Any]) -> None:
@@ -1482,6 +1504,30 @@ def _has_image_attachment(attachments: tuple[dict[str, Any], ...]) -> bool:
         for attachment in attachments
         if isinstance(attachment, dict)
     )
+
+
+def _initial_delivery_target(source: str, metadata: dict[str, Any], *, agent_id: str) -> dict[str, str]:
+    nested = metadata.get("delivery") if isinstance(metadata.get("delivery"), dict) else {}
+    raw = nested if nested else metadata if source == "wechat" else {}
+    channel = str(raw.get("channel") or ("wechat" if source == "wechat" else "")).strip()
+    account_id = str(raw.get("account_id") or "").strip()
+    recipient = (
+        (raw.get("to_user_id") or raw.get("peer_id"))
+        if nested
+        else (raw.get("from_user_id") or raw.get("peer_id"))
+    )
+    to_user_id = str(recipient or "").strip()
+    if channel != "wechat" or not account_id or not to_user_id:
+        return {}
+    return {
+        "channel": "wechat",
+        "account_id": account_id,
+        "agent_id": agent_id,
+        "peer_id": str(raw.get("peer_id") or to_user_id).strip(),
+        "peer_type": str(raw.get("peer_type") or "private").strip(),
+        "to_user_id": to_user_id,
+        "context_token": str(raw.get("context_token") or "").strip(),
+    }
 
 
 def _runtime_options(raw: Any) -> DeepAgentRuntimeOptions:

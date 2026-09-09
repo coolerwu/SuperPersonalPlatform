@@ -40,6 +40,8 @@ channels:
 class FakeRunService:
     def __init__(self) -> None:
         self.created: list[dict[str, Any]] = []
+        self.run_details: dict[str, dict[str, Any]] = {}
+        self.approval_decisions: list[dict[str, str]] = []
 
     async def create_run(
         self,
@@ -67,6 +69,18 @@ class FakeRunService:
 
     async def execute_run(self, run_id: str) -> dict[str, Any]:
         return {"result": {"content": f"reply for {run_id}"}}
+
+    def list_runs(self) -> list[dict[str, Any]]:
+        return [{"run_id": run_id} for run_id in self.run_details]
+
+    def get_run(self, run_id: str) -> dict[str, Any]:
+        return self.run_details[run_id]
+
+    def approve_run(self, run_id: str) -> None:
+        self.approval_decisions.append({"run_id": run_id, "decision": "approve", "message": ""})
+
+    def reject_run(self, run_id: str, *, message: str = "") -> None:
+        self.approval_decisions.append({"run_id": run_id, "decision": "reject", "message": message})
 
 
 class FakeWechatClient:
@@ -432,6 +446,65 @@ def test_wechat_done_command_flushes_pending_input_immediately(tmp_path) -> None
         assert run_service.created[0]["content"] == "第一段"
 
     asyncio.run(scenario())
+
+
+def test_wechat_approval_commands_only_resume_matching_channel_run(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, client = _service(tmp_path)
+        run_service.run_details = {
+            "run-allowed": _waiting_approval_run("run-allowed", account_id="default", peer_id="wxid_user"),
+            "run-other-peer": _waiting_approval_run("run-other-peer", account_id="default", peer_id="wxid_other"),
+        }
+
+        await service._process_message(_text_message("/approve run-allowed", context_token="approve"))
+        await service._process_message(_text_message("/reject run-allowed 不要覆盖", context_token="reject"))
+
+        assert run_service.created == []
+        assert run_service.approval_decisions == [
+            {"run_id": "run-allowed", "decision": "approve", "message": ""},
+            {"run_id": "run-allowed", "decision": "reject", "message": "不要覆盖"},
+        ]
+        assert "已批准任务 run-allowed" in client.sent[-2]["payload"]["item_list"][0]["text_item"]["text"]
+        assert "已拒绝任务 run-allowed" in client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
+
+    asyncio.run(scenario())
+
+
+def test_wechat_delivery_preserves_stable_client_id(tmp_path) -> None:
+    async def scenario() -> None:
+        service, _run_service, client = _service(tmp_path)
+
+        await service.deliver_text(
+            to_user_id="wxid_user",
+            context_token="reply-token",
+            text="结果",
+            client_id="spp-run-1-final",
+        )
+
+        assert client.sent[0]["payload"]["client_id"] == "spp-run-1-final"
+
+    asyncio.run(scenario())
+
+
+def _waiting_approval_run(run_id: str, *, account_id: str, peer_id: str) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "state": {"status": "waiting_approval"},
+        "approval": {"status": "pending"},
+        "input": {
+            "source": "schedule",
+            "agent_id": "assistant",
+            "metadata": {
+                "delivery": {
+                    "channel": "wechat",
+                    "account_id": account_id,
+                    "peer_id": peer_id,
+                    "peer_type": "private",
+                    "to_user_id": peer_id,
+                }
+            },
+        },
+    }
 
 
 def _encrypt_aes_ecb_pkcs7(content: bytes, key: bytes) -> bytes:
