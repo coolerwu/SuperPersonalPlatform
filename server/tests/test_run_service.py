@@ -6,6 +6,12 @@ from server.app.run_service import RunService
 from server.app.run_worker_service import RunWorkerService
 from server.app.session_service import SessionService
 from server.app.system_log_service import SystemLogService
+from server.domain.run_approval import (
+    RunApprovalAction,
+    RunApprovalInterrupt,
+    RunApprovalRequest,
+    RunApprovalResume,
+)
 from server.domain.run_events import (
     DeepAgentGraphUpdatePayload,
     DeepAgentMessageDeltaPayload,
@@ -53,6 +59,10 @@ CHECKPOINT_CONFIG = CONFIG.replace("        tools:\n          - search_context\n
 NO_CHECKPOINT_CONFIG = CONFIG.replace(
     "        tools:\n          - search_context\n",
     "        tools:\n          - search_context\n        checkpointer: false\n",
+)
+INTERRUPT_CONFIG = CONFIG.replace(
+    "        tools:\n          - search_context\n",
+    "        tools:\n          - search_context\n        interrupt_on:\n          - write_context\n",
 )
 
 
@@ -693,3 +703,110 @@ def test_run_service_rejects_unknown_session_before_writing_run(tmp_path) -> Non
         raise AssertionError("expected unknown session to be rejected")
 
     assert not (tmp_path / "runs").exists()
+
+
+def test_run_service_persists_approval_and_resumes_from_checkpoint(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(INTERRUPT_CONFIG, encoding="utf-8")
+    calls = []
+
+    async def fake_run(
+        self,
+        *,
+        instructions,
+        messages,
+        options,
+        checkpoint_path=None,
+        thread_id="",
+        stream_callback=None,
+        resume=None,
+    ):
+        calls.append({"checkpoint_path": checkpoint_path, "thread_id": thread_id, "resume": resume})
+        if resume is None:
+            return RunApprovalRequest(
+                interrupts=(
+                    RunApprovalInterrupt(
+                        interrupt_id="interrupt-1",
+                        actions=(
+                            RunApprovalAction(
+                                name="write_context",
+                                args={"path": "/notes/example.md", "content": "hello"},
+                                description="Write a note",
+                                allowed_decisions=("approve", "reject"),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        assert isinstance(resume, RunApprovalResume)
+        assert resume.to_command_value() == {
+            "interrupt-1": {"decisions": [{"type": "approve"}]},
+        }
+        return "approved result"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="write it", agent_id="assistant"))
+    run_id = run["run_id"]
+
+    waiting = asyncio.run(service.execute_run(run_id))
+
+    assert waiting["state"]["status"] == "waiting_approval"
+    assert waiting["approval"]["status"] == "pending"
+    assert waiting["approval"]["request"]["interrupts"][0]["actions"][0]["name"] == "write_context"
+    assert waiting["partial"]["status"] == "waiting_approval"
+    assert not (tmp_path / "runs" / run_id / "lock.json").exists()
+    assert calls[0]["checkpoint_path"] == tmp_path / "sessions" / "checkpoints.sqlite"
+    assert calls[0]["thread_id"] == run_id
+
+    queued = service.approve_run(run_id)
+    assert queued["state"]["status"] == "queued"
+    assert queued["approval"]["status"] == "resume_queued"
+
+    completed = asyncio.run(service.execute_run(run_id))
+
+    assert completed["state"]["status"] == "completed"
+    assert completed["result"]["content"] == "approved result"
+    assert completed["approval"]["status"] == "completed"
+    event_types = [event["type"] for event in service.get_events(run_id)]
+    assert "approval_required" in event_types
+    assert "approval_resolved" in event_types
+
+
+def test_run_service_rejects_approval_with_feedback_and_can_cancel_waiting_run(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(INTERRUPT_CONFIG, encoding="utf-8")
+
+    async def fake_run(self, **kwargs):
+        return RunApprovalRequest(
+            interrupts=(
+                RunApprovalInterrupt(
+                    interrupt_id="interrupt-2",
+                    actions=(
+                        RunApprovalAction(
+                            name="write_context",
+                            args={},
+                            description="Write",
+                            allowed_decisions=("approve", "reject"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="write it", agent_id="assistant"))
+    run_id = run["run_id"]
+    asyncio.run(service.execute_run(run_id))
+
+    queued = service.reject_run(run_id, message="Do not overwrite the file")
+
+    decision = queued["approval"]["resume"]["values"][0]["decisions"][0]
+    assert decision == {"type": "reject", "message": "Do not overwrite the file"}
+    assert queued["state"]["status"] == "queued"
+
+    second = asyncio.run(service.create_run(content="write again", agent_id="assistant"))
+    asyncio.run(service.execute_run(second["run_id"]))
+    cancelled = service.cancel_run(second["run_id"])
+    assert cancelled["state"]["status"] == "cancelled"
+    assert cancelled["approval"]["status"] == "cancelled"

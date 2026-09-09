@@ -1,6 +1,7 @@
 import asyncio
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
+from server.domain.run_approval import RunApprovalRequest
 from server.domain.run_events import DeepAgentMessageDeltaPayload, DeepAgentSubagentResponsePayload, RunEventType
 from server.infrastructure.agent_filesystem_backend import (
     AGENT_WORKSPACE_DIRECTORIES,
@@ -14,6 +15,8 @@ from server.infrastructure.deepagent_runtime import (
     MEMORY_INDEX_PATH,
     RuntimeAttachment,
     RuntimeMessage,
+    _approval_request_from_stream_data,
+    _normalize_interrupt_on,
     _to_langchain_messages,
     load_agent_files,
     persist_agent_files,
@@ -532,3 +535,28 @@ def test_runtime_message_converts_image_attachment_to_openai_content_block(tmp_p
     assert messages[0].content[0] == {"type": "text", "text": "看图"}
     assert messages[0].content[1]["type"] == "image_url"
     assert messages[0].content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_runtime_parses_langgraph_interrupt_as_typed_approval_request() -> None:
+    from langgraph.types import Interrupt
+
+    interrupt = Interrupt(
+        value={
+            "action_requests": [{"name": "write_context", "args": {"path": "/notes/result.md"}, "description": "Write a file"}],
+            "review_configs": [{"action_name": "write_context", "allowed_decisions": ["approve", "reject"]}],
+        },
+        id="interrupt-1",
+    )
+
+    request = _approval_request_from_stream_data({"__interrupt__": (interrupt,)})
+
+    assert isinstance(request, RunApprovalRequest)
+    assert request.interrupts[0].interrupt_id == "interrupt-1"
+    assert request.interrupts[0].actions[0].name == "write_context"
+    assert request.interrupts[0].actions[0].allowed_decisions == ("approve", "reject")
+
+
+def test_runtime_limits_interrupt_decisions_to_approve_and_reject() -> None:
+    assert _normalize_interrupt_on(("write_context",)) == {
+        "write_context": {"allowed_decisions": ["approve", "reject"]}
+    }

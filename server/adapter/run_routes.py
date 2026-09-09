@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -17,6 +19,15 @@ class CreateRunRequest(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+class ResumeRunRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+    message: str = ""
+
+
+class RejectRunRequest(BaseModel):
+    message: str = ""
+
+
 def create_run_router(container: AppContainer) -> APIRouter:
     def require_run_auth(request: Request) -> None:
         require_authenticated(request, container)
@@ -26,6 +37,22 @@ def create_run_router(container: AppContainer) -> APIRouter:
         tags=["runs"],
         dependencies=[Depends(require_run_auth)],
     )
+
+    async def resume_waiting_run(
+        run_id: str,
+        *,
+        decision: Literal["approve", "reject"],
+        message: str = "",
+    ) -> dict[str, object]:
+        try:
+            resumed = container.run_service.resume_run(run_id, decision=decision, message=message)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="run not found") from exc
+        except RunStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if container.run_worker_service is not None:
+            container.run_worker_service.wake()
+        return resumed
 
     @router.post("")
     async def create_run(payload: CreateRunRequest) -> dict[str, object]:
@@ -83,5 +110,17 @@ def create_run_router(container: AppContainer) -> APIRouter:
         if container.run_worker_service is not None:
             container.run_worker_service.wake()
         return rerun_payload
+
+    @router.post("/{run_id}/approve")
+    async def approve_run(run_id: str) -> dict[str, object]:
+        return await resume_waiting_run(run_id, decision="approve")
+
+    @router.post("/{run_id}/reject")
+    async def reject_run(run_id: str, payload: RejectRunRequest | None = None) -> dict[str, object]:
+        return await resume_waiting_run(run_id, decision="reject", message=payload.message if payload else "")
+
+    @router.post("/{run_id}/resume")
+    async def resume_run(run_id: str, payload: ResumeRunRequest) -> dict[str, object]:
+        return await resume_waiting_run(run_id, decision=payload.decision, message=payload.message)
 
     return router

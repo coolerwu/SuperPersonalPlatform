@@ -13,6 +13,12 @@ from typing import Any
 
 from server.app.session_service import SessionService
 from server.domain.agent_config import AgentConfigError, AgentDefinition, ModelDefinition
+from server.domain.run_approval import (
+    ApprovalDecisionType,
+    RunApprovalDecision,
+    RunApprovalRequest,
+    RunApprovalResume,
+)
 from server.domain.run_events import (
     DeepAgentGraphUpdatePayload,
     DeepAgentMessageDeltaPayload,
@@ -23,6 +29,8 @@ from server.domain.run_events import (
     RunEventRecord,
     RunEventType,
     RunLifecyclePayload,
+    RunApprovalRequiredPayload,
+    RunApprovalResolvedPayload,
     run_event_from_json,
 )
 from server.infrastructure.config import load_settings
@@ -36,7 +44,7 @@ from server.infrastructure.deepagent_runtime import (
 from server.infrastructure.tool_runtime import PlatformToolContext
 
 
-RUN_STATUSES = {"queued", "running", "completed", "failed", "cancelled"}
+RUN_STATUSES = {"queued", "running", "waiting_approval", "completed", "failed", "cancelled"}
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 SESSION_HISTORY_READ_LIMIT = 120
 SESSION_RUNTIME_MESSAGE_LIMIT = 60
@@ -202,13 +210,20 @@ class RunService:
         session_id = str(run_input.get("session_id") or "")
         runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
         use_session_checkpoint = bool(session_id and _agent_checkpointer_enabled(agent_snapshot))
+        approval_resume = self._approval_resume(run_id)
+        use_approval_checkpoint = bool(runtime_options.interrupt_on or approval_resume is not None)
         history = (
             self._session_service.read_messages(session_id, limit=SESSION_HISTORY_READ_LIMIT)
             if session_id and self._session_service is not None
             else []
         )
         fallback_attachments = _runtime_attachments(run_input.get("attachments") or [], workspace=self._workspace)
-        checkpoint_path = self._workspace / "sessions" / "checkpoints.sqlite" if use_session_checkpoint else None
+        checkpoint_path = (
+            self._workspace / "sessions" / "checkpoints.sqlite"
+            if use_session_checkpoint or use_approval_checkpoint
+            else None
+        )
+        runtime_thread_id = session_id if use_session_checkpoint else (run_id if use_approval_checkpoint else "")
         runtime_history = _current_run_messages(history, run_id) if use_session_checkpoint else history[-SESSION_RUNTIME_MESSAGE_LIMIT:]
         runtime_messages = _runtime_messages(
             runtime_history,
@@ -223,7 +238,11 @@ class RunService:
                 workspace=self._workspace,
             )
         effective_system_prompt = system_prompt
-        stream_recorder = _RunStreamRecorder(run_id=run_id, run_dir=self._run_dir(run_id), append_event=self._append_event)
+        stream_recorder = _RunStreamRecorder.restore(
+            run_id=run_id,
+            run_dir=self._run_dir(run_id),
+            append_event=self._append_event,
+        )
         self._set_state(run_id, "running", extra={"worker_lease_id": execution_lease_id})
         running_payload = RunLifecyclePayload(message="DeepAgent started")
         self._append_event(run_id, RunEventType.RUNNING, running_payload)
@@ -243,7 +262,7 @@ class RunService:
         heartbeat_task = asyncio.create_task(self._heartbeat_run_lock(run_id, lease_id=execution_lease_id))
         try:
             async with asyncio.timeout(RUN_EXECUTION_TIMEOUT_SECONDS):
-                result = await DeepAgentRuntime(
+                runtime = DeepAgentRuntime(
                     model,
                     context_workspace=self._workspace / "context",
                     agent_workspace=self._agent_workspace(str(run_input.get("agent_id") or "")),
@@ -255,14 +274,28 @@ class RunService:
                         session_id=session_id,
                         metadata=run_input.get("metadata") if isinstance(run_input.get("metadata"), dict) else {},
                     ),
-                ).run(
-                    instructions=effective_system_prompt,
-                    messages=runtime_messages,
-                    options=runtime_options,
-                    checkpoint_path=checkpoint_path,
-                    thread_id=session_id if use_session_checkpoint else "",
-                    stream_callback=stream_recorder.record,
                 )
+                runtime_kwargs: dict[str, Any] = {
+                    "instructions": effective_system_prompt,
+                    "messages": runtime_messages,
+                    "options": runtime_options,
+                    "checkpoint_path": checkpoint_path,
+                    "thread_id": runtime_thread_id,
+                    "stream_callback": stream_recorder.record,
+                }
+                if approval_resume is not None:
+                    runtime_kwargs["resume"] = approval_resume
+                result = await runtime.run(
+                    **runtime_kwargs,
+                )
+            if isinstance(result, RunApprovalRequest):
+                self._wait_for_approval(
+                    run_id,
+                    result,
+                    lease_id=execution_lease_id,
+                    stream_recorder=stream_recorder,
+                )
+                return self.get_run(run_id)
             stream_recorder.finish(result)
         except asyncio.CancelledError:
             error = {
@@ -313,6 +346,7 @@ class RunService:
             "completed_at": _now(),
         }
         _write_json(self._run_dir(run_id) / "result.json", result_payload)
+        self._complete_approval(run_id)
         if session_id and self._session_service is not None:
             self._session_service.append_message(
                 session_id,
@@ -408,7 +442,8 @@ class RunService:
             with suppress(OSError):
                 lock_path.unlink()
             raise
-        attempts = int(state.get("attempts") or 0) + 1
+        is_approval_resume = bool(state.get("approval_resume_pending"))
+        attempts = int(state.get("attempts") or 0) + (0 if is_approval_resume else 1)
         self._set_state(
             run_id,
             "running",
@@ -420,6 +455,7 @@ class RunService:
                 "started_at": now,
                 "heartbeat_at": now,
                 "cancel_requested_at": None,
+                "approval_resume_pending": False,
             },
         )
         return {"run_id": run_id, "lease_id": lease_id}
@@ -433,7 +469,7 @@ class RunService:
             return self.get_run(run_id)
         now = _now()
         error = {"type": "RunCancelledError", "message": "run was cancelled"}
-        if state.get("status") in {"queued", "running"}:
+        if state.get("status") in {"queued", "running", "waiting_approval"}:
             _write_json(
                 run_dir / "result.json",
                 {"run_id": run_id, "status": "cancelled", "error": error, "completed_at": now},
@@ -442,6 +478,7 @@ class RunService:
             self._append_event(run_id, RunEventType.CANCELLED, RunErrorPayload(message=error["message"], type=error["type"]))
             self._set_delivery(run_id, "cancelled", error=error)
             self._mark_partial_failed(run_id, error, status="cancelled")
+            self._cancel_approval(run_id)
             self._release_lock(run_id)
             return self.get_run(run_id)
         return self.get_run(run_id)
@@ -454,7 +491,7 @@ class RunService:
         if state.get("status") not in TERMINAL_RUN_STATUSES:
             raise RunStateError("only terminal runs can be rerun")
         now = _now()
-        for filename in ("result.json", "partial.json"):
+        for filename in ("result.json", "partial.json", "approval.json"):
             with suppress(OSError):
                 (run_dir / filename).unlink()
         next_state = {
@@ -477,6 +514,94 @@ class RunService:
         self._upsert_index(self._summary_from_state(run_id))
         return self.get_run(run_id)
 
+    def approve_run(self, run_id: str) -> dict[str, Any]:
+        return self.resume_run(run_id, decision="approve")
+
+    def reject_run(self, run_id: str, *, message: str = "") -> dict[str, Any]:
+        return self.resume_run(run_id, decision="reject", message=message)
+
+    def resume_run(
+        self,
+        run_id: str,
+        *,
+        decision: ApprovalDecisionType,
+        message: str = "",
+    ) -> dict[str, Any]:
+        run_dir = self._run_dir(run_id)
+        if not run_dir.exists():
+            raise RunNotFoundError(run_id)
+        state = _read_json(run_dir / "state.json")
+        if state.get("status") != "waiting_approval":
+            raise RunStateError("only runs waiting for approval can be resumed")
+        approval_path = run_dir / "approval.json"
+        approval = _read_json(approval_path) if approval_path.exists() else {}
+        if approval.get("status") != "pending":
+            raise RunStateError("run has no pending approval request")
+        request = RunApprovalRequest.from_json(approval.get("request") or {})
+        if not request.interrupts:
+            raise RunStateError("run approval request is invalid")
+        rejection_message = message.strip() or "用户拒绝执行该操作"
+        resume_values: list[tuple[str, tuple[RunApprovalDecision, ...]]] = []
+        for interrupt in request.interrupts:
+            decisions: list[RunApprovalDecision] = []
+            for action in interrupt.actions:
+                if decision not in action.allowed_decisions:
+                    raise RunStateError(f"{action.name} does not allow the {decision} decision")
+                decisions.append(
+                    RunApprovalDecision(
+                        type=decision,
+                        message=rejection_message if decision == "reject" else "",
+                    )
+                )
+            resume_values.append((interrupt.interrupt_id, tuple(decisions)))
+        resume = RunApprovalResume(values=tuple(resume_values))
+        now = _now()
+        history = approval.get("history") if isinstance(approval.get("history"), list) else []
+        history.append(
+            {
+                "request": request.to_json(),
+                "resolution": {"decision": decision, "message": rejection_message if decision == "reject" else ""},
+                "resolved_at": now,
+            }
+        )
+        _write_json(
+            approval_path,
+            {
+                "schema_version": 1,
+                "run_id": run_id,
+                "status": "resume_queued",
+                "request": request.to_json(),
+                "resume": resume.to_json(),
+                "history": history,
+                "requested_at": approval.get("requested_at") or now,
+                "updated_at": now,
+            },
+        )
+        self._set_state(
+            run_id,
+            "queued",
+            extra={
+                "approval_resume_pending": True,
+                "worker_id": "",
+                "worker_lease_id": "",
+                "heartbeat_at": None,
+                "cancel_requested_at": None,
+            },
+        )
+        self._append_event(
+            run_id,
+            RunEventType.APPROVAL_RESOLVED,
+            RunApprovalResolvedPayload(
+                decision=decision,
+                message=rejection_message if decision == "reject" else "",
+                interrupt_ids=tuple(item.interrupt_id for item in request.interrupts),
+            ),
+        )
+        self._append_event(run_id, RunEventType.QUEUED, RunLifecyclePayload(message="run resume queued"))
+        self._set_delivery(run_id, "pending")
+        self._release_lock(run_id)
+        return self.get_run(run_id)
+
     async def wait_for_terminal(self, run_id: str, *, poll_seconds: float = RUN_WORKER_POLL_SECONDS) -> dict[str, Any]:
         while True:
             run = self.get_run(run_id)
@@ -484,6 +609,81 @@ class RunService:
             if state.get("status") in TERMINAL_RUN_STATUSES:
                 return run
             await asyncio.sleep(poll_seconds)
+
+    def _wait_for_approval(
+        self,
+        run_id: str,
+        request: RunApprovalRequest,
+        *,
+        lease_id: str,
+        stream_recorder: _RunStreamRecorder,
+    ) -> None:
+        if not request.interrupts:
+            raise RunStateError("DeepAgent returned an empty approval request")
+        if not self._lease_matches(run_id, lease_id):
+            return
+        approval_path = self._run_dir(run_id) / "approval.json"
+        previous = _read_json(approval_path) if approval_path.exists() else {}
+        now = _now()
+        _write_json(
+            approval_path,
+            {
+                "schema_version": 1,
+                "run_id": run_id,
+                "status": "pending",
+                "request": request.to_json(),
+                "resume": None,
+                "history": previous.get("history") if isinstance(previous.get("history"), list) else [],
+                "requested_at": now,
+                "updated_at": now,
+            },
+        )
+        self._set_state(
+            run_id,
+            "waiting_approval",
+            extra={
+                "approval_requested_at": now,
+                "approval_resume_pending": False,
+                "worker_id": "",
+                "worker_lease_id": "",
+                "heartbeat_at": None,
+            },
+        )
+        payload = RunApprovalRequiredPayload(request=request)
+        self._append_event(run_id, RunEventType.APPROVAL_REQUIRED, payload)
+        stream_recorder.wait_for_approval(payload)
+        self._set_delivery(run_id, "waiting_approval")
+        self._release_lock(run_id)
+
+    def _approval_resume(self, run_id: str) -> RunApprovalResume | None:
+        approval_path = self._run_dir(run_id) / "approval.json"
+        if not approval_path.exists():
+            return None
+        approval = _read_json(approval_path)
+        if approval.get("status") != "resume_queued":
+            return None
+        resume = RunApprovalResume.from_json(approval.get("resume") or {})
+        return resume if resume.values else None
+
+    def _complete_approval(self, run_id: str) -> None:
+        approval_path = self._run_dir(run_id) / "approval.json"
+        if not approval_path.exists():
+            return
+        approval = _read_json(approval_path)
+        approval["status"] = "completed"
+        approval["resume"] = None
+        approval["updated_at"] = _now()
+        _write_json(approval_path, approval)
+
+    def _cancel_approval(self, run_id: str) -> None:
+        approval_path = self._run_dir(run_id) / "approval.json"
+        if not approval_path.exists():
+            return
+        approval = _read_json(approval_path)
+        approval["status"] = "cancelled"
+        approval["resume"] = None
+        approval["updated_at"] = _now()
+        _write_json(approval_path, approval)
 
     def reconcile_stale_active_runs(self) -> int:
         reconciled = 0
@@ -562,6 +762,7 @@ class RunService:
             "delivery": _read_json(run_dir / "delivery.json") if (run_dir / "delivery.json").exists() else {},
             "result": None,
             "partial": None,
+            "approval": None,
         }
         result_path = run_dir / "result.json"
         if result_path.exists():
@@ -569,6 +770,9 @@ class RunService:
         partial_path = run_dir / "partial.json"
         if partial_path.exists():
             payload["partial"] = _read_json(partial_path)
+        approval_path = run_dir / "approval.json"
+        if approval_path.exists():
+            payload["approval"] = _read_json(approval_path)
         return payload
 
     def get_events(self, run_id: str, after: int = 0) -> list[dict[str, Any]]:
@@ -782,8 +986,8 @@ class RunService:
             return False
 
         now = datetime.now(timezone.utc)
-        created_at = _parse_datetime(state.get("created_at")) or _parse_datetime(state.get("updated_at"))
-        if created_at is not None and (now - created_at).total_seconds() > RUN_EXECUTION_TIMEOUT_SECONDS:
+        started_at = _parse_datetime(state.get("started_at")) or _parse_datetime(state.get("updated_at"))
+        if started_at is not None and (now - started_at).total_seconds() > RUN_EXECUTION_TIMEOUT_SECONDS:
             return self._recover_active_run(
                 run_id,
                 error={
@@ -927,6 +1131,19 @@ class _RunStreamRecorder:
     thinking: tuple[str, ...] = ()
     snapshot_dirty: bool = False
 
+    @classmethod
+    def restore(cls, *, run_id: str, run_dir: Path, append_event: Any) -> _RunStreamRecorder:
+        partial_path = run_dir / "partial.json"
+        partial = _read_json(partial_path) if partial_path.exists() else {}
+        raw_thinking = partial.get("thinking")
+        return cls(
+            run_id=run_id,
+            run_dir=run_dir,
+            append_event=append_event,
+            content=str(partial.get("content") or ""),
+            thinking=tuple(str(item) for item in raw_thinking) if isinstance(raw_thinking, list) else (),
+        )
+
     def record(self, event: DeepAgentStreamEvent) -> None:
         try:
             if event.type == RunEventType.ASSISTANT_DELTA and isinstance(event.payload, DeepAgentMessageDeltaPayload):
@@ -976,6 +1193,22 @@ class _RunStreamRecorder:
                 "thinking_status": "failed",
                 "thinking_collapsed": True,
                 "error": error,
+                "updated_at": _now(),
+            },
+        )
+
+    def wait_for_approval(self, payload: RunApprovalRequiredPayload) -> None:
+        self.record_snapshot_event(RunEventType.APPROVAL_REQUIRED, payload)
+        self._flush(force=True)
+        _write_json(
+            self.run_dir / "partial.json",
+            {
+                "run_id": self.run_id,
+                "status": "waiting_approval",
+                "content": self.content,
+                "thinking": list(self.thinking),
+                "thinking_status": "waiting_approval",
+                "thinking_collapsed": False,
                 "updated_at": _now(),
             },
         )
@@ -1046,6 +1279,9 @@ def _thinking_text(event_type: RunEventType | str, payload: RunEventPayload) -> 
         if len(content) > 1000:
             content = f"{content[:1000]}..."
         return f"子 Agent {label}：{content}" if content else f"子 Agent {label} 已完成"
+    if event_type == RunEventType.APPROVAL_REQUIRED and isinstance(payload, RunApprovalRequiredPayload):
+        names = [action.name for interrupt in payload.request.interrupts for action in interrupt.actions]
+        return f"等待审批：{', '.join(names)}" if names else "等待用户审批"
     if event_type == RunEventType.STREAM_FALLBACK:
         message = getattr(payload, "message", "")
         return str(message or "当前运行时不支持增量流，已切换为最终结果模式")

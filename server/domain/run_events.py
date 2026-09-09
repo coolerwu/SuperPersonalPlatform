@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, is_dataclass
 from enum import StrEnum
 from typing import Any
 
+from server.domain.run_approval import RunApprovalRequest
+
 
 class RunEventType(StrEnum):
     QUEUED = "queued"
@@ -16,6 +18,8 @@ class RunEventType(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    APPROVAL_REQUIRED = "approval_required"
+    APPROVAL_RESOLVED = "approval_resolved"
 
 
 class RunEventPayload:
@@ -99,6 +103,22 @@ class ImageAttachmentsTextifiedPayload(RunEventPayload):
 
 
 @dataclass(frozen=True)
+class RunApprovalRequiredPayload(RunEventPayload):
+    kind = "run_approval_required"
+
+    request: RunApprovalRequest
+
+
+@dataclass(frozen=True)
+class RunApprovalResolvedPayload(RunEventPayload):
+    kind = "run_approval_resolved"
+
+    decision: str
+    message: str
+    interrupt_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class RunEventRecord:
     seq: int
     run_id: str
@@ -153,6 +173,15 @@ def run_event_payload_from_json(event_type: str, payload: Any) -> RunEventPayloa
         return ImageAttachmentsTextifiedPayload(
             message=str(data.get("message") or ""),
             items=int(data.get("items") or 0),
+        )
+    if event_type == RunEventType.APPROVAL_REQUIRED:
+        return RunApprovalRequiredPayload(request=RunApprovalRequest.from_json(data.get("request") or {}))
+    if event_type == RunEventType.APPROVAL_RESOLVED:
+        raw_ids = data.get("interrupt_ids") or ()
+        return RunApprovalResolvedPayload(
+            decision=str(data.get("decision") or ""),
+            message=str(data.get("message") or ""),
+            interrupt_ids=tuple(str(item) for item in raw_ids) if isinstance(raw_ids, list | tuple) else (),
         )
     return GenericRunEventPayload(data=data)
 

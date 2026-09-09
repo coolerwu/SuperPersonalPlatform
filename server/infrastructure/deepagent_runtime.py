@@ -5,6 +5,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from server.domain.agent_config import ModelDefinition, ModelProvider
+from server.domain.run_approval import (
+    RunApprovalAction,
+    RunApprovalInterrupt,
+    RunApprovalRequest,
+    RunApprovalResume,
+)
 from server.domain.run_events import (
     DeepAgentGraphUpdatePayload,
     DeepAgentMessageDeltaPayload,
@@ -101,8 +107,9 @@ class DeepAgentRuntime:
         checkpoint_path: Path | None = None,
         thread_id: str = "",
         stream_callback: Callable[[DeepAgentStreamEvent], None] | None = None,
-    ) -> str:
-        if not messages:
+        resume: RunApprovalResume | None = None,
+    ) -> str | RunApprovalRequest:
+        if not messages and resume is None:
             raise ValueError("messages are required")
         try:
             from deepagents import create_deep_agent
@@ -145,8 +152,15 @@ class DeepAgentRuntime:
         middleware = _deepagent_builtin_middleware(create_deep_agent, options)
         if middleware:
             create_kwargs["middleware"] = middleware
-        input_messages = _to_langchain_messages(messages, HumanMessage, AIMessage, self._model.provider)
-        input_state: dict[str, Any] = {"messages": input_messages}
+        if resume is not None:
+            try:
+                from langgraph.types import Command
+            except Exception as exc:
+                raise RuntimeError("DeepAgent resume requires langgraph") from exc
+            input_state: Any = Command(resume=resume.to_command_value())
+        else:
+            input_messages = _to_langchain_messages(messages, HumanMessage, AIMessage, self._model.provider)
+            input_state = {"messages": input_messages}
         invoke_config = _invoke_config(options, assistant_id=self._agent_id, thread_id=thread_id)
         if checkpoint_path is not None and thread_id.strip():
             try:
@@ -161,18 +175,22 @@ class DeepAgentRuntime:
         else:
             agent = create_deep_agent(**create_kwargs)
             result = await self._run_agent(agent, input_state, invoke_config, stream_callback=stream_callback)
+        approval = _approval_request_from_stream_data(result)
+        if approval is not None:
+            return approval
         return self._extract_content(result)
 
     async def _run_agent(
         self,
         agent: Any,
-        input_state: dict[str, Any],
+        input_state: Any,
         invoke_config: dict[str, Any],
         *,
         stream_callback: Callable[[DeepAgentStreamEvent], None] | None,
     ) -> Any:
         if stream_callback is None or not hasattr(agent, "astream"):
-            return await agent.ainvoke(input_state, config=invoke_config)
+            result = await agent.ainvoke(input_state, config=invoke_config)
+            return _approval_request_from_stream_data(result) or result
 
         final_result: Any = None
         stream_started = False
@@ -187,6 +205,9 @@ class DeepAgentRuntime:
             ):
                 stream_started = True
                 part = _split_langgraph_stream_part(chunk)
+                approval = _approval_request_from_stream_data(part.data)
+                if approval is not None:
+                    return approval
                 if part.namespace:
                     if part.mode == "messages":
                         agent_name = _message_agent_name(part.data)
@@ -433,12 +454,65 @@ def _invoke_config(options: DeepAgentRuntimeOptions, *, assistant_id: str, threa
     return config
 
 
-def _normalize_interrupt_on(value: Any) -> dict[str, bool] | None:
+def _normalize_interrupt_on(value: Any) -> dict[str, dict[str, list[str]]] | None:
     if isinstance(value, dict):
-        return {str(key): bool(item) for key, item in value.items() if str(key).strip()}
-    if isinstance(value, list):
-        return {str(item).strip(): True for item in value if str(item).strip()}
+        return {
+            str(key): {"allowed_decisions": ["approve", "reject"]}
+            for key, item in value.items()
+            if str(key).strip() and bool(item)
+        }
+    if isinstance(value, list | tuple):
+        return {
+            str(item).strip(): {"allowed_decisions": ["approve", "reject"]}
+            for item in value
+            if str(item).strip()
+        }
     return None
+
+
+def _approval_request_from_stream_data(data: Any) -> RunApprovalRequest | None:
+    if isinstance(data, RunApprovalRequest):
+        return data
+    if not isinstance(data, dict):
+        return None
+    raw_interrupts = data.get("__interrupt__")
+    if not isinstance(raw_interrupts, list | tuple):
+        return None
+    interrupts: list[RunApprovalInterrupt] = []
+    for raw_interrupt in raw_interrupts:
+        interrupt_id = str(getattr(raw_interrupt, "id", "") or "").strip()
+        value = getattr(raw_interrupt, "value", None)
+        request = value if isinstance(value, dict) else {}
+        raw_actions = request.get("action_requests")
+        raw_configs = request.get("review_configs")
+        configs = {
+            str(item.get("action_name") or ""): item
+            for item in (raw_configs if isinstance(raw_configs, list | tuple) else ())
+            if isinstance(item, dict)
+        }
+        actions: list[RunApprovalAction] = []
+        for raw_action in raw_actions if isinstance(raw_actions, list | tuple) else ():
+            action = raw_action if isinstance(raw_action, dict) else {}
+            name = str(action.get("name") or "").strip()
+            if not name:
+                continue
+            raw_allowed = configs.get(name, {}).get("allowed_decisions")
+            allowed = tuple(
+                decision
+                for item in (raw_allowed if isinstance(raw_allowed, list | tuple) else ())
+                if (decision := str(item).strip()) in {"approve", "reject"}
+            )
+            actions.append(
+                RunApprovalAction(
+                    name=name,
+                    args=dict(action.get("args") or {}) if isinstance(action.get("args"), dict) else {},
+                    description=str(action.get("description") or ""),
+                    allowed_decisions=allowed or ("approve", "reject"),
+                )
+            )
+        if interrupt_id and actions:
+            interrupts.append(RunApprovalInterrupt(interrupt_id=interrupt_id, actions=tuple(actions)))
+    return RunApprovalRequest(interrupts=tuple(interrupts)) if interrupts else None
 
 
 def _deepagent_builtin_middleware(create_deep_agent: Any, options: DeepAgentRuntimeOptions) -> list[Any]:

@@ -19,7 +19,8 @@
 - DeepAgent 在后端由进程内持久化 Run Executor 运行，状态、事件、租约、心跳、重试和结果全部落盘；Checkpoint 只保存 LangGraph/Agent 状态，不替代任务队列或 worker lease。
 - DeepAgent 运行时优先使用 LangGraph/DeepAgent `astream(..., subgraphs=True)` 读取主图与 sub-agent 子图的模型增量和图更新；运行时先把 LangGraph stream chunk 转换成明确的 `DeepAgentStreamEvent` / `RunEventPayload` 对象，再追加到 `workspace/runs/{run_id}/events.jsonl`。主 Agent 增量正文以 `assistant_delta` 事件作为唯一实时入口，并节流写入 `workspace/runs/{run_id}/partial.json` 快照；sub-agent 的非空模型响应单独写为强类型 `subagent_response` 事件，记录 `namespace`、Agent 名、节点、正文和消息类，不混入主回答。`running`、`agent_update`、`subagent_response`、`stream_fallback`、`image_attachments_textified` 等公开运行事件会同步聚合成 `partial.thinking[]`，作为 Chat 页面刷新后的 run 级思考过程恢复来源。若当前 deepagents 版本或 fake agent 不支持 stream，则自动回退到 `ainvoke`，不影响最终结果。
 - `workspace/runs/index.json` 维护所有 run 的摘要和当前状态。
-- 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json` 和 `delivery.json`；run 由同一 FastAPI 进程内常驻 `RunWorkerService` 从落盘队列领取执行，而不是由 HTTP 请求内的临时 `asyncio.create_task` 执行；仅在 run 被 worker 领取后额外持有 `lock.json`，进入终态后立即移除。
+- 工具人工确认沿用 DeepAgent/LangGraph 原生 HITL：`interrupt_on` 只开放 approve/reject，运行时把 `Interrupt.value` 转成 `RunApprovalRequest` 强类型对象；`approval_required` 和 `approval_resolved` 使用明确的事件 payload 类，不在运行链路传递无定义 dict。当前请求、决定和历次审批保存在 `workspace/runs/{run_id}/approval.json`，LangGraph 的实际恢复位置仍由 SQLite checkpoint 保存。
+- 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json` 和 `delivery.json`；需要人工审批时额外保存 `approval.json`，记录强类型工具请求、当前决定和历史。run 由同一 FastAPI 进程内常驻 `RunWorkerService` 从落盘队列领取执行，而不是由 HTTP 请求内的临时 `asyncio.create_task` 执行；仅在 run 被 worker 领取后额外持有 `lock.json`，进入终态或 `waiting_approval` 后立即移除。
 - 统一调度器使用 `workspace/schedules/` 落盘调度定义和状态；WebDAV Context 同步和未来 Agent 定时任务共用这一套调度机制。
 - `workspace/sessions/index.json` 维护所有长期会话索引；长期 session 对微信和未来渠道默认开启。`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`；Agent 的 `deepagent.checkpointer` 默认开启，只有显式配置为 `false` 时才关闭，开启时 DeepAgent/LangGraph 运行时状态写入 `workspace/sessions/checkpoints.sqlite`。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
@@ -129,9 +130,12 @@ GET /api/runs/{run_id}
 GET /api/runs/{run_id}/events?after={seq}
 POST /api/runs/{run_id}/cancel
 POST /api/runs/{run_id}/rerun
+POST /api/runs/{run_id}/approve
+POST /api/runs/{run_id}/reject
+POST /api/runs/{run_id}/resume
 ```
 
-`POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`，只负责创建 `queued` run 并写入落盘队列；执行由同一 FastAPI 进程内的 `RunWorkerService` 领取，不再绑定创建请求的生命周期。未传 `session_id` 时按独立一次性 run 处理，不启用 checkpoint；传入 `session_id` 且 Agent 快照里的 `deepagent.checkpointer` 未显式关闭时，运行时使用 `workspace/sessions/checkpoints.sqlite` 作为 LangGraph SQLite checkpointer，并把 `configurable.thread_id` 设为该 `session_id`，同时只传当前 run 消息。传入 `session_id` 但 Agent 显式关闭 checkpointer 时，运行时不传 checkpoint/thread_id，仍使用最近会话历史作为显式上下文。微信通道会传入全局长期会话 ID，并把图片等附件保存到 `workspace/sessions/{session_id}/attachments/` 后创建 run，再等待 worker 写出终态后回发。该接口保留给渠道接入、自动化和后端集成使用，当前前端 Runs 页面不暴露手动创建入口。`cancel` 会把 queued/running run 标记为 `cancelled` 并释放 lock；`rerun` 只允许作用于 `completed/failed/cancelled` 终态 run，保留原 `input.json` 和事件审计，清除结果快照并重新入队。
+`POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`，只负责创建 `queued` run 并写入落盘队列；执行由同一 FastAPI 进程内的 `RunWorkerService` 领取，不再绑定创建请求的生命周期。未传 `session_id` 时按独立一次性 run 处理；若 Agent 配置了 `interrupt_on`，平台仍会用 run ID 建立可恢复 checkpoint。传入 `session_id` 且 Agent 快照里的 `deepagent.checkpointer` 未显式关闭时，运行时使用 `workspace/sessions/checkpoints.sqlite` 作为 LangGraph SQLite checkpointer，并把 `configurable.thread_id` 设为该 `session_id`，同时只传当前 run 消息。DeepAgent 原生 interrupt 会把 Run 切到 `waiting_approval` 并释放 worker lock；批准或拒绝会写入 `approval_resolved` 事件、重新入队，再通过同一 thread ID 的 `Command(resume=...)` 从中断点继续。三个审批接口中，`approve` / `reject` 是快捷入口，`resume` 接受结构化 `decision=approve|reject` 和可选拒绝理由。微信通道会等待恢复后的最终终态再回发。该接口保留给渠道接入、自动化和后端集成使用，当前前端 Runs 页面不暴露手动创建入口。`cancel` 会把 queued/running/waiting_approval run 标记为 `cancelled` 并释放 lock；`rerun` 只允许作用于 `completed/failed/cancelled` 终态 run，保留原 `input.json` 和事件审计，清除结果、审批快照并重新入队。
 
 Chat API：
 
@@ -144,7 +148,9 @@ GET /api/chat/sessions/{session_id}/messages?agent_id={agent_id}
 POST /api/chat/messages
 ```
 
-页面 Chat 使用 `channel=web`、`channel_account_id=default`、`peer_type=private`、`peer_id=browser` 和当前 `agent_id` 在 `workspace/sessions/active.json` 中维护页面当前选中的长期会话。`GET /api/chat/sessions` 列出当前 Agent 名下的全部长期 session，包括微信、Web 和未来渠道；`POST /api/chat/session/change` 可以把 Web Chat 绑定到其中任意一个 session，但只更新 Web Chat 的 active binding，不改写 session 原始的渠道、账号和 peer 身份，也不改变微信侧 active binding。读取消息、切换和发送消息都校验 session 必须属于当前 Agent。`POST /api/chat/session` 和 `POST /api/chat/session/change` 会在当前 session 的 `last_run_id` 仍处于 `queued/running` 时额外返回 `active_run`，让页面刷新或切换回来后可以显示 `partial.json` 并重新轮询事件。`POST /api/chat/messages` 创建 `source=web_chat` 的普通 DeepAgent run 并唤醒 `RunWorkerService`；前端随后只轮询 `/api/runs/{run_id}/events?after={seq}`，按 `assistant_delta` 事件增量更新 assistant 气泡，完成、失败或取消后再读取 run 详情和 session messages 对齐最终历史。
+页面 Chat 使用 `channel=web`、`channel_account_id=default`、`peer_type=private`、`peer_id=browser` 和当前 `agent_id` 在 `workspace/sessions/active.json` 中维护页面当前选中的长期会话。`GET /api/chat/sessions` 列出当前 Agent 名下的全部长期 session，包括微信、Web 和未来渠道；`POST /api/chat/session/change` 可以把 Web Chat 绑定到其中任意一个 session，但只更新 Web Chat 的 active binding，不改写 session 原始的渠道、账号和 peer 身份，也不改变微信侧 active binding。读取消息、切换和发送消息都校验 session 必须属于当前 Agent。`POST /api/chat/session` 和 `POST /api/chat/session/change` 会在当前 session 的 `last_run_id` 仍处于 `queued/running/waiting_approval` 时额外返回 `active_run`，让页面刷新或切换回来后可以显示 `partial.json` 并重新轮询事件。`POST /api/chat/messages` 创建 `source=web_chat` 的普通 DeepAgent run 并唤醒 `RunWorkerService`；前端随后只轮询 `/api/runs/{run_id}/events?after={seq}`，按 `assistant_delta` 事件增量更新 assistant 气泡，完成、失败或取消后再读取 run 详情和 session messages 对齐最终历史。
+
+Chat 的 `active_run` 识别 `queued`、`running` 和 `waiting_approval`。页面刷新后会从 Run 的 `approval.json` 恢复审批卡片；批准或拒绝调用统一 `resume` API，Run 恢复执行前输入框保持锁定，避免向同一 session 并发追加新消息。
 
 Schedule 落盘模型：
 
@@ -223,8 +229,8 @@ code_execution:
 
 ## Frontend Routes
 
-- `/chat` 是页面 Chat 工作区，提供 Agent 选择、该 Agent 全部长期 session 切换、新会话、文本输入和 assistant 流式气泡；session 列表展示微信/Web 等来源、渠道身份、消息数和更新时间，不展示其它 Agent 的 session。页面可以打开并续聊微信 session，但只改变 Web Chat 当前选择，不切换微信通道本身的活跃会话。消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。`820px` 以下使用独立移动布局：全局侧栏收进顶部菜单控制的抽屉，Chat 占满剩余动态视口，会话诊断栏隐藏，Agent、session 和新会话操作保持在紧凑工具行，消息区独立滚动且输入框固定在工作区底部。
-- `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮；详情页支持取消 `queued/running` run，以及重跑 `completed/failed/cancelled` run。
+- `/chat` 是页面 Chat 工作区，提供 Agent 选择、该 Agent 全部长期 session 切换、新会话、文本输入和 assistant 流式气泡；session 列表展示微信/Web 等来源、渠道身份、消息数和更新时间，不展示其它 Agent 的 session。页面可以打开并续聊微信 session，但只改变 Web Chat 当前选择，不切换微信通道本身的活跃会话。消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。用户和 assistant 消息都提供复制按钮，复制原始消息文本并短暂显示成功状态。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗、水平分隔线和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。`820px` 以下使用独立移动布局：全局侧栏收进顶部菜单控制的抽屉，Chat 占满剩余动态视口，会话诊断栏隐藏，Agent、session 和新会话操作保持在紧凑工具行，消息区独立滚动且输入框固定在工作区底部。
+- `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮；详情页支持取消 `queued/running/waiting_approval` run、审批或拒绝待确认工具调用，以及重跑 `completed/failed/cancelled` run。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。
 - `/config` 基础配置栏目只承载访问 Token、服务监听和坚果云 WebDAV 等基础配置；访问 Token 按明文输入展示。

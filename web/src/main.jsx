@@ -2,10 +2,12 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { createRoot } from "react-dom/client";
 import {
   Bot,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock3,
+  Copy,
   Cpu,
   ExternalLink,
   FileJson,
@@ -58,6 +60,7 @@ const WORKSPACE_TREE = [
   ["workspace/runs/{run_id}/input.json", "创建时输入与 Agent/Context 快照"],
   ["workspace/runs/{run_id}/state.json", "当前状态、更新时间、事件序号"],
   ["workspace/runs/{run_id}/events.jsonl", "前端轮询读取的事件流"],
+  ["workspace/runs/{run_id}/approval.json", "待审批工具调用、审批决定和历史"],
   ["workspace/runs/{run_id}/partial.json", "DeepAgent stream 运行中的聚合输出"],
   ["workspace/runs/{run_id}/result.json", "DeepAgent 最终输出"],
   ["workspace/runs/{run_id}/delivery.json", "微信等渠道投递状态"],
@@ -86,6 +89,24 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+async function copyTextToClipboard(text) {
+  if (globalThis.navigator?.clipboard?.writeText) {
+    await globalThis.navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("浏览器未允许复制");
 }
 
 function sameSnapshot(left, right) {
@@ -300,11 +321,31 @@ function ChatPage() {
   const [draft, setDraft] = useState("");
   const [activeRunId, setActiveRunId] = useState("");
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState("");
   const [error, setError] = useState("");
   const messagesRef = useRef(null);
   const composingRef = useRef(false);
   const chatEventSeqRef = useRef(0);
   const chatRunContentRef = useRef("");
+  const copyFeedbackTimerRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      if (copyFeedbackTimerRef.current) window.clearTimeout(copyFeedbackTimerRef.current);
+    },
+    [],
+  );
+
+  async function copyMessage(message) {
+    try {
+      await copyTextToClipboard(message.content);
+      setCopiedMessageId(message.id);
+      if (copyFeedbackTimerRef.current) window.clearTimeout(copyFeedbackTimerRef.current);
+      copyFeedbackTimerRef.current = window.setTimeout(() => setCopiedMessageId(""), 1_600);
+    } catch (exc) {
+      setError(exc.message || "复制失败，请重试");
+    }
+  }
 
   async function loadAgents() {
     const data = await api("/api/workspace/read", {
@@ -413,6 +454,7 @@ function ChatPage() {
         let completedStatus = "";
         let nextContent = chatRunContentRef.current;
         const thinkingUpdates = [];
+        let approvalUpdate;
         for (const event of events) {
           chatEventSeqRef.current = Math.max(chatEventSeqRef.current, Number(event.seq || 0));
           const thinkingText = runEventThinkingText(event);
@@ -428,15 +470,22 @@ function ChatPage() {
           if (event.type === "failed" || event.type === "completed") {
             completedStatus = event.type;
           }
+          if (event.type === "approval_required") {
+            approvalUpdate = event.payload?.request || null;
+          }
+          if (event.type === "approval_resolved") {
+            approvalUpdate = null;
+          }
         }
-        if (nextContent !== chatRunContentRef.current || thinkingUpdates.length > 0) {
+        if (nextContent !== chatRunContentRef.current || thinkingUpdates.length > 0 || approvalUpdate !== undefined) {
           chatRunContentRef.current = nextContent;
           setMessages((current) =>
             upsertChatAssistantMessage(current, runId, {
               content: nextContent,
-              streaming: true,
+              streaming: approvalUpdate ? false : true,
               thinkingAppend: thinkingUpdates,
               thinkingCollapsed: false,
+              approval: approvalUpdate,
             }),
           );
         }
@@ -509,6 +558,26 @@ function ChatPage() {
     }
   }
 
+  async function decideChatApproval(runId, decision, message = "") {
+    try {
+      await api(`/api/runs/${runId}/resume`, {
+        method: "POST",
+        body: JSON.stringify({ decision, message }),
+      });
+      setMessages((current) =>
+        upsertChatAssistantMessage(current, runId, {
+          approval: null,
+          streaming: true,
+          thinkingAppend: [decision === "approve" ? "操作已批准，DeepAgent 继续运行" : "操作已拒绝，DeepAgent 继续处理"],
+          thinkingCollapsed: false,
+        }),
+      );
+    } catch (exc) {
+      setError(exc.message);
+      throw exc;
+    }
+  }
+
   function isComposingMessage(event) {
     return composingRef.current || event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229;
   }
@@ -552,7 +621,7 @@ function ChatPage() {
   function restoreActiveChatRun(run) {
     const runId = run?.run_id || "";
     const status = runStatus(run);
-    if (!runId || (status !== "queued" && status !== "running")) {
+    if (!runId || !["queued", "running", "waiting_approval"].includes(status)) {
       setActiveRunId("");
       chatEventSeqRef.current = 0;
       chatRunContentRef.current = "";
@@ -651,7 +720,18 @@ function ChatPage() {
               key={message.id}
               className={`chat-message ${message.role === "user" ? "user" : "assistant"} ${message.failed ? "failed" : ""}`}
             >
-              <div className="chat-bubble">
+              <div className={`chat-bubble ${message.content ? "copyable" : ""}`}>
+                {message.content ? (
+                  <button
+                    type="button"
+                    className={`chat-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
+                    onClick={() => copyMessage(message)}
+                    aria-label={`${copiedMessageId === message.id ? "已复制" : "复制"}${message.role === "user" ? "用户" : "助手"}消息`}
+                    title={copiedMessageId === message.id ? "已复制" : "复制消息"}
+                  >
+                    {copiedMessageId === message.id ? <Check size={15} /> : <Copy size={15} />}
+                  </button>
+                ) : null}
                 {message.role === "assistant" && message.thinking?.length ? (
                   <ThinkingPanel items={message.thinking} running={message.streaming} collapsed={message.thinkingCollapsed !== false} />
                 ) : null}
@@ -662,7 +742,14 @@ function ChatPage() {
                     {message.content || (message.streaming ? "正在生成正文..." : "")}
                   </pre>
                 )}
-                {message.streaming ? <small>streaming</small> : null}
+                {message.role === "assistant" && message.approval ? (
+                  <ApprovalPanel
+                    approval={message.approval}
+                    compact
+                    onDecision={(decision, reason) => decideChatApproval(message.run_id, decision, reason)}
+                  />
+                ) : null}
+                {message.approval ? <small>等待审批</small> : message.streaming ? <small>streaming</small> : null}
               </div>
             </div>
           ))}
@@ -696,7 +783,7 @@ function ChatPage() {
       </section>
 
       <aside className="status-rail chat-rail">
-        <RailCard title="当前会话" status={activeRunId ? "运行中" : "就绪"} tone={activeRunId ? "cyan" : "green"}>
+        <RailCard title="当前会话" status={activeRunId ? "处理中" : "就绪"} tone={activeRunId ? "cyan" : "green"}>
           <RailRow label="Agent" value={agentId || "-"} />
           <RailRow label="Session" value={shortSessionId(session?.session_id || "") || "-"} />
           <RailRow label="消息数" value={session?.message_count ?? messages.length} />
@@ -726,7 +813,7 @@ function RunsPage() {
         acc[status] = (acc[status] || 0) + 1;
         return acc;
       },
-      { total: 0, queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 },
+      { total: 0, queued: 0, running: 0, waiting_approval: 0, completed: 0, failed: 0, cancelled: 0 },
     );
   }, [runs]);
 
@@ -779,8 +866,11 @@ function RunsPage() {
     setActiveRun((current) => mergeRunSnapshot(current, run));
   }
 
-  async function runAction(runId, action) {
-    const run = await api(`/api/runs/${runId}/${action}`, { method: "POST" });
+  async function runAction(runId, action, payload = null) {
+    const run = await api(`/api/runs/${runId}/${action}`, {
+      method: "POST",
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
+    });
     setActiveRun((current) => (current?.run_id === run.run_id ? mergeRunSnapshot(current, run) : run));
     await load();
   }
@@ -790,6 +880,7 @@ function RunsPage() {
       <div className="metrics-row">
         <Metric label="全部 Run" value={counts.total} tone="blue" />
         <Metric label="运行中" value={counts.running} tone="cyan" />
+        <Metric label="待审批" value={counts.waiting_approval} tone="amber" />
         <Metric label="已完成" value={counts.completed} tone="green" />
         <Metric label="失败" value={counts.failed} tone="red" />
         <Metric label="已取消" value={counts.cancelled} tone="red" />
@@ -868,7 +959,7 @@ function RunDetail({ run, events, onRunAction }) {
   const sessionId = input.session_id || state.session_id || run.session_id || "";
   const status = runStatus(run);
   const resultLabel = run.result?.content ? "结果预览" : partial ? "正在生成" : "结果预览";
-  const canCancel = status === "queued" || status === "running";
+  const canCancel = status === "queued" || status === "running" || status === "waiting_approval";
   const canRerun = status === "completed" || status === "failed" || status === "cancelled";
 
   return (
@@ -903,6 +994,12 @@ function RunDetail({ run, events, onRunAction }) {
       <PathBox label="状态文件" value={`workspace/runs/${runId}/state.json`} />
       <PathBox label="事件文件" value={`workspace/runs/${runId}/events.jsonl`} />
       {sessionId ? <PathBox label="会话历史" value={`workspace/sessions/${sessionId}/messages.jsonl`} /> : null}
+      {run.approval?.status === "pending" ? (
+        <ApprovalPanel
+          approval={run.approval.request}
+          onDecision={(decision, message) => onRunAction?.(runId, "resume", { decision, message })}
+        />
+      ) : null}
 
       <div className="tabs-line">
         <span className="active">事件</span>
@@ -930,6 +1027,64 @@ function RunDetail({ run, events, onRunAction }) {
           </small>
         </div>
         <pre>{result || "暂无结果"}</pre>
+      </div>
+    </section>
+  );
+}
+
+function ApprovalPanel({ approval, onDecision, compact = false }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const interrupts = Array.isArray(approval?.interrupts) ? approval.interrupts : [];
+  const actions = interrupts.flatMap((interrupt) => (Array.isArray(interrupt.actions) ? interrupt.actions : []));
+  if (actions.length === 0) return null;
+
+  async function decide(decision) {
+    if (!onDecision || busy) return;
+    setBusy(true);
+    try {
+      await onDecision(decision, reason.trim());
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className={`approval-panel ${compact ? "compact" : ""}`}>
+      <div className="approval-heading">
+        <Clock3 size={17} />
+        <div>
+          <strong>等待操作审批</strong>
+          <span>DeepAgent 已暂停，确认后从当前 checkpoint 继续。</span>
+        </div>
+      </div>
+      <div className="approval-actions-list">
+        {actions.map((action, index) => (
+          <div className="approval-action" key={`${action.name || "tool"}-${index}`}>
+            <div>
+              <code>{action.name || "unknown_tool"}</code>
+              <span>{action.description || "该工具调用需要人工确认"}</span>
+            </div>
+            <pre>{JSON.stringify(action.args || {}, null, 2)}</pre>
+          </div>
+        ))}
+      </div>
+      <textarea
+        value={reason}
+        onChange={(event) => setReason(event.target.value)}
+        placeholder="拒绝原因（可选，DeepAgent 会收到）"
+        rows={2}
+        disabled={busy}
+      />
+      <div className="approval-controls">
+        <button className="danger" onClick={() => decide("reject")} disabled={busy}>
+          <XCircle size={15} />
+          拒绝并继续
+        </button>
+        <button className="primary" onClick={() => decide("approve")} disabled={busy}>
+          <CheckCircle2 size={15} />
+          批准并继续
+        </button>
       </div>
     </section>
   );
@@ -2437,7 +2592,9 @@ function applyChatRunSnapshot(messages, run) {
   const thinking = Array.isArray(partial.thinking) ? partial.thinking.filter(Boolean) : [];
   if (thinking.length === 0 && !partial.content) return messages;
   const status = String(partial.status || runStatus(run) || "");
-  const streaming = status === "streaming" || runStatus(run) === "running";
+  const runState = runStatus(run);
+  const waitingApproval = runState === "waiting_approval";
+  const streaming = status === "streaming" || runState === "running" || runState === "queued";
   const id = `assistant_${run.run_id}`;
   return messages.map((message) => {
     if (message.id !== id) return message;
@@ -2447,6 +2604,7 @@ function applyChatRunSnapshot(messages, run) {
       thinking: thinking.length ? thinking : message.thinking,
       thinkingCollapsed: partial.thinking_collapsed !== undefined ? Boolean(partial.thinking_collapsed) : !streaming,
       streaming,
+      approval: waitingApproval && run.approval?.status === "pending" ? run.approval.request : null,
       failed: status === "failed" || message.failed,
     };
   });
@@ -2455,15 +2613,16 @@ function applyChatRunSnapshot(messages, run) {
 function applyActiveChatRun(messages, run) {
   const runId = run?.run_id || "";
   const status = runStatus(run);
-  if (!runId || (status !== "queued" && status !== "running")) return messages;
+  if (!runId || !["queued", "running", "waiting_approval"].includes(status)) return messages;
   const partial = run.partial || {};
   const thinking = Array.isArray(partial.thinking)
     ? partial.thinking.filter(Boolean)
     : ["后台运行中，已恢复事件轮询"];
   return upsertChatAssistantMessage(messages, runId, {
     content: partial.content || "",
-    streaming: true,
+    streaming: status !== "waiting_approval",
     failed: false,
+    approval: status === "waiting_approval" && run.approval?.status === "pending" ? run.approval.request : null,
     thinkingAppend: thinking.length ? thinking : ["后台运行中，已恢复事件轮询"],
     thinkingCollapsed: false,
   });
@@ -2482,6 +2641,7 @@ function mergeHydratedChatMessages(current, base, hydrated) {
       thinking: restored.thinking || message.thinking,
       thinkingCollapsed: restored.thinkingCollapsed ?? message.thinkingCollapsed,
       streaming: restored.streaming || message.streaming,
+      approval: restored.approval ?? message.approval,
       failed: restored.failed || message.failed,
     };
   });
@@ -2558,6 +2718,16 @@ function runEventThinkingText(event) {
   }
   if (event?.type === "image_attachments_textified") {
     return payload.message || "图片已转为文本附件说明";
+  }
+  if (event?.type === "approval_required") {
+    const names = (payload.request?.interrupts || [])
+      .flatMap((interrupt) => interrupt.actions || [])
+      .map((action) => action.name)
+      .filter(Boolean);
+    return names.length ? `等待审批：${names.join(", ")}` : "等待用户审批";
+  }
+  if (event?.type === "approval_resolved") {
+    return payload.decision === "reject" ? "操作已拒绝，DeepAgent 继续处理" : "操作已批准，DeepAgent 继续运行";
   }
   return "";
 }
@@ -2657,6 +2827,13 @@ function renderMarkdownBlocks(content) {
       flushQuote();
       continue;
     }
+    if (isMarkdownHorizontalRule(line)) {
+      flushParagraph();
+      flushList();
+      flushQuote();
+      blocks.push(<hr key={`hr-${blocks.length}`} />);
+      continue;
+    }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
       flushParagraph();
@@ -2716,6 +2893,10 @@ function renderMarkdownBlocks(content) {
   flushList();
   flushQuote();
   return blocks.length ? blocks : <p>{content}</p>;
+}
+
+function isMarkdownHorizontalRule(line) {
+  return /^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/.test(String(line || ""));
 }
 
 function isMarkdownTableStart(line, nextLine) {
@@ -2808,7 +2989,14 @@ function renderMarkdownInline(text, keyPrefix) {
 
 function Status({ status }) {
   const value = normalizeStatus(status);
-  const icon = value === "failed" || value === "cancelled" || value === "exited" ? <XCircle size={12} /> : <CheckCircle2 size={12} />;
+  const icon =
+    value === "waiting_approval" ? (
+      <Clock3 size={12} />
+    ) : value === "failed" || value === "cancelled" || value === "exited" ? (
+      <XCircle size={12} />
+    ) : (
+      <CheckCircle2 size={12} />
+    );
   return (
     <span className={`status status-${String(value)}`}>
       {icon}

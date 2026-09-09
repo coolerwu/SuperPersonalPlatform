@@ -269,7 +269,7 @@ pre {
 
 .metrics-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
 }
 
@@ -304,6 +304,10 @@ pre {
 
 .metric-red strong {
   color: var(--red);
+}
+
+.metric-amber strong {
+  color: #fbbf24;
 }
 
 .chat-screen {
@@ -506,6 +510,7 @@ pre {
 }
 
 .chat-bubble {
+  position: relative;
   display: grid;
   gap: 6px;
   max-width: min(760px, 82%);
@@ -514,6 +519,38 @@ pre {
   border-radius: 8px;
   background: #101720;
   padding: 12px 14px;
+}
+
+.chat-bubble.copyable {
+  padding-right: 48px;
+}
+
+.chat-copy-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.chat-copy-button:hover,
+.chat-copy-button:focus-visible {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  opacity: 1;
+}
+
+.chat-copy-button.copied {
+  color: var(--green);
+  opacity: 1;
 }
 
 .chat-message.user .chat-bubble {
@@ -539,6 +576,83 @@ pre {
 
 .chat-answer-placeholder {
   color: var(--muted);
+}
+
+.approval-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  border-radius: 7px;
+  background: rgba(45, 29, 8, 0.34);
+  padding: 12px;
+}
+
+.approval-heading,
+.approval-heading > div,
+.approval-action,
+.approval-action > div {
+  display: grid;
+  min-width: 0;
+}
+
+.approval-heading {
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  color: #fbbf24;
+}
+
+.approval-heading > div,
+.approval-action > div {
+  gap: 3px;
+}
+
+.approval-heading span,
+.approval-action span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.approval-actions-list {
+  display: grid;
+  gap: 8px;
+}
+
+.approval-action {
+  gap: 8px;
+  border-top: 1px solid rgba(245, 158, 11, 0.2);
+  padding-top: 8px;
+}
+
+.approval-action pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line-soft);
+  background: #090f16;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-panel textarea {
+  width: 100%;
+  min-height: 54px;
+  resize: vertical;
+}
+
+.approval-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.approval-controls button {
+  min-height: 36px;
+}
+
+.approval-panel.compact {
+  margin-top: 4px;
+  padding: 10px;
 }
 
 .thinking-panel {
@@ -696,6 +810,14 @@ pre {
   border-left: 3px solid rgba(23, 168, 245, 0.55);
   padding-left: 10px;
   color: var(--muted);
+}
+
+.markdown-message hr {
+  width: 100%;
+  height: 1px;
+  margin: 2px 0;
+  border: 0;
+  background: var(--line-soft);
 }
 
 .markdown-message .markdown-code {
@@ -2486,6 +2608,11 @@ pre {
   color: #ffaaaa;
 }
 
+.status-waiting_approval {
+  border-color: rgba(245, 158, 11, 0.42);
+  color: #fbbf24;
+}
+
 @media (max-width: 1180px) {
   .runs-grid,
   .chat-screen,
@@ -2767,6 +2894,10 @@ pre {
     padding: 10px 11px;
   }
 
+  .chat-bubble.copyable {
+    padding-right: 46px;
+  }
+
   .chat-message.assistant .chat-bubble {
     width: 100%;
     max-width: 100%;
@@ -2806,6 +2937,16 @@ pre {
     min-width: 44px;
     height: 44px;
     padding: 0;
+  }
+
+  .approval-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .approval-controls button {
+    width: 100%;
+    padding: 8px;
   }
 
   .chat-rail {

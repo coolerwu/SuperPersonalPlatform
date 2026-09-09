@@ -189,6 +189,6 @@ def _active_session_run(container: AppContainer, session: dict[str, object]) -> 
     except RunNotFoundError:
         return None
     status = str((run.get("state") or {}).get("status") or "")
-    if status not in {"queued", "running"}:
+    if status not in {"queued", "running", "waiting_approval"}:
         return None
     return run

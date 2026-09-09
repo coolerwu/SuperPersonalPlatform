@@ -441,7 +441,11 @@ class ScheduleService:
     def _meditation_busy_reason(self, agent_id: str) -> str:
         for run in self._run_service.list_runs():
             status = str(run.get("status") or "").strip()
-            if str(run.get("agent_id") or "").strip() == agent_id and status in {"queued", "running"}:
+            if str(run.get("agent_id") or "").strip() == agent_id and status in {
+                "queued",
+                "running",
+                "waiting_approval",
+            }:
                 run_id = str(run.get("run_id") or "").strip()
                 return f"active run {run_id or status}"
         lock_path = self._workspace / "browser_profiles" / _safe_agent_path_segment(agent_id) / "profile.lock.json"

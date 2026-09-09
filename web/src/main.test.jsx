@@ -149,6 +149,7 @@ const TWO_PROVIDER_CONFIG_YAML = [
 ].join("\n");
 
 let scrollHeightDescriptor;
+let clipboardDescriptor;
 
 async function flushReact() {
   for (let index = 0; index < 6; index += 1) {
@@ -162,6 +163,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.useRealTimers();
   scrollHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
   document.body.innerHTML = '<div id="root"></div>';
   window.history.replaceState({}, "", "/agents");
   global.fetch = vi.fn(async (url, options = {}) => {
@@ -182,6 +184,11 @@ afterEach(() => {
     Object.defineProperty(HTMLElement.prototype, "scrollHeight", scrollHeightDescriptor);
   } else {
     delete HTMLElement.prototype.scrollHeight;
+  }
+  if (clipboardDescriptor) {
+    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+  } else {
+    delete navigator.clipboard;
   }
 });
 
@@ -432,6 +439,11 @@ test("chat page does not send when enter confirms ime composition", async () => 
 
 test("chat page renders assistant markdown and follows the latest message", async () => {
   window.history.replaceState({}, "", "/chat");
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
   Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
     configurable: true,
     get() {
@@ -465,7 +477,7 @@ test("chat page renders assistant markdown and follows the latest message", asyn
             seq: 1,
             type: "assistant_delta",
             created_at: "2026-08-20T07:01:02Z",
-            payload: { kind: "deepagent_message_delta", delta: "**重点**\n- 第一条" },
+            payload: { kind: "deepagent_message_delta", delta: "**重点**\n- 第一条\n\n---\n\n结尾" },
           },
         ],
       });
@@ -486,6 +498,13 @@ test("chat page renders assistant markdown and follows the latest message", asyn
   expect(await screen.findByText("重点")).toBeInTheDocument();
   expect(screen.getByText("重点").tagName).toBe("STRONG");
   expect(screen.getByText("第一条").tagName).toBe("LI");
+  expect(screen.getByText("结尾").tagName).toBe("P");
+  expect(document.querySelector(".markdown-message hr")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "复制助手消息" }));
+  await waitFor(() => {
+    expect(writeText).toHaveBeenCalledWith("**重点**\n- 第一条\n\n---\n\n结尾");
+    expect(screen.getByRole("button", { name: "已复制助手消息" })).toBeInTheDocument();
+  });
   await waitFor(() => {
     expect(document.querySelector(".chat-messages").scrollTop).toBe(900);
   });
@@ -1443,5 +1462,65 @@ test("creates and deletes a wechat account", async () => {
     expect(confirmSpy).toHaveBeenCalled();
     const deleteCall = global.fetch.mock.calls.find(([url, options]) => String(url).endsWith("/api/channels/wechat/accounts/side") && options.method === "DELETE");
     expect(deleteCall).toBeTruthy();
+  });
+});
+
+test("runs page approves a paused DeepAgent run and resumes it", async () => {
+  window.history.replaceState({}, "", "/runs");
+  const waitingRun = {
+    run_id: "run_waiting",
+    input: { agent_id: "assistant", source: "web_chat", created_at: "2026-09-08T08:00:00Z" },
+    state: { status: "waiting_approval", seq: 3 },
+    approval: {
+      status: "pending",
+      request: {
+        interrupts: [
+          {
+            interrupt_id: "interrupt-1",
+            actions: [
+              {
+                name: "write_context",
+                description: "写入知识文件",
+                args: { path: "/notes/result.md" },
+                allowed_decisions: ["approve", "reject"],
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) return response({ authenticated: true });
+    if (path.endsWith("/api/runs") && (!options.method || options.method === "GET")) {
+      return response({
+        runs: [{ run_id: "run_waiting", agent_id: "assistant", status: "waiting_approval", updated_at: "2026-09-08T08:00:00Z" }],
+      });
+    }
+    if (path.endsWith("/api/runs/run_waiting/events")) return response({ events: [] });
+    if (path.endsWith("/api/runs/run_waiting/resume")) {
+      return response({ ...waitingRun, state: { status: "queued", seq: 5 }, approval: { status: "resume_queued" } });
+    }
+    if (path.endsWith("/api/runs/run_waiting")) return response(waitingRun);
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect(await screen.findByText("等待操作审批")).toBeInTheDocument();
+  expect(screen.getByText("write_context")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "批准并继续" }));
+
+  await waitFor(() => {
+    const resumeCall = global.fetch.mock.calls.find(
+      ([url, options]) => String(url).endsWith("/api/runs/run_waiting/resume") && options.method === "POST",
+    );
+    expect(resumeCall).toBeTruthy();
+    const payload = JSON.parse(resumeCall[1].body);
+    expect(payload.decision).toBe("approve");
+    expect(payload.message).toBe("");
   });
 });
