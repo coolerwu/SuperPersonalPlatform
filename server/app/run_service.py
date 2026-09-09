@@ -1085,10 +1085,11 @@ class RunService:
 
     def _summary_from_state(self, run_id: str) -> dict[str, Any]:
         run_input = self._load_input(run_id)
+        metadata = run_input.get("metadata") if isinstance(run_input.get("metadata"), dict) else {}
         run_dir = self._run_dir(run_id)
         state = _read_json(run_dir / "state.json")
         delivery = _read_json(run_dir / "delivery.json") if (run_dir / "delivery.json").exists() else {}
-        return {
+        summary = {
             "run_id": run_id,
             "status": state.get("status", "queued"),
             "source": run_input.get("source", "api"),
@@ -1099,6 +1100,10 @@ class RunService:
             "seq": state.get("seq", 0),
             "delivery_status": delivery.get("status", ""),
         }
+        client_message_id = str(metadata.get("client_message_id") or "").strip()
+        if client_message_id:
+            summary["client_message_id"] = client_message_id
+        return summary
 
     def _upsert_index(self, summary: dict[str, Any]) -> None:
         self._runs_dir.mkdir(parents=True, exist_ok=True)

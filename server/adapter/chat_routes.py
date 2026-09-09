@@ -28,6 +28,7 @@ class ChatMessageRequest(BaseModel):
     content: str
     agent_id: str = ""
     session_id: str = ""
+    client_message_id: str = Field(default="", max_length=128)
     attachments: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -137,6 +138,19 @@ def create_chat_router(container: AppContainer) -> APIRouter:
             session_id = session.session_id
         else:
             _require_session_for_agent(session_service, session_id, agent_id)
+        client_message_id = payload.client_message_id.strip()
+        existing_run = _find_existing_chat_run(
+            container,
+            session_id=session_id,
+            agent_id=agent_id,
+            client_message_id=client_message_id,
+        )
+        if existing_run is not None:
+            return {
+                "session": session_service.session_summary(session_id),
+                "run": existing_run,
+                "deduplicated": True,
+            }
         try:
             run = await container.run_service.create_run(
                 content=payload.content,
@@ -144,7 +158,10 @@ def create_chat_router(container: AppContainer) -> APIRouter:
                 source="web_chat",
                 session_id=session_id,
                 attachments=tuple(payload.attachments),
-                metadata={"source": "web_chat"},
+                metadata={
+                    "source": "web_chat",
+                    **({"client_message_id": client_message_id} if client_message_id else {}),
+                },
             )
         except (ValueError, AgentConfigError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -153,9 +170,38 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         return {
             "session": session_service.session_summary(session_id),
             "run": run,
+            "deduplicated": False,
         }
 
     return router
+
+
+def _find_existing_chat_run(
+    container: AppContainer,
+    *,
+    session_id: str,
+    agent_id: str,
+    client_message_id: str,
+) -> dict[str, object] | None:
+    if not client_message_id:
+        return None
+    for summary in container.run_service.list_runs():
+        if (
+            summary.get("source") != "web_chat"
+            or summary.get("session_id") != session_id
+            or summary.get("agent_id") != agent_id
+            or summary.get("client_message_id") != client_message_id
+        ):
+            continue
+        run_id = str(summary.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        try:
+            run = container.run_service.get_run(run_id)
+        except RunNotFoundError:
+            continue
+        return run
+    return None
 
 
 def _resolve_agent_id(workspace, raw_agent_id: str) -> str:

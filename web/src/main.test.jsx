@@ -382,6 +382,57 @@ test("chat page sends a message and renders the streaming assistant bubble", asy
   expect(await screen.findByText("正在回答")).toBeInTheDocument();
 });
 
+test("chat page creates only one run when send is triggered twice before the request finishes", async () => {
+  window.history.replaceState({}, "", "/chat");
+  let messageCalls = 0;
+  let resolveMessage;
+  let requestPayload;
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) return response({ authenticated: true });
+    if (path.endsWith("/api/workspace/read")) return response({ path: "config.yaml", content: CONFIG_YAML });
+    if (path.endsWith("/api/chat/session")) {
+      return response({ session: { session_id: "session_web", agent_id: "assistant", message_count: 0 }, messages: [] });
+    }
+    if (path.endsWith("/api/chat/messages")) {
+      messageCalls += 1;
+      requestPayload = JSON.parse(options.body);
+      return new Promise((resolve) => {
+        resolveMessage = () =>
+          resolve(
+            response({
+              session: { session_id: "session_web", agent_id: "assistant", message_count: 1 },
+              run: { run_id: "run_once", state: { status: "queued" } },
+            }),
+          );
+      });
+    }
+    if (path.startsWith("/api/runs/run_once/events")) return response({ events: [] });
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  const textarea = screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行");
+  fireEvent.change(textarea, { target: { value: "只发送一次" } });
+  act(() => {
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 13 });
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 13 });
+  });
+
+  expect(messageCalls).toBe(1);
+  expect(requestPayload.client_message_id).toBeTruthy();
+  expect(screen.getAllByText("只发送一次")).toHaveLength(1);
+
+  await act(async () => {
+    resolveMessage();
+  });
+  await flushReact();
+});
+
 test("chat page does not send when enter confirms ime composition", async () => {
   window.history.replaceState({}, "", "/chat");
   let messageCalls = 0;

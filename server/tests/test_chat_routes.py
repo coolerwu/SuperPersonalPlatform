@@ -62,6 +62,32 @@ def test_chat_routes_create_web_session_and_run(tmp_path) -> None:
     assert messages[-1]["content"] == "页面问答"
 
 
+def test_chat_routes_deduplicate_client_message_id(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+
+    session_response = client.post("/api/chat/session", json={"agent_id": "assistant"})
+    session_id = session_response.json()["session"]["session_id"]
+    request = {
+        "agent_id": "assistant",
+        "session_id": session_id,
+        "content": "只创建一次",
+        "client_message_id": "client-message-1",
+    }
+
+    first = client.post("/api/chat/messages", json=request)
+    second = client.post("/api/chat/messages", json=request)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["deduplicated"] is False
+    assert second.json()["deduplicated"] is True
+    assert second.json()["run"]["run_id"] == first.json()["run"]["run_id"]
+    messages = client.get(f"/api/chat/sessions/{session_id}/messages").json()["messages"]
+    assert [message["content"] for message in messages] == ["只创建一次"]
+
+
 def test_chat_routes_list_and_change_web_sessions(tmp_path) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
 

@@ -521,14 +521,10 @@ pre {
   padding: 12px 14px;
 }
 
-.chat-bubble.copyable {
-  padding-right: 48px;
-}
-
 .chat-copy-button {
   position: absolute;
   top: 8px;
-  right: 8px;
+  right: -38px;
   display: inline-grid;
   width: 28px;
   height: 28px;
@@ -538,6 +534,11 @@ pre {
   padding: 0;
   color: var(--muted);
   opacity: 0.55;
+}
+
+.chat-message.user .chat-copy-button {
+  right: auto;
+  left: -38px;
 }
 
 .chat-copy-button:hover,
@@ -2894,13 +2895,20 @@ pre {
     padding: 10px 11px;
   }
 
-  .chat-bubble.copyable {
-    padding-right: 46px;
-  }
-
   .chat-message.assistant .chat-bubble {
     width: 100%;
     max-width: 100%;
+  }
+
+  .chat-bubble.copyable {
+    padding-top: 44px;
+  }
+
+  .chat-message .chat-copy-button,
+  .chat-message.user .chat-copy-button {
+    top: 8px;
+    right: 8px;
+    left: auto;
   }
 
   .markdown-message {

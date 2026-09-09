@@ -319,12 +319,14 @@ function ChatPage() {
   const [chatSessions, setChatSessions] = useState([]);
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState("");
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [error, setError] = useState("");
   const messagesRef = useRef(null);
   const composingRef = useRef(false);
+  const sendingRef = useRef(false);
   const chatEventSeqRef = useRef(0);
   const chatRunContentRef = useRef("");
   const copyFeedbackTimerRef = useRef(0);
@@ -506,13 +508,16 @@ function ChatPage() {
 
   async function sendMessage() {
     const content = draft.trim();
-    if (!content || activeRunId) return;
+    if (!content || activeRunId || sendingRef.current) return;
+    const clientMessageId = createClientMessageId();
+    sendingRef.current = true;
+    setSending(true);
     setDraft("");
     setError("");
     setMessages((current) => [
       ...current,
       {
-        id: `local_user_${Date.now()}`,
+        id: `local_user_${clientMessageId}`,
         role: "user",
         content,
         created_at: new Date().toISOString(),
@@ -525,6 +530,7 @@ function ChatPage() {
           content,
           agent_id: agentId || "",
           session_id: session?.session_id || "",
+          client_message_id: clientMessageId,
         }),
       });
       const runId = data.run?.run_id || "";
@@ -555,6 +561,9 @@ function ChatPage() {
         },
       ]);
       setError(exc.message);
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
   }
 
@@ -775,7 +784,11 @@ function ChatPage() {
               }
             }}
           />
-          <button className="primary chat-send-button" onClick={sendMessage} disabled={!draft.trim() || Boolean(activeRunId)}>
+          <button
+            className="primary chat-send-button"
+            onClick={sendMessage}
+            disabled={!draft.trim() || Boolean(activeRunId) || sending}
+          >
             <Send size={18} />
             <span>发送</span>
           </button>
@@ -2531,6 +2544,11 @@ function normalizeChatMessages(items) {
       created_at: item.created_at || "",
       run_id: item.run_id || "",
     }));
+}
+
+function createClientMessageId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function formatSessionButton(session, sessions) {
