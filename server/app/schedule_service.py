@@ -225,7 +225,6 @@ class ScheduleService:
             enabled=(
                 self._settings.nutstore.enabled
                 and self._settings.context.webdav_sync.enabled
-                and bool(self._settings.context.webdav_permissions)
             ),
             trigger=ScheduleTrigger(
                 kind="interval",

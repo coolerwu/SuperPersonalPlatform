@@ -240,8 +240,6 @@ def create_system_router(container: AppContainer) -> APIRouter:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="坚果云 WebDAV 未启用")
         if not settings.context.webdav_sync.enabled:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Context WebDAV 同步未启用")
-        if not settings.context.webdav_permissions:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 WebDAV 权限规则")
 
         service = WebDAVContextService(
             workspace=container.workspace,

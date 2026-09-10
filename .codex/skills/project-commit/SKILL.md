@@ -95,3 +95,5 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
 - Agent data lives in `agents/{agent_id}/workspace/`; only `agent.json` remains outside that private workspace. Use the shared path/policy module and WorkspaceMiddleware for runtime directory guidance.
 - For a user-authorized layout change, migrate production data directly during a stopped-service window, verify file manifests before/after, and only then start the new version. Do not add runtime legacy-path fallback or migration scripts to the repository. Preserve conflicting or unassigned files in a migration backup.
 - Browser state lives directly in `workspace/browser/`. Code execution keeps scripts in `scratch/` and deliverables in `artifacts/`; temporary mounts are cleaned after execution.
+
+- WebDAV uses a virtual `/webdav/` mount configured per Agent (`enabled`, `path`, `permission`, `description`). Global sync has no permission rules. When preparing upgrades, reconcile existing config explicitly; do not add symlinks or automatic migrations. Check native file and Context tool isolation together.

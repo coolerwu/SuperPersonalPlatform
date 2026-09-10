@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import httpx
 import os
 import re
 import threading
@@ -18,6 +19,9 @@ from server.app.webdav_context_service import WebDAVContextError, WebDAVContextS
 from server.domain.tooling import get_tool_definition
 from server.infrastructure.browser_tools import build_browser_extract_tool, build_browser_search_tool
 from server.infrastructure.config import load_settings
+from server.domain.agent_config import AgentWebDAVConfig
+from server.infrastructure.agent_workspace import WebDAVPathPolicy
+from server.infrastructure.webdav_backend import AgentWebDAVView
 
 
 _ARXIV_RATE_LIMIT_SECONDS = 3.0
@@ -65,10 +69,11 @@ def build_platform_tools(
     context_workspace: Path,
     schedule_service: Any = None,
     tool_context: PlatformToolContext | None = None,
+    webdav: AgentWebDAVConfig = AgentWebDAVConfig(),
 ) -> list[Any]:
     tools = []
     service = ContextKnowledgeService(context_workspace)
-    webdav_service = _webdav_context_service(context_workspace)
+    webdav_service = _webdav_context_service(context_workspace, webdav)
     browser_config = _browser_config(context_workspace)
     for tool_id in tool_ids:
         definition = get_tool_definition(tool_id)
@@ -109,7 +114,7 @@ def build_platform_tools(
     return tools
 
 
-def _webdav_context_service(context_workspace: Path) -> WebDAVContextService | None:
+def _webdav_context_service(context_workspace: Path, webdav: AgentWebDAVConfig = AgentWebDAVConfig()) -> AgentWebDAVView | None:
     workspace = context_workspace.parent
     try:
         settings = load_settings(workspace / "config.yaml")
@@ -117,13 +122,11 @@ def _webdav_context_service(context_workspace: Path) -> WebDAVContextService | N
         return None
     if not settings.nutstore.enabled or not settings.context.webdav_sync.enabled:
         return None
-    if not settings.context.webdav_permissions:
+    if not webdav.enabled:
         return None
-    return WebDAVContextService(
-        workspace=workspace,
-        nutstore=settings.nutstore,
-        context=settings.context,
-    )
+    return AgentWebDAVView(WebDAVContextService(
+        workspace=workspace, nutstore=settings.nutstore, context=settings.context,
+    ), WebDAVPathPolicy(webdav))
 
 
 def _browser_config(context_workspace: Path) -> dict[str, Any]:
@@ -264,7 +267,7 @@ def _write_context_tool(service: ContextKnowledgeService, webdav_service: WebDAV
                 result = run_async(webdav_service.write(absolute_path=absolute_path, content=content, mode=mode))
             else:
                 result = service.write(type=type, absolute_path=absolute_path, content=content, mode=mode)
-        except (ContextKnowledgeError, WebDAVContextError, RuntimeError, ValueError) as exc:
+        except (ContextKnowledgeError, WebDAVContextError, RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
             payload: dict[str, Any] = {
                 "ok": False,
                 "path": str(absolute_path or ""),
@@ -287,7 +290,7 @@ def _write_context_tool(service: ContextKnowledgeService, webdav_service: WebDAV
         name="write_context",
         description=(
             "Write approved knowledge to workspace/context/knowledge/files. "
-            "For writable WebDAV permission paths, use /webdav/path.ext; protected paths cannot be written. "
+            "Use /webdav/path.ext inside this Agent’s enabled mapping; its read/write permission is enforced. "
             "Do not write back to protected WebDAV source notes returned by search_context; use /files/... "
             "or an explicitly writable WebDAV inbox such as /webdav/00AgentInbox/... instead. "
             "If the tool returns ok=false, explain the permission issue to the user and continue. "

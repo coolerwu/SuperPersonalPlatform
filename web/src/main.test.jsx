@@ -1304,14 +1304,19 @@ test("saves deepagent options from the agent config menu", async () => {
 
   expect(await screen.findByText("DeepAgent 运行选项")).toBeInTheDocument();
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("Max Iterations"), { target: { value: "12" } });
+  fireEvent.change(screen.getByLabelText("最大执行步数"), { target: { value: "12" } });
   fireEvent.click(screen.getByRole("button", { name: "配置工具" }));
   expect(screen.getByRole("dialog", { name: "Agent 工具授权" })).toBeInTheDocument();
   fireEvent.click(screen.getByLabelText("Search Context"));
   fireEvent.click(screen.getByLabelText("Write Context"));
   fireEvent.click(screen.getByLabelText("Schedule"));
   fireEvent.click(screen.getByRole("button", { name: "完成" }));
-  fireEvent.click(screen.getByLabelText("Agent 文件系统"));
+  expect(screen.queryByLabelText("Checkpointer")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Runtime Name")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText("启用 WebDAV"));
+  expect(screen.getByLabelText("访问权限")).toHaveValue("write");
+  fireEvent.change(screen.getByLabelText("映射目录（相对于全局同步目录）"), { target: { value: "/项目资料" } });
+  fireEvent.change(screen.getByLabelText("目录说明"), { target: { value: "项目共享文档" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
   await waitFor(() => {
@@ -1320,11 +1325,13 @@ test("saves deepagent options from the agent config menu", async () => {
     const content = JSON.parse(writeCall[1].body).content;
     expect(content).toContain("max_iterations: 12");
     expect(content).toContain("todo_list: true");
-    expect(content).toContain("use_longterm_memory: true");
-    expect(content).toContain("filesystem:");
+    expect(content).not.toContain("use_longterm_memory:");
+    expect(content).not.toContain("filesystem:");
     expect(content).toContain("enabled: true");
-    expect(content).toContain('root: "agent"');
-    expect(content).toContain('mode: "read_write"');
+    expect(content).toContain('path: "/项目资料"');
+    expect(content).toContain('permission: "write"');
+    expect(content).toContain('description: "项目共享文档"');
+    expect(content).not.toContain("webdav_permissions:");
     expect(content).toContain('- "search_context"');
     expect(content).toContain('- "write_context"');
     expect(content).toContain('- "schedule"');

@@ -58,15 +58,6 @@ context:
       - ".txt"
       - ".json"
       - ".jsonl"
-  webdav_permissions:
-    - path: "/"
-      readable: true
-      writable: false
-      protected: true
-    - path: "/00AgentInbox"
-      readable: true
-      writable: true
-      protected: false
 maintenance:
   enabled: true
   interval_seconds: 86400
@@ -88,24 +79,15 @@ agents:
       system_prompt: "你是一个运行在后端的 DeepAgent。"
       model_id: "default"
       context_ids: []
+      webdav:
+        enabled: false
+        path: "/"
+        permission: "write"
+        description: ""
       deepagent:
         max_iterations: 60
-        name: ""
-        debug: false
         todo_list: true
-        filesystem:
-          enabled: false
-          root: "agent"
-          mode: "read_write"
-        use_longterm_memory: true
         tools:
           - search_session
           - arxiv
           - yahoo_finance_news
-        interrupt_on: []
-        subagents: []
-        response_format: ""
-        context_schema: ""
-        checkpointer: true
-        store: ""
-        cache: ""

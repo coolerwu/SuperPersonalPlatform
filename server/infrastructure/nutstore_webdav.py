@@ -200,9 +200,9 @@ class NutstoreWebDAVClient:
             raise AgentConfigError("nutstore username/password are required")
 
     def _raise_response_error(self, response: httpx.Response, action: str) -> None:
-        raise AgentConfigError(
-            f"nutstore WebDAV {action} failed: HTTP {response.status_code}"
-        )
+        error = AgentConfigError(f"nutstore WebDAV {action} failed: HTTP {response.status_code}")
+        error.status_code = response.status_code
+        raise error
 
 
 def _normalize_path(path: str, *, allow_empty: bool = False) -> str:

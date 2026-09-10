@@ -5,6 +5,7 @@ from deepagents.middleware._utils import append_to_system_message
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 
 from server.infrastructure.agent_workspace import WORKSPACE_DIRECTORIES
+from server.domain.agent_config import AgentWebDAVConfig
 
 WORKSPACE_PROMPT = "\n".join([
     "## Agent Workspace Contract",
@@ -17,10 +18,17 @@ WORKSPACE_PROMPT = "\n".join([
 
 
 class WorkspaceMiddleware(AgentMiddleware):
+    def __init__(self, webdav: AgentWebDAVConfig = AgentWebDAVConfig()):
+        self.prompt = WORKSPACE_PROMPT
+        if webdav.enabled:
+            purpose = webdav.description or "User documents and shared knowledge from Nutstore."
+            self.prompt += f"\n- /webdav/: {purpose} Permission: {webdav.permission}. "
+            self.prompt += "Allowed writes update the remote Nutstore files. Use /scratch/ for temporary scripts, /artifacts/ for deliverables and /memories/ for private memory."
+
     def modify_request(self, request: ModelRequest) -> ModelRequest:
-        if WORKSPACE_PROMPT in (request.system_message.text if request.system_message else ""):
+        if self.prompt in (request.system_message.text if request.system_message else ""):
             return request
-        return request.override(system_message=append_to_system_message(request.system_message, WORKSPACE_PROMPT))
+        return request.override(system_message=append_to_system_message(request.system_message, self.prompt))
 
     def wrap_model_call(self, request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]) -> ModelResponse:
         return handler(self.modify_request(request))

@@ -46,33 +46,26 @@ class ModelDefinition:
 
 
 @dataclass(frozen=True)
-class DeepAgentFilesystemOptions:
+class AgentWebDAVConfig:
     enabled: bool = False
-    root: str = "agent"
-    mode: str = "read_write"
+    path: str = "/"
+    permission: str = "write"
+    description: str = ""
 
     def __post_init__(self) -> None:
-        if self.root != "agent":
-            raise AgentConfigError("agents.definitions[].deepagent.filesystem.root must be agent")
-        if self.mode not in {"read_write"}:
-            raise AgentConfigError("agents.definitions[].deepagent.filesystem.mode must be read_write")
+        from pathlib import PurePosixPath
+        if not self.path.startswith("/") or any(part in {".", ".."} for part in self.path.split("/")) or "\\" in self.path or "\0" in self.path:
+            raise AgentConfigError("agents.definitions[].webdav.path must be a safe absolute mapping path")
+        object.__setattr__(self, "path", str(PurePosixPath(self.path)))
+        if self.permission not in {"read", "write"}:
+            raise AgentConfigError("agents.definitions[].webdav.permission must be read or write")
 
 
 @dataclass(frozen=True)
 class DeepAgentOptions:
     max_iterations: int = 60
-    name: str = ""
-    debug: bool = False
     todo_list: bool = True
-    filesystem: DeepAgentFilesystemOptions = DeepAgentFilesystemOptions()
-    use_longterm_memory: bool = True
     tools: tuple[str, ...] = ()
-    interrupt_on: tuple[str, ...] = ()
-    subagents: tuple[dict[str, Any], ...] = ()
-    response_format: str = ""
-    context_schema: str = ""
-    checkpointer: bool = True
-    cache: str = ""
 
     def __post_init__(self) -> None:
         if self.max_iterations < 1:
@@ -87,6 +80,7 @@ class AgentDefinition:
     model_id: str | None = None
     context_ids: tuple[str, ...] = ()
     deepagent: DeepAgentOptions = DeepAgentOptions()
+    webdav: AgentWebDAVConfig = AgentWebDAVConfig()
 
     def __post_init__(self) -> None:
         if not self.id.strip():

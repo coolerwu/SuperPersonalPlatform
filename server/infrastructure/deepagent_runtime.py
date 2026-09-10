@@ -1,9 +1,9 @@
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
-from server.domain.agent_config import ModelDefinition, ModelProvider
+from server.domain.agent_config import AgentWebDAVConfig, ModelDefinition, ModelProvider
 from server.domain.run_approval import (
     RunApprovalAction,
     RunApprovalInterrupt,
@@ -23,8 +23,13 @@ from server.infrastructure.agent_filesystem_backend import (
     AGENT_WORKSPACE_DIRECTORIES,
     AgentFilesystemBackend,
 )
-from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools
+from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools, _webdav_context_service
+from server.infrastructure.webdav_backend import WebDAVFilesystemBackend
 
+
+from server.domain.tooling import PLATFORM_TOOL_DEFINITIONS
+
+SYSTEM_APPROVAL_TOOLS = tuple(tool.id for tool in PLATFORM_TOOL_DEFINITIONS if tool.approval_required)
 
 MEMORY_INDEX_PATH = "/memories/AGENTS.md"
 GENERAL_PURPOSE_SKILL_PROMPT = (
@@ -60,12 +65,13 @@ class RuntimeMessage:
 class DeepAgentRuntimeOptions:
     max_iterations: int = 60
     name: str = ""
-    debug: bool = False
     todo_list: bool = True
-    filesystem_enabled: bool = False
-    use_longterm_memory: bool = True
     tools: tuple[str, ...] = ()
-    interrupt_on: tuple[str, ...] = ()
+    webdav: AgentWebDAVConfig = AgentWebDAVConfig()
+
+    @property
+    def interrupt_on(self) -> tuple[str, ...]:
+        return tuple(tool for tool in SYSTEM_APPROVAL_TOOLS if tool in self.tools)
 
 
 @dataclass(frozen=True)
@@ -124,32 +130,37 @@ class DeepAgentRuntime:
             (self._agent_workspace / directory).mkdir(parents=True, exist_ok=True)
         from server.infrastructure.workspace_middleware import WorkspaceMiddleware
 
+        webdav_view = _webdav_context_service(self._context_workspace, options.webdav)
+        if webdav_view is None:
+            options = replace(options, webdav=AgentWebDAVConfig())
         general_purpose_subagent = dict(GENERAL_PURPOSE_SUBAGENT)
-        general_purpose_subagent["middleware"] = [WorkspaceMiddleware()]
+        general_purpose_subagent["middleware"] = [WorkspaceMiddleware(options.webdav)]
         default_subagent_prompt = str(general_purpose_subagent.get("system_prompt") or "").strip()
         general_purpose_subagent["system_prompt"] = (
             f"{default_subagent_prompt}\n\n{GENERAL_PURPOSE_SKILL_PROMPT}"
         )
+        backend = AgentFilesystemBackend(root_dir=self._agent_workspace, virtual_mode=True)
+        if webdav_view is not None:
+            from deepagents.backends import CompositeBackend
+            backend = CompositeBackend(default=backend, routes={"/webdav/": WebDAVFilesystemBackend(webdav_view)})
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
                 options.tools,
                 context_workspace=self._context_workspace,
                 schedule_service=self._schedule_service,
                 tool_context=self._tool_context,
+                webdav=options.webdav,
             ),
             "model": self._chat_model(),
             "system_prompt": instructions.strip(),
-            "backend": AgentFilesystemBackend(root_dir=self._agent_workspace, virtual_mode=True),
+            "backend": backend,
             "skills": ["/skills/"],
             "subagents": [general_purpose_subagent],
         }
-        if options.use_longterm_memory:
-            create_kwargs["memory"] = [MEMORY_INDEX_PATH]
+        create_kwargs["memory"] = [MEMORY_INDEX_PATH]
         name = options.name.strip()
         if name:
             create_kwargs["name"] = name
-        if options.debug:
-            create_kwargs["debug"] = True
         interrupt_on = _normalize_interrupt_on(options.interrupt_on)
         if interrupt_on:
             create_kwargs["interrupt_on"] = interrupt_on
@@ -535,7 +546,7 @@ def _deepagent_builtin_middleware(create_deep_agent: Any, options: DeepAgentRunt
 
     from server.infrastructure.workspace_middleware import WorkspaceMiddleware
 
-    middleware.append(WorkspaceMiddleware())
+    middleware.append(WorkspaceMiddleware(options.webdav))
     middleware.append(SkillImprovementMiddleware())
     return middleware
 

@@ -9,7 +9,7 @@ from server.infrastructure.config import parse_settings
 from server.infrastructure.nutstore_webdav import NutstoreWebDAVClient
 
 
-def test_context_webdav_config_parses_single_sync_root_and_permissions() -> None:
+def test_context_webdav_config_has_no_global_permission_rules() -> None:
     settings = parse_settings(
         {
             "auth": {"token": "secret-token"},
@@ -42,12 +42,10 @@ def test_context_webdav_config_parses_single_sync_root_and_permissions() -> None
     assert settings.context.webdav_sync.enabled is True
     assert settings.context.webdav_sync.root_path == "/notebook"
     assert settings.context.webdav_sync.extensions == (".md", ".txt")
-    assert [permission.path for permission in settings.context.webdav_permissions] == ["/", "/00AgentInbox"]
-    assert settings.context.webdav_permissions[0].protected is True
-    assert settings.context.webdav_permissions[1].writable is True
+    assert not hasattr(settings.context, "webdav_permissions")
 
 
-def test_webdav_context_refresh_uses_single_root_and_permission_paths(tmp_path) -> None:
+def test_webdav_context_refresh_uses_single_root(tmp_path) -> None:
     requested_urls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -114,8 +112,6 @@ def test_webdav_context_refresh_uses_single_root_and_permission_paths(tmp_path) 
         "/webdav/rules.md": "rules",
     }
     index = json.loads((tmp_path / "context" / "webdav" / "index.json").read_text(encoding="utf-8"))
-    assert index["files"]["/webdav/rules.md"]["permission_path"] == "/"
-    assert index["files"]["/webdav/00AgentInbox/write.md"]["permission_path"] == "/00AgentInbox"
     assert index["files"]["/webdav/rules.md"]["cache_path"] == "files/rules.md"
     assert index["files"]["/webdav/00AgentInbox/write.md"]["cache_path"] == "files/00AgentInbox/write.md"
     assert (tmp_path / "context" / "webdav" / "files" / "rules.md").read_text(encoding="utf-8") == "rules"
@@ -126,68 +122,16 @@ def test_webdav_context_refresh_uses_single_root_and_permission_paths(tmp_path) 
     assert requested_urls.count("https://dav.jianguoyun.com/dav/notebook/00AgentInbox/") == 1
 
 
-def test_webdav_context_write_permission_error_includes_diagnostics_for_extra_sync_root(tmp_path) -> None:
-    settings = parse_settings(
-        {
-            "auth": {"token": "secret-token"},
-            "nutstore": {
-                "enabled": True,
-                "username": "u",
-                "password": "p",
-                "root_path": "/",
-            },
-            "context": {
-                "webdav_sync": {
-                    "enabled": True,
-                    "root_path": "/notebook",
-                    "interval_seconds": 600,
-                    "max_files_per_root": 50,
-                    "max_file_size_bytes": 10000,
-                    "extensions": [".md", ".txt", ".json", ".jsonl"],
-                },
-                "webdav_permissions": [
-                    {
-                        "path": "/",
-                        "readable": True,
-                        "writable": False,
-                        "protected": True,
-                    },
-                    {
-                        "path": "/02日记",
-                        "readable": True,
-                        "writable": True,
-                        "protected": False,
-                    },
-                ],
-            },
-        }
-    )
-    service = WebDAVContextService(
-        workspace=tmp_path,
-        nutstore=settings.nutstore,
-        context=settings.context,
-        client=NutstoreWebDAVClient(settings.nutstore, transport=httpx.MockTransport(lambda request: httpx.Response(500))),
-    )
-
-    with pytest.raises(WebDAVContextError) as exc_info:
-        asyncio.run(
-            service.write(
-                absolute_path="/webdav/notebook/02日记/2026-08-30.md",
-                content="日记",
-                mode="append",
-            )
-        )
-
-    assert exc_info.value.diagnostics["reason"] == "permission_denied"
-    assert exc_info.value.diagnostics["resolved_relative_path"] == "/notebook/02日记/2026-08-30.md"
-    assert exc_info.value.diagnostics["matched_permission_path"] == "/"
-    assert exc_info.value.diagnostics["matched_permission"] == {
-        "path": "/",
-        "readable": True,
-        "writable": False,
-        "protected": True,
-    }
-    assert exc_info.value.diagnostics["suggested_tool_path"] == "/webdav/02日记/2026-08-30.md"
+def test_webdav_context_append_does_not_treat_server_error_as_missing(tmp_path) -> None:
+    from server.domain.agent_config import AgentConfigError
+    calls = []
+    def handler(request):
+        calls.append(request.method)
+        return httpx.Response(500)
+    service = _service(tmp_path, httpx.MockTransport(handler))
+    with pytest.raises(AgentConfigError, match="HTTP 500"):
+        asyncio.run(service.write(absolute_path="/webdav/note.md", content="new", mode="append"))
+    assert calls == ["GET"]
 
 
 def test_webdav_context_refresh_caches_markdown_referenced_assets(tmp_path) -> None:
@@ -264,17 +208,14 @@ def test_webdav_context_refresh_caches_markdown_referenced_assets(tmp_path) -> N
     assert service.summary()["assets"] == 1
 
 
-def test_webdav_context_write_rejects_protected_parent_path(tmp_path) -> None:
+def test_webdav_view_rejects_read_only_mapping(tmp_path) -> None:
+    from server.domain.agent_config import AgentWebDAVConfig
+    from server.infrastructure.agent_workspace import WebDAVPathPolicy
+    from server.infrastructure.webdav_backend import AgentWebDAVView
     service = _service(tmp_path, httpx.MockTransport(lambda request: httpx.Response(500)))
-
-    with pytest.raises(WebDAVContextError, match="protected"):
-        asyncio.run(
-            service.write(
-                absolute_path="/webdav/rules.md",
-                content="不能写",
-                mode="overwrite",
-            )
-        )
+    view = AgentWebDAVView(service, WebDAVPathPolicy(AgentWebDAVConfig(enabled=True, permission="read")))
+    with pytest.raises(PermissionError, match="read-only"):
+        asyncio.run(view.write(absolute_path="/webdav/rules.md", content="no", mode="overwrite"))
 
 
 def test_webdav_context_write_uses_writable_child_permission(tmp_path) -> None:

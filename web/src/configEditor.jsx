@@ -5,7 +5,7 @@ const AGENT_TOOL_CARDS = [
   {
     id: "search_context",
     name: "Search Context",
-    summary: "搜索本地知识和已同步的 WebDAV 只读目录。",
+    summary: "搜索本地知识和当前 Agent 映射的 WebDAV 目录。",
     badge: "只读",
   },
   {
@@ -29,7 +29,7 @@ const AGENT_TOOL_CARDS = [
   {
     id: "write_context",
     name: "Write Context",
-    summary: "用户确认后写入 /files/... 或可写 WebDAV 权限路径。",
+    summary: "用户确认后写入 /files/... 或当前 Agent 可写的 /webdav/...。",
     badge: "需确认",
   },
   {
@@ -105,20 +105,7 @@ const DEFAULT_CONFIG = {
       max_file_size_bytes: 524288,
       extensions: [".md", ".txt", ".json", ".jsonl"],
     },
-    webdav_permissions: [
-      {
-        path: "/",
-        readable: true,
-        writable: false,
-        protected: true,
-      },
-      {
-        path: "/00AgentInbox",
-        readable: true,
-        writable: true,
-        protected: false,
-      },
-    ],
+
   },
   maintenance: {
     enabled: true,
@@ -140,24 +127,11 @@ const DEFAULT_CONFIG = {
         system_prompt: "你是一个运行在后端的 DeepAgent。",
         model_id: "default",
         context_ids: [],
+        webdav: { enabled: false, path: "/", permission: "write", description: "" },
         deepagent: {
           max_iterations: 60,
-          name: "",
-          debug: false,
           todo_list: true,
-          filesystem: {
-            enabled: false,
-            root: "agent",
-            mode: "read_write",
-          },
-          use_longterm_memory: true,
           tools: [],
-          interrupt_on: [],
-          subagents: [],
-          response_format: "",
-          context_schema: "",
-          checkpointer: true,
-          cache: "",
         },
       },
     ],
@@ -195,15 +169,6 @@ export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav, on
   function updateWebdavSync(field, value) {
     update((next) => {
       next.context.webdav_sync = { ...next.context.webdav_sync, [field]: value };
-    });
-  }
-
-  function updateWebdavPermission(index, field, value) {
-    update((next) => {
-      const permission = { ...next.context.webdav_permissions[index], [field]: value };
-      if (field === "protected" && value) permission.writable = false;
-      if (field === "writable" && value) permission.protected = false;
-      next.context.webdav_permissions[index] = permission;
     });
   }
 
@@ -397,7 +362,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav, on
         <div className="config-section-title">
           <div>
             <strong>Context WebDAV 同步</strong>
-            <span>context.webdav_sync / context.webdav_permissions</span>
+            <span>连接和同步由全局管理，访问范围在 Agent 中配置</span>
           </div>
           <div className="config-inline-actions">
             {onTestWebdav ? (
@@ -477,76 +442,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav, on
             />
           </ConfigField>
         </div>
-        <ConfigList
-          title="WebDAV 权限规则"
-          subtitle="同步根目录下的相对路径权限；Markdown 引用图片会作为资源缓存，工具路径统一是 /webdav/..."
-          readOnly={readOnly}
-          onAdd={() =>
-            update((next) => {
-              next.context.webdav_permissions.push({
-                path: "/new-folder",
-                readable: true,
-                writable: false,
-                protected: true,
-              });
-            })
-          }
-        >
-          {config.context.webdav_permissions.map((permission, index) => (
-            <div className="config-item" key={`webdav-permission-${index}`}>
-              <div className="config-item-title">
-                <strong>{permission.path || `permission_${index + 1}`}</strong>
-                <button
-                  className="icon-button delete-button"
-                  type="button"
-                  title="删除权限规则"
-                  disabled={readOnly}
-                  onClick={() => update((next) => next.context.webdav_permissions.splice(index, 1))}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-              <div className="config-grid two">
-                <ConfigField label="相对路径">
-                  <input
-                    value={permission.path}
-                    readOnly={readOnly}
-                    onChange={(event) => updateWebdavPermission(index, "path", event.target.value)}
-                  />
-                </ConfigField>
-                <div className="builtin-toggle-row">
-                  <label className="config-toggle field-toggle">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(permission.readable)}
-                      disabled={readOnly}
-                      onChange={(event) => updateWebdavPermission(index, "readable", event.target.checked)}
-                    />
-                    <span>可读</span>
-                  </label>
-                  <label className="config-toggle field-toggle">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(permission.writable)}
-                      disabled={readOnly}
-                      onChange={(event) => updateWebdavPermission(index, "writable", event.target.checked)}
-                    />
-                    <span>可写</span>
-                  </label>
-                  <label className="config-toggle field-toggle">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(permission.protected)}
-                      disabled={readOnly}
-                      onChange={(event) => updateWebdavPermission(index, "protected", event.target.checked)}
-                    />
-                    <span>保护</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-          ))}
-        </ConfigList>
+
       </section>
     </div>
   );
@@ -747,14 +643,10 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
     });
   }
 
-  function updateDeepAgentFilesystem(index, field, value) {
+  function updateAgentWebdav(index, field, value) {
     update((next) => {
-      const current = next.agents.definitions[index].deepagent || cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent);
-      const filesystem = current.filesystem || cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent.filesystem);
-      next.agents.definitions[index].deepagent = {
-        ...current,
-        filesystem: { ...filesystem, [field]: value },
-      };
+      const current = next.agents.definitions[index].webdav;
+      next.agents.definitions[index].webdav = { ...current, [field]: value };
     });
   }
 
@@ -850,136 +742,44 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
             <section className="config-subsection">
               <div className="config-section-title compact">
                 <strong>DeepAgent 运行选项</strong>
-                <span>create_deep_agent / recursion_limit</span>
+                <span>限制单次任务的执行步数</span>
               </div>
               <div className="agent-tool-summary">
-                <div>
-                  <strong>Agent 工具</strong>
-                  <span>{formatSelectedTools(agent.deepagent?.tools)}</span>
-                </div>
-                <button type="button" onClick={() => setToolDialogAgentIndex(index)}>
-                  配置工具
-                </button>
+                <div><strong>Agent 工具</strong><span>{formatSelectedTools(agent.deepagent?.tools)}</span></div>
+                <button type="button" onClick={() => setToolDialogAgentIndex(index)}>配置工具</button>
               </div>
-              <div className="agent-tool-summary">
-                <div>
-                  <strong>DeepAgent 内置能力</strong>
-                  <span>
-                    write_todos
-                    {agent.deepagent?.filesystem?.enabled ? `, filesystem -> workspace/agents/${agent.id || "{agent_id}"}/workspace` : ""}
-                  </span>
-                </div>
-                <div className="builtin-toggle-row">
-                  <label className="config-toggle field-toggle" title="当前 deepagents 版本默认内置 write_todos">
-                    <input type="checkbox" checked readOnly disabled />
-                    <span>Todo List</span>
-                  </label>
-                  <label className="config-toggle field-toggle">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(agent.deepagent?.filesystem?.enabled)}
-                      disabled={readOnly}
-                      onChange={(event) => updateDeepAgentFilesystem(index, "enabled", event.target.checked)}
-                    />
-                    <span>Agent 文件系统</span>
-                  </label>
-                </div>
-              </div>
-              <div className="config-grid two">
-                <ConfigField label="Runtime Name">
-                  <input
-                    value={agent.deepagent?.name || ""}
-                    readOnly={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "name", event.target.value)}
-                  />
-                </ConfigField>
-                <ConfigField label="Max Iterations">
-                  <input
-                    type="number"
-                    min="1"
-                    max="1000"
-                    value={agent.deepagent?.max_iterations ?? 60}
-                    readOnly={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "max_iterations", Number(event.target.value) || 60)}
-                  />
-                </ConfigField>
-                <ConfigField label="Interrupt On">
-                  <input
-                    value={(agent.deepagent?.interrupt_on || []).join(", ")}
-                    readOnly={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "interrupt_on", splitList(event.target.value))}
-                  />
-                </ConfigField>
-                <ConfigField label="Filesystem Root">
-                  <input value={`workspace/agents/${agent.id || "{agent_id}"}/workspace`} readOnly />
-                </ConfigField>
-                <ConfigField label="Response Format">
-                  <input
-                    value={agent.deepagent?.response_format || ""}
-                    readOnly={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "response_format", event.target.value)}
-                  />
-                </ConfigField>
-                <ConfigField label="Context Schema">
-                  <input
-                    value={agent.deepagent?.context_schema || ""}
-                    readOnly={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "context_schema", event.target.value)}
-                  />
-                </ConfigField>
-                <ConfigField label="Memory Store">
-                  <input
-                    value={
-                      agent.deepagent?.use_longterm_memory === false
-                        ? "disabled"
-                        : `workspace/agents/${agent.id || "{agent_id}"}/workspace/memories/`
-                    }
-                    readOnly={readOnly}
-                    disabled
-                  />
-                </ConfigField>
-                <ConfigField label="Cache">
-                  <input
-                    value={agent.deepagent?.cache || ""}
-                    readOnly={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "cache", event.target.value)}
-                  />
-                </ConfigField>
-                <label className="config-toggle field-toggle">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(agent.deepagent?.debug)}
-                    disabled={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "debug", event.target.checked)}
-                  />
-                  <span>Debug</span>
-                </label>
-                <label className="config-toggle field-toggle">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(agent.deepagent?.use_longterm_memory)}
-                    disabled={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "use_longterm_memory", event.target.checked)}
-                  />
-                  <span>Long-term Memory</span>
-                </label>
-                <label className="config-toggle field-toggle">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(agent.deepagent?.checkpointer)}
-                    disabled={readOnly}
-                    onChange={(event) => updateDeepAgent(index, "checkpointer", event.target.checked)}
-                  />
-                  <span>Checkpointer</span>
-                </label>
-              </div>
-              <ConfigField label="Subagents JSON">
-                <textarea
-                  value={JSON.stringify(agent.deepagent?.subagents || [], null, 2)}
-                  readOnly={readOnly}
-                  onChange={(event) => updateDeepAgent(index, "subagents", parseJsonList(event.target.value))}
-                />
+              <ConfigField label="最大执行步数">
+                <input type="number" min="1" max="1000"
+                  value={agent.deepagent?.max_iterations ?? 60} readOnly={readOnly}
+                  onChange={(event) => updateDeepAgent(index, "max_iterations", Number(event.target.value) || 60)} />
               </ConfigField>
+            </section>
+            <section className="config-subsection webdav-workspace">
+              <div className="config-section-title compact"><strong>WebDAV 工作区</strong><span>访问入口 /webdav/ · 修改会同步到坚果云</span></div>
+              <label className="config-toggle field-toggle">
+                <input type="checkbox" checked={agent.webdav.enabled} disabled={readOnly}
+                  onChange={(event) => updateAgentWebdav(index, "enabled", event.target.checked)} />
+                <span>启用 WebDAV</span>
+              </label>
+              {agent.webdav.enabled ? (
+                <div className="config-grid two">
+                  <ConfigField label="映射目录（相对于全局同步目录）">
+                    <input value={agent.webdav.path} readOnly={readOnly} placeholder="/"
+                      onChange={(event) => updateAgentWebdav(index, "path", event.target.value)} />
+                  </ConfigField>
+                  <ConfigField label="访问权限">
+                    <select value={agent.webdav.permission} disabled={readOnly}
+                      onChange={(event) => updateAgentWebdav(index, "permission", event.target.value)}>
+                      <option value="write">读写</option><option value="read">只读</option>
+                    </select>
+                  </ConfigField>
+                  <ConfigField label="目录说明">
+                    <textarea value={agent.webdav.description} readOnly={readOnly}
+                      placeholder="用户文档与共享知识库；说明会提供给 Agent。"
+                      onChange={(event) => updateAgentWebdav(index, "description", event.target.value)} />
+                  </ConfigField>
+                </div>
+              ) : null}
             </section>
           </div>
         ))}
@@ -1103,6 +903,7 @@ function withDefaults(value) {
         ...agent,
         context_ids: normalizeList(agent.context_ids),
         deepagent: normalizeDeepAgent(agent.deepagent),
+        webdav: { enabled: false, path: "/", permission: "write", description: "", ...(isPlainObject(agent.webdav) ? agent.webdav : {}) },
       }))
     : [];
   config.channels.wechat_personal.accounts = Array.isArray(config.channels.wechat_personal.accounts)
@@ -1126,14 +927,7 @@ function withDefaults(value) {
   config.code_execution = normalizeCodeExecution(config.code_execution);
   config.context.webdav_sync.root_path = normalizePath(config.context.webdav_sync.root_path || "/");
   config.context.webdav_sync.extensions = normalizeList(config.context.webdav_sync.extensions);
-  config.context.webdav_permissions = Array.isArray(config.context.webdav_permissions)
-    ? config.context.webdav_permissions.map((permission) => ({
-        path: normalizePath(permission.path || "/"),
-        readable: permission.readable !== false,
-        writable: Boolean(permission.writable) && !Boolean(permission.protected),
-        protected: Boolean(permission.protected),
-      }))
-    : [];
+  delete config.context.webdav_permissions;
   delete config.context.webdav_roots;
   if (config.llm.models.length === 0) config.llm.models = cloneConfig(DEFAULT_CONFIG.llm.models);
   if (config.agents.definitions.length === 0) config.agents.definitions = cloneConfig(DEFAULT_CONFIG.agents.definitions);
@@ -1168,21 +962,8 @@ function normalizePath(value) {
 }
 
 function normalizeDeepAgent(value) {
-  const defaults = cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent);
-  const next = mergeObjects(defaults, isPlainObject(value) ? value : {});
-  next.tools = normalizeList(next.tools);
-  next.interrupt_on = normalizeList(next.interrupt_on);
-  next.todo_list = true;
-  next.use_longterm_memory = next.use_longterm_memory !== false;
-  next.filesystem = isPlainObject(next.filesystem)
-    ? {
-        enabled: Boolean(next.filesystem.enabled),
-        root: "agent",
-        mode: "read_write",
-      }
-    : cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent.filesystem);
-  next.subagents = Array.isArray(next.subagents) ? next.subagents.filter(isPlainObject) : [];
-  return next;
+  const raw = isPlainObject(value) ? value : {};
+  return { max_iterations: raw.max_iterations ?? 60, todo_list: true, tools: normalizeList(raw.tools) };
 }
 
 function normalizeCodeExecution(value) {
@@ -1213,15 +994,6 @@ function splitList(value) {
     .split(/[,\n]/)
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function parseJsonList(value) {
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter(isPlainObject) : [];
-  } catch {
-    return [];
-  }
 }
 
 function parseSimpleYaml(text) {

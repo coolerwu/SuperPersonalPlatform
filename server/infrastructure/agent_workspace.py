@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from server.domain.agent_config import AgentConfigError
+from server.domain.agent_config import AgentConfigError, AgentWebDAVConfig
 
 
 @dataclass(frozen=True)
@@ -54,3 +54,30 @@ def workspace_member_path(workspace: Path, *parts: str) -> Path:
             raise ValueError("Invalid workspace member")
         current = current.parent
     return target
+
+
+@dataclass(frozen=True)
+class WebDAVPathPolicy:
+    """One path authority for both native file and Context tools."""
+    config: "AgentWebDAVConfig"
+
+    def resolve(self, path: str, *, write: bool = False) -> str:
+        from pathlib import PurePosixPath
+        if not self.config.enabled or (write and self.config.permission != "write"):
+            raise PermissionError("WebDAV mapping is disabled or read-only")
+        if not path.startswith("/") or "\\" in path or "\0" in path or any(p in {".", ".."} for p in path.split("/")):
+            raise PermissionError("Invalid WebDAV path")
+        if write and str(PurePosixPath(path)) == "/":
+            raise PermissionError("The WebDAV mount root cannot be modified")
+        return "/webdav/" + "/".join(p for p in (self.config.path.strip("/"), path.strip("/")) if p)
+
+    def visible_path(self, global_path: str) -> str | None:
+        from pathlib import PurePosixPath
+        if not self.config.enabled or not global_path.startswith("/webdav/"):
+            return None
+        try:
+            relative = PurePosixPath(global_path).relative_to(PurePosixPath("/webdav") / self.config.path.lstrip("/"))
+            self.resolve("/" + relative.as_posix())
+        except (ValueError, PermissionError):
+            return None
+        return "/webdav/" + relative.as_posix()

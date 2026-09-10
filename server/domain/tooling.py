@@ -17,7 +17,7 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
         id="search_context",
         name="Search Context",
-        description="Search local context files and synced readable WebDAV permission paths for relevant knowledge.",
+        description="Search local context files and this Agent’s mapped WebDAV files for relevant knowledge.",
     ),
     ToolDefinition(
         id="search_session",
@@ -37,7 +37,7 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
         id="write_context",
         name="Write Context",
-        description="Write approved knowledge into local context files or writable non-protected WebDAV permission paths.",
+        description="Write approved knowledge into local context files or this Agent’s writable WebDAV mapping.",
         approval_required=True,
     ),
     ToolDefinition(

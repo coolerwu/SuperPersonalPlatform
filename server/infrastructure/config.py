@@ -8,7 +8,7 @@ from server.domain.agent_config import (
     AgentConfigError,
     AgentDefinition,
     AgentWorkspaceDefinition,
-    DeepAgentFilesystemOptions,
+    AgentWebDAVConfig,
     DeepAgentOptions,
     ModelDefinition,
     ModelProvider,
@@ -100,21 +100,6 @@ class NutstoreConfig:
 
 
 @dataclass(frozen=True)
-class WebDAVPermission:
-    path: str
-    readable: bool = True
-    writable: bool = False
-    protected: bool = False
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "path", _normalize_posix_path(self.path))
-        if not self.path.startswith("/"):
-            raise AgentConfigError("context.webdav_permissions[].path must start with /")
-        if self.protected and self.writable:
-            raise AgentConfigError(f"context.webdav_permissions[{self.path}] cannot be both protected and writable")
-
-
-@dataclass(frozen=True)
 class WebDAVSyncConfig:
     enabled: bool = False
     root_path: str = "/"
@@ -138,7 +123,6 @@ class WebDAVSyncConfig:
 @dataclass(frozen=True)
 class ContextConfig:
     webdav_sync: WebDAVSyncConfig = field(default_factory=WebDAVSyncConfig)
-    webdav_permissions: tuple[WebDAVPermission, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -267,6 +251,7 @@ def parse_agent_definition(raw: Any) -> AgentDefinition:
         model_id=str(model_id).strip() if model_id is not None else None,
         context_ids=tuple(str(context_id).strip() for context_id in context_ids_raw if str(context_id).strip()),
         deepagent=parse_deepagent_options(raw.get("deepagent") or {}),
+        webdav=parse_agent_webdav(raw.get("webdav") or {}),
     )
 
 
@@ -277,30 +262,19 @@ def parse_deepagent_options(raw: Any) -> DeepAgentOptions:
         raise ValueError("agents.definitions[].deepagent must be an object")
     return DeepAgentOptions(
         max_iterations=int(raw.get("max_iterations") or 60),
-        name=str(raw.get("name") or "").strip(),
-        debug=bool(raw.get("debug", False)),
         todo_list=bool(raw.get("todo_list", True)),
-        filesystem=_parse_deepagent_filesystem(raw.get("filesystem") or {}),
-        use_longterm_memory=bool(raw.get("use_longterm_memory", True)),
         tools=_string_tuple(raw.get("tools") or []),
-        interrupt_on=_string_tuple(raw.get("interrupt_on") or []),
-        subagents=_dict_tuple(raw.get("subagents") or []),
-        response_format=str(raw.get("response_format") or "").strip(),
-        context_schema=str(raw.get("context_schema") or "").strip(),
-        checkpointer=bool(raw.get("checkpointer", True)),
-        cache=str(raw.get("cache") or "").strip(),
     )
 
 
-def _parse_deepagent_filesystem(raw: Any) -> DeepAgentFilesystemOptions:
-    if raw is None:
-        raw = {}
+def parse_agent_webdav(raw: Any) -> AgentWebDAVConfig:
     if not isinstance(raw, dict):
-        raise ValueError("agents.definitions[].deepagent.filesystem must be an object")
-    return DeepAgentFilesystemOptions(
-        enabled=bool(raw.get("enabled", True)),
-        root=str(raw.get("root") or "agent").strip() or "agent",
-        mode=str(raw.get("mode") or "read_write").strip() or "read_write",
+        raise ValueError("agents.definitions[].webdav must be an object")
+    return AgentWebDAVConfig(
+        enabled=bool(raw.get("enabled", False)),
+        path=str(raw.get("path", "/")).strip(),
+        permission=str(raw.get("permission", "write")).strip(),
+        description=str(raw.get("description", "")).strip(),
     )
 
 
@@ -364,20 +338,13 @@ def parse_context_config(raw: Any) -> ContextConfig:
     if not isinstance(raw, dict):
         raise ValueError("context must be an object")
     sync_raw = raw.get("webdav_sync") or {}
-    permissions_raw = raw.get("webdav_permissions")
     if not isinstance(sync_raw, dict):
         raise ValueError("context.webdav_sync must be an object")
-    if permissions_raw is not None and not isinstance(permissions_raw, list):
-        raise ValueError("context.webdav_permissions must be a list")
     extensions_raw = sync_raw.get("extensions") or [".md", ".txt", ".json", ".jsonl"]
     if not isinstance(extensions_raw, list):
         raise ValueError("context.webdav_sync.extensions must be a list")
     extensions = tuple(_normalize_extension(item) for item in extensions_raw if str(item).strip())
     root_path = str(sync_raw.get("root_path") or "/").strip() or "/"
-    permissions = tuple(_parse_webdav_permission(item) for item in (permissions_raw or []))
-    permission_paths = {permission.path for permission in permissions}
-    if len(permission_paths) != len(permissions):
-        raise AgentConfigError("context.webdav_permissions[].path must be unique")
     return ContextConfig(
         webdav_sync=WebDAVSyncConfig(
             enabled=bool(sync_raw.get("enabled", False)),
@@ -387,7 +354,6 @@ def parse_context_config(raw: Any) -> ContextConfig:
             max_file_size_bytes=int(sync_raw.get("max_file_size_bytes") or 524288),
             extensions=extensions or (".md", ".txt", ".json", ".jsonl"),
         ),
-        webdav_permissions=permissions,
     )
 
 
@@ -401,17 +367,6 @@ def parse_maintenance_config(raw: Any) -> MaintenanceConfig:
         interval_seconds=int(raw.get("interval_seconds") or 86400),
         retention_days=int(raw.get("retention_days") or 15),
         dry_run=bool(raw.get("dry_run", False)),
-    )
-
-
-def _parse_webdav_permission(raw: Any) -> WebDAVPermission:
-    if not isinstance(raw, dict):
-        raise ValueError("context.webdav_permissions[] must be an object")
-    return WebDAVPermission(
-        path=str(raw.get("path") or "").strip(),
-        readable=bool(raw.get("readable", True)),
-        writable=bool(raw.get("writable", False)),
-        protected=bool(raw.get("protected", False)),
     )
 
 
@@ -442,9 +397,3 @@ def _string_tuple(value: Any, *, field_name: str = "deepagent list options") -> 
     if not isinstance(value, list):
         raise ValueError(f"{field_name} must be a list")
     return tuple(str(item).strip() for item in value if str(item).strip())
-
-
-def _dict_tuple(value: Any) -> tuple[dict[str, Any], ...]:
-    if not isinstance(value, list):
-        raise ValueError("deepagent.subagents must be a list")
-    return tuple(dict(item) for item in value if isinstance(item, dict))

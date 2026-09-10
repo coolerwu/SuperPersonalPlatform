@@ -62,7 +62,7 @@ NO_CHECKPOINT_CONFIG = CONFIG.replace(
 )
 INTERRUPT_CONFIG = CONFIG.replace(
     "        tools:\n          - search_context\n",
-    "        tools:\n          - search_context\n        interrupt_on:\n          - write_context\n",
+    "        tools:\n          - search_context\n          - write_context\n",
 )
 
 
@@ -90,8 +90,7 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert completed["result"]["content"] == "answer: hello"
     assert captured["options"].max_iterations == 7
     assert captured["options"].todo_list is True
-    assert captured["options"].filesystem_enabled is True
-    assert captured["options"].use_longterm_memory is True
+    assert captured["options"].webdav.enabled is False
     assert captured["options"].tools == ("search_context",)
     assert captured["messages"][-1].content == "hello"
     assert (tmp_path / "runs" / "index.json").exists()
@@ -548,7 +547,7 @@ def test_run_service_uses_checkpoint_without_injecting_prior_session_context(tmp
     assert captured["thread_id"] == session.session_id
 
 
-def test_run_service_uses_recent_history_when_checkpointer_is_disabled(tmp_path, monkeypatch) -> None:
+def test_run_service_always_uses_checkpoint_even_with_retired_flag(tmp_path, monkeypatch) -> None:
     (tmp_path / "config.yaml").write_text(NO_CHECKPOINT_CONFIG, encoding="utf-8")
     session_service = SessionService(tmp_path)
     session = session_service.get_or_create(
@@ -582,9 +581,9 @@ def test_run_service_uses_recent_history_when_checkpointer_is_disabled(tmp_path,
     )
     asyncio.run(service.execute_run(run["run_id"]))
 
-    assert captured["checkpoint_path"] is None
-    assert captured["thread_id"] == ""
-    assert [message.content for message in captured["messages"]] == ["第一句", "第一答", "第二句"]
+    assert captured["checkpoint_path"] == tmp_path / "sessions" / "checkpoints.sqlite"
+    assert captured["thread_id"] == session.session_id
+    assert [message.content for message in captured["messages"]] == ["第二句"]
 
 
 def test_run_service_persists_session_image_attachments(tmp_path, monkeypatch) -> None:

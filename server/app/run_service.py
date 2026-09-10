@@ -223,8 +223,8 @@ class RunService:
         system_prompt = str(agent_snapshot.get("system_prompt") or "")
         content = str(run_input.get("content") or "")
         session_id = str(run_input.get("session_id") or "")
-        runtime_options = _runtime_options(agent_snapshot.get("deepagent") if isinstance(agent_snapshot, dict) else {})
-        use_session_checkpoint = bool(session_id and _agent_checkpointer_enabled(agent_snapshot))
+        runtime_options = _runtime_options(agent_snapshot.get("deepagent"), name=str(agent_snapshot.get("name") or ""), webdav=agent_snapshot.get("webdav"))
+        use_session_checkpoint = bool(session_id)
         approval_resume = self._approval_resume(run_id)
         use_approval_checkpoint = bool(runtime_options.interrupt_on or approval_resume is not None)
         history = (
@@ -1364,24 +1364,12 @@ def _public_agent(agent: AgentDefinition) -> dict[str, Any]:
         "system_prompt": agent.system_prompt,
         "model_id": agent.model_id,
         "context_ids": list(agent.context_ids),
+        "webdav": {"enabled": agent.webdav.enabled, "path": agent.webdav.path,
+                   "permission": agent.webdav.permission, "description": agent.webdav.description},
         "deepagent": {
             "max_iterations": agent.deepagent.max_iterations,
-            "name": agent.deepagent.name,
-            "debug": agent.deepagent.debug,
             "todo_list": agent.deepagent.todo_list,
-            "filesystem": {
-                "enabled": agent.deepagent.filesystem.enabled,
-                "root": agent.deepagent.filesystem.root,
-                "mode": agent.deepagent.filesystem.mode,
-            },
-            "use_longterm_memory": agent.deepagent.use_longterm_memory,
             "tools": list(agent.deepagent.tools),
-            "interrupt_on": list(agent.deepagent.interrupt_on),
-            "subagents": list(agent.deepagent.subagents),
-            "response_format": agent.deepagent.response_format,
-            "context_schema": agent.deepagent.context_schema,
-            "checkpointer": agent.deepagent.checkpointer,
-            "cache": agent.deepagent.cache,
         },
     }
 
@@ -1431,13 +1419,6 @@ def _runtime_messages(
 def _current_run_messages(history: list[dict[str, Any]], run_id: str) -> list[dict[str, Any]]:
     current = [item for item in history if isinstance(item, dict) and str(item.get("run_id") or "") == run_id]
     return current[-1:] if current else []
-
-
-def _agent_checkpointer_enabled(agent_snapshot: Any) -> bool:
-    if not isinstance(agent_snapshot, dict):
-        return True
-    deepagent = agent_snapshot.get("deepagent")
-    return bool(deepagent.get("checkpointer", True)) if isinstance(deepagent, dict) else True
 
 
 def _textify_image_attachments(
@@ -1568,19 +1549,15 @@ def _initial_delivery_target(source: str, metadata: dict[str, Any], *, agent_id:
     }
 
 
-def _runtime_options(raw: Any) -> DeepAgentRuntimeOptions:
+def _runtime_options(raw: Any, *, name: str = "", webdav: Any = None) -> DeepAgentRuntimeOptions:
+    from server.infrastructure.config import parse_agent_webdav
     options = raw if isinstance(raw, dict) else {}
     return DeepAgentRuntimeOptions(
         max_iterations=int(options.get("max_iterations") or 60),
-        name=str(options.get("name") or "").strip(),
-        debug=bool(options.get("debug", False)),
+        name=name,
         tools=tuple(str(item).strip() for item in options.get("tools") or [] if str(item).strip()),
-        interrupt_on=tuple(str(item).strip() for item in options.get("interrupt_on") or [] if str(item).strip()),
         todo_list=bool(options.get("todo_list", True)),
-        filesystem_enabled=bool((options.get("filesystem") or {}).get("enabled", False))
-        if isinstance(options.get("filesystem") or {}, dict)
-        else False,
-        use_longterm_memory=bool(options.get("use_longterm_memory", True)),
+        webdav=parse_agent_webdav(webdav or {}),
     )
 
 

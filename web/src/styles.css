@@ -3018,3 +3018,16 @@ pre {
 .usage-filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .usage-filters select { color: #dbe4f0; background: #141c28; border: 1px solid #334155; border-radius: 6px; padding: 6px; max-width: 100%; }
 @media (max-width: 640px) { .usage-summary .panel-title { flex-wrap: wrap; gap: 12px; } }
+
+.webdav-workspace .config-grid > .config-field:last-child {
+  grid-column: 1 / -1;
+}
+
+.webdav-workspace .config-section-title {
+  flex-wrap: wrap;
+}
+
+.agent-tool-summary > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}

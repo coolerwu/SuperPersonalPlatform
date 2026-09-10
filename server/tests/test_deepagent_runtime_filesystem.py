@@ -60,7 +60,7 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
         runtime.run(
             instructions="base prompt",
             messages=(RuntimeMessage(role="user", content="hello"),),
-            options=DeepAgentRuntimeOptions(filesystem_enabled=False),
+            options=DeepAgentRuntimeOptions(),
         )
     )
 
@@ -437,7 +437,7 @@ def test_runtime_uses_sqlite_checkpointer_when_thread_id_is_provided(tmp_path, m
         conn.close()
 
 
-def test_runtime_skips_memory_when_longterm_memory_is_disabled(tmp_path, monkeypatch) -> None:
+def test_runtime_always_installs_memory(tmp_path, monkeypatch) -> None:
     captured = {}
 
     class FakeAgent:
@@ -470,11 +470,11 @@ def test_runtime_skips_memory_when_longterm_memory_is_disabled(tmp_path, monkeyp
         runtime.run(
             instructions="base prompt",
             messages=(RuntimeMessage(role="user", content="hello"),),
-            options=DeepAgentRuntimeOptions(use_longterm_memory=False),
+            options=DeepAgentRuntimeOptions(),
         )
     )
 
-    assert "memory" not in captured["create_kwargs"]
+    assert captured["create_kwargs"]["memory"] == ["/memories/AGENTS.md"]
     assert not (agent_dir / "memories" / "AGENTS.md").exists()
 
 
