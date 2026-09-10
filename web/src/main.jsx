@@ -1496,19 +1496,22 @@ function ConfigBackedPage({ activeSection, panelTitle, Editor, onNavigate }) {
     }
   }
 
-  async function saveConfig() {
+  async function saveConfig(content = draft, propagateError = false) {
     setError("");
     setMessage("");
     try {
       const data = await api("/api/workspace/write", {
         method: "PUT",
-        body: JSON.stringify({ path: "config.yaml", content: draft }),
+        body: JSON.stringify({ path: "config.yaml", content }),
       });
       setConfigFile(data.file);
       setDraft(data.file.content || "");
       setMessage(data.message || "config.yaml 已保存");
+      return true;
     } catch (err) {
       setError(err.message);
+      if (propagateError) throw err;
+      return false;
     }
   }
 
@@ -1550,18 +1553,18 @@ function ConfigBackedPage({ activeSection, panelTitle, Editor, onNavigate }) {
 
   return (
     <section className="console-screen config-screen">
-      <div className="workspace-header">
+      {activeSection !== "agent-config" ? <div className="workspace-header">
         <div>
           <span className="section-label">配置</span>
           <h1>config.yaml</h1>
         </div>
         <Status status="落盘运行" />
-      </div>
+      </div> : null}
 
       {message ? <p className="ok">{message}</p> : null}
       {error ? <p className="error">{error}</p> : null}
 
-      <section className="panel file-editor config-page-panel">
+      <section className={`panel file-editor config-page-panel ${activeSection === "agent-config" ? "agent-list-panel" : ""}`}>
         <div className="config-page-toolbar">
           <div className="config-tabs" role="tablist" aria-label="配置栏目">
             {CONFIG_SECTIONS.map((section) => {
@@ -1585,22 +1588,23 @@ function ConfigBackedPage({ activeSection, panelTitle, Editor, onNavigate }) {
             <button className="icon-button" onClick={loadConfig} title="重新读取">
               <RefreshCw size={15} />
             </button>
-            <button className="primary config-save-button" onClick={saveConfig} disabled={!configFile?.editable || !dirty}>
+            <button className="primary config-save-button" onClick={() => saveConfig()} disabled={!configFile?.editable || !dirty}>
               <Save size={15} />
               保存
             </button>
           </div>
         </div>
-        <div className="panel-title">
+        {activeSection !== "agent-config" ? <div className="panel-title">
           <div>
             <span>{panelTitle}</span>
             <small>{configFile ? `${formatBytes(configFile.size)} · workspace/config.yaml` : "读取中"}</small>
           </div>
-        </div>
+        </div> : null}
         {configFile ? (
           <Editor
             draft={draft}
             onChange={setDraft}
+            onSave={(content) => saveConfig(content, true)}
             readOnly={!configFile.editable}
             onSyncWebdav={activeSection === "config" ? syncWebdavContext : undefined}
             onTestWebdav={activeSection === "config" ? testWebdavContext : undefined}

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, Plus, Trash2, X } from "lucide-react";
 
 const AGENT_TOOL_CARDS = [
@@ -616,106 +616,114 @@ export function ProviderConfigEditor({ draft, onChange, readOnly }) {
   );
 }
 
-export function AgentConfigEditor({ draft, onChange, readOnly }) {
+export function AgentConfigEditor({ draft, onChange, onSave, readOnly }) {
   const parsed = useConfigDraft(draft);
   const config = parsed.config;
-  const models = config.llm.models;
   const agents = config.agents.definitions;
-  const [toolDialogAgentIndex, setToolDialogAgentIndex] = useState(null);
-  const toolDialogAgent = Number.isInteger(toolDialogAgentIndex) ? agents[toolDialogAgentIndex] : null;
+  const [editing, setEditing] = useState(null);
 
-  function update(mutator) {
+  function createAgent() {
+    let suffix = agents.length + 1;
+    while (agents.some((agent) => agent.id === `agent_${suffix}`)) suffix += 1;
+    const id = `agent_${suffix}`;
+    setEditing({ index: null, agent: { ...cloneConfig(DEFAULT_CONFIG.agents.definitions[0]), id, name: id, model_id: config.llm.default_model_id } });
+  }
+
+  async function saveAgent(agent) {
     const next = cloneConfig(config);
-    mutator(next);
-    onChange(dumpSimpleYaml(next));
+    if (editing.index === null) next.agents.definitions.push(agent);
+    else next.agents.definitions[editing.index] = agent;
+    const content = dumpSimpleYaml(next);
+    if (onSave) {
+      if (!(await onSave(content))) return false;
+    } else onChange(content);
+    setEditing(null);
+    return true;
   }
 
-  function updateAgent(index, field, value) {
-    update((next) => {
-      next.agents.definitions[index] = { ...next.agents.definitions[index], [field]: value };
-    });
-  }
-
-  function updateDeepAgent(index, field, value) {
-    update((next) => {
-      const current = next.agents.definitions[index].deepagent || cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent);
-      next.agents.definitions[index].deepagent = { ...current, [field]: value };
-    });
-  }
-
-  function updateAgentWebdav(index, field, value) {
-    update((next) => {
-      const current = next.agents.definitions[index].webdav;
-      next.agents.definitions[index].webdav = { ...current, [field]: value };
-    });
-  }
-
-  function toggleTool(index, toolId, enabled) {
-    update((next) => {
-      const current = next.agents.definitions[index].deepagent || cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent);
-      const toolSet = new Set(normalizeList(current.tools));
-      if (enabled) {
-        toolSet.add(toolId);
-      } else {
-        toolSet.delete(toolId);
-      }
-      const orderedKnownTools = AGENT_TOOL_CARDS.map((tool) => tool.id).filter((id) => toolSet.has(id));
-      const customTools = [...toolSet].filter((id) => !AGENT_TOOL_CARDS.some((tool) => tool.id === id));
-      next.agents.definitions[index].deepagent = {
-        ...current,
-        tools: [...orderedKnownTools, ...customTools],
-      };
-    });
-  }
-
-  if (parsed.error) {
-    return <ConfigFallbackEditor draft={draft} onChange={onChange} readOnly={readOnly} error={parsed.error} />;
-  }
-
+  if (parsed.error) return <ConfigFallbackEditor draft={draft} onChange={onChange} readOnly={readOnly} error={parsed.error} />;
   return (
     <div className="config-editor">
-
-      <ConfigList
-        title="Agents"
-        subtitle="agents.definitions"
-        readOnly={readOnly}
-        onAdd={() =>
-          update((next) => {
-            const id = `agent_${next.agents.definitions.length + 1}`;
-            next.agents.definitions.push({
-              id,
-              name: id,
-              system_prompt: "你是一个运行在后端的 DeepAgent。",
-              model_id: next.llm.default_model_id,
-              context_ids: [],
-              deepagent: cloneConfig(DEFAULT_CONFIG.agents.definitions[0].deepagent),
-            });
-          })
-        }
-      >
+      <ConfigList title="Agents" subtitle={`${agents.length} 个 Agent`} readOnly={readOnly} onAdd={createAgent}>
         {agents.map((agent, index) => (
-          <div className="config-item" key={`agent-${index}`}>
-            <div className="config-item-title">
-              <strong>{agent.id || `agent_${index + 1}`}</strong>
-              <button
-                className="icon-button delete-button"
-                type="button"
-                title="删除 Agent"
-                disabled={readOnly || agents.length <= 1}
-                onClick={() => update((next) => next.agents.definitions.splice(index, 1))}
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
+          <div className="agent-config-row" key={`agent-${index}`}>
+            <button type="button" className="agent-config-open" aria-label={`配置 Agent ${agent.name || agent.id}`}
+              onClick={() => setEditing({ index, agent: cloneConfig(agent) })}>
+              <span className="agent-config-identity"><strong>{agent.name || agent.id}</strong><small>{agent.id}</small></span>
+              <span><small>模型</small><strong>{agent.model_id || config.llm.default_model_id || "默认模型"}</strong></span>
+              <span><small>工具</small><strong>{agent.deepagent.tools.length} 项</strong></span>
+              <span><small>WebDAV</small><strong>{agent.webdav.enabled ? `${agent.webdav.path} · ${agent.webdav.permission === "read" ? "只读" : "读写"}` : "未启用"}</strong></span>
+              <span className="agent-config-edit-label">配置</span>
+            </button>
+            <button className="icon-button delete-button" type="button" title="删除 Agent"
+              disabled={readOnly || agents.length <= 1} onClick={() => {
+                const next = cloneConfig(config);
+                next.agents.definitions.splice(index, 1);
+                onChange(dumpSimpleYaml(next));
+              }}><Trash2 size={14} /></button>
+          </div>
+        ))}
+      </ConfigList>
+      {editing ? <AgentSettingsDialog initialAgent={editing.agent} models={config.llm.models}
+        readOnly={readOnly} onClose={() => setEditing(null)} onSave={saveAgent} /> : null}
+    </div>
+  );
+}
+
+function AgentSettingsDialog({ initialAgent, models, readOnly, onClose, onSave }) {
+  const dialogRef = useRef(null);
+  const [agent, setAgent] = useState(() => cloneConfig(initialAgent));
+  const [showTools, setShowTools] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog.showModal) dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => { if (dialog.close) dialog.close(); };
+  }, []);
+
+  function updateAgent(field, value) { setAgent((current) => ({ ...current, [field]: value })); }
+  function updateDeepAgent(field, value) {
+    setAgent((current) => ({ ...current, deepagent: { ...current.deepagent, [field]: value } }));
+  }
+  function updateAgentWebdav(field, value) {
+    setAgent((current) => ({ ...current, webdav: { ...current.webdav, [field]: value } }));
+  }
+  function toggleTool(toolId, enabled) {
+    setAgent((current) => ({ ...current, deepagent: { ...current.deepagent,
+      tools: enabled ? [...new Set([...current.deepagent.tools, toolId])] : current.deepagent.tools.filter((id) => id !== toolId),
+    } }));
+  }
+  async function save() {
+    if (saving) return;
+    if (!agent.id.trim() || !agent.name.trim() || !agent.system_prompt.trim()) {
+      setError("请填写 ID、名称和 System Prompt。"); return;
+    }
+    setSaving(true);
+    setError("");
+    try { if (!(await onSave(agent))) setError("保存失败，请检查配置后重试；编辑内容已保留。"); }
+    catch (err) { setError(err.message || "保存失败，请重试。"); }
+    finally { setSaving(false); }
+  }
+  return (
+    <dialog ref={dialogRef} className="agent-settings-dialog" aria-labelledby="agent-settings-title"
+      onCancel={(event) => { event.preventDefault(); if (!saving) onClose(); }}
+      onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }}>
+      <div className="dialog-header">
+        <div><strong id="agent-settings-title">配置 Agent</strong><span>{initialAgent.name || initialAgent.id}</span></div>
+        <button type="button" className="icon-button" aria-label="关闭 Agent 配置" disabled={saving} onClick={onClose}><X size={16} /></button>
+      </div>
+      <div className="agent-settings-fields" inert={saving ? "" : undefined}>
             <div className="config-grid two">
               <ConfigField label="ID">
-                <input value={agent.id} readOnly={readOnly} onChange={(event) => updateAgent(index, "id", event.target.value)} />
+                <input value={agent.id} readOnly={readOnly} onChange={(event) => updateAgent("id", event.target.value)} />
               </ConfigField>
               <ConfigField label="名称">
-                <input value={agent.name} readOnly={readOnly} onChange={(event) => updateAgent(index, "name", event.target.value)} />
+                <input value={agent.name} readOnly={readOnly} onChange={(event) => updateAgent("name", event.target.value)} />
               </ConfigField>
               <ConfigField label="模型">
-                <select value={agent.model_id || ""} disabled={readOnly} onChange={(event) => updateAgent(index, "model_id", event.target.value)}>
+                <select value={agent.model_id || ""} disabled={readOnly} onChange={(event) => updateAgent("model_id", event.target.value)}>
                   <option value="">默认模型</option>
                   {models.map((model) => (
                     <option key={model.id} value={model.id}>
@@ -728,7 +736,7 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                 <input
                   value={(agent.context_ids || []).join(", ")}
                   readOnly={readOnly}
-                  onChange={(event) => updateAgent(index, "context_ids", splitList(event.target.value))}
+                  onChange={(event) => updateAgent("context_ids", splitList(event.target.value))}
                 />
               </ConfigField>
             </div>
@@ -736,7 +744,7 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
               <textarea
                 value={agent.system_prompt}
                 readOnly={readOnly}
-                onChange={(event) => updateAgent(index, "system_prompt", event.target.value)}
+                onChange={(event) => updateAgent("system_prompt", event.target.value)}
               />
             </ConfigField>
             <section className="config-subsection">
@@ -746,100 +754,58 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
               </div>
               <div className="agent-tool-summary">
                 <div><strong>Agent 工具</strong><span>{formatSelectedTools(agent.deepagent?.tools)}</span></div>
-                <button type="button" onClick={() => setToolDialogAgentIndex(index)}>配置工具</button>
+                <button type="button" onClick={() => setShowTools((value) => !value)} aria-expanded={showTools}>配置工具</button>
               </div>
+              {showTools ? <div className="tool-choice-grid">
+                {AGENT_TOOL_CARDS.map((tool) => (
+                  <label className={`tool-choice ${agent.deepagent.tools.includes(tool.id) ? "selected" : ""}`} key={tool.id}>
+                    <input type="checkbox" aria-label={tool.name} disabled={readOnly || saving}
+                      checked={agent.deepagent.tools.includes(tool.id)} onChange={(event) => toggleTool(tool.id, event.target.checked)} />
+                    <span><strong>{tool.name}</strong><small>{tool.summary}</small></span><em>{tool.badge}</em>
+                  </label>
+                ))}
+              </div> : null}
               <ConfigField label="最大执行步数">
                 <input type="number" min="1" max="1000"
                   value={agent.deepagent?.max_iterations ?? 60} readOnly={readOnly}
-                  onChange={(event) => updateDeepAgent(index, "max_iterations", Number(event.target.value) || 60)} />
+                  onChange={(event) => updateDeepAgent("max_iterations", Number(event.target.value) || 60)} />
               </ConfigField>
             </section>
             <section className="config-subsection webdav-workspace">
               <div className="config-section-title compact"><strong>WebDAV 工作区</strong><span>访问入口 /webdav/ · 修改会同步到坚果云</span></div>
               <label className="config-toggle field-toggle">
                 <input type="checkbox" checked={agent.webdav.enabled} disabled={readOnly}
-                  onChange={(event) => updateAgentWebdav(index, "enabled", event.target.checked)} />
+                  onChange={(event) => updateAgentWebdav("enabled", event.target.checked)} />
                 <span>启用 WebDAV</span>
               </label>
               {agent.webdav.enabled ? (
                 <div className="config-grid two">
                   <ConfigField label="映射目录（相对于全局同步目录）">
                     <input value={agent.webdav.path} readOnly={readOnly} placeholder="/"
-                      onChange={(event) => updateAgentWebdav(index, "path", event.target.value)} />
+                      onChange={(event) => updateAgentWebdav("path", event.target.value)} />
                   </ConfigField>
                   <ConfigField label="访问权限">
                     <select value={agent.webdav.permission} disabled={readOnly}
-                      onChange={(event) => updateAgentWebdav(index, "permission", event.target.value)}>
+                      onChange={(event) => updateAgentWebdav("permission", event.target.value)}>
                       <option value="write">读写</option><option value="read">只读</option>
                     </select>
                   </ConfigField>
                   <ConfigField label="目录说明">
                     <textarea value={agent.webdav.description} readOnly={readOnly}
                       placeholder="用户文档与共享知识库；说明会提供给 Agent。"
-                      onChange={(event) => updateAgentWebdav(index, "description", event.target.value)} />
+                      onChange={(event) => updateAgentWebdav("description", event.target.value)} />
                   </ConfigField>
                 </div>
               ) : null}
             </section>
-          </div>
-        ))}
-      </ConfigList>
-      {toolDialogAgent ? (
-        <ToolPickerDialog
-          agent={toolDialogAgent}
-          agentIndex={toolDialogAgentIndex}
-          readOnly={readOnly}
-          onClose={() => setToolDialogAgentIndex(null)}
-          onToggle={toggleTool}
-        />
-      ) : null}
-    </div>
-  );
-}
 
-function ToolPickerDialog({ agent, agentIndex, readOnly, onClose, onToggle }) {
-  const selectedTools = normalizeList(agent.deepagent?.tools);
-  return (
-    <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="tool-dialog" role="dialog" aria-modal="true" aria-labelledby="tool-dialog-title">
-        <div className="dialog-header">
-          <div>
-            <strong id="tool-dialog-title">Agent 工具授权</strong>
-            <span>{agent.id || "未命名 Agent"} · agents.definitions[].deepagent.tools</span>
-          </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭工具弹窗">
-            <X size={15} />
-          </button>
-        </div>
-        <div className="tool-card-grid dialog-tool-grid">
-          {AGENT_TOOL_CARDS.map((tool) => {
-            const checked = selectedTools.includes(tool.id);
-            return (
-              <label className={`tool-choice ${checked ? "selected" : ""}`} key={tool.id}>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={readOnly}
-                  onChange={(event) => onToggle(agentIndex, tool.id, event.target.checked)}
-                  aria-label={tool.name}
-                />
-                <span>
-                  <strong>{tool.name}</strong>
-                  <small>{tool.summary}</small>
-                </span>
-                <em>{tool.badge}</em>
-              </label>
-            );
-          })}
-        </div>
-        <div className="dialog-footer">
-          <span>已选择：{formatSelectedTools(selectedTools)}</span>
-          <button type="button" className="primary" onClick={onClose}>
-            完成
-          </button>
-        </div>
-      </section>
-    </div>
+      </div>
+      <div className="dialog-footer">
+        <span role={error ? "alert" : undefined} className={error ? "error" : ""}>{error || "保存后立即生效；取消将放弃本次编辑。"}</span>
+        <button type="button" disabled={saving} onClick={onClose}>取消</button>
+        <button type="button" className="primary" disabled={readOnly || saving} onClick={save}>{saving ? "保存中…" : "保存 Agent"}</button>
+      </div>
+    </dialog>
   );
 }
 
