@@ -8,6 +8,7 @@ from server.domain.run_approval import RunApprovalRequest
 
 
 class RunEventType(StrEnum):
+    MODEL_USAGE = "model_usage"
     QUEUED = "queued"
     RUNNING = "running"
     ASSISTANT_DELTA = "assistant_delta"
@@ -39,6 +40,17 @@ class GenericRunEventPayload(RunEventPayload):
         payload = dict(self.data)
         payload.setdefault("kind", self.kind)
         return payload
+
+
+@dataclass(frozen=True)
+class ModelUsagePayload(RunEventPayload):
+    kind = "model_usage"
+    call_id: str
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int = 0
+    error: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +150,8 @@ class RunEventRecord:
 
 def run_event_payload_from_json(event_type: str, payload: Any) -> RunEventPayload:
     data = payload if isinstance(payload, dict) else {}
+    if event_type == RunEventType.MODEL_USAGE:
+        return ModelUsagePayload(**{key: data[key] for key in ("call_id", "model", "input_tokens", "output_tokens", "cached_input_tokens", "error") if key in data})
     if event_type in {RunEventType.QUEUED, RunEventType.RUNNING, RunEventType.COMPLETED}:
         return RunLifecyclePayload(message=str(data.get("message") or ""))
     if event_type in {RunEventType.FAILED, RunEventType.CANCELLED}:

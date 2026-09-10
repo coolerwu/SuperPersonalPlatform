@@ -34,6 +34,10 @@ llm:
       base_url: "https://api.openai.com/v1"
       api_key: "change-me"
       model: "gpt-4o-mini"
+      # 可选估算单价：每百万 tokens，按实际供应商填写；缺省不估价。
+      # input_price_per_million: 1.0
+      # output_price_per_million: 2.0
+      # price_currency: USD
       temperature: 0.7
       supports_images: false
 nutstore:

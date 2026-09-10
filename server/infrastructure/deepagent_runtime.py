@@ -16,6 +16,7 @@ from server.domain.run_events import (
     DeepAgentMessageDeltaPayload,
     DeepAgentSubagentResponsePayload,
     RunEventPayload,
+    ModelUsagePayload,
     RunEventType,
     StreamFallbackPayload,
 )
@@ -162,6 +163,8 @@ class DeepAgentRuntime:
             input_messages = _to_langchain_messages(messages, HumanMessage, AIMessage, self._model.provider)
             input_state = {"messages": input_messages}
         invoke_config = _invoke_config(options, assistant_id=self._agent_id, thread_id=thread_id)
+        if stream_callback is not None:
+            invoke_config["callbacks"] = [_usage_callback(stream_callback, self._model.model)]
         if checkpoint_path is not None and thread_id.strip():
             try:
                 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -280,6 +283,7 @@ class DeepAgentRuntime:
             base_url=model.base_url,
             model=model.model,
             temperature=model.temperature if model.temperature is not None else 0.7,
+            stream_usage=True,
         )
 
     def _extract_content(self, result: Any) -> str:
@@ -706,3 +710,46 @@ def _ensure_directory_within_root(path: Path, root: Path) -> bool:
             return False
         current.mkdir(exist_ok=True)
     return True
+
+
+def _usage_callback(callback: Callable[[DeepAgentStreamEvent], None], model_name: str):
+    from langchain_core.callbacks import AsyncCallbackHandler
+
+    class UsageCallback(AsyncCallbackHandler):
+        # Persist on the event loop before the next model call / terminal transition.
+        run_inline = True
+        raise_error = True
+
+        async def on_llm_end(self, response, *, run_id, **kwargs):
+            usage = None
+            actual_model = model_name
+            for generations in response.generations:
+                for generation in generations:
+                    message = getattr(generation, "message", None)
+                    metadata = getattr(message, "response_metadata", {}) or {}
+                    actual_model = metadata.get("model_name") or metadata.get("model") or actual_model
+                    candidate = getattr(message, "usage_metadata", None)
+                    if candidate is not None:
+                        usage = candidate
+                        break
+                if usage is not None:
+                    break
+            if usage is None:
+                raw = (response.llm_output or {}).get("token_usage")
+                if isinstance(raw, dict):
+                    usage = {"input_tokens": raw.get("prompt_tokens"), "output_tokens": raw.get("completion_tokens")}
+            def count(value):
+                return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+            callback(DeepAgentStreamEvent(RunEventType.MODEL_USAGE, ModelUsagePayload(
+                call_id=str(run_id), model=str(actual_model),
+                input_tokens=count((usage or {}).get("input_tokens")),
+                output_tokens=count((usage or {}).get("output_tokens")),
+                cached_input_tokens=count(((usage or {}).get("input_token_details") or {}).get("cache_read")) or 0,
+            )))
+
+        async def on_llm_error(self, error, *, run_id, **kwargs):
+            callback(DeepAgentStreamEvent(RunEventType.MODEL_USAGE, ModelUsagePayload(
+                call_id=str(run_id), model=model_name, error=True,
+            )))
+
+    return UsageCallback()

@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -22,8 +23,16 @@ class ModelDefinition:
     provider: ModelProvider = ModelProvider.OPENAI_COMPATIBLE
     temperature: float | None = None
     supports_images: bool = False
+    input_price_per_million: float | None = None
+    output_price_per_million: float | None = None
+    price_currency: str = "USD"
 
     def __post_init__(self) -> None:
+        for price in (self.input_price_per_million, self.output_price_per_million):
+            if price is not None and (isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price) or price < 0):
+                raise AgentConfigError("model prices must be finite non-negative numbers")
+        if self.price_currency not in {"USD", "CNY"}:
+            raise AgentConfigError("price_currency must be USD or CNY")
         if not self.id.strip():
             raise AgentConfigError("llm.models[].id is required")
         if not self.name.strip():

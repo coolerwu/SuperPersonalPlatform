@@ -691,6 +691,18 @@ export function ProviderConfigEditor({ draft, onChange, readOnly }) {
                   }
                 />
               </ConfigField>
+              {[ ["input_price_per_million", "输入单价 / 百万 tokens"], ["output_price_per_million", "输出单价 / 百万 tokens"] ].map(([field, label]) => (
+                <ConfigField key={field} label={label}>
+                  <input type="number" min="0" step="any" value={model[field] ?? ""} readOnly={readOnly}
+                    placeholder="未配置"
+                    onChange={(event) => updateModel(index, field, event.target.value === "" ? undefined : Number(event.target.value))} />
+                </ConfigField>
+              ))}
+              <ConfigField label="估算币种（不含缓存折扣、阶梯价及工具费用）">
+                <select value={model.price_currency || "USD"} disabled={readOnly} onChange={(event) => updateModel(index, "price_currency", event.target.value)}>
+                  <option value="USD">USD</option><option value="CNY">CNY</option>
+                </select>
+              </ConfigField>
               <label className="config-toggle field-toggle">
                 <input
                   type="checkbox"

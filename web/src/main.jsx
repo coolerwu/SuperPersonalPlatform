@@ -899,6 +899,7 @@ function RunsPage() {
         <Metric label="已取消" value={counts.cancelled} tone="red" />
       </div>
 
+      <UsageSummary runs={runs} />
       <div className="runs-grid">
         <RunIndex runs={runs} activeRunId={activeRun?.run_id} onSelect={selectRun} onRefresh={load} />
         <RunDetail run={activeRun} events={events} onRunAction={runAction} />
@@ -915,6 +916,68 @@ function Metric({ label, value, tone }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function usageCost(costs) {
+  const entries = Object.entries(costs || {});
+  return entries.length ? entries.map(([currency, amount]) => `${currency} ${amount.toFixed(6)}`).join(" · ") : "未估算";
+}
+
+function RunUsage({ usage }) {
+  return <div className="usage-detail">
+    <span className="section-label">运行消耗</span>
+    {usage ? <>
+      <div className="kv-grid">
+        <Kv label="输入 tokens" value={usage.input_tokens?.toLocaleString() ?? "未记录"} />
+        <Kv label="输出 tokens" value={usage.output_tokens?.toLocaleString() ?? "未记录"} />
+        <Kv label="缓存命中 tokens（含在输入中）" value={usage.cached_input_tokens?.toLocaleString() ?? "未记录"} />
+        <Kv label="模型调用（含子 Agent）" value={usage.model_calls} />
+        <Kv label="累计执行耗时" value={`${usage.execution_seconds.toFixed(1)} 秒`} />
+        <Kv label="已知部分估算费用" value={usageCost(usage.estimated_costs)} />
+        <Kv label="模型" value={usage.models.join("、") || "未记录"} />
+      </div>
+      <p className="usage-note">{usage.unknown_calls} 次调用未返回完整用量，{usage.unpriced_calls} 次未估价。包含重试及重跑消耗；耗时不含排队和等待审批。
+        {usage.interrupted_segments ? " 有执行片段进行中或异常中断，耗时可能不完整。" : ""}
+        费用按输入/输出统一单价估算，不含缓存折扣、阶梯价和工具费用，以供应商账单为准。</p>
+    </> : <p className="usage-note">未记录。历史任务无法补算真实用量。</p>}
+  </div>;
+}
+
+function UsageSummary({ runs }) {
+  const [agent, setAgent] = useState("");
+  const [period, setPeriod] = useState("all");
+  const agents = [...new Set(runs.map((run) => run.agent_id).filter(Boolean))].sort();
+  const cutoff = period === "all" ? 0 : Date.now() - Number(period) * 86400000;
+  const selected = runs.filter((run) => (!agent || run.agent_id === agent) && (!cutoff || Date.parse(run.created_at) >= cutoff));
+  const measured = selected.filter((run) => run.usage?.reported_calls > 0);
+  const totals = selected.reduce((acc, run) => {
+    const usage = run.usage;
+    if (!usage) return acc;
+    acc.input += usage.input_tokens || 0;
+    acc.output += usage.output_tokens || 0;
+    acc.calls += usage.model_calls || 0;
+    acc.unknown += usage.unknown_calls || 0;
+    acc.unpriced += usage.unpriced_calls || 0;
+    for (const [currency, cost] of Object.entries(usage.estimated_costs || {})) acc.costs[currency] = (acc.costs[currency] || 0) + cost;
+    return acc;
+  }, { input: 0, output: 0, calls: 0, unknown: 0, unpriced: 0, costs: {} });
+  return <section className="panel usage-summary">
+    <div className="panel-title"><span>运行消耗</span><div className="usage-filters">
+      <select aria-label="消耗统计 Agent" value={agent} onChange={(event) => setAgent(event.target.value)}>
+        <option value="">全部 Agent</option>{agents.map((id) => <option key={id} value={id}>{id}</option>)}
+      </select>
+      <select aria-label="消耗统计时间" value={period} onChange={(event) => setPeriod(event.target.value)}>
+        <option value="all">全部保留任务</option><option value="1">近 24 小时创建</option><option value="7">近 7 天创建</option>
+      </select>
+    </div></div>
+    <div className="kv-grid">
+      <Kv label="输入 / 输出 tokens" value={measured.length ? `${totals.input.toLocaleString()} / ${totals.output.toLocaleString()}` : "未记录"} />
+      <Kv label="模型调用" value={totals.calls} />
+      <Kv label="已知部分估算费用" value={usageCost(totals.costs)} />
+      <Kv label="有用量记录的任务" value={`${measured.length} / ${selected.length}`} />
+    </div>
+    <p className="usage-note">按任务创建时间筛选，包含所选任务全部重试消耗。{totals.unknown} 次调用缺少完整用量，{totals.unpriced} 次未估价；未记录任务不按零费用计算。仅统计当前保留的任务，清理后不计入，非完整账单。</p>
+  </section>;
 }
 
 function RunIndex({ runs, activeRunId, onSelect, onRefresh }) {
@@ -1003,6 +1066,7 @@ function RunDetail({ run, events, onRunAction }) {
         <Kv label="创建时间" value={formatTime(input.created_at || run.created_at)} />
         <Kv label="事件序号" value={state.seq ?? run.seq ?? 0} />
       </div>
+      <RunUsage usage={run.usage} />
       <PathBox label="工作目录" value={`workspace/runs/${runId}/`} />
       <PathBox label="状态文件" value={`workspace/runs/${runId}/state.json`} />
       <PathBox label="事件文件" value={`workspace/runs/${runId}/events.jsonl`} />

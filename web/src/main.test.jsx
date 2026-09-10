@@ -1575,3 +1575,30 @@ test("runs page approves a paused DeepAgent run and resumes it", async () => {
     expect(payload.message).toBe("");
   });
 });
+
+test("usage summary filters agents and preserves unknown historical costs", async () => {
+  window.history.replaceState({}, "", "/runs");
+  const usage = { input_tokens: 1000, output_tokens: 200, cached_input_tokens: 0, model_calls: 2, reported_calls: 1, unknown_calls: 1, unpriced_calls: 1, estimated_costs: { USD: 0.012 }, execution_seconds: 3, models: ["test"], interrupted_segments: 0 };
+  const runs = [
+    { run_id: "new", agent_id: "assistant", status: "completed", created_at: new Date().toISOString(), usage },
+    { run_id: "old", agent_id: "legacy", status: "completed", created_at: "2020-01-01T00:00:00Z" },
+  ];
+  global.fetch = vi.fn(async (url) => {
+    if (String(url).endsWith("/api/auth/me")) return response({ authenticated: true });
+    if (String(url).endsWith("/api/runs")) return response({ runs });
+    if (String(url).endsWith("/events")) return response({ events: [] });
+    return response(runs[0]);
+  });
+  await act(async () => { await import("./main.jsx"); });
+  const filter = await screen.findByLabelText("消耗统计 Agent");
+  const summary = document.querySelector(".usage-summary");
+  expect(summary).toHaveTextContent("USD 0.012000");
+  expect(summary).toHaveTextContent("1 / 2");
+  fireEvent.change(filter, { target: { value: "legacy" } });
+  expect(summary).toHaveTextContent("未记录");
+  expect(summary).toHaveTextContent("未估算");
+  expect(summary).not.toHaveTextContent("USD 0.000000");
+  fireEvent.change(filter, { target: { value: "" } });
+  fireEvent.change(screen.getByLabelText("消耗统计时间"), { target: { value: "1" } });
+  expect(summary).toHaveTextContent("1 / 1");
+});

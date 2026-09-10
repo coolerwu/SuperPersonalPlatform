@@ -19,7 +19,9 @@ from server.domain.run_approval import (
     RunApprovalRequest,
     RunApprovalResume,
 )
+from server.app.run_usage import add_call, summarize_usage
 from server.domain.run_events import (
+    ModelUsagePayload,
     DeepAgentGraphUpdatePayload,
     DeepAgentMessageDeltaPayload,
     DeepAgentSubagentResponsePayload,
@@ -270,6 +272,23 @@ class RunService:
             )
             stream_recorder.record_snapshot_event(RunEventType.IMAGE_ATTACHMENTS_TEXTIFIED, image_payload)
 
+        usage_path = self._run_dir(run_id) / "usage.json"
+        usage_ledger = _read_json(usage_path) if usage_path.exists() else {"schema_version": 1, "calls": {}, "execution_seconds": 0}
+        segment_id = uuid.uuid4().hex
+        usage_ledger.setdefault("segments", {})[segment_id] = {"finished": False}
+        execution_started = time.monotonic()
+
+        def persist_usage():
+            _write_json(usage_path, usage_ledger)
+            self._upsert_index(self._summary_from_state(run_id))
+
+        def record_event(event):
+            if isinstance(event.payload, ModelUsagePayload):
+                add_call(usage_ledger, event.payload, model)
+                persist_usage()
+            stream_recorder.record(event)
+
+        persist_usage()
         heartbeat_task = asyncio.create_task(self._heartbeat_run_lock(run_id, lease_id=execution_lease_id))
         try:
             async with asyncio.timeout(RUN_EXECUTION_TIMEOUT_SECONDS):
@@ -292,7 +311,7 @@ class RunService:
                     "options": runtime_options,
                     "checkpoint_path": checkpoint_path,
                     "thread_id": runtime_thread_id,
-                    "stream_callback": stream_recorder.record,
+                    "stream_callback": record_event,
                 }
                 if approval_resume is not None:
                     runtime_kwargs["resume"] = approval_resume
@@ -306,8 +325,8 @@ class RunService:
                     lease_id=execution_lease_id,
                     stream_recorder=stream_recorder,
                 )
-                return self.get_run(run_id)
-            stream_recorder.finish(result)
+            else:
+                stream_recorder.finish(result)
         except asyncio.CancelledError:
             error = {
                 "message": "run execution task was cancelled before completion",
@@ -336,9 +355,15 @@ class RunService:
             self._fail_executing_run(run_id, error, lease_id=execution_lease_id, retryable=True)
             raise
         finally:
+            usage_ledger["execution_seconds"] += time.monotonic() - execution_started
+            usage_ledger["segments"][segment_id]["finished"] = True
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
+            persist_usage()
+
+        if isinstance(result, RunApprovalRequest):
+            return self.get_run(run_id)
 
         cancel_requested_at = self._cancel_requested_at(run_id)
         if cancel_requested_at:
@@ -774,6 +799,7 @@ class RunService:
             "result": None,
             "partial": None,
             "approval": None,
+            "usage": summarize_usage(_read_json(run_dir / "usage.json")) if (run_dir / "usage.json").exists() else None,
         }
         result_path = run_dir / "result.json"
         if result_path.exists():
@@ -1099,6 +1125,7 @@ class RunService:
             "updated_at": state.get("updated_at", ""),
             "seq": state.get("seq", 0),
             "delivery_status": delivery.get("status", ""),
+            "usage": summarize_usage(_read_json(run_dir / "usage.json")) if (run_dir / "usage.json").exists() else None,
         }
         client_message_id = str(metadata.get("client_message_id") or "").strip()
         if client_message_id:
@@ -1365,6 +1392,9 @@ def _public_model(model: ModelDefinition) -> dict[str, Any]:
         "model": model.model,
         "temperature": model.temperature,
         "supports_images": model.supports_images,
+        "input_price_per_million": model.input_price_per_million,
+        "output_price_per_million": model.output_price_per_million,
+        "price_currency": model.price_currency,
     }
 
 

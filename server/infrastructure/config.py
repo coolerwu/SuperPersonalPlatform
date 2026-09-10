@@ -247,6 +247,9 @@ def parse_model_definition(raw: Any) -> ModelDefinition:
         provider=provider,
         temperature=float(temperature_raw) if temperature_raw is not None else None,
         supports_images=bool(raw.get("supports_images", False)),
+        input_price_per_million=raw.get("input_price_per_million"),
+        output_price_per_million=raw.get("output_price_per_million"),
+        price_currency=str(raw.get("price_currency", "USD")),
     )
 
 

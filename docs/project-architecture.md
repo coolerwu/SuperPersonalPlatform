@@ -315,3 +315,10 @@ code_execution:
 - `./run.sh setup-sudo` 仍用于安装受限 sudoers 规则，使生产服务能无密码执行受限的 `systemctl restart/status/is-active super-personal-platform.service`。
 - `run.sh prod` 生成 systemd unit 时只使用系统临时文件并安装到 systemd 路径，不再把临时 service 文件写入 workspace。
 - 提交项目前必须执行 `.codex/skills/project-commit` 工作流。
+
+## Run Usage Visibility
+
+- 每次模型调用通过 LangChain `AsyncCallbackHandler` 的 `on_llm_end/on_llm_error` 采集，回调随 invoke config 传递给主图和子 Agent；OpenAI-compatible 模型启用 `stream_usage`。不扫描最终 messages/checkpoint 统计，避免历史消息和流式重复累计。优先读取标准 `usage_metadata`，兼容 `llm_output.token_usage`；供应商未返回完整输入/输出用量或调用失败时标为未知，不推算为零。
+- 强类型 `model_usage` 事件保存调用 ID、实际返回模型、输入/输出 tokens、缓存命中和错误标记；`workspace/runs/{run_id}/usage.json` 持久化按调用 ID 去重的明细、每次调用使用的 Provider ID/单价/币种以及执行片段。Run 详情和轻量索引包含 `usage` 汇总。失败、自动重试、审批恢复和手动重跑均保留已发生消耗；重启不清零。执行耗时在每个执行片段结束时累计，排队和等待审批不计入；进程中断或正在执行的片段有明确不完整标记，不声称是完整耗时。
+- Providers 可配置 `input_price_per_million`、`output_price_per_million`（有限非负数，缺省未配置）和 `price_currency`（USD/CNY，默认 USD）。零单价有效；输入/输出两项单价及用量完整时，才按 `input_tokens * input_price / 1e6 + output_tokens * output_price / 1e6` 估算。每次调用保存执行时的价格，不随后续配置修改重算。缓存命中包含在输入总量中，当前估算不单独处理缓存折扣、缓存写入溢价、阶梯价、工具费用或税费，不替代供应商账单；不同币种分开汇总。
+- Runs 页面沿用一分钟轮询和详情快照合并，新增全部/单 Agent、全部保留任务/近 24 小时/近 7 天创建任务的消耗汇总，以及 Run 消耗详情。时间筛选按 Run 创建时间，包含所选 Run 的全部执行消耗。旧任务不做历史迁移或补算，显示“未记录”；未知调用、未估价调用和有用量任务覆盖数分别显示。统计仅覆盖仍保留的 Run，15 天维护清理后的 Run 不再计入，不是长期财务账本。

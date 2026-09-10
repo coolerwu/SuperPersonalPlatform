@@ -896,7 +896,7 @@ pre {
 }
 
 .runs-screen {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -3010,3 +3010,11 @@ pre {
     display: none;
   }
 }
+
+.usage-summary { align-self: start; }
+.usage-summary > .kv-grid, .usage-summary > .usage-note { margin: 16px; }
+.usage-detail { border-top: 1px solid var(--border, #29313f); padding-top: 16px; margin: 16px 0; }
+.usage-note { color: #94a3b8; font-size: 12px; line-height: 1.7; }
+.usage-filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.usage-filters select { color: #dbe4f0; background: #141c28; border: 1px solid #334155; border-radius: 6px; padding: 6px; max-width: 100%; }
+@media (max-width: 640px) { .usage-summary .panel-title { flex-wrap: wrap; gap: 12px; } }
