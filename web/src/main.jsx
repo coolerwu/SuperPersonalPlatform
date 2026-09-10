@@ -2483,7 +2483,7 @@ function BrowserProfilesPage() {
         <div className="panel-title">
           <div>
             <span>浏览器</span>
-            <small>workspace/browser_profiles/</small>
+            <small>{"workspace/agents/{agent_id}/workspace/browser/"}</small>
           </div>
           <button className="icon-button" onClick={loadBrowserProfiles} title="刷新 profile">
             <RefreshCw size={15} />
@@ -2502,7 +2502,7 @@ function BrowserProfilesPage() {
               >
                 <span>{agent.name || agent.id}</span>
                 <Status status={status} />
-                <small>{profile?.profile_path || `workspace/browser_profiles/${agent.id}`}</small>
+                <small>{profile?.profile_path || `workspace/agents/${agent.id}/workspace/browser/`}</small>
               </button>
             );
           })}

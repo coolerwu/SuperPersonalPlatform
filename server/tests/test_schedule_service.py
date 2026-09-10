@@ -298,7 +298,7 @@ def test_schedule_service_bootstraps_and_runs_agent_meditation_per_agent(tmp_pat
     definition = _read_json(tmp_path / "schedules" / "agent_meditation_assistant" / "definition.json")
     state = _read_json(tmp_path / "schedules" / "agent_meditation_assistant" / "state.json")
     events = (tmp_path / "schedules" / "agent_meditation_assistant" / "events.jsonl").read_text(encoding="utf-8")
-    record_paths = list((tmp_path / "agents" / "assistant" / "meditations").glob("*.json"))
+    record_paths = list((tmp_path / "agents" / "assistant" / "workspace" / "meditations").glob("*.json"))
     assert definition["type"] == "agent_meditation"
     assert definition["trigger"]["seconds"] == 86400
     assert definition["agent_id"] == "assistant"
@@ -353,8 +353,8 @@ def test_schedule_service_creates_separate_meditation_schedule_for_each_agent(tm
     assert len(run_service.created) == 1
     assert run_service.created[0]["agent_id"] == "researcher"
     assert run_service.created[0]["metadata"]["schedule_id"] == "agent_meditation_researcher"
-    assert (tmp_path / "agents" / "researcher" / "meditations").is_dir()
-    assert not (tmp_path / "agents" / "assistant" / "meditations").exists()
+    assert (tmp_path / "agents" / "researcher" / "workspace" / "meditations").is_dir()
+    assert not (tmp_path / "agents" / "assistant" / "workspace" / "meditations").exists()
 
 
 def test_schedule_service_skips_agent_meditation_when_busy(tmp_path) -> None:

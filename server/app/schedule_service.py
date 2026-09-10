@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from server.infrastructure.agent_workspace import agent_workspace_path, browser_workspace_path
+
 import asyncio
 import json
 import os
@@ -484,7 +486,7 @@ class ScheduleService:
             }:
                 run_id = str(run.get("run_id") or "").strip()
                 return f"active run {run_id or status}"
-        lock_path = self._workspace / "browser_profiles" / _safe_agent_path_segment(agent_id) / "profile.lock.json"
+        lock_path = browser_workspace_path(self._workspace, agent_id) / "profile.lock.json"
         if lock_path.exists():
             if _lock_is_stale(lock_path):
                 lock_path.unlink(missing_ok=True)
@@ -605,7 +607,7 @@ class ScheduleService:
         return messages
 
     def _agent_relative_files(self, agent_id: str, directory: str, pattern: str, *, limit: int) -> list[str]:
-        agent_dir = self._workspace / "agents" / _safe_agent_path_segment(agent_id)
+        agent_dir = agent_workspace_path(self._workspace, agent_id)
         root = agent_dir / directory
         if not root.exists():
             return []
@@ -613,7 +615,7 @@ class ScheduleService:
         return [path.relative_to(agent_dir).as_posix() for path in files[-limit:]]
 
     def _write_meditation_record(self, agent_id: str, run_id: str, completed: dict[str, Any]) -> None:
-        agent_dir = self._workspace / "agents" / _safe_agent_path_segment(agent_id)
+        agent_dir = agent_workspace_path(self._workspace, agent_id)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         payload = {
             "schema_version": 1,

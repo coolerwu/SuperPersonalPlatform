@@ -235,7 +235,7 @@ def build_browser_extract_tool(
         description=(
             "Open a public http/https web page in a headless Playwright browser and extract rendered text and links. "
             "Use this for JavaScript-rendered pages when normal context search is insufficient. "
-            "For Agent runs, the browser reuses that Agent's persistent profile under workspace/browser_profiles/{agent_id}. "
+            "For Agent runs, the browser reuses that Agent's persistent profile under workspace/agents/{agent_id}/workspace/browser. "
             "If navigation, extraction, DNS validation, or profile locking fails, the tool returns ok=false JSON so the Agent can try a fallback instead of ending the run. "
             "Args: url, include_links=true, max_chars. Private, localhost, and internal network URLs are blocked unless the host is allowed by browser.allow_private_hosts."
         ),
@@ -478,7 +478,7 @@ def build_browser_search_tool(
             "The search engine is fixed by the platform and is not configurable. "
             "Use this to discover source URLs for recent information, web evidence, and open-web research; "
             "then call browser_extract on relevant result URLs before making claims. "
-            "For Agent runs, the browser reuses that Agent's persistent profile under workspace/browser_profiles/{agent_id}. "
+            "For Agent runs, the browser reuses that Agent's persistent profile under workspace/agents/{agent_id}/workspace/browser. "
             "If search navigation or profile locking fails, the tool returns ok=false JSON so the Agent can use another source or explain the limitation. "
             "Args: query, top_k."
         ),
@@ -486,8 +486,10 @@ def build_browser_search_tool(
 
 
 def browser_profile_dir(workspace: Path, agent_id: str) -> Path:
-    safe_agent_id = validate_browser_agent_id(agent_id)
-    return workspace.resolve() / "browser_profiles" / safe_agent_id
+    validate_browser_agent_id(agent_id)
+    from server.infrastructure.agent_workspace import browser_workspace_path
+
+    return browser_workspace_path(workspace, agent_id)
 
 
 def _browser_tool_error_result(

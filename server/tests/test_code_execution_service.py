@@ -1,4 +1,6 @@
 import json
+
+import pytest
 from pathlib import Path
 
 from server.app.code_execution_service import CodeExecutionService
@@ -78,9 +80,11 @@ def test_execute_code_copies_output_files_to_agent_artifacts(tmp_path) -> None:
     )
 
     assert payload["ok"] is True
+    assert not service._sandbox.execution_root.exists()
+    assert payload["script_path"].startswith("/scratch/exec_")
     assert payload["stdout"] == "ok\n"
-    assert payload["files"][0]["path"].startswith("/artifacts/code_runs/run_1/exec_")
-    artifact_path = tmp_path / "agents" / "assistant" / payload["files"][0]["path"].lstrip("/")
+    assert payload["files"][0]["path"].startswith("/artifacts/exec_")
+    artifact_path = tmp_path / "agents" / "assistant" / "workspace" / payload["files"][0]["path"].lstrip("/")
     assert artifact_path.read_text(encoding="utf-8") == "result"
 
 
@@ -116,6 +120,7 @@ class FakeSandbox:
         return {"ok": True, "runtime": "runsc", "image": "python:3.12-slim-bookworm"}
 
     async def execute(self, **kwargs):
+        self.execution_root = kwargs["execution_root"]
         return SandboxResult(
             ok=True,
             language=kwargs["language"],
@@ -132,3 +137,103 @@ class FakeSandbox:
             ),
             duration_ms=12,
         )
+
+
+@pytest.mark.parametrize("outcome", ["success", "failed", "timeout", "cancelled"])
+def test_execution_retains_script_collects_outputs_and_cleans_mounts(tmp_path, monkeypatch, outcome):
+    import asyncio
+    from server.infrastructure import docker_gvisor_sandbox as sandbox_module
+    service = CodeExecutionService(tmp_path, CodeExecutionConfig())
+    events = []
+    roots = []
+
+    async def capability():
+        return {"ok": True}
+    service._sandbox.capability_check = capability
+
+    class Process:
+        returncode = None
+        async def communicate(self):
+            if outcome == "cancelled":
+                raise asyncio.CancelledError()
+            if outcome == "timeout":
+                raise asyncio.TimeoutError()
+            self.returncode = 0 if outcome == "success" else 1
+            return b"hello", b"" if self.returncode == 0 else b"failed"
+        def kill(self):
+            events.append("killed")
+        async def wait(self):
+            self.returncode = -9
+            return -9
+
+    async def spawn(*command, **kwargs):
+        mounts = [command[i + 1] for i, part in enumerate(command) if part == "-v"]
+        work = Path(next(m.split(":")[0] for m in mounts if ":/workspace/work:" in m))
+        output = Path(next(m.split(":")[0] for m in mounts if ":/workspace/output:" in m))
+        roots.append(work.parent.parent)
+        assert (work / "main.py").read_text() == "print('hello')"
+        assert "browser" not in str(mounts)
+        (output / "answer.txt").write_text("answer")
+        return Process()
+
+    async def remove(command, **kwargs):
+        assert command[:3] == ("docker", "rm", "-f")
+        assert roots[0].exists(), "mounts must remain until container stops"
+        events.append("removed")
+        return {"exit_code": 0, "stderr": "", "stdout": ""}
+
+    monkeypatch.setattr(sandbox_module.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(sandbox_module, "_run_capture", remove)
+    call = service.execute(language="python", code="print('hello')", agent_id="assistant", run_id="run_test")
+    if outcome == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(call)
+    else:
+        result = asyncio.run(call)
+        assert result["ok"] == (outcome == "success")
+        assert result["script_path"].endswith(".py")
+        if outcome in {"success", "failed"}:
+            artifact = tmp_path / "agents/assistant/workspace" / result["files"][0]["path"].lstrip("/")
+            assert artifact.read_text() == "answer"
+    assert len(list((tmp_path / "agents/assistant/workspace/scratch").glob("*.py"))) == 1
+    assert not roots[0].exists()
+    if outcome in {"timeout", "cancelled"}:
+        assert events == ["killed", "removed"]
+
+
+def test_artifact_copy_failure_retains_recovery_directory(tmp_path, monkeypatch):
+    import asyncio
+    import shutil
+    source = tmp_path / "result.txt"
+    source.write_text("answer")
+    service = CodeExecutionService(tmp_path, CodeExecutionConfig())
+    service._sandbox = FakeSandbox(source)
+    def fail_copy(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr("server.app.code_execution_service.shutil.copy2", fail_copy)
+    result = asyncio.run(service.execute(language="python", code="pass", agent_id="assistant", run_id="r"))
+    assert result["error"]["type"] == "ArtifactCollectionError"
+    recovery = Path(result["recovery_path"])
+    assert recovery.is_dir()
+    assert (tmp_path / "agents/assistant/workspace" / result["script_path"].lstrip("/")).exists()
+    shutil.rmtree(recovery)
+
+
+def test_parallel_executions_use_distinct_scripts_artifacts_and_temporary_roots(tmp_path):
+    import asyncio
+    source = tmp_path / "result.txt"
+    source.write_text("answer")
+    service = CodeExecutionService(tmp_path, CodeExecutionConfig())
+    roots = []
+    class ParallelSandbox(FakeSandbox):
+        async def execute(self, **kwargs):
+            roots.append(kwargs["execution_root"])
+            await asyncio.sleep(0)
+            return await super().execute(**kwargs)
+    service._sandbox = ParallelSandbox(source)
+    async def run():
+        return await asyncio.gather(*[service.execute(language="python", code="pass", agent_id="assistant", run_id="same") for _ in range(2)])
+    results = asyncio.run(run())
+    assert len(set(roots)) == 2 and not any(p.exists() for p in roots)
+    assert results[0]["script_path"] != results[1]["script_path"]
+    assert results[0]["files"][0]["path"] != results[1]["files"][0]["path"]

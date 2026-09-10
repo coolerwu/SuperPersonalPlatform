@@ -109,7 +109,7 @@ def test_real_graph_callbacks_include_subgraph_without_history_double_count(tmp_
     graph.add_edge("main_model", "child")
     graph.add_edge("child", END)
     events = []
-    runtime = DeepAgentRuntime(model(), context_workspace=tmp_path, agent_workspace=tmp_path / "agent")
+    runtime = DeepAgentRuntime(model(), agent_id="assistant", context_workspace=tmp_path, agent_workspace=tmp_path / "agent")
     asyncio.run(runtime._run_agent(graph.compile(), {"messages": [AIMessage(content="old", usage_metadata={"input_tokens": 999, "output_tokens": 999, "total_tokens": 1998})]}, {"callbacks": [_usage_callback(events.append, "test")]}, stream_callback=events.append))
     usage = [event.payload for event in events if event.type == RunEventType.MODEL_USAGE]
     assert len(usage) == 2

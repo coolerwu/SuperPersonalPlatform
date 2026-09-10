@@ -295,7 +295,7 @@ def test_system_browser_profiles_lists_agents(tmp_path) -> None:
     body = response.json()
     assert body["agents"][0]["id"] == "assistant"
     assert body["profiles"][0]["agent_id"] == "assistant"
-    assert body["profiles"][0]["profile_path"].endswith("/browser_profiles/assistant")
+    assert body["profiles"][0]["profile_path"].endswith("/agents/assistant/workspace/browser")
 
 
 def test_manual_webdav_context_sync_uses_saved_config(tmp_path, monkeypatch) -> None:
@@ -450,7 +450,6 @@ def test_workspace_delete_protects_config_and_root_skeleton(tmp_path) -> None:
     client = make_system_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})
     (tmp_path / "runs").mkdir()
-    (tmp_path / "browser_profiles").mkdir()
     scratch_dir = tmp_path / "scratch"
     scratch_dir.mkdir()
     (scratch_dir / "note.txt").write_text("delete me", encoding="utf-8")
@@ -458,13 +457,11 @@ def test_workspace_delete_protects_config_and_root_skeleton(tmp_path) -> None:
     root_response = client.post("/api/workspace/list", json={"path": ""})
     root_entries = {entry["path"]: entry for entry in root_response.json()["entries"]}
     assert root_entries["config.yaml"]["deletable"] is False
-    assert root_entries["browser_profiles"]["deletable"] is False
     assert root_entries["runs"]["deletable"] is False
     assert root_entries["scratch"]["deletable"] is True
 
     assert client.post("/api/workspace/delete", json={"path": "config.yaml"}).status_code == 400
     assert client.post("/api/workspace/delete", json={"path": "context"}).status_code == 400
-    assert client.post("/api/workspace/delete", json={"path": "browser_profiles"}).status_code == 400
     assert client.post("/api/workspace/delete", json={"path": "runs"}).status_code == 400
     assert client.post("/api/workspace/delete", json={"path": "schedules"}).status_code == 400
 

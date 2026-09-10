@@ -14,7 +14,11 @@ from server.infrastructure.config import CodeExecutionConfig
 
 
 class CodeSandboxError(RuntimeError):
-    pass
+    preserve_execution = False
+
+
+class ContainerCleanupError(CodeSandboxError):
+    preserve_execution = True
 
 
 @dataclass(frozen=True)
@@ -95,10 +99,16 @@ class DockerGVisorSandbox:
                 process.communicate(),
                 timeout=self._config.timeout_seconds,
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            await _run_capture(("docker", "rm", "-f", container_name), timeout=10)
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            cleanup = asyncio.create_task(_stop_container(process, container_name))
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            cleanup.result()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             duration_ms = int((time.monotonic() - started) * 1000)
             return SandboxResult(
                 ok=False,
@@ -106,7 +116,7 @@ class DockerGVisorSandbox:
                 exit_code=-1,
                 stdout="",
                 stderr="",
-                files=(),
+                files=_collect_output_files(output_dir, max_files=self._config.max_files, max_file_bytes=self._config.max_file_bytes),
                 duration_ms=duration_ms,
                 error={
                     "type": "CodeExecutionTimeoutError",
@@ -281,3 +291,15 @@ async def _run_capture(command: tuple[str, ...], *, timeout: int) -> dict[str, A
         "stdout": stdout.decode("utf-8", errors="replace").strip(),
         "stderr": stderr.decode("utf-8", errors="replace").strip(),
     }
+
+
+async def _stop_container(process, container_name: str) -> None:
+    if process.returncode is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+    await process.wait()
+    removal = await _run_capture(("docker", "rm", "-f", container_name), timeout=10)
+    if removal["exit_code"] != 0 and "No such container" not in str(removal["stderr"]):
+        raise ContainerCleanupError("Could not stop execution container; temporary files retained for recovery")

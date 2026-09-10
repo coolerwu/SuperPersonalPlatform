@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from server.infrastructure.agent_workspace import agent_workspace_path
+
 import asyncio
 import json
 import os
@@ -295,6 +297,7 @@ class RunService:
                 runtime = DeepAgentRuntime(
                     model,
                     context_workspace=self._workspace / "context",
+                    agent_id=str(run_input.get("agent_id") or ""),
                     agent_workspace=self._agent_workspace(str(run_input.get("agent_id") or "")),
                     schedule_service=self._schedule_service,
                     tool_context=PlatformToolContext(
@@ -1159,7 +1162,7 @@ class RunService:
     def _agent_workspace(self, agent_id: str) -> Path:
         if not agent_id or any(part in agent_id for part in ("/", "\\")) or agent_id in {".", ".."}:
             raise AgentConfigError("agents.definitions[].id must be a single path segment for filesystem access")
-        return self._workspace / "agents" / agent_id
+        return agent_workspace_path(self._workspace, agent_id)
 
     @property
     def _index_path(self) -> Path:

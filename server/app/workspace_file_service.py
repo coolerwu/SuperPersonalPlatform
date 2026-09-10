@@ -44,7 +44,6 @@ class WorkspaceFileService:
     protected_root_files = {"config.yaml"}
     protected_root_directories = {
         "agents",
-        "browser_profiles",
         "context",
         "runs",
         "sessions",

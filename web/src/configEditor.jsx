@@ -866,7 +866,7 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                   <strong>DeepAgent 内置能力</strong>
                   <span>
                     write_todos
-                    {agent.deepagent?.filesystem?.enabled ? `, filesystem -> workspace/agents/${agent.id || "{agent_id}"}` : ""}
+                    {agent.deepagent?.filesystem?.enabled ? `, filesystem -> workspace/agents/${agent.id || "{agent_id}"}/workspace` : ""}
                   </span>
                 </div>
                 <div className="builtin-toggle-row">
@@ -911,7 +911,7 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                   />
                 </ConfigField>
                 <ConfigField label="Filesystem Root">
-                  <input value={`workspace/agents/${agent.id || "{agent_id}"}`} readOnly />
+                  <input value={`workspace/agents/${agent.id || "{agent_id}"}/workspace`} readOnly />
                 </ConfigField>
                 <ConfigField label="Response Format">
                   <input
@@ -932,7 +932,7 @@ export function AgentConfigEditor({ draft, onChange, readOnly }) {
                     value={
                       agent.deepagent?.use_longterm_memory === false
                         ? "disabled"
-                        : `workspace/agents/${agent.id || "{agent_id}"}/memories/`
+                        : `workspace/agents/${agent.id || "{agent_id}"}/workspace/memories/`
                     }
                     readOnly={readOnly}
                     disabled

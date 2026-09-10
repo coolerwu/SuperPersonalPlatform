@@ -18,49 +18,11 @@ from server.infrastructure.deepagent_runtime import (
     _approval_request_from_stream_data,
     _normalize_interrupt_on,
     _to_langchain_messages,
-    load_agent_files,
-    persist_agent_files,
 )
 from server.infrastructure.skill_improvement_middleware import (
     SKILL_IMPROVEMENT_PROMPT,
     SkillImprovementMiddleware,
 )
-
-
-def test_agent_filesystem_sync_is_limited_to_agent_workspace(tmp_path) -> None:
-    agent_dir = tmp_path / "agents" / "assistant"
-    (agent_dir / "notes").mkdir(parents=True)
-    (agent_dir / "notes" / "profile.md").write_text("hello\nworld", encoding="utf-8")
-    (agent_dir / "memory").mkdir()
-    (agent_dir / "memory" / "store.json").write_text('{"items": {}}', encoding="utf-8")
-    (agent_dir / "binary.bin").write_bytes(b"\xff\x00\xfe")
-    (agent_dir / "outside").symlink_to(tmp_path)
-
-    files = load_agent_files(agent_dir)
-
-    assert files["/notes/profile.md"]["content"] == ["hello", "world"]
-    assert "/memory/store.json" not in files
-    assert "/binary.bin" not in files
-    assert not any(path.startswith("/outside") for path in files)
-
-    persist_agent_files(
-        agent_dir,
-        {
-            "/notes/profile.md": {"content": ["updated"]},
-            "/artifacts/result.txt": {"content": ["done"]},
-            "/memory/store.json": {"content": ["bad"]},
-            "/outside/created.txt": {"content": ["bad"]},
-            "/../escape.txt": {"content": ["bad"]},
-            "relative.txt": {"content": ["bad"]},
-        },
-    )
-
-    assert (agent_dir / "notes" / "profile.md").read_text(encoding="utf-8") == "updated"
-    assert (agent_dir / "artifacts" / "result.txt").read_text(encoding="utf-8") == "done"
-    assert (agent_dir / "memory" / "store.json").read_text(encoding="utf-8") == '{"items": {}}'
-    assert not (tmp_path / "created.txt").exists()
-    assert not (tmp_path / "escape.txt").exists()
-    assert not (agent_dir / "relative.txt").exists()
 
 
 def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monkeypatch) -> None:
@@ -90,6 +52,7 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     runtime = DeepAgentRuntime(
         model,
         context_workspace=tmp_path / "context",
+        agent_id="assistant",
         agent_workspace=agent_dir,
     )
 
@@ -108,6 +71,7 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     general_purpose = captured["create_kwargs"]["subagents"][0]
     assert general_purpose["name"] == GENERAL_PURPOSE_SUBAGENT["name"]
     assert general_purpose["description"] == GENERAL_PURPOSE_SUBAGENT["description"]
+    assert [type(m).__name__ for m in general_purpose["middleware"]] == ["WorkspaceMiddleware"]
     assert "skills" not in general_purpose
     assert general_purpose["system_prompt"] == (
         f"{GENERAL_PURPOSE_SUBAGENT['system_prompt']}\n\n{GENERAL_PURPOSE_SKILL_PROMPT}"
@@ -122,6 +86,7 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
     assert middleware_names[0] == "TodoListMiddleware"
     assert "SkillImprovementMiddleware" in middleware_names
+    assert "WorkspaceMiddleware" in middleware_names
     assert "store" not in captured["create_kwargs"]
     assert "use_longterm_memory" not in captured["create_kwargs"]
     assert "files" not in captured["input_state"]
@@ -142,14 +107,14 @@ def test_agent_filesystem_backend_restricts_mutations_to_managed_directories(tmp
     assert allowed.error is None
     assert (tmp_path / "artifacts" / "web-dev" / "index.html").read_text(encoding="utf-8") == "ok"
     assert "Permission denied" in str(denied_nested_workspace.error)
-    assert "virtual '/' is already" in str(denied_nested_workspace.error)
+    assert "virtual root is already" in str(denied_nested_workspace.error)
     assert "Writable directories" in str(denied_root_file.error)
     assert "invalid or escapes" in str(denied_traversal.error)
     assert not (tmp_path / "workspace").exists()
     assert not (tmp_path / "README.md").exists()
 
 
-def test_agent_filesystem_backend_keeps_legacy_top_level_content_read_only(tmp_path) -> None:
+def test_agent_filesystem_backend_rejects_undeclared_top_level_content(tmp_path) -> None:
     backend = AgentFilesystemBackend(root_dir=tmp_path, virtual_mode=True)
     legacy_file = tmp_path / "workspace" / "web-dev" / "index.html"
     legacy_file.parent.mkdir(parents=True)
@@ -159,8 +124,8 @@ def test_agent_filesystem_backend_keeps_legacy_top_level_content_read_only(tmp_p
     edit_result = backend.edit("/workspace/web-dev/index.html", "legacy", "changed")
     delete_result = backend.delete("/workspace/web-dev/index.html")
 
-    assert read_result.error is None
-    assert read_result.file_data["content"] == "legacy"
+    assert read_result.error is not None
+    assert read_result.file_data is None
     assert "Permission denied" in str(edit_result.error)
     assert "Permission denied" in str(delete_result.error)
     assert legacy_file.read_text(encoding="utf-8") == "legacy"
@@ -209,6 +174,7 @@ def test_runtime_adds_skill_improvement_middleware_by_default(tmp_path, monkeypa
     runtime = DeepAgentRuntime(
         model,
         context_workspace=tmp_path / "context",
+        agent_id="assistant",
         agent_workspace=tmp_path / "agents" / "assistant",
     )
 
@@ -223,6 +189,7 @@ def test_runtime_adds_skill_improvement_middleware_by_default(tmp_path, monkeypa
     assert result == "ok"
     middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
     assert "SkillImprovementMiddleware" in middleware_names
+    assert "WorkspaceMiddleware" in middleware_names
 
 
 def test_runtime_streams_agent_messages_when_available(tmp_path, monkeypatch) -> None:
@@ -259,6 +226,7 @@ def test_runtime_streams_agent_messages_when_available(tmp_path, monkeypatch) ->
     runtime = DeepAgentRuntime(
         model,
         context_workspace=tmp_path / "context",
+        agent_id="assistant",
         agent_workspace=tmp_path / "agents" / "assistant",
     )
 
@@ -331,6 +299,7 @@ def test_runtime_persists_subagent_responses_without_merging_them_into_main_outp
             model="gpt-4o-mini",
         ),
         context_workspace=tmp_path / "context",
+        agent_id="assistant",
         agent_workspace=tmp_path / "agents" / "assistant",
     )
 
@@ -438,6 +407,7 @@ def test_runtime_uses_sqlite_checkpointer_when_thread_id_is_provided(tmp_path, m
     runtime = DeepAgentRuntime(
         model,
         context_workspace=tmp_path / "context",
+        agent_id="assistant",
         agent_workspace=tmp_path / "agents" / "assistant",
     )
 
@@ -492,6 +462,7 @@ def test_runtime_skips_memory_when_longterm_memory_is_disabled(tmp_path, monkeyp
     runtime = DeepAgentRuntime(
         model,
         context_workspace=tmp_path / "context",
+        agent_id="assistant",
         agent_workspace=agent_dir,
     )
 

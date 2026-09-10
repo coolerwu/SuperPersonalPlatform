@@ -223,7 +223,7 @@ workspace/
 
 DeepAgent 原生 filesystem 通过 `FilesystemBackend(root_dir=workspace/agents/{agent_id}, virtual_mode=True)` 锚定到单个 Agent 私有目录。Agent 看到的 `/` 就是自己的目录，可读写其中的 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/` 等内容，不能访问其它 Agent、Context、Runs、Sessions、配置文件或项目源码。当前不启用 DeepAgent `LocalShellBackend`，因此不向 Agent 暴露非沙箱 shell `execute`。
 
-每个 Agent 的私有 skill 放在 `workspace/agents/{agent_id}/skills/{skill_id}/SKILL.md`，运行时传入 `skills=["/skills/"]`。DeepAgent 会扫描包含 `SKILL.md` 的子目录；没有 skill 时只会提示 Agent 可以在 `/skills/` 创建，是否创建由 Agent 在具体任务中通过文件工具自行决定，新建 skill 通常在下一次执行开始时被重新扫描后生效。
+每个 Agent 的私有 skill 放在 `workspace/agents/{agent_id}/workspace/skills/{skill_id}/SKILL.md`，运行时传入 `skills=["/skills/"]`。DeepAgent 会扫描包含 `SKILL.md` 的子目录；没有 skill 时只会提示 Agent 可以在 `/skills/` 创建，是否创建由 Agent 在具体任务中通过文件工具自行决定，新建 skill 通常在下一次执行开始时被重新扫描后生效。
 
 ## Run 快照
 

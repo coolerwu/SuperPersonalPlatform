@@ -1054,7 +1054,7 @@ test("keeps browser authorization on a dedicated page", async () => {
         profiles: [
           {
             agent_id: "assistant",
-            profile_path: "/workspace/browser_profiles/assistant",
+            profile_path: "/workspace/agents/assistant/workspace/browser",
             exists: true,
             locked: false,
           },
@@ -1069,7 +1069,7 @@ test("keeps browser authorization on a dedicated page", async () => {
   });
 
   expect(await screen.findByText("授权会话")).toBeInTheDocument();
-  expect(screen.getAllByText("/workspace/browser_profiles/assistant").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("/workspace/agents/assistant/workspace/browser").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: /启动授权/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /^浏览器$/ })).toHaveClass("active");
 });

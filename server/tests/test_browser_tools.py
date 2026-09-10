@@ -377,7 +377,7 @@ browser:
 
 
 def test_browser_profile_lock_waits_for_same_agent_profile(tmp_path) -> None:
-    profile_dir = tmp_path / "browser_profiles" / "assistant"
+    profile_dir = tmp_path / "agents" / "assistant" / "workspace" / "browser"
     first_lock = acquire_browser_profile_lock(
         profile_dir,
         owner="first",
@@ -409,7 +409,7 @@ def test_browser_profile_lock_waits_for_same_agent_profile(tmp_path) -> None:
 
 
 def test_browser_profile_lock_clears_dead_owner_pid(tmp_path, monkeypatch) -> None:
-    profile_dir = tmp_path / "browser_profiles" / "assistant"
+    profile_dir = tmp_path / "agents" / "assistant" / "workspace" / "browser"
     profile_dir.mkdir(parents=True)
     (profile_dir / "profile.lock.json").write_text(
         json.dumps({"owner": "dead", "agent_id": "assistant", "purpose": "browser_extract", "pid": 999999}),

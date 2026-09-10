@@ -177,7 +177,7 @@ def _execute_code_tool(workspace: Path, tool_context: PlatformToolContext) -> An
             "The tool never falls back to host subprocess. It requires code_execution.enabled=true, Docker, runsc, and the configured image. "
             "Network is disabled, no host secrets are passed, and only prepared /workspace/input, /workspace/work, and /workspace/output mounts are visible. "
             "Use language='python' for Python 3.12 scripts or language='shell' for /bin/sh scripts. "
-            "Write generated files to /workspace/output to receive artifact paths. Args: language, code, optional files=[{path, content}]."
+            "Write generated files to /workspace/output to receive /artifacts/... paths. The script is saved under /scratch/ and returned as script_path; temporary input/work/output mounts are removed after execution. Args: language, code, optional files=[{path, content}]."
         ),
     )
 

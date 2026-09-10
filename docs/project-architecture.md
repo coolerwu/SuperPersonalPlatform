@@ -49,29 +49,26 @@ workspace/
     index.json
     {agent_id}/
       agent.json
-      skills/
-        {skill_id}/
-          SKILL.md
-      scratch/
-      notes/
-      artifacts/
-      memories/
-        AGENTS.md
-      improvements/
-        reflections/
-          {run_id}.md
-        reviews/
-          {run_id}.md
-        changes/
-          {timestamp}_{change_id}.json
-      meditations/
-        {timestamp}_{run_id}.json
-
-  browser_profiles/
-    {agent_id}/
-
-  code_runs/
-    {run_id}/
+      workspace/
+        artifacts/
+          exec_{id}/
+        scratch/
+          exec_{id}.py
+          exec_{id}.sh
+        notes/
+        skills/
+          {skill_id}/
+            SKILL.md
+        memories/
+          AGENTS.md
+        improvements/
+          reflections/
+          reviews/
+          changes/
+        meditations/
+          {timestamp}_{run_id}.json
+        browser/
+          profile.lock.json
 
   runs/
     index.json
@@ -186,7 +183,7 @@ PUT /api/workspace/write
 POST /api/workspace/delete
 ```
 
-这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`browser_profiles/`、`context/`、`runs/`、`schedules/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
+这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`context/`、`runs/`、`schedules/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
 
 System API 额外保留：
 
@@ -211,7 +208,7 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 
 `/maintenance/preview` 只计算清理计划不删除文件；`/maintenance/run` 执行清理。当前默认保留期统一为 15 天：删除超过保留期且已终态的 run、超过保留期未活跃且没有活动 run 引用、也没有被 `workspace/sessions/active.json` 指向的 session、这些已删 session 在 `workspace/sessions/checkpoints.sqlite` 里的 checkpoint/writes 行、旧调度事件、旧平台日志、Agent scratch 和 Context cache 里的旧文件，以及很旧的孤立 lock；同时会清理 `active.json` 中指向已不存在 session 的脏 binding。知识库、WebDAV 文本/图片缓存、微信登录态和 Agent 长期记忆不做自动删除。自动清理不再使用单独后台 loop，而是作为 `workspace/schedules/maintenance_cleanup/` 内置定时任务落盘并显示在 `/schedules`。
 
-浏览器授权 API 用于后台管理员操作服务器上的 Playwright persistent browser profile。Profile 固定按 Agent 隔离在 `workspace/browser_profiles/{agent_id}/`，不再按微信账号或单独 service 目录拆分；授权会话启动后前端通过截图、点击、键盘输入和跳转 API 操作同一个 headless browser context，完成或取消时关闭浏览器并释放 `profile.lock.json`。Agent 不能直接调用这些授权 API，也不能选择 profile 路径。
+浏览器授权 API 用于后台管理员操作服务器上的 Playwright persistent browser profile。Profile 固定按 Agent 隔离在 `workspace/agents/{agent_id}/workspace/browser/`，不再按微信账号或单独 service 目录拆分；授权会话启动后前端通过截图、点击、键盘输入和跳转 API 操作同一个 headless browser context，完成或取消时关闭浏览器并释放 `profile.lock.json`。Agent 不能直接调用这些授权 API，也不能选择 profile 路径。
 
 Code Execution 配置：
 
@@ -240,7 +237,7 @@ code_execution:
 - `/providers` 是配置页内的模型 Provider 栏目直达入口，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
 - `/agent-config` 是配置页内的 Agent 栏目直达入口，维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 `search_context`、会话历史检索工具 `search_session`、学术检索工具 `arxiv`、轻量财经新闻工具 `yahoo_finance_news`、需要确认的 `write_context`、浏览器能力 `browser_extract`、用于对话式创建定时任务的 `schedule` 和 Docker/gVisor 沙箱代码执行器 `execute_code`；授权 `browser_extract` 会同时提供固定 Bing 的 `browser_search`，前端不单独展示搜索引擎或搜索工具选择；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
 - `/schedules` 是定时任务管理页面，读取 `workspace/schedules/index.json` 和每个任务详情，支持查看内置 WebDAV 同步任务和维护清理任务、创建/编辑/删除 Agent 定时任务、启用/停用、立即运行和查看调度事件；任务创建表单只暴露 `prompt + agent + trigger` 等必要字段，不在前端执行 Agent。
-- `/browser` 是浏览器授权页，读取 `config.yaml` 中的 Agent 列表，允许管理员按 Agent 启动一个截图式 Playwright 授权会话，profile 路径固定为 `workspace/browser_profiles/{agent_id}/`；授权页提供 Agent/profile 列表、目标 URL、截图点击、文本输入、按键、完成和取消操作，不放入 `/config` 或 `/system`。
+- `/browser` 是浏览器授权页，读取 `config.yaml` 中的 Agent 列表，允许管理员按 Agent 启动一个截图式 Playwright 授权会话，profile 路径固定为 `workspace/agents/{agent_id}/workspace/browser/`；授权页提供 Agent/profile 列表、目标 URL、截图点击、文本输入、按键、完成和取消操作，不放入 `/config` 或 `/system`。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供新增、删除、启动和停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
 - `/wechat` 的每个账号都可以独立选择默认 Agent；微信登录态继续按 `workspace/channels/wechat/sessions/{account_id}.json` 隔离保存，不作为聊天历史；长期聊天会话统一写入 `workspace/sessions/{session_id}/`。
 - `/system` 是运维页，展示生产更新、工作目录入口和系统日志；不再承载系统配置编辑、浏览器授权或架构说明。系统配置入口在 `/config`，Provider 在 `/providers`，Agent 在 `/agent-config`，浏览器授权入口在 `/browser`，文件级查看/编辑入口保留在 `/workspace`。
@@ -268,16 +265,16 @@ code_execution:
 - `context.webdav_permissions[]` 是同步根目录下的相对路径权限规则，使用最长前缀匹配。父级可设为 `readable=true, protected=true`，子目录可单独设为 `writable=true, protected=false`；这样只需要同步一次，检索结果不会因为父子 root 重叠而重复。
 - `search_context` 合并本地 `/files/...` 与 WebDAV `/webdav/...` 缓存检索；WebDAV 工具路径不再包含 root ID。同步根目录下的远端相对路径会原样保留到本地，例如远端 `/notebook/96备忘录/OpenWrt.md` 会缓存为 `workspace/context/webdav/files/96备忘录/OpenWrt.md`，工具路径为 `/webdav/96备忘录/OpenWrt.md`，`index.json` 记录 remote path、tool path、cache path、etag、mtime、权限和类型。用户询问“最近笔记/最新文档/recent notes”时，`search_context` 会额外返回按 WebDAV `modified` 排序的 `recent_documents`，避免纯 BM25 因没有关键词命中而误判没有笔记。`write_context` 只能写匹配到 `writable=true` 且 `protected=false` 权限规则的 `/webdav/...` 路径；`protected=true` 路径可读可检索但不可写、覆盖或删除，Agent 不应尝试写回搜索命中的受保护原文，默认改写到 `/files/...` 或明确开放的 WebDAV inbox。
 - WebDAV 同步会解析 Markdown 里的 `![...](...)` 和 `<img src="...">`，把被引用的 `.png`、`.jpg`、`.jpeg`、`.gif`、`.webp`、`.svg` 按相对目录结构作为二进制资源缓存到 `workspace/context/webdav/files/`；这些资源不进入 `search_context` 文本索引，当前也不通过 `write_context` 写入。
-- `browser_extract(url, include_links, max_chars)` 使用 Playwright headless browser 打开公开 `http/https` 页面，提取渲染后的文本和链接；对 `raw.githubusercontent.com`、`gist.githubusercontent.com` 和常见源码/文本扩展名 URL，会先用 HTTP 客户端按文本资源直接读取，避免纯文本文件因 Chromium SSL/导航问题失败，只有文本直取失败时才回退到浏览器导航。授权该浏览器能力时还会注入 `browser_search(query, top_k)`，它固定用同一个 Playwright 浏览器打开 Bing 搜索页并提取公开结果 URL、标题和片段，不新增 `web_search` provider、搜索引擎配置或 Agent 可选 `engine` 参数。浏览器工具的导航超时、页面提取失败、DNS/私网拦截、profile 占用等下游异常不再向上抛出导致整个 run failed，而是返回 `ok=false` 的 JSON 观察结果，交给 DeepAgent 改用其它搜索词、其它来源或向用户解释限制；真正的 RunService/落盘/配置加载等平台级异常仍会让 run failed。后端封装会拒绝 URL 主机本身为 localhost、私有网段、内网地址或非 `http/https` URL；未配置浏览器代理时，本机 DNS 若把公开 hostname 解析到私网/内网地址也会拦截，但公开 hostname 被 DNS 污染成 `0.0.0.0` 不作为私网拦截处理，而是交给文本直取或浏览器实际导航返回结果/错误；配置 `browser.proxy` 或进程代理环境变量时，不做本机 DNS 私网预解析，由浏览器代理负责解析。若 `browser.allow_private_hosts` 显式列出目标 hostname，或用 `.wulang.vip` 这类后缀匹配目标 hostname，则允许该 host 解析到内网/私有 IP 后继续访问。浏览器启动优先使用 `browser.proxy`，未配置时回退到进程环境变量 `HTTPS_PROXY`、`HTTP_PROXY` 或 `ALL_PROXY`，导航超时由 `browser.timeout_ms` 控制，默认 60000ms。带 `tool_context` 的 Agent run 会自动复用 `workspace/browser_profiles/{agent_id}/` 的 Playwright persistent profile，并用 `profile.lock.json` 避免授权会话和后台抓取并发占用；同一个 Agent 的后台 `browser_extract`/`browser_search` 会先等待 profile lock，按任务串行排队，最多等待 `browser.timeout_ms`，不同 Agent 仍使用各自 profile 并行。profile lock 记录持有进程 pid，pid 不存在时会立即清理；旧版无 pid lock 才继续使用 1 小时兜底清理。授权、搜索和抓取使用同一组桌面 Chrome UA、中文语言、上海时区和基础自动化隐藏参数。工具参数仍只有网页读取所需的 `url/include_links/max_chars` 和搜索所需的 `query/top_k`，Agent 不能传 profile ID、路径或搜索引擎。没有 tool context 时保持一次性无状态浏览器。
+- `browser_extract(url, include_links, max_chars)` 使用 Playwright headless browser 打开公开 `http/https` 页面，提取渲染后的文本和链接；对 `raw.githubusercontent.com`、`gist.githubusercontent.com` 和常见源码/文本扩展名 URL，会先用 HTTP 客户端按文本资源直接读取，避免纯文本文件因 Chromium SSL/导航问题失败，只有文本直取失败时才回退到浏览器导航。授权该浏览器能力时还会注入 `browser_search(query, top_k)`，它固定用同一个 Playwright 浏览器打开 Bing 搜索页并提取公开结果 URL、标题和片段，不新增 `web_search` provider、搜索引擎配置或 Agent 可选 `engine` 参数。浏览器工具的导航超时、页面提取失败、DNS/私网拦截、profile 占用等下游异常不再向上抛出导致整个 run failed，而是返回 `ok=false` 的 JSON 观察结果，交给 DeepAgent 改用其它搜索词、其它来源或向用户解释限制；真正的 RunService/落盘/配置加载等平台级异常仍会让 run failed。后端封装会拒绝 URL 主机本身为 localhost、私有网段、内网地址或非 `http/https` URL；未配置浏览器代理时，本机 DNS 若把公开 hostname 解析到私网/内网地址也会拦截，但公开 hostname 被 DNS 污染成 `0.0.0.0` 不作为私网拦截处理，而是交给文本直取或浏览器实际导航返回结果/错误；配置 `browser.proxy` 或进程代理环境变量时，不做本机 DNS 私网预解析，由浏览器代理负责解析。若 `browser.allow_private_hosts` 显式列出目标 hostname，或用 `.wulang.vip` 这类后缀匹配目标 hostname，则允许该 host 解析到内网/私有 IP 后继续访问。浏览器启动优先使用 `browser.proxy`，未配置时回退到进程环境变量 `HTTPS_PROXY`、`HTTP_PROXY` 或 `ALL_PROXY`，导航超时由 `browser.timeout_ms` 控制，默认 60000ms。带 `tool_context` 的 Agent run 会自动复用 `workspace/agents/{agent_id}/workspace/browser/` 的 Playwright persistent profile，并用 `profile.lock.json` 避免授权会话和后台抓取并发占用；同一个 Agent 的后台 `browser_extract`/`browser_search` 会先等待 profile lock，按任务串行排队，最多等待 `browser.timeout_ms`，不同 Agent 仍使用各自 profile 并行。profile lock 记录持有进程 pid，pid 不存在时会立即清理；旧版无 pid lock 才继续使用 1 小时兜底清理。授权、搜索和抓取使用同一组桌面 Chrome UA、中文语言、上海时区和基础自动化隐藏参数。工具参数仍只有网页读取所需的 `url/include_links/max_chars` 和搜索所需的 `query/top_k`，Agent 不能传 profile ID、路径或搜索引擎。没有 tool context 时保持一次性无状态浏览器。
 - `schedule(action, ...)` 是单一调度管理工具，支持 `create/list/get/update/delete`。创建时只能使用当前 Agent、当前长期 session 和当前渠道投递上下文，触发器支持 `once`、`interval` 和 `cron`；`list/get/update/delete` 只能作用于 `metadata.created_by.type="agent_tool"` 且 `agent_id/session_id` 与当前 run 一致的任务，避免 Agent 删除页面或其它会话创建的定时任务。每次触发只运行一个 Agent run；微信来源任务执行完成后，ScheduleService 读取该 run 的完整 `result.json`，调用微信通道投递最终结果一次，并更新 run 的 `delivery.json`。
-- `execute_code(language, code, files)` 是可选平台工具，`code_execution.enabled` 默认开启，但仍只有 Agent 授权 `execute_code` 时才注入。它只支持 `language="python"` 和 `language="shell"`，通过 Docker 运行配置镜像，强制 `--runtime=runsc`、`--network=none`、`--read-only`、`--cap-drop=ALL`、`--security-opt no-new-privileges`、CPU/内存/pids 限制和只读/读写的临时目录挂载；默认镜像为 Docker Hub 官方 `python:3.12-slim-bookworm`，Python 使用 `python /workspace/work/main.py`，shell 使用 `/bin/sh /workspace/work/script.sh`。执行器不允许 Agent 指定镜像、runtime、volume、env 或 Docker 参数；缺 Docker、缺 `runsc` 或缺镜像时返回 `ok=false` 工具观察，不降级为宿主机 subprocess。输入文件只写入本次 `/workspace/input`，生成文件必须写到 `/workspace/output`，完成后复制到 `workspace/agents/{agent_id}/artifacts/code_runs/{run_id}/{exec_id}/` 并以 `/artifacts/...` 虚拟路径返回。
+- `execute_code(language, code, files)` 是可选平台工具，`code_execution.enabled` 默认开启，但仍只有 Agent 授权 `execute_code` 时才注入。它只支持 `language="python"` 和 `language="shell"`，通过 Docker 运行配置镜像，强制 `--runtime=runsc`、`--network=none`、`--read-only`、`--cap-drop=ALL`、`--security-opt no-new-privileges`、CPU/内存/pids 限制和只读/读写的临时目录挂载；默认镜像为 Docker Hub 官方 `python:3.12-slim-bookworm`，Python 使用 `python /workspace/work/main.py`，shell 使用 `/bin/sh /workspace/work/script.sh`。执行器不允许 Agent 指定镜像、runtime、volume、env 或 Docker 参数；缺 Docker、缺 `runsc` 或缺镜像时返回 `ok=false` 工具观察，不降级为宿主机 subprocess。脚本保留为当前 Agent `/scratch/exec_{id}.py` 或 `.sh`，工具返回 `script_path`；每次调用使用独立系统临时目录挂载 `/workspace/input`（只读）、`/workspace/work` 和 `/workspace/output`，不挂载整个 Agent 工作区。成果收集到 `/artifacts/exec_{id}/` 后清理临时目录和输入副本，原始输入不删除。失败仍保留脚本；超时、取消先终止容器再清理，容器终止失败或成果收集失败则保留临时目录并返回 `recovery_path` 供恢复。没有长期 `code_runs/` 或额外 `execution.json`，执行观察沿用 Run 事件。`scratch/` 内脚本沿用现有保留期清理规则。
 - DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 等工具由 `deepagents` 默认 middleware 提供；`deepagent.todo_list` 默认开启，`write_todos` 由运行时接入 LangChain `TodoListMiddleware`，只有 Agent 显式配置 `todo_list=false` 时关闭。当前不启用 DeepAgent `LocalShellBackend`，因此不向 Agent 暴露非沙箱 shell `execute`。
-- DeepAgent 原生 filesystem 使用受限的 `AgentFilesystemBackend(root_dir=workspace/agents/{agent_id}, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录；工具层只允许修改 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/`、`improvements/` 和 `meditations/`，并保护这些固定顶层目录本身不被删除。Agent 不能创建 `/workspace/` 或其它未声明顶层目录；越界写入、编辑、删除和上传返回带允许目录列表的 permission 诊断，作为可恢复工具观察交给 Agent 改用正确路径，不让整个 run 失败。升级前已经存在的未声明顶层目录仍可读取但不可修改，后续按 workspace 数据偏好做受控的一次性整理。Agent 不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制已停用。
-- 每个 Agent 的私有 skill 固定放在 `workspace/agents/{agent_id}/skills/{skill_id}/SKILL.md`，运行时传给主 DeepAgent 的 `skills` 参数固定为 `["/skills/"]`。平台会复制 DeepAgents 原版同名 `general-purpose` subagent 配置来覆盖自动生成版本，保留原版 description 和 system prompt，只在其提示词末尾追加“派发任务明确指定 skill 时才访问，否则不访问任何 skill”的约束。该显式 subagent 未声明 `skills`，因此不安装 `SkillsMiddleware`、不自动发现或激活主 Agent 的 skill；它继续继承主 Agent 的模型和工具，避免 workflow skill 派发 subagent 后再次命中自身形成递归。DeepAgent 主 Agent 会扫描该目录下包含 `SKILL.md` 的子目录并用 progressive disclosure 暴露 metadata；不再维护产品级 Skill index，也不需要在 `config.yaml` 里配置 Skill 列表。
+- DeepAgent 原生 filesystem 使用受限的 `AgentFilesystemBackend(root_dir=workspace/agents/{agent_id}/workspace, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录；工具层只允许修改 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/`、`improvements/` 和 `meditations/`，并保护这些固定顶层目录本身不被删除。`browser/` 只由浏览器服务访问，Agent 文件工具的同步/异步读取、列举、搜索、下载和修改都不能触及其内容；不允许通过符号链接访问。Agent 不应创建第二层 `/workspace/`，不能访问其它未声明顶层目录；越界写入、编辑、删除和上传返回带允许目录列表的 permission 诊断，作为可恢复工具观察交给 Agent 改用正确路径，不让整个 run 失败。历史目录由部署时受控的一次性文件操作整理，没有运行时兼容路径或自动迁移。Agent 不能访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制及辅助函数已删除。
+- 每个 Agent 的私有 skill 固定放在 `workspace/agents/{agent_id}/workspace/skills/{skill_id}/SKILL.md`，运行时传给主 DeepAgent 的 `skills` 参数固定为 `["/skills/"]`。平台会复制 DeepAgents 原版同名 `general-purpose` subagent 配置来覆盖自动生成版本，保留原版 description 和 system prompt，只在其提示词末尾追加“派发任务明确指定 skill 时才访问，否则不访问任何 skill”的约束。该显式 subagent 未声明 `skills`，因此不安装 `SkillsMiddleware`、不自动发现或激活主 Agent 的 skill；它继续继承主 Agent 的模型和工具，避免 workflow skill 派发 subagent 后再次命中自身形成递归。DeepAgent 主 Agent 会扫描该目录下包含 `SKILL.md` 的子目录并用 progressive disclosure 暴露 metadata；不再维护产品级 Skill index，也不需要在 `config.yaml` 里配置 Skill 列表。
 - DeepAgent 运行时默认注入 `SkillImprovementMiddleware`，通过 LangChain `wrap_model_call` / `awrap_model_call` 生命周期钩子在每次同步或异步模型调用前把技能维护规则追加到模型请求；该 middleware 不负责 memory，长期记忆仍由 DeepAgent 原生 `MemoryMiddleware` 维护 `/memories/AGENTS.md`。`SkillImprovementMiddleware` 只管 Agent 自己的 `/skills/` 和 `/improvements/`：Agent 可以自动创建或更新 `/skills/{skill_id}/SKILL.md` 来沉淀可复用能力，并在 `/improvements/reflections/{run_id}.md`、`/improvements/reviews/{run_id}.md` 或 `/improvements/changes/{timestamp}_{change_id}.json` 记录原因、来源和变更摘要。`/improvements/` 是审计材料，不是 active skill；只有 `/skills/{skill_id}/SKILL.md` 会在下一次 Agent 执行开始时作为 skill metadata 被扫描。
 - `agents.definitions[].deepagent.use_longterm_memory` 默认开启。开启后运行时通过 DeepAgent 原生 `memory=["/memories/AGENTS.md"]` 启用 `MemoryMiddleware` 加载和维护这一个长期记忆索引文件，不预创建或填充模板；文件不存在时 `MemoryMiddleware` 按空记忆处理，首次持久化时由 Agent 使用内置文件工具创建。其它 `/memories/...` 细节文件不自动注入，Agent 需要时可用内置文件工具自行查找和读取。用户确认后的全局长期知识仍必须通过 `search_context`/`write_context` 写入 `workspace/context/knowledge/files/`。
-- 运行时不再向 Agent system prompt 重复注入长期记忆、浏览器研究或 filesystem 使用规则。Agent 特定记忆由 DeepAgent 原生 `MemoryMiddleware` 的 memory guidelines 负责；用户笔记、同步文档与共享知识的检索/写入边界由 `search_context`、`write_context` 工具 description 负责；浏览器的搜索、正文提取和失败恢复流程由 `browser_search`、`browser_extract` 工具 description 负责；私有虚拟文件系统的路径、权限和错误恢复由 DeepAgent `FilesystemMiddleware` 与 `AgentFilesystemBackend` 负责。
-- 历史 `workspace/agents/{agent_id}/memory/store.json` 是旧版 DeepAgent store 遗留路径，不由运行时代码或迁移脚本自动处理。按用户偏好，旧 workspace 数据收敛直接在目标机器上做一次性文件操作；配置页只展示新版 `workspace/agents/{agent_id}/memories/`。
+- 运行时默认通过 `WorkspaceMiddleware` 向主 Agent 和使用文件工具的 general-purpose 子 Agent 的每次模型请求追加工作区目录用途、权限、脚本/成果位置及容器路径区别；同步和异步均生效，不重复累积，不写聊天历史或人格配置。目录定义、初始化及 Agent 文件权限共用 `agent_workspace.py`，实际物理路径经统一入口解析，Agent ID 显式传入运行时。长期记忆和浏览器研究细则不重复注入。Agent 特定记忆由 DeepAgent 原生 `MemoryMiddleware` 的 memory guidelines 负责；用户笔记、同步文档与共享知识的检索/写入边界由 `search_context`、`write_context` 工具 description 负责；浏览器的搜索、正文提取和失败恢复流程由 `browser_search`、`browser_extract` 工具 description 负责；私有虚拟文件系统的目录认知由 `WorkspaceMiddleware` 负责，权限强制执行由 `AgentFilesystemBackend` 负责。
+- 历史 `workspace/agents/{agent_id}/memory/store.json` 是旧版 DeepAgent store 遗留路径，不由运行时代码或迁移脚本自动处理。按用户偏好，旧 workspace 数据收敛直接在目标机器上做一次性文件操作；配置页只展示新版 `workspace/agents/{agent_id}/workspace/memories/`。
 - 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
 - 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据，但不会删除 `workspace/sessions/active.json` 仍指向的当前会话。删除过期 session 时，同步删除 `workspace/sessions/checkpoints.sqlite` 里该 `thread_id` 的 checkpoint/writes 行。自动执行由统一 Scheduler 的内置 `maintenance_cleanup` 任务负责，状态和事件落在 `workspace/schedules/maintenance_cleanup/`，立即清理可使用系统 API 或 `/schedules` 的立即运行按钮。
 - 生产更新锁文件固定写入 `workspace/logs/update-service.lock`。历史 `workspace/.run/` 已退役，不再保存微信登录态或更新锁；生产升级前必须把旧 `workspace/.run/wechat_session*.json` 移到 `workspace/channels/wechat/sessions/`，再删除空 `.run` 目录。
@@ -322,3 +319,18 @@ code_execution:
 - 强类型 `model_usage` 事件保存调用 ID、实际返回模型、输入/输出 tokens、缓存命中和错误标记；`workspace/runs/{run_id}/usage.json` 持久化按调用 ID 去重的明细、每次调用使用的 Provider ID/单价/币种以及执行片段。Run 详情和轻量索引包含 `usage` 汇总。失败、自动重试、审批恢复和手动重跑均保留已发生消耗；重启不清零。执行耗时在每个执行片段结束时累计，排队和等待审批不计入；进程中断或正在执行的片段有明确不完整标记，不声称是完整耗时。
 - Providers 可配置 `input_price_per_million`、`output_price_per_million`（有限非负数，缺省未配置）和 `price_currency`（USD/CNY，默认 USD）。零单价有效；输入/输出两项单价及用量完整时，才按 `input_tokens * input_price / 1e6 + output_tokens * output_price / 1e6` 估算。每次调用保存执行时的价格，不随后续配置修改重算。缓存命中包含在输入总量中，当前估算不单独处理缓存折扣、缓存写入溢价、阶梯价、工具费用或税费，不替代供应商账单；不同币种分开汇总。
 - Runs 页面沿用一分钟轮询和详情快照合并，新增全部/单 Agent、全部保留任务/近 24 小时/近 7 天创建任务的消耗汇总，以及 Run 消耗详情。时间筛选按 Run 创建时间，包含所选 Run 的全部执行消耗。旧任务不做历史迁移或补算，显示“未记录”；未知调用、未估价调用和有用量任务覆盖数分别显示。统计仅覆盖仍保留的 Run，15 天维护清理后的 Run 不再计入，不是长期财务账本。
+
+## Agent Workspace Directory Contract
+
+| Agent 路径 | 用途 | Agent 文件工具权限 |
+| --- | --- | --- |
+| `/artifacts/` | 最终交付文件 | 读写，顶层不能删除 |
+| `/scratch/` | 草稿与保留的执行脚本；按现有 scratch 保留期清理 | 读写，顶层不能删除 |
+| `/notes/` | Agent 工作笔记；共享知识通过 Context 工具访问 | 读写，顶层不能删除 |
+| `/skills/` | 可复用技能 | 读写，详细规则由技能 middleware 提供 |
+| `/memories/` | 长期记忆 | 读写，详细规则由 MemoryMiddleware 提供 |
+| `/improvements/` | 技能反思、评审、变更记录 | 读写，顶层不能删除 |
+| `/meditations/` | 每日冥想记录 | 读写，顶层不能删除 |
+| `/browser/` | 浏览器登录态、缓存、占用锁 | 仅浏览器服务访问 |
+
+生产目录收敛须停止相关运行进程后直接执行一次性迁移，并核验文件清单和内容；同名冲突不覆盖，未知归属数据保留迁移备份。旧路径不参与运行时读取或回退。

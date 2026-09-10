@@ -126,7 +126,7 @@ def test_maintenance_trims_schedule_events_logs_scratch_and_cache(tmp_path: Path
     old_log = tmp_path / "logs" / "platform-2026-01-01.log"
     old_log.parent.mkdir(parents=True)
     old_log.write_text("old log", encoding="utf-8")
-    scratch_file = tmp_path / "agents" / "assistant" / "scratch" / "old.txt"
+    scratch_file = tmp_path / "agents" / "assistant" / "workspace" / "scratch" / "old.txt"
     cache_file = tmp_path / "context" / "state" / "cache" / "old.txt"
     scratch_file.parent.mkdir(parents=True)
     cache_file.parent.mkdir(parents=True)

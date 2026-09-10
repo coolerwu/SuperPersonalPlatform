@@ -89,3 +89,9 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
   this skill before continuing the commit.
 - Include the exact test commands, push outcome, and production restart outcome
   in the final response.
+
+## Agent workspace deployments
+
+- Agent data lives in `agents/{agent_id}/workspace/`; only `agent.json` remains outside that private workspace. Use the shared path/policy module and WorkspaceMiddleware for runtime directory guidance.
+- For a user-authorized layout change, migrate production data directly during a stopped-service window, verify file manifests before/after, and only then start the new version. Do not add runtime legacy-path fallback or migration scripts to the repository. Preserve conflicting or unassigned files in a migration backup.
+- Browser state lives directly in `workspace/browser/`. Code execution keeps scripts in `scratch/` and deliverables in `artifacts/`; temporary mounts are cleaned after execution.

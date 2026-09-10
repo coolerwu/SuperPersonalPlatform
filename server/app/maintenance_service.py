@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from server.infrastructure.agent_workspace import agent_workspace_path
+
 import json
 import shutil
 import sqlite3
@@ -256,7 +258,10 @@ class MaintenanceService:
         agents_dir = self._workspace / "agents"
         if not agents_dir.exists():
             return
-        for scratch_dir in sorted(agents_dir.glob("*/scratch")):
+        for agent_dir in sorted(agents_dir.iterdir()):
+            if not agent_dir.is_dir() or agent_dir.is_symlink():
+                continue
+            scratch_dir = agent_workspace_path(self._workspace, agent_dir.name) / "scratch"
             self._clean_files_under(scratch_dir, cutoff, report, bucket="agent_scratch", dry_run=dry_run)
 
     def _clean_context_cache(self, cutoff: datetime, report: dict[str, Any], *, dry_run: bool) -> None:
