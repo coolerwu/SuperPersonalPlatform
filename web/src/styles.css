@@ -3107,3 +3107,10 @@ pre {
   .agent-settings-dialog { height: calc(100dvh - 16px); }
   .agent-settings-dialog .config-grid.two { grid-template-columns: minmax(0, 1fr); }
 }
+
+.webdav-directories, .webdav-directory { display: grid; gap: 14px; min-width: 0; }
+.webdav-directory { border-top: 1px solid var(--border, #293541); padding-top: 16px; }
+.webdav-directories > p { margin: 0; }
+.webdav-picker-panel { padding: 12px; margin-top: 10px; border: 1px solid var(--border, #293541); display: flex; flex-wrap: wrap; gap: 10px; }
+.webdav-picker-panel .config-section-title { width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+.webdav-directory small { overflow-wrap: anywhere; }

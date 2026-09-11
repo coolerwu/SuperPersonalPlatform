@@ -46,19 +46,29 @@ class ModelDefinition:
 
 
 @dataclass(frozen=True)
-class AgentWebDAVConfig:
-    enabled: bool = False
+class AgentWebDAVDirectory:
     path: str = "/"
     permission: str = "write"
     description: str = ""
 
     def __post_init__(self) -> None:
         from pathlib import PurePosixPath
-        if not self.path.startswith("/") or any(part in {".", ".."} for part in self.path.split("/")) or "\\" in self.path or "\0" in self.path:
-            raise AgentConfigError("agents.definitions[].webdav.path must be a safe absolute mapping path")
-        object.__setattr__(self, "path", str(PurePosixPath(self.path)))
+        if not self.path.startswith("/") or any(part in {".", "..", "~"} for part in self.path.split("/")) or "\\" in self.path or "\0" in self.path:
+            raise AgentConfigError("agents.definitions[].webdav.directories[].path must be a safe absolute mapping path")
+        object.__setattr__(self, "path", "/" + "/".join(PurePosixPath(self.path).parts[1:]))
         if self.permission not in {"read", "write"}:
-            raise AgentConfigError("agents.definitions[].webdav.permission must be read or write")
+            raise AgentConfigError("agents.definitions[].webdav.directories[].permission must be read or write")
+
+
+@dataclass(frozen=True)
+class AgentWebDAVConfig:
+    enabled: bool = False
+    directories: tuple[AgentWebDAVDirectory, ...] = ()
+
+    def __post_init__(self) -> None:
+        paths = [directory.path for directory in self.directories]
+        if len(paths) != len(set(paths)):
+            raise AgentConfigError("WebDAV directories must not contain duplicate paths")
 
 
 @dataclass(frozen=True)

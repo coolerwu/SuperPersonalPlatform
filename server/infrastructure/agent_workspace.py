@@ -1,5 +1,6 @@
 """Canonical Agent workspace paths and directory policy."""
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 from server.domain.agent_config import AgentConfigError, AgentWebDAVConfig
@@ -58,26 +59,49 @@ def workspace_member_path(workspace: Path, *parts: str) -> Path:
 
 @dataclass(frozen=True)
 class WebDAVPathPolicy:
-    """One path authority for both native file and Context tools."""
-    config: "AgentWebDAVConfig"
+    """Compile native DeepAgent rules; Context and backend reuse the native matcher."""
+    config: AgentWebDAVConfig
 
-    def resolve(self, path: str, *, write: bool = False) -> str:
+    @cached_property
+    def permissions(self):
+        from deepagents import FilesystemPermission
+        from wcmatch import glob
         from pathlib import PurePosixPath
-        if not self.config.enabled or (write and self.config.permission != "write"):
-            raise PermissionError("WebDAV mapping is disabled or read-only")
+        rules = []
+        ancestors = set()
+        if self.config.enabled:
+            for directory in sorted(self.config.directories, key=lambda d: len(PurePosixPath(d.path).parts), reverse=True):
+                path = "/webdav" + directory.path.rstrip("/")
+                escaped = glob.escape(path)
+                patterns = [escaped, escaped + "/**"]
+                rules.append(FilesystemPermission(operations=["read"], paths=patterns))
+                rules.append(FilesystemPermission(operations=["write"], paths=patterns,
+                    mode="allow" if directory.permission == "write" else "deny"))
+                ancestors.update(str(p) for p in PurePosixPath(path).parents if str(p).startswith("/webdav"))
+        if ancestors:
+            rules.append(FilesystemPermission(operations=["read"], paths=[glob.escape(p) for p in sorted(ancestors)]))
+        rules.append(FilesystemPermission(operations=["read", "write"], paths=["/webdav", "/webdav/**"], mode="deny"))
+        return rules
+
+    def resolve(self, path: str, *, write: bool = False, navigation: bool = False) -> str:
+        from pathlib import PurePosixPath
+        from deepagents.middleware.filesystem import _check_fs_permission
         if not path.startswith("/") or "\\" in path or "\0" in path or any(p in {".", ".."} for p in path.split("/")):
             raise PermissionError("Invalid WebDAV path")
-        if write and str(PurePosixPath(path)) == "/":
+        path = "/" + "/".join(PurePosixPath(path).parts[1:])
+        full = "/webdav" + path.rstrip("/")
+        if write and path == "/":
             raise PermissionError("The WebDAV mount root cannot be modified")
-        return "/webdav/" + "/".join(p for p in (self.config.path.strip("/"), path.strip("/")) if p)
+        # Exact ancestor permissions allow directory navigation only, never ancestor files.
+        selected = any(path == d.path or path.startswith(d.path.rstrip("/") + "/") for d in self.config.directories)
+        if (not selected and not navigation) or _check_fs_permission(self.permissions, "write" if write else "read", full) != "allow":
+            raise PermissionError("WebDAV permission denied: directory is unselected or read-only")
+        return full + ("/" if path == "/" else "")
 
     def visible_path(self, global_path: str) -> str | None:
-        from pathlib import PurePosixPath
-        if not self.config.enabled or not global_path.startswith("/webdav/"):
+        if not global_path.startswith("/webdav/"):
             return None
         try:
-            relative = PurePosixPath(global_path).relative_to(PurePosixPath("/webdav") / self.config.path.lstrip("/"))
-            self.resolve("/" + relative.as_posix())
+            return self.resolve(global_path[len("/webdav"):])
         except (ValueError, PermissionError):
             return None
-        return "/webdav/" + relative.as_posix()

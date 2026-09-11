@@ -1364,8 +1364,9 @@ def _public_agent(agent: AgentDefinition) -> dict[str, Any]:
         "system_prompt": agent.system_prompt,
         "model_id": agent.model_id,
         "context_ids": list(agent.context_ids),
-        "webdav": {"enabled": agent.webdav.enabled, "path": agent.webdav.path,
-                   "permission": agent.webdav.permission, "description": agent.webdav.description},
+        "webdav": {"enabled": agent.webdav.enabled, "directories": [
+            {"path": d.path, "permission": d.permission, "description": d.description}
+            for d in agent.webdav.directories]},
         "deepagent": {
             "max_iterations": agent.deepagent.max_iterations,
             "todo_list": agent.deepagent.todo_list,

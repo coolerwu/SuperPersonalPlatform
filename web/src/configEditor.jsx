@@ -127,7 +127,7 @@ const DEFAULT_CONFIG = {
         system_prompt: "你是一个运行在后端的 DeepAgent。",
         model_id: "default",
         context_ids: [],
-        webdav: { enabled: false, path: "/", permission: "write", description: "" },
+        webdav: { enabled: false, directories: [] },
         deepagent: {
           max_iterations: 60,
           todo_list: true,
@@ -652,7 +652,7 @@ export function AgentConfigEditor({ draft, onChange, onSave, readOnly }) {
               <span className="agent-config-identity"><strong>{agent.name || agent.id}</strong><small>{agent.id}</small></span>
               <span><small>模型</small><strong>{agent.model_id || config.llm.default_model_id || "默认模型"}</strong></span>
               <span><small>工具</small><strong>{agent.deepagent.tools.length} 项</strong></span>
-              <span><small>WebDAV</small><strong>{agent.webdav.enabled ? `${agent.webdav.path} · ${agent.webdav.permission === "read" ? "只读" : "读写"}` : "未启用"}</strong></span>
+              <span><small>WebDAV</small><strong>{agent.webdav.enabled ? `${agent.webdav.directories.length} 个目录` : "未启用"}</strong></span>
               <span className="agent-config-edit-label">配置</span>
             </button>
             <button className="icon-button delete-button" type="button" title="删除 Agent"
@@ -668,6 +668,38 @@ export function AgentConfigEditor({ draft, onChange, onSave, readOnly }) {
         readOnly={readOnly} onClose={() => setEditing(null)} onSave={saveAgent} /> : null}
     </div>
   );
+}
+
+function WebDAVDirectoryPicker({ readOnly, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const [path, setPath] = useState("/");
+  const [listing, setListing] = useState({ loading: false, entries: [], error: "" });
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    setListing({ loading: true, entries: [], error: "" });
+    fetch("/api/workspace/list", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "context/webdav/files" + (path === "/" ? "" : path) }), signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok) throw new Error("目录尚未同步或读取失败，可手动填写目录路径。");
+      const data = await response.json();
+      if (!controller.signal.aborted) setListing({ loading: false, entries: (data.entries || []).filter((entry) => entry.type === "directory"), error: "" });
+    }).catch((error) => { if (!controller.signal.aborted) setListing({ loading: false, entries: [], error: error.message }); });
+    return () => controller.abort();
+  }, [open, path]);
+  return <div className="webdav-picker">
+    <button type="button" disabled={readOnly} onClick={() => setOpen(!open)}>{open ? "收起目录选择" : "选择目录"}</button>
+    {open ? <div className="webdav-picker-panel">
+      <div className="config-section-title compact"><strong>{path}</strong>
+        <button type="button" disabled={path === "/"} onClick={() => setPath(path.slice(0, path.lastIndexOf("/")) || "/")}>上一级</button>
+        <button type="button" onClick={() => { onSelect(path); setOpen(false); }}>选择此目录</button>
+      </div>
+      {listing.loading ? <p role="status">读取目录中…</p> : null}
+      {listing.error ? <p role="alert">{listing.error}</p> : null}
+      {!listing.loading && !listing.error && !listing.entries.length ? <p className="muted">没有已同步的子目录，也可手动填写路径。</p> : null}
+      {listing.entries.map((entry) => <button key={entry.name} type="button" onClick={() => setPath((path === "/" ? "" : path) + "/" + entry.name)}>{entry.name} /</button>)}
+    </div> : null}
+  </div>;
 }
 
 function AgentSettingsDialog({ initialAgent, models, readOnly, onClose, onSave }) {
@@ -690,6 +722,11 @@ function AgentSettingsDialog({ initialAgent, models, readOnly, onClose, onSave }
   function updateAgentWebdav(field, value) {
     setAgent((current) => ({ ...current, webdav: { ...current.webdav, [field]: value } }));
   }
+  function updateDirectory(index, field, value) {
+    setAgent((current) => ({ ...current, webdav: { ...current.webdav,
+      directories: current.webdav.directories.map((directory, i) => i === index ? { ...directory, [field]: value } : directory),
+    } }));
+  }
   function toggleTool(toolId, enabled) {
     setAgent((current) => ({ ...current, deepagent: { ...current.deepagent,
       tools: enabled ? [...new Set([...current.deepagent.tools, toolId])] : current.deepagent.tools.filter((id) => id !== toolId),
@@ -700,6 +737,11 @@ function AgentSettingsDialog({ initialAgent, models, readOnly, onClose, onSave }
     if (!agent.id.trim() || !agent.name.trim() || !agent.system_prompt.trim()) {
       setError("请填写 ID、名称和 System Prompt。"); return;
     }
+    const paths = agent.webdav.directories.map((directory) => directory.path.trim().replace(/\/+/g, "/").replace(/\/$/, "") || "/");
+    if (agent.webdav.directories.some((directory) => !directory.path.trim().startsWith("/") || directory.path.split("/").some((part) => part === "." || part === ".." || part === "~") || /[\\\0]/.test(directory.path))) {
+      setError("目录必须以 / 开头，且不能包含 .、..、~ 路径段或反斜杠。"); return;
+    }
+    if (new Set(paths).size !== paths.length) { setError("同一个目录不能重复配置，请修改或移除重复项。"); return; }
     setSaving(true);
     setError("");
     try { if (!(await onSave(agent))) setError("保存失败，请检查配置后重试；编辑内容已保留。"); }
@@ -779,22 +821,36 @@ function AgentSettingsDialog({ initialAgent, models, readOnly, onClose, onSave }
                 <span>启用 WebDAV</span>
               </label>
               {agent.webdav.enabled ? (
-                <div className="config-grid two">
-                  <ConfigField label="映射目录（相对于全局同步目录）">
-                    <input value={agent.webdav.path} readOnly={readOnly} placeholder="/"
-                      onChange={(event) => updateAgentWebdav("path", event.target.value)} />
-                  </ConfigField>
-                  <ConfigField label="访问权限">
-                    <select value={agent.webdav.permission} disabled={readOnly}
-                      onChange={(event) => updateAgentWebdav("permission", event.target.value)}>
-                      <option value="write">读写</option><option value="read">只读</option>
-                    </select>
-                  </ConfigField>
-                  <ConfigField label="目录说明">
-                    <textarea value={agent.webdav.description} readOnly={readOnly}
-                      placeholder="用户文档与共享知识库；说明会提供给 Agent。"
-                      onChange={(event) => updateAgentWebdav("description", event.target.value)} />
-                  </ConfigField>
+                <div className="webdav-directories">
+                  <p className="muted">保留原目录结构，子目录权限优先于父目录；无需调整顺序。未选择的目录不可访问。</p>
+                  {agent.webdav.directories.map((directory, index) => (
+                    <div className="webdav-directory" key={index}>
+                      <div className="config-section-title compact"><strong>目录 {index + 1}</strong>
+                        <button type="button" disabled={readOnly} onClick={() => updateAgentWebdav("directories", agent.webdav.directories.filter((_, i) => i !== index))}>移除目录 {index + 1}</button>
+                      </div>
+                      <div className="config-grid two">
+                        <ConfigField label="映射目录（相对于全局同步目录）">
+                          <input value={directory.path} readOnly={readOnly} placeholder="/项目资料"
+                            onChange={(event) => updateDirectory(index, "path", event.target.value)} />
+                        </ConfigField>
+                        <ConfigField label="访问权限">
+                          <select value={directory.permission} disabled={readOnly}
+                            onChange={(event) => updateDirectory(index, "permission", event.target.value)}>
+                            <option value="write">读写</option><option value="read">只读</option>
+                          </select>
+                        </ConfigField>
+                        <ConfigField label="目录说明">
+                          <textarea value={directory.description} readOnly={readOnly}
+                            placeholder="目录用途；说明会提供给 Agent。"
+                            onChange={(event) => updateDirectory(index, "description", event.target.value)} />
+                        </ConfigField>
+                      </div>
+                      <small className="muted">Agent 路径：/webdav{directory.path === "/" ? "/" : directory.path}</small>
+                      <WebDAVDirectoryPicker readOnly={readOnly} onSelect={(path) => updateDirectory(index, "path", path)} />
+                    </div>
+                  ))}
+                  {!agent.webdav.directories.length ? <p className="muted">尚未授权任何目录。</p> : null}
+                  <button type="button" disabled={readOnly} onClick={() => updateAgentWebdav("directories", [...agent.webdav.directories, { path: "", permission: "write", description: "" }])}>添加目录</button>
                 </div>
               ) : null}
             </section>
@@ -869,7 +925,7 @@ function withDefaults(value) {
         ...agent,
         context_ids: normalizeList(agent.context_ids),
         deepagent: normalizeDeepAgent(agent.deepagent),
-        webdav: { enabled: false, path: "/", permission: "write", description: "", ...(isPlainObject(agent.webdav) ? agent.webdav : {}) },
+        webdav: { enabled: false, directories: [], ...(isPlainObject(agent.webdav) ? agent.webdav : {}) },
       }))
     : [];
   config.channels.wechat_personal.accounts = Array.isArray(config.channels.wechat_personal.accounts)

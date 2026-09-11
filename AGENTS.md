@@ -53,3 +53,5 @@
 - 目录重构直接迁移目标机器数据，不加入兼容路径或自动迁移；停止相关进程、核验迁移前后清单再启用新代码，冲突不覆盖。
 
 - WebDAV 全局只管理连接与同步；映射目录、read/write 权限（默认 write）和用途说明放在 Agent 的 `webdav` 配置中。使用 CompositeBackend 虚拟映射 `/webdav/`，不使用软链接；原生文件工具和 Context 工具共用工作区路径授权。WorkspaceMiddleware 同时向主 Agent 和文件工具子 Agent 说明目录用途、权限和远端写回行为。
+
+- WebDAV 每个 Agent 配置 `enabled` 与 `directories[]`，每项独立 path/permission/description；原目录层级保留在 `/webdav/` 下。使用 DeepAgent 原生 FilesystemPermission，子目录规则自动优先，未选择目录拒绝；Context 和文件后端共用原生匹配器，祖先只用于导航。

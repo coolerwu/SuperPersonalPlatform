@@ -46,17 +46,18 @@ class WebDAVFilesystemBackend(AgentFilesystemBackend):
     def __init__(self, view: AgentWebDAVView):
         self.view = view
         # No per-Agent copies or aliases. Guard every access against the shared cache root.
-        root = view.service._files_dir / view.policy.config.path.lstrip("/")
+        root = view.service._files_dir
         super().__init__(root_dir=root, virtual_mode=True)
 
     def _resolve_path(self, key: str) -> Path:
-        global_path = self.view.policy.resolve(key)
+        candidate = self.view.service._files_dir / key.lstrip("/")
+        global_path = self.view.policy.resolve(key, navigation=candidate.is_dir())
         self.view.service._cache_file_path(global_path) if key != "/" else self._check_root()
         return FilesystemBackend._resolve_path(self, key)
 
     def _check_root(self):
         root = self.view.service._files_dir
-        path = root / self.view.policy.config.path.lstrip("/")
+        path = root
         if not path.resolve().is_relative_to(root.resolve()) or any(p.is_symlink() for p in (path, *path.parents) if p.is_relative_to(self.view.service._cache_dir)):
             raise PermissionError("WebDAV cache contains a symlink")
 

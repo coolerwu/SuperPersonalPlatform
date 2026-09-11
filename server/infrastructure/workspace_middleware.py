@@ -20,10 +20,12 @@ WORKSPACE_PROMPT = "\n".join([
 class WorkspaceMiddleware(AgentMiddleware):
     def __init__(self, webdav: AgentWebDAVConfig = AgentWebDAVConfig()):
         self.prompt = WORKSPACE_PROMPT
-        if webdav.enabled:
-            purpose = webdav.description or "User documents and shared knowledge from Nutstore."
-            self.prompt += f"\n- /webdav/: {purpose} Permission: {webdav.permission}. "
-            self.prompt += "Allowed writes update the remote Nutstore files. Use /scratch/ for temporary scripts, /artifacts/ for deliverables and /memories/ for private memory."
+        if webdav.enabled and webdav.directories:
+            self.prompt += "\nWebDAV preserves the shared directory hierarchy under /webdav/. More specific child permissions override parents, regardless of configuration order. Unselected directories are inaccessible; ancestors are navigation only."
+            for directory in webdav.directories:
+                purpose = directory.description or "User documents and shared knowledge from Nutstore."
+                self.prompt += f"\n- /webdav{directory.path.rstrip('/')}/: {purpose} Permission: {directory.permission}."
+            self.prompt += " Allowed writes update remote Nutstore files. Use /scratch/ for scripts, /artifacts/ for deliverables and /memories/ for private memory."
 
     def modify_request(self, request: ModelRequest) -> ModelRequest:
         if self.prompt in (request.system_message.text if request.system_message else ""):

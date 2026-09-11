@@ -258,7 +258,7 @@ DeepAgent 原生 filesystem 通过 `AgentFilesystemBackend(root_dir=workspace/ag
 后端根据 Run 快照解析：
 
 ```text
-nutstore.root_path + context.webdav_sync.root_path + agent.webdav.path + /webdav/ 后的相对路径
+nutstore.root_path + context.webdav_sync.root_path + /webdav/ 后保留原层级的相对路径
 ```
 
 本地缓存必须保留同步根目录下的相对目录结构：
@@ -275,7 +275,7 @@ nutstore.root_path + context.webdav_sync.root_path + agent.webdav.path + /webdav
 必须校验：
 
 - `/webdav/...` 后的相对路径不包含 `..`。
-- 当前 Run 的 Agent 快照保存 `webdav.enabled/path/permission/description`；write（默认）包含读取，read 只允许读取。
+- 当前 Run 的 Agent 快照保存 `webdav.enabled/directories[]`，每项包含 path、permission、description；write（默认）包含读取，read 只允许读取；子目录自动优先，未选择范围拒绝，主/子 Agent 使用 DeepAgent 原生 FilesystemPermission。
 - 全局保护目录、`webdav_permissions` 和 `protected` 已删除；原生文件工具和 Context 工具共用 Agent 映射权限，访问不得越出映射目录。
 - 任何操作都不能逃出 `context.webdav_sync.root_path`。
 

@@ -7,7 +7,7 @@ import pytest
 from deepagents.backends import CompositeBackend
 
 from server.app.webdav_context_service import WebDAVContextError, WebDAVContextService
-from server.domain.agent_config import AgentConfigError, AgentWebDAVConfig
+from server.domain.agent_config import AgentConfigError, AgentWebDAVConfig, AgentWebDAVDirectory
 from server.infrastructure.agent_filesystem_backend import AgentFilesystemBackend
 from server.infrastructure.agent_workspace import WebDAVPathPolicy
 from server.infrastructure.config import ContextConfig, NutstoreConfig, WebDAVSyncConfig, parse_agent_definition
@@ -33,7 +33,7 @@ def setup_backend(tmp_path, permission="write"):
     service = WebDAVContextService(workspace=tmp_path, nutstore=nutstore,
         context=ContextConfig(webdav_sync=WebDAVSyncConfig(enabled=True, root_path="/notebook")),
         client=NutstoreWebDAVClient(nutstore, transport=httpx.MockTransport(handle)))
-    config = AgentWebDAVConfig(enabled=True, path="/team", permission=permission, description="Team documents")
+    config = AgentWebDAVConfig(enabled=True, directories=(AgentWebDAVDirectory(path="/team", permission=permission, description="Team documents"),))
     view = AgentWebDAVView(service, WebDAVPathPolicy(config))
     root = tmp_path / "context/webdav/files"
     (root / "team").mkdir(parents=True)
@@ -47,42 +47,42 @@ def setup_backend(tmp_path, permission="write"):
 
 def test_mapping_native_sync_and_async_write_through(tmp_path):
     backend, view, remote, calls = setup_backend(tmp_path)
-    assert "original" in backend.read("/webdav/note.md").file_data["content"]
-    assert not backend.write("/webdav/new.md", "new").error
+    assert "original" in backend.read("/webdav/team/note.md").file_data["content"]
+    assert not backend.write("/webdav/team/new.md", "new").error
     assert remote["/dav/notebook/team/new.md"] == b"new"
-    assert not asyncio.run(backend.aedit("/webdav/note.md", "original", "updated")).error
+    assert not asyncio.run(backend.aedit("/webdav/team/note.md", "original", "updated")).error
     assert remote["/dav/notebook/team/note.md"] == b"updated"
     assert (tmp_path / "context/webdav/files/team/note.md").read_text() == "updated"
-    assert {d.path for d in view.documents()} == {"/webdav/note.md", "/webdav/new.md"}
-    assert backend.write("/webdav/note.md", "duplicate").error
+    assert {d.path for d in view.documents()} == {"/webdav/team/note.md", "/webdav/team/new.md"}
+    assert backend.write("/webdav/team/note.md", "duplicate").error
     assert backend.delete("/webdav/").error
-    assert backend.upload_files([("/webdav/x.png", b"image")])[0].error
+    assert backend.upload_files([("/webdav/team/x.png", b"image")])[0].error
     assert not backend.write("/notes/local.md", "local").error
 
 
 def test_readonly_and_isolation_cover_context_and_file_tools(tmp_path):
     backend, view, remote, calls = setup_backend(tmp_path, "read")
-    assert backend.write("/webdav/no.md", "no").error
-    assert asyncio.run(backend.aedit("/webdav/note.md", "original", "bad")).error
+    assert backend.write("/webdav/team/no.md", "no").error
+    assert asyncio.run(backend.aedit("/webdav/team/note.md", "original", "bad")).error
     with pytest.raises(PermissionError):
-        asyncio.run(view.write(absolute_path="/webdav/no.md", content="no"))
+        asyncio.run(view.write(absolute_path="/webdav/team/no.md", content="no"))
     assert not calls
     assert backend.read("/webdav/../secret.md").error
     assert backend.read("/webdav/secret.md").error
     assert not backend.grep("private", "/").matches
     assert not asyncio.run(backend.agrep("private", "/")).matches
-    assert [r["path"] for r in backend.glob("**/*.md", "/webdav/").matches] == ["/webdav/note.md"]
+    assert [r["path"] for r in backend.glob("**/*.md", "/webdav/").matches] == ["/webdav/team/note.md"]
 
 
 def test_symlink_is_invisible_to_all_mapping_readers(tmp_path):
     backend, view, remote, calls = setup_backend(tmp_path)
     root = tmp_path / "context/webdav/files"
     (root / "team/link.md").symlink_to(root / "secret.md")
-    assert backend.read("/webdav/link.md").error
-    assert backend.download_files(["/webdav/link.md"])[0].error
+    assert backend.read("/webdav/team/link.md").error
+    assert backend.download_files(["/webdav/team/link.md"])[0].error
     assert not backend.grep("private", "/webdav/").matches
     assert not asyncio.run(backend.agrep("private", "/webdav/")).matches
-    assert backend.write("/webdav/link.md", "bad").error
+    assert backend.write("/webdav/team/link.md", "bad").error
     assert not calls
 
 
@@ -90,11 +90,11 @@ def test_mapping_config_defaults_validation_and_retired_options():
     agent = parse_agent_definition({"id": "a", "name": "A", "system_prompt": "Hi", "deepagent": {"checkpointer": False, "debug": True}})
     assert agent.webdav == AgentWebDAVConfig()
     assert not hasattr(agent.deepagent, "checkpointer")
-    for path in ("relative", "/../private", "/team/../private", "/team\\private", "/team/./file"):
+    for path in ("relative", "/~/private", "/../private", "/team/../private", "/team\\private", "/team/./file"):
         with pytest.raises(AgentConfigError):
-            AgentWebDAVConfig(enabled=True, path=path)
+            AgentWebDAVDirectory(path=path)
     with pytest.raises(AgentConfigError):
-        AgentWebDAVConfig(permission="invalid")
+        AgentWebDAVDirectory(permission="invalid")
 
 
 def test_cache_failure_reports_remote_success(tmp_path, monkeypatch):
@@ -103,7 +103,7 @@ def test_cache_failure_reports_remote_success(tmp_path, monkeypatch):
         raise OSError("disk full")
     monkeypatch.setattr(view.service, "_update_cached_write", fail)
     with pytest.raises(WebDAVContextError) as error:
-        asyncio.run(view.write(absolute_path="/webdav/new.md", content="new", mode="create"))
+        asyncio.run(view.write(absolute_path="/webdav/team/new.md", content="new", mode="create"))
     assert error.value.diagnostics["remote_written"] is True
     assert remote["/dav/notebook/team/new.md"] == b"new"
 
@@ -139,12 +139,12 @@ def test_recent_documents_filter_before_limit_and_disabled_view(tmp_path):
         files[f"/webdav/other/{i}.md"] = {"cache_path": f"files/other/{i}.md", "modified": "2026-09-10T00:00:00+00:00"}
     files["/webdav/team/note.md"] = {"cache_path": "files/team/note.md", "modified": "2026-09-09T00:00:00+00:00"}
     (tmp_path / "context/webdav/index.json").write_text(json.dumps({"files": files}))
-    assert [item.path for item in view.recent_documents(limit=1)] == ["/webdav/note.md"]
-    assert [item.path for item in view.documents()] == ["/webdav/note.md"]
+    assert [item.path for item in view.recent_documents(limit=1)] == ["/webdav/team/note.md"]
+    assert [item.path for item in view.documents()] == ["/webdav/team/note.md"]
     disabled = AgentWebDAVView(view.service, WebDAVPathPolicy(AgentWebDAVConfig()))
     assert disabled.documents() == []
     with pytest.raises(PermissionError):
-        asyncio.run(disabled.write(absolute_path="/webdav/note.md", content="no"))
+        asyncio.run(disabled.write(absolute_path="/webdav/team/note.md", content="no"))
 
 
 def test_runtime_routes_backend_and_passes_description_to_both_agents(tmp_path, monkeypatch):
@@ -169,7 +169,85 @@ def test_runtime_routes_backend_and_passes_description_to_both_agents(tmp_path, 
     assert isinstance(captured["backend"], CompositeBackend)
     assert captured["name"] == "Agent A"
     assert captured["memory"] == ["/memories/AGENTS.md"]
+    assert captured["permissions"] == view.policy.permissions
+    assert "permissions" not in captured["subagents"][0]  # native inheritance
     assert captured["interrupt_on"] == {"write_context": {"allowed_decisions": ["approve", "reject"]}}
     for middleware in (captured["middleware"], captured["subagents"][0]["middleware"]):
         prompt = next(item.prompt for item in middleware if isinstance(item, WorkspaceMiddleware))
         assert "Team documents" in prompt and "Permission: write" in prompt and "remote" in prompt
+
+@pytest.mark.parametrize("parent,child", [("read", "write"), ("write", "read")])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_nested_permissions_native_backend_and_context(tmp_path, parent, child, reverse):
+    from deepagents.middleware.filesystem import FilesystemMiddleware, _check_fs_permission
+    from types import SimpleNamespace
+    backend, view, remote, calls = setup_backend(tmp_path)
+    directories = [AgentWebDAVDirectory("/team", parent), AgentWebDAVDirectory("/team/drafts", child)]
+    if reverse:
+        directories.reverse()
+    view.policy = WebDAVPathPolicy(AgentWebDAVConfig(True, tuple(directories)))
+    rules = view.policy.permissions
+    assert _check_fs_permission(rules, "write", "/webdav/team/drafts/new.md") == ("allow" if child == "write" else "deny")
+    assert _check_fs_permission(rules, "write", "/webdav/team/new.md") == ("allow" if parent == "write" else "deny")
+    assert _check_fs_permission(rules, "read", "/webdav/team2/secret.md") == "deny"
+    assert _check_fs_permission(rules, "write", "/notes/local.md") == "allow"
+    middleware = FilesystemMiddleware(backend=backend, _permissions=rules)
+    tools = {tool.name: tool for tool in middleware.tools}
+    runtime = SimpleNamespace(tool_call_id="test")
+    for folder, permission in [("team", parent), ("team/drafts", child)]:
+        path = f"/webdav/{folder}/native.md"
+        result = tools["write_file"].func(file_path=path, content="native", runtime=runtime)
+        assert (result.status == "success") == (permission == "write")
+        result = asyncio.run(tools["write_file"].coroutine(file_path=path.replace("native", "async"), content="async", runtime=runtime))
+        assert (result.status == "success") == (permission == "write")
+        if permission == "write":
+            asyncio.run(view.write(absolute_path=path.replace("native", "context"), content="context", mode="create"))
+        else:
+            with pytest.raises(PermissionError):
+                asyncio.run(view.write(absolute_path=path.replace("native", "context"), content="context"))
+        assert bool(backend.write(path.replace("native", "direct"), "direct").error) == (permission == "read")
+    listing = tools["ls"].func(runtime=runtime, path="/webdav/")
+    assert "team" in listing.content and "secret" not in listing.content
+
+
+def test_ancestor_navigation_and_literal_glob_names(tmp_path):
+    from deepagents.middleware.filesystem import FilesystemMiddleware, _check_fs_permission
+    from types import SimpleNamespace
+    backend, view, _, _ = setup_backend(tmp_path)
+    root = view.service._files_dir
+    (root / "team/[drafts]").mkdir()
+    (root / "team/[drafts]/note.md").write_text("visible")
+    view.policy = WebDAVPathPolicy(AgentWebDAVConfig(True, (AgentWebDAVDirectory("/team/[drafts]", "read"),)))
+    tools = {t.name: t for t in FilesystemMiddleware(backend=backend, _permissions=view.policy.permissions).tools}
+    runtime = SimpleNamespace(tool_call_id="test")
+    assert "team" in tools["ls"].func(runtime=runtime, path="/webdav/").content
+    listing = tools["ls"].func(runtime=runtime, path="/webdav/team").content
+    assert "[drafts]" in listing and "note.md" not in listing
+    assert backend.read("/webdav/team/note.md").error
+    assert [r["path"] for r in backend.glob("**/*.md", "/webdav/").matches] == ["/webdav/team/[drafts]/note.md"]
+    assert _check_fs_permission(view.policy.permissions, "read", "/webdav/team/d/note.md") == "deny"
+    # An ancestor replaced by a file must never acquire read permission.
+    (root / "team/[drafts]/note.md").unlink()
+    (root / "team/[drafts]").rmdir()
+    (root / "team/note.md").unlink()
+    (root / "team").rmdir()
+    (root / "team").write_text("private ancestor file")
+    assert backend.read("/webdav/team").error
+    assert backend.download_files(["/webdav/team"])[0].error
+
+
+def test_multiple_directory_validation_and_empty_permissions():
+    from server.infrastructure.config import parse_agent_webdav
+    from deepagents.middleware.filesystem import _check_fs_permission
+    for raw in [{"directories": {}}, {"directories": [None]}, {"path": "/"},
+                {"directories": [{"path": "/team/"}, {"path": "//team"}]}]:
+        with pytest.raises((AgentConfigError, ValueError)):
+            parse_agent_webdav(raw)
+    config = parse_agent_webdav({"enabled": True, "directories": [{"path": "/笔记"}, {"path": "/资料", "permission": "read"}]})
+    assert config.directories[0].permission == "write"
+    policy = WebDAVPathPolicy(config)
+    assert policy.resolve("/笔记/new.md", write=True) == "/webdav/笔记/new.md"
+    with pytest.raises(PermissionError):
+        policy.resolve("/笔记2/new.md")
+    for config in (AgentWebDAVConfig(True), AgentWebDAVConfig(False, config.directories)):
+        assert _check_fs_permission(WebDAVPathPolicy(config).permissions, "read", "/webdav/笔记/new.md") == "deny"

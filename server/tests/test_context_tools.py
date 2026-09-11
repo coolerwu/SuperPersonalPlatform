@@ -1,4 +1,4 @@
-from server.domain.agent_config import AgentWebDAVConfig
+from server.domain.agent_config import AgentWebDAVConfig, AgentWebDAVDirectory
 import json
 from datetime import datetime, timezone
 
@@ -297,7 +297,7 @@ context:
     )
     tools = {
         tool.name: tool
-        for tool in build_platform_tools(("search_context",), context_workspace=context_workspace, webdav=AgentWebDAVConfig(enabled=True))
+        for tool in build_platform_tools(("search_context",), context_workspace=context_workspace, webdav=AgentWebDAVConfig(enabled=True, directories=(AgentWebDAVDirectory(),)))
     }
 
     result = json.loads(tools["search_context"].invoke({"query": "看看最近我的笔记", "top_k": 3}))

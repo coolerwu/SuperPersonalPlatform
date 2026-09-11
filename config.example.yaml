@@ -81,9 +81,7 @@ agents:
       context_ids: []
       webdav:
         enabled: false
-        path: "/"
-        permission: "write"
-        description: ""
+        directories: []
       deepagent:
         max_iterations: 60
         todo_list: true

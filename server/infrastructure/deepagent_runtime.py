@@ -25,6 +25,7 @@ from server.infrastructure.agent_filesystem_backend import (
 )
 from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools, _webdav_context_service
 from server.infrastructure.webdav_backend import WebDAVFilesystemBackend
+from server.infrastructure.agent_workspace import WebDAVPathPolicy
 
 
 from server.domain.tooling import PLATFORM_TOOL_DEFINITIONS
@@ -154,6 +155,7 @@ class DeepAgentRuntime:
             "model": self._chat_model(),
             "system_prompt": instructions.strip(),
             "backend": backend,
+            "permissions": WebDAVPathPolicy(options.webdav).permissions,
             "skills": ["/skills/"],
             "subagents": [general_purpose_subagent],
         }

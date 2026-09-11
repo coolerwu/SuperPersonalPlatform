@@ -209,11 +209,11 @@ def test_webdav_context_refresh_caches_markdown_referenced_assets(tmp_path) -> N
 
 
 def test_webdav_view_rejects_read_only_mapping(tmp_path) -> None:
-    from server.domain.agent_config import AgentWebDAVConfig
+    from server.domain.agent_config import AgentWebDAVConfig, AgentWebDAVDirectory
     from server.infrastructure.agent_workspace import WebDAVPathPolicy
     from server.infrastructure.webdav_backend import AgentWebDAVView
     service = _service(tmp_path, httpx.MockTransport(lambda request: httpx.Response(500)))
-    view = AgentWebDAVView(service, WebDAVPathPolicy(AgentWebDAVConfig(enabled=True, permission="read")))
+    view = AgentWebDAVView(service, WebDAVPathPolicy(AgentWebDAVConfig(enabled=True, directories=(AgentWebDAVDirectory(permission="read"),))))
     with pytest.raises(PermissionError, match="read-only"):
         asyncio.run(view.write(absolute_path="/webdav/rules.md", content="no", mode="overwrite"))
 

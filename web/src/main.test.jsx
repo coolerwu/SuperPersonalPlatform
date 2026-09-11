@@ -1317,6 +1317,7 @@ test("saves deepagent options from the agent config menu", async () => {
   expect(screen.queryByLabelText("Checkpointer")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Runtime Name")).not.toBeInTheDocument();
   fireEvent.click(screen.getByLabelText("启用 WebDAV"));
+  fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
   expect(screen.getByLabelText("访问权限")).toHaveValue("write");
   fireEvent.change(screen.getByLabelText("映射目录（相对于全局同步目录）"), { target: { value: "/项目资料" } });
   fireEvent.change(screen.getByLabelText("目录说明"), { target: { value: "项目共享文档" } });

@@ -9,6 +9,7 @@ from server.domain.agent_config import (
     AgentDefinition,
     AgentWorkspaceDefinition,
     AgentWebDAVConfig,
+    AgentWebDAVDirectory,
     DeepAgentOptions,
     ModelDefinition,
     ModelProvider,
@@ -270,11 +271,18 @@ def parse_deepagent_options(raw: Any) -> DeepAgentOptions:
 def parse_agent_webdav(raw: Any) -> AgentWebDAVConfig:
     if not isinstance(raw, dict):
         raise ValueError("agents.definitions[].webdav must be an object")
+    directories = raw.get("directories", [])
+    if not isinstance(directories, list) or any(not isinstance(item, dict) for item in directories):
+        raise AgentConfigError("agents.definitions[].webdav.directories must be a list of objects")
+    if any(key in raw for key in ("path", "permission", "description")):
+        raise AgentConfigError("WebDAV mapping fields must be configured in directories[]")
     return AgentWebDAVConfig(
         enabled=bool(raw.get("enabled", False)),
-        path=str(raw.get("path", "/")).strip(),
-        permission=str(raw.get("permission", "write")).strip(),
-        description=str(raw.get("description", "")).strip(),
+        directories=tuple(AgentWebDAVDirectory(
+            path=str(item.get("path", "/")).strip(),
+            permission=str(item.get("permission", "write")).strip(),
+            description=str(item.get("description", "")).strip(),
+        ) for item in directories),
     )
 
 

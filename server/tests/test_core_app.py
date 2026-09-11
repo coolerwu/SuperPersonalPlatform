@@ -226,7 +226,7 @@ def test_deepagent_defaults_enable_todo_list_and_longterm_memory() -> None:
     deepagent = settings.agent_workspace.get_agent("assistant").deepagent
     assert deepagent.todo_list is True
     assert not hasattr(deepagent, "use_longterm_memory")
-    assert settings.agent_workspace.get_agent("assistant").webdav.permission == "write"
+    assert settings.agent_workspace.get_agent("assistant").webdav.directories == ()
 
 
 def test_system_update_routes_do_not_expose_config_editor(tmp_path) -> None:
