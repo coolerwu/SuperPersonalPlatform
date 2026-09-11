@@ -67,12 +67,16 @@ def build_platform_tools(
     context_workspace: Path,
     schedule_service: Any = None,
     tool_context: PlatformToolContext | None = None,
+    file_backend: Any = None,
 ) -> list[Any]:
     tools = []
     browser_config = _browser_config(context_workspace)
     for tool_id in tool_ids:
         definition = get_tool_definition(tool_id)
-        if definition.id == "search_session":
+        if definition.id == "send_attachment":
+            if tool_context is not None and file_backend is not None:
+                tools.append(_send_attachment_tool(context_workspace.parent, tool_context, file_backend))
+        elif definition.id == "search_session":
             if tool_context is None:
                 continue
             tools.append(_search_session_tool(SessionService(context_workspace.parent), tool_context))
@@ -131,6 +135,35 @@ def _browser_config(context_workspace: Path) -> dict[str, Any]:
         "timeout_ms": settings.browser.timeout_ms,
         "allow_private_hosts": settings.browser.allow_private_hosts,
     }
+
+
+def _send_attachment_tool(workspace: Path, context: PlatformToolContext, backend: Any) -> Any:
+    from langchain_core.tools import StructuredTool
+    from server.infrastructure.outgoing_attachments import queue_attachment
+    from server.infrastructure.agent_workspace import workspace_member_path
+
+    def send_attachment(file_path: str, kind: str = "auto") -> str:
+        try:
+            from server.app.run_delivery_service import _delivery_target
+            if not context.run_id or any(c in context.run_id for c in ("/", "\\")) or context.run_id in {".", ".."}:
+                raise ValueError("Missing current run")
+            run_dir = workspace_member_path(workspace, "runs", context.run_id)
+            run_input = json.loads((run_dir / "input.json").read_text())
+            if run_input.get("agent_id") != context.agent_id or not _delivery_target({"input": run_input}):
+                raise ValueError("This run has no current WeChat delivery target")
+            item = queue_attachment(run_dir, backend, file_path, kind)
+            return json.dumps({"ok": True, "status": "queued", "attachment": item,
+                "message": "Queued for delivery after this run completes; not yet sent."}, ensure_ascii=False)
+        except (ValueError, OSError, RuntimeError) as exc:
+            return _tool_error_result("send_attachment", exc)
+    return StructuredTool.from_function(send_attachment, name="send_attachment", description=(
+        "Send an existing file or image to the current WeChat conversation when the user asks for it. "
+        "Use an absolute file-tool path such as /artifacts/report.pdf, /files/document.docx or an authorized /webdav/... path. "
+        "kind=auto detects PNG/JPEG/GIF/WebP as images; kind=file sends the original as an attachment. "
+        "Max 20 MiB per file, 10 per run. Queues a frozen copy for delivery after successful run completion. "
+        "Do not claim delivery already succeeded; do not pass URLs, host paths or recipients. "
+        "This tool does not generate images and does not write to WebDAV."
+    ))
 
 
 def _execute_code_tool(workspace: Path, tool_context: PlatformToolContext) -> Any:

@@ -166,9 +166,12 @@ class RunDeliveryService:
             return
 
         attempts = int(delivery.get("attempts") or 0) + 1
-        client_id = str(delivery.get("client_id") or f"spp-{run_id}-final")
+        generation = int((run.get("state") or {}).get("rerun_count") or 0)
+        client_id = f"spp-{run_id}-final-r{generation}" if generation else str(delivery.get("client_id") or f"spp-{run_id}-final")
+        delivered_parts = list(delivery.get("delivered_parts") or [])
         sending = {
             "target": target,
+            "delivered_parts": delivered_parts,
             "status": "sending",
             "attempts": attempts,
             "max_attempts": DELIVERY_MAX_ATTEMPTS,
@@ -177,7 +180,22 @@ class RunDeliveryService:
         }
         self._run_service.set_delivery_status(run_id, "sending", extra=sending)
         try:
-            await self._send(target, text=_final_message(run), client_id=client_id)
+            if client_id not in delivered_parts:
+                await self._send(target, text=_final_message(run), client_id=client_id)
+                delivered_parts.append(client_id)
+                self._run_service.set_delivery_status(run_id, "sending", extra={"delivered_parts": delivered_parts})
+            if (run.get("state") or {}).get("status") == "completed":
+                for item in self._run_service.outgoing_attachments(run_id):
+                    part_id = f"spp-{run_id}-r{generation}-{item['id'][:20]}"
+                    if part_id in delivered_parts: continue
+                    data = self._run_service.read_outgoing_attachment(run_id, item)
+                    await self._channel_delivery_service.deliver_attachment(
+                        channel="wechat", account_id=target["account_id"], to_user_id=target["to_user_id"],
+                        context_token=target.get("context_token", ""), data=data,
+                        filename=item["filename"], kind=item["kind"], client_id=part_id,
+                    )
+                    delivered_parts.append(part_id)
+                    self._run_service.set_delivery_status(run_id, "sending", extra={"delivered_parts": delivered_parts})
         except Exception as exc:  # noqa: BLE001
             failed = _failed_attempt({**delivery, **sending}, exc)
             self._run_service.set_delivery_status(

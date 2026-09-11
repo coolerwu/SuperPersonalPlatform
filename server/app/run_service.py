@@ -403,6 +403,14 @@ class RunService:
         self._release_lock(run_id)
         return self.get_run(run_id)
 
+    def outgoing_attachments(self, run_id: str) -> list[dict[str, Any]]:
+        from server.infrastructure.outgoing_attachments import list_attachments
+        return list_attachments(self._run_dir(run_id))
+
+    def read_outgoing_attachment(self, run_id: str, item: dict[str, Any]) -> bytes:
+        from server.infrastructure.outgoing_attachments import read_attachment
+        return read_attachment(self._run_dir(run_id), item)
+
     def set_delivery_status(
         self,
         run_id: str,

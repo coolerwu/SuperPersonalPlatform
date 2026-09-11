@@ -847,6 +847,17 @@ class WechatChannelService:
             )
         return resp if isinstance(resp, dict) else {}
 
+    async def deliver_attachment(self, *, to_user_id: str, context_token: str, data: bytes,
+                                 filename: str, kind: str, client_id: str) -> dict[str, Any]:
+        if not to_user_id: raise ValueError("wechat to_user_id is required")
+        await self._ensure_delivery_client()
+        item = await self._client.upload_attachment(self._baseurl, self._bot_token,
+            to_user_id=to_user_id, data=data, filename=filename, kind=kind)
+        return await self._client.send_message(self._baseurl, self._bot_token, {
+            "to_user_id": to_user_id, "context_token": context_token, "client_id": client_id,
+            "message_type": 2, "message_state": 2, "item_list": [item],
+        })
+
     async def _ensure_delivery_client(self) -> None:
         if not self._client or not self._baseurl or not self._bot_token:
             proxy = self._channel_config().get("proxy", "")

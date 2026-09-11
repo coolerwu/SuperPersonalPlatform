@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, Plus, Trash2, X } from "lucide-react";
 
 const AGENT_TOOL_CARDS = [
+  { id: "send_attachment", name: "Send Attachment", summary: "将已有图片或文件发回当前微信会话，支持失败重试。", badge: "附件" },
   {
     id: "search_session",
     name: "Search Session",

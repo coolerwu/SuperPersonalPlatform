@@ -15,6 +15,10 @@ class ToolDefinition:
 
 PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
+        id="send_attachment", name="Send Attachment",
+        description="Queue an existing image or file for delivery to the current WeChat conversation.",
+    ),
+    ToolDefinition(
         id="search_session",
         name="Search Session",
         description="Search the current conversation session history by keyword.",

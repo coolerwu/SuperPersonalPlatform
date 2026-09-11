@@ -25,7 +25,7 @@
 - `workspace/sessions/index.json` 维护所有长期会话索引；长期 session 对微信和未来渠道默认开启。`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`；Agent 的 Checkpointer 固定开启，不再提供配置开关，开启时 DeepAgent/LangGraph 运行时状态写入 `workspace/sessions/checkpoints.sqlite`。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
 - Agent 的 DeepAgent 配置只保留 `max_iterations`、`todo_list` 和工具授权 `tools`。长期记忆、私有文件系统及会话 Checkpointer 固定开启；运行名使用 Agent 名称，debug 默认关闭。系统从工具注册表的 `approval_required` 生成 HITL `interrupt_on`；WebDAV 文件写入由原生 Permission interrupt 规则生成审批谓词，不再接受 Agent 自定义审批列表。原生文件工具按路径授权执行。移除 `name/debug/filesystem/use_longterm_memory/interrupt_on/subagents/response_format/context_schema/checkpointer/cache` 配置；系统继续管理通用子 Agent、Skills 和 SkillImprovement middleware。
-- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `search_session`、`arxiv`、`yahoo_finance_news`、`browser_extract`、`schedule` 和 `execute_code`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
+- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `send_attachment`、`search_session`、`arxiv`、`yahoo_finance_news`、`browser_extract`、`schedule` 和 `execute_code`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
 - 微信收到消息后按 `wechat + account + peer + agent` 生成稳定 active key，通过 `workspace/sessions/active.json` 找到当前 `session_id`，再创建 `source=wechat` 的 run；用户在微信发送“清空上下文 / 清空会话 / 开启新会话 / 新会话 / /clear / /new”或 `/session new` 时，通道层会归档旧 session 并为同一渠道身份切换到新的 active session。微信通道还内置 `/session help`、`/session status`、`/session list` 和 `/session change <编号或 session_id>`；这些指令由通道层直接消费，不创建 DeepAgent run。`/session change` 只能切换同一个 `wechat + account + peer + agent` 身份下的历史 session，不能跨用户、跨群、跨微信账号或跨 Agent。带 `session_id` 的 DeepAgent run 使用同一个 SQLite checkpointer 恢复 LangGraph 状态，只把当前 run 消息作为本次输入。`messages.jsonl` 继续保存渠道历史、审计和 `search_session` 检索数据，完成后由平台投递微信回复。
@@ -342,3 +342,12 @@ code_execution:
 - WebDAV 可写目录生成 `FilesystemPermission(mode="interrupt", operations=["write"])`，只读目录仍 deny，读取 allow；保留子目录优先。原生 HITL 在工具执行之前暂停，后端允许经批准的 interrupt 写入但仍检查范围。复用 DeepAgent 原生条件谓词，并限定 approve/reject；主/子 Agent 继承一致规则，无用户开关。没有 session_id 的可写 WebDAV run 也使用 run_id + SQLite checkpoint 保存审批，确保能恢复。
 - 原生文件写入先更新远端再更新缓存；远端编辑在共享 sync.lock 内读取最新内容。定时和手动 WebDAV 同步保持，删除及二进制上传仍不支持。
 - Agent 弹窗显示全局坚果云来源及同步根，每项显示远端实际目录 → Agent 虚拟路径，以及“读写 · 写入需审批”。目录选择器显示远端当前位置；全局连接或同步关闭时显示挂载不可用。全局页面称为“WebDAV 文件同步”。
+
+
+### 微信图片与附件发送
+
+- Agent 授权 `send_attachment(file_path, kind="auto")` 后可将现有文件发回当前 run 固化的微信目标；不接受收件人、账号、URL 或宿主机路径。不生成图片。文件来源走同一个原生文件后端路径校验，支持 Agent 私有目录、`/files/` 和授权的 `/webdav/`；浏览器目录、越界及符号链接拒绝，WebDAV 读取不触发写入 HITL。
+- `auto` 按内容标记识别 PNG/JPEG/GIF/WebP，按图片消息发送；其它格式作为普通文件。`kind=file` 可发送图片原文件，`kind=image` 要求支持的图片格式。单文件 1 字节至 20 MiB、每轮最多 10 个；工具返回 queued，不能宣称已经送达。无微信目标的 Web Chat/API run 返回可恢复错误；带微信投递目标的定时任务可使用同一工具。
+- 每个成功排队的文件固化到 `runs/{run_id}/outgoing/{rerun_count}/`，index.json 保存文件名、来源虚拟路径、种类、大小和 SHA-256；同名同内容同种类去重，文件快照和索引原子替换，文件不会因源文件随后编辑而变化。明确重跑使用新的 generation，不发送旧一轮的附件；outgoing 随 run 保留期清理。
+- RunDeliveryService 在成功 run 的最终文本之后逐个投递附件；失败/取消的 run 只发状态文本。delivery.json 的 delivered_parts 持久化每个成功部分，重试/服务重启跳过已确认成功部分；每部分稳定 client_id。网络响应不确定时仍可能重复，沿用至少一次投递语义；所有部分完成才标记 delivered，失败沿用退避及 dead_letter。
+- ILinkClient 依据腾讯官方 openclaw-weixin 的 [upload](https://github.com/Tencent/openclaw-weixin/blob/main/src/cdn/upload.ts)、[CDN](https://github.com/Tencent/openclaw-weixin/blob/main/src/cdn/cdn-upload.ts) 和 [send](https://github.com/Tencent/openclaw-weixin/blob/main/src/messaging/send.ts) 实现：AES-128-ECB/PKCS7 加密，getuploadurl 申请上传位置（no_need_thumb），密文 POST 到 CDN，读取 x-encrypted-param，发送 IMAGE=2 或 FILE=4 item；AES key 使用官方 hex 文本的 base64 编码，文件 len 使用明文长度字符串。CDN 请求不携带 bot token，不跟随重定向。HTTP 200 中非零 ret/errcode 同样判定失败，避免误报发送成功。

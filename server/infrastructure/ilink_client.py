@@ -110,15 +110,67 @@ class ILinkClient:
         if response.status_code != 200:
             raise ILinkAPIError(response.status_code, response.text)
         raw = response.text
-        try:
-            result = response.json()
-        except Exception:
-            result = {}
+        result = self._checked_response(response)
         result.setdefault("_debug_url", url)
         result.setdefault("_debug_status", response.status_code)
         result.setdefault("_debug_body", _json.dumps(body, ensure_ascii=False)[:500])
         result.setdefault("_debug_raw", raw[:500])
         return result
+
+    async def upload_attachment(self, baseurl: str, bot_token: str, *, to_user_id: str,
+                                data: bytes, filename: str, kind: str) -> dict[str, Any]:
+        import hashlib
+        import secrets
+        from urllib.parse import urlencode
+        from cryptography.hazmat.primitives import padding
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from server.infrastructure.outgoing_attachments import MAX_ATTACHMENT_BYTES, image_mime
+        if not data or len(data) > MAX_ATTACHMENT_BYTES or kind not in {"image", "file"}:
+            raise ValueError("Invalid attachment type or size")
+        if kind == "image" and not image_mime(data):
+            raise ValueError("Unsupported image format")
+        key = secrets.token_bytes(16)
+        filekey = secrets.token_hex(16)
+        padder = padding.PKCS7(128).padder()
+        padded = padder.update(data) + padder.finalize()
+        encryptor = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+        encrypted = encryptor.update(padded) + encryptor.finalize()
+        response = await self._client.post(
+            f"{baseurl.rstrip('/')}/ilink/bot/getuploadurl", headers=self._auth_headers(bot_token),
+            json={"filekey": filekey, "media_type": 1 if kind == "image" else 3,
+                  "to_user_id": to_user_id, "rawsize": len(data), "rawfilemd5": hashlib.md5(data).hexdigest(),
+                  "filesize": len(encrypted), "no_need_thumb": True, "aeskey": key.hex(),
+                  "base_info": {"channel_version": "1.0.2"}},
+        )
+        payload = self._checked_response(response)
+        url = str(payload.get("upload_full_url") or "").strip()
+        if not url:
+            param = payload.get("upload_param")
+            if not param: raise ILinkAPIError(502, "Missing media upload parameters")
+            url = "https://novac2c.cdn.weixin.qq.com/c2c/upload?" + urlencode({"encrypted_query_param": param, "filekey": filekey})
+        if not _safe_media_url(url) or urlparse(url).scheme != "https":
+            raise ILinkAPIError(400, "Unsafe media upload URL")
+        # CDN upload carries ciphertext only, never the bot Authorization header.
+        uploaded = await self._client.post(url, content=encrypted,
+            headers={"Content-Type": "application/octet-stream"}, follow_redirects=False)
+        if uploaded.status_code != 200:
+            raise ILinkAPIError(uploaded.status_code, "Media CDN upload failed")
+        download = uploaded.headers.get("x-encrypted-param")
+        if not download: raise ILinkAPIError(502, "Missing media download parameter")
+        media = {"encrypt_query_param": download, "aes_key": base64.b64encode(key.hex().encode()).decode(), "encrypt_type": 1}
+        if kind == "image": return {"type": 2, "image_item": {"media": media, "mid_size": len(encrypted)}}
+        return {"type": 4, "file_item": {"media": media, "file_name": filename, "len": str(len(data))}}
+
+    @staticmethod
+    def _checked_response(response: httpx.Response) -> dict[str, Any]:
+        if response.status_code in (401, 403):
+            raise ILinkSessionExpiredError(response.status_code, "iLink authentication expired")
+        if response.status_code != 200:
+            raise ILinkAPIError(response.status_code, "iLink request failed")
+        payload = response.json()
+        if not isinstance(payload, dict) or any(payload.get(k) not in (None, 0, "0") for k in ("ret", "errcode")):
+            raise ILinkAPIError(502, "iLink rejected request")
+        return payload
 
     async def read_media_bytes(
         self,

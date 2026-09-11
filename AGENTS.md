@@ -57,3 +57,5 @@
 - WebDAV 每个 Agent 配置 `enabled` 与 `directories[]`，每项独立 path/permission/description；原目录层级保留在 `/webdav/` 下。使用 DeepAgent 原生 FilesystemPermission，子目录规则自动优先，未选择目录拒绝；文件后端使用原生匹配器，祖先只用于导航。
 
 - `/notes/` 已删除；临时笔记用 `/scratch/`，长期信息用 `/memories/`，成品用 `/artifacts/`。本地共享知识挂载 `/files/`，不再提供 search_context/write_context。WebDAV 所有允许的写入均需 HITL 审批，主/子 Agent 一致；没有 session_id 的 run 也必须保留审批 checkpoint。
+
+- 微信图片/附件通过 send_attachment 显式选择已有文件，工具仅排队并返回 queued，成功 run 结束后由 RunDeliveryService 发送到固化的当前微信目标。不要让 Agent 自选收件人或把排队说成已发送。每个发送部分持久化进度和稳定 client_id；重试只处理未确认部分，重跑不复用旧轮次附件。

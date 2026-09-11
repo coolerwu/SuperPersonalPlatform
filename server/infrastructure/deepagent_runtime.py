@@ -153,6 +153,7 @@ class DeepAgentRuntime:
                 context_workspace=self._context_workspace,
                 schedule_service=self._schedule_service,
                 tool_context=self._tool_context,
+                file_backend=backend,
             ),
             "model": self._chat_model(),
             "system_prompt": instructions.strip(),

@@ -166,6 +166,11 @@ class WechatChannelManager:
             client_id=client_id,
         )
 
+    async def deliver_attachment(self, *, channel: str, account_id: str, **kwargs) -> dict[str, Any]:
+        if channel != "wechat": raise WechatChannelManagerError(f"unsupported channel: {channel}")
+        account = self._find_account(account_id)
+        return await self._get_or_create_instance(account).deliver_attachment(**kwargs)
+
     def first_account_id(self) -> str | None:
         accounts = self.parse_accounts()
         return str(accounts[0].get("id", "default")) if accounts else None
