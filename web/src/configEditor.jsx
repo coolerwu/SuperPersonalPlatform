@@ -3,12 +3,6 @@ import { RefreshCw, Plus, Trash2, X } from "lucide-react";
 
 const AGENT_TOOL_CARDS = [
   {
-    id: "search_context",
-    name: "Search Context",
-    summary: "搜索本地知识和当前 Agent 映射的 WebDAV 目录。",
-    badge: "只读",
-  },
-  {
     id: "search_session",
     name: "Search Session",
     summary: "按关键词检索当前会话历史，用于关联前文要求、图片和链接。",
@@ -25,12 +19,6 @@ const AGENT_TOOL_CARDS = [
     name: "Yahoo Finance News",
     summary: "按股票代码获取轻量财经新闻，不作为交易级数据源。",
     badge: "财经",
-  },
-  {
-    id: "write_context",
-    name: "Write Context",
-    summary: "用户确认后写入 /files/... 或当前 Agent 可写的 /webdav/...。",
-    badge: "需确认",
   },
   {
     id: "browser_extract",
@@ -361,7 +349,7 @@ export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav, on
       <section className="config-section">
         <div className="config-section-title">
           <div>
-            <strong>Context WebDAV 同步</strong>
+            <strong>WebDAV 文件同步</strong>
             <span>连接和同步由全局管理，访问范围在 Agent 中配置</span>
           </div>
           <div className="config-inline-actions">
@@ -664,13 +652,17 @@ export function AgentConfigEditor({ draft, onChange, onSave, readOnly }) {
           </div>
         ))}
       </ConfigList>
-      {editing ? <AgentSettingsDialog initialAgent={editing.agent} models={config.llm.models}
+      {editing ? <AgentSettingsDialog initialAgent={editing.agent} models={config.llm.models} nutstore={config.nutstore} sync={config.context.webdav_sync}
         readOnly={readOnly} onClose={() => setEditing(null)} onSave={saveAgent} /> : null}
     </div>
   );
 }
 
-function WebDAVDirectoryPicker({ readOnly, onSelect }) {
+export function joinWebDAVPath(...parts) {
+  return "/" + parts.flatMap((part) => String(part || "").split("/")).filter(Boolean).join("/");
+}
+
+function WebDAVDirectoryPicker({ readOnly, onSelect, sourceRoot }) {
   const [open, setOpen] = useState(false);
   const [path, setPath] = useState("/");
   const [listing, setListing] = useState({ loading: false, entries: [], error: "" });
@@ -690,7 +682,7 @@ function WebDAVDirectoryPicker({ readOnly, onSelect }) {
   return <div className="webdav-picker">
     <button type="button" disabled={readOnly} onClick={() => setOpen(!open)}>{open ? "收起目录选择" : "选择目录"}</button>
     {open ? <div className="webdav-picker-panel">
-      <div className="config-section-title compact"><strong>{path}</strong>
+      <div className="config-section-title compact"><strong>坚果云：{joinWebDAVPath(sourceRoot, path)}</strong>
         <button type="button" disabled={path === "/"} onClick={() => setPath(path.slice(0, path.lastIndexOf("/")) || "/")}>上一级</button>
         <button type="button" onClick={() => { onSelect(path); setOpen(false); }}>选择此目录</button>
       </div>
@@ -702,7 +694,9 @@ function WebDAVDirectoryPicker({ readOnly, onSelect }) {
   </div>;
 }
 
-function AgentSettingsDialog({ initialAgent, models, readOnly, onClose, onSave }) {
+function AgentSettingsDialog({ initialAgent, models, nutstore, sync, readOnly, onClose, onSave }) {
+  const sourceRoot = joinWebDAVPath(nutstore.root_path, sync.root_path);
+  const sourceEnabled = nutstore.enabled && sync.enabled;
   const dialogRef = useRef(null);
   const [agent, setAgent] = useState(() => cloneConfig(initialAgent));
   const [showTools, setShowTools] = useState(false);
@@ -814,7 +808,9 @@ function AgentSettingsDialog({ initialAgent, models, readOnly, onClose, onSave }
               </ConfigField>
             </section>
             <section className="config-subsection webdav-workspace">
-              <div className="config-section-title compact"><strong>WebDAV 工作区</strong><span>访问入口 /webdav/ · 修改会同步到坚果云</span></div>
+              <div className="config-section-title compact"><strong>WebDAV 工作区</strong><span>来源：坚果云 · 同步目录 {sourceRoot}</span></div>
+              <p className="muted">WebDAV 写入需审批。<a href="/config" target="_blank" rel="noreferrer">查看全局 WebDAV 配置 ↗</a></p>
+              {!sourceEnabled ? <p role="status">全局 WebDAV 连接或同步未启用，当前挂载不可用。</p> : null}
               <label className="config-toggle field-toggle">
                 <input type="checkbox" checked={agent.webdav.enabled} disabled={readOnly}
                   onChange={(event) => updateAgentWebdav("enabled", event.target.checked)} />
@@ -836,7 +832,7 @@ function AgentSettingsDialog({ initialAgent, models, readOnly, onClose, onSave }
                         <ConfigField label="访问权限">
                           <select value={directory.permission} disabled={readOnly}
                             onChange={(event) => updateDirectory(index, "permission", event.target.value)}>
-                            <option value="write">读写</option><option value="read">只读</option>
+                            <option value="write">读写 · 写入需审批</option><option value="read">只读</option>
                           </select>
                         </ConfigField>
                         <ConfigField label="目录说明">
@@ -845,8 +841,8 @@ function AgentSettingsDialog({ initialAgent, models, readOnly, onClose, onSave }
                             onChange={(event) => updateDirectory(index, "description", event.target.value)} />
                         </ConfigField>
                       </div>
-                      <small className="muted">Agent 路径：/webdav{directory.path === "/" ? "/" : directory.path}</small>
-                      <WebDAVDirectoryPicker readOnly={readOnly} onSelect={(path) => updateDirectory(index, "path", path)} />
+                      <small className="muted">坚果云 {joinWebDAVPath(sourceRoot, directory.path)} → Agent {joinWebDAVPath("/webdav", directory.path)}</small>
+                      <WebDAVDirectoryPicker sourceRoot={sourceRoot} readOnly={readOnly || !sourceEnabled} onSelect={(path) => updateDirectory(index, "path", path)} />
                     </div>
                   ))}
                   {!agent.webdav.directories.length ? <p className="muted">尚未授权任何目录。</p> : null}

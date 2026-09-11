@@ -15,11 +15,6 @@ class ToolDefinition:
 
 PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
-        id="search_context",
-        name="Search Context",
-        description="Search local context files and this Agent’s mapped WebDAV files for relevant knowledge.",
-    ),
-    ToolDefinition(
         id="search_session",
         name="Search Session",
         description="Search the current conversation session history by keyword.",
@@ -33,12 +28,6 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         id="yahoo_finance_news",
         name="Yahoo Finance News",
         description="Fetch lightweight Yahoo Finance news for a public ticker.",
-    ),
-    ToolDefinition(
-        id="write_context",
-        name="Write Context",
-        description="Write approved knowledge into local context files or this Agent’s writable WebDAV mapping.",
-        approval_required=True,
     ),
     ToolDefinition(
         id="browser_extract",

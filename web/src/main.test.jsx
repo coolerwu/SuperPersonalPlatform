@@ -1310,9 +1310,7 @@ test("saves deepagent options from the agent config menu", async () => {
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("最大执行步数"), { target: { value: "12" } });
   fireEvent.click(screen.getByRole("button", { name: "配置工具" }));
-  expect(screen.getByLabelText("Search Context")).toBeInTheDocument();
-  fireEvent.click(screen.getByLabelText("Search Context"));
-  fireEvent.click(screen.getByLabelText("Write Context"));
+  expect(screen.queryByLabelText("Search Context")).not.toBeInTheDocument();
   fireEvent.click(screen.getByLabelText("Schedule"));
   expect(screen.queryByLabelText("Checkpointer")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Runtime Name")).not.toBeInTheDocument();
@@ -1336,8 +1334,8 @@ test("saves deepagent options from the agent config menu", async () => {
     expect(content).toContain('permission: "write"');
     expect(content).toContain('description: "项目共享文档"');
     expect(content).not.toContain("webdav_permissions:");
-    expect(content).toContain('- "search_context"');
-    expect(content).toContain('- "write_context"');
+    expect(content).not.toContain('- "search_context"');
+    expect(content).not.toContain('- "write_context"');
     expect(content).toContain('- "schedule"');
   });
 });
@@ -1541,7 +1539,7 @@ test("runs page approves a paused DeepAgent run and resumes it", async () => {
             interrupt_id: "interrupt-1",
             actions: [
               {
-                name: "write_context",
+                name: "write_file",
                 description: "写入知识文件",
                 args: { path: "/notes/result.md" },
                 allowed_decisions: ["approve", "reject"],
@@ -1573,7 +1571,7 @@ test("runs page approves a paused DeepAgent run and resumes it", async () => {
   });
 
   expect(await screen.findByText("等待操作审批")).toBeInTheDocument();
-  expect(screen.getByText("write_context")).toBeInTheDocument();
+  expect(screen.getByText("write_file")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "批准并继续" }));
 
   await waitFor(() => {

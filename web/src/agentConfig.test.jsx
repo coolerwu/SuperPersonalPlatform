@@ -7,7 +7,7 @@ import { AgentConfigEditor, parseConfigDraft } from "./configEditor.jsx";
 afterEach(cleanup);
 function setup(onSave = vi.fn().mockResolvedValue(true)) {
   const onChange = vi.fn();
-  render(<AgentConfigEditor draft="" onChange={onChange} onSave={onSave} readOnly={false} />);
+  render(<AgentConfigEditor draft={"nutstore:\n  enabled: true\ncontext:\n  webdav_sync:\n    enabled: true\n"} onChange={onChange} onSave={onSave} readOnly={false} />);
   return { onSave, onChange };
 }
 
@@ -103,4 +103,15 @@ test("directory picker navigates folders and allows manual fallback", async () =
     fireEvent.click(screen.getByRole("button", { name: "移除目录 1" }));
     expect(screen.getByText("尚未授权任何目录。")).toBeInTheDocument();
   } finally { vi.unstubAllGlobals(); }
+});
+
+test("shows source mapping and WebDAV approval requirement", () => {
+  setup();
+  fireEvent.click(screen.getByRole("button", { name: "配置 Agent 默认助手" }));
+  expect(screen.getByText("来源：坚果云 · 同步目录 /notebook")).toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText("启用 WebDAV"));
+  fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
+  fireEvent.change(screen.getByLabelText("映射目录（相对于全局同步目录）"), { target: { value: "/日记" } });
+  expect(screen.getByText("坚果云 /notebook/日记 → Agent /webdav/日记")).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "读写 · 写入需审批" })).toBeInTheDocument();
 });

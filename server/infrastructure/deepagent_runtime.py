@@ -141,16 +141,18 @@ class DeepAgentRuntime:
             f"{default_subagent_prompt}\n\n{GENERAL_PURPOSE_SKILL_PROMPT}"
         )
         backend = AgentFilesystemBackend(root_dir=self._agent_workspace, virtual_mode=True)
+        from deepagents.backends import CompositeBackend
+        from server.infrastructure.shared_files_backend import SharedFilesBackend
+        routes = {"/files/": SharedFilesBackend(root_dir=self._context_workspace / "knowledge" / "files", virtual_mode=True)}
         if webdav_view is not None:
-            from deepagents.backends import CompositeBackend
-            backend = CompositeBackend(default=backend, routes={"/webdav/": WebDAVFilesystemBackend(webdav_view)})
+            routes["/webdav/"] = WebDAVFilesystemBackend(webdav_view)
+        backend = CompositeBackend(default=backend, routes=routes)
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
                 options.tools,
                 context_workspace=self._context_workspace,
                 schedule_service=self._schedule_service,
                 tool_context=self._tool_context,
-                webdav=options.webdav,
             ),
             "model": self._chat_model(),
             "system_prompt": instructions.strip(),
@@ -163,7 +165,11 @@ class DeepAgentRuntime:
         name = options.name.strip()
         if name:
             create_kwargs["name"] = name
-        interrupt_on = _normalize_interrupt_on(options.interrupt_on)
+        from deepagents.middleware._fs_interrupt import _build_interrupt_on_from_permissions
+        interrupt_on = _build_interrupt_on_from_permissions(create_kwargs["permissions"])
+        for rule in interrupt_on.values():
+            rule["allowed_decisions"] = ["approve", "reject"]
+        interrupt_on.update(_normalize_interrupt_on(options.interrupt_on) or {})
         if interrupt_on:
             create_kwargs["interrupt_on"] = interrupt_on
         middleware = _deepagent_builtin_middleware(create_deep_agent, options)

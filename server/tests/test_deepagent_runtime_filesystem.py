@@ -80,9 +80,9 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     assert "tools" not in general_purpose
     assert captured["create_kwargs"]["memory"] == [MEMORY_INDEX_PATH]
     assert captured["create_kwargs"]["system_prompt"] == "base prompt"
-    assert captured["create_kwargs"]["backend"].cwd == agent_dir.resolve()
-    assert isinstance(captured["create_kwargs"]["backend"], AgentFilesystemBackend)
-    assert captured["create_kwargs"]["backend"].virtual_mode is True
+    assert captured["create_kwargs"]["backend"].default.cwd == agent_dir.resolve()
+    assert isinstance(captured["create_kwargs"]["backend"].default, AgentFilesystemBackend)
+    assert captured["create_kwargs"]["backend"].default.virtual_mode is True
     middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
     assert middleware_names[0] == "TodoListMiddleware"
     assert "SkillImprovementMiddleware" in middleware_names
@@ -133,19 +133,19 @@ def test_agent_filesystem_backend_rejects_undeclared_top_level_content(tmp_path)
 
 def test_agent_filesystem_backend_protects_managed_roots_and_uploaded_files(tmp_path) -> None:
     backend = AgentFilesystemBackend(root_dir=tmp_path, virtual_mode=True)
-    (tmp_path / "notes").mkdir()
+    (tmp_path / "scratch").mkdir()
 
     uploaded = backend.upload_files(
         [
-            ("/notes/reference.bin", b"ok"),
+            ("/scratch/reference.bin", b"ok"),
             ("/workspace/reference.bin", b"bad"),
         ]
     )
-    delete_root = backend.delete("/notes")
+    delete_root = backend.delete("/scratch")
 
     assert uploaded[0].error is None
     assert uploaded[1].error is not None
-    assert (tmp_path / "notes" / "reference.bin").read_bytes() == b"ok"
+    assert (tmp_path / "scratch" / "reference.bin").read_bytes() == b"ok"
     assert not (tmp_path / "workspace").exists()
     assert "cannot be deleted" in str(delete_root.error)
 
@@ -513,8 +513,8 @@ def test_runtime_parses_langgraph_interrupt_as_typed_approval_request() -> None:
 
     interrupt = Interrupt(
         value={
-            "action_requests": [{"name": "write_context", "args": {"path": "/notes/result.md"}, "description": "Write a file"}],
-            "review_configs": [{"action_name": "write_context", "allowed_decisions": ["approve", "reject"]}],
+            "action_requests": [{"name": "write_file", "args": {"path": "/scratch/result.md"}, "description": "Write a file"}],
+            "review_configs": [{"action_name": "write_file", "allowed_decisions": ["approve", "reject"]}],
         },
         id="interrupt-1",
     )
@@ -523,11 +523,11 @@ def test_runtime_parses_langgraph_interrupt_as_typed_approval_request() -> None:
 
     assert isinstance(request, RunApprovalRequest)
     assert request.interrupts[0].interrupt_id == "interrupt-1"
-    assert request.interrupts[0].actions[0].name == "write_context"
+    assert request.interrupts[0].actions[0].name == "write_file"
     assert request.interrupts[0].actions[0].allowed_decisions == ("approve", "reject")
 
 
 def test_runtime_limits_interrupt_decisions_to_approve_and_reject() -> None:
-    assert _normalize_interrupt_on(("write_context",)) == {
-        "write_context": {"allowed_decisions": ["approve", "reject"]}
+    assert _normalize_interrupt_on(("write_file",)) == {
+        "write_file": {"allowed_decisions": ["approve", "reject"]}
     }

@@ -50,19 +50,19 @@ agents:
           mode: read_write
         use_longterm_memory: true
         tools:
-          - search_context
+          - search_session
 """
 
 
 IMAGE_CONFIG = CONFIG.replace("model: gpt-4o-mini", "model: gpt-4o-mini\n      supports_images: true")
-CHECKPOINT_CONFIG = CONFIG.replace("        tools:\n          - search_context\n", "        tools:\n          - search_context\n        checkpointer: true\n")
+CHECKPOINT_CONFIG = CONFIG.replace("        tools:\n          - search_session\n", "        tools:\n          - search_session\n        checkpointer: true\n")
 NO_CHECKPOINT_CONFIG = CONFIG.replace(
-    "        tools:\n          - search_context\n",
-    "        tools:\n          - search_context\n        checkpointer: false\n",
+    "        tools:\n          - search_session\n",
+    "        tools:\n          - search_session\n        checkpointer: false\n",
 )
 INTERRUPT_CONFIG = CONFIG.replace(
-    "        tools:\n          - search_context\n",
-    "        tools:\n          - search_context\n          - write_context\n",
+    "        tools:\n          - search_session\n",
+    "        tools:\n          - search_session\n          - arxiv\n      webdav:\n        enabled: true\n        directories:\n          - path: /\n            permission: write\n",
 )
 
 
@@ -91,7 +91,7 @@ def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatc
     assert captured["options"].max_iterations == 7
     assert captured["options"].todo_list is True
     assert captured["options"].webdav.enabled is False
-    assert captured["options"].tools == ("search_context",)
+    assert captured["options"].tools == ("search_session",)
     assert captured["messages"][-1].content == "hello"
     assert (tmp_path / "runs" / "index.json").exists()
     assert (tmp_path / "runs" / run_id / "input.json").exists()
@@ -727,8 +727,8 @@ def test_run_service_persists_approval_and_resumes_from_checkpoint(tmp_path, mon
                         interrupt_id="interrupt-1",
                         actions=(
                             RunApprovalAction(
-                                name="write_context",
-                                args={"path": "/notes/example.md", "content": "hello"},
+                                name="write_file",
+                                args={"path": "/scratch/example.md", "content": "hello"},
                                 description="Write a note",
                                 allowed_decisions=("approve", "reject"),
                             ),
@@ -752,7 +752,7 @@ def test_run_service_persists_approval_and_resumes_from_checkpoint(tmp_path, mon
 
     assert waiting["state"]["status"] == "waiting_approval"
     assert waiting["approval"]["status"] == "pending"
-    assert waiting["approval"]["request"]["interrupts"][0]["actions"][0]["name"] == "write_context"
+    assert waiting["approval"]["request"]["interrupts"][0]["actions"][0]["name"] == "write_file"
     assert waiting["partial"]["status"] == "waiting_approval"
     assert not (tmp_path / "runs" / run_id / "lock.json").exists()
     assert calls[0]["checkpoint_path"] == tmp_path / "sessions" / "checkpoints.sqlite"
@@ -782,7 +782,7 @@ def test_run_service_rejects_approval_with_feedback_and_can_cancel_waiting_run(t
                     interrupt_id="interrupt-2",
                     actions=(
                         RunApprovalAction(
-                            name="write_context",
+                            name="write_file",
                             args={},
                             description="Write",
                             allowed_decisions=("approve", "reject"),

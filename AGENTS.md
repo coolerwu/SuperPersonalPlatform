@@ -43,7 +43,7 @@
 - 生产环境使用已提交的 `web/dist`，前端改动需要执行 `cd web && npm run build` 并提交新的 dist 产物。
 - 后端命名要区分配置领域和运行时封装：`server/domain/agent_config.py` 只能放 Agent/LLM/DeepAgent 选项配置对象和校验；真正调用或封装 `deepagents`、LangChain 模型的代码只能放在 `server/infrastructure/deepagent_runtime.py` 或同层 infrastructure 模块。
 - `DeepAgentRuntime.run()` 的入参必须保持清晰：`instructions` 是 system prompt，`messages` 是完整会话消息，`options` 是结构化运行选项；不要重新引入 `user_message`、`max_iterations`、`deepagent_options` 这种和 `messages/options` 重复的散参数。
-- Agent 的 Checkpointer、长期记忆和私有 filesystem 固定开启，不提供配置开关。带 `session_id` 的 run 只传当前 run 消息，由 LangGraph checkpoint 恢复状态；审批工具由系统工具注册表的 `approval_required` 决定，不读取 Agent 自定义 `interrupt_on`。
+- Agent 的 Checkpointer、长期记忆和私有 filesystem 固定开启，不提供配置开关。带 `session_id` 的 run 只传当前 run 消息，由 LangGraph checkpoint 恢复状态；WebDAV 写入由原生 FilesystemPermission 的 interrupt 规则触发审批；其它平台工具审批由系统注册表的 `approval_required` 决定，不读取 Agent 自定义 `interrupt_on`。
 
 ## Agent Workspace 约定
 
@@ -52,6 +52,8 @@
 - 浏览器直接使用私有 `browser/`；代码脚本保留到 `scratch/`，成果放 `artifacts/`，不保留长期 `code_runs`、input/work/output 或额外执行元数据目录。
 - 目录重构直接迁移目标机器数据，不加入兼容路径或自动迁移；停止相关进程、核验迁移前后清单再启用新代码，冲突不覆盖。
 
-- WebDAV 全局只管理连接与同步；映射目录、read/write 权限（默认 write）和用途说明放在 Agent 的 `webdav` 配置中。使用 CompositeBackend 虚拟映射 `/webdav/`，不使用软链接；原生文件工具和 Context 工具共用工作区路径授权。WorkspaceMiddleware 同时向主 Agent 和文件工具子 Agent 说明目录用途、权限和远端写回行为。
+- WebDAV 全局只管理连接与同步；映射目录、read/write 权限（默认 write）和用途说明放在 Agent 的 `webdav` 配置中。使用 CompositeBackend 虚拟映射 `/webdav/`，不使用软链接；文档统一通过原生文件工具访问。WorkspaceMiddleware 同时向主 Agent 和文件工具子 Agent 说明目录用途、权限和远端写回行为。
 
-- WebDAV 每个 Agent 配置 `enabled` 与 `directories[]`，每项独立 path/permission/description；原目录层级保留在 `/webdav/` 下。使用 DeepAgent 原生 FilesystemPermission，子目录规则自动优先，未选择目录拒绝；Context 和文件后端共用原生匹配器，祖先只用于导航。
+- WebDAV 每个 Agent 配置 `enabled` 与 `directories[]`，每项独立 path/permission/description；原目录层级保留在 `/webdav/` 下。使用 DeepAgent 原生 FilesystemPermission，子目录规则自动优先，未选择目录拒绝；文件后端使用原生匹配器，祖先只用于导航。
+
+- `/notes/` 已删除；临时笔记用 `/scratch/`，长期信息用 `/memories/`，成品用 `/artifacts/`。本地共享知识挂载 `/files/`，不再提供 search_context/write_context。WebDAV 所有允许的写入均需 HITL 审批，主/子 Agent 一致；没有 session_id 的 run 也必须保留审批 checkpoint。

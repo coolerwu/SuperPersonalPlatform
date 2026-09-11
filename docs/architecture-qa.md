@@ -168,7 +168,6 @@ workspace/
         {skill_id}/
           SKILL.md
       scratch/
-      notes/
       artifacts/
       memories/
     operator/
@@ -177,7 +176,6 @@ workspace/
         {skill_id}/
           SKILL.md
       scratch/
-      notes/
       artifacts/
       memories/
 
@@ -221,7 +219,7 @@ workspace/
 
 微信和未来渠道都把连续对话写入 `workspace/sessions/{session_id}/messages.jsonl`，当前活跃会话由 `workspace/sessions/active.json` 维护。微信按 `wechat + account + peer + agent` 生成稳定 active key，再取该 key 指向的 `session_id`；用户发送“清空上下文 / 清空会话 / 开启新会话 / 新会话 / /clear / /new”时，通道层归档旧 session 并切换到新 session。微信图片输入会兼容 iLink 的 base64/data URL、直接媒体 URL 和 `media.encrypt_query_param`/`aeskey` CDN 加密媒体，下载或解密失败时写入 `image_warning` 日志。带 `session_id` 的 DeepAgent run 使用 `workspace/sessions/checkpoints.sqlite` 作为 LangGraph SQLite checkpointer，并以 `session_id` 作为 `thread_id` 恢复运行上下文；运行时只传当前 run 消息，避免历史消息和 checkpoint 重复叠加。`messages.jsonl` 继续作为渠道历史、审计和 `search_session` 检索数据；需要引用更早历史时，Agent 通过 `search_session` 查询。`search_session` 默认只查当前 session，传 `scope="related"` 时用 jieba 分词和子串评分搜索同一渠道身份下的相关 session，包括清空上下文前归档的旧 session。
 
-DeepAgent 原生 filesystem 通过 `AgentFilesystemBackend(root_dir=workspace/agents/{agent_id}/workspace, virtual_mode=True)` 锚定到单个 Agent 私有目录。Agent 看到的 `/` 就是自己的目录，可读写其中的 `scratch/`、`notes/`、`artifacts/`、`skills/`、`memories/` 等内容，不能直接访问其它 Agent、Context、Runs、Sessions、配置文件或项目源码；启用 WebDAV 后通过 `/webdav/` 虚拟映射访问授权范围内的共享文档。当前不启用 DeepAgent `LocalShellBackend`，因此不向 Agent 暴露非沙箱 shell `execute`。
+DeepAgent 原生 filesystem 通过 `AgentFilesystemBackend(root_dir=workspace/agents/{agent_id}/workspace, virtual_mode=True)` 锚定到单个 Agent 私有目录。Agent 看到的 `/` 就是自己的目录，可读写其中的 `scratch/`、`artifacts/`、`skills/`、`memories/` 等内容，不能直接访问其它 Agent、Context、Runs、Sessions、配置文件或项目源码；启用 WebDAV 后通过 `/webdav/` 虚拟映射访问授权范围内的共享文档。当前不启用 DeepAgent `LocalShellBackend`，因此不向 Agent 暴露非沙箱 shell `execute`。
 
 每个 Agent 的私有 skill 放在 `workspace/agents/{agent_id}/workspace/skills/{skill_id}/SKILL.md`，运行时传入 `skills=["/skills/"]`。DeepAgent 会扫描包含 `SKILL.md` 的子目录；没有 skill 时只会提示 Agent 可以在 `/skills/` 创建，是否创建由 Agent 在具体任务中通过文件工具自行决定，新建 skill 通常在下一次执行开始时被重新扫描后生效。
 
@@ -294,3 +292,5 @@ nutstore.root_path + context.webdav_sync.root_path + /webdav/ 后保留原层级
 主架构文档只保留当前目标架构，不再描述 Portfolio、Critique、Proxy、旧 WebSocket 聊天、旧 Session/Skill 管理等待删除模块。
 
 日期化 `docs/superpowers/*` 文件视为历史实现记录，不作为当前架构依据。后续真正删除对应代码模块时，必须同步删除或归档对应历史设计/计划文档，避免搜索结果把人带回旧架构。
+
+WebDAV 可写目录通过原生 HITL 审批后才写回，读取无需审批；本地共享资料挂载在 `/files/`，统一使用原生文件工具。Context 搜索/写入工具和 `/notes/` 已移除。

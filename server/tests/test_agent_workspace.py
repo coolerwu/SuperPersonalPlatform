@@ -25,15 +25,15 @@ def test_workspace_identity_and_browser_share_root(tmp_path):
 def test_browser_secret_unavailable_to_all_file_operations(tmp_path, asynchronous):
     root = agent_workspace_path(tmp_path, "first")
     (root / "browser").mkdir(parents=True)
-    (root / "notes").mkdir()
+    (root / "scratch").mkdir()
     (root / "browser" / "Cookies.txt").write_text("SECRET_NEVER_READ")
-    (root / "notes" / "public.txt").write_text("public marker")
-    (root / "notes" / "alias.txt").symlink_to(root / "browser" / "Cookies.txt")
-    (root / "notes" / "aliasdir").symlink_to(root / "browser", target_is_directory=True)
+    (root / "scratch" / "public.txt").write_text("public marker")
+    (root / "scratch" / "alias.txt").symlink_to(root / "browser" / "Cookies.txt")
+    (root / "scratch" / "aliasdir").symlink_to(root / "browser", target_is_directory=True)
     backend = AgentFilesystemBackend(root_dir=root, virtual_mode=True)
     def call(name, *args):
         return asyncio.run(getattr(backend, 'a' + name)(*args)) if asynchronous else getattr(backend, name)(*args)
-    for path in ("/browser/Cookies.txt", "/notes/alias.txt", "/notes/aliasdir/Cookies.txt", "/notes/../browser/Cookies.txt"):
+    for path in ("/browser/Cookies.txt", "/scratch/alias.txt", "/scratch/aliasdir/Cookies.txt", "/scratch/../browser/Cookies.txt"):
         assert call("read", path).error
         assert call("download_files", [path])[0].error
         assert call("write", path, "replace").error
@@ -45,7 +45,7 @@ def test_browser_secret_unavailable_to_all_file_operations(tmp_path, asynchronou
     assert not call("grep", "SECRET_NEVER_READ", "/").matches
     assert not call("grep", "SECRET_NEVER_READ", "/browser").matches
     assert all("Cookies" not in x["path"] and "alias" not in x["path"] for x in call("glob", "**/*", "/").matches)
-    assert call("grep", "public marker", "/").matches[0]["path"] == "/notes/public.txt"
+    assert call("grep", "public marker", "/").matches[0]["path"] == "/scratch/public.txt"
     assert (root / "browser" / "Cookies.txt").read_text() == "SECRET_NEVER_READ"
 
 

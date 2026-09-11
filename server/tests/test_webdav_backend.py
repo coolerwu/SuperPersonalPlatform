@@ -40,7 +40,7 @@ def setup_backend(tmp_path, permission="write"):
     (root / "team/note.md").write_text("original")
     (root / "secret.md").write_text("private other mapping")
     local = tmp_path / "agents/a/workspace"
-    (local / "notes").mkdir(parents=True)
+    (local / "scratch").mkdir(parents=True)
     backend = CompositeBackend(default=AgentFilesystemBackend(root_dir=local), routes={"/webdav/": WebDAVFilesystemBackend(view)})
     return backend, view, remote, calls
 
@@ -57,7 +57,7 @@ def test_mapping_native_sync_and_async_write_through(tmp_path):
     assert backend.write("/webdav/team/note.md", "duplicate").error
     assert backend.delete("/webdav/").error
     assert backend.upload_files([("/webdav/team/x.png", b"image")])[0].error
-    assert not backend.write("/notes/local.md", "local").error
+    assert not backend.write("/scratch/local.md", "local").error
 
 
 def test_readonly_and_isolation_cover_context_and_file_tools(tmp_path):
@@ -165,13 +165,13 @@ def test_runtime_routes_backend_and_passes_description_to_both_agents(tmp_path, 
     runtime = DeepAgentRuntime(ModelDefinition(id="m", name="M", base_url="https://example.com", api_key="test", model="m"),
         context_workspace=tmp_path / "context", agent_workspace=tmp_path / "agents/a/workspace", agent_id="a")
     asyncio.run(runtime.run(instructions="Hi", messages=(RuntimeMessage(role="user", content="Hi"),),
-        options=DeepAgentRuntimeOptions(name="Agent A", webdav=view.policy.config, tools=("write_context",))))
+        options=DeepAgentRuntimeOptions(name="Agent A", webdav=view.policy.config, tools=())))
     assert isinstance(captured["backend"], CompositeBackend)
     assert captured["name"] == "Agent A"
     assert captured["memory"] == ["/memories/AGENTS.md"]
     assert captured["permissions"] == view.policy.permissions
     assert "permissions" not in captured["subagents"][0]  # native inheritance
-    assert captured["interrupt_on"] == {"write_context": {"allowed_decisions": ["approve", "reject"]}}
+    assert captured["interrupt_on"]["write_file"]["allowed_decisions"] == ["approve", "reject"]
     for middleware in (captured["middleware"], captured["subagents"][0]["middleware"]):
         prompt = next(item.prompt for item in middleware if isinstance(item, WorkspaceMiddleware))
         assert "Team documents" in prompt and "Permission: write" in prompt and "remote" in prompt
@@ -187,10 +187,10 @@ def test_nested_permissions_native_backend_and_context(tmp_path, parent, child, 
         directories.reverse()
     view.policy = WebDAVPathPolicy(AgentWebDAVConfig(True, tuple(directories)))
     rules = view.policy.permissions
-    assert _check_fs_permission(rules, "write", "/webdav/team/drafts/new.md") == ("allow" if child == "write" else "deny")
-    assert _check_fs_permission(rules, "write", "/webdav/team/new.md") == ("allow" if parent == "write" else "deny")
+    assert _check_fs_permission(rules, "write", "/webdav/team/drafts/new.md") == ("interrupt" if child == "write" else "deny")
+    assert _check_fs_permission(rules, "write", "/webdav/team/new.md") == ("interrupt" if parent == "write" else "deny")
     assert _check_fs_permission(rules, "read", "/webdav/team2/secret.md") == "deny"
-    assert _check_fs_permission(rules, "write", "/notes/local.md") == "allow"
+    assert _check_fs_permission(rules, "write", "/scratch/local.md") == "allow"
     middleware = FilesystemMiddleware(backend=backend, _permissions=rules)
     tools = {tool.name: tool for tool in middleware.tools}
     runtime = SimpleNamespace(tool_call_id="test")
@@ -251,3 +251,76 @@ def test_multiple_directory_validation_and_empty_permissions():
         policy.resolve("/笔记2/new.md")
     for config in (AgentWebDAVConfig(True), AgentWebDAVConfig(False, config.directories)):
         assert _check_fs_permission(WebDAVPathPolicy(config).permissions, "read", "/webdav/笔记/new.md") == "deny"
+
+@pytest.mark.parametrize('delegate', [False, True])
+@pytest.mark.parametrize('decision', ['approve', 'reject'])
+@pytest.mark.parametrize('operation', ['write_file', 'edit_file'])
+def test_real_graph_webdav_hitl(tmp_path, delegate, decision, operation):
+    from deepagents import create_deep_agent
+    from deepagents.middleware._fs_interrupt import _build_interrupt_on_from_permissions
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import AIMessage, ToolMessage
+    from langchain_core.outputs import ChatResult, ChatGeneration
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command
+    backend, view, remote, calls = setup_backend(tmp_path)
+    class Model(BaseChatModel):
+        @property
+        def _llm_type(self): return 'hitl-test'
+        def bind_tools(self, tools, **kwargs): return self
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            is_child = any('CHILD' in m.text for m in messages if m.type == 'system')
+            if any(isinstance(m, ToolMessage) for m in messages):
+                result = AIMessage(content='done')
+            elif delegate and not is_child:
+                result = AIMessage(content='', tool_calls=[{'name':'task','id':'child','args':{'description':'Write the document','subagent_type':'general-purpose'}}])
+            else:
+                args = {'file_path':'/webdav/team/hitl.md','content':'approved'} if operation == 'write_file' else {'file_path':'/webdav/team/note.md','old_string':'original','new_string':'approved'}
+                result = AIMessage(content='', tool_calls=[{'name':operation,'id':'write','args':args}])
+            return ChatResult(generations=[ChatGeneration(message=result)])
+    permissions=view.policy.permissions
+    interrupt_on=_build_interrupt_on_from_permissions(permissions)
+    for rule in interrupt_on.values(): rule['allowed_decisions']=['approve','reject']
+    saver=InMemorySaver()
+    def build():
+        return create_deep_agent(model=Model(),backend=backend,permissions=permissions,interrupt_on=interrupt_on,checkpointer=saver,
+            subagents=[{'name':'general-purpose','description':'child','system_prompt':'CHILD'}])
+    config={'configurable':{'thread_id':'approval'}}
+    graph=build()
+    first=asyncio.run(graph.ainvoke({'messages':[{'role':'user','content':'Write'}]},config))
+    assert first.get('__interrupt__')
+    assert calls == []
+    assert remote == {'/dav/notebook/team/note.md':b'original'}
+    # Rebuild the graph to exercise checkpoint-based approval resumption.
+    resumed=asyncio.run(build().ainvoke(Command(resume={'decisions':[{'type':decision}]}),config))
+    assert not resumed.get('__interrupt__')
+    if decision == 'approve':
+        target='hitl.md' if operation=='write_file' else 'note.md'
+        assert remote['/dav/notebook/team/'+target]==b'approved'
+        assert (view.service._files_dir/'team'/target).read_text()=='approved'
+        assert sum(method=='PUT' for method,_ in calls)==1
+    else:
+        assert calls==[]
+        assert not (view.service._files_dir/'team/hitl.md').exists()
+        assert (view.service._files_dir/'team/note.md').read_text()=='original'
+
+
+def test_shared_files_and_removed_notes(tmp_path):
+    from server.infrastructure.shared_files_backend import SharedFilesBackend
+    root=tmp_path/'knowledge'
+    root.mkdir()
+    backend=SharedFilesBackend(root_dir=root,virtual_mode=True)
+    assert not backend.write('/existing.md','shared').error
+    assert not asyncio.run(backend.aedit('/existing.md','shared','updated')).error
+    assert backend.read('/existing.md').file_data['content']=='updated'
+    assert backend.write('/binary.png','no').error
+    assert backend.delete('/existing.md').error
+    (root/'alias.md').symlink_to(tmp_path/'private.md')
+    assert backend.read('/alias.md').error
+    assert backend.write('/alias.md','no').error
+    private=AgentFilesystemBackend(root_dir=tmp_path,virtual_mode=True)
+    (tmp_path/'notes').mkdir()
+    (tmp_path/'notes/old.md').write_text('retired')
+    assert private.read('/notes/old.md').error
+    assert private.write('/notes/new.md','no').error
+    assert not private.grep('retired','/').matches

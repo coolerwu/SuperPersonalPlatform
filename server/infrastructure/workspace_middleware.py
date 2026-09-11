@@ -11,6 +11,7 @@ WORKSPACE_PROMPT = "\n".join([
     "## Agent Workspace Contract",
     "File tools see '/' as this Agent's private workspace. Use /skills/, /scratch/, etc. directly; do not create another /workspace/ directory.",
     *[f"- /{d.name}/: {d.purpose}" for d in WORKSPACE_DIRECTORIES],
+    "/files/ contains local shared knowledge. Use native file tools to find, read and edit it. Temporary notes belong in /scratch/, persistent memory in /memories/, deliverables in /artifacts/.",
     "Do not delete fixed top-level directories. Other Agents and platform configuration are outside this filesystem.",
     "execute_code saves scripts in /scratch/ and deliverables in /artifacts/. Use the returned script_path and file paths.",
     "Inside the code container ONLY, /workspace/input is read-only input, /workspace/work is temporary working space, and /workspace/output receives deliverables. These are temporary mounts, not file-tool paths. They are cleaned after execution; original inputs and saved scripts remain.",
@@ -25,7 +26,7 @@ class WorkspaceMiddleware(AgentMiddleware):
             for directory in webdav.directories:
                 purpose = directory.description or "User documents and shared knowledge from Nutstore."
                 self.prompt += f"\n- /webdav{directory.path.rstrip('/')}/: {purpose} Permission: {directory.permission}."
-            self.prompt += " Allowed writes update remote Nutstore files. Use /scratch/ for scripts, /artifacts/ for deliverables and /memories/ for private memory."
+            self.prompt += " All writes to writable WebDAV paths require human approval before execution and update remote Nutstore files only after approval. Read-only paths reject writes. Use /scratch/ for scripts, /artifacts/ for deliverables and /memories/ for private memory."
 
     def modify_request(self, request: ModelRequest) -> ModelRequest:
         if self.prompt in (request.system_message.text if request.system_message else ""):

@@ -16,7 +16,6 @@ class WorkspaceDirectory:
 WORKSPACE_DIRECTORIES = (
     WorkspaceDirectory("artifacts", "Final deliverables; return these paths to the user."),
     WorkspaceDirectory("scratch", "Drafts and saved execution scripts (.py/.sh); subject to scratch retention cleanup."),
-    WorkspaceDirectory("notes", "Your working notes; shared user knowledge belongs in Context tools."),
     WorkspaceDirectory("skills", "Reusable skills; follow Skills and SkillImprovement middleware rules."),
     WorkspaceDirectory("memories", "Long-term memory; follow MemoryMiddleware rules."),
     WorkspaceDirectory("improvements", "Skill reflections, reviews and change records."),
@@ -76,7 +75,7 @@ class WebDAVPathPolicy:
                 patterns = [escaped, escaped + "/**"]
                 rules.append(FilesystemPermission(operations=["read"], paths=patterns))
                 rules.append(FilesystemPermission(operations=["write"], paths=patterns,
-                    mode="allow" if directory.permission == "write" else "deny"))
+                    mode="interrupt" if directory.permission == "write" else "deny"))
                 ancestors.update(str(p) for p in PurePosixPath(path).parents if str(p).startswith("/webdav"))
         if ancestors:
             rules.append(FilesystemPermission(operations=["read"], paths=[glob.escape(p) for p in sorted(ancestors)]))
@@ -94,7 +93,7 @@ class WebDAVPathPolicy:
             raise PermissionError("The WebDAV mount root cannot be modified")
         # Exact ancestor permissions allow directory navigation only, never ancestor files.
         selected = any(path == d.path or path.startswith(d.path.rstrip("/") + "/") for d in self.config.directories)
-        if (not selected and not navigation) or _check_fs_permission(self.permissions, "write" if write else "read", full) != "allow":
+        if (not selected and not navigation) or _check_fs_permission(self.permissions, "write" if write else "read", full) == "deny":
             raise PermissionError("WebDAV permission denied: directory is unselected or read-only")
         return full + ("/" if path == "/" else "")
 

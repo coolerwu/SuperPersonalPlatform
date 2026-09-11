@@ -226,7 +226,10 @@ class RunService:
         runtime_options = _runtime_options(agent_snapshot.get("deepagent"), name=str(agent_snapshot.get("name") or ""), webdav=agent_snapshot.get("webdav"))
         use_session_checkpoint = bool(session_id)
         approval_resume = self._approval_resume(run_id)
-        use_approval_checkpoint = bool(runtime_options.interrupt_on or approval_resume is not None)
+        use_approval_checkpoint = bool(
+            runtime_options.interrupt_on or approval_resume is not None
+            or (runtime_options.webdav.enabled and any(d.permission == "write" for d in runtime_options.webdav.directories))
+        )
         history = (
             self._session_service.read_messages(session_id, limit=SESSION_HISTORY_READ_LIMIT)
             if session_id and self._session_service is not None

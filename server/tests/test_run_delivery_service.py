@@ -26,7 +26,7 @@ agents:
       model_id: default
       deepagent:
         interrupt_on:
-          - write_context
+          - arxiv
 """
 
 
@@ -101,7 +101,7 @@ def test_delivery_notifies_approval_then_delivers_resumed_result(tmp_path, monke
                     interrupt_id="interrupt-1",
                     actions=(
                         RunApprovalAction(
-                            name="write_context",
+                            name="write_file",
                             args={"path": "/files/result.md"},
                             description="写入结果文档",
                             allowed_decisions=("approve", "reject"),
