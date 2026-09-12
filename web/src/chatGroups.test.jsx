@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatGroupsPage } from "./chatGroups.jsx";
-import { ChatComposer } from "./chatComponents.jsx";
+import { ApprovalPanel, ChatComposer } from "./chatComponents.jsx";
 
 afterEach(cleanup);
 const config = "agents:\n  definitions:\n    - id: assistant\n      name: 基础助手\n";
@@ -37,6 +37,21 @@ test("shared composer preserves IME and shift-enter, prevents sends while busy",
   rerender(<ChatComposer value="你好" onChange={() => {}} onSend={send} busy />);
   fireEvent.keyDown(input, { key: "Enter" });
   expect(send).toHaveBeenCalledTimes(1);
+});
+
+test("shared approval panel prevents duplicate submits and restores controls after failure", async () => {
+  let rejectDecision;
+  const onDecision = vi.fn(() => new Promise((_, reject) => { rejectDecision = reject; }));
+  render(<ApprovalPanel approval={{ interrupts: [{ actions: [{ name: "write_file", args: { file_path: "/webdav/a.md" } }] }] }} onDecision={onDecision} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "批准并继续" }));
+  fireEvent.click(screen.getByRole("button", { name: "批准中…" }));
+  expect(onDecision).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("button", { name: "批准中…" })).toBeDisabled();
+
+  rejectDecision(new Error("审批接口不可用"));
+  expect(await screen.findByRole("alert")).toHaveTextContent("审批接口不可用");
+  expect(screen.getByRole("button", { name: "批准并继续" })).toBeEnabled();
 });
 
 test("group mentions submit member IDs in textual order and default sends have no mentions", async () => {

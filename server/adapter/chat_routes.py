@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
-from server.app.run_service import RunNotFoundError
+from server.app.run_service import RunNotFoundError, SessionRunConflictError
 from server.app.session_service import SessionService
 from server.domain.agent_config import AgentConfigError
 from server.infrastructure.config import load_settings
@@ -163,6 +163,11 @@ def create_chat_router(container: AppContainer) -> APIRouter:
                     **({"client_message_id": client_message_id} if client_message_id else {}),
                 },
             )
+        except SessionRunConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": str(exc), "active_run_id": exc.run_id, "status": exc.status},
+            ) from exc
         except (ValueError, AgentConfigError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if container.run_worker_service is not None:

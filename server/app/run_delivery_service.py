@@ -271,7 +271,7 @@ def _approval_request_id(approval: dict[str, Any]) -> str:
 
 
 def _approval_message(run_id: str, request: dict[str, Any]) -> str:
-    lines = ["此任务需要审批后才能继续：", f"Run: {run_id}"]
+    lines = ["此任务需要审批后才能继续："]
     action_number = 0
     interrupts = request.get("interrupts") if isinstance(request.get("interrupts"), list) else []
     for interrupt in interrupts:
@@ -290,8 +290,8 @@ def _approval_message(run_id: str, request: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            f"批准：/approve {run_id}",
-            f"拒绝：/reject {run_id} 原因",
+            "批准：approve",
+            "拒绝：reject",
         ]
     )
     return "\n".join(lines)

@@ -15,6 +15,7 @@ from urllib.parse import quote, urljoin
 import yaml
 
 from server.app.debounce_executor import DebouncedTaskExecutor
+from server.app.run_service import SessionRunConflictError
 from server.infrastructure.ilink_client import (
     ILinkAPIError,
     ILinkClient,
@@ -361,6 +362,26 @@ class WechatChannelService:
             )
             return
 
+        if self._session_service is not None:
+            session = self._session_service.get_or_create(
+                channel="wechat",
+                channel_account_id=self._account_id,
+                peer_type=peer_type,
+                peer_id=peer_id,
+                agent_id=agent_id,
+                metadata={"to_user_id": to_user_id},
+            )
+            active_run = self._run_service.active_run_for_session(session.session_id)
+            if active_run is not None:
+                status = str((active_run.get("state") or {}).get("status") or "")
+                message = (
+                    "当前任务等待审批，请回复 approve 或 reject。"
+                    if status == "waiting_approval"
+                    else "当前任务仍在运行，请等待完成后再发送新消息。"
+                )
+                await self._send_reply(from_user_id, context_token, message)
+                return
+
         await self._queue_pending_message(
             key=pending_key,
             text=text,
@@ -612,6 +633,12 @@ class WechatChannelService:
                 completed = await self._run_service.execute_run(run_id)
             result = completed.get("result") or {}
             reply = str(result.get("content") or result.get("error") or "任务没有返回内容")
+        except SessionRunConflictError as exc:
+            reply = (
+                "当前任务等待审批，请回复 approve 或 reject。"
+                if exc.status == "waiting_approval"
+                else "当前任务仍在运行，请等待完成后再发送新消息。"
+            )
         except Exception as exc:
             reply = f"DeepAgent 处理失败：{exc}"
             async with self._lock:
@@ -638,7 +665,7 @@ class WechatChannelService:
         if not matches:
             await self._send_reply(from_user_id, context_token, "没有找到当前微信会话可审批的任务。")
             return
-        if len(matches) > 1:
+        if command.selector and len(matches) > 1:
             run_ids = "\n".join(f"- {item['run_id']}" for item in matches[:5])
             await self._send_reply(
                 from_user_id,
@@ -671,7 +698,7 @@ class WechatChannelService:
         peer_type: str,
     ) -> list[dict[str, Any]]:
         matches: list[dict[str, Any]] = []
-        for summary in reversed(self._run_service.list_runs()):
+        for summary in self._run_service.list_runs():
             run_id = str(summary.get("run_id") or "").strip()
             if not run_id or (selector and not run_id.startswith(selector)):
                 continue

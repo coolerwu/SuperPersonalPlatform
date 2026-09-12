@@ -42,6 +42,10 @@ class FakeRunService:
         self.created: list[dict[str, Any]] = []
         self.run_details: dict[str, dict[str, Any]] = {}
         self.approval_decisions: list[dict[str, str]] = []
+        self.active_run: dict[str, Any] | None = None
+
+    def active_run_for_session(self, session_id: str) -> dict[str, Any] | None:
+        return self.active_run
 
     async def create_run(
         self,
@@ -456,7 +460,7 @@ def test_wechat_approval_commands_only_resume_matching_channel_run(tmp_path) -> 
             "run-other-peer": _waiting_approval_run("run-other-peer", account_id="default", peer_id="wxid_other"),
         }
 
-        await service._process_message(_text_message("/approve run-allowed", context_token="approve"))
+        await service._process_message(_text_message("approve", context_token="approve"))
         await service._process_message(_text_message("/reject run-allowed 不要覆盖", context_token="reject"))
 
         assert run_service.created == []
@@ -466,6 +470,36 @@ def test_wechat_approval_commands_only_resume_matching_channel_run(tmp_path) -> 
         ]
         assert "已批准任务 run-allowed" in client.sent[-2]["payload"]["item_list"][0]["text_item"]["text"]
         assert "已拒绝任务 run-allowed" in client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
+
+    asyncio.run(scenario())
+
+
+def test_wechat_plain_approval_uses_newest_matching_run(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, _client = _service(tmp_path)
+        run_service.run_details = {
+            "run-new": _waiting_approval_run("run-new", account_id="default", peer_id="wxid_user"),
+            "run-old": _waiting_approval_run("run-old", account_id="default", peer_id="wxid_user"),
+        }
+
+        await service._process_message(_text_message("approve"))
+
+        assert run_service.approval_decisions == [
+            {"run_id": "run-new", "decision": "approve", "message": ""},
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_wechat_blocks_normal_message_while_session_waits_for_approval(tmp_path) -> None:
+    async def scenario() -> None:
+        service, run_service, client = _service(tmp_path)
+        run_service.active_run = {"run_id": "run-active", "state": {"status": "waiting_approval"}}
+
+        await service._process_message(_text_message("继续补充"))
+
+        assert run_service.created == []
+        assert "请回复 approve 或 reject" in client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
 
     asyncio.run(scenario())
 

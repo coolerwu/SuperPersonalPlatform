@@ -23,6 +23,7 @@
 - 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json` 和 `delivery.json`；需要人工审批时额外保存 `approval.json`，记录强类型工具请求、当前决定和历史。run 由同一 FastAPI 进程内常驻 `RunWorkerService` 从落盘队列领取执行，而不是由 HTTP 请求内的临时 `asyncio.create_task` 执行；仅在 run 被 worker 领取后额外持有 `lock.json`，进入终态或 `waiting_approval` 后立即移除。`RunDeliveryService` 独立扫描 Run 索引，把审批通知和最终结果投递从微信接收协程、Scheduler 执行协程中解耦。
 - 统一调度器使用 `workspace/schedules/` 落盘调度定义和状态；WebDAV Context 同步和未来 Agent 定时任务共用这一套调度机制。
 - `workspace/sessions/index.json` 维护所有长期会话索引；长期 session 对微信和未来渠道默认开启。`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`；Agent 的 Checkpointer 固定开启，不再提供配置开关，开启时 DeepAgent/LangGraph 运行时状态写入 `workspace/sessions/checkpoints.sqlite`。
+- 同一 `session_id` 同时只允许一个 `queued`、`running` 或 `waiting_approval` Run。RunService 在保存附件、追加消息或创建 Run 目录前强制检查，冲突通过 HTTP 409 返回当前 Run ID 和状态，防止多个 Run 覆盖同一个 LangGraph checkpoint。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
 - Agent 的 DeepAgent 配置只保留 `max_iterations`、`todo_list` 和工具授权 `tools`。长期记忆、私有文件系统及会话 Checkpointer 固定开启；运行名使用 Agent 名称，debug 默认关闭。系统从工具注册表的 `approval_required` 生成 HITL `interrupt_on`；WebDAV 文件写入由原生 Permission interrupt 规则生成审批谓词，不再接受 Agent 自定义审批列表。原生文件工具按路径授权执行。移除 `name/debug/filesystem/use_longterm_memory/interrupt_on/subagents/response_format/context_schema/checkpointer/cache` 配置；系统继续管理通用子 Agent、Skills 和 SkillImprovement middleware。
 - 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `send_attachment`、`search_session`、`arxiv`、`yahoo_finance_news`、`browser_extract`、`schedule` 和 `execute_code`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
@@ -136,7 +137,7 @@ POST /api/runs/{run_id}/reject
 POST /api/runs/{run_id}/resume
 ```
 
-`POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`，只负责创建 `queued` run 并写入落盘队列；执行由同一 FastAPI 进程内的 `RunWorkerService` 领取，不再绑定创建请求的生命周期。未传 `session_id` 时按独立一次性 run 处理；若当前 Agent 授权了系统标记需审批的工具，平台仍会用 run ID 建立可恢复 checkpoint。传入 `session_id` 时，运行时使用 `workspace/sessions/checkpoints.sqlite` 作为 LangGraph SQLite checkpointer，并把 `configurable.thread_id` 设为该 `session_id`，同时只传当前 run 消息。DeepAgent 原生 interrupt 会把 Run 切到 `waiting_approval` 并释放 worker lock；批准或拒绝会写入 `approval_resolved` 事件、重新入队，再通过同一 thread ID 的 `Command(resume=...)` 从中断点继续。三个审批接口中，`approve` / `reject` 是快捷入口，`resume` 接受结构化 `decision=approve|reject` 和可选拒绝理由。微信来源 Run 和带微信投递目标的定时 Run 会由 `RunDeliveryService` 发出审批通知；用户可在 Web Chat/Runs 页面审批，也可在原微信身份中发送 `/approve <run_id>` 或 `/reject <run_id> <原因>`，微信侧只能匹配同一账号、peer、Agent 的待审批 Run。该接口保留给渠道接入、自动化和后端集成使用。`cancel` 会把 queued/running/waiting_approval run 标记为 `cancelled` 并释放 lock；`rerun` 只允许作用于 `completed/failed/cancelled` 终态 run，保留原 `input.json` 和事件审计，清除结果、审批快照并重新入队。
+`POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`，只负责创建 `queued` run 并写入落盘队列；执行由同一 FastAPI 进程内的 `RunWorkerService` 领取，不再绑定创建请求的生命周期。同一 session 已有活动 Run 时返回 409，响应 detail 包含 `message`、`active_run_id` 和 `status`。未传 `session_id` 时按独立一次性 run 处理；若当前 Agent 授权了系统标记需审批的工具，平台仍会用 run ID 建立可恢复 checkpoint。传入 `session_id` 时，运行时使用 `workspace/sessions/checkpoints.sqlite` 作为 LangGraph SQLite checkpointer，并把 `configurable.thread_id` 设为该 `session_id`，同时只传当前 run 消息。DeepAgent 原生 interrupt 会把 Run 切到 `waiting_approval` 并释放 worker lock；批准或拒绝会写入 `approval_resolved` 事件、重新入队，再通过同一 thread ID 的 `Command(resume=...)` 从中断点继续。三个审批接口中，`approve` / `reject` 是快捷入口，`resume` 接受结构化 `decision=approve|reject` 和可选拒绝理由。微信来源 Run 和带微信投递目标的定时 Run 会由 `RunDeliveryService` 发出审批通知；通知只提示回复 `approve` 或 `reject`，短命令选择同一账号、peer、Agent 下最新的待审批 Run，旧 `/approve <run_id>` 与 `/reject <run_id> <原因>` 继续兼容。该接口保留给渠道接入、自动化和后端集成使用。`cancel` 会把 queued/running/waiting_approval run 标记为 `cancelled` 并释放 lock；`rerun` 只允许作用于 `completed/failed/cancelled` 终态 run，保留原 `input.json` 和事件审计，清除结果、审批快照并重新入队。
 
 Chat API：
 
@@ -324,6 +325,7 @@ code_execution:
 - 强类型 `model_usage` 事件保存调用 ID、实际返回模型、输入/输出 tokens、缓存命中和错误标记；`workspace/runs/{run_id}/usage.json` 持久化按调用 ID 去重的明细、每次调用使用的 Provider ID/单价/币种以及执行片段。Run 详情和轻量索引包含 `usage` 汇总。失败、自动重试、审批恢复和手动重跑均保留已发生消耗；重启不清零。执行耗时在每个执行片段结束时累计，排队和等待审批不计入；进程中断或正在执行的片段有明确不完整标记，不声称是完整耗时。
 - Providers 可配置 `input_price_per_million`、`output_price_per_million`（有限非负数，缺省未配置）和 `price_currency`（USD/CNY，默认 USD）。零单价有效；输入/输出两项单价及用量完整时，才按 `input_tokens * input_price / 1e6 + output_tokens * output_price / 1e6` 估算。每次调用保存执行时的价格，不随后续配置修改重算。缓存命中包含在输入总量中，当前估算不单独处理缓存折扣、缓存写入溢价、阶梯价、工具费用或税费，不替代供应商账单；不同币种分开汇总。
 - Runs 页面沿用一分钟轮询和详情快照合并，新增全部/单 Agent、全部保留任务/近 24 小时/近 7 天创建任务的消耗汇总，以及 Run 消耗详情。时间筛选按 Run 创建时间，包含所选 Run 的全部执行消耗。旧任务不做历史迁移或补算，显示“未记录”；未知调用、未估价调用和有用量任务覆盖数分别显示。统计仅覆盖仍保留的 Run，15 天维护清理后的 Run 不再计入，不是长期财务账本。
+- Runs 和共享聊天审批面板在提交期间显示批准中/拒绝中并禁止重复点击；成功后立即移除操作面板、显示恢复提示并更新本地 Run 状态，服务端轮询继续负责最终校正。Runs 状态使用中文短标签，避免状态列与 Agent 列重叠。
 
 ## Agent Workspace Directory Contract
 

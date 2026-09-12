@@ -88,6 +88,35 @@ def test_chat_routes_deduplicate_client_message_id(tmp_path) -> None:
     assert [message["content"] for message in messages] == ["只创建一次"]
 
 
+def test_chat_and_run_routes_reject_second_active_run_for_session(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+    session_id = client.post("/api/chat/session", json={"agent_id": "assistant"}).json()["session"]["session_id"]
+    first = client.post(
+        "/api/chat/messages",
+        json={"agent_id": "assistant", "session_id": session_id, "content": "first", "client_message_id": "one"},
+    )
+    assert first.status_code == 200
+
+    chat_conflict = client.post(
+        "/api/chat/messages",
+        json={"agent_id": "assistant", "session_id": session_id, "content": "second", "client_message_id": "two"},
+    )
+    api_conflict = client.post(
+        "/api/runs",
+        json={"agent_id": "assistant", "session_id": session_id, "content": "third"},
+    )
+
+    for response in (chat_conflict, api_conflict):
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "message": f"session already has an active run: {first.json()['run']['run_id']} (queued)",
+            "active_run_id": first.json()["run"]["run_id"],
+            "status": "queued",
+        }
+
+
 def test_chat_routes_list_and_change_web_sessions(tmp_path) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
 

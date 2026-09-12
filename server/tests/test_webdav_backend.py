@@ -305,6 +305,78 @@ def test_real_graph_webdav_hitl(tmp_path, delegate, decision, operation):
         assert (view.service._files_dir/'team/note.md').read_text()=='original'
 
 
+def test_real_graph_webdav_hitl_resumes_once_with_sqlite_checkpoint(tmp_path):
+    from deepagents import create_deep_agent
+    from deepagents.middleware._fs_interrupt import _build_interrupt_on_from_permissions
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import AIMessage, ToolMessage
+    from langchain_core.outputs import ChatGeneration, ChatResult
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from langgraph.types import Command
+
+    backend, view, remote, calls = setup_backend(tmp_path)
+
+    class Model(BaseChatModel):
+        model_calls: int = 0
+
+        @property
+        def _llm_type(self):
+            return "sqlite-hitl-test"
+
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.model_calls += 1
+            if any(isinstance(message, ToolMessage) for message in messages):
+                message = AIMessage(content="done")
+            else:
+                message = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "write_file",
+                        "id": "write-once",
+                        "args": {"file_path": "/webdav/team/once.md", "content": "approved"},
+                    }],
+                )
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    async def scenario():
+        permissions = view.policy.permissions
+        interrupt_on = _build_interrupt_on_from_permissions(permissions)
+        for rule in interrupt_on.values():
+            rule["allowed_decisions"] = ["approve", "reject"]
+        model = Model()
+        checkpoint_path = tmp_path / "sessions" / "checkpoints.sqlite"
+        checkpoint_path.parent.mkdir(parents=True)
+        async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as saver:
+            def build():
+                return create_deep_agent(
+                    model=model,
+                    backend=backend,
+                    permissions=permissions,
+                    interrupt_on=interrupt_on,
+                    checkpointer=saver,
+                )
+
+            config = {"configurable": {"thread_id": "single-session"}}
+            first = await build().ainvoke({"messages": [{"role": "user", "content": "Write"}]}, config)
+            interrupt = first["__interrupt__"][0]
+            resumed = await build().ainvoke(
+                Command(resume={interrupt.id: {"decisions": [{"type": "approve"}]}}),
+                config,
+            )
+            return resumed, model.model_calls
+
+    resumed, model_calls = asyncio.run(scenario())
+
+    assert not resumed.get("__interrupt__")
+    assert remote["/dav/notebook/team/once.md"] == b"approved"
+    assert (view.service._files_dir / "team" / "once.md").read_text() == "approved"
+    assert sum(method == "PUT" for method, _ in calls) == 1
+    assert model_calls == 2
+
+
 def test_shared_files_and_removed_notes(tmp_path):
     from server.infrastructure.shared_files_backend import SharedFilesBackend
     root=tmp_path/'knowledge'

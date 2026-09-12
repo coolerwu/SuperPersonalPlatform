@@ -70,6 +70,14 @@ class RunStateError(Exception):
     pass
 
 
+class SessionRunConflictError(RunStateError):
+    def __init__(self, *, session_id: str, run_id: str, status: str) -> None:
+        self.session_id = session_id
+        self.run_id = run_id
+        self.status = status
+        super().__init__(f"session already has an active run: {run_id} ({status})")
+
+
 @dataclass(frozen=True)
 class RunInput:
     run_id: str
@@ -142,6 +150,15 @@ class RunService:
                 return self.get_run(group_context.run_id)
         elif session_id and self._session_service and self._session_service.session_summary(session_id).get("channel") == "chat_group":
             raise ValueError("群成员会话只能通过群聊接口执行")
+        if session_id:
+            active_run = self.active_run_for_session(session_id)
+            if active_run is not None:
+                state = active_run.get("state") if isinstance(active_run.get("state"), dict) else {}
+                raise SessionRunConflictError(
+                    session_id=session_id,
+                    run_id=str(active_run.get("run_id") or ""),
+                    status=str(state.get("status") or "queued"),
+                )
         saved_attachments: tuple[dict[str, Any], ...] = ()
         if session_id and self._session_service is not None:
             saved_attachments = self._session_service.save_attachments(session_id, attachments)
@@ -812,6 +829,25 @@ class RunService:
     def list_runs(self) -> list[dict[str, Any]]:
         self.reconcile_stale_active_runs()
         return self._list_runs_no_reconcile()
+
+    def active_run_for_session(self, session_id: str) -> dict[str, Any] | None:
+        target = session_id.strip()
+        if not target:
+            return None
+        for summary in self._list_runs_no_reconcile():
+            if str(summary.get("session_id") or "") != target:
+                continue
+            run_id = str(summary.get("run_id") or "").strip()
+            if not run_id:
+                continue
+            try:
+                run = self.get_run(run_id)
+            except (RunNotFoundError, OSError, ValueError, json.JSONDecodeError):
+                continue
+            state = run.get("state") if isinstance(run.get("state"), dict) else {}
+            if state.get("status") in {"queued", "running", "waiting_approval"}:
+                return run
+        return None
 
     def _list_runs_no_reconcile(self) -> list[dict[str, Any]]:
         index = self._read_index()

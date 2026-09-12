@@ -2,7 +2,9 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
-from server.app.run_service import RunService
+import pytest
+
+from server.app.run_service import RunService, SessionRunConflictError
 from server.app.run_worker_service import RunWorkerService
 from server.app.session_service import SessionService
 from server.app.system_log_service import SystemLogService
@@ -130,6 +132,30 @@ def test_run_service_create_run_only_enqueues_until_claimed(tmp_path) -> None:
     lock = json.loads((tmp_path / "runs" / run_id / "lock.json").read_text(encoding="utf-8"))
     assert lock["lease_id"] == claim["lease_id"]
     assert lock["worker_id"] == "worker-a"
+
+
+def test_run_service_rejects_second_active_run_for_same_session_before_writing(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    sessions = SessionService(tmp_path)
+    identity = sessions.get_or_create(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+    service = RunService(tmp_path, session_service=sessions)
+    first = asyncio.run(service.create_run(content="first", agent_id="assistant", session_id=identity.session_id))
+    run_dirs_before = sorted(path.name for path in (tmp_path / "runs").iterdir() if path.is_dir())
+
+    with pytest.raises(SessionRunConflictError) as caught:
+        asyncio.run(service.create_run(content="second", agent_id="assistant", session_id=identity.session_id))
+
+    assert caught.value.run_id == first["run_id"]
+    assert caught.value.status == "queued"
+    assert sorted(path.name for path in (tmp_path / "runs").iterdir() if path.is_dir()) == run_dirs_before
+    messages = sessions.read_messages(identity.session_id)
+    assert [message["content"] for message in messages] == ["first"]
 
 
 def test_run_service_requeues_runs_interrupted_by_restart(tmp_path) -> None:

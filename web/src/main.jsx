@@ -86,7 +86,11 @@ async function api(path, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = Array.isArray(data.detail) ? data.detail.map((item) => item.msg || String(item)).join("；") : data.detail;
+    const detail = Array.isArray(data.detail)
+      ? data.detail.map((item) => item.msg || String(item)).join("；")
+      : typeof data.detail === "object"
+        ? data.detail?.message
+        : data.detail;
     const error = new Error(detail || "请求失败");
     error.status = response.status;
     throw error;
@@ -760,7 +764,14 @@ function RunsPage() {
       ...(payload ? { body: JSON.stringify(payload) } : {}),
     });
     setActiveRun((current) => (current?.run_id === run.run_id ? mergeRunSnapshot(current, run) : run));
+    setRuns((current) => current.map((item) => item.run_id === run.run_id ? {
+      ...item,
+      status: runStatus(run),
+      updated_at: run.state?.updated_at || item.updated_at,
+      seq: run.state?.seq ?? item.seq,
+    } : item));
     await load();
+    return run;
   }
 
   return (
@@ -951,6 +962,12 @@ function RunDetail({ run, events, onRunAction }) {
           approval={run.approval.request}
           onDecision={(decision, message) => onRunAction?.(runId, "resume", { decision, message })}
         />
+      ) : null}
+      {run.approval?.status === "resume_queued" ? (
+        <div className="approval-resumed" role="status">
+          <CheckCircle2 size={16} />
+          {latestApprovalDecision(run) === "reject" ? "已拒绝，Agent 正在继续处理" : "已批准，Agent 正在恢复运行"}
+        </div>
       ) : null}
 
       <div className="tabs-line">
@@ -2613,9 +2630,25 @@ function Status({ status }) {
   return (
     <span className={`status status-${String(value)}`}>
       {icon}
-      {value}
+      {STATUS_LABELS[value] || value}
     </span>
   );
+}
+
+const STATUS_LABELS = {
+  queued: "排队中",
+  running: "运行中",
+  waiting_approval: "待审批",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  retrying: "重试中",
+  unknown: "未知",
+};
+
+function latestApprovalDecision(run) {
+  const history = Array.isArray(run?.approval?.history) ? run.approval.history : [];
+  return history.at(-1)?.resolution?.decision || "";
 }
 
 function runStatus(run) {

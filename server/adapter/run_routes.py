@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
-from server.app.run_service import RunNotFoundError, RunStateError
+from server.app.run_service import RunNotFoundError, RunStateError, SessionRunConflictError
 from server.domain.agent_config import AgentConfigError
 
 
@@ -68,6 +68,11 @@ def create_run_router(container: AppContainer) -> APIRouter:
                 attachments=tuple(payload.attachments),
                 metadata=payload.metadata,
             )
+        except SessionRunConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": str(exc), "active_run_id": exc.run_id, "status": exc.status},
+            ) from exc
         except (ValueError, AgentConfigError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if container.run_worker_service is not None:

@@ -146,7 +146,9 @@ def test_delivery_notifies_approval_then_delivers_resumed_result(tmp_path, monke
 
     assert len(channel.deliveries) == 1
     assert "此任务需要审批" in channel.deliveries[0]["text"]
-    assert f"/approve {run_id}" in channel.deliveries[0]["text"]
+    assert "批准：approve" in channel.deliveries[0]["text"]
+    assert "拒绝：reject" in channel.deliveries[0]["text"]
+    assert run_id not in channel.deliveries[0]["text"]
     assert run_service.get_run(run_id)["delivery"]["approval_notification"]["status"] == "delivered"
 
     run_service.approve_run(run_id)

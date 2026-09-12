@@ -656,6 +656,23 @@ pre {
   padding: 10px;
 }
 
+.approval-error {
+  margin: 0;
+  color: #ffaaaa;
+  font-size: 12px;
+}
+
+.approval-resumed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(55, 217, 107, 0.34);
+  border-radius: 7px;
+  background: rgba(18, 72, 38, 0.22);
+  color: #9af7b1;
+  padding: 10px 12px;
+}
+
 .thinking-panel {
   min-width: 0;
   border: 1px solid rgba(123, 145, 170, 0.22);
@@ -963,7 +980,7 @@ pre {
 
 .run-table {
   display: grid;
-  grid-template-columns: minmax(150px, 1.3fr) 92px minmax(96px, 0.8fr) 86px;
+  grid-template-columns: minmax(150px, 1.3fr) 88px minmax(96px, 0.8fr) 86px;
   gap: 10px;
   align-items: center;
 }

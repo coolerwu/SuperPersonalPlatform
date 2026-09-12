@@ -1527,6 +1527,8 @@ test("creates and deletes a wechat account", async () => {
 
 test("runs page approves a paused DeepAgent run and resumes it", async () => {
   window.history.replaceState({}, "", "/runs");
+  let resolveResume;
+  let resumed = false;
   const waitingRun = {
     run_id: "run_waiting",
     input: { agent_id: "assistant", source: "web_chat", created_at: "2026-09-08T08:00:00Z" },
@@ -1541,7 +1543,7 @@ test("runs page approves a paused DeepAgent run and resumes it", async () => {
               {
                 name: "write_file",
                 description: "写入知识文件",
-                args: { path: "/notes/result.md" },
+                args: { path: "/webdav/result.md" },
                 allowed_decisions: ["approve", "reject"],
               },
             ],
@@ -1555,14 +1557,25 @@ test("runs page approves a paused DeepAgent run and resumes it", async () => {
     if (path.endsWith("/api/auth/me")) return response({ authenticated: true });
     if (path.endsWith("/api/runs") && (!options.method || options.method === "GET")) {
       return response({
-        runs: [{ run_id: "run_waiting", agent_id: "assistant", status: "waiting_approval", updated_at: "2026-09-08T08:00:00Z" }],
+        runs: [{ run_id: "run_waiting", agent_id: "assistant", status: resumed ? "queued" : "waiting_approval", updated_at: "2026-09-08T08:00:00Z" }],
       });
     }
     if (path.endsWith("/api/runs/run_waiting/events")) return response({ events: [] });
     if (path.endsWith("/api/runs/run_waiting/resume")) {
-      return response({ ...waitingRun, state: { status: "queued", seq: 5 }, approval: { status: "resume_queued" } });
+      return new Promise((resolve) => { resolveResume = () => {
+        resumed = true;
+        resolve(response({
+          ...waitingRun,
+          state: { status: "queued", seq: 5 },
+          approval: { status: "resume_queued", history: [{ resolution: { decision: "approve" } }] },
+        }));
+      }; });
     }
-    if (path.endsWith("/api/runs/run_waiting")) return response(waitingRun);
+    if (path.endsWith("/api/runs/run_waiting")) return response(resumed ? {
+      ...waitingRun,
+      state: { status: "queued", seq: 5 },
+      approval: { status: "resume_queued", history: [{ resolution: { decision: "approve" } }] },
+    } : waitingRun);
     return response({});
   });
 
@@ -1573,6 +1586,10 @@ test("runs page approves a paused DeepAgent run and resumes it", async () => {
   expect(await screen.findByText("等待操作审批")).toBeInTheDocument();
   expect(screen.getByText("write_file")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "批准并继续" }));
+  expect(await screen.findByRole("button", { name: "批准中…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "拒绝并继续" })).toBeDisabled();
+
+  await act(async () => resolveResume());
 
   await waitFor(() => {
     const resumeCall = global.fetch.mock.calls.find(
@@ -1582,6 +1599,9 @@ test("runs page approves a paused DeepAgent run and resumes it", async () => {
     const payload = JSON.parse(resumeCall[1].body);
     expect(payload.decision).toBe("approve");
     expect(payload.message).toBe("");
+    expect(screen.queryByText("等待操作审批")).not.toBeInTheDocument();
+    expect(screen.getByText("已批准，Agent 正在恢复运行")).toBeInTheDocument();
+    expect(screen.getAllByText("排队中").length).toBeGreaterThan(0);
   });
 });
 

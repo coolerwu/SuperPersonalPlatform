@@ -130,18 +130,22 @@ async function copyTextToClipboard(text) {
 
 export function ApprovalPanel({ approval, onDecision, compact = false }) {
   const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
   const interrupts = Array.isArray(approval?.interrupts) ? approval.interrupts : [];
   const actions = interrupts.flatMap((interrupt) => (Array.isArray(interrupt.actions) ? interrupt.actions : []));
   if (actions.length === 0) return null;
 
   async function decide(decision) {
     if (!onDecision || busy) return;
-    setBusy(true);
+    setBusy(decision);
+    setError("");
     try {
       await onDecision(decision, reason.trim());
+    } catch (exc) {
+      setError(exc.message || "审批提交失败，请重试");
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
 
@@ -170,16 +174,17 @@ export function ApprovalPanel({ approval, onDecision, compact = false }) {
         onChange={(event) => setReason(event.target.value)}
         placeholder="拒绝原因（可选，DeepAgent 会收到）"
         rows={2}
-        disabled={busy}
+        disabled={Boolean(busy)}
       />
+      {error ? <p className="approval-error" role="alert">{error}</p> : null}
       <div className="approval-controls">
-        <button className="danger" onClick={() => decide("reject")} disabled={busy}>
+        <button className="danger" onClick={() => decide("reject")} disabled={Boolean(busy)}>
           <XCircle size={15} />
-          拒绝并继续
+          {busy === "reject" ? "拒绝中…" : "拒绝并继续"}
         </button>
-        <button className="primary" onClick={() => decide("approve")} disabled={busy}>
+        <button className="primary" onClick={() => decide("approve")} disabled={Boolean(busy)}>
           <CheckCircle2 size={15} />
-          批准并继续
+          {busy === "approve" ? "批准中…" : "批准并继续"}
         </button>
       </div>
     </section>
