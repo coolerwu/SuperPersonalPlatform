@@ -61,6 +61,8 @@
 
 - 微信图片/附件通过 send_attachment 显式选择已有文件，工具仅排队并返回 queued，成功 run 结束后由 RunDeliveryService 发送到固化的当前微信目标。不要让 Agent 自选收件人或把排队说成已发送。每个发送部分持久化进度和稳定 client_id；重试只处理未确认部分，重跑不复用旧轮次附件。
 
+- Skill 自进化必须保留已有 Skill 的触发条件、必需步骤、输出契约、工具/subagent 拓扑、串并行顺序和审批边界；历史 improvement 记录中的平台判断必须按当前 runtime 重新验证。用户硬约束可放在 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 中，Agent 文件工具不得修改、覆盖或删除该区块及其所在 Skill；建议变更只写入 `/improvements/`，正式契约由用户通过平台文件入口调整。
+
 
 ## 群聊约定
 

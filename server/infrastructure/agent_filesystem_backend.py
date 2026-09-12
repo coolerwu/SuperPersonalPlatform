@@ -14,6 +14,15 @@ from deepagents.backends.utils import compile_grep_include_glob
 from server.infrastructure.agent_workspace import AGENT_WORKSPACE_DIRECTORIES
 
 
+SKILL_CONTRACT_START = "<!-- BEGIN USER CONTRACT -->"
+SKILL_CONTRACT_END = "<!-- END USER CONTRACT -->"
+SKILL_CONTRACT_ERROR = (
+    "This skill contains a protected user contract. Agent self-improvement may add guidance around it, "
+    "but cannot change, remove, overwrite, or delete the protected block. Record the proposed contract "
+    "change under /improvements/ instead."
+)
+
+
 class AgentFilesystemBackend(FilesystemBackend):
     """Restrict all Agent file operations to declared, non-browser directories."""
 
@@ -117,6 +126,9 @@ class AgentFilesystemBackend(FilesystemBackend):
         error = self._mutation_error(file_path)
         if error:
             return WriteResult(error=error)
+        error = self._skill_contract_write_error(file_path, content)
+        if error:
+            return WriteResult(error=error)
         return super().write(file_path, content)
 
     def edit(
@@ -129,10 +141,16 @@ class AgentFilesystemBackend(FilesystemBackend):
         error = self._mutation_error(file_path)
         if error:
             return EditResult(error=error)
+        error = self._skill_contract_edit_error(file_path, old_string, new_string, replace_all)
+        if error:
+            return EditResult(error=error)
         return super().edit(file_path, old_string, new_string, replace_all)
 
     def delete(self, file_path: str) -> DeleteResult:
         error = self._mutation_error(file_path, protect_root=True)
+        if error:
+            return DeleteResult(error=error)
+        error = self._skill_contract_delete_error(file_path)
         if error:
             return DeleteResult(error=error)
         return super().delete(file_path)
@@ -141,11 +159,70 @@ class AgentFilesystemBackend(FilesystemBackend):
         responses: list[FileUploadResponse] = []
         for file_path, content in files:
             error = self._mutation_error(file_path)
+            if not error:
+                try:
+                    next_content = content.decode("utf-8")
+                except UnicodeDecodeError:
+                    next_content = ""
+                error = self._skill_contract_write_error(file_path, next_content)
             if error:
                 responses.append(FileUploadResponse(path=file_path, error=error))
             else:
                 responses.extend(super().upload_files([(file_path, content)]))
         return responses
+
+    def _skill_contract_write_error(self, file_path: str, next_content: str) -> str | None:
+        path = self._resolve_path(file_path)
+        if not self._is_skill_file(path) or not path.is_file():
+            return None
+        try:
+            current_content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        current_contract = _skill_contract(current_content)
+        if current_contract is None:
+            return SKILL_CONTRACT_ERROR if SKILL_CONTRACT_START in current_content else None
+        return None if _skill_contract(next_content) == current_contract else SKILL_CONTRACT_ERROR
+
+    def _skill_contract_edit_error(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool,
+    ) -> str | None:
+        path = self._resolve_path(file_path)
+        if not self._is_skill_file(path) or not path.is_file() or not old_string:
+            return None
+        try:
+            current_content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        if SKILL_CONTRACT_START not in current_content:
+            return None
+        next_content = current_content.replace(old_string, new_string, -1 if replace_all else 1)
+        return self._skill_contract_write_error(file_path, next_content)
+
+    def _skill_contract_delete_error(self, file_path: str) -> str | None:
+        path = self._resolve_path(file_path)
+        candidates = [path] if path.is_file() else list(path.glob("**/SKILL.md")) if path.is_dir() else []
+        for candidate in candidates:
+            if not self._is_skill_file(candidate):
+                continue
+            try:
+                content = candidate.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if SKILL_CONTRACT_START in content:
+                return SKILL_CONTRACT_ERROR
+        return None
+
+    def _is_skill_file(self, path: Path) -> bool:
+        try:
+            relative = path.relative_to(self.cwd)
+        except ValueError:
+            return False
+        return len(relative.parts) >= 3 and relative.parts[0] == "skills" and relative.name == "SKILL.md"
 
     def _mutation_error(self, file_path: str, *, protect_root: bool = False) -> str | None:
         normalized = str(file_path or "").strip().replace("\\", "/")
@@ -172,3 +249,14 @@ class AgentFilesystemBackend(FilesystemBackend):
         else:
             reason = "The requested path is outside the writable agent directories."
         return f"Permission denied for '{file_path}'. {reason} Writable directories: {allowed_paths}"
+
+
+def _skill_contract(content: str) -> str | None:
+    start = content.find(SKILL_CONTRACT_START)
+    if start < 0:
+        return None
+    end = content.find(SKILL_CONTRACT_END, start + len(SKILL_CONTRACT_START))
+    if end < 0:
+        return None
+    end += len(SKILL_CONTRACT_END)
+    return content[start:end]

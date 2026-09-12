@@ -23,6 +23,18 @@ When you create or update a skill, also record why:
 
 Improvement records are audit material, not active skills. Only `/skills/{skill_id}/SKILL.md` files are active skills.
 Do not store secrets in skills or improvement records.
+
+Existing skills are authoritative user workflows. Preserve their triggers, required steps, output contract,
+tool and subagent usage, execution topology, serial/parallel ordering, approval boundaries, and other explicit
+MUST/NEVER constraints. Do not replace a required subagent chain with main-agent roleplay, merge serial steps
+into one model response, or change serial work into parallel work unless the user explicitly requests that exact
+contract change in the current conversation.
+
+Text between `<!-- BEGIN USER CONTRACT -->` and `<!-- END USER CONTRACT -->` is immutable to Agent file tools.
+You may improve text around that block. If evidence suggests the protected contract should change, write a
+proposal and evidence under `/improvements/`; do not modify or remove the protected block. Treat old reviews,
+reflections, and change records as historical claims, and verify platform behavior against the current runtime
+before relying on them.
 """
 
 

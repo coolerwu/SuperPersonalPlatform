@@ -5,7 +5,11 @@ import pytest
 from langchain_core.messages import SystemMessage
 
 from server.infrastructure.agent_workspace import agent_workspace_path, browser_workspace_path, WORKSPACE_DIRECTORIES
-from server.infrastructure.agent_filesystem_backend import AgentFilesystemBackend
+from server.infrastructure.agent_filesystem_backend import (
+    AgentFilesystemBackend,
+    SKILL_CONTRACT_END,
+    SKILL_CONTRACT_START,
+)
 from server.infrastructure.workspace_middleware import WorkspaceMiddleware, WORKSPACE_PROMPT
 
 
@@ -47,6 +51,36 @@ def test_browser_secret_unavailable_to_all_file_operations(tmp_path, asynchronou
     assert all("Cookies" not in x["path"] and "alias" not in x["path"] for x in call("glob", "**/*", "/").matches)
     assert call("grep", "public marker", "/").matches[0]["path"] == "/scratch/public.txt"
     assert (root / "browser" / "Cookies.txt").read_text() == "SECRET_NEVER_READ"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_agent_cannot_change_or_delete_protected_skill_contract(tmp_path, asynchronous):
+    root = agent_workspace_path(tmp_path, "first")
+    skill_dir = root / "skills" / "serial-review"
+    skill_dir.mkdir(parents=True)
+    original = (
+        "# Review\n\n"
+        f"{SKILL_CONTRACT_START}\n"
+        "Use four subagents strictly in serial order: A -> B -> C -> D.\n"
+        f"{SKILL_CONTRACT_END}\n\n"
+        "Notes may evolve.\n"
+    )
+    skill_path = skill_dir / "SKILL.md"
+    skill_path.write_text(original)
+    backend = AgentFilesystemBackend(root_dir=root, virtual_mode=True)
+
+    def call(name, *args):
+        method = getattr(backend, f"a{name}") if asynchronous else getattr(backend, name)
+        return asyncio.run(method(*args)) if asynchronous else method(*args)
+
+    assert call("edit", "/skills/serial-review/SKILL.md", "Notes may evolve.", "New notes.").error is None
+    assert "New notes." in skill_path.read_text()
+    assert call("edit", "/skills/serial-review/SKILL.md", "strictly in serial order", "in parallel").error
+    assert call("write", "/skills/serial-review/SKILL.md", "# Replaced").error
+    assert call("upload_files", [("/skills/serial-review/SKILL.md", b"# Uploaded")])[0].error
+    assert call("delete", "/skills/serial-review/SKILL.md").error
+    assert call("delete", "/skills/serial-review").error
+    assert "Use four subagents strictly in serial order" in skill_path.read_text()
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

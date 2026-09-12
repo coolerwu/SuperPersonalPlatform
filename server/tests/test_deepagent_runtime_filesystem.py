@@ -354,6 +354,9 @@ def test_skill_improvement_middleware_wraps_sync_model_call() -> None:
     assert "Memory is handled separately by MemoryMiddleware" in system_message.text
     assert "/skills/{skill_id}/SKILL.md" in system_message.text
     assert "/improvements/changes/{timestamp}_{change_id}.json" in system_message.text
+    assert "Do not replace a required subagent chain with main-agent roleplay" in system_message.text
+    assert "<!-- BEGIN USER CONTRACT -->" in system_message.text
+    assert "verify platform behavior against the current runtime" in system_message.text
 
 
 def test_skill_improvement_middleware_wraps_async_model_call() -> None:
