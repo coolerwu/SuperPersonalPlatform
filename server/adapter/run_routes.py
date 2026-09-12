@@ -104,6 +104,8 @@ def create_run_router(container: AppContainer) -> APIRouter:
     @router.post("/{run_id}/rerun")
     async def rerun(run_id: str) -> dict[str, object]:
         try:
+            if container.run_service.get_run(run_id).get("input", {}).get("snapshot", {}).get("group_context"):
+                raise RunStateError("群聊任务请在群聊中重试当前步骤或继续协作")
             rerun_payload = container.run_service.rerun(run_id)
         except RunNotFoundError as exc:
             raise HTTPException(status_code=404, detail="run not found") from exc

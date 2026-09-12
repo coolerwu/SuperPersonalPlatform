@@ -101,3 +101,6 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
 - `/notes/` is retired; check and back up existing content before removing its directory on target machines. Scratch notes belong in `/scratch/`, persistent memory in `/memories/`, deliverables in `/artifacts/`. Local shared knowledge uses the virtual `/files/` mount without copying data.
 
 - For WeChat attachment delivery changes, verify encrypted upload, image/file payloads, path permissions, frozen snapshots, partial-success retries and rerun isolation with mocked transports. Enable send_attachment only for user-authorized Agents; do not send real test messages without explicit authorization. Report queued versus delivered accurately.
+
+
+- For group-chat changes, verify shared single/group chat rendering, per-member checkpoint isolation, stable message/step IDs, restart recovery, approval pauses, stop/retry and the three-round/four-member limits. Group records live in `chat_groups/`; protect referenced sessions and unfinished step runs from maintenance cleanup. Group orchestration must remain outside the Run worker, and host control tools must not be inherited by subagents. No migration is needed when adding the group-chat workspace directory.

@@ -1,13 +1,11 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Bot,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock3,
-  Copy,
   Cpu,
   ExternalLink,
   FileJson,
@@ -32,10 +30,14 @@ import {
   XCircle,
 } from "lucide-react";
 import { AgentConfigEditor, ConfigVisualEditor, ProviderConfigEditor, parseConfigDraft } from "./configEditor.jsx";
+import { ChatMessageList, ChatComposer, ApprovalPanel, ThinkingPanel, MarkdownMessage } from "./chatComponents.jsx";
+import { ChatGroupsPage } from "./chatGroups.jsx";
+import { runEventThinkingText } from "./chatRuntime.js";
 import "./styles.css";
 
 const NAV_ITEMS = [
   { id: "chat", path: "/chat", label: "Chat", icon: Send },
+  { id: "chat-groups", path: "/chat-groups", label: "群聊", icon: Bot },
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
   { id: "config", path: "/config", label: "配置", icon: SlidersHorizontal },
@@ -84,29 +86,12 @@ async function api(path, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(data.detail || "请求失败");
+    const detail = Array.isArray(data.detail) ? data.detail.map((item) => item.msg || String(item)).join("；") : data.detail;
+    const error = new Error(detail || "请求失败");
     error.status = response.status;
     throw error;
   }
   return data;
-}
-
-async function copyTextToClipboard(text) {
-  if (globalThis.navigator?.clipboard?.writeText) {
-    await globalThis.navigator.clipboard.writeText(text);
-    return;
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) throw new Error("浏览器未允许复制");
 }
 
 function sameSnapshot(left, right) {
@@ -298,6 +283,7 @@ function App() {
       </aside>
       <main className="content">
         {page === "chat" ? <ChatPage /> : null}
+        {page === "chat-groups" ? <ChatGroupsPage api={api} /> : null}
         {page === "runs" ? <RunsPage /> : null}
         {page === "workspace" ? <WorkspacePage /> : null}
         {page === "config" ? <ConfigPage onNavigate={navigate} /> : null}
@@ -322,32 +308,10 @@ function ChatPage() {
   const [sending, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState("");
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
-  const [copiedMessageId, setCopiedMessageId] = useState("");
   const [error, setError] = useState("");
-  const messagesRef = useRef(null);
-  const composingRef = useRef(false);
   const sendingRef = useRef(false);
   const chatEventSeqRef = useRef(0);
   const chatRunContentRef = useRef("");
-  const copyFeedbackTimerRef = useRef(0);
-
-  useEffect(
-    () => () => {
-      if (copyFeedbackTimerRef.current) window.clearTimeout(copyFeedbackTimerRef.current);
-    },
-    [],
-  );
-
-  async function copyMessage(message) {
-    try {
-      await copyTextToClipboard(message.content);
-      setCopiedMessageId(message.id);
-      if (copyFeedbackTimerRef.current) window.clearTimeout(copyFeedbackTimerRef.current);
-      copyFeedbackTimerRef.current = window.setTimeout(() => setCopiedMessageId(""), 1_600);
-    } catch (exc) {
-      setError(exc.message || "复制失败，请重试");
-    }
-  }
 
   async function loadAgents() {
     const data = await api("/api/workspace/read", {
@@ -392,21 +356,6 @@ function ChatPage() {
     loadAgents().catch((exc) => setError(exc.message));
     loadSession("").catch((exc) => setError(exc.message));
   }, []);
-
-  useLayoutEffect(() => {
-    const node = messagesRef.current;
-    if (!node) return undefined;
-    function scrollToBottom() {
-      node.scrollTop = node.scrollHeight;
-    }
-    scrollToBottom();
-    const frame = window.requestAnimationFrame ? window.requestAnimationFrame(scrollToBottom) : 0;
-    return () => {
-      if (frame && window.cancelAnimationFrame) {
-        window.cancelAnimationFrame(frame);
-      }
-    };
-  }, [messages, activeRunId]);
 
   useEffect(() => {
     if (!activeRunId) return undefined;
@@ -587,10 +536,6 @@ function ChatPage() {
     }
   }
 
-  function isComposingMessage(event) {
-    return composingRef.current || event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229;
-  }
-
   async function newSession() {
     if (activeRunId) return;
     setSessionMenuOpen(false);
@@ -716,83 +661,10 @@ function ChatPage() {
           </div>
         </div>
 
-        <div className="chat-messages" ref={messagesRef}>
-          {messages.length === 0 ? (
-            <div className="chat-empty">
-              <TerminalSquare size={30} />
-              <strong>开始一次页面对话</strong>
-              <span>消息会进入长期 session；运行中输出会在这里实时刷新。</span>
-            </div>
-          ) : null}
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`chat-message ${message.role === "user" ? "user" : "assistant"} ${message.failed ? "failed" : ""}`}
-            >
-              <div className={`chat-bubble ${message.content ? "copyable" : ""}`}>
-                {message.content ? (
-                  <button
-                    type="button"
-                    className={`chat-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
-                    onClick={() => copyMessage(message)}
-                    aria-label={`${copiedMessageId === message.id ? "已复制" : "复制"}${message.role === "user" ? "用户" : "助手"}消息`}
-                    title={copiedMessageId === message.id ? "已复制" : "复制消息"}
-                  >
-                    {copiedMessageId === message.id ? <Check size={15} /> : <Copy size={15} />}
-                  </button>
-                ) : null}
-                {message.role === "assistant" && message.thinking?.length ? (
-                  <ThinkingPanel items={message.thinking} running={message.streaming} collapsed={message.thinkingCollapsed !== false} />
-                ) : null}
-                {message.role === "assistant" && message.content ? (
-                  <MarkdownMessage content={message.content} />
-                ) : (
-                  <pre className={message.streaming ? "chat-answer-placeholder" : ""}>
-                    {message.content || (message.streaming ? "正在生成正文..." : "")}
-                  </pre>
-                )}
-                {message.role === "assistant" && message.approval ? (
-                  <ApprovalPanel
-                    approval={message.approval}
-                    compact
-                    onDecision={(decision, reason) => decideChatApproval(message.run_id, decision, reason)}
-                  />
-                ) : null}
-                {message.approval ? <small>等待审批</small> : message.streaming ? <small>streaming</small> : null}
-              </div>
-            </div>
-          ))}
-        </div>
+        <ChatMessageList messages={messages} onDecision={decideChatApproval} onError={setError} />
 
         {error ? <div className="error chat-error">{error}</div> : null}
-        <div className="chat-composer">
-          <textarea
-            value={draft}
-            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-            onChange={(event) => setDraft(event.target.value)}
-            onCompositionStart={() => {
-              composingRef.current = true;
-            }}
-            onCompositionEnd={() => {
-              composingRef.current = false;
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                if (isComposingMessage(event)) return;
-                event.preventDefault();
-                sendMessage();
-              }
-            }}
-          />
-          <button
-            className="primary chat-send-button"
-            onClick={sendMessage}
-            disabled={!draft.trim() || Boolean(activeRunId) || sending}
-          >
-            <Send size={18} />
-            <span>发送</span>
-          </button>
-        </div>
+        <ChatComposer value={draft} onChange={setDraft} onSend={sendMessage} busy={Boolean(activeRunId) || sending} />
       </section>
 
       <aside className="status-rail chat-rail">
@@ -836,7 +708,10 @@ function RunsPage() {
     setRuns((current) => replaceWhenChanged(current, nextRuns));
     setActiveRun((current) => {
       if (nextRuns.length === 0) return current ? null : current;
-      if (!current?.run_id) return nextRuns[0];
+      if (!current?.run_id) {
+        const requested = new URLSearchParams(window.location.search).get("run_id");
+        return nextRuns.find((run) => run.run_id === requested) || nextRuns[0];
+      }
       const nextSummary = nextRuns.find((run) => run.run_id === current.run_id);
       return nextSummary ? mergeRunSnapshot(current, nextSummary) : nextRuns[0];
     });
@@ -1104,64 +979,6 @@ function RunDetail({ run, events, onRunAction }) {
           </small>
         </div>
         <pre>{result || "暂无结果"}</pre>
-      </div>
-    </section>
-  );
-}
-
-function ApprovalPanel({ approval, onDecision, compact = false }) {
-  const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
-  const interrupts = Array.isArray(approval?.interrupts) ? approval.interrupts : [];
-  const actions = interrupts.flatMap((interrupt) => (Array.isArray(interrupt.actions) ? interrupt.actions : []));
-  if (actions.length === 0) return null;
-
-  async function decide(decision) {
-    if (!onDecision || busy) return;
-    setBusy(true);
-    try {
-      await onDecision(decision, reason.trim());
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className={`approval-panel ${compact ? "compact" : ""}`}>
-      <div className="approval-heading">
-        <Clock3 size={17} />
-        <div>
-          <strong>等待操作审批</strong>
-          <span>DeepAgent 已暂停，确认后从当前 checkpoint 继续。</span>
-        </div>
-      </div>
-      <div className="approval-actions-list">
-        {actions.map((action, index) => (
-          <div className="approval-action" key={`${action.name || "tool"}-${index}`}>
-            <div>
-              <code>{action.name || "unknown_tool"}</code>
-              <span>{action.description || "该工具调用需要人工确认"}</span>
-            </div>
-            <pre>{JSON.stringify(action.args || {}, null, 2)}</pre>
-          </div>
-        ))}
-      </div>
-      <textarea
-        value={reason}
-        onChange={(event) => setReason(event.target.value)}
-        placeholder="拒绝原因（可选，DeepAgent 会收到）"
-        rows={2}
-        disabled={busy}
-      />
-      <div className="approval-controls">
-        <button className="danger" onClick={() => decide("reject")} disabled={busy}>
-          <XCircle size={15} />
-          拒绝并继续
-        </button>
-        <button className="primary" onClick={() => decide("approve")} disabled={busy}>
-          <CheckCircle2 size={15} />
-          批准并继续
-        </button>
       </div>
     </section>
   );
@@ -2781,296 +2598,6 @@ function carryChatAssistantRuntimeState(nextMessages, currentMessages, runId) {
       failed: runtimeMessage.failed,
     };
   });
-}
-
-function runEventThinkingText(event) {
-  const payload = event?.payload || {};
-  if (event?.type === "running") {
-    return payload.message || "DeepAgent 已开始处理";
-  }
-  if (event?.type === "agent_update") {
-    if (payload.preview) return payload.preview;
-    const nodes = Array.isArray(payload.nodes) ? payload.nodes.filter(Boolean).join(", ") : "";
-    return nodes ? `图节点更新：${nodes}` : "DeepAgent 状态已更新";
-  }
-  if (event?.type === "subagent_response") {
-    const label = String(payload.agent || "sub-agent");
-    const content = String(payload.content || "").trim();
-    const preview = content.length > 1_000 ? `${content.slice(0, 1_000)}...` : content;
-    return preview ? `子 Agent ${label}：${preview}` : `子 Agent ${label} 已完成`;
-  }
-  if (event?.type === "stream_fallback") {
-    return payload.message || "当前运行时不支持增量流，已切换为最终结果模式";
-  }
-  if (event?.type === "image_attachments_textified") {
-    return payload.message || "图片已转为文本附件说明";
-  }
-  if (event?.type === "approval_required") {
-    const names = (payload.request?.interrupts || [])
-      .flatMap((interrupt) => interrupt.actions || [])
-      .map((action) => action.name)
-      .filter(Boolean);
-    return names.length ? `等待审批：${names.join(", ")}` : "等待用户审批";
-  }
-  if (event?.type === "approval_resolved") {
-    return payload.decision === "reject" ? "操作已拒绝，DeepAgent 继续处理" : "操作已批准，DeepAgent 继续运行";
-  }
-  return "";
-}
-
-function ThinkingPanel({ items, running, collapsed }) {
-  const visibleItems = Array.isArray(items) ? items.slice(-10) : [];
-  if (visibleItems.length === 0) return null;
-  return (
-    <details className={`thinking-panel ${running ? "running" : ""}`} open={running || !collapsed}>
-      <summary>
-        <span>思考过程</span>
-        <small>{running ? "运行中" : "已折叠"}</small>
-      </summary>
-      <div className="thinking-body">
-        {visibleItems.map((item, index) => (
-          <div className="thinking-row" key={`${index}-${item}`}>
-            {item}
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function MarkdownMessage({ content }) {
-  return <div className="markdown-message">{renderMarkdownBlocks(content)}</div>;
-}
-
-function renderMarkdownBlocks(content) {
-  const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
-  const blocks = [];
-  let paragraph = [];
-  let list = null;
-  let quote = [];
-  let code = null;
-
-  function flushParagraph() {
-    if (paragraph.length === 0) return;
-    const text = paragraph.join(" ").trim();
-    if (text) {
-      blocks.push(<p key={`p-${blocks.length}`}>{renderMarkdownInline(text, `p-${blocks.length}`)}</p>);
-    }
-    paragraph = [];
-  }
-
-  function flushList() {
-    if (!list) return;
-    const Tag = list.ordered ? "ol" : "ul";
-    blocks.push(
-      <Tag key={`list-${blocks.length}`}>
-        {list.items.map((item, index) => (
-          <li key={index}>{renderMarkdownInline(item, `li-${blocks.length}-${index}`)}</li>
-        ))}
-      </Tag>,
-    );
-    list = null;
-  }
-
-  function flushQuote() {
-    if (quote.length === 0) return;
-    blocks.push(<blockquote key={`quote-${blocks.length}`}>{renderMarkdownInline(quote.join(" "), `quote-${blocks.length}`)}</blockquote>);
-    quote = [];
-  }
-
-  function flushCode() {
-    if (!code) return;
-    blocks.push(
-      <pre className="markdown-code" key={`code-${blocks.length}`}>
-        <code>{code.lines.join("\n")}</code>
-      </pre>,
-    );
-    code = null;
-  }
-
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const rawLine = lines[lineIndex];
-    const line = rawLine.trimEnd();
-    const fenceMatch = line.match(/^```(\w+)?\s*$/);
-    if (fenceMatch) {
-      if (code) {
-        flushCode();
-      } else {
-        flushParagraph();
-        flushList();
-        flushQuote();
-        code = { language: fenceMatch[1] || "", lines: [] };
-      }
-      continue;
-    }
-    if (code) {
-      code.lines.push(rawLine);
-      continue;
-    }
-    if (!line.trim()) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      continue;
-    }
-    if (isMarkdownHorizontalRule(line)) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      blocks.push(<hr key={`hr-${blocks.length}`} />);
-      continue;
-    }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      const Tag = `h${heading[1].length + 2}`;
-      blocks.push(<Tag key={`h-${blocks.length}`}>{renderMarkdownInline(heading[2], `h-${blocks.length}`)}</Tag>);
-      continue;
-    }
-    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (unordered || ordered) {
-      flushParagraph();
-      flushQuote();
-      const orderedList = Boolean(ordered);
-      if (!list || list.ordered !== orderedList) {
-        flushList();
-        list = { ordered: orderedList, items: [] };
-      }
-      list.items.push((unordered?.[1] || ordered?.[1] || "").trim());
-      continue;
-    }
-    const quoted = line.match(/^\s*>\s?(.+)$/);
-    if (quoted) {
-      flushParagraph();
-      flushList();
-      quote.push(quoted[1].trim());
-      continue;
-    }
-    const nextLine = lines[lineIndex + 1]?.trimEnd() || "";
-    if (isMarkdownTableStart(line, nextLine)) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      const header = splitMarkdownTableRow(line);
-      const rows = [];
-      lineIndex += 2;
-      while (lineIndex < lines.length) {
-        const rowLine = lines[lineIndex].trimEnd();
-        if (!rowLine.trim() || rowLine.match(/^```/) || !rowLine.includes("|")) {
-          lineIndex -= 1;
-          break;
-        }
-        rows.push(splitMarkdownTableRow(rowLine));
-        lineIndex += 1;
-      }
-      if (lineIndex >= lines.length) {
-        lineIndex = lines.length - 1;
-      }
-      blocks.push(renderMarkdownTable(header, rows, `table-${blocks.length}`));
-      continue;
-    }
-    paragraph.push(line.trim());
-  }
-  flushCode();
-  flushParagraph();
-  flushList();
-  flushQuote();
-  return blocks.length ? blocks : <p>{content}</p>;
-}
-
-function isMarkdownHorizontalRule(line) {
-  return /^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/.test(String(line || ""));
-}
-
-function isMarkdownTableStart(line, nextLine) {
-  const header = splitMarkdownTableRow(line);
-  const separator = splitMarkdownTableRow(nextLine);
-  return header.length >= 2 && separator.length === header.length && separator.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
-}
-
-function splitMarkdownTableRow(line) {
-  const trimmed = String(line || "").trim();
-  if (!trimmed.includes("|")) return [];
-  return trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
-}
-
-function normalizeMarkdownTableRow(row, width) {
-  const cells = Array.isArray(row) ? row.slice(0, width) : [];
-  while (cells.length < width) {
-    cells.push("");
-  }
-  return cells;
-}
-
-function renderMarkdownTable(header, rows, keyPrefix) {
-  const width = header.length;
-  return (
-    <div className="markdown-table-wrap" key={keyPrefix}>
-      <table>
-        <thead>
-          <tr>
-            {header.map((cell, index) => (
-              <th key={`${keyPrefix}-h-${index}`}>{renderMarkdownInline(cell, `${keyPrefix}-h-${index}`)}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, rowIndex) => (
-            <tr key={`${keyPrefix}-r-${rowIndex}`}>
-              {normalizeMarkdownTableRow(row, width).map((cell, cellIndex) => (
-                <td key={`${keyPrefix}-r-${rowIndex}-${cellIndex}`}>
-                  {renderMarkdownInline(cell, `${keyPrefix}-r-${rowIndex}-${cellIndex}`)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function renderMarkdownInline(text, keyPrefix) {
-  const value = String(text || "");
-  const matcher = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)\s]+\)|https?:\/\/[^\s]+)/g;
-  const nodes = [];
-  let cursor = 0;
-  let match;
-  while ((match = matcher.exec(value)) !== null) {
-    if (match.index > cursor) {
-      nodes.push(value.slice(cursor, match.index));
-    }
-    const token = match[0];
-    const key = `${keyPrefix}-${nodes.length}`;
-    const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
-    if (link) {
-      nodes.push(
-        <a key={key} href={link[2]} target="_blank" rel="noreferrer">
-          {link[1]}
-        </a>,
-      );
-    } else if (token.startsWith("http://") || token.startsWith("https://")) {
-      nodes.push(
-        <a key={key} href={token} target="_blank" rel="noreferrer">
-          {token}
-        </a>,
-      );
-    } else if (token.startsWith("**") && token.endsWith("**")) {
-      nodes.push(<strong key={key}>{token.slice(2, -2)}</strong>);
-    } else if (token.startsWith("`") && token.endsWith("`")) {
-      nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
-    } else {
-      nodes.push(token);
-    }
-    cursor = match.index + token.length;
-  }
-  if (cursor < value.length) {
-    nodes.push(value.slice(cursor));
-  }
-  return nodes;
 }
 
 function Status({ status }) {

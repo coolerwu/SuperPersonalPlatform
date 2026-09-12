@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from server.infrastructure.agent_workspace import agent_workspace_path
+from server.domain.chat_group import GroupRunContext
 
 import asyncio
 import json
@@ -129,9 +130,18 @@ class RunService:
         session_id: str = "",
         attachments: tuple[dict[str, Any], ...] = (),
         metadata: dict[str, Any] | None = None,
+        group_context: GroupRunContext | None = None,
     ) -> dict[str, Any]:
         if session_id and self._session_service is not None and not self._session_service.exists(session_id):
             raise ValueError("session does not exist")
+        if group_context is not None:
+            existing = self._run_dir(group_context.run_id)
+            if (existing / "state.json").exists():
+                if not any(item.get("run_id") == group_context.run_id for item in self._list_runs_no_reconcile()):
+                    self._upsert_index(self._summary_from_state(group_context.run_id))
+                return self.get_run(group_context.run_id)
+        elif session_id and self._session_service and self._session_service.session_summary(session_id).get("channel") == "chat_group":
+            raise ValueError("群成员会话只能通过群聊接口执行")
         saved_attachments: tuple[dict[str, Any], ...] = ()
         if session_id and self._session_service is not None:
             saved_attachments = self._session_service.save_attachments(session_id, attachments)
@@ -143,13 +153,13 @@ class RunService:
 
         settings = load_settings(self._workspace / "config.yaml")
         agent = self._resolve_agent(settings.agent_workspace.agents, agent_id)
-        model_id = agent.model_id or settings.agent_workspace.default_model_id
+        model_id = (group_context.agent_snapshot.get("model_id") if group_context else agent.model_id) or settings.agent_workspace.default_model_id
         model = settings.agent_workspace.get_model(model_id)
         now = _now()
-        run_id = self._new_run_id()
+        run_id = group_context.run_id if group_context else self._new_run_id()
         selected_context_ids = context_ids or agent.context_ids
         run_dir = self._run_dir(run_id)
-        run_dir.mkdir(parents=True, exist_ok=False)
+        run_dir.mkdir(parents=True, exist_ok=group_context is not None)
 
         run_input = RunInput(
             run_id=run_id,
@@ -162,25 +172,13 @@ class RunService:
             created_at=now,
             metadata=metadata or {},
             snapshot={
-                "agent": _public_agent(agent),
-                "model": _public_model(model),
+                "agent": group_context.agent_snapshot if group_context else _public_agent(agent),
+                **({"group_context": group_context.model_dump()} if group_context else {}),
+                "model": group_context.model_snapshot if group_context and group_context.model_snapshot else _public_model(model),
                 "context": self._snapshot_context(),
             },
         )
         _write_json(run_dir / "input.json", asdict(run_input))
-        _write_json(
-            run_dir / "state.json",
-            {
-                "run_id": run_id,
-                "session_id": session_id,
-                "status": "queued",
-                "created_at": now,
-                "updated_at": now,
-                "seq": 0,
-                "attempts": 0,
-                "max_attempts": RUN_RETRY_MAX_ATTEMPTS,
-            },
-        )
         delivery_target = _initial_delivery_target(source, run_input.metadata, agent_id=agent.id)
         delivery_payload: dict[str, Any] = {
             "schema_version": 1,
@@ -209,6 +207,19 @@ class RunService:
                 source=source,
                 agent_id=agent.id,
             )
+        _write_json(
+            run_dir / "state.json",
+            {
+                "run_id": run_id,
+                "session_id": session_id,
+                "status": "queued",
+                "created_at": now,
+                "updated_at": now,
+                "seq": 0,
+                "attempts": 0,
+                "max_attempts": RUN_RETRY_MAX_ATTEMPTS,
+            },
+        )
         self._append_event(run_id, RunEventType.QUEUED, RunLifecyclePayload(message="run queued"))
         self._upsert_index(self._summary_from_state(run_id))
         return self.get_run(run_id)
@@ -224,6 +235,13 @@ class RunService:
         content = str(run_input.get("content") or "")
         session_id = str(run_input.get("session_id") or "")
         runtime_options = _runtime_options(agent_snapshot.get("deepagent"), name=str(agent_snapshot.get("name") or ""), webdav=agent_snapshot.get("webdav"))
+        group_data = run_input.get("snapshot", {}).get("group_context")
+        if group_data:
+            from dataclasses import replace
+            from server.domain.agent_config import ModelProvider
+            frozen_model = run_input["snapshot"]["model"]
+            model = replace(model, **{**frozen_model, "provider": ModelProvider(frozen_model["provider"])})
+            runtime_options = replace(runtime_options, group_control=group_data if group_data.get("control_members") else None)
         use_session_checkpoint = bool(session_id)
         approval_resume = self._approval_resume(run_id)
         use_approval_checkpoint = bool(
@@ -249,6 +267,8 @@ class RunService:
             fallback_attachments=fallback_attachments,
             workspace=self._workspace,
         )
+        if group_data:
+            runtime_messages = tuple(RuntimeMessage(role="user", content=item["content"], id=item["id"]) for item in group_data["messages"])
         downgraded_image_count = 0
         if any(message.has_images for message in runtime_messages) and not model.supports_images:
             runtime_messages, downgraded_image_count = _textify_image_attachments(
@@ -802,7 +822,7 @@ class RunService:
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         run_dir = self._run_dir(run_id)
-        if not run_dir.exists():
+        if not (run_dir / "state.json").exists():
             raise RunNotFoundError(run_id)
         self._reconcile_run_if_stale(run_id)
         payload = {

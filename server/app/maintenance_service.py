@@ -69,6 +69,9 @@ class MaintenanceService:
             session_id = str(item.get("session_id") or "").strip()
             if session_id and "/" not in session_id and "\\" not in session_id:
                 protected.add(session_id)
+        for path in (self._workspace / "chat_groups").glob("group_*/state.json"):
+            group = json.loads(path.read_text(encoding="utf-8"))
+            protected.update(group.get("member_sessions", {}).values())
         return protected
 
     def _clean_runs(self, cutoff: datetime, report: dict[str, Any], *, dry_run: bool) -> None:
@@ -77,6 +80,12 @@ class MaintenanceService:
         runs = original.get("runs") if isinstance(original, dict) else []
         if not isinstance(runs, list):
             runs = []
+        group_runs = set()
+        for path in (self._workspace / "chat_groups").glob("group_*/state.json"):
+            group = json.loads(path.read_text(encoding="utf-8"))
+            for execution in group.get("executions", []):
+                if execution.get("status") not in {"completed", "cancelled"} and execution.get("current_step"):
+                    group_runs.add(execution["current_step"]["run_id"])
         kept: list[Any] = []
         changed = False
         for item in runs:
@@ -89,7 +98,7 @@ class MaintenanceService:
             if not run_id or "/" in run_id or "\\" in run_id:
                 changed = True
                 continue
-            if status in TERMINAL_RUN_STATUSES and _is_older_than(updated_at, cutoff):
+            if run_id not in group_runs and status in TERMINAL_RUN_STATUSES and _is_older_than(updated_at, cutoff):
                 path = self._workspace / "runs" / run_id
                 size = _path_size(path)
                 _add_item(report, "runs", path, "terminal run older than retention", size)

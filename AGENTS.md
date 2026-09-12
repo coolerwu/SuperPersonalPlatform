@@ -59,3 +59,11 @@
 - `/notes/` 已删除；临时笔记用 `/scratch/`，长期信息用 `/memories/`，成品用 `/artifacts/`。本地共享知识挂载 `/files/`，不再提供 search_context/write_context。WebDAV 所有允许的写入均需 HITL 审批，主/子 Agent 一致；没有 session_id 的 run 也必须保留审批 checkpoint。
 
 - 微信图片/附件通过 send_attachment 显式选择已有文件，工具仅排队并返回 queued，成功 run 结束后由 RunDeliveryService 发送到固化的当前微信目标。不要让 Agent 自选收件人或把排队说成已发送。每个发送部分持久化进度和稳定 client_id；重试只处理未确认部分，重跑不复用旧轮次附件。
+
+
+## 群聊约定
+
+- 单聊和群聊共用 `web/src/chatComponents.jsx`，不要复制消息气泡、Markdown、思考过程、审批或输入框实现。
+- 群记录归 `workspace/chat_groups/`；成员执行 session 归 `workspace/sessions/`，每群成员独立 checkpoint，普通 Chat 不列出或选用内部 session。临时角色仍共享基础 Agent 的文件和长期记忆。
+- 群步骤使用确定性 Run ID 与稳定 LangGraph 消息 ID，推进前先落盘，发布结果与游标原子更新。自动协作最多三轮、每轮四名成员；只接受主持结构化工具决定，不从回答中的 @ 派工，控制工具不得下放给子 Agent。
+- 群引用 session 和未结束步骤 Run 必须得到清理保护；群任务重试从群入口发起，不能绕过编排。发布前验证中断恢复、审批、停止和上下文隔离。

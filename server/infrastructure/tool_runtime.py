@@ -412,6 +412,8 @@ def _schedule_tool(schedule_service: Any, tool_context: PlatformToolContext) -> 
         try:
             normalized_action = str(action or "").strip().lower()
             if normalized_action == "create":
+                if tool_context.source == "chat_group":
+                    return json.dumps({"ok": False, "error": "群聊暂不支持定时协作。请在单聊或定时任务页面创建任务。"}, ensure_ascii=False)
                 return json.dumps(
                     _schedule_create(
                         schedule_service,

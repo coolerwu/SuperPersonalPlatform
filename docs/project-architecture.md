@@ -9,7 +9,7 @@
 - 运行入口仍是 `./run-dev.sh`、`./run-prod.sh` 和底层 `./run.sh`。
 - 生产环境仍使用已提交的 `web/dist`，生产启动不现场构建前端。
 - 工作区默认仍是项目目录下 `.super-personal-platform`，可通过 `--workspace` 覆盖。
-- 目标产品边界收缩为：DeepAgent/LangGraph 后端任务执行、微信个人号入口、坚果云 WebDAV Context、单 token 登录、基础配置、基础日志和生产更新。
+- 目标产品边界收缩为：DeepAgent/LangGraph 后端任务执行、Web 单聊与多 Agent 群聊、微信个人号入口、坚果云 WebDAV Context、单 token 登录、基础配置、基础日志和生产更新。
 
 ## Architecture Q&A
 
@@ -87,6 +87,11 @@ workspace/
       state.json
       events.jsonl
       lock.json
+
+  chat_groups/
+    index.json
+    {group_id}/
+      state.json
 
   sessions/
     index.json
@@ -225,6 +230,7 @@ code_execution:
 
 ## Frontend Routes
 
+- `/chat-groups` 是多 Agent 群聊工作区，独立群列表、共享聊天区和成员面板；与单聊共用消息、Markdown、思考过程、审批和输入组件。
 - `/chat` 是页面 Chat 工作区，提供 Agent 选择、该 Agent 全部长期 session 切换、新会话、文本输入和 assistant 流式气泡；session 列表展示微信/Web 等来源、渠道身份、消息数和更新时间，不展示其它 Agent 的 session。页面可以打开并续聊微信 session，但只改变 Web Chat 当前选择，不切换微信通道本身的活跃会话。消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。发送动作有同步 in-flight 锁，并由后端按 `client_message_id` 幂等创建 run，避免连续按键、双击或重复请求生成两条相同消息。用户和 assistant 消息都提供复制按钮，桌面端按钮位于气泡外侧操作位，移动端使用顶部操作位，不再通过贯穿全文的右内边距压缩正文；复制原始消息文本并短暂显示成功状态。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗、水平分隔线和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。`820px` 以下使用独立移动布局：全局侧栏收进顶部菜单控制的抽屉，Chat 占满剩余动态视口，会话诊断栏隐藏，Agent、session 和新会话操作保持在紧凑工具行，消息区独立滚动且输入框固定在工作区底部。
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮；详情页支持取消 `queued/running/waiting_approval` run、审批或拒绝待确认工具调用，以及重跑 `completed/failed/cancelled` run。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
@@ -351,3 +357,31 @@ code_execution:
 - 每个成功排队的文件固化到 `runs/{run_id}/outgoing/{rerun_count}/`，index.json 保存文件名、来源虚拟路径、种类、大小和 SHA-256；同名同内容同种类去重，文件快照和索引原子替换，文件不会因源文件随后编辑而变化。明确重跑使用新的 generation，不发送旧一轮的附件；outgoing 随 run 保留期清理。
 - RunDeliveryService 在成功 run 的最终文本之后逐个投递附件；失败/取消的 run 只发状态文本。delivery.json 的 delivered_parts 持久化每个成功部分，重试/服务重启跳过已确认成功部分；每部分稳定 client_id。网络响应不确定时仍可能重复，沿用至少一次投递语义；所有部分完成才标记 delivered，失败沿用退避及 dead_letter。
 - ILinkClient 依据腾讯官方 openclaw-weixin 的 [upload](https://github.com/Tencent/openclaw-weixin/blob/main/src/cdn/upload.ts)、[CDN](https://github.com/Tencent/openclaw-weixin/blob/main/src/cdn/cdn-upload.ts) 和 [send](https://github.com/Tencent/openclaw-weixin/blob/main/src/messaging/send.ts) 实现：AES-128-ECB/PKCS7 加密，getuploadurl 申请上传位置（no_need_thumb），密文 POST 到 CDN，读取 x-encrypted-param，发送 IMAGE=2 或 FILE=4 item；AES key 使用官方 hex 文本的 base64 编码，文件 len 使用明文长度字符串。CDN 请求不携带 bot token，不跟随重定向。HTTP 200 中非零 ret/errcode 同样判定失败，避免误报发送成功。
+
+
+## 多 Agent 群聊
+
+- `/chat-groups` 支持 Web 文本群聊。成员引用已有 Agent，设置群内名称及可选追加 prompt；主持必须是成员。成员继承基础 Agent 的模型、工具权限、私有文件、Skills 和长期记忆；不会生成独立 Agent 或跨成员挂载私有文件。群名称/成员名称非空，成员 ID 稳定，群内名称唯一，最多 20 名成员。更换基础 Agent 必须移除旧成员并以新 ID 添加，移除不删除历史署名。
+- `@` 选择器将可读名称映射到稳定成员 ID，发送请求按正文首次提及顺序传递 `mentions[]`；去重后依次执行，后一名成员看到前一名结果。普通消息不点名时由主持正常回复，Agent 回答里的 @ 不自动派工。显式“开始协作”才启动多轮分工。
+- 自动协作由主持调用强类型 `group_decision(action, tasks, summary)` 工具，选择 `dispatch` 或 `finish`。每轮最多调度 4 名不同成员顺序执行，然后主持评估；最多 3 轮，允许提前结束。达到上限时只接受 finish，必须总结成果与未完成项；用户显式继续会创建新的最多 3 轮协作。控制工具只注入当前主持控制步骤，不提供给 general-purpose 子 Agent，不成为可配置平台工具。
+- `ChatGroupService` 随 FastAPI lifespan 每秒推进持久化步骤，复用现有 RunWorker，不在 worker 内等待子任务。每群同时只有一条回复链/协作，暂停与审批等待也占用该位置。执行期间禁发新消息和编辑成员；审批复用现有 approve/reject/resume，审批恢复后继续队列。Run 重试耗尽、取消或主持未提交合法决定时群执行暂停；用户可重试当前步骤或停止。停止先落盘 stopping 意图，再取消当前 Run、清空待执行步骤；重启可继续完成停止动作。
+- 权威数据位于 `chat_groups/{group_id}/state.json`，以原子替换同时保存定义、带序号与稳定 ID 的群消息、成员 session 映射/历史游标、历次协作及当前步骤；`chat_groups/index.json` 是可重建索引，读取列表以权威状态文件为准。群消息与协作保留，不套用 15 天自动删除；根目录列入 Workspace 保护目录。无历史迁移或兼容路径。
+- 每个 `group + member + base_agent` 创建专属 `channel=chat_group` 内部长期 session，仍落在 `sessions/{session_id}/`，使用同一个 SQLite Checkpointer。内部 session 不出现在普通 Chat 会话选择中，普通 Chat/API Run 不能直接向其发送。维护服务显式保护群引用 session/checkpoint；当前未结束步骤引用的 Run 也受保护，其他 Run 沿用 15 天清理。
+- 每个执行固化成员人格、prompt、模型选择及非敏感模型参数/价格，凭据仍从当前配置读取；基础 Agent/模型不可用时明确失败，不替换为默认 Agent。成员文件及外部资源内容继续读取执行时现状。内部 `GroupRunContext` 保存角色与模型快照、结构化输入消息及控制权限，不由公开 Run API 接收。运行时继续维持 `instructions/messages/options` 边界。
+- 当前步骤在创建 Run 前固化确定性的 `run_group_{execution_id}_{step_number}`，Run 创建可幂等恢复，session 消息/Run 关联不重复追加。每次执行传递未接收群记录和当前任务，群记录作为带发言人的对话材料而非 system prompt；每条群记录与任务都有稳定 LangGraph message ID，失败重试、重启或停止后继续不会重复追加相同群记录。平台游标及发布结果在一次原子状态更新中推进；模型/工具外部副作用仍沿用 Run 原有重试语义，不声称 exactly-once。
+- 前端 `chatComponents.jsx` 为单聊与群聊共用的消息列表、复制、Markdown、思考过程、审批及 IME 输入组件；`chatRuntime.js` 共用事件说明转换，群页按 Run 事件序号增量轮询，落盘 partial 用于刷新恢复。群页在切换时取消旧轮询，输入被锁定时仍可查看结果和处理审批。群消息的 Run 链接支持 `/runs?run_id=...` 定位；普通 Run 重跑接口拒绝群步骤，须在群内重试或继续。
+
+认证 API：
+
+```text
+GET/POST /api/chat-groups
+GET/PUT /api/chat-groups/{group_id}
+GET /api/chat-groups/{group_id}/messages?after={seq}
+POST /api/chat-groups/{group_id}/messages
+POST /api/chat-groups/{group_id}/collaborations
+POST /api/chat-groups/{group_id}/collaborations/{execution_id}/continue
+POST /api/chat-groups/{group_id}/collaborations/{execution_id}/retry
+POST /api/chat-groups/{group_id}/collaborations/{execution_id}/stop
+```
+
+创建/更新接收 `name/members[]/host_member_id/archived`；成员字段是 `id/agent_id/name/prompt`。发送和开始协作接收 `content/mentions[]/client_message_id`；同群相同客户端消息 ID 幂等返回已有执行。继续协作要求新的 `client_message_id`。详情返回共享历史、执行状态及当前 `active_run`；归档和恢复通过 PUT 的 archived 字段完成。第一版没有群附件上传、群定时协作或微信接入，保留原有单聊能力。群上下文调用 schedule 创建任务会返回可恢复说明，避免创建无法执行的内部 session 定时任务；请通过单聊或定时任务页面创建。

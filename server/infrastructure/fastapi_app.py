@@ -8,6 +8,8 @@ from fastapi import FastAPI, Request
 
 from server.adapter.auth_routes import create_auth_router
 from server.adapter.chat_routes import create_chat_router
+from server.adapter.chat_group_routes import create_chat_group_router
+from server.app.chat_group_service import ChatGroupService
 from server.adapter.channel_routes import create_channel_router
 from server.adapter.dependencies import AppContainer
 from server.adapter.run_routes import create_run_router
@@ -84,6 +86,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     run_service.set_schedule_service(schedule_service)
     return AppContainer(
         workspace=active_workspace,
+        chat_group_service=ChatGroupService(active_workspace, run_service, run_worker_service),
         auth_service=AuthService(AuthToken(settings.auth.token)),
         browser_profile_service=BrowserProfileService(active_workspace),
         config_file_service=ConfigFileService(active_workspace),
@@ -141,6 +144,8 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
         schedule_task: asyncio.Task | None = None
         run_worker_task: asyncio.Task | None = None
         run_delivery_task: asyncio.Task | None = None
+        group_stop = asyncio.Event()
+        group_task = asyncio.create_task(container.chat_group_service.run_forever(group_stop))
         schedule_stop = asyncio.Event()
         run_worker_stop = asyncio.Event()
         run_delivery_stop = asyncio.Event()
@@ -161,6 +166,8 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
         try:
             yield
         finally:
+            group_stop.set()
+            await group_task
             if schedule_task is not None:
                 schedule_stop.set()
                 await schedule_task
@@ -182,6 +189,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     install_request_logging(app, container)
     app.include_router(create_auth_router(container))
     app.include_router(create_chat_router(container))
+    app.include_router(create_chat_group_router(container))
     app.include_router(create_run_router(container))
     app.include_router(create_schedule_router(container))
     app.include_router(create_channel_router(container))

@@ -219,7 +219,7 @@ def _resolve_agent_id(workspace, raw_agent_id: str) -> str:
 
 def _require_session_for_agent(session_service: SessionService, session_id: str, agent_id: str) -> dict[str, object]:
     summary = session_service.session_summary(session_id)
-    if not summary:
+    if not summary or summary.get("channel") == "chat_group":
         raise HTTPException(status_code=404, detail="session not found")
     if str(summary.get("agent_id") or "").strip() != agent_id:
         raise HTTPException(status_code=404, detail="session not found for current agent")

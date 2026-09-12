@@ -289,6 +289,8 @@ class SessionService:
             session_id = str(item.get("session_id") or "").strip()
             if not session_id or not self.exists(session_id):
                 continue
+            if item.get("channel") == "chat_group":
+                continue
             summary = dict(item)
             summary["active"] = session_id in active_session_ids
             summary["selected"] = session_id == selected_session_id
@@ -536,6 +538,9 @@ class SessionService:
         run_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        if metadata and metadata.get("source") == "chat_group" and run_id:
+            if any(item.get("run_id") == run_id and item.get("role") == role for item in self.read_messages(session_id, limit=1000000)):
+                return
         text = content.strip()
         if not text and not attachments:
             return
@@ -609,6 +614,10 @@ class SessionService:
         source: str,
         agent_id: str,
     ) -> None:
+        if source == "chat_group":
+            path = self._session_dir(session_id) / "runs.jsonl"
+            if path.exists() and any(json.loads(line).get("run_id") == run_id for line in path.read_text().splitlines() if line.strip()):
+                return
         state = self._read_state(session_id)
         now = _now()
         run_count = int(state.get("run_count") or 0) + 1

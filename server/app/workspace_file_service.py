@@ -47,6 +47,7 @@ class WorkspaceFileService:
         "context",
         "runs",
         "sessions",
+        "chat_groups",
         "channels",
         "logs",
         "schedules",

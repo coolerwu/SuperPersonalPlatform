@@ -56,6 +56,7 @@ class RuntimeMessage:
     role: str
     content: str
     attachments: tuple[RuntimeAttachment, ...] = ()
+    id: str = ""
 
     @property
     def has_images(self) -> bool:
@@ -67,6 +68,7 @@ class DeepAgentRuntimeOptions:
     max_iterations: int = 60
     name: str = ""
     todo_list: bool = True
+    group_control: dict | None = None
     tools: tuple[str, ...] = ()
     webdav: AgentWebDAVConfig = AgentWebDAVConfig()
 
@@ -147,6 +149,14 @@ class DeepAgentRuntime:
         if webdav_view is not None:
             routes["/webdav/"] = WebDAVFilesystemBackend(webdav_view)
         backend = CompositeBackend(default=backend, routes=routes)
+        control_tools = []
+        if options.group_control:
+            from server.infrastructure.group_control import group_control_tool
+            control = options.group_control
+            control_tools = [group_control_tool(
+                self._context_workspace.parent / "runs" / control["run_id"] / "group_decision.json",
+                control["control_members"], control["finish_only"],
+            )]
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
                 options.tools,
@@ -154,7 +164,7 @@ class DeepAgentRuntime:
                 schedule_service=self._schedule_service,
                 tool_context=self._tool_context,
                 file_backend=backend,
-            ),
+            ) + control_tools,
             "model": self._chat_model(),
             "system_prompt": instructions.strip(),
             "backend": backend,
@@ -162,6 +172,9 @@ class DeepAgentRuntime:
             "skills": ["/skills/"],
             "subagents": [general_purpose_subagent],
         }
+        if control_tools:
+            # Only the host may submit scheduling decisions, never its general-purpose subagent.
+            general_purpose_subagent["tools"] = [tool for tool in create_kwargs["tools"] if tool.name != "group_decision"]
         create_kwargs["memory"] = [MEMORY_INDEX_PATH]
         name = options.name.strip()
         if name:
@@ -583,9 +596,9 @@ def _to_langchain_messages(
             continue
         role = message.role.lower()
         if role in {"assistant", "ai"}:
-            result.append(ai_cls(content=content))
+            result.append(ai_cls(content=content, **({"id": message.id} if message.id else {})))
         elif role in {"user", "human"}:
-            result.append(human_cls(content=_message_content(content, attachments, provider)))
+            result.append(human_cls(content=_message_content(content, attachments, provider), **({"id": message.id} if message.id else {})))
     return result
 
 

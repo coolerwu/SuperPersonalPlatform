@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from server.app.auth_service import AuthService
+from server.app.chat_group_service import ChatGroupService
 from server.app.browser_profile_service import BrowserProfileService
 from server.app.config_file_service import ConfigFileService
 from server.app.maintenance_service import MaintenanceService
@@ -34,3 +35,4 @@ class AppContainer:
     wechat_channel_manager: WechatChannelManager | None = None
     run_worker_service: RunWorkerService | None = None
     run_delivery_service: RunDeliveryService | None = None
+    chat_group_service: ChatGroupService | None = None
