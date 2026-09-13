@@ -232,6 +232,7 @@ class DeepAgentRuntime:
             return _approval_request_from_stream_data(result) or result
 
         final_result: Any = None
+        pending_interrupts: dict[str, RunApprovalInterrupt] = {}
         stream_started = False
         subagent_names: dict[tuple[str, ...], str] = {}
         subagent_responses: set[str] = set()
@@ -246,7 +247,13 @@ class DeepAgentRuntime:
                 part = _split_langgraph_stream_part(chunk)
                 approval = _approval_request_from_stream_data(part.data)
                 if approval is not None:
-                    return approval
+                    # Exhaust the stream before closing the SQLite saver: graph
+                    # exit flushes the checkpoint and pending interrupt writes.
+                    # Subgraphs may report the same interrupt again at the root.
+                    if part.mode == "updates":
+                        for item in approval.interrupts:
+                            pending_interrupts[item.interrupt_id] = item
+                    continue
                 if part.namespace:
                     if part.mode == "messages":
                         agent_name = _message_agent_name(part.data)
@@ -287,6 +294,8 @@ class DeepAgentRuntime:
             )
             return await agent.ainvoke(input_state, config=invoke_config)
 
+        if pending_interrupts:
+            return RunApprovalRequest(interrupts=tuple(pending_interrupts.values()))
         if final_result is not None:
             return final_result
         _emit_stream_event(

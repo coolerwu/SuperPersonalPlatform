@@ -387,3 +387,7 @@ POST /api/chat-groups/{group_id}/collaborations/{execution_id}/stop
 ```
 
 创建/更新接收 `name/members[]/host_member_id/archived`；成员字段是 `id/agent_id/name/prompt`。发送和开始协作接收 `content/mentions[]/client_message_id`；同群相同客户端消息 ID 幂等返回已有执行。继续协作要求新的 `client_message_id`。详情返回共享历史、执行状态及当前 `active_run`；归档和恢复通过 PUT 的 archived 字段完成。第一版没有群附件上传、群定时协作或微信接入，保留原有单聊能力。群上下文调用 schedule 创建任务会返回可恢复说明，避免创建无法执行的内部 session 定时任务；请通过单聊或定时任务页面创建。
+
+### 流式审批 checkpoint 完整性
+
+- 运行时收到主图或子图的 HITL interrupt 后必须继续消费 `astream` 至正常结束，等待 SQLite checkpoint 与 pending writes 保存完成，再将 Run 切为等待审批；不能在第一个 interrupt chunk 处提前返回或关闭 checkpointer。以 updates 事件收集本轮待审批中断，按 interrupt ID 合并，保留并行子图全部审批；忽略恢复时 values 快照中的旧审批。批准或拒绝后使用已保存的中断继续，不重新生成已审批的工具参数。
