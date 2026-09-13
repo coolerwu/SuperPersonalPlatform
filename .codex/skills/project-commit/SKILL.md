@@ -104,3 +104,5 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
 
 
 - For group-chat changes, verify shared single/group chat rendering, per-member checkpoint isolation, stable message/step IDs, restart recovery, approval pauses, stop/retry and the three-round/four-member limits. Group records live in `chat_groups/`; protect referenced sessions and unfinished step runs from maintenance cleanup. Group orchestration must remain outside the Run worker, and host control tools must not be inherited by subagents. No migration is needed when adding the group-chat workspace directory.
+
+- Checkpoint databases belong to sessions/{session_id}/checkpoints.sqlite or, for sessionless approval runs, runs/{run_id}/checkpoints.sqlite. For the shared-database split, stop writers, back up the original database, preserve every thread namespace/parent/pending write, verify row counts/content/integrity before startup, and retain unknown threads in backup. Never overwrite conflicting destinations or add runtime legacy fallback. Verify group public-message cursors include host tool-generated announcements.

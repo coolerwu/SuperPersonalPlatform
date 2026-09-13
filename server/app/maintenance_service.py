@@ -4,7 +4,6 @@ from server.infrastructure.agent_workspace import agent_workspace_path
 
 import json
 import shutil
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -33,8 +32,7 @@ class MaintenanceService:
         )
         protected_session_ids = self._protected_session_ids(cutoff)
         self._clean_runs(cutoff, report, dry_run=effective_dry_run)
-        deleted_session_ids = self._clean_sessions(cutoff, protected_session_ids, report, dry_run=effective_dry_run)
-        self._clean_session_checkpoints(deleted_session_ids, report, dry_run=effective_dry_run)
+        self._clean_sessions(cutoff, protected_session_ids, report, dry_run=effective_dry_run)
         self._clean_active_session_bindings(report, dry_run=effective_dry_run)
         self._trim_schedule_events(cutoff, report, dry_run=effective_dry_run)
         self._clean_logs(cutoff, report, dry_run=effective_dry_run)
@@ -148,52 +146,6 @@ class MaintenanceService:
         if changed and not dry_run:
             _write_json(index_path, {"schema_version": 1, "sessions": kept})
         return deleted_session_ids
-
-    def _clean_session_checkpoints(
-        self,
-        session_ids: set[str],
-        report: dict[str, Any],
-        *,
-        dry_run: bool,
-    ) -> None:
-        checkpoint_path = self._workspace / "sessions" / "checkpoints.sqlite"
-        if not session_ids or not checkpoint_path.exists():
-            return
-        safe_session_ids = {item for item in session_ids if item and "/" not in item and "\\" not in item}
-        if not safe_session_ids:
-            return
-        try:
-            conn = sqlite3.connect(checkpoint_path, timeout=1)
-        except sqlite3.Error:
-            return
-        try:
-            deleted_rows = 0
-            for table in ("checkpoints", "writes"):
-                if not _sqlite_table_exists(conn, table):
-                    continue
-                for session_id in safe_session_ids:
-                    row = conn.execute(
-                        f"SELECT COUNT(*) FROM {table} WHERE thread_id = ?",
-                        (session_id,),
-                    ).fetchone()
-                    deleted_rows += int(row[0])
-                    if not dry_run:
-                        conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (session_id,))
-            if deleted_rows:
-                _add_item(
-                    report,
-                    "checkpoints",
-                    checkpoint_path,
-                    f"checkpoint rows for {len(safe_session_ids)} deleted sessions",
-                    0,
-                )
-                report["items"][-1]["rows"] = deleted_rows
-            if not dry_run:
-                conn.commit()
-        except sqlite3.Error:
-            return
-        finally:
-            conn.close()
 
     def _clean_active_session_bindings(self, report: dict[str, Any], *, dry_run: bool) -> None:
         active_path = self._workspace / "sessions" / "active.json"
@@ -369,14 +321,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp_path.replace(path)
-
-
-def _sqlite_table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (table,),
-    ).fetchone()
-    return row is not None
 
 
 def _parse_dt(value: str) -> datetime | None:

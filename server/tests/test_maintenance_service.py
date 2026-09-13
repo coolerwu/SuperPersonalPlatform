@@ -92,28 +92,25 @@ def test_maintenance_keeps_active_bound_session_and_removes_stale_binding(tmp_pa
     assert [item["key"] for item in active["bindings"]] == ["current"]
 
 
-def test_maintenance_deletes_checkpoint_rows_for_deleted_sessions(tmp_path: Path) -> None:
+def test_maintenance_deletes_owned_databases_and_preserves_protected(tmp_path: Path) -> None:
     old = datetime.now(timezone.utc) - timedelta(days=16)
-    _write_session(tmp_path, "session_old", old)
-    _write_session(tmp_path, "session_kept", old)
-    _write_run(tmp_path, "run_active", "running", old, session_id="session_kept")
-    checkpoint_path = tmp_path / "sessions" / "checkpoints.sqlite"
-    _write_checkpoint_rows(checkpoint_path, "session_old")
-    _write_checkpoint_rows(checkpoint_path, "session_kept")
-
-    report = MaintenanceService(tmp_path, MaintenanceConfig(retention_days=15)).cleanup(dry_run=False)
-
-    conn = sqlite3.connect(checkpoint_path)
-    try:
-        old_rows = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", ("session_old",)).fetchone()[0]
-        kept_rows = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", ("session_kept",)).fetchone()[0]
-    finally:
-        conn.close()
-
+    for sid in ("session_old", "session_kept"):
+        _write_session(tmp_path, sid, old)
+        _write_checkpoint_rows(tmp_path / "sessions" / sid / "checkpoints.sqlite", sid)
+    _write_run(tmp_path, "run_active", "waiting_approval", old, session_id="session_kept")
+    _write_run(tmp_path, "run_old", "completed", old)
+    run_db = tmp_path / "runs" / "run_old" / "checkpoints.sqlite"
+    _write_checkpoint_rows(run_db, "run_old")
+    service = MaintenanceService(tmp_path, MaintenanceConfig(retention_days=15))
+    service.preview()
+    assert run_db.exists()
+    assert (tmp_path / "sessions/session_old/checkpoints.sqlite").exists()
+    report = service.cleanup(dry_run=False)
     assert report["summary"]["sessions"] == 1
-    assert report["summary"]["checkpoints"] == 1
-    assert old_rows == 0
-    assert kept_rows == 1
+    assert not run_db.exists()
+    assert not (tmp_path / "sessions/session_old/checkpoints.sqlite").exists()
+    with sqlite3.connect(tmp_path / "sessions/session_kept/checkpoints.sqlite") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM checkpoints").fetchone()[0] == 1
 
 
 def test_maintenance_trims_schedule_events_logs_scratch_and_cache(tmp_path: Path) -> None:

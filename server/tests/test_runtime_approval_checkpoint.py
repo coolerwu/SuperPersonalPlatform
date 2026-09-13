@@ -65,3 +65,28 @@ def test_stream_approval_survives_checkpoint_reopen(tmp_path, nested, decision, 
         assert calls == [decision] * (2 if parallel else 1)
 
     asyncio.run(scenario())
+
+
+def test_session_files_preserve_history_and_stable_message_ids(tmp_path):
+    from langchain_core.messages import HumanMessage
+
+    async def scenario():
+        for sid in ("session_a", "session_b"):
+            (tmp_path / "sessions" / sid).mkdir(parents=True)
+        async def invoke(sid, messages):
+            path = tmp_path / "sessions" / sid / "checkpoints.sqlite"
+            async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
+                graph = StateGraph(MessagesState)
+                graph.add_node("read", lambda state: {})
+                graph.add_edge(START, "read")
+                graph.add_edge("read", END)
+                agent = graph.compile(checkpointer=saver)
+                return await agent.ainvoke({"messages": messages}, {"configurable": {"thread_id": sid}})
+        first = HumanMessage(content="公共群消息", id="public-1")
+        await invoke("session_a", [first])
+        await invoke("session_b", [HumanMessage(content="另一群", id="other-1")])
+        result = await invoke("session_a", [first, HumanMessage(content="未点名自己的新消息", id="public-2")])
+        assert [m.content for m in result["messages"]] == ["公共群消息", "未点名自己的新消息"]
+        other = await invoke("session_b", [])
+        assert [m.content for m in other["messages"]] == ["另一群"]
+    asyncio.run(scenario())

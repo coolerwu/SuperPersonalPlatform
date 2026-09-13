@@ -70,3 +70,5 @@
 - 群记录归 `workspace/chat_groups/`；成员执行 session 归 `workspace/sessions/`，每群成员独立 checkpoint，普通 Chat 不列出或选用内部 session。临时角色仍共享基础 Agent 的文件和长期记忆。
 - 群步骤使用确定性 Run ID 与稳定 LangGraph 消息 ID，推进前先落盘，发布结果与游标原子更新。自动协作最多三轮、每轮四名成员；只接受主持结构化工具决定，不从回答中的 @ 派工，控制工具不得下放给子 Agent。
 - 群引用 session 和未结束步骤 Run 必须得到清理保护；群任务重试从群入口发起，不能绕过编排。发布前验证中断恢复、审批、停止和上下文隔离。
+
+- Checkpoint 按 session 存储于 `sessions/{session_id}/checkpoints.sqlite`；无 session 的审批 Run 存于自身 Run 目录。旧公共库需停服备份后按 thread_id 一次性拆分并核验，不加入自动迁移；群公共消息增量与成员 checkpoint 衔接，主持工具生成的公开消息也必须补齐。

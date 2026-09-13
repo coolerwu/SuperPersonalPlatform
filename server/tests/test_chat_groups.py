@@ -77,6 +77,8 @@ def test_manual_chain_context_isolation_dedup_and_restart(tmp_path, monkeypatch)
         assert len(done["messages"]) == 3
         assert len(container.run_service.list_runs()) == 2
         assert calls[0]["thread_id"] != calls[1]["thread_id"]
+        for call in calls:
+            assert call["checkpoint_path"] == tmp_path / "sessions" / call["thread_id"] / "checkpoints.sqlite"
         assert calls[0]["messages"][-1].id == f"group-input-{first}"
         assert "负责组织" in calls[0]["instructions"] and "检查问题" in calls[1]["instructions"]
         assert service.sessions.summaries_for_agent(agent_id="assistant") == []
@@ -108,6 +110,8 @@ def test_host_three_rounds_and_continue(tmp_path, monkeypatch):
         execution = group["executions"][-1]
         assert execution["round"] == 3 and execution["status"] == "completed"
         assert len(calls) == 7
+        assert any("@评审：检查" in m.content for m in calls[2]["messages"])
+        assert any("答复 2" in m.content for m in calls[2]["messages"])
         assert group["messages"][-1]["content"] == "已完成三轮，未完成项待继续"
         await service.action(group["id"], execution["id"], "continue", "continue-id")
         await service.action(group["id"], execution["id"], "continue", "continue-id")

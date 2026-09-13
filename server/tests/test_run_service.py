@@ -505,7 +505,7 @@ def test_run_service_persists_session_history(tmp_path, monkeypatch) -> None:
     assert completed["input"]["session_id"] == session.session_id
     assert completed["state"]["session_id"] == session.session_id
     assert completed["delivery"]["session_id"] == session.session_id
-    assert captured["checkpoint_path"] == tmp_path / "sessions" / "checkpoints.sqlite"
+    assert captured["checkpoint_path"] == tmp_path / "sessions" / session.session_id / "checkpoints.sqlite"
     assert captured["thread_id"] == session.session_id
     assert captured["messages"][-1].role == "user"
     assert captured["messages"][-1].content == "第二句"
@@ -607,7 +607,7 @@ def test_run_service_always_uses_checkpoint_even_with_retired_flag(tmp_path, mon
     )
     asyncio.run(service.execute_run(run["run_id"]))
 
-    assert captured["checkpoint_path"] == tmp_path / "sessions" / "checkpoints.sqlite"
+    assert captured["checkpoint_path"] == tmp_path / "sessions" / session.session_id / "checkpoints.sqlite"
     assert captured["thread_id"] == session.session_id
     assert [message.content for message in captured["messages"]] == ["第二句"]
 
@@ -781,7 +781,7 @@ def test_run_service_persists_approval_and_resumes_from_checkpoint(tmp_path, mon
     assert waiting["approval"]["request"]["interrupts"][0]["actions"][0]["name"] == "write_file"
     assert waiting["partial"]["status"] == "waiting_approval"
     assert not (tmp_path / "runs" / run_id / "lock.json").exists()
-    assert calls[0]["checkpoint_path"] == tmp_path / "sessions" / "checkpoints.sqlite"
+    assert calls[0]["checkpoint_path"] == tmp_path / "runs" / run_id / "checkpoints.sqlite"
     assert calls[0]["thread_id"] == run_id
 
     queued = service.approve_run(run_id)

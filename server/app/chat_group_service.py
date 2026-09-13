@@ -297,7 +297,9 @@ class ChatGroupService:
             content = decision.summary or "\n".join(f'@{next(m["name"] for m in execution["members"] if m["id"] == t.member_id)}：{t.task}' for t in decision.tasks)
         self._message(group, content=content, role="assistant", name=step["name"], member_id=step["member_id"],
                       run_id=step["run_id"], thinking=(run.get("partial") or {}).get("thinking", []), usage=run.get("usage"))
-        group["cursors"][step["key"]] = len(group["messages"])
+        # Control messages can be synthesized from tool output rather than the
+        # model answer. Deliver that public message on the host’s next turn.
+        group["cursors"][step["key"]] = len(group["messages"]) - int(decision is not None)
         execution["steps"].append(step)
         execution["current_step"] = None
         if decision:

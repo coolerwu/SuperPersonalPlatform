@@ -22,7 +22,7 @@
 - 工具人工确认沿用 DeepAgent/LangGraph 原生 HITL：`interrupt_on` 只开放 approve/reject，运行时把 `Interrupt.value` 转成 `RunApprovalRequest` 强类型对象；`approval_required` 和 `approval_resolved` 使用明确的事件 payload 类，不在运行链路传递无定义 dict。当前请求、决定和历次审批保存在 `workspace/runs/{run_id}/approval.json`，LangGraph 的实际恢复位置仍由 SQLite checkpoint 保存。
 - 每个 run 使用 `workspace/runs/{run_id}/` 独立目录保存 `input.json`、`state.json`、`events.jsonl`、`result.json` 和 `delivery.json`；需要人工审批时额外保存 `approval.json`，记录强类型工具请求、当前决定和历史。run 由同一 FastAPI 进程内常驻 `RunWorkerService` 从落盘队列领取执行，而不是由 HTTP 请求内的临时 `asyncio.create_task` 执行；仅在 run 被 worker 领取后额外持有 `lock.json`，进入终态或 `waiting_approval` 后立即移除。`RunDeliveryService` 独立扫描 Run 索引，把审批通知和最终结果投递从微信接收协程、Scheduler 执行协程中解耦。
 - 统一调度器使用 `workspace/schedules/` 落盘调度定义和状态；WebDAV Context 同步和未来 Agent 定时任务共用这一套调度机制。
-- `workspace/sessions/index.json` 维护所有长期会话索引；长期 session 对微信和未来渠道默认开启。`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`；Agent 的 Checkpointer 固定开启，不再提供配置开关，开启时 DeepAgent/LangGraph 运行时状态写入 `workspace/sessions/checkpoints.sqlite`。
+- `workspace/sessions/index.json` 维护所有长期会话索引；长期 session 对微信和未来渠道默认开启。`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`；Agent 的 Checkpointer 固定开启，不再提供配置开关，开启时 DeepAgent/LangGraph 运行时状态写入 `workspace/sessions/{session_id}/checkpoints.sqlite`。
 - 同一 `session_id` 同时只允许一个 `queued`、`running` 或 `waiting_approval` Run。RunService 在保存附件、追加消息或创建 Run 目录前强制检查，冲突通过 HTTP 409 返回当前 Run ID 和状态，防止多个 Run 覆盖同一个 LangGraph checkpoint。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
 - Agent 的 DeepAgent 配置只保留 `max_iterations`、`todo_list` 和工具授权 `tools`。长期记忆、私有文件系统及会话 Checkpointer 固定开启；运行名使用 Agent 名称，debug 默认关闭。系统从工具注册表的 `approval_required` 生成 HITL `interrupt_on`；WebDAV 文件写入由原生 Permission interrupt 规则生成审批谓词，不再接受 Agent 自定义审批列表。原生文件工具按路径授权执行。移除 `name/debug/filesystem/use_longterm_memory/interrupt_on/subagents/response_format/context_schema/checkpointer/cache` 配置；系统继续管理通用子 Agent、Skills 和 SkillImprovement middleware。
@@ -80,6 +80,7 @@ workspace/
       result.json
       lock.json
       delivery.json
+      checkpoints.sqlite  # 无 session 的审批 Run
 
   schedules/
     index.json
@@ -97,8 +98,8 @@ workspace/
   sessions/
     index.json
     active.json
-    checkpoints.sqlite
     {session_id}/
+      checkpoints.sqlite
       state.json
       messages.jsonl
       runs.jsonl
@@ -137,7 +138,7 @@ POST /api/runs/{run_id}/reject
 POST /api/runs/{run_id}/resume
 ```
 
-`POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`，只负责创建 `queued` run 并写入落盘队列；执行由同一 FastAPI 进程内的 `RunWorkerService` 领取，不再绑定创建请求的生命周期。同一 session 已有活动 Run 时返回 409，响应 detail 包含 `message`、`active_run_id` 和 `status`。未传 `session_id` 时按独立一次性 run 处理；若当前 Agent 授权了系统标记需审批的工具，平台仍会用 run ID 建立可恢复 checkpoint。传入 `session_id` 时，运行时使用 `workspace/sessions/checkpoints.sqlite` 作为 LangGraph SQLite checkpointer，并把 `configurable.thread_id` 设为该 `session_id`，同时只传当前 run 消息。DeepAgent 原生 interrupt 会把 Run 切到 `waiting_approval` 并释放 worker lock；批准或拒绝会写入 `approval_resolved` 事件、重新入队，再通过同一 thread ID 的 `Command(resume=...)` 从中断点继续。三个审批接口中，`approve` / `reject` 是快捷入口，`resume` 接受结构化 `decision=approve|reject` 和可选拒绝理由。微信来源 Run 和带微信投递目标的定时 Run 会由 `RunDeliveryService` 发出审批通知；通知支持整条回复 `approve`、`同意`、`批准`、`允许`、`通过` 表示批准，`reject`、`拒绝`、`不同意`、`不批准`、`不允许`、`不通过` 表示拒绝；忽略英文大小写、首尾空格和句末标点，不匹配普通句子或“好/可以/继续/确认/OK”，短命令选择同一账号、peer、Agent 下最新的待审批 Run，旧 `/approve <run_id>` 与 `/reject <run_id> <原因>` 继续兼容。该接口保留给渠道接入、自动化和后端集成使用。`cancel` 会把 queued/running/waiting_approval run 标记为 `cancelled` 并释放 lock；`rerun` 只允许作用于 `completed/failed/cancelled` 终态 run，保留原 `input.json` 和事件审计，清除结果、审批快照并重新入队。
+`POST /api/runs` 可接受可选 `session_id` 和 `attachments[]`，只负责创建 `queued` run 并写入落盘队列；执行由同一 FastAPI 进程内的 `RunWorkerService` 领取，不再绑定创建请求的生命周期。同一 session 已有活动 Run 时返回 409，响应 detail 包含 `message`、`active_run_id` 和 `status`。未传 `session_id` 时按独立一次性 run 处理；若当前 Agent 授权了系统标记需审批的工具，平台仍会用 run ID 建立可恢复 checkpoint。传入 `session_id` 时，运行时使用 `workspace/sessions/{session_id}/checkpoints.sqlite` 作为 LangGraph SQLite checkpointer，并把 `configurable.thread_id` 设为该 `session_id`，同时只传当前 run 消息。DeepAgent 原生 interrupt 会把 Run 切到 `waiting_approval` 并释放 worker lock；批准或拒绝会写入 `approval_resolved` 事件、重新入队，再通过同一 thread ID 的 `Command(resume=...)` 从中断点继续。三个审批接口中，`approve` / `reject` 是快捷入口，`resume` 接受结构化 `decision=approve|reject` 和可选拒绝理由。微信来源 Run 和带微信投递目标的定时 Run 会由 `RunDeliveryService` 发出审批通知；通知支持整条回复 `approve`、`同意`、`批准`、`允许`、`通过` 表示批准，`reject`、`拒绝`、`不同意`、`不批准`、`不允许`、`不通过` 表示拒绝；忽略英文大小写、首尾空格和句末标点，不匹配普通句子或“好/可以/继续/确认/OK”，短命令选择同一账号、peer、Agent 下最新的待审批 Run，旧 `/approve <run_id>` 与 `/reject <run_id> <原因>` 继续兼容。该接口保留给渠道接入、自动化和后端集成使用。`cancel` 会把 queued/running/waiting_approval run 标记为 `cancelled` 并释放 lock；`rerun` 只允许作用于 `completed/failed/cancelled` 终态 run，保留原 `input.json` 和事件审计，清除结果、审批快照并重新入队。
 
 Chat API：
 
@@ -211,7 +212,7 @@ POST /api/system/browser-auth/sessions/{session_id}/cancel
 
 `/webdav-context/test` 可使用配置页当前草稿或已保存配置测试坚果云 WebDAV 连接，只返回目标 URL、HTTP 状态和是否成功，不回传账号密码；`/webdav-context/sync` 现读已保存的 `workspace/config.yaml`，手动执行一次 WebDAV 文件同步，用于配置变更后立即制作本地缓存，而不必等待后台间隔或重启服务。
 
-`/maintenance/preview` 只计算清理计划不删除文件；`/maintenance/run` 执行清理。当前默认保留期统一为 15 天：删除超过保留期且已终态的 run、超过保留期未活跃且没有活动 run 引用、也没有被 `workspace/sessions/active.json` 指向的 session、这些已删 session 在 `workspace/sessions/checkpoints.sqlite` 里的 checkpoint/writes 行、旧调度事件、旧平台日志、Agent scratch 和 Context cache 里的旧文件，以及很旧的孤立 lock；同时会清理 `active.json` 中指向已不存在 session 的脏 binding。知识库、WebDAV 文本/图片缓存、微信登录态和 Agent 长期记忆不做自动删除。自动清理不再使用单独后台 loop，而是作为 `workspace/schedules/maintenance_cleanup/` 内置定时任务落盘并显示在 `/schedules`。
+`/maintenance/preview` 只计算清理计划不删除文件；`/maintenance/run` 执行清理。当前默认保留期统一为 15 天：删除超过保留期且已终态的 run、超过保留期未活跃且没有活动 run 引用、也没有被 `workspace/sessions/active.json` 指向的 session、随 session 和 Run 目录一并删除的所属 checkpoint 数据库、旧调度事件、旧平台日志、Agent scratch 和 Context cache 里的旧文件，以及很旧的孤立 lock；同时会清理 `active.json` 中指向已不存在 session 的脏 binding。知识库、WebDAV 文本/图片缓存、微信登录态和 Agent 长期记忆不做自动删除。自动清理不再使用单独后台 loop，而是作为 `workspace/schedules/maintenance_cleanup/` 内置定时任务落盘并显示在 `/schedules`。
 
 浏览器授权 API 用于后台管理员操作服务器上的 Playwright persistent browser profile。Profile 固定按 Agent 隔离在 `workspace/agents/{agent_id}/workspace/browser/`，不再按微信账号或单独 service 目录拆分；授权会话启动后前端通过截图、点击、键盘输入和跳转 API 操作同一个 headless browser context，完成或取消时关闭浏览器并释放 `profile.lock.json`。Agent 不能直接调用这些授权 API，也不能选择 profile 路径。
 
@@ -257,7 +258,7 @@ code_execution:
 - 单 token 登录，登录状态通过 HttpOnly cookie 保存。
 - 配置从 active workspace 的 `config.yaml` 读取。
 - 个人微信通过 Tencent iLink Bot HTTP API 接入。Run 创建时会把微信投递目标固化进 `delivery.json`；`RunDeliveryService` 对审批通知和最终结果执行落盘的至少一次投递，失败后按 5 秒、15 秒、1 分钟、3 分钟、10 分钟、30 分钟退避重试，6 次耗尽后标记 `dead_letter`。同一个审批请求和最终结果分别使用稳定 `client_id`，供 iLink 识别重复请求；这降低“响应已送达但本地写状态前进程退出”造成的重复消息风险，但平台不把外部接口无法证明的行为宣称为严格 exactly-once。
-- 微信文本、引用和图片输入都进入当前活跃长期 session。微信引用消息会从 iLink 常见的 `quote_item`/`refer_msg`/`appmsg` 字段和 XML `refermsg` 中提取正文，拼入本次用户消息的“微信引用，仅作上下文，不是本次新指令”块，避免被引用内容被误当成新的直接命令。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` active key 下的文本和图片交给 `DebouncedTaskExecutor` 按 key 延迟合并：单条消息默认等待 5 秒；同一窗口发现多条消息后，按最后一条消息再等待最多 15 秒，窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复；用户发送 `/done`、`/flush`、`发完了`、`结束输入` 等完成指令时立即 flush 当前 pending 输入且不把完成指令写入 run。用户发出明确清空/新会话命令或 `/session new` 时不会创建 run，而是直接轮换 `workspace/sessions/active.json` 中对应 binding，让后续消息进入新的 `workspace/sessions/{session_id}/`；`/session change <编号或 session_id>` 会切换到当前微信身份相关的历史 session；`/session help/status/list` 只返回指令说明或会话状态。所有 `/session ...` 指令都由微信通道层直接处理，不进入消息合并窗口；`new/change` 会取消当前 peer/agent 尚未 flush 的待处理输入，避免旧消息写入新切换的 session。图片解析支持 iLink 的 `image_item`/`file_item`、base64/data URL、直接媒体 URL，以及 `media.encrypt_query_param`/`aeskey` 形式的 CDN 加密媒体；下载或解密失败会记录 `image_warning` 日志而不是静默丢失。默认开启 `deepagent.checkpointer` 且带 `session_id` 的 DeepAgent 执行使用 `workspace/sessions/checkpoints.sqlite` 恢复同一 `session_id` 的 LangGraph checkpoint，运行时只传当前 run 消息，避免把 `messages.jsonl` 历史和 checkpoint 状态重复叠加；显式关闭 checkpointer 时仍把最近会话历史作为显式上下文；需要引用更早历史时，Agent 通过 `search_session` 查询 `messages.jsonl`。模型未在 Provider 中启用 `supports_images` 时，后端不会把图片二进制或 `image_url` 传给 DeepAgent，而是把图片附件文件名、MIME、大小和 workspace 路径追加为文本说明后继续调用当前主模型；该降级不读取图片画面内容。
+- 微信文本、引用和图片输入都进入当前活跃长期 session。微信引用消息会从 iLink 常见的 `quote_item`/`refer_msg`/`appmsg` 字段和 XML `refermsg` 中提取正文，拼入本次用户消息的“微信引用，仅作上下文，不是本次新指令”块，避免被引用内容被误当成新的直接命令。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` active key 下的文本和图片交给 `DebouncedTaskExecutor` 按 key 延迟合并：单条消息默认等待 5 秒；同一窗口发现多条消息后，按最后一条消息再等待最多 15 秒，窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复；用户发送 `/done`、`/flush`、`发完了`、`结束输入` 等完成指令时立即 flush 当前 pending 输入且不把完成指令写入 run。用户发出明确清空/新会话命令或 `/session new` 时不会创建 run，而是直接轮换 `workspace/sessions/active.json` 中对应 binding，让后续消息进入新的 `workspace/sessions/{session_id}/`；`/session change <编号或 session_id>` 会切换到当前微信身份相关的历史 session；`/session help/status/list` 只返回指令说明或会话状态。所有 `/session ...` 指令都由微信通道层直接处理，不进入消息合并窗口；`new/change` 会取消当前 peer/agent 尚未 flush 的待处理输入，避免旧消息写入新切换的 session。图片解析支持 iLink 的 `image_item`/`file_item`、base64/data URL、直接媒体 URL，以及 `media.encrypt_query_param`/`aeskey` 形式的 CDN 加密媒体；下载或解密失败会记录 `image_warning` 日志而不是静默丢失。默认开启 `deepagent.checkpointer` 且带 `session_id` 的 DeepAgent 执行使用 `workspace/sessions/{session_id}/checkpoints.sqlite` 恢复同一 `session_id` 的 LangGraph checkpoint，运行时只传当前 run 消息，避免把 `messages.jsonl` 历史和 checkpoint 状态重复叠加；显式关闭 checkpointer 时仍把最近会话历史作为显式上下文；需要引用更早历史时，Agent 通过 `search_session` 查询 `messages.jsonl`。模型未在 Provider 中启用 `supports_images` 时，后端不会把图片二进制或 `image_url` 传给 DeepAgent，而是把图片附件文件名、MIME、大小和 workspace 路径追加为文本说明后继续调用当前主模型；该降级不读取图片画面内容。
 - 坚果云通过 WebDAV 接入，默认 endpoint 为 `https://dav.jianguoyun.com/dav/`。
 - DeepAgent 依赖 `deepagents>=0.7.13,<0.8`、LangGraph 和 `langgraph-checkpoint-sqlite`；后端任务执行结果必须落盘，带 `session_id` 且 Agent 未显式关闭 `deepagent.checkpointer` 的任务还会把 LangGraph checkpoint 写入统一 SQLite 文件。生产依赖同时固定 `cryptography>=38,<49`，避免部署时走不兼容本机 Rust 工具链的源码构建路径。
 - `search_session(query, top_k, role, scope)` 检索会话历史，`scope` 默认为 `current`，只查当前 run 的 `session_id` 对应 `workspace/sessions/{session_id}/messages.jsonl`；传 `scope="related"` 时，按当前 session 的 `active_key` 或 `channel + channel_account_id + peer_type + peer_id + agent_id` 搜索同一渠道身份下的相关 session，包括清空上下文前归档的旧 session。Agent 不能传任意 `session_id`。搜索使用 jieba 对中文 query 分词，并结合精确子串命中评分；返回 session 元数据、是否当前 active、消息序号、角色、时间、run ID、片段和附件元数据。该工具用于用户引用“刚才/前面/之前/那张图/那个链接”等同一微信或 API 长期会话中的历史消息，也用于用户给关键词要求找相关旧会话。
@@ -282,7 +283,7 @@ code_execution:
 - 运行时默认通过 `WorkspaceMiddleware` 向主 Agent 和使用文件工具的 general-purpose 子 Agent 的每次模型请求追加工作区目录用途、权限、脚本/成果位置及容器路径区别；同步和异步均生效，不重复累积，不写聊天历史或人格配置。目录定义、初始化及 Agent 文件权限共用 `agent_workspace.py`，实际物理路径经统一入口解析，Agent ID 显式传入运行时。长期记忆和浏览器研究细则不重复注入。Agent 特定记忆由 DeepAgent 原生 `MemoryMiddleware` 的 memory guidelines 负责；用户笔记、同步文档与共享知识统一使用原生文件工具；浏览器的搜索、正文提取和失败恢复流程由 `browser_search`、`browser_extract` 工具 description 负责；私有虚拟文件系统的目录认知由 `WorkspaceMiddleware` 负责，权限强制执行由 `AgentFilesystemBackend` 负责。 启用 WebDAV 时逐项追加 `/webdav/` 下目录路径、用户说明（缺省为用户文档与共享知识库）、权限、子目录优先规则和远端写回提示，主 Agent 与通用子 Agent 都接收；私有脚本、成果和记忆继续使用对应私有目录。
 - 历史 `workspace/agents/{agent_id}/memory/store.json` 是旧版 DeepAgent store 遗留路径，不由运行时代码或迁移脚本自动处理。按用户偏好，旧 workspace 数据收敛直接在目标机器上做一次性文件操作；配置页只展示新版 `workspace/agents/{agent_id}/workspace/memories/`。
 - 系统日志继续写入 `workspace/logs/platform-YYYY-MM-DD.log`。
-- 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据，但不会删除 `workspace/sessions/active.json` 仍指向的当前会话。删除过期 session 时，同步删除 `workspace/sessions/checkpoints.sqlite` 里该 `thread_id` 的 checkpoint/writes 行。自动执行由统一 Scheduler 的内置 `maintenance_cleanup` 任务负责，状态和事件落在 `workspace/schedules/maintenance_cleanup/`，立即清理可使用系统 API 或 `/schedules` 的立即运行按钮。
+- 维护清理服务读取 `maintenance.enabled`、`maintenance.interval_seconds`、`maintenance.retention_days` 和 `maintenance.dry_run`；默认每 86400 秒运行一次，统一清理超过 15 天的可清理运行数据，但不会删除 `workspace/sessions/active.json` 仍指向的当前会话。删除过期 session 时，同步删除 `workspace/sessions/{session_id}/checkpoints.sqlite` 里该 `thread_id` 的 checkpoint/writes 行。自动执行由统一 Scheduler 的内置 `maintenance_cleanup` 任务负责，状态和事件落在 `workspace/schedules/maintenance_cleanup/`，立即清理可使用系统 API 或 `/schedules` 的立即运行按钮。
 - 生产更新锁文件固定写入 `workspace/logs/update-service.lock`。历史 `workspace/.run/` 已退役，不再保存微信登录态或更新锁；生产升级前必须把旧 `workspace/.run/wechat_session*.json` 移到 `workspace/channels/wechat/sessions/`，再删除空 `.run` 目录。
 
 ## Removed From Target Architecture
@@ -391,3 +392,9 @@ POST /api/chat-groups/{group_id}/collaborations/{execution_id}/stop
 ### 流式审批 checkpoint 完整性
 
 - 运行时收到主图或子图的 HITL interrupt 后必须继续消费 `astream` 至正常结束，等待 SQLite checkpoint 与 pending writes 保存完成，再将 Run 切为等待审批；不能在第一个 interrupt chunk 处提前返回或关闭 checkpointer。以 updates 事件收集本轮待审批中断，按 interrupt ID 合并，保留并行子图全部审批；忽略恢复时 values 快照中的旧审批。批准或拒绝后使用已保存的中断继续，不重新生成已审批的工具参数。
+
+## Checkpoint 存储与切换
+
+- RunService 按 session 定位 `sessions/{session_id}/checkpoints.sqlite`；无 session 的审批 Run 使用 `runs/{run_id}/checkpoints.sqlite`。thread_id 保持原 session ID 或 Run ID，同一会话持续复用文件，删除所属目录即释放数据库；不裁剪存活会话的历史快照。
+- 群成员复用群 state.json 的 member_sessions 映射；checkpoint 中已有群上下文与执行前补齐的新增公共消息共同构成成员上下文。@ 只决定发言顺序。主持工具生成的公开分工在下一次执行补入，不能因游标推进而跳过。
+- 公共旧库仅在停服窗口一次性按 thread_id 拆分，完整保留所有表数据、namespace、父链和 pending writes；备份、逐 thread 内容与数量核验、完整性检查通过后移出旧库再启动。未知归属保留备份、目标冲突不覆盖；不提供运行时迁移或旧路径回退。

@@ -272,9 +272,9 @@ class RunService:
         )
         fallback_attachments = _runtime_attachments(run_input.get("attachments") or [], workspace=self._workspace)
         checkpoint_path = (
-            self._workspace / "sessions" / "checkpoints.sqlite"
-            if use_session_checkpoint or use_approval_checkpoint
-            else None
+            self._workspace / "sessions" / session_id / "checkpoints.sqlite"
+            if use_session_checkpoint
+            else (self._run_dir(run_id) / "checkpoints.sqlite" if use_approval_checkpoint else None)
         )
         runtime_thread_id = session_id if use_session_checkpoint else (run_id if use_approval_checkpoint else "")
         runtime_history = _current_run_messages(history, run_id) if use_session_checkpoint else history[-SESSION_RUNTIME_MESSAGE_LIMIT:]
