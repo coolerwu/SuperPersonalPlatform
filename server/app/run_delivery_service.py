@@ -290,8 +290,8 @@ def _approval_message(run_id: str, request: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "批准：approve",
-            "拒绝：reject",
+            "批准：approve / 同意 / 批准 / 允许 / 通过",
+            "拒绝：reject / 拒绝 / 不同意 / 不批准 / 不允许 / 不通过",
         ]
     )
     return "\n".join(lines)

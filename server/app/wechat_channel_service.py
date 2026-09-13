@@ -375,7 +375,7 @@ class WechatChannelService:
             if active_run is not None:
                 status = str((active_run.get("state") or {}).get("status") or "")
                 message = (
-                    "当前任务等待审批，请回复 approve 或 reject。"
+                    "当前任务等待审批，请回复 同意/批准/允许/通过/approve，或 拒绝/不同意/不批准/不允许/不通过/reject。"
                     if status == "waiting_approval"
                     else "当前任务仍在运行，请等待完成后再发送新消息。"
                 )
@@ -635,7 +635,7 @@ class WechatChannelService:
             reply = str(result.get("content") or result.get("error") or "任务没有返回内容")
         except SessionRunConflictError as exc:
             reply = (
-                "当前任务等待审批，请回复 approve 或 reject。"
+                "当前任务等待审批，请回复 同意/批准/允许/通过/approve，或 拒绝/不同意/不批准/不允许/不通过/reject。"
                 if exc.status == "waiting_approval"
                 else "当前任务仍在运行，请等待完成后再发送新消息。"
             )
@@ -985,9 +985,14 @@ def _parse_approval_command(text: str) -> WechatApprovalCommand | None:
     value = str(text or "").strip()
     if not value:
         return None
+    reply = value.rstrip("。.!！?？…，,；;、").strip().lower()
+    if reply in {"approve", "同意", "批准", "允许", "通过"}:
+        return WechatApprovalCommand(action="approve")
+    if reply in {"reject", "拒绝", "不同意", "不批准", "不允许", "不通过"}:
+        return WechatApprovalCommand(action="reject")
     parts = value.split(maxsplit=2)
     root = parts[0].lower()
-    if root not in {"/approve", "approve", "/reject", "reject"}:
+    if root not in {"/approve", "/reject"}:
         return None
     action = "approve" if root in {"/approve", "approve"} else "reject"
     return WechatApprovalCommand(

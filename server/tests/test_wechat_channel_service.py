@@ -1,10 +1,12 @@
 import asyncio
 import base64
+
+import pytest
 from pathlib import Path
 from typing import Any
 
 from server.app.session_service import SessionService
-from server.app.wechat_channel_service import WechatChannelService
+from server.app.wechat_channel_service import WechatChannelService, _parse_approval_command
 
 
 CONFIG = """\
@@ -499,7 +501,7 @@ def test_wechat_blocks_normal_message_while_session_waits_for_approval(tmp_path)
         await service._process_message(_text_message("继续补充"))
 
         assert run_service.created == []
-        assert "请回复 approve 或 reject" in client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
+        assert "请回复 同意/批准/允许/通过/approve" in client.sent[-1]["payload"]["item_list"][0]["text_item"]["text"]
 
     asyncio.run(scenario())
 
@@ -548,3 +550,22 @@ def _encrypt_aes_ecb_pkcs7(content: bytes, key: bytes) -> bytes:
     padded = content + bytes([padding]) * padding
     encryptor = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
     return encryptor.update(padded) + encryptor.finalize()
+
+
+@pytest.mark.parametrize("reply", ["approve", "APPROVE", "同意", "批准", "允许", "通过"])
+def test_approval_reply_aliases(reply):
+    command = _parse_approval_command(f"  {reply}！。  ")
+    assert command.action == "approve"
+    assert not command.selector
+
+
+@pytest.mark.parametrize("reply", ["reject", "REJECT", "拒绝", "不同意", "不批准", "不允许", "不通过"])
+def test_rejection_reply_aliases(reply):
+    command = _parse_approval_command(f"  {reply}。  ")
+    assert command.action == "reject"
+    assert not command.selector
+
+
+@pytest.mark.parametrize("reply", ["好", "可以", "继续", "确认", "OK", "我同意", "同意 但是先等等", "不同意这个方案", "approve later", "reject this idea"])
+def test_approval_reply_requires_whole_message(reply):
+    assert _parse_approval_command(reply) is None
