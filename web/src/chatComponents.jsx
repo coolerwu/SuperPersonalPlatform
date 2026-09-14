@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, Copy, TerminalSquare, Send, Clock3, XCircle, CheckCircle2 } from "lucide-react";
+import { Check, Copy, TerminalSquare, ArrowUp, Clock3, XCircle, CheckCircle2 } from "lucide-react";
 
 export function ChatMessageList({ messages, onDecision, onError = () => {}, emptyTitle = "开始一次页面对话", emptyDescription = "消息会进入长期 session；运行中输出会在这里实时刷新。" }) {
   const [copiedMessageId, setCopiedMessageId] = useState("");
@@ -63,17 +63,6 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
             >
               <div className={`chat-bubble ${message.content ? "copyable" : ""}`}>
                 {message.speaker ? <div className="chat-speaker"><strong>{message.speaker}</strong>{message.run_id ? <a href={`/runs?run_id=${encodeURIComponent(message.run_id)}`}>Run ↗</a> : null}</div> : null}
-                {message.content ? (
-                  <button
-                    type="button"
-                    className={`chat-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
-                    onClick={() => copyMessage(message)}
-                    aria-label={`${copiedMessageId === message.id ? "已复制" : "复制"}${message.role === "user" ? "用户" : "助手"}消息`}
-                    title={copiedMessageId === message.id ? "已复制" : "复制消息"}
-                  >
-                    {copiedMessageId === message.id ? <Check size={15} /> : <Copy size={15} />}
-                  </button>
-                ) : null}
                 {message.role === "assistant" && message.thinking?.length ? (
                   <ThinkingPanel items={message.thinking} running={message.streaming} collapsed={message.thinkingCollapsed !== false} />
                 ) : null}
@@ -93,6 +82,19 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
                 ) : null}
                 {message.cancelled ? <small>已停止</small> : null}
                 {!message.approval && message.streaming ? <small>streaming</small> : null}
+                <div className="chat-message-actions">
+                {message.content ? (
+                  <button
+                    type="button"
+                    className={`chat-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
+                    onClick={() => copyMessage(message)}
+                    aria-label={`${copiedMessageId === message.id ? "已复制" : "复制"}${message.role === "user" ? "用户" : "助手"}消息`}
+                    title={copiedMessageId === message.id ? "已复制" : "复制消息"}
+                  >
+                    {copiedMessageId === message.id ? <Check size={15} /> : <Copy size={15} />}
+                  </button>
+                ) : null}
+                </div>
               </div>
             </div>
           ))}
@@ -119,8 +121,8 @@ export function ChatComposer({ value, onChange, onSend, busy = false, disabled =
           if (!busy && !disabled && value.trim()) onSend();
         }
       }} />
-    {children}
-    <button className="primary chat-send-button" onClick={onSend} disabled={!value.trim() || busy || disabled}><Send size={18} /><span>发送</span></button>
+    <div className="chat-composer-actions">{children}
+    <button className="primary chat-send-button" aria-label="发送" title="发送" onClick={onSend} disabled={!value.trim() || busy || disabled}><ArrowUp size={23} /></button></div>
   </div>;
 }
 

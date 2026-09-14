@@ -522,9 +522,7 @@ pre {
 }
 
 .chat-copy-button {
-  position: absolute;
-  top: 8px;
-  right: -38px;
+  position: static;
   display: inline-grid;
   width: 28px;
   height: 28px;
@@ -2917,9 +2915,7 @@ pre {
     max-width: 100%;
   }
 
-  .chat-bubble.copyable {
-    padding-top: 44px;
-  }
+
 
   .chat-message .chat-copy-button,
   .chat-message.user .chat-copy-button {
@@ -3180,3 +3176,28 @@ pre {
 }
 
 .chat-new-messages { position: sticky; bottom: 8px; align-self: center; z-index: 2; background: var(--panel, #182332); color: #fff; }
+
+/* Shared Chat and group message actions and composer. */
+.chat-message-actions { display: flex; align-items: center; min-height: 28px; margin-top: 6px; }
+.chat-composer, .group-chat-panel .chat-composer {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 10px 14px 14px; padding: 12px;
+  border: 1px solid var(--line); border-radius: 22px; background: #101720;
+}
+.chat-composer:focus-within { border-color: #47709a; }
+.chat-composer textarea, .group-chat-panel .chat-composer textarea {
+  flex: none; width: 100%; min-height: 54px; padding: 4px 6px;
+  border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none;
+}
+.chat-composer-actions { display: flex; align-items: center; gap: 10px; width: 100%; }
+.chat-composer .chat-send-button {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 40px; width: 40px; min-width: 40px; height: 40px;
+  margin-left: auto; padding: 0; border: 0; border-radius: 50%;
+  background: #397cf6; color: white;
+}
+.chat-composer .chat-send-button:hover:not(:disabled) { background: #528eff; }
+.chat-composer .chat-send-button:disabled { background: #303b49; color: #8995a6; opacity: 1; }
+@media (max-width: 760px) {
+  .chat-composer, .group-chat-panel .chat-composer { margin: 8px; padding: 10px; }
+}
