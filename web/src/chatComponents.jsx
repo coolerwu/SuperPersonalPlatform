@@ -5,6 +5,8 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const copyFeedbackTimerRef = useRef(0);
   const messagesRef = useRef(null);
+  const followingRef = useRef(true);
+  const [hasNew, setHasNew] = useState(false);
   useEffect(
     () => () => {
       if (copyFeedbackTimerRef.current) window.clearTimeout(copyFeedbackTimerRef.current);
@@ -29,6 +31,8 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
     function scrollToBottom() {
       node.scrollTop = node.scrollHeight;
     }
+    if (!followingRef.current) { setHasNew(true); return undefined; }
+    setHasNew(false);
     scrollToBottom();
     const frame = window.requestAnimationFrame ? window.requestAnimationFrame(scrollToBottom) : 0;
     return () => {
@@ -40,7 +44,11 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
 
   const decideChatApproval = onDecision;
   return (
-        <div className="chat-messages" ref={messagesRef}>
+        <div className="chat-messages" ref={messagesRef} onScroll={(event) => {
+          const node = event.currentTarget;
+          followingRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 64;
+          if (followingRef.current) setHasNew(false);
+        }}>
           {messages.length === 0 ? (
             <div className="chat-empty">
               <TerminalSquare size={30} />
@@ -83,10 +91,16 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
                     onDecision={(decision, reason) => decideChatApproval(message.run_id, decision, reason)}
                   />
                 ) : null}
-                {message.approval ? <small>等待审批</small> : message.streaming ? <small>streaming</small> : null}
+                {message.cancelled ? <small>已停止</small> : null}
+                {!message.approval && message.streaming ? <small>streaming</small> : null}
               </div>
             </div>
           ))}
+          {hasNew ? <button className="chat-new-messages" onClick={() => {
+            followingRef.current = true;
+            messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+            setHasNew(false);
+          }}>有新消息 · 回到底部</button> : null}
         </div>
 
   );
@@ -132,22 +146,30 @@ export function ApprovalPanel({ approval, onDecision, compact = false }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [submitted, setSubmitted] = useState("");
+  const submittingRef = useRef(false);
+  const approvalKey = JSON.stringify(approval);
   const interrupts = Array.isArray(approval?.interrupts) ? approval.interrupts : [];
   const actions = interrupts.flatMap((interrupt) => (Array.isArray(interrupt.actions) ? interrupt.actions : []));
   if (actions.length === 0) return null;
 
   async function decide(decision) {
-    if (!onDecision || busy) return;
+    if (!onDecision || submittingRef.current || submitted === approvalKey) return;
+    submittingRef.current = true;
     setBusy(decision);
     setError("");
     try {
       await onDecision(decision, reason.trim());
+      setSubmitted(approvalKey);
     } catch (exc) {
       setError(exc.message || "审批提交失败，请重试");
     } finally {
+      submittingRef.current = false;
       setBusy("");
     }
   }
+
+  if (submitted === approvalKey) return <p role="status">审批已提交，正在同步任务状态…</p>;
 
   return (
     <section className={`approval-panel ${compact ? "compact" : ""}`}>

@@ -803,7 +803,7 @@ test("chat page restores an active run after refresh and keeps polling", async (
       return response({
         run_id: "run_active",
         input: { agent_id: "assistant", source: "web_chat", session_id: "session_web" },
-        state: { status: "completed", seq: 3 },
+        state: { status: eventPolls < 2 ? "running" : "completed", seq: eventPolls < 2 ? 1 : 3 },
         result: { status: "completed", content: "最终正文" },
       });
     }
@@ -1630,4 +1630,59 @@ test("usage summary filters agents and preserves unknown historical costs", asyn
   fireEvent.change(filter, { target: { value: "" } });
   fireEvent.change(screen.getByLabelText("消耗统计时间"), { target: { value: "1" } });
   expect(summary).toHaveTextContent("1 / 1");
+});
+
+test("chat retries unconfirmed send with original identity and handles cancelled snapshot", async () => {
+  window.history.replaceState({}, "", "/chat");
+  const bodies = [];
+  global.fetch = vi.fn(async (url, options) => {
+    if (url === "/api/auth/me") return response({ authenticated: true });
+    if (url === "/api/workspace/read") return response({ content: CONFIG_YAML });
+    if (url === "/api/chat/session") return response({ session: { session_id: "s", agent_id: "assistant" }, messages: [] });
+    if (url === "/api/chat/messages") {
+      bodies.push(JSON.parse(options.body));
+      if (bodies.length === 1) throw new Error("响应丢失");
+      return response({ session: { session_id: "s", agent_id: "assistant" }, run: { run_id: "r" } });
+    }
+    if (String(url).includes("/events?")) return response({ events: [] });
+    if (url === "/api/runs/r") return response({ state: { status: "cancelled" }, result: {} });
+    return response({ messages: [], sessions: [] });
+  });
+  await act(async () => { await import("./main.jsx"); });
+  await flushReact();
+  const input = screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行");
+  fireEvent.change(input, { target: { value: "需要保留的原文" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  fireEvent.click(await screen.findByRole("button", { name: "重试确认发送" }));
+  await waitFor(() => expect(screen.getByText("已停止")).toBeInTheDocument());
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1]).toEqual(bodies[0]);
+  fireEvent.change(input, { target: { value: "下一条" } });
+  expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+});
+
+test("slow chat polling is serial and repeated event IDs do not duplicate output", async () => {
+  window.history.replaceState({}, "", "/chat");
+  let release;
+  let calls = 0;
+  global.fetch = vi.fn(async (url) => {
+    if (url === "/api/auth/me") return response({ authenticated: true });
+    if (url === "/api/workspace/read") return response({ content: CONFIG_YAML });
+    if (url === "/api/chat/session") return response({ session: { session_id: "s", agent_id: "assistant" }, messages: [], active_run: { run_id: "slow_serial", state: { status: "running", seq: 0 } } });
+    if (String(url).startsWith("/api/runs/slow_serial/events?")) {
+      calls++;
+      if (calls === 1) await new Promise((resolve) => { release = resolve; });
+      return response({ events: [{ seq: 1, type: "assistant_delta", payload: { delta: "唯一正文" } }] });
+    }
+    return response({ sessions: [] });
+  });
+  await act(async () => { await import("./main.jsx"); });
+  await flushReact();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1150)); });
+  expect(calls).toBe(1);
+  await act(async () => release());
+  expect(await screen.findByText("唯一正文")).toBeInTheDocument();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1150)); });
+  expect(calls).toBe(2);
+  expect(screen.getByText("唯一正文")).toBeInTheDocument();
 });

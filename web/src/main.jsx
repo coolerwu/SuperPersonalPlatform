@@ -314,6 +314,7 @@ function ChatPage() {
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [error, setError] = useState("");
   const sendingRef = useRef(false);
+  const [pendingSend, setPendingSend] = useState(null);
   const chatEventSeqRef = useRef(0);
   const chatRunContentRef = useRef("");
 
@@ -365,31 +366,39 @@ function ChatPage() {
     if (!activeRunId) return undefined;
     let cancelled = false;
     const runId = activeRunId;
+    let timer;
+    let finished = false;
+    let terminalStatus = "";
 
     async function finalizeRun(status) {
       let content = "";
       let failed = status === "failed";
+      let stopped = status === "cancelled";
       try {
         const run = await api(`/api/runs/${runId}`);
         if (cancelled) return;
         failed = runStatus(run) === "failed";
+        stopped = runStatus(run) === "cancelled";
         content = failed ? run.result?.error?.message || run.state?.error?.message || "运行失败" : run.result?.content || "";
       } catch (exc) {
         if (!cancelled) setError(exc.message);
+        return;
       }
       if (cancelled) return;
+      finished = true;
       setMessages((current) =>
         upsertChatAssistantMessage(current, runId, {
           content: content || chatRunContentRef.current,
           streaming: false,
+          approval: null,
+          cancelled: stopped,
           failed,
-          thinkingAppend: [failed ? "运行失败，已停止生成正文" : "已完成，正文已生成"],
+          thinkingAppend: [stopped ? "任务已停止" : failed ? "运行失败，已停止生成正文" : "已完成，正文已生成"],
           thinkingCollapsed: true,
         }),
       );
-      setActiveRunId("");
       if (session?.session_id) {
-        api(
+        await api(
           `/api/chat/sessions/${encodeURIComponent(session.session_id)}/messages?agent_id=${encodeURIComponent(agentId || "")}`,
         )
           .then((data) => {
@@ -399,10 +408,12 @@ function ChatPage() {
           })
           .catch(() => {});
       }
+      if (!cancelled) setActiveRunId("");
     }
 
     async function poll() {
       try {
+        if (terminalStatus) { await finalizeRun(terminalStatus); return; }
         const data = await api(`/api/runs/${runId}/events?after=${chatEventSeqRef.current}`);
         if (cancelled) return;
         const events = data.events || [];
@@ -411,6 +422,7 @@ function ChatPage() {
         const thinkingUpdates = [];
         let approvalUpdate;
         for (const event of events) {
+          if (Number(event.seq || 0) <= chatEventSeqRef.current) continue;
           chatEventSeqRef.current = Math.max(chatEventSeqRef.current, Number(event.seq || 0));
           const thinkingText = runEventThinkingText(event);
           if (thinkingText) {
@@ -422,7 +434,7 @@ function ChatPage() {
               nextContent += delta;
             }
           }
-          if (event.type === "failed" || event.type === "completed") {
+          if (["failed", "completed", "cancelled"].includes(event.type)) {
             completedStatus = event.type;
           }
           if (event.type === "approval_required") {
@@ -444,76 +456,59 @@ function ChatPage() {
             }),
           );
         }
+        if (!completedStatus && !events.length) {
+          const snapshot = await api(`/api/runs/${runId}`);
+          if (cancelled) return;
+          if (["completed", "failed", "cancelled"].includes(runStatus(snapshot))) completedStatus = runStatus(snapshot);
+        }
         if (completedStatus) {
+          terminalStatus = completedStatus;
           await finalizeRun(completedStatus);
         }
       } catch (exc) {
         if (!cancelled) setError(exc.message);
+      } finally {
+        if (!cancelled && !finished) timer = window.setTimeout(poll, 1_000);
       }
     }
     poll();
-    const timer = window.setInterval(poll, 1_000);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, [activeRunId, session?.session_id]);
 
-  async function sendMessage() {
-    const content = draft.trim();
-    if (!content || activeRunId || sendingRef.current) return;
-    const clientMessageId = createClientMessageId();
+  async function sendMessage(retry = null) {
+    const request = retry || { content: draft.trim(), agent_id: agentId || "", session_id: session?.session_id || "", client_message_id: createClientMessageId() };
+    if (!request.content || activeRunId || sendingRef.current || (!retry && pendingSend)) return;
     sendingRef.current = true;
     setSending(true);
-    setDraft("");
+    setPendingSend(request);
+    if (!retry) {
+      setDraft("");
+      setMessages((current) => [...current, { id: `local_user_${request.client_message_id}`, role: "user", content: request.content, created_at: new Date().toISOString() }]);
+    }
     setError("");
-    setMessages((current) => [
-      ...current,
-      {
-        id: `local_user_${clientMessageId}`,
-        role: "user",
-        content,
-        created_at: new Date().toISOString(),
-      },
-    ]);
     try {
-      const data = await api("/api/chat/messages", {
-        method: "POST",
-        body: JSON.stringify({
-          content,
-          agent_id: agentId || "",
-          session_id: session?.session_id || "",
-          client_message_id: clientMessageId,
-        }),
-      });
-      const runId = data.run?.run_id || "";
+      const data = await api("/api/chat/messages", { method: "POST", body: JSON.stringify(request) });
+      const runId = data.run?.run_id;
+      if (!runId) throw new Error("未收到任务确认，请重试确认发送");
+      setPendingSend(null);
       setSession(data.session || session);
       loadChatSessions(data.session?.agent_id || agentId || "").catch(() => {});
-      if (runId) {
-        chatEventSeqRef.current = 0;
-        chatRunContentRef.current = "";
-        setMessages((current) =>
-          upsertChatAssistantMessage(current, runId, {
-            content: "",
-            streaming: true,
-            thinking: ["等待 DeepAgent 响应"],
-            thinkingCollapsed: false,
-          }),
-        );
-        setActiveRunId(runId);
-      }
+      chatEventSeqRef.current = 0;
+      chatRunContentRef.current = "";
+      setMessages((current) => upsertChatAssistantMessage(current, runId, { content: "", streaming: true, thinking: ["等待 DeepAgent 响应"], thinkingCollapsed: false }));
+      setActiveRunId(runId);
     } catch (exc) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: `local_error_${Date.now()}`,
-          role: "assistant",
-          content: exc.message || "发送失败",
-          failed: true,
-          created_at: new Date().toISOString(),
-        },
-      ]);
-      setError(exc.message);
+      if ([400, 401, 403, 404, 409, 422].includes(exc.status)) {
+        setPendingSend(null);
+        setDraft((current) => current ? `${request.content}\n${current}` : request.content);
+        setMessages((current) => current.filter((item) => item.id !== `local_user_${request.client_message_id}`));
+        setError(`发送被拒绝：${exc.message}。原文已恢复到输入框。`);
+      } else {
+        setError(`发送尚未确认：${exc.message || "连接失败"}。重试会复用原消息，不会重复创建任务。`);
+      }
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -609,7 +604,7 @@ function ChatPage() {
             <h2>DeepAgent 对话</h2>
           </div>
           <div className="chat-actions">
-            <select value={agentId} onChange={(event) => changeAgent(event.target.value)} disabled={Boolean(activeRunId)}>
+            <select value={agentId} onChange={(event) => changeAgent(event.target.value)} disabled={Boolean(activeRunId) || sending || Boolean(pendingSend)}>
               {agents.length === 0 ? <option value="">default</option> : null}
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>
@@ -622,7 +617,7 @@ function ChatPage() {
                 type="button"
                 className="session-switch-button"
                 onClick={() => setSessionMenuOpen((open) => !open)}
-                disabled={Boolean(activeRunId) || chatSessions.length === 0}
+                disabled={Boolean(activeRunId) || sending || Boolean(pendingSend) || chatSessions.length === 0}
                 aria-expanded={sessionMenuOpen}
                 title="切换 Agent 会话"
               >
@@ -655,7 +650,7 @@ function ChatPage() {
             <button
               className="chat-secondary-button"
               onClick={newSession}
-              disabled={Boolean(activeRunId)}
+              disabled={Boolean(activeRunId) || sending || Boolean(pendingSend)}
               aria-label="新会话"
               title="新会话"
             >
@@ -668,7 +663,8 @@ function ChatPage() {
         <ChatMessageList messages={messages} onDecision={decideChatApproval} onError={setError} />
 
         {error ? <div className="error chat-error">{error}</div> : null}
-        <ChatComposer value={draft} onChange={setDraft} onSend={sendMessage} busy={Boolean(activeRunId) || sending} />
+        {pendingSend ? <button disabled={sending} onClick={() => sendMessage(pendingSend)}>{sending ? "正在确认发送…" : "重试确认发送"}</button> : null}
+        <ChatComposer value={draft} onChange={setDraft} onSend={() => sendMessage()} busy={Boolean(activeRunId) || sending || Boolean(pendingSend)} />
       </section>
 
       <aside className="status-rail chat-rail">
@@ -2605,6 +2601,7 @@ function carryChatAssistantRuntimeState(nextMessages, currentMessages, runId) {
   const id = `assistant_${runId}`;
   const runtimeMessage = currentMessages.find((message) => message.id === id);
   if (!runtimeMessage?.thinking?.length) return nextMessages;
+  if (!nextMessages.some((message) => message.id === id)) return [...nextMessages, runtimeMessage];
   return nextMessages.map((message) => {
     if (message.id !== id) return message;
     return {
@@ -2613,6 +2610,8 @@ function carryChatAssistantRuntimeState(nextMessages, currentMessages, runId) {
       thinkingCollapsed: true,
       streaming: false,
       failed: runtimeMessage.failed,
+      cancelled: runtimeMessage.cancelled,
+      approval: null,
     };
   });
 }

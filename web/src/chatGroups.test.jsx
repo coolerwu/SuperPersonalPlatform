@@ -109,3 +109,36 @@ test("mention matching does not accidentally target a member with a prefix name"
   expect(mentionPosition("@产品经理 请设计", "@产品")).toBe(-1);
   expect(mentionPosition("@产品经理 @产品 请设计", "@产品")).toBe(6);
 });
+
+test("group approval failure stays actionable and successful retry survives stale snapshot", async () => {
+  const group = base();
+  group.executions = [{ id: "exec", status: "waiting_approval", current_step: { name: "主持" } }];
+  group.active_run = { run_id: "r", state: { status: "waiting_approval" }, approval: { status: "pending", request: { interrupts: [{ id: "i", actions: [{ name: "write_file" }] }] } } };
+  const fallback = mockApi(group);
+  let calls = 0;
+  const api = vi.fn(async (url, opts) => {
+    if (url === "/api/runs/r/resume") { if (++calls === 1) throw new Error("连接失败"); return {}; }
+    return fallback(url, opts);
+  });
+  render(<ChatGroupsPage api={api} />);
+  fireEvent.click(await screen.findByRole("button", { name: "批准并继续" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("连接失败");
+  fireEvent.click(screen.getByRole("button", { name: "批准并继续" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("审批已提交");
+  expect(screen.queryByRole("button", { name: "批准并继续" })).not.toBeInTheDocument();
+  expect(calls).toBe(2);
+});
+
+test("reading history keeps scroll position until user chooses latest", async () => {
+  const { ChatMessageList } = await import("./chatComponents.jsx");
+  const messages = [{ id: "a", role: "assistant", content: "旧消息" }];
+  const { container, rerender } = render(<ChatMessageList messages={messages} />);
+  const node = container.querySelector(".chat-messages");
+  Object.defineProperties(node, { scrollHeight: { configurable: true, value: 1200 }, clientHeight: { configurable: true, value: 300 } });
+  node.scrollTop = 200;
+  fireEvent.scroll(node);
+  rerender(<ChatMessageList messages={[...messages, { id: "b", role: "assistant", content: "新消息" }]} />);
+  expect(node.scrollTop).toBe(200);
+  fireEvent.click(screen.getByRole("button", { name: "有新消息 · 回到底部" }));
+  expect(node.scrollTop).toBe(1200);
+});

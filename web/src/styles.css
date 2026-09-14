@@ -3178,3 +3178,5 @@ pre {
   .group-list { display: flex; align-items: center; overflow-x: auto; }.group-list .group-local-toolbar { padding: 8px; border: 0; flex-shrink: 0; }.group-list .group-local-toolbar strong { display: none; }.group-list-item { min-width: 120px; margin: 4px; padding: 7px 10px; }.group-list-item small { display: none; }.group-list .group-muted { white-space: nowrap; padding: 4px; }
   .group-local-toolbar { padding: 10px; flex-wrap: wrap; }.group-chat-panel .chat-composer { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; }.group-chat-panel .chat-composer textarea { flex: 1 0 100%; }.group-chat-panel .chat-send-button { margin-left: auto; }.group-chat-panel .chat-messages { padding: 12px; }.group-chat-panel .chat-bubble { max-width: 100%; }.group-modal-backdrop { padding: 8px; }
 }
+
+.chat-new-messages { position: sticky; bottom: 8px; align-self: center; z-index: 2; background: var(--panel, #182332); color: #fff; }

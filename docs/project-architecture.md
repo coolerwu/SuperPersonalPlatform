@@ -398,3 +398,10 @@ POST /api/chat-groups/{group_id}/collaborations/{execution_id}/stop
 - RunService 按 session 定位 `sessions/{session_id}/checkpoints.sqlite`；无 session 的审批 Run 使用 `runs/{run_id}/checkpoints.sqlite`。thread_id 保持原 session ID 或 Run ID，同一会话持续复用文件，删除所属目录即释放数据库；不裁剪存活会话的历史快照。
 - 群成员复用群 state.json 的 member_sessions 映射；checkpoint 中已有群上下文与执行前补齐的新增公共消息共同构成成员上下文。@ 只决定发言顺序。主持工具生成的公开分工在下一次执行补入，不能因游标推进而跳过。
 - 公共旧库仅在停服窗口一次性按 thread_id 拆分，完整保留所有表数据、namespace、父链和 pending writes；备份、逐 thread 内容与数量核验、完整性检查通过后移出旧库再启动。未知归属保留备份、目标冲突不覆盖；不提供运行时迁移或旧路径回退。
+
+## Chat 交互恢复
+
+- Chat 事件轮询串行执行，按 seq 去重；完成、失败、取消均结束生成并释放输入，空事件时读取 Run 快照校正终态。终态详情读取失败保留重试。
+- 发送未确认时保留原文和 client_message_id，提供原请求重试，确认前禁止新发送及切换会话；草稿可继续编辑。
+- 群审批提交错误由共享审批卡呈现；成功立即禁用旧审批，后续刷新失败不视为提交失败。新审批按请求内容重新呈现。
+- 共享消息列表仅在接近底部时跟随输出，翻阅历史时保留位置并显示回到底部入口。
