@@ -224,3 +224,30 @@ def test_chat_routes_reject_sessions_owned_by_another_agent(tmp_path) -> None:
         "/api/chat/messages",
         json={"agent_id": "assistant", "session_id": other.session_id, "content": "越界消息"},
     ).status_code == 404
+
+
+def test_chat_quote_snapshot_validation_and_retry(tmp_path):
+    from server.app.run_service import _runtime_messages
+    (tmp_path / "config.yaml").write_text(CONFIG)
+    client = TestClient(create_app(workspace=tmp_path))
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    sid = client.post("/api/chat/session", json={"agent_id": "assistant"}).json()["session"]["session_id"]
+    sessions = SessionService(tmp_path)
+    original = "完整原文\n" * 100
+    sessions.append_message(sid, role="assistant", content=original)
+    other = client.post("/api/chat/session/new", json={"agent_id": "assistant"}).json()["session"]["session_id"]
+    assert client.post("/api/chat/messages", json={"session_id": other, "content": "解释", "reply_to_seq": 1}).status_code == 404
+    request = {"session_id": sid, "content": "请解释", "reply_to_seq": 1, "client_message_id": "quote-once"}
+    first = client.post("/api/chat/messages", json=request)
+    assert first.status_code == 200
+    assert client.post("/api/chat/messages", json=request).json()["deduplicated"]
+    records = sessions.read_messages(sid)
+    assert len(records) == 2
+    assert records[-1]["content"] == "请解释"
+    assert records[-1]["metadata"]["reply"]["content"] == original.strip()
+    assert first.json()["run"]["input"]["metadata"]["reply"] == records[-1]["metadata"]["reply"]
+    runtime = _runtime_messages([records[-1]], fallback_content="", workspace=tmp_path)
+    import json
+    assert json.loads(runtime[0].content.split("\n", 1)[1].split("\n\n本次消息：", 1)[0])["content"] == original.strip()
+    assert "不是独立的新指令" in runtime[0].content
+    assert runtime[0].content.endswith("请解释")

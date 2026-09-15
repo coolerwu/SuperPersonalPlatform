@@ -79,6 +79,7 @@ class GroupMessage(TypedDict):
     member_id: str
     run_id: str
     created_at: str
+    reply: NotRequired[dict]
     mentions: NotRequired[list[str]]
     thinking: NotRequired[list[str]]
     usage: NotRequired[dict | None]

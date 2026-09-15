@@ -9,6 +9,7 @@ from server.domain.chat_group import GroupDefinition
 class GroupMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content: str = Field(min_length=1, max_length=100000)
+    reply_to_message_id: str | None = Field(default=None, min_length=1, max_length=128)
     mentions: list[str] = Field(default_factory=list, max_length=20)
     client_message_id: str = Field(min_length=1, max_length=128)
 
@@ -62,11 +63,11 @@ def create_chat_group_router(container):
 
     @router.post("/{group_id}/messages")
     async def send(group_id: str, payload: GroupMessageRequest):
-        return await call(service.send(group_id, payload.content, payload.mentions, payload.client_message_id))
+        return await call(service.send(group_id, payload.content, payload.mentions, payload.client_message_id, reply_to_message_id=payload.reply_to_message_id))
 
     @router.post("/{group_id}/collaborations")
     async def collaborate(group_id: str, payload: GroupMessageRequest):
-        return await call(service.send(group_id, payload.content, payload.mentions, payload.client_message_id, automatic=True))
+        return await call(service.send(group_id, payload.content, payload.mentions, payload.client_message_id, automatic=True, reply_to_message_id=payload.reply_to_message_id))
 
     @router.post("/{group_id}/collaborations/{execution_id}/continue")
     async def continue_execution(group_id: str, execution_id: str, payload: ContinueRequest):

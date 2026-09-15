@@ -23,6 +23,7 @@ export function ChatGroupsPage({ api }) {
   const [selected, setSelected] = useState("");
   const [group, setGroup] = useState(null);
   const [draft, setDraft] = useState("");
+  const [quote, setQuote] = useState(null);
   const [mentions, setMentions] = useState([]);
   const [editor, setEditor] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -54,6 +55,7 @@ export function ChatGroupsPage({ api }) {
     setSelected(id);
     setGroup(null);
     setDraft("");
+    setQuote(null);
     setMentions([]);
     setError("");
     requestRef.current = null;
@@ -95,13 +97,13 @@ export function ChatGroupsPage({ api }) {
     const id = group.id;
     const content = draft.trim();
     const ordered = mentions.filter((m) => mentionPosition(content, m.token) >= 0).sort((a, b) => mentionPosition(content, a.token) - mentionPosition(content, b.token)).map((m) => m.id);
-    const signature = JSON.stringify([id, content, ordered, automatic]);
+    const signature = JSON.stringify([id, content, ordered, automatic, quote?.id]);
     if (requestRef.current?.signature !== signature) requestRef.current = { signature, id: newId() };
     await perform(async () => {
       await api(`/api/chat-groups/${id}/${automatic ? "collaborations" : "messages"}`, {
-        method: "POST", body: JSON.stringify({ content, mentions: ordered, client_message_id: requestRef.current.id }),
+        method: "POST", body: JSON.stringify({ content, ...(quote ? { reply_to_message_id: quote.id } : {}), mentions: ordered, client_message_id: requestRef.current.id }),
       });
-      if (selectedRef.current === id) { setDraft(""); setMentions([]); requestRef.current = null; }
+      if (selectedRef.current === id) { setDraft(""); setQuote(null); setMentions([]); requestRef.current = null; }
       await refresh(id);
     });
   }
@@ -130,7 +132,7 @@ export function ChatGroupsPage({ api }) {
     setMentions((current) => [...current.filter((item) => item.id !== member.id), { id: member.id, token: token.trim() }]);
   }
 
-  const messages = group?.messages || [];
+  const messages = (group?.messages || []).map((m) => ({ ...m, saved: true }));
   const run = group?.active_run;
   const step = execution?.current_step;
   const live = useGroupRunEvents(api, run);
@@ -160,13 +162,13 @@ export function ChatGroupsPage({ api }) {
           {!active && execution?.automatic && execution.status === "completed" && !group.archived ? <button onClick={() => control("continue")} disabled={busy}>继续协作</button> : null}
           <button aria-label="编辑群聊" title="编辑群聊" disabled={active || busy} onClick={() => setEditor({ _groupId: group.id, name: group.name, members: group.members, host_member_id: group.host_member_id, archived: group.archived })}><Settings size={16} /></button>
         </div></div>
-        <ChatMessageList messages={displayMessages} onDecision={decide} onError={setError} emptyTitle="把任务交给合适的角色" emptyDescription="@ 点名接力；不点名由主持回复。开始协作后，主持会组织最多三轮分工。" />
+        <ChatMessageList messages={displayMessages} onQuote={setQuote} quoteDisabled={busy} onDecision={decide} onError={setError} emptyTitle="把任务交给合适的角色" emptyDescription="@ 点名接力；不点名由主持回复。开始协作后，主持会组织最多三轮分工。" />
         {execution?.error ? <div className="error chat-error">{execution.error}</div> : null}
         {error ? <div role="alert" className="error chat-error">{error}</div> : null}
         <div className="group-input-area">
           {mentions.length ? <div className="group-mention-chips">{mentions.filter((m) => mentionPosition(draft, m.token) >= 0).map((m) => <span key={m.id}>{m.token}</span>)}</div> : null}
           {mentionOptions.length ? <div className="group-mention-menu" role="listbox" aria-label="选择群成员">{mentionOptions.map((member) => <button role="option" aria-selected="false" key={member.id} onClick={() => addMention(member)}><Bot size={15} />{member.name}</button>)}</div> : null}
-          <ChatComposer value={draft} onChange={setDraft} onSend={() => send(false)} busy={locked} disabled={locked} placeholder="输入 @ 选择角色，或直接与主持交流">
+          <ChatComposer quote={quote} onCancelQuote={busy ? undefined : () => setQuote(null)} value={draft} onChange={setDraft} onSend={() => send(false)} busy={locked} disabled={locked} placeholder="输入 @ 选择角色，或直接与主持交流">
             <button className="group-collaborate" onClick={() => send(true)} disabled={locked || !draft.trim()}>开始协作</button>
           </ChatComposer>
         </div>

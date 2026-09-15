@@ -1686,3 +1686,27 @@ test("slow chat polling is serial and repeated event IDs do not duplicate output
   expect(calls).toBe(2);
   expect(screen.getByText("唯一正文")).toBeInTheDocument();
 });
+
+test("chat quote uses saved sequence, restores snapshot and leaves copy body separate", async () => {
+  window.history.replaceState({}, "", "/chat");
+  let request;
+  global.fetch = vi.fn(async (url, options) => {
+    if (url === "/api/auth/me") return response({ authenticated: true });
+    if (url === "/api/workspace/read") return response({ content: CONFIG_YAML });
+    if (url === "/api/chat/session") return response({ session: { session_id: "quoted", agent_id: "assistant" }, messages: [{ seq: 7, role: "assistant", content: "原始消息" }, { seq: 8, role: "user", content: "以前的追问", metadata: { reply: { speaker: "助手", content: "已保存的引用" } } }] });
+    if (url === "/api/chat/messages") { request = JSON.parse(options.body); return response({ session: { session_id: "quoted", agent_id: "assistant" }, run: { run_id: "quote_run" } }); }
+    return response({ sessions: [], events: [] });
+  });
+  await act(async () => { await import("./main.jsx"); });
+  await flushReact();
+  expect(screen.getByText("已保存的引用")).toBeInTheDocument();
+  const input = screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行");
+  fireEvent.click(screen.getAllByRole("button", { name: "引用消息" })[0]);
+  expect(input).toHaveFocus();
+  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+  fireEvent.change(input, { target: { value: "现在的追问" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(request?.reply_to_seq).toBe(7));
+  expect(request.content).toBe("现在的追问");
+  await waitFor(() => expect(screen.queryByRole("button", { name: "取消引用" })).not.toBeInTheDocument());
+});

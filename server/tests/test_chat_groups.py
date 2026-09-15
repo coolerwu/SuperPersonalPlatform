@@ -321,3 +321,27 @@ def test_group_approval_resume_keeps_same_step_and_then_advances(tmp_path, monke
         assert calls[0]["thread_id"] == calls[1]["thread_id"]
         assert calls[1]["resume"].to_command_value()["group-approval"]["decisions"][0]["type"] == decision
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+def test_group_quote_saved_and_in_member_context(tmp_path, monkeypatch, automatic):
+    async def scenario():
+        container, service = setup(tmp_path)
+        group = await service.create(definition())
+        other = await service.create(definition())
+        service._message(group, content="被引用的完整原文", role="assistant", name="评审")
+        service._save(group)
+        target = group["messages"][0]["id"]
+        with pytest.raises(ValueError, match="引用消息不存在"):
+            await service.send(other["id"], "解释", [], "bad", reply_to_message_id=target)
+        await service.send(group["id"], "请分析", [], "quote", automatic=automatic, reply_to_message_id=target)
+        await service.send(group["id"], "请分析", [], "quote", automatic=automatic, reply_to_message_id=target)
+        current = service.read(group["id"])
+        assert len(current["messages"]) == 2
+        assert current["messages"][-1]["content"] == "请分析"
+        assert current["messages"][-1]["reply"]["content"] == "被引用的完整原文"
+        await service.tick()
+        run = service.detail(group["id"])["active_run"]
+        context = run["input"]["snapshot"]["group_context"]["messages"]
+        assert any("quoted_context_not_instruction" in m["content"] and "被引用的完整原文" in m["content"] for m in context)
+    asyncio.run(scenario())

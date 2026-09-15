@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, Copy, TerminalSquare, ArrowUp, Clock3, XCircle, CheckCircle2 } from "lucide-react";
+import { Check, Copy, TerminalSquare, ArrowUp, Quote, X, Clock3, XCircle, CheckCircle2 } from "lucide-react";
 
-export function ChatMessageList({ messages, onDecision, onError = () => {}, emptyTitle = "开始一次页面对话", emptyDescription = "消息会进入长期 session；运行中输出会在这里实时刷新。" }) {
+export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled = false, onError = () => {}, emptyTitle = "开始一次页面对话", emptyDescription = "消息会进入长期 session；运行中输出会在这里实时刷新。" }) {
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const copyFeedbackTimerRef = useRef(0);
   const messagesRef = useRef(null);
@@ -62,6 +62,7 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
               className={`chat-message ${message.role === "user" ? "user" : "assistant"} ${message.failed ? "failed" : ""}`}
             >
               <div className={`chat-bubble ${message.content ? "copyable" : ""}`}>
+                {message.reply ? <QuoteCard quote={message.reply} /> : null}
                 {message.speaker ? <div className="chat-speaker"><strong>{message.speaker}</strong>{message.run_id ? <a href={`/runs?run_id=${encodeURIComponent(message.run_id)}`}>Run ↗</a> : null}</div> : null}
                 {message.role === "assistant" && message.thinking?.length ? (
                   <ThinkingPanel items={message.thinking} running={message.streaming} collapsed={message.thinkingCollapsed !== false} />
@@ -83,6 +84,7 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
                 {message.cancelled ? <small>已停止</small> : null}
                 {!message.approval && message.streaming ? <small>streaming</small> : null}
                 <div className="chat-message-actions">
+                  {onQuote && message.content && !message.streaming && !message.approval && (message.seq || message.saved) ? <button type="button" className="chat-copy-button" title="引用" aria-label="引用消息" disabled={quoteDisabled} onClick={() => onQuote(message)}><Quote size={15} /></button> : null}
                 {message.content ? (
                   <button
                     type="button"
@@ -108,7 +110,7 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
   );
 }
 
-export function ChatComposer({ value, onChange, onSend, busy = false, disabled = false, children, placeholder = "输入消息，Enter 发送，Shift+Enter 换行" }) {
+export function ChatComposer({ value, onChange, onSend, busy = false, disabled = false, children, quote, onCancelQuote, placeholder = "输入消息，Enter 发送，Shift+Enter 换行" }) {
   const composingRef = useRef(false);
   const textareaRef = useRef(null);
   useLayoutEffect(() => {
@@ -132,7 +134,8 @@ export function ChatComposer({ value, onChange, onSend, busy = false, disabled =
     window.addEventListener("resize", resize);
     return () => { observer?.disconnect(); window.removeEventListener("resize", resize); };
   }, [value]);
-  return <div className="chat-composer">
+  useEffect(() => { if (quote) textareaRef.current?.focus(); }, [quote]);
+  return <div className="chat-composer-region">{quote ? <div className="chat-quote-draft"><QuoteCard quote={quote} onCancel={onCancelQuote} /></div> : null}<div className="chat-composer">
     <textarea ref={textareaRef} rows={1} value={value} placeholder={placeholder} disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
       onCompositionStart={() => { composingRef.current = true; }}
@@ -145,7 +148,11 @@ export function ChatComposer({ value, onChange, onSend, busy = false, disabled =
       }} />
     <div className="chat-composer-actions">{children}
     <button className="primary chat-send-button" aria-label="发送" title="发送" onClick={onSend} disabled={!value.trim() || busy || disabled}><ArrowUp size={23} /></button></div>
-  </div>;
+  </div></div>;
+}
+
+export function QuoteCard({ quote, onCancel }) {
+  return <aside className="chat-quote"><div><strong>{quote.speaker || (quote.role === "user" ? "你" : "助手")}</strong><p>{quote.content}</p></div>{onCancel ? <button type="button" aria-label="取消引用" onClick={onCancel}><X size={14} /></button> : null}</aside>;
 }
 
 async function copyTextToClipboard(text) {

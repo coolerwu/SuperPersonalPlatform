@@ -309,6 +309,7 @@ function ChatPage() {
   const [chatSessions, setChatSessions] = useState([]);
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
+  const [quote, setQuote] = useState(null);
   const [sending, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState("");
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
@@ -479,14 +480,14 @@ function ChatPage() {
   }, [activeRunId, session?.session_id]);
 
   async function sendMessage(retry = null) {
-    const request = retry || { content: draft.trim(), agent_id: agentId || "", session_id: session?.session_id || "", client_message_id: createClientMessageId() };
+    const request = retry || { content: draft.trim(), ...(quote ? { reply_to_seq: quote.seq } : {}), agent_id: agentId || "", session_id: session?.session_id || "", client_message_id: createClientMessageId() };
     if (!request.content || activeRunId || sendingRef.current || (!retry && pendingSend)) return;
     sendingRef.current = true;
     setSending(true);
     setPendingSend(request);
     if (!retry) {
       setDraft("");
-      setMessages((current) => [...current, { id: `local_user_${request.client_message_id}`, role: "user", content: request.content, created_at: new Date().toISOString() }]);
+      setMessages((current) => [...current, { id: `local_user_${request.client_message_id}`, role: "user", content: request.content, reply: quote, created_at: new Date().toISOString() }]);
     }
     setError("");
     try {
@@ -494,6 +495,7 @@ function ChatPage() {
       const runId = data.run?.run_id;
       if (!runId) throw new Error("未收到任务确认，请重试确认发送");
       setPendingSend(null);
+      setQuote(null);
       setSession(data.session || session);
       loadChatSessions(data.session?.agent_id || agentId || "").catch(() => {});
       chatEventSeqRef.current = 0;
@@ -537,6 +539,7 @@ function ChatPage() {
 
   async function newSession() {
     if (activeRunId) return;
+    setQuote(null);
     setSessionMenuOpen(false);
     setError("");
     const data = await api("/api/chat/session/new", {
@@ -552,6 +555,7 @@ function ChatPage() {
 
   async function changeSession(selector) {
     if (!selector || activeRunId) return;
+    setQuote(null);
     setSessionMenuOpen(false);
     setError("");
     const data = await api("/api/chat/session/change", {
@@ -586,6 +590,7 @@ function ChatPage() {
   }
 
   function changeAgent(nextAgentId) {
+    setQuote(null);
     setSessionMenuOpen(false);
     setAgentId(nextAgentId);
     setActiveRunId("");
@@ -660,11 +665,11 @@ function ChatPage() {
           </div>
         </div>
 
-        <ChatMessageList messages={messages} onDecision={decideChatApproval} onError={setError} />
+        <ChatMessageList messages={messages} onQuote={setQuote} quoteDisabled={sending || Boolean(pendingSend)} onDecision={decideChatApproval} onError={setError} />
 
         {error ? <div className="error chat-error">{error}</div> : null}
         {pendingSend ? <button disabled={sending} onClick={() => sendMessage(pendingSend)}>{sending ? "正在确认发送…" : "重试确认发送"}</button> : null}
-        <ChatComposer value={draft} onChange={setDraft} onSend={() => sendMessage()} busy={Boolean(activeRunId) || sending || Boolean(pendingSend)} />
+        <ChatComposer quote={quote} onCancelQuote={sending || pendingSend ? undefined : () => setQuote(null)} value={draft} onChange={setDraft} onSend={() => sendMessage()} busy={Boolean(activeRunId) || sending || Boolean(pendingSend)} />
       </section>
 
       <aside className="status-rail chat-rail">
@@ -2439,6 +2444,8 @@ function normalizeChatMessages(items) {
       id: item.run_id ? `${item.role}_${item.run_id}` : `${item.role}_${item.seq || index}`,
       role: item.role,
       content: item.content || "",
+      seq: item.seq,
+      reply: item.metadata?.reply,
       created_at: item.created_at || "",
       run_id: item.run_id || "",
     }));

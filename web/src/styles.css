@@ -3229,3 +3229,10 @@ pre {
 .chat-composer textarea:hover::-webkit-scrollbar-thumb,
 .chat-composer textarea:focus::-webkit-scrollbar-thumb { background: #526478; }
 .chat-composer textarea::-webkit-scrollbar-corner { background: transparent; }
+
+.chat-quote-draft { margin: 8px 14px 0; min-width: 0; }
+.chat-quote { display: flex; align-items: flex-start; gap: 8px; border-left: 3px solid #47709a; border-radius: 6px; padding: 8px 10px; background: #17222e; font-size: 12px; min-width: 0; }
+.chat-quote > div { flex: 1; min-width: 0; }
+.chat-quote strong { color: #a8bacb; }
+.chat-quote p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.chat-quote button { padding: 4px; border: 0; background: transparent; }

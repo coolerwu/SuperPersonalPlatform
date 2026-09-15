@@ -29,6 +29,7 @@ class ChatMessageRequest(BaseModel):
     agent_id: str = ""
     session_id: str = ""
     client_message_id: str = Field(default="", max_length=128)
+    reply_to_seq: int | None = Field(default=None, ge=1)
     attachments: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -151,6 +152,13 @@ def create_chat_router(container: AppContainer) -> APIRouter:
                 "run": existing_run,
                 "deduplicated": True,
             }
+        reply = None
+        if payload.reply_to_seq is not None:
+            target = next((m for m in session_service.read_messages(session_id, limit=1000000)
+                           if m.get("seq") == payload.reply_to_seq and m.get("role") in {"user", "assistant"} and m.get("content")), None)
+            if target is None:
+                raise HTTPException(404, "引用消息不存在于当前会话")
+            reply = {"seq": target["seq"], "session_id": session_id, "speaker": "你" if target["role"] == "user" else "助手", "content": target["content"]}
         try:
             run = await container.run_service.create_run(
                 content=payload.content,
@@ -160,6 +168,7 @@ def create_chat_router(container: AppContainer) -> APIRouter:
                 attachments=tuple(payload.attachments),
                 metadata={
                     "source": "web_chat",
+                    **({"reply": reply} if reply else {}),
                     **({"client_message_id": client_message_id} if client_message_id else {}),
                 },
             )

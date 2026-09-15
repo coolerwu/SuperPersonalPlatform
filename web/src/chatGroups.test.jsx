@@ -142,3 +142,35 @@ test("reading history keeps scroll position until user chooses latest", async ()
   fireEvent.click(screen.getByRole("button", { name: "有新消息 · 回到底部" }));
   expect(node.scrollTop).toBe(1200);
 });
+
+test("quote selection preserves draft, focuses input and retries identical group request", async () => {
+  const group = base();
+  group.messages = [{ id: "m1", seq: 1, role: "assistant", speaker: "评审", content: "完整引用原文" }, { id: "m2", seq: 2, role: "user", speaker: "你", content: "第二条" }];
+  const fallback = mockApi(group);
+  const bodies = [];
+  const api = vi.fn(async (url, options) => {
+    if (url.endsWith("/messages") && options?.method === "POST") {
+      bodies.push(JSON.parse(options.body));
+      if (bodies.length === 1) throw new Error("发送失败");
+      return group;
+    }
+    return fallback(url, options);
+  });
+  render(<ChatGroupsPage api={api} />);
+  const input = await screen.findByPlaceholderText("输入 @ 选择角色，或直接与主持交流");
+  fireEvent.change(input, { target: { value: "草稿保留" } });
+  fireEvent.click(screen.getAllByRole("button", { name: "引用消息" })[0]);
+  expect(input).toHaveValue("草稿保留");
+  expect(input).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: "取消引用" }));
+  expect(screen.queryByRole("button", { name: "取消引用" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole("button", { name: "引用消息" })[1]);
+  fireEvent.click(screen.getAllByRole("button", { name: "引用消息" })[0]);
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await screen.findByText("发送失败");
+  expect(screen.getByRole("button", { name: "取消引用" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "取消引用" })).not.toBeInTheDocument());
+  expect(bodies[0]).toEqual(bodies[1]);
+  expect(bodies[0].reply_to_message_id).toBe("m1");
+});
