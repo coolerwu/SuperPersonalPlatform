@@ -3215,3 +3215,17 @@ pre {
 .chat-composer textarea, .group-chat-panel .chat-composer textarea {
   box-sizing: border-box; line-height: 24px; max-height: none; resize: none; overflow-y: hidden;
 }
+
+/* Quiet native scrolling for long drafts in Chat and groups. */
+.chat-composer textarea {
+  scrollbar-width: thin;
+  scrollbar-color: #354454 transparent;
+}
+.chat-composer textarea:hover,
+.chat-composer textarea:focus { scrollbar-color: #526478 transparent; }
+.chat-composer textarea::-webkit-scrollbar { width: 5px; }
+.chat-composer textarea::-webkit-scrollbar-track { background: transparent; }
+.chat-composer textarea::-webkit-scrollbar-thumb { background: #354454; border-radius: 999px; }
+.chat-composer textarea:hover::-webkit-scrollbar-thumb,
+.chat-composer textarea:focus::-webkit-scrollbar-thumb { background: #526478; }
+.chat-composer textarea::-webkit-scrollbar-corner { background: transparent; }
