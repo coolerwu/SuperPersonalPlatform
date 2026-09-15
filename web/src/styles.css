@@ -3201,3 +3201,13 @@ pre {
 @media (max-width: 760px) {
   .chat-composer, .group-chat-panel .chat-composer { margin: 8px; padding: 10px; }
 }
+
+/* A send-only composer does not need a separate toolbar row. */
+.chat-composer:not(:has(.group-collaborate)) {
+  display: grid; grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: end; gap: 8px; padding: 8px 10px;
+}
+.chat-composer:not(:has(.group-collaborate)) textarea {
+  min-height: 40px; padding: 8px 4px; resize: none;
+}
+.chat-composer:not(:has(.group-collaborate)) .chat-composer-actions { width: 40px; }
