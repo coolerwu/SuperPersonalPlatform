@@ -110,8 +110,30 @@ export function ChatMessageList({ messages, onDecision, onError = () => {}, empt
 
 export function ChatComposer({ value, onChange, onSend, busy = false, disabled = false, children, placeholder = "输入消息，Enter 发送，Shift+Enter 换行" }) {
   const composingRef = useRef(false);
+  const textareaRef = useRef(null);
+  useLayoutEffect(() => {
+    const node = textareaRef.current;
+    if (!node) return;
+    function resize() {
+      const style = window.getComputedStyle(node);
+      const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const limit = parseFloat(style.lineHeight) * 20 + padding;
+      node.style.height = "0px";
+      const required = node.scrollHeight;
+      node.style.height = `${Math.min(required, limit)}px`;
+      node.style.overflowY = required > limit ? "auto" : "hidden";
+    }
+    resize();
+    let width = node.clientWidth;
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
+      if (node.clientWidth !== width) { width = node.clientWidth; resize(); }
+    }) : null;
+    observer?.observe(node);
+    window.addEventListener("resize", resize);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", resize); };
+  }, [value]);
   return <div className="chat-composer">
-    <textarea value={value} placeholder={placeholder} disabled={disabled}
+    <textarea ref={textareaRef} rows={1} value={value} placeholder={placeholder} disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
       onCompositionStart={() => { composingRef.current = true; }}
       onCompositionEnd={() => { composingRef.current = false; }}

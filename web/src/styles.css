@@ -3211,3 +3211,7 @@ pre {
   min-height: 40px; padding: 8px 4px; resize: none;
 }
 .chat-composer:not(:has(.group-collaborate)) .chat-composer-actions { width: 40px; }
+
+.chat-composer textarea, .group-chat-panel .chat-composer textarea {
+  box-sizing: border-box; line-height: 24px; max-height: none; resize: none; overflow-y: hidden;
+}
