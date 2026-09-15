@@ -2491,26 +2491,48 @@ async function hydrateChatRunSnapshots(messages) {
   const runIds = [
     ...new Set(
       messages
-        .filter((message) => message.role === "assistant" && message.run_id)
-        .slice(-8)
+        .filter((message) => message.run_id)
         .map((message) => message.run_id),
     ),
   ];
   if (runIds.length === 0) return messages;
-  const runs = await Promise.all(
-    runIds.map(async (runId) => {
-      try {
-        return await api(`/api/runs/${encodeURIComponent(runId)}`);
-      } catch {
-        return null;
-      }
-    }),
-  );
+  const runs = [];
+  for (let offset = 0; offset < runIds.length; offset += 8) {
+    runs.push(...await Promise.all(
+      runIds.slice(offset, offset + 8).map(async (runId) => {
+        try {
+          return await api(`/api/runs/${encodeURIComponent(runId)}`);
+        } catch {
+          return null;
+        }
+      }),
+    ));
+  }
   return runs.reduce((nextMessages, run) => applyChatRunSnapshot(nextMessages, run), messages);
 }
 
 function applyChatRunSnapshot(messages, run) {
-  if (!run?.run_id || !run.partial) return messages;
+  if (!run?.run_id) return messages;
+  const terminalStatus = runStatus(run);
+  if (["failed", "cancelled"].includes(terminalStatus)) {
+    const id = `assistant_${run.run_id}`;
+    const existing = messages.find((message) => message.id === id);
+    const sourceIndex = messages.findIndex((message) => message.role === "user" && message.run_id === run.run_id);
+    if (!existing && sourceIndex < 0) return messages;
+    const detail = run.result?.error?.message || run.state?.error?.message || "";
+    const restored = {
+      ...existing,
+      id, role: "assistant", run_id: run.run_id,
+      content: detail || existing?.content || run.partial?.content || (terminalStatus === "failed" ? "运行失败" : "任务已停止"),
+      failed: terminalStatus === "failed", cancelled: terminalStatus === "cancelled",
+      streaming: false, approval: null,
+      thinking: run.partial?.thinking || existing?.thinking || [],
+      thinkingCollapsed: true,
+    };
+    if (existing) return messages.map((message) => message.id === id ? restored : message);
+    return [...messages.slice(0, sourceIndex + 1), restored, ...messages.slice(sourceIndex + 1)];
+  }
+  if (!run.partial) return messages;
   const partial = run.partial || {};
   const thinking = Array.isArray(partial.thinking) ? partial.thinking.filter(Boolean) : [];
   if (thinking.length === 0 && !partial.content) return messages;

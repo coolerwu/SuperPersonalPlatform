@@ -1710,3 +1710,22 @@ test("chat quote uses saved sequence, restores snapshot and leaves copy body sep
   expect(request.content).toBe("现在的追问");
   await waitFor(() => expect(screen.queryByRole("button", { name: "取消引用" })).not.toBeInTheDocument());
 });
+
+test.each(["failed", "cancelled"])("chat reload restores %s runs without saved assistant messages in order", async (status) => {
+  window.history.replaceState({}, "", "/chat");
+  global.fetch = vi.fn(async (url) => {
+    if (url === "/api/auth/me") return response({ authenticated: true });
+    if (url === "/api/workspace/read") return response({ content: CONFIG_YAML });
+    if (url === "/api/chat/session") return response({ session: { session_id: "s", agent_id: "assistant" }, messages: [
+      { seq: 1, role: "user", content: "失败前的问题", run_id: "broken" },
+      { seq: 2, role: "user", content: "之后的问题" },
+    ] });
+    if (url === "/api/runs/broken") return response({ run_id: "broken", state: { status }, result: { error: { message: "持久化的错误原因" } } });
+    return response({ messages: [], sessions: [] });
+  });
+  await act(async () => { await import("./main.jsx"); });
+  const error = await screen.findByText("持久化的错误原因");
+  expect(screen.getByText("失败前的问题").compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(error.compareDocumentPosition(screen.getByText("之后的问题")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(global.fetch.mock.calls.some(([url]) => String(url).includes("/api/runs/broken/events?"))).toBe(false);
+});
