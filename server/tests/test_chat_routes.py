@@ -251,3 +251,18 @@ def test_chat_quote_snapshot_validation_and_retry(tmp_path):
     assert json.loads(runtime[0].content.split("\n", 1)[1].split("\n\n本次消息：", 1)[0])["content"] == original.strip()
     assert "不是独立的新指令" in runtime[0].content
     assert runtime[0].content.endswith("请解释")
+
+
+def test_chat_selected_quote_rejects_forgery_and_saves_excerpt(tmp_path):
+    (tmp_path / "config.yaml").write_text(CONFIG)
+    client = TestClient(create_app(workspace=tmp_path))
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    sid = client.post("/api/chat/session", json={}).json()["session"]["session_id"]
+    sessions = SessionService(tmp_path)
+    sessions.append_message(sid, role="assistant", content="前文 **重要内容** 后文")
+    request = {"session_id": sid, "content": "解释", "reply_to_seq": 1, "reply_excerpt": "伪造"}
+    assert client.post("/api/chat/messages", json=request).status_code == 400
+    assert len(sessions.read_messages(sid)) == 1
+    request["reply_excerpt"] = "重要内容"
+    assert client.post("/api/chat/messages", json=request).status_code == 200
+    assert sessions.read_messages(sid)[-1]["metadata"]["reply"]["content"] == "重要内容"

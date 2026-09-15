@@ -3236,3 +3236,5 @@ pre {
 .chat-quote strong { color: #a8bacb; }
 .chat-quote p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .chat-quote button { padding: 4px; border: 0; background: transparent; }
+
+.chat-selection-quote { position: sticky; bottom: 8px; align-self: center; z-index: 3; display: flex; align-items: center; gap: 6px; background: #23374b; color: #e0edfa; box-shadow: 0 4px 16px #0005; flex-shrink: 0; }

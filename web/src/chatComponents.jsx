@@ -7,6 +7,23 @@ export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled =
   const messagesRef = useRef(null);
   const followingRef = useRef(true);
   const [hasNew, setHasNew] = useState(false);
+  const [selectedQuote, setSelectedQuote] = useState(null);
+  useEffect(() => {
+    function select() {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount || quoteDisabled) { setSelectedQuote(null); return; }
+      const range = selection.getRangeAt(0);
+      const element = (node) => node.nodeType === 1 ? node : node.parentElement;
+      const body = element(range.startContainer)?.closest("[data-quote-body]");
+      if (!body || !messagesRef.current?.contains(body) || !body.contains(range.endContainer)) { setSelectedQuote(null); return; }
+      const message = messages.find((item) => item.id === body.dataset.quoteBody);
+      const content = selection.toString().trim();
+      if (!message || !content || message.streaming || message.approval || !(message.seq || message.saved)) { setSelectedQuote(null); return; }
+      setSelectedQuote({ ...message, content, excerpt: content });
+    }
+    document.addEventListener("selectionchange", select);
+    return () => document.removeEventListener("selectionchange", select);
+  }, [messages, quoteDisabled]);
   useEffect(
     () => () => {
       if (copyFeedbackTimerRef.current) window.clearTimeout(copyFeedbackTimerRef.current);
@@ -67,6 +84,7 @@ export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled =
                 {message.role === "assistant" && message.thinking?.length ? (
                   <ThinkingPanel items={message.thinking} running={message.streaming} collapsed={message.thinkingCollapsed !== false} />
                 ) : null}
+                <div data-quote-body={message.id}>
                 {message.role === "assistant" && message.content ? (
                   <MarkdownMessage content={message.content} />
                 ) : (
@@ -74,6 +92,7 @@ export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled =
                     {message.content || (message.streaming ? "正在生成正文..." : "")}
                   </pre>
                 )}
+                </div>
                 {message.role === "assistant" && message.approval ? (
                   <ApprovalPanel
                     approval={message.approval}
@@ -100,6 +119,9 @@ export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled =
               </div>
             </div>
           ))}
+          {selectedQuote && onQuote ? <button className="chat-selection-quote" onPointerDown={(event) => event.preventDefault()} onClick={() => {
+            onQuote(selectedQuote); setSelectedQuote(null); window.getSelection()?.removeAllRanges();
+          }}><Quote size={15} />引用所选内容</button> : null}
           {hasNew ? <button className="chat-new-messages" onClick={() => {
             followingRef.current = true;
             messagesRef.current.scrollTop = messagesRef.current.scrollHeight;

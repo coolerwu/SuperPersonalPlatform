@@ -9,6 +9,7 @@ from pathlib import Path
 
 from server.app.run_service import RunNotFoundError, _public_agent, _public_model
 from server.app.session_service import SessionService
+from server.domain.message_quote import quote_content
 from server.domain.chat_group import GroupDefinition, GroupDecision, GroupRunContext, ChatGroupState, GroupExecution
 from server.infrastructure.config import load_settings
 
@@ -115,19 +116,21 @@ class ChatGroupService:
                                   "content": content, "speaker": name, "member_id": member_id,
                                   "run_id": run_id, "created_at": now(), **extra})
 
-    async def send(self, group_id, content, mentions, client_id, *, automatic=False, reply_to_message_id=None):
+    async def send(self, group_id, content, mentions, client_id, *, automatic=False, reply_to_message_id=None, reply_excerpt=None):
         async with self.lock:
             group = self.read(group_id)
             previous = next((e for e in group["executions"] if e["client_message_id"] == client_id), None)
             if previous:
                 return self.detail(group_id)
             self._idle(group)
+            if reply_excerpt is not None and reply_to_message_id is None:
+                raise ValueError("引用片段需要来源消息")
             reply = None
             if reply_to_message_id is not None:
                 target = next((m for m in group["messages"] if m["id"] == reply_to_message_id and m["role"] in {"user", "assistant"} and m["content"]), None)
                 if target is None:
                     raise ValueError("引用消息不存在于当前群聊")
-                reply = {"message_id": target["id"], "group_id": group_id, "speaker": target["speaker"], "content": target["content"]}
+                reply = {"message_id": target["id"], "group_id": group_id, "speaker": target["speaker"], "content": quote_content(target["content"], reply_excerpt)}
             definition = GroupDefinition.model_validate({k: group[k] for k in GroupDefinition.model_fields})
             settings = self._validate_agents(definition)
             if any(member_id not in {m.id for m in definition.members} for member_id in mentions):

@@ -174,3 +174,22 @@ test("quote selection preserves draft, focuses input and retries identical group
   expect(bodies[0]).toEqual(bodies[1]);
   expect(bodies[0].reply_to_message_id).toBe("m1");
 });
+
+test("selected quote excludes other messages and preserves source identity", async () => {
+  const { ChatMessageList } = await import("./chatComponents.jsx");
+  const onQuote = vi.fn();
+  const { container } = render(<ChatMessageList messages={[{ id: "a", seq: 1, role: "assistant", content: "前文选中片段后文" }, { id: "b", seq: 2, role: "user", content: "其他消息" }]} onQuote={onQuote} />);
+  const node = container.querySelector('[data-quote-body="a"] p').firstChild;
+  const range = document.createRange();
+  range.setStart(node, 2); range.setEnd(node, 6);
+  window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+  fireEvent(document, new Event("selectionchange"));
+  fireEvent.click(await screen.findByRole("button", { name: "引用所选内容" }));
+  expect(onQuote).toHaveBeenCalledWith(expect.objectContaining({ id: "a", seq: 1, content: "选中片段", excerpt: "选中片段" }));
+  const cross = document.createRange();
+  cross.setStart(node, 0); cross.setEnd(container.querySelector('[data-quote-body="b"] pre').firstChild, 2);
+  window.getSelection().removeAllRanges(); window.getSelection().addRange(cross);
+  fireEvent(document, new Event("selectionchange"));
+  expect(screen.queryByRole("button", { name: "引用所选内容" })).not.toBeInTheDocument();
+  window.getSelection().removeAllRanges();
+});

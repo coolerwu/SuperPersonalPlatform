@@ -1,3 +1,4 @@
+from server.domain.message_quote import quote_content
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -29,6 +30,7 @@ class ChatMessageRequest(BaseModel):
     agent_id: str = ""
     session_id: str = ""
     client_message_id: str = Field(default="", max_length=128)
+    reply_excerpt: str | None = Field(default=None, min_length=1, max_length=100000)
     reply_to_seq: int | None = Field(default=None, ge=1)
     attachments: list[dict[str, object]] = Field(default_factory=list)
 
@@ -152,13 +154,19 @@ def create_chat_router(container: AppContainer) -> APIRouter:
                 "run": existing_run,
                 "deduplicated": True,
             }
+        if payload.reply_excerpt is not None and payload.reply_to_seq is None:
+            raise HTTPException(400, "引用片段需要来源消息")
         reply = None
         if payload.reply_to_seq is not None:
             target = next((m for m in session_service.read_messages(session_id, limit=1000000)
                            if m.get("seq") == payload.reply_to_seq and m.get("role") in {"user", "assistant"} and m.get("content")), None)
             if target is None:
                 raise HTTPException(404, "引用消息不存在于当前会话")
-            reply = {"seq": target["seq"], "session_id": session_id, "speaker": "你" if target["role"] == "user" else "助手", "content": target["content"]}
+            try:
+                quoted = quote_content(target["content"], payload.reply_excerpt)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            reply = {"seq": target["seq"], "session_id": session_id, "speaker": "你" if target["role"] == "user" else "助手", "content": quoted}
         try:
             run = await container.run_service.create_run(
                 content=payload.content,

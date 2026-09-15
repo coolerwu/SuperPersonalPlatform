@@ -480,7 +480,7 @@ function ChatPage() {
   }, [activeRunId, session?.session_id]);
 
   async function sendMessage(retry = null) {
-    const request = retry || { content: draft.trim(), ...(quote ? { reply_to_seq: quote.seq } : {}), agent_id: agentId || "", session_id: session?.session_id || "", client_message_id: createClientMessageId() };
+    const request = retry || { content: draft.trim(), ...(quote ? { reply_to_seq: quote.seq, ...(quote.excerpt ? { reply_excerpt: quote.excerpt } : {}) } : {}), agent_id: agentId || "", session_id: session?.session_id || "", client_message_id: createClientMessageId() };
     if (!request.content || activeRunId || sendingRef.current || (!retry && pendingSend)) return;
     sendingRef.current = true;
     setSending(true);
@@ -665,7 +665,7 @@ function ChatPage() {
           </div>
         </div>
 
-        <ChatMessageList messages={messages} onQuote={setQuote} quoteDisabled={sending || Boolean(pendingSend)} onDecision={decideChatApproval} onError={setError} />
+        <ChatMessageList key={session?.session_id || "loading"} messages={messages} onQuote={setQuote} quoteDisabled={sending || Boolean(pendingSend)} onDecision={decideChatApproval} onError={setError} />
 
         {error ? <div className="error chat-error">{error}</div> : null}
         {pendingSend ? <button disabled={sending} onClick={() => sendMessage(pendingSend)}>{sending ? "正在确认发送…" : "重试确认发送"}</button> : null}

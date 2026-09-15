@@ -97,11 +97,11 @@ export function ChatGroupsPage({ api }) {
     const id = group.id;
     const content = draft.trim();
     const ordered = mentions.filter((m) => mentionPosition(content, m.token) >= 0).sort((a, b) => mentionPosition(content, a.token) - mentionPosition(content, b.token)).map((m) => m.id);
-    const signature = JSON.stringify([id, content, ordered, automatic, quote?.id]);
+    const signature = JSON.stringify([id, content, ordered, automatic, quote?.id, quote?.excerpt]);
     if (requestRef.current?.signature !== signature) requestRef.current = { signature, id: newId() };
     await perform(async () => {
       await api(`/api/chat-groups/${id}/${automatic ? "collaborations" : "messages"}`, {
-        method: "POST", body: JSON.stringify({ content, ...(quote ? { reply_to_message_id: quote.id } : {}), mentions: ordered, client_message_id: requestRef.current.id }),
+        method: "POST", body: JSON.stringify({ content, ...(quote ? { reply_to_message_id: quote.id, ...(quote.excerpt ? { reply_excerpt: quote.excerpt } : {}) } : {}), mentions: ordered, client_message_id: requestRef.current.id }),
       });
       if (selectedRef.current === id) { setDraft(""); setQuote(null); setMentions([]); requestRef.current = null; }
       await refresh(id);
@@ -162,7 +162,7 @@ export function ChatGroupsPage({ api }) {
           {!active && execution?.automatic && execution.status === "completed" && !group.archived ? <button onClick={() => control("continue")} disabled={busy}>继续协作</button> : null}
           <button aria-label="编辑群聊" title="编辑群聊" disabled={active || busy} onClick={() => setEditor({ _groupId: group.id, name: group.name, members: group.members, host_member_id: group.host_member_id, archived: group.archived })}><Settings size={16} /></button>
         </div></div>
-        <ChatMessageList messages={displayMessages} onQuote={setQuote} quoteDisabled={busy} onDecision={decide} onError={setError} emptyTitle="把任务交给合适的角色" emptyDescription="@ 点名接力；不点名由主持回复。开始协作后，主持会组织最多三轮分工。" />
+        <ChatMessageList key={selected} messages={displayMessages} onQuote={setQuote} quoteDisabled={busy} onDecision={decide} onError={setError} emptyTitle="把任务交给合适的角色" emptyDescription="@ 点名接力；不点名由主持回复。开始协作后，主持会组织最多三轮分工。" />
         {execution?.error ? <div className="error chat-error">{execution.error}</div> : null}
         {error ? <div role="alert" className="error chat-error">{error}</div> : null}
         <div className="group-input-area">
