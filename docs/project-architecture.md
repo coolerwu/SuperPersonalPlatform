@@ -429,3 +429,11 @@ POST /api/chat-groups/{group_id}/collaborations/{execution_id}/stop
 - `POST /api/runs/{run_id}/resume` 增加 `scope=once|file_10min`，默认 once；file_10min 仅允许 approve。后端从已保存的审批请求提取并验证精确文件路径和 WebDAV 写权限，不接受客户端指定文件、期限或目录授权。
 - 文件授权按当前 session + Agent 隔离，存于 `sessions/{session_id}/file_approvals.json`，无 session 时存于 Run 目录；记录批准时间和固定 600 秒到期时间，审批 history 保存授权快照。刷新、重启和后续工具调用不会续期。群成员独立 session，因此不会共享其他成员或会话的授权。
 - 主/子 Agent 原生 HITL 条件在每次工具调用时检查持久化授权和实时到期时间；精确路径匹配，仅豁免该文件 write_file/edit_file 的重复确认，原生目录权限、只读限制和后端校验不变。到期自动恢复审批，不调整 checkpoint，不批量放行其他文件或工具。
+
+### Chat 与群聊实时 Markdown 编辑
+
+- 两页仍共用 `chatComponents.jsx` 的 ChatComposer，内部统一使用 `MarkdownComposer.jsx`（Tiptap/ProseMirror）。输入标题、列表、引用、加粗、斜体、行内代码和代码围栏时在原位呈现格式，不切换预览；支持撤销/重做、粘贴 Markdown 表格和任务列表。图片 Markdown 保留为文本，不在输入时自动加载远程图片。
+- 编辑器文档管理光标、选区与中文输入法，React 草稿保存 Markdown 字符串；仅外部草稿替换时重新解析，正常输入不重建文档。序列化可能规范化空格、列表和表格排版，保持内容与格式语义；传给现有发送接口的仍是 Markdown 文本，无后端协议或 checkpoint 变更。
+- Enter 发送，Shift+Enter 换行、列表续项或在代码块内换行；输入 ```language 后 Shift+Enter 建立代码块，代码块末行输入 ``` 后 Shift+Enter 退出。IME 确认候选不发送。引用聚焦、群 @ 成员、失败草稿恢复及原请求重试沿用现有流程。切换会话重建编辑器，避免遗留选区或格式。
+- 输入框自然增高，普通正文约 20 行后内部滚动；格式块占用实际高度。保留细滚动条与右下发送按钮。长路径、表格及代码在窄屏内换行，不撑宽页面。
+- 前端构建环境要求 Node.js 20+，依赖与锁文件一并提交；编辑器依赖拆成单独构建 chunk。生产继续使用已提交的 dist，不现场安装 Node 依赖。测试环境为 jsdom 补齐空布局 API，真实键盘、IME 防误发、滚动及桌面/手机布局用浏览器模拟 API 验证。

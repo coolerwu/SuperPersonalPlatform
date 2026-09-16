@@ -373,7 +373,7 @@ test("chat page sends a message and renders the streaming assistant bubble", asy
   });
   await flushReact();
 
-  fireEvent.change(screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行"), {
+  changeInput(await screen.findByRole("textbox", { name: "输入消息，Enter 发送，Shift+Enter 换行" }), {
     target: { value: "你好" },
   });
   fireEvent.click(screen.getByRole("button", { name: /发送/ }));
@@ -416,8 +416,8 @@ test("chat page creates only one run when send is triggered twice before the req
   });
   await flushReact();
 
-  const textarea = screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行");
-  fireEvent.change(textarea, { target: { value: "只发送一次" } });
+  const textarea = await screen.findByRole("textbox", { name: "输入消息，Enter 发送，Shift+Enter 换行" });
+  changeInput(textarea, { target: { value: "只发送一次" } });
   act(() => {
     fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 13 });
     fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 13 });
@@ -473,8 +473,8 @@ test("chat page does not send when enter confirms ime composition", async () => 
   });
   await flushReact();
 
-  const textarea = screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行");
-  fireEvent.change(textarea, { target: { value: "nihao" } });
+  const textarea = await screen.findByRole("textbox", { name: "输入消息，Enter 发送，Shift+Enter 换行" });
+  changeInput(textarea, { target: { value: "nihao" } });
   fireEvent.compositionStart(textarea);
   fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 229, isComposing: true });
   await flushReact();
@@ -482,6 +482,7 @@ test("chat page does not send when enter confirms ime composition", async () => 
   expect(messageCalls).toBe(0);
 
   fireEvent.compositionEnd(textarea);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 550)); });
   fireEvent.keyDown(textarea, { key: "Enter", code: "Enter", keyCode: 13 });
   await flushReact();
 
@@ -541,7 +542,7 @@ test("chat page renders assistant markdown and follows the latest message", asyn
   });
   await flushReact();
 
-  fireEvent.change(screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行"), {
+  changeInput(await screen.findByRole("textbox", { name: "输入消息，Enter 发送，Shift+Enter 换行" }), {
     target: { value: "给我 markdown" },
   });
   fireEvent.click(screen.getByRole("button", { name: /发送/ }));
@@ -684,7 +685,7 @@ test("chat page shows thinking events while running and folds them after complet
   });
   await flushReact();
 
-  fireEvent.change(screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行"), {
+  changeInput(screen.getByRole("textbox", { name: "输入消息，Enter 发送，Shift+Enter 换行" }), {
     target: { value: "生成一段话" },
   });
   fireEvent.click(screen.getByRole("button", { name: /发送/ }));
@@ -1014,8 +1015,8 @@ test("saves system config from the dedicated config menu", async () => {
   expect(screen.queryByText("DeepAgent 运行选项")).not.toBeInTheDocument();
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
 
-  fireEvent.change(screen.getByLabelText("监听端口"), { target: { value: "9999" } });
-  fireEvent.change(screen.getByLabelText("代理"), { target: { value: "socks5://127.0.0.1:7890" } });
+  changeInput(screen.getByLabelText("监听端口"), { target: { value: "9999" } });
+  changeInput(screen.getByLabelText("代理"), { target: { value: "socks5://127.0.0.1:7890" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
   await waitFor(() => {
@@ -1130,7 +1131,7 @@ test("saves provider config from the provider menu", async () => {
   expect(await screen.findByText("Provider 默认项")).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: /Providers/ })).toHaveAttribute("aria-selected", "true");
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("模型名"), { target: { value: "gpt-4.1-mini" } });
+  changeInput(screen.getByLabelText("模型名"), { target: { value: "gpt-4.1-mini" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
   await waitFor(() => {
@@ -1162,7 +1163,7 @@ test("keeps focus while editing provider id", async () => {
 
   const idInput = await screen.findByLabelText("ID");
   idInput.focus();
-  fireEvent.change(idInput, { target: { value: "defaultx" } });
+  changeInput(idInput, { target: { value: "defaultx" } });
   expect(document.activeElement).toBe(idInput);
 });
 
@@ -1189,7 +1190,7 @@ test("keeps focus while editing agent id", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /配置 Agent/ }));
   const idInput = await screen.findByLabelText("ID");
   idInput.focus();
-  fireEvent.change(idInput, { target: { value: "assistantx" } });
+  changeInput(idInput, { target: { value: "assistantx" } });
   expect(document.activeElement).toBe(idInput);
 });
 
@@ -1222,7 +1223,7 @@ test("loads provider config with yaml indentless sequences", async () => {
 
   expect((await screen.findAllByDisplayValue("ds-pro")).length).toBeGreaterThanOrEqual(2);
   expect(screen.getByDisplayValue("deepseek-v4-pro")).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("Temperature"), { target: { value: "0.5" } });
+  changeInput(screen.getByLabelText("Temperature"), { target: { value: "0.5" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
   await waitFor(() => {
@@ -1308,7 +1309,7 @@ test("saves deepagent options from the agent config menu", async () => {
   fireEvent.click(screen.getByRole("button", { name: /配置 Agent/ }));
   expect(screen.getByRole("dialog", { name: "配置 Agent" })).toBeInTheDocument();
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("最大执行步数"), { target: { value: "12" } });
+  changeInput(screen.getByLabelText("最大执行步数"), { target: { value: "12" } });
   fireEvent.click(screen.getByRole("button", { name: "配置工具" }));
   expect(screen.queryByLabelText("Search Context")).not.toBeInTheDocument();
   fireEvent.click(screen.getByLabelText("Schedule"));
@@ -1317,8 +1318,8 @@ test("saves deepagent options from the agent config menu", async () => {
   fireEvent.click(screen.getByLabelText("启用 WebDAV"));
   fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
   expect(screen.getByLabelText("访问权限")).toHaveValue("write");
-  fireEvent.change(screen.getByLabelText("映射目录（相对于全局同步目录）"), { target: { value: "/项目资料" } });
-  fireEvent.change(screen.getByLabelText("目录说明"), { target: { value: "项目共享文档" } });
+  changeInput(screen.getByLabelText("映射目录（相对于全局同步目录）"), { target: { value: "/项目资料" } });
+  changeInput(screen.getByLabelText("目录说明"), { target: { value: "项目共享文档" } });
   fireEvent.click(screen.getByRole("button", { name: "保存 Agent" }));
 
   await waitFor(() => {
@@ -1445,7 +1446,7 @@ test("updates the selected agent for a wechat account", async () => {
   });
 
   expect((await screen.findAllByText("主账号")).length).toBeGreaterThan(0);
-  fireEvent.change(screen.getByLabelText("默认 Agent"), { target: { value: "" } });
+  changeInput(screen.getByLabelText("默认 Agent"), { target: { value: "" } });
 
   await waitFor(() => {
     const updateCall = global.fetch.mock.calls.find(([url, options]) => String(url).endsWith("/api/channels/wechat/accounts/main") && options.method === "PUT");
@@ -1499,9 +1500,9 @@ test("creates and deletes a wechat account", async () => {
 
   expect((await screen.findAllByText("主账号")).length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: /新增/ }));
-  fireEvent.change(screen.getByLabelText("账号 ID"), { target: { value: "side" } });
-  fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "副账号" } });
-  fireEvent.change(screen.getAllByLabelText("默认 Agent")[0], { target: { value: "assistant" } });
+  changeInput(screen.getByLabelText("账号 ID"), { target: { value: "side" } });
+  changeInput(screen.getByLabelText("显示名称"), { target: { value: "副账号" } });
+  changeInput(screen.getAllByLabelText("默认 Agent")[0], { target: { value: "assistant" } });
   fireEvent.click(screen.getByRole("button", { name: /保存账号/ }));
 
   await waitFor(() => {
@@ -1623,12 +1624,12 @@ test("usage summary filters agents and preserves unknown historical costs", asyn
   const summary = document.querySelector(".usage-summary");
   expect(summary).toHaveTextContent("USD 0.012000");
   expect(summary).toHaveTextContent("1 / 2");
-  fireEvent.change(filter, { target: { value: "legacy" } });
+  changeInput(filter, { target: { value: "legacy" } });
   expect(summary).toHaveTextContent("未记录");
   expect(summary).toHaveTextContent("未估算");
   expect(summary).not.toHaveTextContent("USD 0.000000");
-  fireEvent.change(filter, { target: { value: "" } });
-  fireEvent.change(screen.getByLabelText("消耗统计时间"), { target: { value: "1" } });
+  changeInput(filter, { target: { value: "" } });
+  changeInput(screen.getByLabelText("消耗统计时间"), { target: { value: "1" } });
   expect(summary).toHaveTextContent("1 / 1");
 });
 
@@ -1650,14 +1651,14 @@ test("chat retries unconfirmed send with original identity and handles cancelled
   });
   await act(async () => { await import("./main.jsx"); });
   await flushReact();
-  const input = screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行");
-  fireEvent.change(input, { target: { value: "需要保留的原文" } });
+  const input = await screen.findByRole("textbox", { name: "输入消息，Enter 发送，Shift+Enter 换行" });
+  changeInput(input, { target: { value: "需要保留的原文" } });
   fireEvent.click(screen.getByRole("button", { name: "发送" }));
   fireEvent.click(await screen.findByRole("button", { name: "重试确认发送" }));
   await waitFor(() => expect(screen.getByText("已停止")).toBeInTheDocument());
   expect(bodies).toHaveLength(2);
   expect(bodies[1]).toEqual(bodies[0]);
-  fireEvent.change(input, { target: { value: "下一条" } });
+  changeInput(input, { target: { value: "下一条" } });
   expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
 });
 
@@ -1700,11 +1701,11 @@ test("chat quote uses saved sequence, restores snapshot and leaves copy body sep
   await act(async () => { await import("./main.jsx"); });
   await flushReact();
   expect(screen.getByText("已保存的引用")).toBeInTheDocument();
-  const input = screen.getByPlaceholderText("输入消息，Enter 发送，Shift+Enter 换行");
+  const input = await screen.findByRole("textbox", { name: "输入消息，Enter 发送，Shift+Enter 换行" });
   fireEvent.click(screen.getAllByRole("button", { name: "引用消息" })[0]);
-  expect(input).toHaveFocus();
+  await waitFor(() => expect(input).toHaveFocus());
   expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
-  fireEvent.change(input, { target: { value: "现在的追问" } });
+  changeInput(input, { target: { value: "现在的追问" } });
   fireEvent.click(screen.getByRole("button", { name: "发送" }));
   await waitFor(() => expect(request?.reply_to_seq).toBe(7));
   expect(request.content).toBe("现在的追问");
@@ -1729,3 +1730,11 @@ test.each(["failed", "cancelled"])("chat reload restores %s runs without saved a
   expect(error.compareDocumentPosition(screen.getByText("之后的问题")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(global.fetch.mock.calls.some(([url]) => String(url).includes("/api/runs/broken/events?"))).toBe(false);
 });
+
+function changeInput(node, event) {
+  if (node.editor) {
+    act(() => node.editor.commands.setContent(event.target.value, { contentType: "markdown" }));
+  } else {
+    fireEvent.change(node, event);
+  }
+}

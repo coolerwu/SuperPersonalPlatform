@@ -5,6 +5,7 @@ A compact DeepAgent platform served as one deployable Python application. It kee
 ## Requirements
 
 - Python 3.12.x
+- Node.js 20+ for frontend development, tests and builds (production serves committed `web/dist`)
 - Linux systemd + sudo for production deployment
 
 ## Setup

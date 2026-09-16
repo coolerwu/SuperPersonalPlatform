@@ -669,7 +669,7 @@ function ChatPage() {
 
         {error ? <div className="error chat-error">{error}</div> : null}
         {pendingSend ? <button disabled={sending} onClick={() => sendMessage(pendingSend)}>{sending ? "正在确认发送…" : "重试确认发送"}</button> : null}
-        <ChatComposer quote={quote} onCancelQuote={sending || pendingSend ? undefined : () => setQuote(null)} value={draft} onChange={setDraft} onSend={() => sendMessage()} busy={Boolean(activeRunId) || sending || Boolean(pendingSend)} />
+        <ChatComposer key={`composer_${session?.session_id || "new"}`} quote={quote} onCancelQuote={sending || pendingSend ? undefined : () => setQuote(null)} value={draft} onChange={setDraft} onSend={() => sendMessage()} busy={Boolean(activeRunId) || sending || Boolean(pendingSend)} />
       </section>
 
       <aside className="status-rail chat-rail">

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { act } from "react";
 import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -22,10 +22,10 @@ function mockApi(group = base()) {
   });
 }
 
-test("shared composer preserves IME and shift-enter, prevents sends while busy", () => {
+test("shared composer preserves IME and shift-enter, prevents sends while busy", async () => {
   const send = vi.fn();
   const { rerender } = render(<ChatComposer value="你好" onChange={() => {}} onSend={send} />);
-  const input = screen.getByRole("textbox");
+  const input = await screen.findByRole("textbox");
   fireEvent.compositionStart(input);
   fireEvent.keyDown(input, { key: "Enter" });
   expect(send).not.toHaveBeenCalled();
@@ -57,18 +57,18 @@ test("shared approval panel prevents duplicate submits and restores controls aft
 test("group mentions submit member IDs in textual order and default sends have no mentions", async () => {
   const api = mockApi();
   render(<ChatGroupsPage api={api} />);
-  const input = await screen.findByPlaceholderText("输入 @ 选择角色，或直接与主持交流");
-  fireEvent.change(input, { target: { value: "@" } });
+  const input = await screen.findByRole("textbox", { name: "输入 @ 选择角色，或直接与主持交流" });
+  changeInput(input, { target: { value: "@" } });
   fireEvent.click(screen.getByRole("option", { name: "评审" }));
-  fireEvent.change(input, { target: { value: "@评审 请检查 @" } });
+  changeInput(input, { target: { value: "@评审 请检查 @" } });
   fireEvent.click(screen.getByRole("option", { name: "主持" }));
   fireEvent.click(screen.getByRole("button", { name: "发送" }));
   await waitFor(() => expect(api).toHaveBeenCalledWith("/api/chat-groups/group_one/messages", expect.objectContaining({ method: "POST" })));
   const call = api.mock.calls.find(([url]) => url.endsWith("/messages"));
   expect(JSON.parse(call[1].body).mentions).toEqual(["review", "host"]);
   expect(JSON.parse(call[1].body).client_message_id).toBeTruthy();
-  await waitFor(() => expect(input).toHaveValue(""));
-  fireEvent.change(input, { target: { value: "请安排工作" } });
+  await waitFor(() => expect(input).toHaveTextContent(""));
+  changeInput(input, { target: { value: "请安排工作" } });
   fireEvent.click(screen.getByRole("button", { name: "开始协作" }));
   await waitFor(() => expect(api).toHaveBeenCalledWith("/api/chat-groups/group_one/collaborations", expect.anything()));
 });
@@ -96,7 +96,7 @@ test("restored group execution uses shared thinking and approval components and 
   expect(await screen.findByText("初步分析")).toBeVisible();
   expect(screen.getByText("检查共享文档")).toBeVisible();
   expect(screen.getByText("等待操作审批")).toBeVisible();
-  expect(screen.getByPlaceholderText("输入 @ 选择角色，或直接与主持交流")).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "输入 @ 选择角色，或直接与主持交流" })).toHaveAttribute("contenteditable", "false");
   fireEvent.click(screen.getByRole("button", { name: "仅批准本次" }));
   await waitFor(() => expect(api).toHaveBeenCalledWith("/api/runs/run-1/resume", expect.objectContaining({ method: "POST" })));
   await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeEnabled());
@@ -157,11 +157,11 @@ test("quote selection preserves draft, focuses input and retries identical group
     return fallback(url, options);
   });
   render(<ChatGroupsPage api={api} />);
-  const input = await screen.findByPlaceholderText("输入 @ 选择角色，或直接与主持交流");
-  fireEvent.change(input, { target: { value: "草稿保留" } });
+  const input = await screen.findByRole("textbox", { name: "输入 @ 选择角色，或直接与主持交流" });
+  changeInput(input, { target: { value: "草稿保留" } });
   fireEvent.click(screen.getAllByRole("button", { name: "引用消息" })[0]);
-  expect(input).toHaveValue("草稿保留");
-  expect(input).toHaveFocus();
+  expect(input).toHaveTextContent("草稿保留");
+  await waitFor(() => expect(input).toHaveFocus());
   fireEvent.click(screen.getByRole("button", { name: "取消引用" }));
   expect(screen.queryByRole("button", { name: "取消引用" })).not.toBeInTheDocument();
   fireEvent.click(screen.getAllByRole("button", { name: "引用消息" })[1]);
@@ -215,3 +215,11 @@ test("mixed file approval does not offer a misleading single file grant", async 
   expect(screen.queryByRole("button", { name: "批准当前文件（10 分钟）" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "仅批准本次" })).toBeEnabled();
 });
+
+function changeInput(node, event) {
+  if (node.editor) {
+    act(() => node.editor.commands.setContent(event.target.value, { contentType: "markdown" }));
+  } else {
+    fireEvent.change(node, event);
+  }
+}

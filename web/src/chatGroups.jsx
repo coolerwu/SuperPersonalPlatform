@@ -168,7 +168,7 @@ export function ChatGroupsPage({ api }) {
         <div className="group-input-area">
           {mentions.length ? <div className="group-mention-chips">{mentions.filter((m) => mentionPosition(draft, m.token) >= 0).map((m) => <span key={m.id}>{m.token}</span>)}</div> : null}
           {mentionOptions.length ? <div className="group-mention-menu" role="listbox" aria-label="选择群成员">{mentionOptions.map((member) => <button role="option" aria-selected="false" key={member.id} onClick={() => addMention(member)}><Bot size={15} />{member.name}</button>)}</div> : null}
-          <ChatComposer quote={quote} onCancelQuote={busy ? undefined : () => setQuote(null)} value={draft} onChange={setDraft} onSend={() => send(false)} busy={locked} disabled={locked} placeholder="输入 @ 选择角色，或直接与主持交流">
+          <ChatComposer key={selected} quote={quote} onCancelQuote={busy ? undefined : () => setQuote(null)} value={draft} onChange={setDraft} onSend={() => send(false)} busy={locked} disabled={locked} placeholder="输入 @ 选择角色，或直接与主持交流">
             <button className="group-collaborate" onClick={() => send(true)} disabled={locked || !draft.trim()}>开始协作</button>
           </ChatComposer>
         </div>

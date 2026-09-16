@@ -294,3 +294,7 @@ nutstore.root_path + context.webdav_sync.root_path + /webdav/ 后保留原层级
 日期化 `docs/superpowers/*` 文件视为历史实现记录，不作为当前架构依据。后续真正删除对应代码模块时，必须同步删除或归档对应历史设计/计划文档，避免搜索结果把人带回旧架构。
 
 WebDAV 可写目录通过原生 HITL 审批后才写回，读取无需审批；本地共享资料挂载在 `/files/`，统一使用原生文件工具。Context 搜索/写入工具和 `/notes/` 已移除。
+
+## Chat 输入框为何采用文档编辑器？
+
+Chat 和群聊需要在同一输入区域即时呈现 Markdown，不能依赖 textarea 加独立预览。统一使用 Tiptap/ProseMirror 管理选区、撤销和输入法，草稿与发送接口继续使用 Markdown；不自写 contenteditable DOM 重绘。详见项目架构中的“Chat 与群聊实时 Markdown 编辑”。

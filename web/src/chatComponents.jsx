@@ -1,5 +1,7 @@
+import { MarkdownComposer } from "./MarkdownComposer.jsx";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, Copy, TerminalSquare, ArrowUp, Quote, X, Clock3, XCircle, CheckCircle2 } from "lucide-react";
+
 
 export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled = false, onError = () => {}, emptyTitle = "开始一次页面对话", emptyDescription = "消息会进入长期 session；运行中输出会在这里实时刷新。" }) {
   const [copiedMessageId, setCopiedMessageId] = useState("");
@@ -133,41 +135,8 @@ export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled =
 }
 
 export function ChatComposer({ value, onChange, onSend, busy = false, disabled = false, children, quote, onCancelQuote, placeholder = "输入消息，Enter 发送，Shift+Enter 换行" }) {
-  const composingRef = useRef(false);
-  const textareaRef = useRef(null);
-  useLayoutEffect(() => {
-    const node = textareaRef.current;
-    if (!node) return;
-    function resize() {
-      const style = window.getComputedStyle(node);
-      const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-      const limit = parseFloat(style.lineHeight) * 20 + padding;
-      node.style.height = "0px";
-      const required = node.scrollHeight;
-      node.style.height = `${Math.min(required, limit)}px`;
-      node.style.overflowY = required > limit ? "auto" : "hidden";
-    }
-    resize();
-    let width = node.clientWidth;
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => {
-      if (node.clientWidth !== width) { width = node.clientWidth; resize(); }
-    }) : null;
-    observer?.observe(node);
-    window.addEventListener("resize", resize);
-    return () => { observer?.disconnect(); window.removeEventListener("resize", resize); };
-  }, [value]);
-  useEffect(() => { if (quote) textareaRef.current?.focus(); }, [quote]);
   return <div className="chat-composer-region">{quote ? <div className="chat-quote-draft"><QuoteCard quote={quote} onCancel={onCancelQuote} /></div> : null}<div className="chat-composer">
-    <textarea ref={textareaRef} rows={1} value={value} placeholder={placeholder} disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-      onCompositionStart={() => { composingRef.current = true; }}
-      onCompositionEnd={() => { composingRef.current = false; }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" && !event.shiftKey && !composingRef.current && !event.nativeEvent?.isComposing && event.keyCode !== 229) {
-          event.preventDefault();
-          if (!busy && !disabled && value.trim()) onSend();
-        }
-      }} />
+    <MarkdownComposer value={value} onChange={onChange} onSend={onSend} busy={busy} disabled={disabled} placeholder={placeholder} quote={quote} />
     <div className="chat-composer-actions">{children}
     <button className="primary chat-send-button" aria-label="发送" title="发送" onClick={onSend} disabled={!value.trim() || busy || disabled}><ArrowUp size={23} /></button></div>
   </div></div>;
