@@ -62,7 +62,7 @@
 
 - 微信图片/附件通过 send_attachment 显式选择已有文件，工具仅排队并返回 queued，成功 run 结束后由 RunDeliveryService 发送到固化的当前微信目标。不要让 Agent 自选收件人或把排队说成已发送。每个发送部分持久化进度和稳定 client_id；重试只处理未确认部分，重跑不复用旧轮次附件。
 
-- 不再有 Skill 自进化：运行时不注入 SkillImprovement middleware，Agent 不会自动创建或改写 `/skills/`，也不会写 `/improvements/`（该目录已从工作区契约移除）；skill 由用户通过平台文件入口维护，历史 improvement 记录不再作为判断依据。用户硬约束可放在 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 中，Agent 文件工具不得修改、覆盖或删除该区块及其所在 Skill，正式契约由用户通过平台文件入口调整。
+- 不再有 Skill 自进化：运行时不注入 SkillImprovement middleware，Agent 不会主动创建或改写 `/skills/`，也不会写 `/improvements/`（该目录已从工作区契约移除）；但用户在对话里明确要求时，Agent 仍可用原生文件工具创建或更新 `/skills/{skill_id}/SKILL.md`，新 skill 在下一次 Agent 执行开始时生效，历史 improvement 记录不再作为判断依据。用户硬约束可放在 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 中，Agent 文件工具不得修改、覆盖或删除该区块及其所在 Skill，正式契约由用户通过平台文件入口调整。
 
 
 ## 群聊约定

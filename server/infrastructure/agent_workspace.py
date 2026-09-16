@@ -16,7 +16,7 @@ class WorkspaceDirectory:
 WORKSPACE_DIRECTORIES = (
     WorkspaceDirectory("artifacts", "Final deliverables; return these paths to the user."),
     WorkspaceDirectory("scratch", "Drafts and saved execution scripts (.py/.sh); subject to scratch retention cleanup."),
-    WorkspaceDirectory("skills", "Reusable skills maintained by the user; follow Skills middleware rules."),
+    WorkspaceDirectory("skills", "Reusable skills; create or update one only when the user asks for it. Follow Skills middleware rules."),
     WorkspaceDirectory("memories", "Long-term memory; follow MemoryMiddleware rules."),
     WorkspaceDirectory("browser", "Browser login state and cache; browser-service only. Never read, search or modify with file tools.", False),
 )
