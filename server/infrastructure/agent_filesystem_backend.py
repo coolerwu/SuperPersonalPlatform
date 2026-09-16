@@ -17,9 +17,9 @@ from server.infrastructure.agent_workspace import AGENT_WORKSPACE_DIRECTORIES
 SKILL_CONTRACT_START = "<!-- BEGIN USER CONTRACT -->"
 SKILL_CONTRACT_END = "<!-- END USER CONTRACT -->"
 SKILL_CONTRACT_ERROR = (
-    "This skill contains a protected user contract. Agent self-improvement may add guidance around it, "
-    "but cannot change, remove, overwrite, or delete the protected block. Record the proposed contract "
-    "change under /improvements/ instead."
+    "This skill contains a protected user contract. Agent file tools cannot change, remove, overwrite, "
+    "or delete the protected block, or delete the skill file or directory that contains it. The user "
+    "changes the contract through the platform file entry instead."
 )
 
 

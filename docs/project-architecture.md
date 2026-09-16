@@ -25,7 +25,7 @@
 - `workspace/sessions/index.json` 维护所有长期会话索引；长期 session 对微信和未来渠道默认开启。`workspace/sessions/active.json` 维护渠道身份到当前活跃会话的绑定；微信、API 和未来渠道共享 `workspace/sessions/{session_id}/`，每个 run 只引用 `session_id`；Agent 的 Checkpointer 固定开启，不再提供配置开关，开启时 DeepAgent/LangGraph 运行时状态写入 `workspace/sessions/{session_id}/checkpoints.sqlite`。
 - 同一 `session_id` 同时只允许一个 `queued`、`running` 或 `waiting_approval` Run。RunService 在保存附件、追加消息或创建 Run 目录前强制检查，冲突通过 HTTP 409 返回当前 Run ID 和状态，防止多个 Run 覆盖同一个 LangGraph checkpoint。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
-- Agent 的 DeepAgent 配置只保留 `max_iterations`、`todo_list` 和工具授权 `tools`。长期记忆、私有文件系统及会话 Checkpointer 固定开启；运行名使用 Agent 名称，debug 默认关闭。系统从工具注册表的 `approval_required` 生成 HITL `interrupt_on`；WebDAV 文件写入由原生 Permission interrupt 规则生成审批谓词，不再接受 Agent 自定义审批列表。原生文件工具按路径授权执行。移除 `name/debug/filesystem/use_longterm_memory/interrupt_on/subagents/response_format/context_schema/checkpointer/cache` 配置；系统继续管理通用子 Agent、Skills 和 SkillImprovement middleware。
+- Agent 的 DeepAgent 配置只保留 `max_iterations`、`todo_list` 和工具授权 `tools`。长期记忆、私有文件系统及会话 Checkpointer 固定开启；运行名使用 Agent 名称，debug 默认关闭。系统从工具注册表的 `approval_required` 生成 HITL `interrupt_on`；WebDAV 文件写入由原生 Permission interrupt 规则生成审批谓词，不再接受 Agent 自定义审批列表。原生文件工具按路径授权执行。移除 `name/debug/filesystem/use_longterm_memory/interrupt_on/subagents/response_format/context_schema/checkpointer/cache` 配置；系统继续管理通用子 Agent 和 Skills。
 - 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前平台工具为 `send_attachment`、`search_session`、`arxiv`、`yahoo_finance_news`、`browser_extract`、`schedule` 和 `execute_code`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
@@ -61,10 +61,6 @@ workspace/
             SKILL.md
         memories/
           AGENTS.md
-        improvements/
-          reflections/
-          reviews/
-          changes/
         browser/
           profile.lock.json
 
@@ -274,9 +270,9 @@ code_execution:
 - `schedule(action, ...)` 是单一调度管理工具，支持 `create/list/get/update/delete`。创建时只能使用当前 Agent、当前长期 session 和当前渠道投递上下文，触发器支持 `once`、`interval` 和 `cron`；`list/get/update/delete` 只能作用于 `metadata.created_by.type="agent_tool"` 且 `agent_id/session_id` 与当前 run 一致的任务，避免 Agent 删除页面或其它会话创建的定时任务。每次触发只运行一个 Agent run；微信来源任务执行完成后，ScheduleService 读取该 run 的完整 `result.json`，调用微信通道投递最终结果一次，并更新 run 的 `delivery.json`。
 - `execute_code(language, code, files)` 是可选平台工具，`code_execution.enabled` 默认开启，但仍只有 Agent 授权 `execute_code` 时才注入。它只支持 `language="python"` 和 `language="shell"`，通过 Docker 运行配置镜像，强制 `--runtime=runsc`、`--network=none`、`--read-only`、`--cap-drop=ALL`、`--security-opt no-new-privileges`、CPU/内存/pids 限制和只读/读写的临时目录挂载；默认镜像为 Docker Hub 官方 `python:3.12-slim-bookworm`，Python 使用 `python /workspace/work/main.py`，shell 使用 `/bin/sh /workspace/work/script.sh`。执行器不允许 Agent 指定镜像、runtime、volume、env 或 Docker 参数；缺 Docker、缺 `runsc` 或缺镜像时返回 `ok=false` 工具观察，不降级为宿主机 subprocess。脚本保留为当前 Agent `/scratch/exec_{id}.py` 或 `.sh`，工具返回 `script_path`；每次调用使用独立系统临时目录挂载 `/workspace/input`（只读）、`/workspace/work` 和 `/workspace/output`，不挂载整个 Agent 工作区。成果收集到 `/artifacts/exec_{id}/` 后清理临时目录和输入副本，原始输入不删除。失败仍保留脚本；超时、取消先终止容器再清理，容器终止失败或成果收集失败则保留临时目录并返回 `recovery_path` 供恢复。没有长期 `code_runs/` 或额外 `execution.json`，执行观察沿用 Run 事件。`scratch/` 内脚本沿用现有保留期清理规则。
 - DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 等工具由 `deepagents` 默认 middleware 提供；`deepagent.todo_list` 默认开启，`write_todos` 由运行时接入 LangChain `TodoListMiddleware`，只有 Agent 显式配置 `todo_list=false` 时关闭。当前不启用 DeepAgent `LocalShellBackend`，因此不向 Agent 暴露非沙箱 shell `execute`。
-- DeepAgent 原生 filesystem 使用受限的 `AgentFilesystemBackend(root_dir=workspace/agents/{agent_id}/workspace, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录；私有文件后端只允许修改 `scratch/`、`artifacts/`、`skills/`、`memories/` 和 `improvements/`，并保护这些固定顶层目录本身不被删除。`browser/` 只由浏览器服务访问，Agent 文件工具的同步/异步读取、列举、搜索、下载和修改都不能触及其内容；不允许通过符号链接访问。启用的 `/webdav/` 由独立映射后端访问共享缓存，可写路径通过原生 HITL 审批后写回远端；不能删除挂载根目录。Agent 不应创建第二层 `/workspace/`，不能访问其它未声明顶层目录；越界写入、编辑、删除和上传返回带允许目录列表的 permission 诊断，作为可恢复工具观察交给 Agent 改用正确路径，不让整个 run 失败。历史目录由部署时受控的一次性文件操作整理，没有运行时兼容路径或自动迁移。Agent 不能直接访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制及辅助函数已删除。
+- DeepAgent 原生 filesystem 使用受限的 `AgentFilesystemBackend(root_dir=workspace/agents/{agent_id}/workspace, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录；私有文件后端只允许修改 `scratch/`、`artifacts/`、`skills/` 和 `memories/`，并保护这些固定顶层目录本身不被删除。`browser/` 只由浏览器服务访问，Agent 文件工具的同步/异步读取、列举、搜索、下载和修改都不能触及其内容；不允许通过符号链接访问。启用的 `/webdav/` 由独立映射后端访问共享缓存，可写路径通过原生 HITL 审批后写回远端；不能删除挂载根目录。Agent 不应创建第二层 `/workspace/`，不能访问其它未声明顶层目录；越界写入、编辑、删除和上传返回带允许目录列表的 permission 诊断，作为可恢复工具观察交给 Agent 改用正确路径，不让整个 run 失败。历史目录由部署时受控的一次性文件操作整理，没有运行时兼容路径或自动迁移。Agent 不能直接访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制及辅助函数已删除。
 - 每个 Agent 的私有 skill 固定放在 `workspace/agents/{agent_id}/workspace/skills/{skill_id}/SKILL.md`，运行时传给主 DeepAgent 的 `skills` 参数固定为 `["/skills/"]`。平台会复制 DeepAgents 原版同名 `general-purpose` subagent 配置来覆盖自动生成版本，保留原版 description 和 system prompt，只在其提示词末尾追加“派发任务明确指定 skill 时才访问，否则不访问任何 skill”的约束。该显式 subagent 未声明 `skills`，因此不安装 `SkillsMiddleware`、不自动发现或激活主 Agent 的 skill；它继续继承主 Agent 的模型和工具，避免 workflow skill 派发 subagent 后再次命中自身形成递归。DeepAgent 主 Agent 会扫描该目录下包含 `SKILL.md` 的子目录并用 progressive disclosure 暴露 metadata；不再维护产品级 Skill index，也不需要在 `config.yaml` 里配置 Skill 列表。
-- DeepAgent 运行时默认注入 `SkillImprovementMiddleware`，通过 LangChain `wrap_model_call` / `awrap_model_call` 生命周期钩子在每次同步或异步模型调用前把技能维护规则追加到模型请求；该 middleware 不负责 memory，长期记忆仍由 DeepAgent 原生 `MemoryMiddleware` 维护 `/memories/AGENTS.md`。`SkillImprovementMiddleware` 只管 Agent 自己的 `/skills/` 和 `/improvements/`：Agent 可以自动创建或更新 `/skills/{skill_id}/SKILL.md` 来沉淀可复用能力，并在 `/improvements/reflections/{run_id}.md`、`/improvements/reviews/{run_id}.md` 或 `/improvements/changes/{timestamp}_{change_id}.json` 记录原因、来源和变更摘要。已有 Skill 的触发条件、必需步骤、输出契约、工具/subagent 拓扑、串并行顺序和审批边界视为用户工作流，不能被自进化自行改写；历史审计中的平台判断必须按当前 runtime 重新验证。Skill 可用 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 标出硬约束，`AgentFilesystemBackend` 会在 write/edit/upload/delete 入口逐字保护该区块及包含它的 Skill 文件/目录；建议变更只能写入 `/improvements/`，用户仍可通过平台文件编辑入口修改正式契约。`/improvements/` 是审计材料，不是 active skill；只有 `/skills/{skill_id}/SKILL.md` 会在下一次 Agent 执行开始时作为 skill metadata 被扫描。
+- 运行时不注入 Skill 自进化 middleware：Agent 不会自动创建或改写 `/skills/`，skill 由用户通过平台文件入口维护，也没有 `/improvements/` 审计目录。Skill 可用 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 标出硬约束，`AgentFilesystemBackend` 会在 write/edit/upload/delete 入口逐字保护该区块及包含它的 Skill 文件/目录，正式契约只能由用户通过平台文件编辑入口修改。只有 `/skills/{skill_id}/SKILL.md` 会在 Agent 执行开始时作为 skill metadata 被扫描。
 - Agent 长期记忆固定开启。运行时通过 DeepAgent 原生 `memory=["/memories/AGENTS.md"]` 启用 `MemoryMiddleware` 加载和维护这一个长期记忆索引文件，不预创建或填充模板；文件不存在时 `MemoryMiddleware` 按空记忆处理，首次持久化时由 Agent 使用内置文件工具创建。其它 `/memories/...` 细节文件不自动注入，Agent 需要时可用内置文件工具自行查找和读取。本地共享知识通过原生文件工具访问 `/files/`，对应 `workspace/context/knowledge/files/`。
 - 运行时默认通过 `WorkspaceMiddleware` 向主 Agent 和使用文件工具的 general-purpose 子 Agent 的每次模型请求追加工作区目录用途、权限、脚本/成果位置及容器路径区别；同步和异步均生效，不重复累积，不写聊天历史或人格配置。目录定义、初始化及 Agent 文件权限共用 `agent_workspace.py`，实际物理路径经统一入口解析，Agent ID 显式传入运行时。长期记忆和浏览器研究细则不重复注入。Agent 特定记忆由 DeepAgent 原生 `MemoryMiddleware` 的 memory guidelines 负责；用户笔记、同步文档与共享知识统一使用原生文件工具；浏览器的搜索、正文提取和失败恢复流程由 `browser_search`、`browser_extract` 工具 description 负责；私有虚拟文件系统的目录认知由 `WorkspaceMiddleware` 负责，权限强制执行由 `AgentFilesystemBackend` 负责。 启用 WebDAV 时逐项追加 `/webdav/` 下目录路径、用户说明（缺省为用户文档与共享知识库）、权限、子目录优先规则和远端写回提示，主 Agent 与通用子 Agent 都接收；私有脚本、成果和记忆继续使用对应私有目录。
 - 历史 `workspace/agents/{agent_id}/memory/store.json` 是旧版 DeepAgent store 遗留路径，不由运行时代码或迁移脚本自动处理。按用户偏好，旧 workspace 数据收敛直接在目标机器上做一次性文件操作；配置页只展示新版 `workspace/agents/{agent_id}/workspace/memories/`。
@@ -294,6 +290,7 @@ code_execution:
 - 旧 Session CRUD 产品页和旧 WebSocket 聊天会话模型。
 - 旧 Skill 管理和 Skill 作为产品级概念。
 - Agent 每日冥想定时任务（`agent_meditation_{agent_id}`）与 `/meditations/` 工作区目录。
+- Skill 自进化（`SkillImprovementMiddleware`）与 `/improvements/` 工作区目录。
 - Portfolio 投资组合模块。
 - Critique 多维批判模块。
 - Proxy 嵌入站点模块。
@@ -335,7 +332,6 @@ code_execution:
 | `/scratch/` | 草稿与保留的执行脚本；按现有 scratch 保留期清理 | 读写，顶层不能删除 |
 | `/skills/` | 可复用技能 | 读写，详细规则由技能 middleware 提供 |
 | `/memories/` | 长期记忆 | 读写，详细规则由 MemoryMiddleware 提供 |
-| `/improvements/` | 技能反思、评审、变更记录 | 读写，顶层不能删除 |
 | `/browser/` | 浏览器登录态、缓存、占用锁 | 仅浏览器服务访问 |
 | `/webdav/` | Agent 配置映射的坚果云共享文档，虚拟挂载 | 默认 write，可配置 read；文本写回远端，挂载根不能删除 |
 

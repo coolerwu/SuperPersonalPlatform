@@ -16,9 +16,8 @@ class WorkspaceDirectory:
 WORKSPACE_DIRECTORIES = (
     WorkspaceDirectory("artifacts", "Final deliverables; return these paths to the user."),
     WorkspaceDirectory("scratch", "Drafts and saved execution scripts (.py/.sh); subject to scratch retention cleanup."),
-    WorkspaceDirectory("skills", "Reusable skills; follow Skills and SkillImprovement middleware rules."),
+    WorkspaceDirectory("skills", "Reusable skills maintained by the user; follow Skills middleware rules."),
     WorkspaceDirectory("memories", "Long-term memory; follow MemoryMiddleware rules."),
-    WorkspaceDirectory("improvements", "Skill reflections, reviews and change records."),
     WorkspaceDirectory("browser", "Browser login state and cache; browser-service only. Never read, search or modify with file tools.", False),
 )
 AGENT_WORKSPACE_DIRECTORIES = tuple(d.name for d in WORKSPACE_DIRECTORIES if d.agent_access)

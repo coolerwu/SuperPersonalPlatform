@@ -578,12 +578,9 @@ def _deepagent_builtin_middleware(create_deep_agent: Any, options: DeepAgentRunt
             TodoListMiddleware = None
         if TodoListMiddleware is not None:
             middleware.append(TodoListMiddleware())
-    from server.infrastructure.skill_improvement_middleware import SkillImprovementMiddleware
-
     from server.infrastructure.workspace_middleware import WorkspaceMiddleware
 
     middleware.append(WorkspaceMiddleware(options.webdav))
-    middleware.append(SkillImprovementMiddleware())
     return middleware
 
 

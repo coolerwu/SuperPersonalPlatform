@@ -19,12 +19,6 @@ from server.infrastructure.deepagent_runtime import (
     _normalize_interrupt_on,
     _to_langchain_messages,
 )
-from server.infrastructure.skill_improvement_middleware import (
-    SKILL_IMPROVEMENT_PROMPT,
-    SkillImprovementMiddleware,
-)
-
-
 def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monkeypatch) -> None:
     captured = {}
 
@@ -85,7 +79,6 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
     assert captured["create_kwargs"]["backend"].default.virtual_mode is True
     middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
     assert middleware_names[0] == "TodoListMiddleware"
-    assert "SkillImprovementMiddleware" in middleware_names
     assert "WorkspaceMiddleware" in middleware_names
     assert "store" not in captured["create_kwargs"]
     assert "use_longterm_memory" not in captured["create_kwargs"]
@@ -150,7 +143,7 @@ def test_agent_filesystem_backend_protects_managed_roots_and_uploaded_files(tmp_
     assert "cannot be deleted" in str(delete_root.error)
 
 
-def test_runtime_adds_skill_improvement_middleware_by_default(tmp_path, monkeypatch) -> None:
+def test_runtime_adds_workspace_middleware_by_default(tmp_path, monkeypatch) -> None:
     captured = {}
 
     class FakeAgent:
@@ -188,7 +181,6 @@ def test_runtime_adds_skill_improvement_middleware_by_default(tmp_path, monkeypa
 
     assert result == "ok"
     middleware_names = [type(item).__name__ for item in captured["create_kwargs"]["middleware"]]
-    assert "SkillImprovementMiddleware" in middleware_names
     assert "WorkspaceMiddleware" in middleware_names
 
 
@@ -326,60 +318,6 @@ def test_runtime_persists_subagent_responses_without_merging_them_into_main_outp
     assert payload.agent == "researcher"
     assert captured["events"][1].payload.preview == ""
     assert captured["events"][2].payload.preview == "另一个子任务失败"
-
-
-def test_skill_improvement_middleware_wraps_sync_model_call() -> None:
-    from langchain_core.messages import SystemMessage
-
-    class FakeRequest:
-        system_message = SystemMessage(content="base")
-
-        def override(self, **kwargs):
-            request = FakeRequest()
-            request.system_message = kwargs["system_message"]
-            return request
-
-    captured = {}
-
-    def handler(request):
-        captured["request"] = request
-        return "sync response"
-
-    response = SkillImprovementMiddleware().wrap_model_call(FakeRequest(), handler)
-    system_message = captured["request"].system_message
-
-    assert response == "sync response"
-    assert "base" in system_message.text
-    assert SKILL_IMPROVEMENT_PROMPT in system_message.text
-    assert "Memory is handled separately by MemoryMiddleware" in system_message.text
-    assert "/skills/{skill_id}/SKILL.md" in system_message.text
-    assert "/improvements/changes/{timestamp}_{change_id}.json" in system_message.text
-    assert "Do not replace a required subagent chain with main-agent roleplay" in system_message.text
-    assert "<!-- BEGIN USER CONTRACT -->" in system_message.text
-    assert "verify platform behavior against the current runtime" in system_message.text
-
-
-def test_skill_improvement_middleware_wraps_async_model_call() -> None:
-    from langchain_core.messages import SystemMessage
-
-    class FakeRequest:
-        system_message = SystemMessage(content="base")
-
-        def override(self, **kwargs):
-            request = FakeRequest()
-            request.system_message = kwargs["system_message"]
-            return request
-
-    captured = {}
-
-    async def handler(request):
-        captured["request"] = request
-        return "async response"
-
-    response = asyncio.run(SkillImprovementMiddleware().awrap_model_call(FakeRequest(), handler))
-
-    assert response == "async response"
-    assert SKILL_IMPROVEMENT_PROMPT in captured["request"].system_message.text
 
 
 def test_runtime_uses_sqlite_checkpointer_when_thread_id_is_provided(tmp_path, monkeypatch) -> None:
