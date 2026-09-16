@@ -45,6 +45,18 @@ After login, use `系统 -> 更新` to trigger the same production update flow f
 
 The production systemd service runs as `SUPER_PERSONAL_SERVICE_USER` when set; otherwise it uses `SUDO_USER` or the current `id -un` user.
 
+To roll back to an earlier tag or commit, run this on the production host:
+
+```bash
+./run.sh rollback v0.1.0 --workspace /path/to/workspace
+```
+
+The rollback checks out the target version, installs that version's dependencies, and restarts
+the service. Run `./run-prod.sh` again to return to the production branch. Version, release and
+rollback rules live in `docs/release.md`; the change log is `CHANGELOG.md`.
+
 ## Project Architecture
 
 `docs/project-architecture.md` is part of the project contract. `docs/architecture-qa.md` records the DeepAgent rebuild decisions. Update both when implementation changes behavior, architecture, commands, or operating assumptions.
+
+Requirement documents live in `docs/requirements/` and follow `F<n>-<name>.md`; see `docs/requirements/README.md` for the numbering and template rules.

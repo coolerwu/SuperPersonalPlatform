@@ -16,10 +16,17 @@ usage() {
   cat <<USAGE
 Usage:
   ./run.sh dev [--workspace PATH]
-  ./run.sh prod [--workspace PATH]
+  ./run.sh prod [--workspace PATH] [--no-pull]
+  ./run.sh rollback <tag|branch|commit> [--workspace PATH]
   ./run.sh setup-sudo
   ./run-dev.sh [--workspace PATH]
-  ./run-prod.sh [--workspace PATH]
+  ./run-prod.sh [--workspace PATH] [--no-pull]
+
+Modes:
+  prod      Pull the production branch, install dependencies, and restart the service.
+  rollback  Check out a tag/branch/commit, then deploy it with the prod pipeline.
+            Run ./run-prod.sh again afterwards to return to the production branch.
+  --no-pull Skip the git pull in prod mode (offline redeploy or pinned commit).
 
 Environment:
   SUPER_PERSONAL_HOST    default: 0.0.0.0
@@ -61,6 +68,10 @@ parse_workspace() {
       --workspace=*)
         WORKSPACE_DIR="$(absolute_path "${1#--workspace=}")"
         WORKSPACE_WAS_EXPLICIT=1
+        shift
+        ;;
+      --no-pull)
+        PROD_SKIP_PULL=1
         shift
         ;;
       *)
@@ -116,6 +127,10 @@ ensure_clean_git() {
 update_git() {
   cd "$SCRIPT_DIR"
   local before_head after_head
+  if ! git_in_repo symbolic-ref -q HEAD >/dev/null 2>&1; then
+    echo "Detached HEAD detected (a previous rollback); checking out ${PROD_GIT_BRANCH} before pull."
+    git_in_repo checkout "$PROD_GIT_BRANCH"
+  fi
   before_head="$(git_in_repo rev-parse HEAD)"
   local attempt delay=2
   for ((attempt = 1; attempt <= PROD_GIT_PULL_ATTEMPTS; attempt += 1)); do
@@ -387,6 +402,10 @@ build_frontend_assets() {
 run_dev() {
   RUN_MODE=dev
   parse_workspace "${SCRIPT_DIR}/.super-personal-platform" "$@"
+  if [[ "${PROD_SKIP_PULL:-0}" == "1" ]]; then
+    echo "--no-pull is only valid for prod and rollback modes." >&2
+    exit 1
+  fi
   ensure_config
   build_frontend_assets
   ensure_venv
@@ -468,7 +487,12 @@ run_prod() {
   parse_workspace "${SCRIPT_DIR}/.super-personal-platform" "$@"
   ensure_config
   ensure_clean_git
-  update_git
+  if [[ "${PROD_SKIP_PULL:-0}" == "1" ]]; then
+    echo "Skipping git pull because --no-pull was passed."
+    CODE_UPDATED=1
+  else
+    update_git
+  fi
   RESTART_BY_EXIT=0
   if ! can_restart_without_prompt && [[ ! -t 0 ]]; then
     RESTART_BY_EXIT=1
@@ -516,6 +540,36 @@ MSG
   sudo systemctl status "$SERVICE_NAME" --no-pager
 }
 
+run_rollback() {
+  local target_ref="${1:-}"
+  if [[ -z "$target_ref" || "$target_ref" == -* ]]; then
+    echo "rollback requires a target tag, branch, or commit." >&2
+    usage >&2
+    exit 1
+  fi
+  shift
+
+  RUN_MODE=prod
+  parse_workspace "${SCRIPT_DIR}/.super-personal-platform" "$@"
+  ensure_config
+  ensure_clean_git
+
+  cd "$SCRIPT_DIR"
+  echo "Fetching production refs from ${PROD_GIT_URL} before rollback."
+  git_https_in_repo fetch "$PROD_GIT_URL" --tags >/dev/null 2>&1 || true
+
+  local resolved_ref
+  if ! resolved_ref="$(git_in_repo rev-parse --verify "${target_ref}^{commit}" 2>/dev/null)"; then
+    echo "Unknown rollback target: ${target_ref}" >&2
+    exit 1
+  fi
+  echo "Checking out ${target_ref} (${resolved_ref}) for rollback."
+  git_in_repo checkout --detach "$resolved_ref"
+
+  PROD_SKIP_PULL=1
+  run_prod --workspace "$WORKSPACE_DIR" --no-pull
+}
+
 main() {
   local mode="${1:-}"
   case "$mode" in
@@ -526,6 +580,10 @@ main() {
     prod)
       shift
       run_prod "$@"
+      ;;
+    rollback)
+      shift
+      run_rollback "$@"
       ;;
     help|--help|-h)
       usage

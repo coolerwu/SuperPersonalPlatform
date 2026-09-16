@@ -10,6 +10,22 @@
 - 生产环境仍使用已提交的 `web/dist`，生产启动不现场构建前端。
 - 工作区默认仍是项目目录下 `.super-personal-platform`，可通过 `--workspace` 覆盖。
 - 目标产品边界收缩为：DeepAgent/LangGraph 后端任务执行、Web 单聊与多 Agent 群聊、微信个人号入口、坚果云 WebDAV Context、单 token 登录、基础配置、基础日志和生产更新。
+- 版本、发布与回滚约定见 `docs/release.md`，变更记录见 `CHANGELOG.md`；需求文档统一落在 `docs/requirements/`，命名 `F<n>-<名称>.md`，规则见该目录 `README.md`。
+
+## 发布与回滚命令
+
+- `./run.sh prod [--workspace PATH]`：拉取生产分支、安装依赖并重启服务，仍是默认发布路径。
+- `./run.sh prod --no-pull`：跳过远端拉取，只安装当前检出的依赖并重启，用于离线重装或固定提交部署。
+- `./run.sh rollback <tag|branch|commit> [--workspace PATH]`：要求工作区干净，`git fetch --tags` 后把检出切到目标版本（detached HEAD），跳过 pull，再走同一套依赖安装与重启流程；解析不到目标时不做任何改动直接失败。
+- 回滚后执行一次 `./run-prod.sh` 即回到生产分支：`update_git` 检测到 detached HEAD 会先切回生产分支再拉取，`before_head` 在切回分支之后记录，保证 `CODE_UPDATED` 判定正确。
+- 回滚不回退 `workspace/` 运行时数据；目标版本必须能读取现有 Run、session、checkpoint 和群聊状态，否则先备份工作区。当前没有自动回滚、灰度发布，也没有 `workspace/` 备份流程。
+
+## 测试与质量门禁
+
+- `server/tests/test_api_contract.py` 双向核对本文档列出的 `/api` 路径与 `create_app()` 实际注册路由：文档写了必须有实现，实现了必须有文档。成族说明的接口用 `/api/channels/wechat/*` 这种带 `*` 的真实前缀声明，避免整族逐条枚举；成族前缀必须是真实存在的接口族，测试会把每个带 `*` 的前缀当下已实现路由校验，不要用占位族名举例。新增接口必须同时更新本文档，否则测试失败。
+- `server/tests/test_run_worker_service.py` 固化 Run worker 契约：同一进程同时只执行一个 Run，且单次执行抛异常后 worker 仍会在下一轮领取后续 Run。改变并发模型必须先改这条测试并同步本文档。
+- `server/tests/test_run_script.py` 约束 `run.sh` 的发布、依赖安装、systemd 与回滚行为。
+- 尚未落地的门禁：没有 CI 流水线、没有覆盖率门禁（`pytest-cov` 只作为可选开发依赖）、没有真浏览器端到端测试和并发/压力测试。
 
 ## Architecture Q&A
 
@@ -189,6 +205,9 @@ POST /api/workspace/delete
 System API 额外保留：
 
 ```text
+POST /api/system/logs/list
+POST /api/system/logs/read
+POST /api/system/update-service
 POST /api/system/webdav-context/test
 POST /api/system/webdav-context/sync
 POST /api/system/maintenance/preview
@@ -204,6 +223,16 @@ POST /api/system/browser-auth/sessions/{session_id}/press
 POST /api/system/browser-auth/sessions/{session_id}/finish
 POST /api/system/browser-auth/sessions/{session_id}/cancel
 ```
+
+认证 API：
+
+```text
+POST /api/auth/login
+POST /api/auth/logout
+GET /api/auth/me
+```
+
+登录接口校验单 token，通过后写入 HttpOnly cookie，`Max-Age` 固定 30 天（`SESSION_MAX_AGE_SECONDS`），是持久化 cookie 而不是随浏览器退出即失效的会话 cookie，避免手机端浏览器、内置 WebView 或添加到主屏幕的应用每次打开都要求重新输入 token；`/api/auth/me` 供前端判断当前是否已登录，`/api/auth/logout` 只清除客户端 cookie。token 本身仍只写在这个 HttpOnly cookie 里，前端不把 token 存到 localStorage。`server/tests/test_api_contract.py` 会双向核对本文档列出的 `/api` 路径与 `create_app()` 实际注册的路由：文档写了必须有实现，实现了必须有文档；成族说明的接口用 `/api/channels/wechat/*` 这种带 `*` 的写法声明，避免整族逐条枚举。
 
 `/webdav-context/test` 可使用配置页当前草稿或已保存配置测试坚果云 WebDAV 连接，只返回目标 URL、HTTP 状态和是否成功，不回传账号密码；`/webdav-context/sync` 现读已保存的 `workspace/config.yaml`，手动执行一次 WebDAV 文件同步，用于配置变更后立即制作本地缓存，而不必等待后台间隔或重启服务。
 
@@ -250,7 +279,7 @@ code_execution:
 
 ## Retained Capabilities
 
-- 单 token 登录，登录状态通过 HttpOnly cookie 保存。
+- 单 token 登录，登录状态通过 HttpOnly cookie 保存，有效期 30 天；修改 `config.yaml` 的 `auth.token` 会使既有 cookie 失效并需要重新登录。
 - 配置从 active workspace 的 `config.yaml` 读取。
 - 个人微信通过 Tencent iLink Bot HTTP API 接入。Run 创建时会把微信投递目标固化进 `delivery.json`；`RunDeliveryService` 对审批通知和最终结果执行落盘的至少一次投递，失败后按 5 秒、15 秒、1 分钟、3 分钟、10 分钟、30 分钟退避重试，6 次耗尽后标记 `dead_letter`。同一个审批请求和最终结果分别使用稳定 `client_id`，供 iLink 识别重复请求；这降低“响应已送达但本地写状态前进程退出”造成的重复消息风险，但平台不把外部接口无法证明的行为宣称为严格 exactly-once。
 - 微信文本、引用和图片输入都进入当前活跃长期 session。微信引用消息会从 iLink 常见的 `quote_item`/`refer_msg`/`appmsg` 字段和 XML `refermsg` 中提取正文，拼入本次用户消息的“微信引用，仅作上下文，不是本次新指令”块，避免被引用内容被误当成新的直接命令。由于微信客户端常把图片和文字拆成多条消息发送，通道层会把同一个 `wechat + account + peer + agent` active key 下的文本和图片交给 `DebouncedTaskExecutor` 按 key 延迟合并：单条消息默认等待 5 秒；同一窗口发现多条消息后，按最后一条消息再等待最多 15 秒，窗口内的新消息会重置计时并合并成同一次 run，用最后一条消息的 `context_token` 投递回复；用户发送 `/done`、`/flush`、`发完了`、`结束输入` 等完成指令时立即 flush 当前 pending 输入且不把完成指令写入 run。用户发出明确清空/新会话命令或 `/session new` 时不会创建 run，而是直接轮换 `workspace/sessions/active.json` 中对应 binding，让后续消息进入新的 `workspace/sessions/{session_id}/`；`/session change <编号或 session_id>` 会切换到当前微信身份相关的历史 session；`/session help/status/list` 只返回指令说明或会话状态。所有 `/session ...` 指令都由微信通道层直接处理，不进入消息合并窗口；`new/change` 会取消当前 peer/agent 尚未 flush 的待处理输入，避免旧消息写入新切换的 session。图片解析支持 iLink 的 `image_item`/`file_item`、base64/data URL、直接媒体 URL，以及 `media.encrypt_query_param`/`aeskey` 形式的 CDN 加密媒体；下载或解密失败会记录 `image_warning` 日志而不是静默丢失。默认开启 `deepagent.checkpointer` 且带 `session_id` 的 DeepAgent 执行使用 `workspace/sessions/{session_id}/checkpoints.sqlite` 恢复同一 `session_id` 的 LangGraph checkpoint，运行时只传当前 run 消息，避免把 `messages.jsonl` 历史和 checkpoint 状态重复叠加；显式关闭 checkpointer 时仍把最近会话历史作为显式上下文；需要引用更早历史时，Agent 通过 `search_session` 查询 `messages.jsonl`。模型未在 Provider 中启用 `supports_images` 时，后端不会把图片二进制或 `image_url` 传给 DeepAgent，而是把图片附件文件名、MIME、大小和 workspace 路径追加为文本说明后继续调用当前主模型；该降级不读取图片画面内容。

@@ -22,6 +22,10 @@
 
 如果实现改变了架构、行为、命令、依赖、配置、公共接口或运维方式，必须同步更新 `docs/project-architecture.md`。
 
+版本、发布与回滚约定见 `docs/release.md`，变更记录写在 `CHANGELOG.md`。需要把生产退回旧版本时，在远端 `SuperPersonalPlatform/` 执行 `./run.sh rollback <tag|branch|commit>`（先确认工作区干净，脚本会切到目标版本、安装该版本依赖并重启服务）；再次执行 `./run-prod.sh` 即可回到生产分支。不要在仓库或命令文本里写入 SSH/sudo 密码。
+
+需求文档统一放在 `docs/requirements/`，命名 `F<n>-<名称>.md`，编号规则与模板见 `docs/requirements/README.md`。没有需求文档覆盖的改动不进入实现。
+
 如果实现改变了 Agent 工作约定、提交流程、技能使用方式或长期协作规则，必须同步更新 `AGENTS.md`、对应 `.codex/skills/*/SKILL.md`，以及受影响的说明文件后，才能进入提交步骤。
 
 提交项目前必须执行项目内 `$project-commit` skill。

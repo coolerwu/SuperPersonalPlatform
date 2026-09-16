@@ -11,6 +11,7 @@ from server.infrastructure.session import SessionCodec
 
 
 SESSION_COOKIE = "spp_session"
+SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 
 
 class LoginRequest(BaseModel):
@@ -40,6 +41,7 @@ def create_auth_router(container: AppContainer) -> APIRouter:
             httponly=True,
             samesite="lax",
             secure=False,
+            max_age=SESSION_MAX_AGE_SECONDS,
             path="/",
         )
         return {"ok": True}

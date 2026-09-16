@@ -135,3 +135,39 @@ def test_prod_service_uses_resolved_terminal_user() -> None:
     assert 'service_group="$(resolve_service_group "$service_user")"' in script
     assert "User=${service_user}" in script
     assert "Group=${service_group}" in script
+
+
+def test_prod_supports_no_pull_for_offline_and_pinned_deploys() -> None:
+    script = read_run_sh()
+
+    assert "PROD_SKIP_PULL" in script
+    assert "Skipping git pull because --no-pull was passed." in script
+    assert "--no-pull is only valid for prod and rollback modes." in script
+    run_prod_body = script.split("run_prod() {", 1)[1]
+    assert 'if [[ "${PROD_SKIP_PULL:-0}" == "1" ]]; then' in run_prod_body
+    assert "CODE_UPDATED=1" in run_prod_body
+
+
+def test_rollback_checks_out_target_ref_then_redeploys_without_pull() -> None:
+    script = read_run_sh()
+
+    assert "run_rollback()" in script
+    assert "rollback)" in script
+    assert "rollback requires a target tag, branch, or commit." in script
+    assert 'git_in_repo rev-parse --verify "${target_ref}^{commit}"' in script
+    assert "Unknown rollback target: ${target_ref}" in script
+    assert 'git_in_repo checkout --detach "$resolved_ref"' in script
+    assert 'run_prod --workspace "$WORKSPACE_DIR" --no-pull' in script
+    assert "rollback  Check out a tag/branch/commit" in script
+
+
+def test_update_git_reattaches_detached_head_before_pull() -> None:
+    script = read_run_sh()
+
+    update_git_body = script.split("update_git() {", 1)[1].split("\n}\n", 1)[0]
+    reattach = update_git_body.index("symbolic-ref -q HEAD")
+    capture_head = update_git_body.index('before_head="$(git_in_repo rev-parse HEAD)"')
+
+    assert "Detached HEAD detected" in update_git_body
+    assert 'git_in_repo checkout "$PROD_GIT_BRANCH"' in update_git_body
+    assert reattach < capture_head, "detached HEAD must be resolved before recording before_head"

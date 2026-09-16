@@ -143,6 +143,31 @@ def test_login_uses_current_workspace_token_without_restart(tmp_path) -> None:
     assert client.post("/api/auth/login", json={"token": "next-token"}).status_code == 200
 
 
+def test_login_issues_persistent_session_cookie(tmp_path) -> None:
+    client = make_app_client(tmp_path)
+
+    response = client.post("/api/auth/login", json={"token": "secret-token"})
+
+    assert response.status_code == 200
+    set_cookie = response.headers["set-cookie"]
+    assert "spp_session=" in set_cookie
+    assert "Max-Age=2592000" in set_cookie
+    assert "HttpOnly" in set_cookie
+
+
+def test_logout_clears_persistent_session_cookie(tmp_path) -> None:
+    client = make_app_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+
+    response = client.post("/api/auth/logout")
+
+    assert response.status_code == 200
+    set_cookie = response.headers["set-cookie"]
+    assert "spp_session=" in set_cookie
+    assert "Max-Age=0" in set_cookie
+    assert client.get("/api/auth/me").json() == {"authenticated": False}
+
+
 def test_old_product_routes_are_gone(tmp_path) -> None:
     client = make_app_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})

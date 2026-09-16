@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, test, vi, expect } from "vitest";
 
@@ -1022,6 +1022,15 @@ test("opens config.yaml as a native workspace text file", async () => {
   const editor = await screen.findByDisplayValue((value) => value.includes("auth:") && value.includes("server:"));
   expect(editor).toHaveClass("workspace-editor");
   expect(screen.queryByText("认证与服务")).not.toBeInTheDocument();
+
+  // The convention map must track the current workspace contract: retired tools
+  // and retired directories must not survive here after backend removals.
+  const conventionMap = screen.getByText("约定目录").closest(".panel");
+  expect(within(conventionMap).getByText("workspace/sessions/active.json")).toBeInTheDocument();
+  expect(within(conventionMap).getByText("workspace/chat_groups/{group_id}/state.json")).toBeInTheDocument();
+  expect(within(conventionMap).queryByText(/search_context/)).not.toBeInTheDocument();
+  expect(within(conventionMap).queryByText(/write_context/)).not.toBeInTheDocument();
+  expect(within(conventionMap).queryByText(/\/notes\//)).not.toBeInTheDocument();
 });
 
 test("saves system config from the dedicated config menu", async () => {
