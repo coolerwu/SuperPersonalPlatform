@@ -671,6 +671,12 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.approval-action pre.approval-prompt-review {
+  max-height: 320px;
+  border-color: rgba(245, 158, 11, 0.28);
+  line-height: 1.5;
+}
+
 .approval-panel textarea {
   width: 100%;
   min-height: 54px;
@@ -1814,6 +1820,18 @@ pre {
 .tool-choice.selected {
   border-color: rgba(23, 168, 245, 0.72);
   background: rgba(9, 43, 65, 0.72);
+}
+
+.tool-choice.locked {
+  cursor: default;
+  border-style: dashed;
+  border-color: rgba(245, 158, 11, 0.42);
+  background: rgba(45, 29, 8, 0.28);
+}
+
+.tool-choice.locked em {
+  border-color: rgba(245, 158, 11, 0.42);
+  color: #fbbf24;
 }
 
 .tool-choice input {

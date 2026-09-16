@@ -9,6 +9,7 @@ from typing import Any
 
 from server.app.run_service import RunNotFoundError, RunService
 from server.app.system_log_service import SystemLogService
+from server.domain.tooling import SYSTEM_PROMPT_TOOL_ID
 
 
 DELIVERY_POLL_SECONDS = 2.0
@@ -286,6 +287,11 @@ def _approval_message(run_id: str, request: dict[str, Any]) -> str:
             action_number += 1
             name = str(action.get("name") or "tool")
             description = str(action.get("description") or "").strip()
+            if name == SYSTEM_PROMPT_TOOL_ID:
+                lines.append(f"{action_number}. {name}：修改本 Agent 的系统提示词")
+                lines.append(_prompt_update_preview(description))
+                lines.append("完整对照请在 Web 端审批卡片查看；回复 approve 批准本次修改。")
+                continue
             lines.append(f"{action_number}. {name}" + (f"：{description}" if description else ""))
     from server.infrastructure.file_approval import approval_file
     paths = {approval_file(str(action.get("name") or ""), action.get("args") or {})
@@ -301,6 +307,18 @@ def _approval_message(run_id: str, request: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+PROMPT_UPDATE_PREVIEW_CHARS = 600
+
+
+def _prompt_update_preview(description: str) -> str:
+    text = description.strip()
+    if not text:
+        return "（未提供新的提示词文本）"
+    if len(text) <= PROMPT_UPDATE_PREVIEW_CHARS:
+        return text
+    return f"{text[:PROMPT_UPDATE_PREVIEW_CHARS]}\n…（已截断）"
 
 
 def _final_message(run: dict[str, Any]) -> str:

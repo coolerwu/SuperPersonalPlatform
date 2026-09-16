@@ -79,6 +79,8 @@ def test_manual_chain_context_isolation_dedup_and_restart(tmp_path, monkeypatch)
         assert calls[0]["thread_id"] != calls[1]["thread_id"]
         for call in calls:
             assert call["checkpoint_path"] == tmp_path / "sessions" / call["thread_id"] / "checkpoints.sqlite"
+            # Group runs never expose the always-on self-config tool.
+            assert call["options"].self_config is False
         assert calls[0]["messages"][-1].id == f"group-input-{first}"
         assert "负责组织" in calls[0]["instructions"] and "检查问题" in calls[1]["instructions"]
         assert service.sessions.summaries_for_agent(agent_id="assistant") == []

@@ -71,7 +71,8 @@ def test_runtime_uses_agent_workspace_backend_and_private_skills(tmp_path, monke
         f"{GENERAL_PURPOSE_SUBAGENT['system_prompt']}\n\n{GENERAL_PURPOSE_SKILL_PROMPT}"
     )
     assert "model" not in general_purpose
-    assert "tools" not in general_purpose
+    # The subagent inherits platform tools explicitly, minus self-config and host control tools.
+    assert general_purpose["tools"] == []
     assert captured["create_kwargs"]["memory"] == [MEMORY_INDEX_PATH]
     assert captured["create_kwargs"]["system_prompt"] == "base prompt"
     assert captured["create_kwargs"]["backend"].default.cwd == agent_dir.resolve()

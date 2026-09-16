@@ -68,11 +68,15 @@ def build_platform_tools(
     schedule_service: Any = None,
     tool_context: PlatformToolContext | None = None,
     file_backend: Any = None,
+    include_self_config: bool = False,
 ) -> list[Any]:
     tools = []
     browser_config = _browser_config(context_workspace)
     for tool_id in tool_ids:
         definition = get_tool_definition(tool_id)
+        if definition.always_on:
+            # Always-on system capabilities are injected by the runtime, never by authorization.
+            continue
         if definition.id == "send_attachment":
             if tool_context is not None and file_backend is not None:
                 tools.append(_send_attachment_tool(context_workspace.parent, tool_context, file_backend))
@@ -106,6 +110,8 @@ def build_platform_tools(
             if tool_context is None:
                 continue
             tools.append(_execute_code_tool(context_workspace.parent, tool_context))
+    if include_self_config and tool_context is not None:
+        tools.append(_update_system_prompt_tool(context_workspace.parent, tool_context))
     return tools
 
 
@@ -164,6 +170,63 @@ def _send_attachment_tool(workspace: Path, context: PlatformToolContext, backend
         "Do not claim delivery already succeeded; do not pass URLs, host paths or recipients. "
         "This tool does not generate images and does not write to WebDAV."
     ))
+
+
+def _update_system_prompt_tool(workspace: Path, tool_context: PlatformToolContext) -> Any:
+    from langchain_core.tools import StructuredTool
+    from server.app.config_file_service import AgentPromptUpdateError, ConfigFileService
+    from server.domain.tooling import SYSTEM_PROMPT_TOOL_ID
+
+    def update_system_prompt(new_prompt: str, reason: str = "") -> str:
+        """Replace this Agent's own system prompt in workspace/config.yaml.
+
+        Use this only when the user explicitly asks to change this Agent's persona, rules or
+        system instructions, and always pass the complete new prompt text, never a diff or a
+        fragment. The platform pauses the run for human approval before anything is written and
+        a rejected call changes nothing. The new prompt applies to this Agent's next runs, not
+        the current one. This tool cannot modify other Agents, models, tools or any other config
+        field, and it never writes to WebDAV.
+        """
+        try:
+            result = ConfigFileService(workspace).update_agent_system_prompt(
+                tool_context.agent_id,
+                new_prompt,
+            )
+            return json.dumps(
+                {
+                    "ok": True,
+                    "tool": SYSTEM_PROMPT_TOOL_ID,
+                    "agent_id": result["agent_id"],
+                    "status": "applied",
+                    "length": result["length"],
+                    "message": "系统提示词已更新，将在下一次运行生效",
+                },
+                ensure_ascii=False,
+            )
+        except AgentPromptUpdateError as exc:
+            return _tool_error_result(
+                SYSTEM_PROMPT_TOOL_ID,
+                exc,
+                suggestions=[
+                    "Ask the user for the exact prompt text or fix the draft, then call the tool again.",
+                    "If config.yaml is invalid or the Agent is missing, tell the user instead of retrying blindly.",
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _tool_error_result(SYSTEM_PROMPT_TOOL_ID, exc)
+
+    return StructuredTool.from_function(
+        update_system_prompt,
+        name=SYSTEM_PROMPT_TOOL_ID,
+        description=(
+            "Replace this Agent's own system prompt (workspace/config.yaml system_prompt). "
+            "Call it only when the user explicitly asks to change this Agent's persona or system "
+            "instructions, and pass the complete new prompt text as one string. "
+            "Every call pauses for human approval; after approval it applies to this Agent's next "
+            "runs, not the current run. Do not claim the change is applied before the tool returns "
+            "ok=true, and never use it for other Agents or other config fields."
+        ),
+    )
 
 
 def _execute_code_tool(workspace: Path, tool_context: PlatformToolContext) -> Any:

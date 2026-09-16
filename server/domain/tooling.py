@@ -5,12 +5,16 @@ class ToolDefinitionError(ValueError):
     pass
 
 
+SYSTEM_PROMPT_TOOL_ID = "update_system_prompt"
+
+
 @dataclass(frozen=True)
 class ToolDefinition:
     id: str
     name: str
     description: str
     approval_required: bool = False
+    always_on: bool = False
 
 
 PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
@@ -48,6 +52,27 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         name="Execute Code",
         description="Run short Python or shell code in a Docker + gVisor sandbox with no network and artifact collection.",
     ),
+    ToolDefinition(
+        id=SYSTEM_PROMPT_TOOL_ID,
+        name="Update System Prompt",
+        description=(
+            "Replace this Agent's own system prompt in config.yaml after human approval. "
+            "System capability, not an authorization choice."
+        ),
+        approval_required=True,
+        always_on=True,
+    ),
+)
+
+
+SYSTEM_APPROVAL_TOOL_IDS: tuple[str, ...] = tuple(
+    definition.id for definition in PLATFORM_TOOL_DEFINITIONS
+    if definition.approval_required and not definition.always_on
+)
+
+ALWAYS_ON_APPROVAL_TOOL_IDS: tuple[str, ...] = tuple(
+    definition.id for definition in PLATFORM_TOOL_DEFINITIONS
+    if definition.always_on and definition.approval_required
 )
 
 

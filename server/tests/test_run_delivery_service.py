@@ -1,6 +1,10 @@
 import asyncio
 
-from server.app.run_delivery_service import RunDeliveryService
+from server.app.run_delivery_service import (
+    PROMPT_UPDATE_PREVIEW_CHARS,
+    RunDeliveryService,
+    _approval_message,
+)
 from server.app.run_service import RunService
 from server.app.system_log_service import SystemLogService
 from server.domain.run_approval import RunApprovalAction, RunApprovalInterrupt, RunApprovalRequest
@@ -160,3 +164,55 @@ def test_delivery_notifies_approval_then_delivers_resumed_result(tmp_path, monke
     assert channel.deliveries[1]["text"] == "审批后的结果"
     assert channel.deliveries[0]["client_id"] != channel.deliveries[1]["client_id"]
     assert run_service.get_run(run_id)["delivery"]["status"] == "delivered"
+
+
+def test_approval_message_previews_system_prompt_update() -> None:
+    description = (
+        "Agent「Assistant（assistant）」申请修改本 Agent 的系统提示词；批准后将在下一次运行生效。\n\n"
+        "拟修改为（新）：\n" + "新" * 800 + "\n\n当前（旧）：\nBe direct."
+    )
+
+    message = _approval_message("run_1", {
+        "interrupts": [
+            {
+                "interrupt_id": "interrupt-1",
+                "actions": [
+                    {
+                        "name": "update_system_prompt",
+                        "args": {"new_prompt": "新" * 800},
+                        "description": description,
+                        "allowed_decisions": ["approve", "reject"],
+                    }
+                ],
+            }
+        ]
+    })
+
+    assert "1. update_system_prompt：修改本 Agent 的系统提示词" in message
+    assert "…（已截断）" in message
+    assert "完整对照请在 Web 端审批卡片查看" in message
+    assert "回复 approve 批准本次修改。" in message
+    assert len(message) < len(description)
+    assert PROMPT_UPDATE_PREVIEW_CHARS < len(description)
+
+
+def test_approval_message_keeps_other_tools_short() -> None:
+    message = _approval_message("run_1", {
+        "interrupts": [
+            {
+                "interrupt_id": "interrupt-1",
+                "actions": [
+                    {
+                        "name": "write_file",
+                        "args": {"file_path": "/webdav/team/note.md"},
+                        "description": "写入团队文档",
+                        "allowed_decisions": ["approve", "reject"],
+                    }
+                ],
+            }
+        ]
+    })
+
+    assert "1. write_file：写入团队文档" in message
+    assert "拟修改为（新）" not in message
+    assert "仅批准本次：approve" in message

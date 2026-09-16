@@ -28,9 +28,14 @@ from server.infrastructure.webdav_backend import WebDAVFilesystemBackend
 from server.infrastructure.agent_workspace import WebDAVPathPolicy
 
 
-from server.domain.tooling import PLATFORM_TOOL_DEFINITIONS
+from server.domain.tooling import (
+    ALWAYS_ON_APPROVAL_TOOL_IDS,
+    SYSTEM_PROMPT_TOOL_ID,
+    SYSTEM_APPROVAL_TOOL_IDS,
+)
 
-SYSTEM_APPROVAL_TOOLS = tuple(tool.id for tool in PLATFORM_TOOL_DEFINITIONS if tool.approval_required)
+SYSTEM_APPROVAL_TOOLS = SYSTEM_APPROVAL_TOOL_IDS
+SELF_CONFIG_TOOL_ID = SYSTEM_PROMPT_TOOL_ID
 
 MEMORY_INDEX_PATH = "/memories/AGENTS.md"
 GENERAL_PURPOSE_SKILL_PROMPT = (
@@ -72,10 +77,14 @@ class DeepAgentRuntimeOptions:
     group_control: dict | None = None
     tools: tuple[str, ...] = ()
     webdav: AgentWebDAVConfig = AgentWebDAVConfig()
+    self_config: bool = True
 
     @property
     def interrupt_on(self) -> tuple[str, ...]:
-        return tuple(tool for tool in SYSTEM_APPROVAL_TOOLS if tool in self.tools)
+        selected = [tool for tool in SYSTEM_APPROVAL_TOOLS if tool in self.tools]
+        if self.self_config:
+            selected.extend(ALWAYS_ON_APPROVAL_TOOL_IDS)
+        return tuple(dict.fromkeys(selected))
 
 
 @dataclass(frozen=True)
@@ -158,6 +167,9 @@ class DeepAgentRuntime:
                 self._context_workspace.parent / "runs" / control["run_id"] / "group_decision.json",
                 control["control_members"], control["finish_only"],
             )]
+        include_self_config = (
+            options.self_config and not options.group_control and self._tool_context is not None
+        )
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
                 options.tools,
@@ -165,6 +177,7 @@ class DeepAgentRuntime:
                 schedule_service=self._schedule_service,
                 tool_context=self._tool_context,
                 file_backend=backend,
+                include_self_config=include_self_config,
             ) + control_tools,
             "model": self._chat_model(),
             "system_prompt": instructions.strip(),
@@ -173,9 +186,11 @@ class DeepAgentRuntime:
             "skills": ["/skills/"],
             "subagents": [general_purpose_subagent],
         }
-        if control_tools:
-            # Only the host may submit scheduling decisions, never its general-purpose subagent.
-            general_purpose_subagent["tools"] = [tool for tool in create_kwargs["tools"] if tool.name != "group_decision"]
+        # Subagents inherit the platform tools, except self-config and host-only control tools.
+        excluded_subagent_tools = {SELF_CONFIG_TOOL_ID, "group_decision"}
+        general_purpose_subagent["tools"] = [
+            tool for tool in create_kwargs["tools"] if tool.name not in excluded_subagent_tools
+        ]
         create_kwargs["memory"] = [MEMORY_INDEX_PATH]
         name = options.name.strip()
         if name:
@@ -189,6 +204,14 @@ class DeepAgentRuntime:
             if grants and tool in {"write_file", "edit_file"}:
                 rule["when"] = grants.wrap(tool, rule["when"])
         interrupt_on.update(_normalize_interrupt_on(options.interrupt_on) or {})
+        if include_self_config:
+            interrupt_on[SELF_CONFIG_TOOL_ID] = {
+                "allowed_decisions": ["approve", "reject"],
+                "description": _system_prompt_update_description(
+                    self._context_workspace.parent / "config.yaml",
+                    self._agent_id,
+                ),
+            }
         if interrupt_on:
             create_kwargs["interrupt_on"] = interrupt_on
         middleware = _deepagent_builtin_middleware(create_deep_agent, options)
@@ -506,6 +529,24 @@ def _invoke_config(options: DeepAgentRuntimeOptions, *, assistant_id: str, threa
     if normalized_thread_id:
         config["configurable"] = {"thread_id": normalized_thread_id}
     return config
+
+
+def _system_prompt_update_description(config_path: Path, agent_id: str) -> Any:
+    """Build the approval description callback for the always-on system prompt tool."""
+
+    def describe(tool_call: Any, _state: Any = None, _runtime: Any = None) -> str:
+        args = tool_call.get("args") if isinstance(tool_call, dict) else {}
+        try:
+            from server.app.config_file_service import describe_system_prompt_update
+
+            return describe_system_prompt_update(config_path, agent_id, args)
+        except Exception:  # noqa: BLE001 - approval text must never break the interrupt
+            return (
+                f"Agent「{agent_id}」申请修改本 Agent 的系统提示词；"
+                "批准后将在下一次运行生效。请核对内容后再决定。"
+            )
+
+    return describe
 
 
 def _normalize_interrupt_on(value: Any) -> dict[str, dict[str, list[str]]] | None:

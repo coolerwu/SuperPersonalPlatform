@@ -26,6 +26,11 @@
   `workspace/chat_groups/members.json`，通过 `GET/POST /api/chat-groups/members` 与
   `DELETE /api/chat-groups/members/{member_id}` 管理；新建/编辑群时可一键选入，
   也可把现有成员存回成员库。预设是编辑期模板，不影响已建群。
+- 系统提示词对话内编辑：新增始终注入的平台工具 `update_system_prompt`，Agent 在
+  对话里提交完整新提示词后必须经人工审批才写入 `config.yaml` 中该 Agent 的
+  `system_prompt`，只替换目标字段并在下一次 Run 生效；Web 审批卡片展示新旧对照，
+  微信审批通知给截断预览并指向 Web 端，群聊内部 Run 不提供该工具。需求见
+  `docs/requirements/F1-系统提示词对话内编辑.md`。
 
 ### Changed
 

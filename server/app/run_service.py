@@ -260,7 +260,11 @@ class RunService:
             from server.domain.agent_config import ModelProvider
             frozen_model = run_input["snapshot"]["model"]
             model = replace(model, **{**frozen_model, "provider": ModelProvider(frozen_model["provider"])})
-            runtime_options = replace(runtime_options, group_control=group_data if group_data.get("control_members") else None)
+            runtime_options = replace(
+                runtime_options,
+                group_control=group_data if group_data.get("control_members") else None,
+                self_config=False,
+            )
         use_session_checkpoint = bool(session_id)
         approval_resume = self._approval_resume(run_id)
         use_approval_checkpoint = bool(

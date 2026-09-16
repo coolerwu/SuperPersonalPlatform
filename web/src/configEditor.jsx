@@ -39,6 +39,13 @@ const AGENT_TOOL_CARDS = [
     summary: "在 Docker + gVisor 沙箱中运行短 Python 或 shell 代码，输出 artifacts。",
     badge: "沙箱",
   },
+  {
+    id: "update_system_prompt",
+    name: "Update System Prompt",
+    summary: "系统内置、始终开启：对话中申请修改本 Agent 的系统提示词，必须人工审批后才写入 config.yaml。",
+    badge: "系统内置",
+    locked: true,
+  },
 ];
 
 const DEFAULT_CONFIG = {
@@ -795,9 +802,13 @@ function AgentSettingsDialog({ initialAgent, models, nutstore, sync, readOnly, o
               </div>
               {showTools ? <div className="tool-choice-grid">
                 {AGENT_TOOL_CARDS.map((tool) => (
-                  <label className={`tool-choice ${agent.deepagent.tools.includes(tool.id) ? "selected" : ""}`} key={tool.id}>
-                    <input type="checkbox" aria-label={tool.name} disabled={readOnly || saving}
-                      checked={agent.deepagent.tools.includes(tool.id)} onChange={(event) => toggleTool(tool.id, event.target.checked)} />
+                  <label
+                    className={`tool-choice ${tool.locked || agent.deepagent.tools.includes(tool.id) ? "selected" : ""} ${tool.locked ? "locked" : ""}`}
+                    key={tool.id}
+                  >
+                    <input type="checkbox" aria-label={tool.name} disabled={readOnly || saving || Boolean(tool.locked)}
+                      checked={Boolean(tool.locked) || agent.deepagent.tools.includes(tool.id)}
+                      onChange={(event) => toggleTool(tool.id, event.target.checked)} />
                     <span><strong>{tool.name}</strong><small>{tool.summary}</small></span><em>{tool.badge}</em>
                   </label>
                 ))}
