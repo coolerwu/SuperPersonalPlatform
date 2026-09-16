@@ -19,7 +19,6 @@ WORKSPACE_DIRECTORIES = (
     WorkspaceDirectory("skills", "Reusable skills; follow Skills and SkillImprovement middleware rules."),
     WorkspaceDirectory("memories", "Long-term memory; follow MemoryMiddleware rules."),
     WorkspaceDirectory("improvements", "Skill reflections, reviews and change records."),
-    WorkspaceDirectory("meditations", "Daily meditation records."),
     WorkspaceDirectory("browser", "Browser login state and cache; browser-service only. Never read, search or modify with file tools.", False),
 )
 AGENT_WORKSPACE_DIRECTORIES = tuple(d.name for d in WORKSPACE_DIRECTORIES if d.agent_access)

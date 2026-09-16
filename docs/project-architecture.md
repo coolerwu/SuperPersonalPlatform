@@ -65,8 +65,6 @@ workspace/
           reflections/
           reviews/
           changes/
-        meditations/
-          {timestamp}_{run_id}.json
         browser/
           profile.lock.json
 
@@ -172,9 +170,9 @@ workspace/schedules/{schedule_id}/events.jsonl
 workspace/schedules/{schedule_id}/lock.json
 ```
 
-后台统一 Scheduler 每 5 秒扫描轻量调度索引，只判断 `next_run_at` 是否到期，不执行高频 WebDAV 同步。到期任务由独立 asyncio task 执行，一个等待审批的 Agent 定时任务不会阻塞其它 schedule 扫描。到期后按 `definition.type` 分发：`webdav_sync` 执行 WebDAV 文件同步并写调度事件；`maintenance_cleanup` 执行 15 天保留期清理并写调度事件；`agent_meditation` 每 86400 秒执行一次每日冥想，每个配置中的用户 Agent 都有独立的内置 `agent_meditation_{agent_id}` 任务、状态、事件和手动运行入口，在该 Agent 没有 queued/running run 或浏览器 profile lock 时，为该 Agent 创建 `source=system`、`metadata.kind=meditation` 的普通 DeepAgent run；`agent_run` 每次触发只创建一个普通 `workspace/runs/{run_id}/`，唤醒 `RunWorkerService`，等待该 run 终态及投递终态后处理调度完成。Schedule `lock.json` 用于避免重复执行，并记录 `pid`、`created_at` 和 `heartbeat_at`；执行期间每 15 秒刷新 heartbeat。服务重启后，如果 schedule 原先正在等待 `queued/running/waiting_approval/completed` Run，会保留并复用 `current_run_id`，不会为同一次触发重新创建 Run；不存在可恢复 Run 的陈旧 schedule 才按失败重试策略处理。调度执行失败后会进入 `retrying` 状态，默认 1 分钟后重试，最多 3 次；重试耗尽后才标记 `failed` 并进入下一次正式触发周期，成功后重试计数清零。普通 Run 固定最多执行 30 分钟，执行期间每 15 秒刷新 run `lock.json.heartbeat_at`；超过上限、执行 task 被取消，或读 `list/get/events` 时发现 active run 已超过上限/心跳超过 120 秒未刷新，会按 `attempts/max_attempts` 重新入队或最终标记为 `failed` 并释放 `lock.json`。服务启动时会把上一进程遗留的 `running` Run 按同一重试策略恢复，保留 `queued` 和 `waiting_approval` Run；普通 Run 后台任务运行在 FastAPI 进程内，项目不引入 Redis/Celery，也不拆独立 systemd worker service。
+后台统一 Scheduler 每 5 秒扫描轻量调度索引，只判断 `next_run_at` 是否到期，不执行高频 WebDAV 同步。到期任务由独立 asyncio task 执行，一个等待审批的 Agent 定时任务不会阻塞其它 schedule 扫描。到期后按 `definition.type` 分发：`webdav_sync` 执行 WebDAV 文件同步并写调度事件；`maintenance_cleanup` 执行 15 天保留期清理并写调度事件；`agent_run` 每次触发只创建一个普通 `workspace/runs/{run_id}/`，唤醒 `RunWorkerService`，等待该 run 终态及投递终态后处理调度完成。Schedule `lock.json` 用于避免重复执行，并记录 `pid`、`created_at` 和 `heartbeat_at`；执行期间每 15 秒刷新 heartbeat。服务重启后，如果 schedule 原先正在等待 `queued/running/waiting_approval/completed` Run，会保留并复用 `current_run_id`，不会为同一次触发重新创建 Run；不存在可恢复 Run 的陈旧 schedule 才按失败重试策略处理。调度执行失败后会进入 `retrying` 状态，默认 1 分钟后重试，最多 3 次；重试耗尽后才标记 `failed` 并进入下一次正式触发周期，成功后重试计数清零。普通 Run 固定最多执行 30 分钟，执行期间每 15 秒刷新 run `lock.json.heartbeat_at`；超过上限、执行 task 被取消，或读 `list/get/events` 时发现 active run 已超过上限/心跳超过 120 秒未刷新，会按 `attempts/max_attempts` 重新入队或最终标记为 `failed` 并释放 `lock.json`。服务启动时会把上一进程遗留的 `running` Run 按同一重试策略恢复，保留 `queued` 和 `waiting_approval` Run；普通 Run 后台任务运行在 FastAPI 进程内，项目不引入 Redis/Celery，也不拆独立 systemd worker service。
 
-`/api/schedules` 是定时任务管理页面使用的后端入口。前端只允许创建、编辑和删除 `agent_run` 类型任务，字段核心为 `prompt + agent_id + trigger`；内置 `context_webdav_sync`、`maintenance_cleanup` 和每个 Agent 各自的 `agent_meditation_{agent_id}` 由系统自动生成，只能查看状态和手动 `run-now`，不能通过页面编辑或删除。当前触发器支持 `interval`、5 字段 `cron` 和 `once`。Agent 也可以在被授权 `schedule` 平台工具后，通过同一个 ScheduleService 创建、查看、更新和删除定时任务；工具只允许管理由该工具在当前 `agent_id + session_id` 下创建的任务，并把微信来源 run 创建的定时任务结果回发到原微信会话。
+`/api/schedules` 是定时任务管理页面使用的后端入口。前端只允许创建、编辑和删除 `agent_run` 类型任务，字段核心为 `prompt + agent_id + trigger`；内置 `context_webdav_sync` 和 `maintenance_cleanup` 由系统自动生成，只能查看状态和手动 `run-now`，不能通过页面编辑或删除。当前触发器支持 `interval`、5 字段 `cron` 和 `once`。Agent 也可以在被授权 `schedule` 平台工具后，通过同一个 ScheduleService 创建、查看、更新和删除定时任务；工具只允许管理由该工具在当前 `agent_id + session_id` 下创建的任务，并把微信来源 run 创建的定时任务结果回发到原微信会话。
 
 微信 API 继续保留 `/api/channels/wechat/*` 账号管理和登录生命周期接口。
 
@@ -276,7 +274,7 @@ code_execution:
 - `schedule(action, ...)` 是单一调度管理工具，支持 `create/list/get/update/delete`。创建时只能使用当前 Agent、当前长期 session 和当前渠道投递上下文，触发器支持 `once`、`interval` 和 `cron`；`list/get/update/delete` 只能作用于 `metadata.created_by.type="agent_tool"` 且 `agent_id/session_id` 与当前 run 一致的任务，避免 Agent 删除页面或其它会话创建的定时任务。每次触发只运行一个 Agent run；微信来源任务执行完成后，ScheduleService 读取该 run 的完整 `result.json`，调用微信通道投递最终结果一次，并更新 run 的 `delivery.json`。
 - `execute_code(language, code, files)` 是可选平台工具，`code_execution.enabled` 默认开启，但仍只有 Agent 授权 `execute_code` 时才注入。它只支持 `language="python"` 和 `language="shell"`，通过 Docker 运行配置镜像，强制 `--runtime=runsc`、`--network=none`、`--read-only`、`--cap-drop=ALL`、`--security-opt no-new-privileges`、CPU/内存/pids 限制和只读/读写的临时目录挂载；默认镜像为 Docker Hub 官方 `python:3.12-slim-bookworm`，Python 使用 `python /workspace/work/main.py`，shell 使用 `/bin/sh /workspace/work/script.sh`。执行器不允许 Agent 指定镜像、runtime、volume、env 或 Docker 参数；缺 Docker、缺 `runsc` 或缺镜像时返回 `ok=false` 工具观察，不降级为宿主机 subprocess。脚本保留为当前 Agent `/scratch/exec_{id}.py` 或 `.sh`，工具返回 `script_path`；每次调用使用独立系统临时目录挂载 `/workspace/input`（只读）、`/workspace/work` 和 `/workspace/output`，不挂载整个 Agent 工作区。成果收集到 `/artifacts/exec_{id}/` 后清理临时目录和输入副本，原始输入不删除。失败仍保留脚本；超时、取消先终止容器再清理，容器终止失败或成果收集失败则保留临时目录并返回 `recovery_path` 供恢复。没有长期 `code_runs/` 或额外 `execution.json`，执行观察沿用 Run 事件。`scratch/` 内脚本沿用现有保留期清理规则。
 - DeepAgent 内置 `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 等工具由 `deepagents` 默认 middleware 提供；`deepagent.todo_list` 默认开启，`write_todos` 由运行时接入 LangChain `TodoListMiddleware`，只有 Agent 显式配置 `todo_list=false` 时关闭。当前不启用 DeepAgent `LocalShellBackend`，因此不向 Agent 暴露非沙箱 shell `execute`。
-- DeepAgent 原生 filesystem 使用受限的 `AgentFilesystemBackend(root_dir=workspace/agents/{agent_id}/workspace, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录；私有文件后端只允许修改 `scratch/`、`artifacts/`、`skills/`、`memories/`、`improvements/` 和 `meditations/`，并保护这些固定顶层目录本身不被删除。`browser/` 只由浏览器服务访问，Agent 文件工具的同步/异步读取、列举、搜索、下载和修改都不能触及其内容；不允许通过符号链接访问。启用的 `/webdav/` 由独立映射后端访问共享缓存，可写路径通过原生 HITL 审批后写回远端；不能删除挂载根目录。Agent 不应创建第二层 `/workspace/`，不能访问其它未声明顶层目录；越界写入、编辑、删除和上传返回带允许目录列表的 permission 诊断，作为可恢复工具观察交给 Agent 改用正确路径，不让整个 run 失败。历史目录由部署时受控的一次性文件操作整理，没有运行时兼容路径或自动迁移。Agent 不能直接访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制及辅助函数已删除。
+- DeepAgent 原生 filesystem 使用受限的 `AgentFilesystemBackend(root_dir=workspace/agents/{agent_id}/workspace, virtual_mode=True)`。Agent 看到的 `/` 就是自己的私有目录；私有文件后端只允许修改 `scratch/`、`artifacts/`、`skills/`、`memories/` 和 `improvements/`，并保护这些固定顶层目录本身不被删除。`browser/` 只由浏览器服务访问，Agent 文件工具的同步/异步读取、列举、搜索、下载和修改都不能触及其内容；不允许通过符号链接访问。启用的 `/webdav/` 由独立映射后端访问共享缓存，可写路径通过原生 HITL 审批后写回远端；不能删除挂载根目录。Agent 不应创建第二层 `/workspace/`，不能访问其它未声明顶层目录；越界写入、编辑、删除和上传返回带允许目录列表的 permission 诊断，作为可恢复工具观察交给 Agent 改用正确路径，不让整个 run 失败。历史目录由部署时受控的一次性文件操作整理，没有运行时兼容路径或自动迁移。Agent 不能直接访问 `workspace/config.yaml`、`workspace/context`、`workspace/runs`、`workspace/sessions`、其它 Agent 目录或项目源码。旧的 run 前加载 `files` state、run 后同步回磁盘机制及辅助函数已删除。
 - 每个 Agent 的私有 skill 固定放在 `workspace/agents/{agent_id}/workspace/skills/{skill_id}/SKILL.md`，运行时传给主 DeepAgent 的 `skills` 参数固定为 `["/skills/"]`。平台会复制 DeepAgents 原版同名 `general-purpose` subagent 配置来覆盖自动生成版本，保留原版 description 和 system prompt，只在其提示词末尾追加“派发任务明确指定 skill 时才访问，否则不访问任何 skill”的约束。该显式 subagent 未声明 `skills`，因此不安装 `SkillsMiddleware`、不自动发现或激活主 Agent 的 skill；它继续继承主 Agent 的模型和工具，避免 workflow skill 派发 subagent 后再次命中自身形成递归。DeepAgent 主 Agent 会扫描该目录下包含 `SKILL.md` 的子目录并用 progressive disclosure 暴露 metadata；不再维护产品级 Skill index，也不需要在 `config.yaml` 里配置 Skill 列表。
 - DeepAgent 运行时默认注入 `SkillImprovementMiddleware`，通过 LangChain `wrap_model_call` / `awrap_model_call` 生命周期钩子在每次同步或异步模型调用前把技能维护规则追加到模型请求；该 middleware 不负责 memory，长期记忆仍由 DeepAgent 原生 `MemoryMiddleware` 维护 `/memories/AGENTS.md`。`SkillImprovementMiddleware` 只管 Agent 自己的 `/skills/` 和 `/improvements/`：Agent 可以自动创建或更新 `/skills/{skill_id}/SKILL.md` 来沉淀可复用能力，并在 `/improvements/reflections/{run_id}.md`、`/improvements/reviews/{run_id}.md` 或 `/improvements/changes/{timestamp}_{change_id}.json` 记录原因、来源和变更摘要。已有 Skill 的触发条件、必需步骤、输出契约、工具/subagent 拓扑、串并行顺序和审批边界视为用户工作流，不能被自进化自行改写；历史审计中的平台判断必须按当前 runtime 重新验证。Skill 可用 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 标出硬约束，`AgentFilesystemBackend` 会在 write/edit/upload/delete 入口逐字保护该区块及包含它的 Skill 文件/目录；建议变更只能写入 `/improvements/`，用户仍可通过平台文件编辑入口修改正式契约。`/improvements/` 是审计材料，不是 active skill；只有 `/skills/{skill_id}/SKILL.md` 会在下一次 Agent 执行开始时作为 skill metadata 被扫描。
 - Agent 长期记忆固定开启。运行时通过 DeepAgent 原生 `memory=["/memories/AGENTS.md"]` 启用 `MemoryMiddleware` 加载和维护这一个长期记忆索引文件，不预创建或填充模板；文件不存在时 `MemoryMiddleware` 按空记忆处理，首次持久化时由 Agent 使用内置文件工具创建。其它 `/memories/...` 细节文件不自动注入，Agent 需要时可用内置文件工具自行查找和读取。本地共享知识通过原生文件工具访问 `/files/`，对应 `workspace/context/knowledge/files/`。
@@ -295,6 +293,7 @@ code_execution:
 - Prompt/Agent 双模式产品概念。
 - 旧 Session CRUD 产品页和旧 WebSocket 聊天会话模型。
 - 旧 Skill 管理和 Skill 作为产品级概念。
+- Agent 每日冥想定时任务（`agent_meditation_{agent_id}`）与 `/meditations/` 工作区目录。
 - Portfolio 投资组合模块。
 - Critique 多维批判模块。
 - Proxy 嵌入站点模块。
@@ -337,7 +336,6 @@ code_execution:
 | `/skills/` | 可复用技能 | 读写，详细规则由技能 middleware 提供 |
 | `/memories/` | 长期记忆 | 读写，详细规则由 MemoryMiddleware 提供 |
 | `/improvements/` | 技能反思、评审、变更记录 | 读写，顶层不能删除 |
-| `/meditations/` | 每日冥想记录 | 读写，顶层不能删除 |
 | `/browser/` | 浏览器登录态、缓存、占用锁 | 仅浏览器服务访问 |
 | `/webdav/` | Agent 配置映射的坚果云共享文档，虚拟挂载 | 默认 write，可配置 read；文本写回远端，挂载根不能删除 |
 

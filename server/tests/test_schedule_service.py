@@ -253,7 +253,7 @@ def test_schedule_service_bootstraps_and_runs_webdav_sync(tmp_path) -> None:
     assert state["next_run_at"]
     assert any(item["id"] == "context_webdav_sync" for item in index["schedules"])
     assert any(item["id"] == "maintenance_cleanup" for item in index["schedules"])
-    assert any(item["id"] == "agent_meditation_assistant" for item in index["schedules"])
+    assert all(not item["id"].startswith("agent_meditation_") for item in index["schedules"])
 
 
 def test_schedule_service_bootstraps_and_runs_maintenance_cleanup(tmp_path) -> None:
@@ -281,46 +281,7 @@ def test_schedule_service_bootstraps_and_runs_maintenance_cleanup(tmp_path) -> N
     assert "maintenance cleanup completed" in events
 
 
-def test_schedule_service_bootstraps_and_runs_agent_meditation_per_agent(tmp_path) -> None:
-    settings = parse_settings(_raw_config())
-    run_service = FakeRunService()
-    service = ScheduleService(
-        workspace=tmp_path,
-        settings=settings,
-        run_service=run_service,
-        system_log_service=SystemLogService(tmp_path),
-        maintenance_service=FakeMaintenanceService(),
-        webdav_context_service=FakeWebDAVContextService(),
-    )
-
-    asyncio.run(service.run_now("agent_meditation_assistant"))
-
-    definition = _read_json(tmp_path / "schedules" / "agent_meditation_assistant" / "definition.json")
-    state = _read_json(tmp_path / "schedules" / "agent_meditation_assistant" / "state.json")
-    events = (tmp_path / "schedules" / "agent_meditation_assistant" / "events.jsonl").read_text(encoding="utf-8")
-    record_paths = list((tmp_path / "agents" / "assistant" / "workspace" / "meditations").glob("*.json"))
-    assert definition["type"] == "agent_meditation"
-    assert definition["trigger"]["seconds"] == 86400
-    assert definition["agent_id"] == "assistant"
-    assert run_service.created[0]["agent_id"] == "assistant"
-    assert run_service.created[0]["source"] == "system"
-    assert run_service.created[0]["session_id"] == ""
-    assert run_service.created[0]["metadata"] == {
-        "schedule_id": "agent_meditation_assistant",
-        "kind": "meditation",
-        "agent_id": "assistant",
-    }
-    assert "# Daily Agent Meditation" in run_service.created[0]["content"]
-    assert "recent_sessions" in run_service.created[0]["content"]
-    assert run_service.executed == ["run_test"]
-    assert state["status"] == "completed"
-    assert state["last_run_id"] == "run_test"
-    assert "agent meditation completed" in events
-    assert len(record_paths) == 1
-    assert _read_json(record_paths[0])["run_id"] == "run_test"
-
-
-def test_schedule_service_creates_separate_meditation_schedule_for_each_agent(tmp_path) -> None:
+def test_schedule_service_does_not_create_meditation_schedules(tmp_path) -> None:
     raw = _raw_config()
     raw["agents"]["definitions"].append(
         {
@@ -345,71 +306,10 @@ def test_schedule_service_creates_separate_meditation_schedule_for_each_agent(tm
 
     index = _read_json(tmp_path / "schedules" / "index.json")
     ids = {item["id"] for item in index["schedules"]}
-    assert "agent_meditation_assistant" in ids
-    assert "agent_meditation_researcher" in ids
-
-    asyncio.run(service.run_now("agent_meditation_researcher"))
-
-    assert len(run_service.created) == 1
-    assert run_service.created[0]["agent_id"] == "researcher"
-    assert run_service.created[0]["metadata"]["schedule_id"] == "agent_meditation_researcher"
-    assert (tmp_path / "agents" / "researcher" / "workspace" / "meditations").is_dir()
-    assert not (tmp_path / "agents" / "assistant" / "workspace" / "meditations").exists()
-
-
-def test_schedule_service_skips_agent_meditation_when_busy(tmp_path) -> None:
-    settings = parse_settings(_raw_config())
-    run_service = FakeRunService()
-    run_service.created.append({"seed": "busy"})
-    run_service.runs = [{"run_id": "run_busy", "agent_id": "assistant", "status": "running"}]
-    service = ScheduleService(
-        workspace=tmp_path,
-        settings=settings,
-        run_service=run_service,
-        system_log_service=SystemLogService(tmp_path),
-        maintenance_service=FakeMaintenanceService(),
-        webdav_context_service=FakeWebDAVContextService(),
-    )
-    service.bootstrap()
-
-    asyncio.run(service.run_now("agent_meditation_assistant"))
-
-    state = _read_json(tmp_path / "schedules" / "agent_meditation_assistant" / "state.json")
-    events = (tmp_path / "schedules" / "agent_meditation_assistant" / "events.jsonl").read_text(encoding="utf-8")
-    assert len(run_service.created) == 1
-    assert state["status"] == "completed"
-    assert "system is busy" in events
-    assert "run_busy" in events
-
-
-def test_schedule_service_meditation_busy_check_is_agent_scoped(tmp_path) -> None:
-    raw = _raw_config()
-    raw["agents"]["definitions"].append(
-        {
-            "id": "researcher",
-            "name": "Researcher",
-            "system_prompt": "Research carefully.",
-            "model_id": "default",
-        }
-    )
-    settings = parse_settings(raw)
-    run_service = FakeRunService()
-    run_service.runs = [{"run_id": "run_assistant_busy", "agent_id": "assistant", "status": "running"}]
-    service = ScheduleService(
-        workspace=tmp_path,
-        settings=settings,
-        run_service=run_service,
-        system_log_service=SystemLogService(tmp_path),
-        maintenance_service=FakeMaintenanceService(),
-        webdav_context_service=FakeWebDAVContextService(),
-    )
-    service.bootstrap()
-
-    asyncio.run(service.run_now("agent_meditation_researcher"))
-
-    assert len(run_service.created) == 1
-    assert run_service.created[0]["agent_id"] == "researcher"
-    assert run_service.executed == ["run_test"]
+    assert ids == {"context_webdav_sync", "maintenance_cleanup"}
+    assert not (tmp_path / "schedules" / "agent_meditation_assistant").exists()
+    assert not (tmp_path / "schedules" / "agent_meditation_researcher").exists()
+    assert run_service.created == []
 
 
 def test_schedule_service_runs_agent_schedule_from_files(tmp_path) -> None:

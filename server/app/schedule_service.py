@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from server.infrastructure.agent_workspace import agent_workspace_path, browser_workspace_path
-
 import asyncio
 import json
 import os
-import re
 import shutil
 from contextlib import suppress
 from dataclasses import dataclass
@@ -23,12 +20,6 @@ from server.infrastructure.config import Settings
 
 SCHEDULE_STATUSES = {"idle", "running", "retrying", "completed", "failed", "disabled"}
 STATIC_BUILTIN_SCHEDULE_IDS = {"context_webdav_sync", "maintenance_cleanup"}
-AGENT_MEDITATION_SCHEDULE_PREFIX = "agent_meditation_"
-OBSOLETE_BUILTIN_SCHEDULE_IDS = {"agent_meditation"}
-AGENT_MEDITATION_INTERVAL_SECONDS = 86400
-AGENT_MEDITATION_MAX_RUNS = 20
-AGENT_MEDITATION_MAX_SESSIONS = 8
-AGENT_MEDITATION_MESSAGES_PER_SESSION = 8
 SCHEDULE_RETRY_MAX_ATTEMPTS = 3
 SCHEDULE_RETRY_DELAY_SECONDS = 60
 SCHEDULE_LOCK_HEARTBEAT_SECONDS = 15
@@ -207,14 +198,12 @@ class ScheduleService:
                     else item
                     for item in schedules
                 ]
-        schedules = self._drop_obsolete_builtin_schedules(schedules)
         self._write_index_from_summaries(schedules)
 
     def _builtin_definitions(self) -> tuple[ScheduleDefinition, ...]:
         return (
             self._builtin_webdav_definition(),
             self._builtin_maintenance_definition(),
-            *self._builtin_meditation_definitions(),
         )
 
     def _builtin_webdav_definition(self) -> ScheduleDefinition:
@@ -247,40 +236,6 @@ class ScheduleService:
                 "dry_run": self._settings.maintenance.dry_run,
             },
         )
-
-    def _builtin_meditation_definitions(self) -> tuple[ScheduleDefinition, ...]:
-        definitions: list[ScheduleDefinition] = []
-        for agent in self._settings.agent_workspace.agents:
-            definitions.append(
-                ScheduleDefinition(
-                    id=_agent_meditation_schedule_id(agent.id),
-                    type="agent_meditation",
-                    name=f"{agent.name or agent.id} 每日冥想",
-                    enabled=True,
-                    trigger=ScheduleTrigger(kind="interval", seconds=AGENT_MEDITATION_INTERVAL_SECONDS),
-                    agent_id=agent.id,
-                    context_ids=agent.context_ids,
-                    metadata={
-                        "source": "system",
-                        "kind": "meditation",
-                        "agent_id": agent.id,
-                    },
-                )
-            )
-        return tuple(definitions)
-
-    def _drop_obsolete_builtin_schedules(self, schedules: list[Any]) -> list[Any]:
-        next_schedules = []
-        for item in schedules:
-            if not isinstance(item, dict):
-                next_schedules.append(item)
-                continue
-            schedule_id = str(item.get("id") or "").strip()
-            if schedule_id in OBSOLETE_BUILTIN_SCHEDULE_IDS:
-                shutil.rmtree(self._schedule_dir(schedule_id), ignore_errors=True)
-                continue
-            next_schedules.append(item)
-        return next_schedules
 
     async def _execute(self, definition: ScheduleDefinition, *, due_at: datetime) -> None:
         locked = self._try_lock(definition.id)
@@ -402,15 +357,6 @@ class ScheduleService:
                 "summary": report.get("summary", {}),
                 "items": len(report.get("items") or []),
             }
-        if definition.type == "agent_meditation":
-            busy_reason = self._meditation_busy_reason(definition.agent_id)
-            if busy_reason:
-                return {
-                    "message": "agent meditation skipped because the system is busy",
-                    "skipped": True,
-                    "reason": busy_reason,
-                }
-            return await self._execute_agent_meditation(definition)
         if definition.type == "agent_run":
             if not definition.prompt.strip():
                 raise RuntimeError("schedule prompt is required")
@@ -435,33 +381,6 @@ class ScheduleService:
             return {"message": "agent run completed", "run_id": run_id, "delivery": delivery}
         raise RuntimeError(f"unsupported schedule type: {definition.type}")
 
-    async def _execute_agent_meditation(self, definition: ScheduleDefinition) -> dict[str, Any]:
-        if not definition.agent_id:
-            raise RuntimeError("agent meditation schedule requires agent_id")
-        agent = self._settings.agent_workspace.get_agent(definition.agent_id)
-        prompt = self._agent_meditation_prompt(agent.id)
-        run = await self._run_service.create_run(
-            content=prompt,
-            agent_id=agent.id,
-            context_ids=agent.context_ids,
-            source="system",
-            session_id="",
-            metadata={
-                "schedule_id": definition.id,
-                "kind": "meditation",
-                "agent_id": agent.id,
-            },
-        )
-        run_id = str(run["run_id"])
-        self._set_current_run(definition.id, run_id)
-        completed = await self._execute_or_wait_for_run(run_id)
-        self._write_meditation_record(agent.id, run_id, completed)
-        return {
-            "message": "agent meditation completed",
-            "agent_id": agent.id,
-            "run_id": run_id,
-        }
-
     async def _execute_or_wait_for_run(self, run_id: str) -> dict[str, Any]:
         if self._run_worker_service is not None:
             self._run_worker_service.wake()
@@ -474,157 +393,6 @@ class ScheduleService:
             message = str(error.get("message") if isinstance(error, dict) else "") or f"agent run {run_id} did not complete"
             raise RuntimeError(message)
         return completed
-
-    def _meditation_busy_reason(self, agent_id: str) -> str:
-        for run in self._run_service.list_runs():
-            status = str(run.get("status") or "").strip()
-            if str(run.get("agent_id") or "").strip() == agent_id and status in {
-                "queued",
-                "running",
-                "waiting_approval",
-            }:
-                run_id = str(run.get("run_id") or "").strip()
-                return f"active run {run_id or status}"
-        lock_path = browser_workspace_path(self._workspace, agent_id) / "profile.lock.json"
-        if lock_path.exists():
-            if _lock_is_stale(lock_path):
-                lock_path.unlink(missing_ok=True)
-            else:
-                return f"browser profile locked: {agent_id}"
-        return ""
-
-    def _agent_meditation_prompt(self, agent_id: str) -> str:
-        payload = {
-            "generated_at": _now(),
-            "agent_id": agent_id,
-            "recent_runs": self._recent_agent_runs(agent_id),
-            "recent_sessions": self._recent_agent_sessions(agent_id),
-            "skills": self._agent_relative_files(agent_id, "skills", "SKILL.md", limit=40),
-            "improvements": self._agent_relative_files(agent_id, "improvements", "*", limit=40),
-        }
-        return (
-            "# Daily Agent Meditation\n\n"
-            "你正在执行系统每日冥想任务。把这条消息当作当前用户消息处理，但不要向任何渠道发送回复。\n\n"
-            "目标：\n"
-            "1. 复盘近期 session 和 runs，提炼可检索的 session digest、失败归因、重复卡点和未完成事项。\n"
-            "2. 如果发现稳定、可复用的工作流程或工具用法，创建或更新你自己的 `/skills/{skill_id}/SKILL.md`。\n"
-            "3. 把本次复盘写入 `/improvements/reflections/{run_id}.md`；如果更新了 skill，也写入 `/improvements/changes/{timestamp}_{change_id}.json`。\n"
-            "4. 不要写 `/memories/AGENTS.md`；长期记忆由 MemoryMiddleware 单独处理。\n"
-            "5. 不要保存密钥、cookie、token、账号密码或浏览器 profile 细节。\n\n"
-            "材料如下，是后端从当前 Agent 的近期运行和会话中整理出的有限摘要：\n\n"
-            "```json\n"
-            f"{json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)}\n"
-            "```\n\n"
-            "最后返回简短结果，说明是否写入 reflection、是否更新 skill、session digest 的主要结论。"
-        )
-
-    def _recent_agent_runs(self, agent_id: str) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
-        for summary in self._run_service.list_runs():
-            if str(summary.get("agent_id") or "") != agent_id:
-                continue
-            run_id = str(summary.get("run_id") or "").strip()
-            if not run_id:
-                continue
-            try:
-                detail = self._run_service.get_run(run_id)
-            except Exception:
-                continue
-            run_input = detail.get("input") if isinstance(detail.get("input"), dict) else {}
-            result = detail.get("result") if isinstance(detail.get("result"), dict) else {}
-            items.append(
-                {
-                    "run_id": run_id,
-                    "source": summary.get("source", ""),
-                    "status": summary.get("status", ""),
-                    "session_id": summary.get("session_id", ""),
-                    "created_at": summary.get("created_at", ""),
-                    "updated_at": summary.get("updated_at", ""),
-                    "prompt": _snippet(str(run_input.get("content") or ""), max_chars=900),
-                    "result": _snippet(str(result.get("content") or result.get("error") or ""), max_chars=1200),
-                }
-            )
-            if len(items) >= AGENT_MEDITATION_MAX_RUNS:
-                break
-        return items
-
-    def _recent_agent_sessions(self, agent_id: str) -> list[dict[str, Any]]:
-        index = _read_json(self._workspace / "sessions" / "index.json")
-        raw_sessions = index.get("sessions") if isinstance(index, dict) else []
-        if not isinstance(raw_sessions, list):
-            return []
-        sessions: list[dict[str, Any]] = []
-        for session in raw_sessions:
-            if not isinstance(session, dict) or str(session.get("agent_id") or "") != agent_id:
-                continue
-            session_id = str(session.get("session_id") or "").strip()
-            if not session_id:
-                continue
-            sessions.append(
-                {
-                    "session": {
-                        "session_id": session_id,
-                        "channel": session.get("channel", ""),
-                        "channel_account_id": session.get("channel_account_id", ""),
-                        "peer_type": session.get("peer_type", ""),
-                        "status": session.get("status", ""),
-                        "updated_at": session.get("updated_at", ""),
-                        "message_count": session.get("message_count", 0),
-                        "run_count": session.get("run_count", 0),
-                    },
-                    "recent_messages": self._recent_session_messages(session_id),
-                }
-            )
-            if len(sessions) >= AGENT_MEDITATION_MAX_SESSIONS:
-                break
-        return sessions
-
-    def _recent_session_messages(self, session_id: str) -> list[dict[str, Any]]:
-        messages_path = self._workspace / "sessions" / session_id / "messages.jsonl"
-        if not messages_path.exists():
-            return []
-        messages: list[dict[str, Any]] = []
-        for line in messages_path.read_text(encoding="utf-8").splitlines()[-AGENT_MEDITATION_MESSAGES_PER_SESSION:]:
-            if not line.strip():
-                continue
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(item, dict):
-                continue
-            messages.append(
-                {
-                    "seq": item.get("seq"),
-                    "role": item.get("role", ""),
-                    "created_at": item.get("created_at", ""),
-                    "run_id": item.get("run_id", ""),
-                    "content": _snippet(str(item.get("content") or ""), max_chars=900),
-                    "attachments": _attachment_summaries(item.get("attachments") or []),
-                }
-            )
-        return messages
-
-    def _agent_relative_files(self, agent_id: str, directory: str, pattern: str, *, limit: int) -> list[str]:
-        agent_dir = agent_workspace_path(self._workspace, agent_id)
-        root = agent_dir / directory
-        if not root.exists():
-            return []
-        files = [path for path in sorted(root.rglob(pattern)) if path.is_file()]
-        return [path.relative_to(agent_dir).as_posix() for path in files[-limit:]]
-
-    def _write_meditation_record(self, agent_id: str, run_id: str, completed: dict[str, Any]) -> None:
-        agent_dir = agent_workspace_path(self._workspace, agent_id)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        payload = {
-            "schema_version": 1,
-            "agent_id": agent_id,
-            "run_id": run_id,
-            "created_at": _now(),
-            "status": (completed.get("state") or {}).get("status", ""),
-            "result": completed.get("result"),
-        }
-        _write_json(agent_dir / "meditations" / f"{timestamp}_{run_id}.json", payload)
 
     async def _heartbeat_running_schedule(self, schedule_id: str) -> None:
         while True:
@@ -841,8 +609,6 @@ class ScheduleService:
         now = _now()
         status = "idle" if definition.enabled else "disabled"
         next_run_at = now
-        if definition.type == "agent_meditation":
-            next_run_at = self._initial_next_run_at(definition)
         self._write_state(
             definition.id,
             {
@@ -1107,31 +873,6 @@ def _definition_payload(definition: ScheduleDefinition) -> dict[str, Any]:
     }
 
 
-def _snippet(text: str, *, max_chars: int) -> str:
-    value = " ".join(str(text or "").split())
-    if len(value) <= max_chars:
-        return value
-    return f"{value[:max_chars].rstrip()}..."
-
-
-def _attachment_summaries(raw: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw, list | tuple):
-        return []
-    items: list[dict[str, Any]] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        items.append(
-            {
-                "type": item.get("type", ""),
-                "mime": item.get("mime", ""),
-                "filename": item.get("filename", ""),
-                "workspace_path": item.get("workspace_path", ""),
-            }
-        )
-    return items
-
-
 def _safe_agent_path_segment(agent_id: str) -> str:
     value = str(agent_id or "").strip()
     if not value or "/" in value or "\\" in value or value in {".", ".."}:
@@ -1139,16 +880,9 @@ def _safe_agent_path_segment(agent_id: str) -> str:
     return value
 
 
-def _agent_meditation_schedule_id(agent_id: str) -> str:
-    safe_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(agent_id or "").strip()).strip("._-")
-    if not safe_id:
-        raise ValueError("agent_id is required for meditation schedule")
-    return f"{AGENT_MEDITATION_SCHEDULE_PREFIX}{safe_id}"
-
-
 def _is_builtin_schedule_id(schedule_id: str) -> bool:
     value = str(schedule_id or "").strip()
-    return value in STATIC_BUILTIN_SCHEDULE_IDS or value.startswith(AGENT_MEDITATION_SCHEDULE_PREFIX)
+    return value in STATIC_BUILTIN_SCHEDULE_IDS
 
 
 def _trigger_payload(trigger: ScheduleTrigger) -> dict[str, Any]:
