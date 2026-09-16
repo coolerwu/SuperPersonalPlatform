@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Archive, Bot, Copy, Plus, Settings, Square, Users, X } from "lucide-react";
+import { Archive, Bot, Copy, Pencil, Plus, Settings, Square, Trash2, Users, X } from "lucide-react";
 import { ChatComposer, ChatMessageList } from "./chatComponents.jsx";
 import { useGroupRunEvents } from "./chatRuntime.js";
 import { parseConfigDraft } from "./configEditor.jsx";
@@ -26,6 +26,7 @@ export function ChatGroupsPage({ api }) {
   const [quote, setQuote] = useState(null);
   const [mentions, setMentions] = useState([]);
   const [editor, setEditor] = useState(null);
+  const [renaming, setRenaming] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const selectedRef = useRef("");
@@ -128,6 +129,32 @@ export function ChatGroupsPage({ api }) {
     });
   }
 
+  async function renameGroup(name) {
+    const target = renaming;
+    if (!target?.id || busy) return;
+    await perform(async () => {
+      await api(`/api/chat-groups/${target.id}/rename`, { method: "POST", body: JSON.stringify({ name }) });
+      setRenaming(null);
+      await refresh(target.id);
+    });
+  }
+
+  async function deleteGroup(item) {
+    if (!item?.id || busy) return;
+    if (!window.confirm(`删除群聊 ${item.name}？群内消息和协作记录会一并删除，无法恢复。`)) return;
+    await perform(async () => {
+      await api(`/api/chat-groups/${item.id}`, { method: "DELETE" });
+      const list = await api("/api/chat-groups");
+      const remaining = list.groups || [];
+      setGroups(remaining);
+      if (selectedRef.current === item.id) {
+        const next = remaining.find((entry) => !entry.archived) || remaining[0];
+        if (next) selectGroup(next.id);
+        else selectGroup("");
+      }
+    });
+  }
+
   async function decide(runId, decision, message, scope = "once") {
     const id = group.id;
     await api(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ decision, message, scope }) });
@@ -161,7 +188,9 @@ export function ChatGroupsPage({ api }) {
       <div className="group-local-toolbar"><strong><Users size={16} /> 聊天室</strong><button aria-label="新建群聊" title="新建群聊" disabled={busy} onClick={() => setEditor({ name: "", members: [], host_member_id: "", archived: false })}><Plus size={16} /></button></div>
       {groups.map((item) => <div key={item.id} className={`group-list-item ${selected === item.id ? "selected" : ""}`}>
         <button type="button" className="group-list-main" onClick={() => selectGroup(item.id)}><span>{item.name}</span><small>{item.archived ? "已归档" : "群聊"}</small></button>
-        <button type="button" className="group-list-copy" aria-label={`复制群聊 ${item.name}`} title="复制群聊" disabled={busy} onClick={() => duplicateGroup(item)}><Copy size={14} /></button>
+        <button type="button" className="group-list-action" aria-label={`复制群聊 ${item.name}`} title="复制群聊" disabled={busy} onClick={() => duplicateGroup(item)}><Copy size={14} /></button>
+        <button type="button" className="group-list-action" aria-label={`重命名群聊 ${item.name}`} title="重命名群聊" disabled={busy} onClick={() => { setError(""); setRenaming({ id: item.id, name: item.name }); }}><Pencil size={14} /></button>
+        <button type="button" className="group-list-action group-list-danger" aria-label={`删除群聊 ${item.name}`} title="删除群聊" disabled={busy} onClick={() => deleteGroup(item)}><Trash2 size={14} /></button>
       </div>)}
       {!groups.length ? <p className="group-muted">创建聊天室，邀请不同角色一起干活。</p> : null}
     </aside>
@@ -196,7 +225,19 @@ export function ChatGroupsPage({ api }) {
       const data = await api(`/api/chat-groups${target ? `/${target}` : ""}`, { method: target ? "PUT" : "POST", body: JSON.stringify(definition) });
       setEditor(null); selectGroup(data.id); await refresh(data.id);
     })} error={error} /> : null}
+    {renaming ? <GroupRenameDialog value={renaming} busy={busy} error={error} onClose={() => setRenaming(null)} onSave={renameGroup} /> : null}
   </section>;
+}
+
+function GroupRenameDialog({ value, onClose, onSave, busy, error }) {
+  const [name, setName] = useState(value.name);
+  return <div className="group-modal-backdrop"><form className="panel group-editor group-rename-editor" onSubmit={(event) => { event.preventDefault(); onSave(name.trim()); }}>
+    <div className="group-local-toolbar"><strong>重命名群聊</strong><button type="button" aria-label="关闭" onClick={onClose} disabled={busy}><X size={18} /></button></div>
+    <div className="group-editor-body"><label>群名称<input required maxLength={100} autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
+      {error ? <p role="alert" className="error">{error}</p> : null}
+    </div>
+    <div className="group-editor-footer"><button type="button" disabled={busy} onClick={onClose}>取消</button><button className="primary" disabled={busy || !name.trim()}>保存名称</button></div>
+  </form></div>;
 }
 
 function GroupEditor({ value, agents, onClose, onSave, busy, error }) {

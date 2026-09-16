@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +11,7 @@ from pathlib import Path
 from server.app.run_service import RunNotFoundError, _public_agent, _public_model
 from server.app.session_service import SessionService
 from server.domain.message_quote import quote_content
-from server.domain.chat_group import GroupDefinition, GroupDecision, GroupRunContext, ChatGroupState, GroupExecution
+from server.domain.chat_group import GroupDefinition, GroupDecision, GroupRename, GroupRunContext, ChatGroupState, GroupExecution
 from server.infrastructure.config import load_settings
 
 
@@ -55,6 +56,9 @@ class ChatGroupService:
     def _save(self, group: ChatGroupState) -> None:
         group["updated_at"] = now()
         save(self._path(group["id"]), group)
+        self._write_index()
+
+    def _write_index(self) -> None:
         # State documents are authoritative; this index can be rebuilt after a crash.
         save(self.root / "index.json", {"groups": self.list()})
 
@@ -128,6 +132,24 @@ class ChatGroupService:
             group.update(definition.model_dump())
             self._save(group)
             return group
+
+    async def rename(self, group_id, name):
+        """Rename one group. Allowed while executing: only the title changes."""
+        async with self.lock:
+            group = self.read(group_id)
+            group["name"] = GroupRename(name=name).name
+            self._save(group)
+            return group
+
+    async def delete(self, group_id):
+        """Remove one group and its records. Refused while an execution is unfinished."""
+        async with self.lock:
+            group = self.read(group_id)
+            if self._active(group):
+                raise GroupConflict("群正在执行或等待处理，请先停止当前协作")
+            shutil.rmtree(self._path(group_id).parent)
+            self._write_index()
+            return {"deleted": group_id, "name": group["name"]}
 
     def _message(self, group, *, content, role, name, member_id="", run_id="", **extra):
         seq = len(group["messages"]) + 1

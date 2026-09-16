@@ -243,6 +243,65 @@ def test_duplicate_group_route_copies_and_rejects_unknown_group(tmp_path):
     assert client.post("/api/chat-groups/not-a-group/duplicate").status_code == 404
 
 
+def test_rename_group_route_changes_only_the_name(tmp_path):
+    setup(tmp_path)
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+    group = client.post("/api/chat-groups", json=definition().model_dump()).json()
+
+    response = client.post(f'/api/chat-groups/{group["id"]}/rename', json={"name": "  改名后的群  "})
+
+    assert response.status_code == 200
+    renamed = response.json()
+    assert renamed["name"] == "改名后的群"
+    assert renamed["members"] == group["members"]
+    assert renamed["host_member_id"] == group["host_member_id"]
+    assert renamed["archived"] == group["archived"]
+    assert client.get(f'/api/chat-groups/{group["id"]}').json()["name"] == "改名后的群"
+    assert [item["name"] for item in client.get("/api/chat-groups").json()["groups"]] == ["改名后的群"]
+
+    assert client.post("/api/chat-groups/not-a-group/rename", json={"name": "随便"}).status_code == 404
+    assert client.post(f'/api/chat-groups/{group["id"]}/rename', json={"name": "   "}).status_code == 422
+    assert client.post(f'/api/chat-groups/{group["id"]}/rename', json={"name": "长" * 101}).status_code == 422
+    assert client.get(f'/api/chat-groups/{group["id"]}').json()["name"] == "改名后的群"
+
+
+def test_rename_group_is_allowed_while_executing_but_delete_is_not(tmp_path, monkeypatch):
+    async def scenario():
+        _, service = setup(tmp_path)
+        fake_runtime(monkeypatch)
+        group = await service.create(definition())
+        await service.send(group["id"], "开始干活", [], "first")
+        assert service.detail(group["id"])["executions"][-1]["status"] == "running"
+
+        renamed = await service.rename(group["id"], "执行中改名")
+        assert renamed["name"] == "执行中改名"
+        assert service.detail(group["id"])["name"] == "执行中改名"
+
+        with pytest.raises(GroupConflict):
+            await service.delete(group["id"])
+        assert (tmp_path / "chat_groups" / group["id"] / "state.json").exists()
+    asyncio.run(scenario())
+
+
+def test_delete_group_route_removes_state_and_index_entry(tmp_path):
+    setup(tmp_path)
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+    kept = client.post("/api/chat-groups", json=definition().model_dump()).json()
+    doomed = client.post("/api/chat-groups", json={**definition().model_dump(), "name": "待删除", "archived": True}).json()
+
+    response = client.delete(f'/api/chat-groups/{doomed["id"]}')
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": doomed["id"], "name": "待删除"}
+    assert [item["id"] for item in client.get("/api/chat-groups").json()["groups"]] == [kept["id"]]
+    assert client.get(f'/api/chat-groups/{doomed["id"]}').status_code == 404
+    assert client.delete(f'/api/chat-groups/{doomed["id"]}').status_code == 404
+    assert client.delete("/api/chat-groups/not-a-group").status_code == 404
+    assert sorted(path.name for path in (tmp_path / "chat_groups").glob("group_*")) == [kept["id"]]
+
+
 def test_group_sessions_survive_maintenance_without_bindings(tmp_path, monkeypatch):
     async def scenario():
         container, service = setup(tmp_path)

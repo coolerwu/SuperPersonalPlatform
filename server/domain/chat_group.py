@@ -1,6 +1,9 @@
 """Group chat contracts, independent of the execution framework."""
-from typing import Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+GroupName = Annotated[str, Field(min_length=1, max_length=100)]
 
 
 class GroupMember(BaseModel):
@@ -13,7 +16,7 @@ class GroupMember(BaseModel):
 
 class GroupDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    name: str = Field(min_length=1, max_length=100)
+    name: GroupName
     members: list[GroupMember] = Field(min_length=1, max_length=20)
     host_member_id: str
     archived: bool = False
@@ -27,6 +30,12 @@ class GroupDefinition(BaseModel):
         if len(names) != len(set(names)) or any("@" in name or "\n" in name for name in names):
             raise ValueError("群内名称不能重复或包含 @、换行")
         return self
+
+
+class GroupRename(BaseModel):
+    """Renaming touches only the group title; members and cursors stay untouched."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: GroupName
 
 
 class GroupTask(BaseModel):

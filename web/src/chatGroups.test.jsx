@@ -92,6 +92,72 @@ test("copying a group creates and opens the duplicate", async () => {
   expect(screen.getByRole("button", { name: `复制群聊 ${source.name}` })).toBeInTheDocument();
 });
 
+test("renaming a group from the list posts the trimmed name and closes the dialog", async () => {
+  const group = base();
+  const api = vi.fn(async (url, options) => {
+    if (url === "/api/workspace/read") return { content: config };
+    if (url === "/api/chat-groups" && !options) return { groups: [{ id: group.id, name: group.name }] };
+    if (url === `/api/chat-groups/${group.id}/rename`) return { ...group, name: JSON.parse(options.body).name };
+    return group;
+  });
+  render(<ChatGroupsPage api={api} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: `重命名群聊 ${group.name}` }));
+  const input = screen.getByLabelText("群名称");
+  await userEvent.clear(input);
+  await userEvent.type(input, "  改名后的群  ");
+  fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
+
+  const renameCall = await waitFor(() => {
+    const call = api.mock.calls.find(([url]) => url === `/api/chat-groups/${group.id}/rename`);
+    expect(call).toBeTruthy();
+    return call;
+  });
+  expect(renameCall[1].method).toBe("POST");
+  expect(JSON.parse(renameCall[1].body)).toEqual({ name: "改名后的群" });
+  await waitFor(() => expect(screen.queryByRole("button", { name: "保存名称" })).not.toBeInTheDocument());
+});
+
+test("deleting a group asks for confirmation and selects the remaining group", async () => {
+  const first = base();
+  const second = { ...base(), id: "group_two", name: "第二个群" };
+  let list = [{ id: first.id, name: first.name }, { id: second.id, name: second.name }];
+  const api = vi.fn(async (url, options) => {
+    if (url === "/api/workspace/read") return { content: config };
+    if (url === "/api/chat-groups" && !options) return { groups: list };
+    if (url === `/api/chat-groups/${first.id}` && options?.method === "DELETE") {
+      list = list.filter((entry) => entry.id !== first.id);
+      return { deleted: first.id, name: first.name };
+    }
+    if (url === `/api/chat-groups/${second.id}`) return second;
+    return first;
+  });
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<ChatGroupsPage api={api} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: `删除群聊 ${first.name}` }));
+
+  await waitFor(() => expect(api).toHaveBeenCalledWith(`/api/chat-groups/${first.id}`, expect.objectContaining({ method: "DELETE" })));
+  expect(confirmSpy).toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole("button", { name: `删除群聊 ${first.name}` })).not.toBeInTheDocument());
+  expect(screen.getByRole("button", { name: `删除群聊 ${second.name}` })).toBeInTheDocument();
+  confirmSpy.mockRestore();
+});
+
+test("cancelling the delete confirmation keeps the group", async () => {
+  const group = base();
+  const api = mockApi(group);
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<ChatGroupsPage api={api} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: `删除群聊 ${group.name}` }));
+
+  expect(confirmSpy).toHaveBeenCalled();
+  expect(api.mock.calls.some(([, options]) => options?.method === "DELETE")).toBe(false);
+  expect(screen.getByRole("button", { name: `删除群聊 ${group.name}` })).toBeInTheDocument();
+  confirmSpy.mockRestore();
+});
+
 test("editing uses PUT and stable member keys preserve typing focus", async () => {
   const api = mockApi();
   render(<ChatGroupsPage api={api} />);

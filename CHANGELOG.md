@@ -19,6 +19,9 @@
   领取任务的契约。
 - `docs/requirements/`：需求文档编号与分档约定。
 - `docs/release.md`、本 `CHANGELOG.md`：版本号、发布与回滚约定。
+- 群聊列表新增“重命名群聊”和“删除群聊”入口，对应
+  `POST /api/chat-groups/{group_id}/rename` 与 `DELETE /api/chat-groups/{group_id}`；
+  删除在群仍在协作中时返回 409，重命名在协作中也可用。
 
 ### Changed
 

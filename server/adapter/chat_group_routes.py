@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from server.adapter.security import require_authenticated
 from server.app.chat_group_service import GroupConflict
-from server.domain.chat_group import GroupDefinition
+from server.domain.chat_group import GroupDefinition, GroupRename
 
 
 class GroupMessageRequest(BaseModel):
@@ -61,6 +61,14 @@ def create_chat_group_router(container):
     @router.put("/{group_id}")
     async def update(group_id: str, payload: GroupDefinition):
         return await call(service.update(group_id, payload))
+
+    @router.post("/{group_id}/rename")
+    async def rename(group_id: str, payload: GroupRename):
+        return await call(service.rename(group_id, payload.name))
+
+    @router.delete("/{group_id}")
+    async def delete_group(group_id: str):
+        return await call(service.delete(group_id))
 
     @router.get("/{group_id}/messages")
     def messages(group_id: str, after: int = 0):
