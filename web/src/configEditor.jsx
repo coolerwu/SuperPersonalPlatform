@@ -40,9 +40,9 @@ const AGENT_TOOL_CARDS = [
     badge: "沙箱",
   },
   {
-    id: "update_system_prompt",
-    name: "Update System Prompt",
-    summary: "系统内置、始终开启：对话中申请修改本 Agent 的系统提示词，必须人工审批后才写入 config.yaml。",
+    id: "system_prompt",
+    name: "System Prompt",
+    summary: "系统内置、始终开启：对话中可读取本 Agent 的 system_prompt 原文；修改必须人工审批后才写入 config.yaml。",
     badge: "系统内置",
     locked: true,
   },

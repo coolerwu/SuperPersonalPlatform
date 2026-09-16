@@ -178,7 +178,7 @@ def test_approval_message_previews_system_prompt_update() -> None:
                 "interrupt_id": "interrupt-1",
                 "actions": [
                     {
-                        "name": "update_system_prompt",
+                        "name": "system_prompt",
                         "args": {"new_prompt": "新" * 800},
                         "description": description,
                         "allowed_decisions": ["approve", "reject"],
@@ -188,7 +188,7 @@ def test_approval_message_previews_system_prompt_update() -> None:
         ]
     })
 
-    assert "1. update_system_prompt：修改本 Agent 的系统提示词" in message
+    assert "1. system_prompt：修改本 Agent 的系统提示词" in message
     assert "…（已截断）" in message
     assert "完整对照请在 Web 端审批卡片查看" in message
     assert "回复 approve 批准本次修改。" in message

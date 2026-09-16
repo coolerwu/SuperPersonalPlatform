@@ -62,6 +62,31 @@ class ConfigFileService:
             raise AgentPromptUpdateError(f"修改后的配置未通过校验：{exc}") from exc
         return {"agent_id": normalized_id, "length": len(normalized_prompt)}
 
+    def read_agent_system_prompt(self, agent_id: str) -> dict[str, Any]:
+        """Return the exact system prompt the runtime injects for this Agent."""
+        normalized_id = str(agent_id or "").strip()
+        if not normalized_id:
+            raise AgentPromptUpdateError("缺少要读取的 Agent ID")
+        try:
+            content = self.config_path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise AgentPromptUpdateError("config.yaml 不存在") from exc
+        except OSError as exc:
+            raise AgentPromptUpdateError(f"读取 config.yaml 失败：{exc}") from exc
+        try:
+            settings = parse_settings(yaml.safe_load(content) or {})
+        except Exception as exc:  # noqa: BLE001
+            raise AgentPromptUpdateError(f"config.yaml 未通过校验：{exc}") from exc
+        if not any(agent.id == normalized_id for agent in settings.agent_workspace.agents):
+            raise AgentPromptUpdateError(f"config.yaml 中不存在 Agent「{normalized_id}」")
+        agent = settings.agent_workspace.get_agent(normalized_id)
+        return {
+            "agent_id": agent.id,
+            "name": agent.name,
+            "system_prompt": agent.system_prompt,
+            "length": len(agent.system_prompt),
+        }
+
 
 def describe_system_prompt_update(config_path: Path, agent_id: str, args: Any) -> str:
     """Build the human-facing approval text comparing current and proposed system prompts.

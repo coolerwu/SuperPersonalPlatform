@@ -209,14 +209,14 @@ export function ApprovalPanel({ approval, onDecision, compact = false }) {
       </div>
       <div className="approval-actions-list">
         {actions.map((action, index) => {
-          const promptUpdate = action.name === "update_system_prompt";
+          const promptUpdate = action.name === "system_prompt";
           return (
             <div className="approval-action" key={`${action.name || "tool"}-${index}`}>
               <div>
                 <code>{action.name || "unknown_tool"}</code>
                 <span>
                   {promptUpdate
-                    ? "修改本 Agent 的系统提示词，批准后从下一次运行生效"
+                    ? "修改本 Agent 的 system_prompt（写入 config.yaml），批准后从下一次运行生效"
                     : action.description || "该工具调用需要人工确认"}
                 </span>
               </div>

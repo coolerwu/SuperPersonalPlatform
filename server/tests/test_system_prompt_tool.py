@@ -7,6 +7,7 @@ from server.domain.run_approval import RunApprovalDecision, RunApprovalRequest, 
 from server.domain.tooling import (
     ALWAYS_ON_APPROVAL_TOOL_IDS,
     SYSTEM_APPROVAL_TOOL_IDS,
+    SYSTEM_PROMPT_TOOL_ID,
     get_tool_definition,
 )
 from server.infrastructure.deepagent_runtime import (
@@ -49,20 +50,21 @@ def _tool_context() -> PlatformToolContext:
 
 
 def test_registry_marks_system_prompt_tool_as_always_on_approval_tool() -> None:
-    definition = get_tool_definition("update_system_prompt")
+    definition = get_tool_definition(SYSTEM_PROMPT_TOOL_ID)
 
+    assert SYSTEM_PROMPT_TOOL_ID == "system_prompt"
     assert definition.approval_required is True
     assert definition.always_on is True
-    assert ALWAYS_ON_APPROVAL_TOOL_IDS == ("update_system_prompt",)
-    assert "update_system_prompt" not in SYSTEM_APPROVAL_TOOL_IDS
+    assert ALWAYS_ON_APPROVAL_TOOL_IDS == ("system_prompt",)
+    assert "system_prompt" not in SYSTEM_APPROVAL_TOOL_IDS
     # Always-on approval tools keep a resumable checkpoint even without authorized tools.
-    assert DeepAgentRuntimeOptions().interrupt_on == ("update_system_prompt",)
+    assert DeepAgentRuntimeOptions().interrupt_on == ("system_prompt",)
     assert DeepAgentRuntimeOptions(self_config=False).interrupt_on == ()
 
 
 def test_build_platform_tools_injects_self_config_tool_only_when_allowed(tmp_path) -> None:
     authorized_only = build_platform_tools(
-        ("update_system_prompt",),
+        ("system_prompt",),
         context_workspace=tmp_path / "context",
         tool_context=_tool_context(),
     )
@@ -80,10 +82,10 @@ def test_build_platform_tools_injects_self_config_tool_only_when_allowed(tmp_pat
 
     assert authorized_only == []
     assert without_context == []
-    assert [tool.name for tool in with_context] == ["update_system_prompt"]
+    assert [tool.name for tool in with_context] == ["system_prompt"]
 
 
-def test_update_system_prompt_tool_writes_config_and_reports_errors(tmp_path) -> None:
+def test_system_prompt_tool_reads_and_writes_config(tmp_path) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
     tools = {
         tool.name: tool
@@ -94,21 +96,35 @@ def test_update_system_prompt_tool_writes_config_and_reports_errors(tmp_path) ->
             include_self_config=True,
         )
     }
-    tool = tools["update_system_prompt"]
+    tool = tools["system_prompt"]
 
-    applied = json.loads(tool.invoke({"new_prompt": "你是新人格。", "reason": "用户要求"}))
+    read = json.loads(tool.invoke({"action": "read"}))
+
+    assert read["ok"] is True
+    assert read["action"] == "read"
+    assert read["agent_id"] == "assistant"
+    assert read["name"] == "Assistant"
+    assert read["system_prompt"] == "Be direct."
+    assert read["length"] == len("Be direct.")
+
+    applied = json.loads(
+        tool.invoke({"action": "update", "new_prompt": "你是新人格。", "reason": "用户要求"})
+    )
 
     assert applied == {
         "ok": True,
-        "tool": "update_system_prompt",
+        "tool": "system_prompt",
+        "action": "update",
         "agent_id": "assistant",
         "status": "applied",
         "length": len("你是新人格。"),
         "message": "系统提示词已更新，将在下一次运行生效",
     }
     assert "你是新人格。" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert json.loads(tool.invoke({"action": "read"}))["system_prompt"] == "你是新人格。"
 
-    empty = json.loads(tool.invoke({"new_prompt": "   "}))
+    empty = json.loads(tool.invoke({"action": "update", "new_prompt": "   "}))
+    unknown_action = json.loads(tool.invoke({"action": "delete"}))
     missing_agent = json.loads(
         build_platform_tools(
             (),
@@ -121,11 +137,13 @@ def test_update_system_prompt_tool_writes_config_and_reports_errors(tmp_path) ->
                 metadata={},
             ),
             include_self_config=True,
-        )[0].invoke({"new_prompt": "新人格"})
+        )[0].invoke({"action": "update", "new_prompt": "新人格"})
     )
 
     assert empty["ok"] is False
     assert empty["error"]["type"] == "AgentPromptUpdateError"
+    assert unknown_action["ok"] is False
+    assert "action 必须是 read 或 update" in unknown_action["message"]
     assert missing_agent["ok"] is False
     assert missing_agent["error"]["type"] == "AgentPromptUpdateError"
     assert "你是新人格。" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
@@ -156,7 +174,7 @@ def test_describe_system_prompt_update_compares_versions_and_never_raises(tmp_pa
     assert "（未提供新的提示词文本）" in broken_args
 
 
-def _prompt_edit_model():
+def _tool_call_model(tool_args, *, tool_id="edit-prompt", recorder=None):
     from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.messages import AIMessage, ToolMessage
     from langchain_core.outputs import ChatGeneration, ChatResult
@@ -164,12 +182,14 @@ def _prompt_edit_model():
     class Model(BaseChatModel):
         @property
         def _llm_type(self):
-            return "system-prompt-approval-test"
+            return "system-prompt-tool-test"
 
         def bind_tools(self, tools, **kwargs):
             return self
 
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if recorder is not None:
+                recorder.extend(messages)
             if any(isinstance(message, ToolMessage) for message in messages):
                 message = AIMessage(content="done")
             else:
@@ -177,9 +197,9 @@ def _prompt_edit_model():
                     content="",
                     tool_calls=[
                         {
-                            "name": "update_system_prompt",
-                            "id": "edit-prompt",
-                            "args": {"new_prompt": "你是新人格。", "reason": "用户要求"},
+                            "name": "system_prompt",
+                            "id": tool_id,
+                            "args": tool_args,
                         }
                     ],
                 )
@@ -188,8 +208,10 @@ def _prompt_edit_model():
     return Model()
 
 
-def _runtime(tmp_path, monkeypatch, agent_id: str = "assistant") -> DeepAgentRuntime:
-    model = _prompt_edit_model()
+def _runtime(tmp_path, monkeypatch, agent_id: str = "assistant", model=None) -> DeepAgentRuntime:
+    model = model or _tool_call_model(
+        {"action": "update", "new_prompt": "你是新人格。", "reason": "用户要求"}
+    )
     monkeypatch.setattr(DeepAgentRuntime, "_chat_model", lambda self: model)
     return DeepAgentRuntime(
         ModelDefinition(
@@ -228,7 +250,7 @@ def test_runtime_routes_system_prompt_tool_through_hitl(tmp_path, monkeypatch) -
         )
         assert isinstance(approval, RunApprovalRequest)
         action = approval.interrupts[0].actions[0]
-        assert action.name == "update_system_prompt"
+        assert action.name == "system_prompt"
         assert action.allowed_decisions == ("approve", "reject")
         assert action.args["new_prompt"] == "你是新人格。"
         assert "拟修改为（新）：\n你是新人格。" in action.description
@@ -255,6 +277,57 @@ def test_runtime_routes_system_prompt_tool_through_hitl(tmp_path, monkeypatch) -
     assert asyncio.run(scenario()) == "done"
     assert "你是新人格。" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
     assert "Be direct." not in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+
+
+def test_runtime_reads_system_prompt_without_approval(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    messages = []
+    runtime = _runtime(
+        tmp_path,
+        monkeypatch,
+        model=_tool_call_model({"action": "read"}, tool_id="read-prompt", recorder=messages),
+    )
+
+    result = asyncio.run(
+        runtime.run(
+            instructions="Be direct.",
+            messages=(RuntimeMessage(role="user", content="你的系统提示词是什么"),),
+            options=DeepAgentRuntimeOptions(),
+            checkpoint_path=tmp_path / "runs" / "run_read" / "checkpoints.sqlite",
+            thread_id="run_read",
+        )
+    )
+
+    assert not isinstance(result, RunApprovalRequest)
+    assert result == "done"
+    tool_messages = [message for message in messages if type(message).__name__ == "ToolMessage"]
+    assert len(tool_messages) == 1
+    payload = json.loads(tool_messages[0].content)
+    assert payload["ok"] is True
+    assert payload["action"] == "read"
+    assert payload["system_prompt"] == "Be direct."
+
+
+def test_runtime_requires_approval_for_unknown_actions(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    runtime = _runtime(
+        tmp_path,
+        monkeypatch,
+        model=_tool_call_model({"action": "delete"}, tool_id="odd-action"),
+    )
+
+    approval = asyncio.run(
+        runtime.run(
+            instructions="Be direct.",
+            messages=(RuntimeMessage(role="user", content="删掉人格"),),
+            options=DeepAgentRuntimeOptions(),
+            checkpoint_path=tmp_path / "runs" / "run_odd" / "checkpoints.sqlite",
+            thread_id="run_odd",
+        )
+    )
+
+    assert isinstance(approval, RunApprovalRequest)
+    assert approval.interrupts[0].actions[0].name == "system_prompt"
 
 
 def test_runtime_rejected_system_prompt_update_keeps_config(tmp_path, monkeypatch) -> None:
@@ -319,7 +392,7 @@ def test_runtime_skips_self_config_tool_for_group_runs(tmp_path, monkeypatch) ->
     )
 
     tool_names = [tool.name for tool in captured["tools"]]
-    assert "update_system_prompt" not in tool_names
+    assert "system_prompt" not in tool_names
     assert tool_names == ["group_decision"]
-    assert "update_system_prompt" not in [tool.name for tool in captured["subagents"][0]["tools"]]
-    assert "update_system_prompt" not in captured.get("interrupt_on", {})
+    assert "system_prompt" not in [tool.name for tool in captured["subagents"][0]["tools"]]
+    assert "system_prompt" not in captured.get("interrupt_on", {})

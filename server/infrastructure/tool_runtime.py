@@ -111,7 +111,7 @@ def build_platform_tools(
                 continue
             tools.append(_execute_code_tool(context_workspace.parent, tool_context))
     if include_self_config and tool_context is not None:
-        tools.append(_update_system_prompt_tool(context_workspace.parent, tool_context))
+        tools.append(_system_prompt_tool(context_workspace.parent, tool_context))
     return tools
 
 
@@ -172,30 +172,65 @@ def _send_attachment_tool(workspace: Path, context: PlatformToolContext, backend
     ))
 
 
-def _update_system_prompt_tool(workspace: Path, tool_context: PlatformToolContext) -> Any:
+def _system_prompt_tool(workspace: Path, tool_context: PlatformToolContext) -> Any:
     from langchain_core.tools import StructuredTool
     from server.app.config_file_service import AgentPromptUpdateError, ConfigFileService
-    from server.domain.tooling import SYSTEM_PROMPT_TOOL_ID
+    from server.domain.tooling import (
+        SYSTEM_PROMPT_READ_ACTION,
+        SYSTEM_PROMPT_TOOL_ID,
+        SYSTEM_PROMPT_UPDATE_ACTION,
+        normalize_system_prompt_action,
+    )
 
-    def update_system_prompt(new_prompt: str, reason: str = "") -> str:
-        """Replace this Agent's own system prompt in workspace/config.yaml.
+    def system_prompt(action: str, new_prompt: str = "", reason: str = "") -> str:
+        """Read or replace this Agent's own system prompt in workspace/config.yaml.
 
-        Use this only when the user explicitly asks to change this Agent's persona, rules or
-        system instructions, and always pass the complete new prompt text, never a diff or a
-        fragment. The platform pauses the run for human approval before anything is written and
-        a rejected call changes nothing. The new prompt applies to this Agent's next runs, not
-        the current one. This tool cannot modify other Agents, models, tools or any other config
-        field, and it never writes to WebDAV.
+        action=read returns the exact system prompt text this Agent runs with, straight from
+        workspace/config.yaml; reading needs no approval. Use it whenever the user asks what your
+        system prompt is, or before proposing any change, because your file tools cannot open
+        config.yaml and the text injected into a turn also contains platform middleware sections
+        that are not part of this field.
+
+        action=update replaces the field with new_prompt (pass the complete text, never a diff or a
+        fragment) and requires the user to explicitly ask for the change. The platform pauses the
+        run for human approval before anything is written; a rejected call changes nothing, and an
+        approved change applies to this Agent's next runs, not the current one. This tool cannot
+        touch other Agents, models, tools, WebDAV or any other config field.
         """
-        try:
-            result = ConfigFileService(workspace).update_agent_system_prompt(
-                tool_context.agent_id,
-                new_prompt,
+        normalized_action = normalize_system_prompt_action(action)
+        service = ConfigFileService(workspace)
+        if not normalized_action:
+            return _tool_error_result(
+                SYSTEM_PROMPT_TOOL_ID,
+                ValueError(f"unknown action: {action}"),
+                message=f"action 必须是 {SYSTEM_PROMPT_READ_ACTION} 或 {SYSTEM_PROMPT_UPDATE_ACTION}",
+                suggestions=[
+                    "Use action=read to get the current system prompt.",
+                    "Use action=update with new_prompt to replace it after user approval.",
+                ],
             )
+        try:
+            if normalized_action == SYSTEM_PROMPT_READ_ACTION:
+                result = service.read_agent_system_prompt(tool_context.agent_id)
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "tool": SYSTEM_PROMPT_TOOL_ID,
+                        "action": SYSTEM_PROMPT_READ_ACTION,
+                        "agent_id": result["agent_id"],
+                        "name": result["name"],
+                        "system_prompt": result["system_prompt"],
+                        "length": result["length"],
+                        "message": "这是当前 config.yaml 中该 Agent 的 system_prompt 原文，也是运行时注入的那一段。",
+                    },
+                    ensure_ascii=False,
+                )
+            result = service.update_agent_system_prompt(tool_context.agent_id, new_prompt)
             return json.dumps(
                 {
                     "ok": True,
                     "tool": SYSTEM_PROMPT_TOOL_ID,
+                    "action": SYSTEM_PROMPT_UPDATE_ACTION,
                     "agent_id": result["agent_id"],
                     "status": "applied",
                     "length": result["length"],
@@ -216,15 +251,18 @@ def _update_system_prompt_tool(workspace: Path, tool_context: PlatformToolContex
             return _tool_error_result(SYSTEM_PROMPT_TOOL_ID, exc)
 
     return StructuredTool.from_function(
-        update_system_prompt,
+        system_prompt,
         name=SYSTEM_PROMPT_TOOL_ID,
         description=(
-            "Replace this Agent's own system prompt (workspace/config.yaml system_prompt). "
-            "Call it only when the user explicitly asks to change this Agent's persona or system "
-            "instructions, and pass the complete new prompt text as one string. "
-            "Every call pauses for human approval; after approval it applies to this Agent's next "
-            "runs, not the current run. Do not claim the change is applied before the tool returns "
-            "ok=true, and never use it for other Agents or other config fields."
+            "Read or replace this Agent's own system prompt (workspace/config.yaml system_prompt). "
+            "action=read returns the exact current text and needs no approval; use it when the user "
+            "asks what your prompt is or before editing, since file tools cannot read config.yaml "
+            "and the prompt injected into a turn also contains platform middleware sections. "
+            "action=update replaces the field with new_prompt (complete text, not a diff) and only "
+            "when the user explicitly asks to change this Agent's persona or rules; every update "
+            "pauses for human approval and applies to this Agent's next runs, not the current one. "
+            "Never claim a change is applied before the tool returns status=applied, and never use "
+            "it for other Agents or other config fields."
         ),
     )
 

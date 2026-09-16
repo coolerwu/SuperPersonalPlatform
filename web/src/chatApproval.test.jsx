@@ -24,7 +24,7 @@ test("system prompt approval shows the current and proposed prompt instead of ra
   render(
     <ApprovalPanel
       approval={approvalFor({
-        name: "update_system_prompt",
+        name: "system_prompt",
         args: { new_prompt: "你是新人格。", reason: "用户要求" },
         description,
         allowed_decisions: ["approve", "reject"],
@@ -40,7 +40,7 @@ test("system prompt approval shows the current and proposed prompt instead of ra
   expect(review).toHaveTextContent("当前（旧）：");
   expect(review).toHaveTextContent("Be direct.");
   expect(screen.queryByText(/"new_prompt"/)).not.toBeInTheDocument();
-  expect(screen.getByText("修改本 Agent 的系统提示词，批准后从下一次运行生效")).toBeInTheDocument();
+  expect(screen.getByText(/修改本 Agent 的 system_prompt/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /仅批准本次/ })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /批准当前文件/ })).not.toBeInTheDocument();
 });

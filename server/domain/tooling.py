@@ -5,7 +5,16 @@ class ToolDefinitionError(ValueError):
     pass
 
 
-SYSTEM_PROMPT_TOOL_ID = "update_system_prompt"
+SYSTEM_PROMPT_TOOL_ID = "system_prompt"
+SYSTEM_PROMPT_READ_ACTION = "read"
+SYSTEM_PROMPT_UPDATE_ACTION = "update"
+
+
+def normalize_system_prompt_action(value: object) -> str:
+    action = str(value or "").strip().lower()
+    if action in {SYSTEM_PROMPT_READ_ACTION, SYSTEM_PROMPT_UPDATE_ACTION}:
+        return action
+    return ""
 
 
 @dataclass(frozen=True)
@@ -54,10 +63,10 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     ),
     ToolDefinition(
         id=SYSTEM_PROMPT_TOOL_ID,
-        name="Update System Prompt",
+        name="System Prompt",
         description=(
-            "Replace this Agent's own system prompt in config.yaml after human approval. "
-            "System capability, not an authorization choice."
+            "Read or replace this Agent's own system prompt in config.yaml. Reading is free; "
+            "replacing always requires human approval. System capability, not an authorization choice."
         ),
         approval_required=True,
         always_on=True,

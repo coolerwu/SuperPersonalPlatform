@@ -30,8 +30,10 @@ from server.infrastructure.agent_workspace import WebDAVPathPolicy
 
 from server.domain.tooling import (
     ALWAYS_ON_APPROVAL_TOOL_IDS,
+    SYSTEM_PROMPT_READ_ACTION,
     SYSTEM_PROMPT_TOOL_ID,
     SYSTEM_APPROVAL_TOOL_IDS,
+    normalize_system_prompt_action,
 )
 
 SYSTEM_APPROVAL_TOOLS = SYSTEM_APPROVAL_TOOL_IDS
@@ -211,6 +213,7 @@ class DeepAgentRuntime:
                     self._context_workspace.parent / "config.yaml",
                     self._agent_id,
                 ),
+                "when": _system_prompt_requires_approval,
             }
         if interrupt_on:
             create_kwargs["interrupt_on"] = interrupt_on
@@ -547,6 +550,13 @@ def _system_prompt_update_description(config_path: Path, agent_id: str) -> Any:
             )
 
     return describe
+
+
+def _system_prompt_requires_approval(request: Any) -> bool:
+    """Only read-only calls skip the human approval gate; anything else stays gated."""
+    args = request.tool_call.get("args") if hasattr(request, "tool_call") else None
+    payload = args if isinstance(args, dict) else {}
+    return normalize_system_prompt_action(payload.get("action")) != SYSTEM_PROMPT_READ_ACTION
 
 
 def _normalize_interrupt_on(value: Any) -> dict[str, dict[str, list[str]]] | None:
