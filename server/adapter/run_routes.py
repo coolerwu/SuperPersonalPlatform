@@ -21,6 +21,7 @@ class CreateRunRequest(BaseModel):
 
 class ResumeRunRequest(BaseModel):
     decision: Literal["approve", "reject"]
+    scope: Literal["once", "file_10min"] = "once"
     message: str = ""
 
 
@@ -43,9 +44,10 @@ def create_run_router(container: AppContainer) -> APIRouter:
         *,
         decision: Literal["approve", "reject"],
         message: str = "",
+        scope: Literal["once", "file_10min"] = "once",
     ) -> dict[str, object]:
         try:
-            resumed = container.run_service.resume_run(run_id, decision=decision, message=message)
+            resumed = container.run_service.resume_run(run_id, decision=decision, message=message, scope=scope)
         except RunNotFoundError as exc:
             raise HTTPException(status_code=404, detail="run not found") from exc
         except RunStateError as exc:
@@ -130,6 +132,6 @@ def create_run_router(container: AppContainer) -> APIRouter:
 
     @router.post("/{run_id}/resume")
     async def resume_run(run_id: str, payload: ResumeRunRequest) -> dict[str, object]:
-        return await resume_waiting_run(run_id, decision=payload.decision, message=payload.message)
+        return await resume_waiting_run(run_id, decision=payload.decision, message=payload.message, scope=payload.scope)
 
     return router

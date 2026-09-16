@@ -639,8 +639,14 @@ pre {
   resize: vertical;
 }
 
+.approval-file-hint {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
 .approval-controls {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }

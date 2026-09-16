@@ -287,10 +287,16 @@ def _approval_message(run_id: str, request: dict[str, Any]) -> str:
             name = str(action.get("name") or "tool")
             description = str(action.get("description") or "").strip()
             lines.append(f"{action_number}. {name}" + (f"：{description}" if description else ""))
+    from server.infrastructure.file_approval import approval_file
+    paths = {approval_file(str(action.get("name") or ""), action.get("args") or {})
+             for item in interrupts if isinstance(item, dict) for action in item.get("actions", []) if isinstance(action, dict)}
+    if len(paths) == 1 and None not in paths:
+        lines.append(f"当前文件：{next(iter(paths))}")
+        lines.append("回复 批准当前文件：当前会话内允许写入该文件 10 分钟，到期再次审批。")
     lines.extend(
         [
             "",
-            "批准：approve / 同意 / 批准 / 允许 / 通过",
+            "仅批准本次：approve / 同意 / 批准 / 允许 / 通过",
             "拒绝：reject / 拒绝 / 不同意 / 不批准 / 不允许 / 不通过",
         ]
     )

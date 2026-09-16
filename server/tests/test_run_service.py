@@ -835,3 +835,26 @@ def test_run_service_rejects_approval_with_feedback_and_can_cancel_waiting_run(t
     cancelled = service.cancel_run(second["run_id"])
     assert cancelled["state"]["status"] == "cancelled"
     assert cancelled["approval"]["status"] == "cancelled"
+
+
+def test_file_approval_validates_pending_actions_and_persists_lease(tmp_path, monkeypatch):
+    from server.app.run_service import RunStateError
+    from server.infrastructure.file_approval import FileApprovalStore
+    (tmp_path / "config.yaml").write_text(INTERRUPT_CONFIG)
+    async def fake_run(self, **kwargs):
+        return RunApprovalRequest(interrupts=(RunApprovalInterrupt("i", (
+            RunApprovalAction("write_file", {"file_path": "/webdav/a.md"}, "write", ("approve", "reject")),
+        )),))
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+    service = RunService(tmp_path)
+    run_id = asyncio.run(service.create_run(content="write", agent_id="assistant"))["run_id"]
+    asyncio.run(service.execute_run(run_id))
+    with pytest.raises(RunStateError):
+        service.resume_run(run_id, decision="reject", scope="file_10min")
+    result = service.resume_run(run_id, decision="approve", scope="file_10min")
+    resolution = result["approval"]["history"][-1]["resolution"]
+    assert resolution["file_grant"]["expires_at"] - resolution["file_grant"]["approved_at"] == 600
+    store = FileApprovalStore(tmp_path / "runs" / run_id / "file_approvals.json", "assistant")
+    assert store.allows("edit_file", {"file_path": "/webdav/a.md"})
+    with pytest.raises(RunStateError):
+        service.resume_run(run_id, decision="approve", scope="file_10min")

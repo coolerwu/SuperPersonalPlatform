@@ -44,14 +44,14 @@ test("shared approval panel prevents duplicate submits and restores controls aft
   const onDecision = vi.fn(() => new Promise((_, reject) => { rejectDecision = reject; }));
   render(<ApprovalPanel approval={{ interrupts: [{ actions: [{ name: "write_file", args: { file_path: "/webdav/a.md" } }] }] }} onDecision={onDecision} />);
 
-  fireEvent.click(screen.getByRole("button", { name: "批准并继续" }));
+  fireEvent.click(screen.getByRole("button", { name: "仅批准本次" }));
   fireEvent.click(screen.getByRole("button", { name: "批准中…" }));
   expect(onDecision).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("button", { name: "批准中…" })).toBeDisabled();
 
   rejectDecision(new Error("审批接口不可用"));
   expect(await screen.findByRole("alert")).toHaveTextContent("审批接口不可用");
-  expect(screen.getByRole("button", { name: "批准并继续" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "仅批准本次" })).toBeEnabled();
 });
 
 test("group mentions submit member IDs in textual order and default sends have no mentions", async () => {
@@ -97,7 +97,7 @@ test("restored group execution uses shared thinking and approval components and 
   expect(screen.getByText("检查共享文档")).toBeVisible();
   expect(screen.getByText("等待操作审批")).toBeVisible();
   expect(screen.getByPlaceholderText("输入 @ 选择角色，或直接与主持交流")).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "批准并继续" }));
+  fireEvent.click(screen.getByRole("button", { name: "仅批准本次" }));
   await waitFor(() => expect(api).toHaveBeenCalledWith("/api/runs/run-1/resume", expect.objectContaining({ method: "POST" })));
   await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "停止" }));
@@ -121,11 +121,11 @@ test("group approval failure stays actionable and successful retry survives stal
     return fallback(url, opts);
   });
   render(<ChatGroupsPage api={api} />);
-  fireEvent.click(await screen.findByRole("button", { name: "批准并继续" }));
+  fireEvent.click(await screen.findByRole("button", { name: "仅批准本次" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("连接失败");
-  fireEvent.click(screen.getByRole("button", { name: "批准并继续" }));
+  fireEvent.click(screen.getByRole("button", { name: "仅批准本次" }));
   expect(await screen.findByRole("status")).toHaveTextContent("审批已提交");
-  expect(screen.queryByRole("button", { name: "批准并继续" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "仅批准本次" })).not.toBeInTheDocument();
   expect(calls).toBe(2);
 });
 
@@ -192,4 +192,26 @@ test("selected quote excludes other messages and preserves source identity", asy
   fireEvent(document, new Event("selectionchange"));
   expect(screen.queryByRole("button", { name: "引用所选内容" })).not.toBeInTheDocument();
   window.getSelection().removeAllRanges();
+});
+
+test("file approval sends the ten minute scope and displays the exact file", async () => {
+  const group = base();
+  group.executions = [{ id: "exec", status: "waiting_approval", current_step: { name: "主持" } }];
+  group.active_run = { run_id: "r", state: { status: "waiting_approval" }, approval: { status: "pending", request: { interrupts: [{ id: "i", actions: [{ name: "edit_file", args: { file_path: "/webdav/日记.md" } }] }] } } };
+  const api = mockApi(group);
+  render(<ChatGroupsPage api={api} />);
+  fireEvent.click(await screen.findByRole("button", { name: "批准当前文件（10 分钟）" }));
+  await waitFor(() => expect(api).toHaveBeenCalledWith("/api/runs/r/resume", {
+    method: "POST", body: JSON.stringify({ decision: "approve", message: "", scope: "file_10min" }),
+  }));
+});
+
+test("mixed file approval does not offer a misleading single file grant", async () => {
+  const { ApprovalPanel } = await import("./chatComponents.jsx");
+  render(<ApprovalPanel approval={{ interrupts: [{ actions: [
+    { name: "write_file", args: { file_path: "/webdav/a.md" } },
+    { name: "write_file", args: { file_path: "/webdav/b.md" } },
+  ] }] }} onDecision={vi.fn()} />);
+  expect(screen.queryByRole("button", { name: "批准当前文件（10 分钟）" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "仅批准本次" })).toBeEnabled();
 });

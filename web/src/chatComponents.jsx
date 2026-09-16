@@ -97,7 +97,7 @@ export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled =
                   <ApprovalPanel
                     approval={message.approval}
                     compact
-                    onDecision={(decision, reason) => decideChatApproval(message.run_id, decision, reason)}
+                    onDecision={(decision, reason, scope) => decideChatApproval(message.run_id, decision, reason, scope)}
                   />
                 ) : null}
                 {message.cancelled ? <small>已停止</small> : null}
@@ -206,13 +206,18 @@ export function ApprovalPanel({ approval, onDecision, compact = false }) {
   const actions = interrupts.flatMap((interrupt) => (Array.isArray(interrupt.actions) ? interrupt.actions : []));
   if (actions.length === 0) return null;
 
-  async function decide(decision) {
+  const filePaths = actions.map((action) =>
+    ["write_file", "edit_file"].includes(action.name) && typeof action.args?.file_path === "string"
+      && action.args.file_path.startsWith("/webdav/") ? action.args.file_path : null);
+  const filePath = filePaths.length && filePaths.every((path) => path && path === filePaths[0]) ? filePaths[0] : null;
+
+  async function decide(decision, scope = "once") {
     if (!onDecision || submittingRef.current || submitted === approvalKey) return;
     submittingRef.current = true;
-    setBusy(decision);
+    setBusy(scope === "file_10min" ? scope : decision);
     setError("");
     try {
-      await onDecision(decision, reason.trim());
+      await onDecision(decision, reason.trim(), scope);
       setSubmitted(approvalKey);
     } catch (exc) {
       setError(exc.message || "审批提交失败，请重试");
@@ -252,14 +257,19 @@ export function ApprovalPanel({ approval, onDecision, compact = false }) {
         disabled={Boolean(busy)}
       />
       {error ? <p className="approval-error" role="alert">{error}</p> : null}
+      {filePath ? <p className="approval-file-hint">文件授权：<code>{filePath}</code> · 当前会话内 10 分钟有效</p> : null}
       <div className="approval-controls">
         <button className="danger" onClick={() => decide("reject")} disabled={Boolean(busy)}>
           <XCircle size={15} />
           {busy === "reject" ? "拒绝中…" : "拒绝并继续"}
         </button>
+        {filePath ? <button onClick={() => decide("approve", "file_10min")} disabled={Boolean(busy)}>
+          <CheckCircle2 size={15} />
+          {busy === "file_10min" ? "批准中…" : "批准当前文件（10 分钟）"}
+        </button> : null}
         <button className="primary" onClick={() => decide("approve")} disabled={Boolean(busy)}>
           <CheckCircle2 size={15} />
-          {busy === "approve" ? "批准中…" : "批准并继续"}
+          {busy === "approve" ? "批准中…" : "仅批准本次"}
         </button>
       </div>
     </section>

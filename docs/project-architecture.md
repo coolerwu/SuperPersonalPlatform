@@ -422,3 +422,10 @@ POST /api/chat-groups/{group_id}/collaborations/{execution_id}/stop
 ### Chat 终态恢复
 
 - Chat 刷新或切换会话时，按当前已加载消息的 Run ID 分批读取任务快照（每批最多 8 个），包含只有用户消息的任务。失败和取消任务从已有 result/state 恢复原因与终态，并将状态消息放回对应用户消息之后；不依赖助手历史记录或 partial 是否存在，不写入 checkpoint 或伪造历史消息。
+
+### 当前文件的 10 分钟审批授权
+
+- Chat、群聊和 Runs 共用审批卡，提供“仅批准本次”和“批准当前文件（10 分钟）”。仅当整批待审批调用均为同一个 WebDAV 文件的 write_file/edit_file 时显示文件授权；混合工具或多个文件仍逐批审批，避免误批其他目标。微信整条回复“批准当前文件”使用相同入口，原 approve/批准等仍只批准本次。
+- `POST /api/runs/{run_id}/resume` 增加 `scope=once|file_10min`，默认 once；file_10min 仅允许 approve。后端从已保存的审批请求提取并验证精确文件路径和 WebDAV 写权限，不接受客户端指定文件、期限或目录授权。
+- 文件授权按当前 session + Agent 隔离，存于 `sessions/{session_id}/file_approvals.json`，无 session 时存于 Run 目录；记录批准时间和固定 600 秒到期时间，审批 history 保存授权快照。刷新、重启和后续工具调用不会续期。群成员独立 session，因此不会共享其他成员或会话的授权。
+- 主/子 Agent 原生 HITL 条件在每次工具调用时检查持久化授权和实时到期时间；精确路径匹配，仅豁免该文件 write_file/edit_file 的重复确认，原生目录权限、只读限制和后端校验不变。到期自动恢复审批，不调整 checkpoint，不批量放行其他文件或工具。

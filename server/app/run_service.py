@@ -252,6 +252,8 @@ class RunService:
         content = str(run_input.get("content") or "")
         session_id = str(run_input.get("session_id") or "")
         runtime_options = _runtime_options(agent_snapshot.get("deepagent"), name=str(agent_snapshot.get("name") or ""), webdav=agent_snapshot.get("webdav"))
+        from dataclasses import replace
+        runtime_options = replace(runtime_options, file_approval_path=self._file_approval_path(run_id, run_input))
         group_data = run_input.get("snapshot", {}).get("group_context")
         if group_data:
             from dataclasses import replace
@@ -607,12 +609,18 @@ class RunService:
     def reject_run(self, run_id: str, *, message: str = "") -> dict[str, Any]:
         return self.resume_run(run_id, decision="reject", message=message)
 
+    def _file_approval_path(self, run_id: str, run_input: dict) -> Path:
+        session_id = str(run_input.get("session_id") or "")
+        root = self._workspace / "sessions" / session_id if session_id else self._run_dir(run_id)
+        return root / "file_approvals.json"
+
     def resume_run(
         self,
         run_id: str,
         *,
         decision: ApprovalDecisionType,
         message: str = "",
+        scope: str = "once",
     ) -> dict[str, Any]:
         run_dir = self._run_dir(run_id)
         if not run_dir.exists():
@@ -627,6 +635,22 @@ class RunService:
         request = RunApprovalRequest.from_json(approval.get("request") or {})
         if not request.interrupts:
             raise RunStateError("run approval request is invalid")
+        if scope not in {"once", "file_10min"} or (scope != "once" and decision != "approve"):
+            raise RunStateError("invalid approval scope")
+        grant_path = None
+        if scope == "file_10min":
+            from server.infrastructure.file_approval import approval_file
+            paths = {approval_file(action.name, action.args) for item in request.interrupts for action in item.actions}
+            if None in paths or len(paths) != 1:
+                raise RunStateError("批准当前文件仅支持同一个 WebDAV 文件的写入审批")
+            grant_path = paths.pop()
+            from server.infrastructure.agent_workspace import WebDAVPathPolicy
+            run_input = self._load_input(run_id)
+            options = _runtime_options(run_input["snapshot"]["agent"].get("deepagent"), webdav=run_input["snapshot"]["agent"].get("webdav"))
+            try:
+                WebDAVPathPolicy(options.webdav).resolve(grant_path[len("/webdav"):], write=True)
+            except (ValueError, PermissionError) as exc:
+                raise RunStateError("当前文件没有 WebDAV 写入权限") from exc
         rejection_message = message.strip() or "用户拒绝执行该操作"
         resume_values: list[tuple[str, tuple[RunApprovalDecision, ...]]] = []
         for interrupt in request.interrupts:
@@ -641,13 +665,18 @@ class RunService:
                     )
                 )
             resume_values.append((interrupt.interrupt_id, tuple(decisions)))
+        grant = None
+        if grant_path:
+            from server.infrastructure.file_approval import FileApprovalStore
+            run_input = self._load_input(run_id)
+            grant = FileApprovalStore(self._file_approval_path(run_id, run_input), str(run_input.get("agent_id") or "")).grant(grant_path)
         resume = RunApprovalResume(values=tuple(resume_values))
         now = _now()
         history = approval.get("history") if isinstance(approval.get("history"), list) else []
         history.append(
             {
                 "request": request.to_json(),
-                "resolution": {"decision": decision, "message": rejection_message if decision == "reject" else ""},
+                "resolution": {"decision": decision, "message": rejection_message if decision == "reject" else "", "scope": scope, "file_grant": grant},
                 "resolved_at": now,
             }
         )

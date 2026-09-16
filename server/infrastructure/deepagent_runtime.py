@@ -68,6 +68,7 @@ class DeepAgentRuntimeOptions:
     max_iterations: int = 60
     name: str = ""
     todo_list: bool = True
+    file_approval_path: Path | None = None
     group_control: dict | None = None
     tools: tuple[str, ...] = ()
     webdav: AgentWebDAVConfig = AgentWebDAVConfig()
@@ -181,8 +182,12 @@ class DeepAgentRuntime:
             create_kwargs["name"] = name
         from deepagents.middleware._fs_interrupt import _build_interrupt_on_from_permissions
         interrupt_on = _build_interrupt_on_from_permissions(create_kwargs["permissions"])
-        for rule in interrupt_on.values():
+        from server.infrastructure.file_approval import FileApprovalStore
+        grants = FileApprovalStore(options.file_approval_path, self._agent_id) if options.file_approval_path else None
+        for tool, rule in interrupt_on.items():
             rule["allowed_decisions"] = ["approve", "reject"]
+            if grants and tool in {"write_file", "edit_file"}:
+                rule["when"] = grants.wrap(tool, rule["when"])
         interrupt_on.update(_normalize_interrupt_on(options.interrupt_on) or {})
         if interrupt_on:
             create_kwargs["interrupt_on"] = interrupt_on

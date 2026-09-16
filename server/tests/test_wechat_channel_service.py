@@ -569,3 +569,11 @@ def test_rejection_reply_aliases(reply):
 @pytest.mark.parametrize("reply", ["好", "可以", "继续", "确认", "OK", "我同意", "同意 但是先等等", "不同意这个方案", "approve later", "reject this idea"])
 def test_approval_reply_requires_whole_message(reply):
     assert _parse_approval_command(reply) is None
+
+
+def test_file_approval_command_is_explicit_and_time_limited():
+    command = _parse_approval_command("批准当前文件！")
+    assert command.action == "approve"
+    assert command.scope == "file_10min"
+    assert _parse_approval_command("approve").scope == "once"
+    assert _parse_approval_command("请不要批准当前文件") is None

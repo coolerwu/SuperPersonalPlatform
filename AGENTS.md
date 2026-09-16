@@ -72,3 +72,5 @@
 - 群引用 session 和未结束步骤 Run 必须得到清理保护；群任务重试从群入口发起，不能绕过编排。发布前验证中断恢复、审批、停止和上下文隔离。
 
 - Checkpoint 按 session 存储于 `sessions/{session_id}/checkpoints.sqlite`；无 session 的审批 Run 存于自身 Run 目录。旧公共库需停服备份后按 thread_id 一次性拆分并核验，不加入自动迁移；群公共消息增量与成员 checkpoint 衔接，主持工具生成的公开消息也必须补齐。
+
+- WebDAV 文件审批可由用户显式选择“批准当前文件（10 分钟）”：仅当前 session + Agent 的精确文件写入免重复确认，持久化绝对到期时间；主/子 Agent 每次调用实时检查。原生权限和只读限制不变，禁止扩为目录、跨会话或永久授权，普通 approve 仍仅批准本次。发布前验证到期、重启恢复、不同文件/Agent/session 隔离及子 Agent checkpoint 恢复。

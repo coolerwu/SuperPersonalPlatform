@@ -517,11 +517,11 @@ function ChatPage() {
     }
   }
 
-  async function decideChatApproval(runId, decision, message = "") {
+  async function decideChatApproval(runId, decision, message = "", scope = "once") {
     try {
       await api(`/api/runs/${runId}/resume`, {
         method: "POST",
-        body: JSON.stringify({ decision, message }),
+        body: JSON.stringify({ decision, message, scope }),
       });
       setMessages((current) =>
         upsertChatAssistantMessage(current, runId, {
@@ -961,7 +961,7 @@ function RunDetail({ run, events, onRunAction }) {
       {run.approval?.status === "pending" ? (
         <ApprovalPanel
           approval={run.approval.request}
-          onDecision={(decision, message) => onRunAction?.(runId, "resume", { decision, message })}
+          onDecision={(decision, message, scope) => onRunAction?.(runId, "resume", { decision, message, scope })}
         />
       ) : null}
       {run.approval?.status === "resume_queued" ? (

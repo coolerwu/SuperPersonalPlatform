@@ -119,9 +119,9 @@ export function ChatGroupsPage({ api }) {
     });
   }
 
-  async function decide(runId, decision, message) {
+  async function decide(runId, decision, message, scope = "once") {
     const id = group.id;
-    await api(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ decision, message }) });
+    await api(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ decision, message, scope }) });
     // Refresh failure does not undo an accepted approval; polling will recover.
     refresh(id).catch((exc) => { if (selectedRef.current === id) setError(`审批已提交，状态同步暂时失败：${exc.message}`); });
   }

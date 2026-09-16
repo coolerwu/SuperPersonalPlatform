@@ -1585,7 +1585,7 @@ test("runs page approves a paused DeepAgent run and resumes it", async () => {
 
   expect(await screen.findByText("等待操作审批")).toBeInTheDocument();
   expect(screen.getByText("write_file")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "批准并继续" }));
+  fireEvent.click(screen.getByRole("button", { name: "仅批准本次" }));
   expect(await screen.findByRole("button", { name: "批准中…" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "拒绝并继续" })).toBeDisabled();
 

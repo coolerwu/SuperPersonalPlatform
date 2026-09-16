@@ -39,6 +39,7 @@ class WechatChannelStatus:
 @dataclass(frozen=True)
 class WechatApprovalCommand:
     action: str
+    scope: str = "once"
     selector: str = ""
     message: str = ""
 
@@ -675,7 +676,9 @@ class WechatChannelService:
             return
         run_id = str(matches[0]["run_id"])
         try:
-            if command.action == "approve":
+            if command.action == "approve" and command.scope == "file_10min":
+                self._run_service.resume_run(run_id, decision="approve", scope="file_10min")
+            elif command.action == "approve":
                 self._run_service.approve_run(run_id)
             else:
                 self._run_service.reject_run(run_id, message=command.message)
@@ -686,7 +689,7 @@ class WechatChannelService:
             self._run_worker_service.wake()
         if self._run_delivery_service is not None:
             self._run_delivery_service.wake()
-        action_text = "已批准" if command.action == "approve" else "已拒绝"
+        action_text = "已批准当前文件（当前会话内 10 分钟有效）" if command.scope == "file_10min" else "已批准" if command.action == "approve" else "已拒绝"
         await self._send_reply(from_user_id, context_token, f"{action_text}任务 {run_id}，Agent 将继续运行。")
 
     def _matching_pending_approvals(
@@ -986,6 +989,8 @@ def _parse_approval_command(text: str) -> WechatApprovalCommand | None:
     if not value:
         return None
     reply = value.rstrip("。.!！?？…，,；;、").strip().lower()
+    if reply == "批准当前文件":
+        return WechatApprovalCommand(action="approve", scope="file_10min")
     if reply in {"approve", "同意", "批准", "允许", "通过"}:
         return WechatApprovalCommand(action="approve")
     if reply in {"reject", "拒绝", "不同意", "不批准", "不允许", "不通过"}:

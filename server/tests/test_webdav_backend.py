@@ -253,9 +253,9 @@ def test_multiple_directory_validation_and_empty_permissions():
         assert _check_fs_permission(WebDAVPathPolicy(config).permissions, "read", "/webdav/笔记/new.md") == "deny"
 
 @pytest.mark.parametrize('delegate', [False, True])
-@pytest.mark.parametrize('decision', ['approve', 'reject'])
+@pytest.mark.parametrize('decision,lease', [('approve', False), ('reject', False), ('approve', True)])
 @pytest.mark.parametrize('operation', ['write_file', 'edit_file'])
-def test_real_graph_webdav_hitl(tmp_path, delegate, decision, operation):
+def test_real_graph_webdav_hitl(tmp_path, delegate, decision, operation, lease, monkeypatch):
     from deepagents import create_deep_agent
     from deepagents.middleware._fs_interrupt import _build_interrupt_on_from_permissions
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -281,6 +281,11 @@ def test_real_graph_webdav_hitl(tmp_path, delegate, decision, operation):
     permissions=view.policy.permissions
     interrupt_on=_build_interrupt_on_from_permissions(permissions)
     for rule in interrupt_on.values(): rule['allowed_decisions']=['approve','reject']
+    from server.infrastructure.file_approval import FileApprovalStore
+    grants = FileApprovalStore(tmp_path / 'file_approvals.json', 'assistant')
+    for tool, rule in interrupt_on.items():
+        if tool in {'write_file', 'edit_file'}:
+            rule['when'] = grants.wrap(tool, rule['when'])
     saver=InMemorySaver()
     def build():
         return create_deep_agent(model=Model(),backend=backend,permissions=permissions,interrupt_on=interrupt_on,checkpointer=saver,
@@ -291,6 +296,8 @@ def test_real_graph_webdav_hitl(tmp_path, delegate, decision, operation):
     assert first.get('__interrupt__')
     assert calls == []
     assert remote == {'/dav/notebook/team/note.md':b'original'}
+    if lease:
+        grants.grant('/webdav/team/' + ('hitl.md' if operation == 'write_file' else 'note.md'))
     # Rebuild the graph to exercise checkpoint-based approval resumption.
     resumed=asyncio.run(build().ainvoke(Command(resume={'decisions':[{'type':decision}]}),config))
     assert not resumed.get('__interrupt__')
@@ -303,6 +310,15 @@ def test_real_graph_webdav_hitl(tmp_path, delegate, decision, operation):
         assert calls==[]
         assert not (view.service._files_dir/'team/hitl.md').exists()
         assert (view.service._files_dir/'team/note.md').read_text()=='original'
+
+    if lease:
+        second = asyncio.run(build().ainvoke({'messages': [('user', 'Again')]}, {'configurable': {'thread_id': 'next'}}))
+        assert not second.get('__interrupt__')
+        import time
+        expired = time.time() + 601
+        monkeypatch.setattr('server.infrastructure.file_approval.time.time', lambda: expired)
+        third = asyncio.run(build().ainvoke({'messages': [('user', 'Again')]}, {'configurable': {'thread_id': 'expired'}}))
+        assert third.get('__interrupt__')
 
 
 def test_real_graph_webdav_hitl_resumes_once_with_sqlite_checkpoint(tmp_path):
