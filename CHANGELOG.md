@@ -22,6 +22,10 @@
 - 群聊列表新增“重命名群聊”和“删除群聊”入口，对应
   `POST /api/chat-groups/{group_id}/rename` 与 `DELETE /api/chat-groups/{group_id}`；
   删除在群仍在协作中时返回 409，重命名在协作中也可用。
+- 群聊成员库：可复用的群成员预设（群内名称 + 基础 Agent + 附加 prompt）存于
+  `workspace/chat_groups/members.json`，通过 `GET/POST /api/chat-groups/members` 与
+  `DELETE /api/chat-groups/members/{member_id}` 管理；新建/编辑群时可一键选入，
+  也可把现有成员存回成员库。预设是编辑期模板，不影响已建群。
 
 ### Changed
 

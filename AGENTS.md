@@ -80,6 +80,7 @@
 
 - 单聊和群聊共用 `web/src/chatComponents.jsx`，不要复制消息气泡、Markdown、思考过程、审批或输入框实现。
 - 群记录归 `workspace/chat_groups/`；成员执行 session 归 `workspace/sessions/`，每群成员独立 checkpoint，普通 Chat 不列出或选用内部 session。临时角色仍共享基础 Agent 的文件和长期记忆。
+- 可复用的群成员预设（群内名称 + 基础 Agent + 附加 prompt）归 `workspace/chat_groups/members.json`，由 `/chat-groups` 的成员库维护；它是编辑期模板，选入群即复制成该群独立成员，改预设不改写已建群，也不跨群共享 session。
 - 群步骤使用确定性 Run ID 与稳定 LangGraph 消息 ID，推进前先落盘，发布结果与游标原子更新。自动协作最多三轮、每轮四名成员；只接受主持结构化工具决定，不从回答中的 @ 派工，控制工具不得下放给子 Agent。
 - 群引用 session 和未结束步骤 Run 必须得到清理保护；群任务重试从群入口发起，不能绕过编排。发布前验证中断恢复、审批、停止和上下文隔离。
 

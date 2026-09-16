@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from server.adapter.security import require_authenticated
 from server.app.chat_group_service import GroupConflict
-from server.domain.chat_group import GroupDefinition, GroupRename
+from server.domain.chat_group import GroupDefinition, GroupMember, GroupRename
 
 
 class GroupMessageRequest(BaseModel):
@@ -49,6 +49,20 @@ def create_chat_group_router(container):
     @router.post("")
     async def create(payload: GroupDefinition):
         return await call(service.create(payload))
+
+    # The reusable member presets live under a fixed path, so they are declared
+    # before the "/{group_id}" routes that would otherwise capture "members".
+    @router.get("/members")
+    def list_member_library():
+        return {"members": service.list_member_library()}
+
+    @router.post("/members")
+    async def save_member_library_entry(payload: GroupMember):
+        return await call(service.save_member_library_entry(payload))
+
+    @router.delete("/members/{member_id}")
+    async def delete_member_library_entry(member_id: str):
+        return await call(service.delete_member_library_entry(member_id))
 
     @router.post("/{group_id}/duplicate")
     async def duplicate(group_id: str):

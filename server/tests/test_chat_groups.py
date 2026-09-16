@@ -302,6 +302,64 @@ def test_delete_group_route_removes_state_and_index_entry(tmp_path):
     assert sorted(path.name for path in (tmp_path / "chat_groups").glob("group_*")) == [kept["id"]]
 
 
+def test_member_library_round_trip_and_validation(tmp_path):
+    setup(tmp_path)
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+
+    assert client.get("/api/chat-groups/members").json() == {"members": []}
+
+    entry = {"id": "review", "agent_id": "assistant", "name": "评审", "prompt": "检查问题"}
+    assert client.post("/api/chat-groups/members", json=entry).json() == entry
+    assert client.get("/api/chat-groups/members").json() == {"members": [entry]}
+    assert json.loads((tmp_path / "chat_groups" / "members.json").read_text(encoding="utf-8"))["members"] == [entry]
+
+    updated = {**entry, "prompt": "更严格的检查"}
+    assert client.post("/api/chat-groups/members", json=updated).json() == updated
+    assert client.get("/api/chat-groups/members").json() == {"members": [updated]}
+
+    assert client.post("/api/chat-groups/members", json={**entry, "id": "other"}).status_code == 400
+    assert client.post("/api/chat-groups/members", json={**entry, "agent_id": "missing"}).status_code == 400
+    assert client.post("/api/chat-groups/members", json={**entry, "name": "   "}).status_code == 422
+    assert client.get("/api/chat-groups/members").json() == {"members": [updated]}
+
+    assert client.delete("/api/chat-groups/members/review").json() == {"deleted": "review"}
+    assert client.get("/api/chat-groups/members").json() == {"members": []}
+    assert client.delete("/api/chat-groups/members/review").status_code == 404
+    # The fixed "/members" path must win over "/{group_id}".
+    assert client.get("/api/chat-groups/not-a-group").status_code == 404
+
+
+def test_member_library_presets_never_change_existing_groups(tmp_path):
+    setup(tmp_path)
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+    group = client.post("/api/chat-groups", json=definition().model_dump()).json()
+
+    assert client.post(
+        "/api/chat-groups/members",
+        json={"id": "host", "agent_id": "assistant", "name": "主持", "prompt": "改写后的 prompt"},
+    ).status_code == 200
+    assert client.delete("/api/chat-groups/members/host").status_code == 200
+
+    assert client.get(f'/api/chat-groups/{group["id"]}').json()["members"] == group["members"]
+    assert [item["id"] for item in client.get("/api/chat-groups").json()["groups"]] == [group["id"]]
+
+
+def test_member_library_skips_invalid_stored_entries(tmp_path):
+    async def scenario():
+        _, service = setup(tmp_path)
+        service.root.mkdir(parents=True, exist_ok=True)
+        (service.root / "members.json").write_text(json.dumps({"members": [
+            {"id": "keep", "agent_id": "assistant", "name": "保留", "prompt": ""},
+            {"id": "bad id", "agent_id": "assistant", "name": "坏", "prompt": ""},
+            "not-a-member",
+        ]}, ensure_ascii=False), encoding="utf-8")
+
+        assert [item["id"] for item in service.list_member_library()] == ["keep"]
+    asyncio.run(scenario())
+
+
 def test_group_sessions_survive_maintenance_without_bindings(tmp_path, monkeypatch):
     async def scenario():
         container, service = setup(tmp_path)

@@ -11,7 +11,7 @@ from pathlib import Path
 from server.app.run_service import RunNotFoundError, _public_agent, _public_model
 from server.app.session_service import SessionService
 from server.domain.message_quote import quote_content
-from server.domain.chat_group import GroupDefinition, GroupDecision, GroupRename, GroupRunContext, ChatGroupState, GroupExecution
+from server.domain.chat_group import GroupDefinition, GroupDecision, GroupMember, GroupRename, GroupRunContext, ChatGroupState, GroupExecution
 from server.infrastructure.config import load_settings
 
 
@@ -150,6 +150,53 @@ class ChatGroupService:
             shutil.rmtree(self._path(group_id).parent)
             self._write_index()
             return {"deleted": group_id, "name": group["name"]}
+
+    def _library_path(self):
+        return self.root / "members.json"
+
+    def list_member_library(self):
+        """Reusable member presets. Unreadable entries are skipped, never fatal."""
+        path = self._library_path()
+        if not path.is_file():
+            return []
+        raw = json.loads(path.read_text(encoding="utf-8")).get("members", [])
+        members = []
+        for item in raw:
+            try:
+                members.append(GroupMember.model_validate(item).model_dump())
+            except ValueError:
+                continue
+        return members
+
+    def _save_member_library(self, members):
+        save(self._library_path(), {"members": members})
+
+    async def save_member_library_entry(self, member):
+        """Create or replace one preset. Groups only copy presets, so no group is touched."""
+        async with self.lock:
+            settings = load_settings(self.workspace / "config.yaml")
+            settings.agent_workspace.get_agent(member.agent_id)
+            members = self.list_member_library()
+            if any(item["name"] == member.name and item["id"] != member.id for item in members):
+                raise ValueError("角色名称不能重复")
+            entry = member.model_dump()
+            for index, item in enumerate(members):
+                if item["id"] == member.id:
+                    members[index] = entry
+                    break
+            else:
+                members.append(entry)
+            self._save_member_library(members)
+            return entry
+
+    async def delete_member_library_entry(self, member_id):
+        async with self.lock:
+            members = self.list_member_library()
+            remaining = [item for item in members if item["id"] != member_id]
+            if len(remaining) == len(members):
+                raise FileNotFoundError("角色不存在")
+            self._save_member_library(remaining)
+            return {"deleted": member_id}
 
     def _message(self, group, *, content, role, name, member_id="", run_id="", **extra):
         seq = len(group["messages"]) + 1

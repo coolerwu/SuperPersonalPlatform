@@ -3206,6 +3206,14 @@ pre {
 .group-mention-menu { position: absolute; bottom: 100%; left: 16px; z-index: 5; display: flex; flex-direction: column; max-height: 220px; overflow: auto; padding: 6px; background: #17242c; border: 1px solid #41535b; border-radius: 8px; min-width: 180px; box-shadow: 0 8px 30px #0008; }
 .group-mention-menu button { display: flex; align-items: center; gap: 8px; text-align: left; border: 0; }
 .group-mention-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 0; }
+.group-library-picker { display: grid; gap: 8px; justify-items: start; }
+.group-library-picker > button { display: inline-flex; align-items: center; gap: 6px; }
+.group-library-options { display: grid; gap: 6px; width: 100%; max-height: 220px; overflow: auto; padding: 6px; background: #17242c; border: 1px solid #41535b; border-radius: 8px; }
+.group-library-options button { display: flex; align-items: center; gap: 8px; text-align: left; border-color: transparent; background: transparent; }
+.group-library-options button span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.group-library-options button small { color: #8a9aa6; font-size: 11px; }
+.group-library-options button:disabled { opacity: 0.55; }
+.group-library-editor { width: min(560px, 100%); }
 .group-mention-chips span { background: #203c38; color: #9bdfd2; border-radius: 4px; padding: 4px 8px; font-size: 11px; }
 .group-collaborate { white-space: nowrap; font-size: 12px; }
 .group-modal-backdrop { position: fixed; inset: 0; background: #050b10c9; z-index: 60; display: grid; place-items: center; padding: 20px; }

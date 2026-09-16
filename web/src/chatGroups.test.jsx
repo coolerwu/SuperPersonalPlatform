@@ -92,6 +92,97 @@ test("copying a group creates and opens the duplicate", async () => {
   expect(screen.getByRole("button", { name: `复制群聊 ${source.name}` })).toBeInTheDocument();
 });
 
+test("adding a member from the member library copies it into the draft without leaking editor fields", async () => {
+  const group = base();
+  const preset = { id: "lib_writer", agent_id: "assistant", name: "文档整理", prompt: "整理文档" };
+  const api = vi.fn(async (url, options) => {
+    if (url === "/api/workspace/read") return { content: config };
+    if (url === "/api/chat-groups" && !options) return { groups: [{ id: group.id, name: group.name }] };
+    if (url === "/api/chat-groups/members" && !options) return { members: [preset] };
+    return group;
+  });
+  render(<ChatGroupsPage api={api} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "编辑群聊" }));
+  fireEvent.click(screen.getByRole("button", { name: "从成员库添加" }));
+  fireEvent.click(screen.getByRole("option", { name: "使用角色 文档整理" }));
+
+  const names = screen.getAllByLabelText("群内名称");
+  expect(names).toHaveLength(3);
+  expect(names[2]).toHaveValue("文档整理");
+  fireEvent.click(screen.getByRole("button", { name: "保存群聊" }));
+
+  await waitFor(() => expect(api).toHaveBeenCalledWith(`/api/chat-groups/${group.id}`, expect.objectContaining({ method: "PUT" })));
+  const body = JSON.parse(api.mock.calls.find(([, options]) => options?.method === "PUT")[1].body);
+  expect(body.members).toHaveLength(3);
+  body.members.forEach((member) => expect(member).not.toHaveProperty("_libraryId"));
+  expect(body.members[2]).toMatchObject({ agent_id: "assistant", name: "文档整理", prompt: "整理文档" });
+});
+
+test("saving a member into the member library posts the role and reuses its id", async () => {
+  const group = base();
+  const posted = [];
+  const api = vi.fn(async (url, options) => {
+    if (url === "/api/workspace/read") return { content: config };
+    if (url === "/api/chat-groups" && !options) return { groups: [{ id: group.id, name: group.name }] };
+    if (url === "/api/chat-groups/members" && !options) return { members: posted };
+    if (url === "/api/chat-groups/members" && options?.method === "POST") {
+      const entry = JSON.parse(options.body);
+      posted.push(entry);
+      return entry;
+    }
+    return group;
+  });
+  render(<ChatGroupsPage api={api} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "编辑群聊" }));
+  fireEvent.click(screen.getByRole("button", { name: "存入成员库 主持" }));
+  await waitFor(() => expect(posted).toHaveLength(1));
+  expect(posted[0]).toMatchObject({ agent_id: "assistant", name: "主持", prompt: "组织讨论" });
+
+  fireEvent.click(screen.getByRole("button", { name: "存入成员库 主持" }));
+  await waitFor(() => expect(posted).toHaveLength(2));
+  expect(posted[1].id).toBe(posted[0].id);
+});
+
+test("member library dialog saves and deletes presets", async () => {
+  const group = base();
+  let stored = [{ id: "lib_review", agent_id: "assistant", name: "评审", prompt: "检查问题" }];
+  const api = vi.fn(async (url, options) => {
+    if (url === "/api/workspace/read") return { content: config };
+    if (url === "/api/chat-groups" && !options) return { groups: [{ id: group.id, name: group.name }] };
+    if (url === "/api/chat-groups/members" && !options) return { members: stored };
+    if (url === "/api/chat-groups/members" && options?.method === "POST") {
+      const entry = JSON.parse(options.body);
+      stored = [entry];
+      return entry;
+    }
+    if (url === "/api/chat-groups/members/lib_review" && options?.method === "DELETE") {
+      stored = [];
+      return { deleted: "lib_review" };
+    }
+    return group;
+  });
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<ChatGroupsPage api={api} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "成员库" }));
+  const name = screen.getByLabelText("群内名称");
+  await userEvent.clear(name);
+  await userEvent.type(name, "资深评审");
+  fireEvent.click(screen.getByRole("button", { name: "保存角色 资深评审" }));
+
+  await waitFor(() => expect(api).toHaveBeenCalledWith("/api/chat-groups/members", expect.objectContaining({ method: "POST" })));
+  const posted = api.mock.calls.find(([url, options]) => url === "/api/chat-groups/members" && options?.method === "POST")[1];
+  expect(JSON.parse(posted.body)).toMatchObject({ id: "lib_review", agent_id: "assistant", name: "资深评审" });
+
+  fireEvent.click(screen.getByRole("button", { name: "删除角色 资深评审" }));
+  await waitFor(() => expect(api).toHaveBeenCalledWith("/api/chat-groups/members/lib_review", expect.objectContaining({ method: "DELETE" })));
+  expect(confirmSpy).toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole("button", { name: "删除角色 资深评审" })).not.toBeInTheDocument());
+  confirmSpy.mockRestore();
+});
+
 test("renaming a group from the list posts the trimmed name and closes the dialog", async () => {
   const group = base();
   const api = vi.fn(async (url, options) => {

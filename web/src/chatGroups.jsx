@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Archive, Bot, Copy, Pencil, Plus, Settings, Square, Trash2, Users, X } from "lucide-react";
+import { Archive, BookUser, Bot, Copy, Pencil, Plus, Settings, Square, Trash2, Users, X } from "lucide-react";
 import { ChatComposer, ChatMessageList } from "./chatComponents.jsx";
 import { useGroupRunEvents } from "./chatRuntime.js";
 import { parseConfigDraft } from "./configEditor.jsx";
@@ -27,6 +27,8 @@ export function ChatGroupsPage({ api }) {
   const [mentions, setMentions] = useState([]);
   const [editor, setEditor] = useState(null);
   const [renaming, setRenaming] = useState(null);
+  const [library, setLibrary] = useState([]);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const selectedRef = useRef("");
@@ -40,10 +42,12 @@ export function ChatGroupsPage({ api }) {
     let cancelled = false;
     Promise.all([
       api("/api/chat-groups"),
+      api("/api/chat-groups/members"),
       api("/api/workspace/read", { method: "POST", body: JSON.stringify({ path: "config.yaml" }) }),
-    ]).then(([list, config]) => {
+    ]).then(([list, members, config]) => {
       if (cancelled) return;
       setGroups(list.groups || []);
+      setLibrary(members.members || []);
       setAgents(parseConfigDraft(config.content || "").config?.agents?.definitions || []);
       const first = list.groups?.find((item) => !item.archived) || list.groups?.[0];
       if (first) selectGroup(first.id);
@@ -88,9 +92,11 @@ export function ChatGroupsPage({ api }) {
     submitRef.current = true;
     setBusy(true);
     setError("");
-    try { await operation(); }
+    let result;
+    try { result = await operation(); }
     catch (exc) { setError(exc.message); }
     finally { submitRef.current = false; setBusy(false); }
+    return result;
   }
 
   async function send(automatic = false) {
@@ -155,6 +161,30 @@ export function ChatGroupsPage({ api }) {
     });
   }
 
+  async function reloadLibrary() {
+    const data = await api("/api/chat-groups/members");
+    const members = data.members || [];
+    setLibrary(members);
+    return members;
+  }
+
+  async function saveLibraryEntry(member) {
+    return await perform(async () => {
+      const saved = await api("/api/chat-groups/members", { method: "POST", body: JSON.stringify(member) });
+      await reloadLibrary();
+      return saved;
+    });
+  }
+
+  async function deleteLibraryEntry(member) {
+    if (!window.confirm(`删除成员库角色 ${member.name}？已经用它建过的群不受影响。`)) return false;
+    return await perform(async () => {
+      await api(`/api/chat-groups/members/${member.id}`, { method: "DELETE" });
+      await reloadLibrary();
+      return true;
+    });
+  }
+
   async function decide(runId, decision, message, scope = "once") {
     const id = group.id;
     await api(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ decision, message, scope }) });
@@ -185,7 +215,10 @@ export function ChatGroupsPage({ api }) {
 
   return <section className="group-workspace">
     <aside className="panel group-list">
-      <div className="group-local-toolbar"><strong><Users size={16} /> 聊天室</strong><button aria-label="新建群聊" title="新建群聊" disabled={busy} onClick={() => setEditor({ name: "", members: [], host_member_id: "", archived: false })}><Plus size={16} /></button></div>
+      <div className="group-local-toolbar"><strong><Users size={16} /> 聊天室</strong><div className="group-controls">
+        <button aria-label="成员库" title="成员库：可复用的群成员" disabled={busy} onClick={() => { setError(""); setLibraryOpen(true); }}><BookUser size={16} /></button>
+        <button aria-label="新建群聊" title="新建群聊" disabled={busy} onClick={() => setEditor({ name: "", members: [], host_member_id: "", archived: false })}><Plus size={16} /></button>
+      </div></div>
       {groups.map((item) => <div key={item.id} className={`group-list-item ${selected === item.id ? "selected" : ""}`}>
         <button type="button" className="group-list-main" onClick={() => selectGroup(item.id)}><span>{item.name}</span><small>{item.archived ? "已归档" : "群聊"}</small></button>
         <button type="button" className="group-list-action" aria-label={`复制群聊 ${item.name}`} title="复制群聊" disabled={busy} onClick={() => duplicateGroup(item)}><Copy size={14} /></button>
@@ -219,13 +252,14 @@ export function ChatGroupsPage({ api }) {
       {group?.members.map((member) => <div className="group-member" key={member.id}><span className="group-avatar"><Bot size={19} /></span><div><strong>{member.name}</strong><small>{member.id === group.host_member_id ? "主持 · " : ""}{agents.find((a) => a.id === member.agent_id)?.name || member.agent_id}</small>{member.prompt ? <p>{member.prompt}</p> : null}</div></div>)}
       <p className="group-muted">角色沿用基础 Agent 的工具、文件和长期记忆；群内对话状态独立。</p>
     </aside>
-    {editor ? <GroupEditor value={editor} agents={agents} busy={busy} onClose={() => setEditor(null)} onSave={(definition) => perform(async () => {
+    {editor ? <GroupEditor value={editor} agents={agents} library={library} busy={busy} onClose={() => setEditor(null)} onSaveToLibrary={saveLibraryEntry} onSave={(definition) => perform(async () => {
       // The editor carries its target explicitly; creating is never inferred from member identity.
       const target = editor._groupId;
       const data = await api(`/api/chat-groups${target ? `/${target}` : ""}`, { method: target ? "PUT" : "POST", body: JSON.stringify(definition) });
       setEditor(null); selectGroup(data.id); await refresh(data.id);
     })} error={error} /> : null}
     {renaming ? <GroupRenameDialog value={renaming} busy={busy} error={error} onClose={() => setRenaming(null)} onSave={renameGroup} /> : null}
+    {libraryOpen ? <MemberLibraryDialog members={library} agents={agents} busy={busy} error={error} onClose={() => setLibraryOpen(false)} onSave={saveLibraryEntry} onDelete={deleteLibraryEntry} /> : null}
   </section>;
 }
 
@@ -240,28 +274,86 @@ function GroupRenameDialog({ value, onClose, onSave, busy, error }) {
   </form></div>;
 }
 
-function GroupEditor({ value, agents, onClose, onSave, busy, error }) {
+function GroupEditor({ value, agents, library = [], onClose, onSave, onSaveToLibrary, busy, error }) {
   const [draft, setDraft] = useState(value);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [notice, setNotice] = useState("");
   function add() {
     if (!agents.length) return;
     const member = { id: newId(), agent_id: agents[0].id, name: `${agents[0].name || agents[0].id} ${draft.members.length + 1}`, prompt: "" };
     setDraft((current) => ({ ...current, members: [...current.members, member], host_member_id: current.host_member_id || member.id }));
   }
+  function addFromLibrary(entry) {
+    // Presets are copied, not linked: the group keeps its own member identity.
+    const member = { id: newId(), agent_id: entry.agent_id, name: entry.name, prompt: entry.prompt || "", _libraryId: entry.id };
+    setDraft((current) => ({ ...current, members: [...current.members, member], host_member_id: current.host_member_id || member.id }));
+    setPickerOpen(false);
+    setNotice(entry.name);
+  }
+  async function saveMemberToLibrary(member) {
+    setNotice("");
+    const saved = await onSaveToLibrary({ id: member._libraryId || newId(), agent_id: member.agent_id, name: member.name, prompt: member.prompt || "" });
+    if (saved) { change(member.id, "_libraryId", saved.id); setNotice(`${saved.name} 已存入成员库`); }
+  }
   function change(id, key, value) { setDraft((current) => ({ ...current, members: current.members.map((m) => m.id === id ? { ...m, [key]: value } : m) })); }
-  return <div className="group-modal-backdrop"><form className="panel group-editor" onSubmit={(event) => { event.preventDefault(); const { _groupId, ...definition } = draft; onSave(definition); }}>
+  return <div className="group-modal-backdrop"><form className="panel group-editor" onSubmit={(event) => {
+    event.preventDefault();
+    const { _groupId, ...rest } = draft;
+    // `_libraryId` is editor-only provenance and would be rejected by the group schema.
+    const definition = { ...rest, members: rest.members.map(({ _libraryId, ...member }) => member) };
+    onSave(definition);
+  }}>
     <div className="group-local-toolbar"><strong>{value._groupId ? "编辑群聊" : "新建群聊"}</strong><button type="button" aria-label="关闭" onClick={onClose} disabled={busy}><X size={18} /></button></div>
     <div className="group-editor-body"><label>群名称<input required maxLength={100} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
       {draft.members.map((member) => <fieldset key={member.id}><legend>{member.name || "群成员"}</legend>
         <label>基础 Agent<select value={member.agent_id} disabled={Boolean(value._groupId && value.members.some((m) => m.id === member.id))} onChange={(event) => change(member.id, "agent_id", event.target.value)}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>)}</select></label>
         <label>群内名称<input required maxLength={80} value={member.name} onChange={(event) => change(member.id, "name", event.target.value)} /></label>
         <label>追加角色 prompt<textarea value={member.prompt} maxLength={20000} placeholder="留空则沿用基础 Agent 人格" onChange={(event) => change(member.id, "prompt", event.target.value)} /></label>
-        <div className="group-controls"><label className="group-host-choice"><input type="radio" name="host" checked={draft.host_member_id === member.id} onChange={() => setDraft({ ...draft, host_member_id: member.id })} />设为主持</label><button type="button" onClick={() => setDraft((current) => { const members = current.members.filter((m) => m.id !== member.id); return { ...current, members, host_member_id: current.host_member_id === member.id ? members[0]?.id || "" : current.host_member_id }; })}>移除</button></div>
+        <div className="group-controls"><label className="group-host-choice"><input type="radio" name="host" checked={draft.host_member_id === member.id} onChange={() => setDraft({ ...draft, host_member_id: member.id })} />设为主持</label><button type="button" aria-label={`存入成员库 ${member.name}`} title="存入成员库" disabled={busy || !member.name.trim()} onClick={() => saveMemberToLibrary(member)}><BookUser size={14} />存入成员库</button><button type="button" onClick={() => setDraft((current) => { const members = current.members.filter((m) => m.id !== member.id); return { ...current, members, host_member_id: current.host_member_id === member.id ? members[0]?.id || "" : current.host_member_id }; })}>移除</button></div>
       </fieldset>)}
       <button type="button" onClick={add} disabled={!agents.length || draft.members.length >= 20}><Plus size={15} />添加成员 / prompt 角色</button>
+      <div className="group-library-picker">
+        <button type="button" aria-label="从成员库添加" disabled={!library.length || draft.members.length >= 20} onClick={() => setPickerOpen((open) => !open)}><BookUser size={15} />从成员库添加</button>
+        {!library.length ? <small className="group-muted">成员库还是空的，先在某个成员上点“存入成员库”。</small> : null}
+        {pickerOpen ? <div className="group-library-options" role="listbox" aria-label="成员库角色">{library.map((entry) => {
+          const used = draft.members.some((member) => member.name === entry.name);
+          return <button role="option" aria-selected="false" key={entry.id} aria-label={`使用角色 ${entry.name}`} title={used ? "该名称已在群内" : undefined} type="button" disabled={used} onClick={() => addFromLibrary(entry)}><BookUser size={15} /><span>{entry.name}</span><small>{used ? "已在群内" : agents.find((agent) => agent.id === entry.agent_id)?.name || entry.agent_id}</small></button>;
+        })}</div> : null}
+      </div>
+      {notice ? <p role="status" className="group-muted">{notice}</p> : null}
       {!agents.length ? <p>请先在配置中创建 Agent。</p> : null}
       {value._groupId ? <label className="group-host-choice"><input type="checkbox" checked={draft.archived} onChange={(event) => setDraft({ ...draft, archived: event.target.checked })} /><Archive size={14} />归档此群</label> : null}
       {error ? <p role="alert" className="error">{error}</p> : null}
     </div>
     <div className="group-editor-footer"><button type="button" disabled={busy} onClick={onClose}>取消</button><button className="primary" disabled={busy || !draft.members.length}>保存群聊</button></div>
+  </form></div>;
+}
+
+function MemberLibraryDialog({ members, agents, busy, error, onClose, onSave, onDelete }) {
+  const [drafts, setDrafts] = useState(() => members.map((member) => ({ ...member })));
+  const update = (id, key, value) => setDrafts((current) => current.map((member) => member.id === id ? { ...member, [key]: value } : member));
+  const remove = (id) => setDrafts((current) => current.filter((member) => member.id !== id));
+  function add() {
+    if (!agents.length) return;
+    setDrafts((current) => [...current, { id: newId(), agent_id: agents[0].id, name: "", prompt: "" }]);
+  }
+  return <div className="group-modal-backdrop"><form className="panel group-editor group-library-editor" onSubmit={(event) => event.preventDefault()}>
+    <div className="group-local-toolbar"><strong><BookUser size={16} /> 成员库</strong><button type="button" aria-label="关闭" onClick={onClose} disabled={busy}><X size={18} /></button></div>
+    <div className="group-editor-body">
+      <p className="group-muted">把常用的群成员存在这里，新建或编辑群聊时可以一键加入；选入群的是副本，改这里不会影响已经建好的群。</p>
+      {drafts.map((member) => <fieldset key={member.id}><legend>{member.name || "新角色"}</legend>
+        <label>基础 Agent<select value={member.agent_id} onChange={(event) => update(member.id, "agent_id", event.target.value)}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>)}</select></label>
+        <label>群内名称<input required maxLength={80} value={member.name} onChange={(event) => update(member.id, "name", event.target.value)} /></label>
+        <label>追加角色 prompt<textarea value={member.prompt} maxLength={20000} placeholder="留空则沿用基础 Agent 人格" onChange={(event) => update(member.id, "prompt", event.target.value)} /></label>
+        <div className="group-controls">
+          <button type="button" aria-label={`保存角色 ${member.name}`} disabled={busy || !member.name.trim()} onClick={() => onSave({ id: member.id, agent_id: member.agent_id, name: member.name, prompt: member.prompt || "" })}>保存角色</button>
+          <button type="button" aria-label={`删除角色 ${member.name}`} disabled={busy} onClick={() => onDelete(member).then((removed) => { if (removed) remove(member.id); })}>删除</button>
+        </div>
+      </fieldset>)}
+      <button type="button" onClick={add} disabled={!agents.length}><Plus size={15} />新增角色</button>
+      {!agents.length ? <p>请先在配置中创建 Agent。</p> : null}
+      {error ? <p role="alert" className="error">{error}</p> : null}
+    </div>
+    <div className="group-editor-footer"><button type="button" className="primary" disabled={busy} onClick={onClose}>完成</button></div>
   </form></div>;
 }
