@@ -124,6 +124,37 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         _require_session_for_agent(session_service, session_id, resolved_agent_id)
         return {"messages": session_service.read_messages(session_id, limit=120)}
 
+    @router.delete("/sessions/{session_id}")
+    def delete_chat_session(session_id: str, agent_id: str = "") -> dict[str, object]:
+        session_service = SessionService(container.workspace)
+        resolved_agent_id = _resolve_agent_id(container.workspace, agent_id)
+        _require_session_for_agent(session_service, session_id, resolved_agent_id)
+        active_run = container.run_service.active_run_for_session(session_id)
+        if active_run is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "该会话仍有进行中的 Run，请先停止或等待结束",
+                    "active_run_id": str(active_run.get("run_id") or ""),
+                    "status": str((active_run.get("state") or {}).get("status") or ""),
+                },
+            )
+        session_service.delete_session(session_id)
+        active_key = session_service.build_session_id(
+            channel=WEB_CHAT_CHANNEL,
+            channel_account_id=WEB_CHAT_ACCOUNT,
+            peer_type=WEB_CHAT_PEER_TYPE,
+            peer_id=WEB_CHAT_PEER_ID,
+            agent_id=resolved_agent_id,
+        )
+        return {
+            "deleted": session_id,
+            "sessions": session_service.summaries_for_agent(
+                agent_id=resolved_agent_id,
+                selected_active_key=active_key,
+            ),
+        }
+
     @router.post("/messages")
     async def create_chat_message(payload: ChatMessageRequest) -> dict[str, object]:
         session_service = SessionService(container.workspace)

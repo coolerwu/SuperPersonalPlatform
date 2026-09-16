@@ -553,6 +553,29 @@ function ChatPage() {
     loadChatSessions(data.session?.agent_id || agentId || "").catch(() => {});
   }
 
+  async function deleteSession(target) {
+    const sessionId = target?.session_id || "";
+    if (!sessionId || activeRunId) return;
+    const label = `${formatSessionSource(target)} ${formatSessionIdentity(target)}`.trim();
+    if (!window.confirm(`删除会话 ${shortSessionId(sessionId)}？${label ? `${label} 的` : "该会话的"}消息、附件和 checkpoint 会一并删除，无法恢复。`)) return;
+    setSessionMenuOpen(false);
+    setError("");
+    try {
+      await api(
+        `/api/chat/sessions/${encodeURIComponent(sessionId)}?agent_id=${encodeURIComponent(agentId || "")}`,
+        { method: "DELETE" },
+      );
+    } catch (exc) {
+      setError(`删除会话失败：${exc.message}`);
+      return;
+    }
+    if (sessionId === session?.session_id) {
+      await loadSession(agentId).catch((exc) => setError(exc.message));
+      return;
+    }
+    loadChatSessions(agentId).catch((exc) => setError(exc.message));
+  }
+
   async function changeSession(selector) {
     if (!selector || activeRunId) return;
     setQuote(null);
@@ -631,23 +654,38 @@ function ChatPage() {
                 <ChevronDown size={15} />
               </button>
               {sessionMenuOpen && !activeRunId ? (
-                <div className="session-menu" role="listbox" aria-label="Agent 会话">
+                <div className="session-menu" aria-label="Agent 会话">
                   {chatSessions.map((item) => (
-                    <button
+                    <div
                       key={item.session_id}
-                      type="button"
                       className={`session-option ${item.session_id === session?.session_id ? "selected" : ""}`}
-                      onClick={() => changeSession(item.session_id).catch((exc) => setError(exc.message))}
                     >
-                      <span className="session-option-title">
-                        <strong>{formatSessionSource(item)}</strong>
-                        {item.selected ? <span className="session-selected-badge">当前</span> : null}
-                        <code>{shortSessionId(item.session_id)}</code>
-                      </span>
-                      <span className="session-option-meta">
-                        {formatSessionIdentity(item)} · {Number(item.message_count || 0)} 条消息 · {formatTime(item.updated_at || item.created_at)}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        aria-current={item.session_id === session?.session_id ? "true" : undefined}
+                        className="session-option-main"
+                        onClick={() => changeSession(item.session_id).catch((exc) => setError(exc.message))}
+                      >
+                        <span className="session-option-title">
+                          <strong>{formatSessionSource(item)}</strong>
+                          {item.selected ? <span className="session-selected-badge">当前</span> : null}
+                          <code>{shortSessionId(item.session_id)}</code>
+                        </span>
+                        <span className="session-option-meta">
+                          {formatSessionIdentity(item)} · {Number(item.message_count || 0)} 条消息 · {formatTime(item.updated_at || item.created_at)}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="session-option-delete"
+                        aria-label={`删除会话 ${shortSessionId(item.session_id)}`}
+                        title="删除会话"
+                        disabled={sending || Boolean(pendingSend)}
+                        onClick={() => deleteSession(item)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               ) : null}

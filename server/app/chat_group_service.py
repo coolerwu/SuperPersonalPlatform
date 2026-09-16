@@ -18,6 +18,11 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _copy_name(name: str) -> str:
+    base = str(name or "").strip() or "群聊"
+    return f"{base} 副本"[:100]
+
+
 def save(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
@@ -90,6 +95,20 @@ class ChatGroupService:
         async with self.lock:
             self._validate_agents(definition)
             group = {**definition.model_dump(), "id": f"group_{uuid.uuid4().hex}", "created_at": now(),
+                     "messages": [], "executions": [], "member_sessions": {}, "cursors": {}}
+            self._save(group)
+            return group
+
+    async def duplicate(self, group_id):
+        """Copy one group's members and prompts into a new empty group."""
+        async with self.lock:
+            source = self.read(group_id)
+            definition = GroupDefinition.model_validate({k: source[k] for k in GroupDefinition.model_fields})
+            self._validate_agents(definition)
+            copy = definition.model_dump()
+            copy["name"] = _copy_name(definition.name)
+            copy["archived"] = False
+            group = {**copy, "id": f"group_{uuid.uuid4().hex}", "created_at": now(),
                      "messages": [], "executions": [], "member_sessions": {}, "cursors": {}}
             self._save(group)
             return group

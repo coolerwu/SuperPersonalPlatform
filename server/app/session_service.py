@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -201,6 +202,37 @@ class SessionService:
         )
         self._archive_if_unbound(old_session_id, reason=reason)
         return session
+
+    def delete_session(self, session_id: str) -> None:
+        """Remove one long-term session, its index entry, bindings and checkpoints."""
+        normalized = str(session_id or "").strip()
+        if not normalized or "/" in normalized or "\\" in normalized or normalized in {"index.json", "active.json"}:
+            raise ValueError("invalid session id")
+        if not self.exists(normalized):
+            raise FileNotFoundError(normalized)
+        # Drop pointers first so a partially removed directory never stays reachable.
+        self._drop_index_entry(normalized)
+        self._drop_active_bindings(normalized)
+        shutil.rmtree(self._session_dir(normalized), ignore_errors=True)
+
+    def _drop_index_entry(self, session_id: str) -> None:
+        index = self._read_index()
+        sessions = index.get("sessions") if isinstance(index, dict) else []
+        if not isinstance(sessions, list):
+            sessions = []
+        kept = [
+            item
+            for item in sessions
+            if not (isinstance(item, dict) and str(item.get("session_id") or "") == session_id)
+        ]
+        _write_json(self._index_path, {"schema_version": 1, "sessions": kept})
+
+    def _drop_active_bindings(self, session_id: str) -> None:
+        bindings = self._active_bindings()
+        if not bindings:
+            return
+        kept = [item for item in bindings if str(item.get("session_id") or "") != session_id]
+        _write_json(self._active_path, {"schema_version": 1, "bindings": kept})
 
     def active_summary(
         self,

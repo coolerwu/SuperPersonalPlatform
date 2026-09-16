@@ -142,10 +142,11 @@ POST /api/chat/session/new
 GET /api/chat/sessions?agent_id={agent_id}
 POST /api/chat/session/change
 GET /api/chat/sessions/{session_id}/messages?agent_id={agent_id}
+DELETE /api/chat/sessions/{session_id}?agent_id={agent_id}
 POST /api/chat/messages
 ```
 
-页面 Chat 使用 `channel=web`、`channel_account_id=default`、`peer_type=private`、`peer_id=browser` 和当前 `agent_id` 在 `workspace/sessions/active.json` 中维护页面当前选中的长期会话。`GET /api/chat/sessions` 列出当前 Agent 名下的全部长期 session，包括微信、Web 和未来渠道；`POST /api/chat/session/change` 可以把 Web Chat 绑定到其中任意一个 session，但只更新 Web Chat 的 active binding，不改写 session 原始的渠道、账号和 peer 身份，也不改变微信侧 active binding。读取消息、切换和发送消息都校验 session 必须属于当前 Agent。`POST /api/chat/session` 和 `POST /api/chat/session/change` 会在当前 session 的 `last_run_id` 仍处于 `queued/running/waiting_approval` 时额外返回 `active_run`，让页面刷新或切换回来后可以显示 `partial.json` 并重新轮询事件。`POST /api/chat/messages` 创建 `source=web_chat` 的普通 DeepAgent run 并唤醒 `RunWorkerService`；请求可携带 `client_message_id`，同一 session、Agent 和客户端消息 ID 的重复请求返回已有 run，不重复写消息或执行 Agent。前端随后只轮询 `/api/runs/{run_id}/events?after={seq}`，按 `assistant_delta` 事件增量更新 assistant 气泡，完成、失败或取消后再读取 run 详情和 session messages 对齐最终历史。
+页面 Chat 使用 `channel=web`、`channel_account_id=default`、`peer_type=private`、`peer_id=browser` 和当前 `agent_id` 在 `workspace/sessions/active.json` 中维护页面当前选中的长期会话。`GET /api/chat/sessions` 列出当前 Agent 名下的全部长期 session，包括微信、Web 和未来渠道；`POST /api/chat/session/change` 可以把 Web Chat 绑定到其中任意一个 session，但只更新 Web Chat 的 active binding，不改写 session 原始的渠道、账号和 peer 身份，也不改变微信侧 active binding。读取消息、切换、发送消息和删除都校验 session 必须属于当前 Agent。`DELETE /api/chat/sessions/{session_id}` 删除一个长期 session：先移除 `workspace/sessions/index.json` 条目和 `active.json` 中指向它的 binding，再删除 `workspace/sessions/{session_id}/`（含 `messages.jsonl`、附件、成果和 `checkpoints.sqlite`）；该 session 仍在 `queued/running/waiting_approval` 时返回 409 并带上当前 `active_run_id`，`channel=chat_group` 的群内部 session 和缺失 session 返回 404。删除当前 Web Chat 选中的 session 后，前端重新调用 `POST /api/chat/session` 新建会话；删除微信 session 后 binding 消失，微信下一条消息会新建会话。`POST /api/chat/session` 和 `POST /api/chat/session/change` 会在当前 session 的 `last_run_id` 仍处于 `queued/running/waiting_approval` 时额外返回 `active_run`，让页面刷新或切换回来后可以显示 `partial.json` 并重新轮询事件。`POST /api/chat/messages` 创建 `source=web_chat` 的普通 DeepAgent run 并唤醒 `RunWorkerService`；请求可携带 `client_message_id`，同一 session、Agent 和客户端消息 ID 的重复请求返回已有 run，不重复写消息或执行 Agent。前端随后只轮询 `/api/runs/{run_id}/events?after={seq}`，按 `assistant_delta` 事件增量更新 assistant 气泡，完成、失败或取消后再读取 run 详情和 session messages 对齐最终历史。
 
 Chat 的 `active_run` 识别 `queued`、`running` 和 `waiting_approval`。页面刷新后会从 Run 的 `approval.json` 恢复审批卡片；批准或拒绝调用统一 `resume` API，Run 恢复执行前输入框保持锁定，避免向同一 session 并发追加新消息。
 
@@ -226,8 +227,8 @@ code_execution:
 
 ## Frontend Routes
 
-- `/chat-groups` 是多 Agent 群聊工作区，独立群列表、共享聊天区和成员面板；与单聊共用消息、Markdown、思考过程、审批和输入组件。
-- `/chat` 是页面 Chat 工作区，提供 Agent 选择、该 Agent 全部长期 session 切换、新会话、文本输入和 assistant 流式气泡；session 列表展示微信/Web 等来源、渠道身份、消息数和更新时间，不展示其它 Agent 的 session。页面可以打开并续聊微信 session，但只改变 Web Chat 当前选择，不切换微信通道本身的活跃会话。消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。发送动作有同步 in-flight 锁，并由后端按 `client_message_id` 幂等创建 run，避免连续按键、双击或重复请求生成两条相同消息。用户和 assistant 消息都提供复制按钮，桌面端按钮位于气泡外侧操作位，移动端使用顶部操作位，不再通过贯穿全文的右内边距压缩正文；复制原始消息文本并短暂显示成功状态。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗、水平分隔线和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。`820px` 以下使用独立移动布局：全局侧栏收进顶部菜单控制的抽屉，Chat 占满剩余动态视口，会话诊断栏隐藏，Agent、session 和新会话操作保持在紧凑工具行，消息区独立滚动且输入框固定在工作区底部。
+- `/chat-groups` 是多 Agent 群聊工作区，独立群列表、共享聊天区和成员面板；与单聊共用消息、Markdown、思考过程、审批、复制和输入组件。群列表每一项提供“复制群聊”入口：调用 `POST /api/chat-groups/{group_id}/duplicate` 生成一个新的空群，沿用成员、群内名称、角色 prompt 和主持配置，群名追加“副本”，归档状态重置为未归档，不复制消息、协作记录、成员 session 和游标。
+- `/chat` 是页面 Chat 工作区，提供 Agent 选择、该 Agent 全部长期 session 切换、新会话、删除会话、文本输入和 assistant 流式气泡；session 列表展示微信/Web 等来源、渠道身份、消息数和更新时间，不展示其它 Agent 的 session。session 下拉项右侧提供删除按钮，点击后二次确认再调用 `DELETE /api/chat/sessions/{session_id}`；删除当前选中的会话后页面立即新建 Web 会话，删除其它会话后刷新列表，会话仍有活动 Run 时显示后端 409 提示并保留该 session。页面可以打开并续聊微信 session，但只改变 Web Chat 当前选择，不切换微信通道本身的活跃会话。消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。发送动作有同步 in-flight 锁，并由后端按 `client_message_id` 幂等创建 run，避免连续按键、双击或重复请求生成两条相同消息。用户和 assistant 消息都提供复制按钮，桌面端按钮位于气泡外侧操作位，移动端使用顶部操作位，不再通过贯穿全文的右内边距压缩正文；复制原始消息文本并短暂显示成功状态。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗、水平分隔线和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。`820px` 以下使用独立移动布局：全局侧栏收进顶部菜单控制的抽屉，Chat 占满剩余动态视口，会话诊断栏隐藏，Agent、session 和新会话操作保持在紧凑工具行，消息区独立滚动且输入框固定在工作区底部。
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮；详情页支持取消 `queued/running/waiting_approval` run、审批或拒绝待确认工具调用，以及重跑 `completed/failed/cancelled` run。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。
@@ -315,6 +316,7 @@ code_execution:
 - `./run.sh setup-sudo` 仍用于安装受限 sudoers 规则，使生产服务能无密码执行受限的 `systemctl restart/status/is-active super-personal-platform.service`。
 - `run.sh prod` 生成 systemd unit 时只使用系统临时文件并安装到 systemd 路径，不再把临时 service 文件写入 workspace。
 - 提交项目前必须执行 `.codex/skills/project-commit` 工作流。
+- 需要按「需求 → 方案 → 实现 → 验证 → 发布」多角色协作时使用 `.codex/skills/omni-roles` 技能：需求文档落在 `docs/requirements/F<n>-<名称>.md`，角色规则、产物落点和确认闸口由该技能定义，不改变本文件的架构约定。
 
 ## Run Usage Visibility
 
@@ -359,6 +361,7 @@ code_execution:
 ## 多 Agent 群聊
 
 - `/chat-groups` 支持 Web 文本群聊。成员引用已有 Agent，设置群内名称及可选追加 prompt；主持必须是成员。成员继承基础 Agent 的模型、工具权限、私有文件、Skills 和长期记忆；不会生成独立 Agent 或跨成员挂载私有文件。群名称/成员名称非空，成员 ID 稳定，群内名称唯一，最多 20 名成员。更换基础 Agent 必须移除旧成员并以新 ID 添加，移除不删除历史署名。
+- 复制群聊只复制定义：新群沿用成员 ID、群内名称、角色 prompt、主持和基础 Agent 绑定，名称追加“副本”并重置归档状态，消息、协作记录、成员 session 映射与游标全部从空开始；原群状态在复制过程中保持不变。
 - `@` 选择器将可读名称映射到稳定成员 ID，发送请求按正文首次提及顺序传递 `mentions[]`；去重后依次执行，后一名成员看到前一名结果。普通消息不点名时由主持正常回复，Agent 回答里的 @ 不自动派工。显式“开始协作”才启动多轮分工。
 - 自动协作由主持调用强类型 `group_decision(action, tasks, summary)` 工具，选择 `dispatch` 或 `finish`。每轮最多调度 4 名不同成员顺序执行，然后主持评估；最多 3 轮，允许提前结束。达到上限时只接受 finish，必须总结成果与未完成项；用户显式继续会创建新的最多 3 轮协作。控制工具只注入当前主持控制步骤，不提供给 general-purpose 子 Agent，不成为可配置平台工具。
 - `ChatGroupService` 随 FastAPI lifespan 每秒推进持久化步骤，复用现有 RunWorker，不在 worker 内等待子任务。每群同时只有一条回复链/协作，暂停与审批等待也占用该位置。执行期间禁发新消息和编辑成员；审批复用现有 approve/reject/resume，审批恢复后继续队列。Run 重试耗尽、取消或主持未提交合法决定时群执行暂停；用户可重试当前步骤或停止。停止先落盘 stopping 意图，再取消当前 Run、清空待执行步骤；重启可继续完成停止动作。
@@ -372,6 +375,7 @@ code_execution:
 
 ```text
 GET/POST /api/chat-groups
+POST /api/chat-groups/{group_id}/duplicate
 GET/PUT /api/chat-groups/{group_id}
 GET /api/chat-groups/{group_id}/messages?after={seq}
 POST /api/chat-groups/{group_id}/messages

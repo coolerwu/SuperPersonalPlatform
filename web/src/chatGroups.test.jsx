@@ -73,6 +73,25 @@ test("group mentions submit member IDs in textual order and default sends have n
   await waitFor(() => expect(api).toHaveBeenCalledWith("/api/chat-groups/group_one/collaborations", expect.anything()));
 });
 
+test("copying a group creates and opens the duplicate", async () => {
+  const source = base();
+  const copy = { ...source, id: "group_copy", name: "设计讨论 副本" };
+  const api = vi.fn(async (url, options) => {
+    if (url === "/api/workspace/read") return { content: config };
+    if (url === "/api/chat-groups") return { groups: [{ id: source.id, name: source.name }] };
+    if (url === `/api/chat-groups/${source.id}/duplicate` && options?.method === "POST") return copy;
+    if (url === `/api/chat-groups/${copy.id}`) return copy;
+    return source;
+  });
+  render(<ChatGroupsPage api={api} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: `复制群聊 ${source.name}` }));
+
+  await waitFor(() => expect(api).toHaveBeenCalledWith(`/api/chat-groups/${source.id}/duplicate`, expect.objectContaining({ method: "POST" })));
+  expect(await screen.findByText("设计讨论 副本")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: `复制群聊 ${source.name}` })).toBeInTheDocument();
+});
+
 test("editing uses PUT and stable member keys preserve typing focus", async () => {
   const api = mockApi();
   render(<ChatGroupsPage api={api} />);

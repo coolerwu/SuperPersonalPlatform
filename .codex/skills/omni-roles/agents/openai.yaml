@@ -1,0 +1,6 @@
+interface:
+  display_name: "Omni Roles"
+  short_description: "多角色推进需求、方案、实现、验证与发布"
+  default_prompt: "Use $omni-roles to continue this task with the role protocol and its confirmation gates."
+policy:
+  allow_implicit_invocation: false

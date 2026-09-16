@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Bot, Plus, X, Users, Square, Settings, Archive } from "lucide-react";
+import { Archive, Bot, Copy, Plus, Settings, Square, Users, X } from "lucide-react";
 import { ChatComposer, ChatMessageList } from "./chatComponents.jsx";
 import { useGroupRunEvents } from "./chatRuntime.js";
 import { parseConfigDraft } from "./configEditor.jsx";
@@ -119,6 +119,15 @@ export function ChatGroupsPage({ api }) {
     });
   }
 
+  async function duplicateGroup(source) {
+    if (!source?.id || busy) return;
+    await perform(async () => {
+      const data = await api(`/api/chat-groups/${source.id}/duplicate`, { method: "POST" });
+      selectGroup(data.id);
+      await refresh(data.id);
+    });
+  }
+
   async function decide(runId, decision, message, scope = "once") {
     const id = group.id;
     await api(`/api/runs/${runId}/resume`, { method: "POST", body: JSON.stringify({ decision, message, scope }) });
@@ -150,7 +159,10 @@ export function ChatGroupsPage({ api }) {
   return <section className="group-workspace">
     <aside className="panel group-list">
       <div className="group-local-toolbar"><strong><Users size={16} /> 聊天室</strong><button aria-label="新建群聊" title="新建群聊" disabled={busy} onClick={() => setEditor({ name: "", members: [], host_member_id: "", archived: false })}><Plus size={16} /></button></div>
-      {groups.map((item) => <button key={item.id} className={`group-list-item ${selected === item.id ? "selected" : ""}`} onClick={() => selectGroup(item.id)}><span>{item.name}</span><small>{item.archived ? "已归档" : "群聊"}</small></button>)}
+      {groups.map((item) => <div key={item.id} className={`group-list-item ${selected === item.id ? "selected" : ""}`}>
+        <button type="button" className="group-list-main" onClick={() => selectGroup(item.id)}><span>{item.name}</span><small>{item.archived ? "已归档" : "群聊"}</small></button>
+        <button type="button" className="group-list-copy" aria-label={`复制群聊 ${item.name}`} title="复制群聊" disabled={busy} onClick={() => duplicateGroup(item)}><Copy size={14} /></button>
+      </div>)}
       {!groups.length ? <p className="group-muted">创建聊天室，邀请不同角色一起干活。</p> : null}
     </aside>
     <section className="panel chat-panel group-chat-panel">

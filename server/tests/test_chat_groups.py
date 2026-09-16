@@ -204,6 +204,45 @@ def test_routes_auth_validation_archiving_and_internal_sessions(tmp_path):
     assert client.get("/api/chat-groups/not-a-group").status_code == 404
 
 
+def test_duplicate_group_copies_definition_without_history(tmp_path, monkeypatch):
+    async def scenario():
+        _, service = setup(tmp_path)
+        group = await service.create(definition())
+        await service.send(group["id"], "原始消息", [], "1")
+        source = service.detail(group["id"])
+        assert len(source["messages"]) == 1
+
+        copy = await service.duplicate(source["id"])
+        assert copy["id"] != source["id"]
+        assert copy["name"] == "设计组 副本"
+        assert copy["archived"] is False
+        assert copy["host_member_id"] == source["host_member_id"]
+        assert copy["members"] == source["members"]
+        assert copy["messages"] == []
+        assert copy["executions"] == []
+        assert copy["member_sessions"] == {}
+        assert source["messages"], "原群记录不能被复制操作清空"
+        assert {item["id"] for item in service.list()} == {source["id"], copy["id"]}
+    asyncio.run(scenario())
+
+
+def test_duplicate_group_route_copies_and_rejects_unknown_group(tmp_path):
+    setup(tmp_path)
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+    group = client.post("/api/chat-groups", json=definition().model_dump()).json()
+
+    response = client.post(f'/api/chat-groups/{group["id"]}/duplicate')
+
+    assert response.status_code == 200
+    copy = response.json()
+    assert copy["id"] != group["id"]
+    assert copy["name"] == "设计组 副本"
+    assert copy["members"] == group["members"]
+    assert copy["messages"] == []
+    assert client.post("/api/chat-groups/not-a-group/duplicate").status_code == 404
+
+
 def test_group_sessions_survive_maintenance_without_bindings(tmp_path, monkeypatch):
     async def scenario():
         container, service = setup(tmp_path)

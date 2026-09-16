@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from server.app.session_service import SessionService
@@ -224,6 +226,59 @@ def test_chat_routes_reject_sessions_owned_by_another_agent(tmp_path) -> None:
         "/api/chat/messages",
         json={"agent_id": "assistant", "session_id": other.session_id, "content": "越界消息"},
     ).status_code == 404
+    assert client.delete(
+        f"/api/chat/sessions/{other.session_id}?agent_id=assistant"
+    ).status_code == 404
+
+
+def test_chat_routes_delete_session_removes_history_index_and_binding(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+
+    session_id = client.post("/api/chat/session", json={"agent_id": "assistant"}).json()["session"]["session_id"]
+    SessionService(tmp_path).append_message(session_id, role="user", content="准备删除")
+    assert (
+        client.get(f"/api/chat/sessions/{session_id}/messages?agent_id=assistant").json()["messages"][0]["content"]
+        == "准备删除"
+    )
+
+    deleted = client.delete(f"/api/chat/sessions/{session_id}?agent_id=assistant")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] == session_id
+    assert deleted.json()["sessions"] == []
+    assert client.get(
+        f"/api/chat/sessions/{session_id}/messages?agent_id=assistant"
+    ).status_code == 404
+    assert not (tmp_path / "sessions" / session_id).exists()
+    assert json.loads((tmp_path / "sessions" / "index.json").read_text(encoding="utf-8"))["sessions"] == []
+    bindings = json.loads((tmp_path / "sessions" / "active.json").read_text(encoding="utf-8"))["bindings"]
+    assert bindings == []
+
+    replacement = client.post("/api/chat/session", json={"agent_id": "assistant"}).json()["session"]["session_id"]
+    assert replacement != session_id
+
+
+def test_chat_routes_delete_session_rejects_active_run_and_missing_session(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.post("/api/auth/login", json={"token": "secret-token"}).status_code == 200
+
+    session_id = client.post("/api/chat/session", json={"agent_id": "assistant"}).json()["session"]["session_id"]
+    run_id = client.post(
+        "/api/chat/messages",
+        json={"agent_id": "assistant", "session_id": session_id, "content": "运行中的任务"},
+    ).json()["run"]["run_id"]
+
+    conflict = client.delete(f"/api/chat/sessions/{session_id}?agent_id=assistant")
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["active_run_id"] == run_id
+    assert conflict.json()["detail"]["status"] == "queued"
+    assert (tmp_path / "sessions" / session_id / "state.json").exists()
+
+    assert client.delete("/api/chat/sessions/missing_session?agent_id=assistant").status_code == 404
 
 
 def test_chat_quote_snapshot_validation_and_retry(tmp_path):

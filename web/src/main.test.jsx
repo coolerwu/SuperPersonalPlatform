@@ -915,6 +915,77 @@ test("chat page switches to a WeChat session owned by the selected agent", async
   expect(JSON.parse(changeCall[1].body)).toEqual({ agent_id: "assistant", selector: "session_old" });
 });
 
+test("chat page deletes a session from the switcher menu", async () => {
+  window.history.replaceState({}, "", "/chat");
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  let deleted = false;
+  const webSession = {
+    session_id: "session_new",
+    agent_id: "assistant",
+    channel: "web",
+    peer_type: "private",
+    peer_id: "browser",
+    active: true,
+    selected: true,
+    message_count: 0,
+    updated_at: "2026-08-20T08:00:00Z",
+  };
+  const wechatSession = {
+    session_id: "session_old",
+    agent_id: "assistant",
+    channel: "wechat",
+    channel_account_id: "main",
+    peer_type: "private",
+    peer_id: "wxid_user",
+    active: true,
+    selected: false,
+    message_count: 2,
+    updated_at: "2026-08-20T07:00:00Z",
+  };
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) {
+      return response({ authenticated: true });
+    }
+    if (path.endsWith("/api/workspace/read")) {
+      return response({ path: "config.yaml", content: CONFIG_YAML });
+    }
+    if (path.endsWith("/api/chat/session")) {
+      return response({ session: webSession, messages: [] });
+    }
+    if (path.startsWith("/api/chat/sessions/session_old") && options.method === "DELETE") {
+      deleted = true;
+      return response({ deleted: "session_old", sessions: [webSession] });
+    }
+    if (path.startsWith("/api/chat/sessions?")) {
+      return response({ sessions: deleted ? [webSession] : [webSession, wechatSession] });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  await waitFor(() => expect(screen.getByTitle("切换 Agent 会话")).not.toBeDisabled());
+  fireEvent.click(screen.getByTitle("切换 Agent 会话"));
+  fireEvent.click(screen.getByRole("button", { name: "删除会话 session_old" }));
+  await flushReact();
+
+  expect(confirmSpy).toHaveBeenCalled();
+  const deleteCall = global.fetch.mock.calls.find(
+    ([url, options]) => String(url).startsWith("/api/chat/sessions/session_old?") && options.method === "DELETE",
+  );
+  expect(deleteCall).toBeTruthy();
+  expect(deleteCall[0]).toContain("agent_id=assistant");
+
+  fireEvent.click(screen.getByTitle("切换 Agent 会话"));
+  await flushReact();
+  expect(screen.queryByRole("button", { name: "删除会话 session_old" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "删除会话 session_new" })).toBeInTheDocument();
+});
+
 test("opens config.yaml as a native workspace text file", async () => {
   window.history.replaceState({}, "", "/workspace");
   global.fetch = vi.fn(async (url) => {

@@ -50,6 +50,10 @@ def create_chat_group_router(container):
     async def create(payload: GroupDefinition):
         return await call(service.create(payload))
 
+    @router.post("/{group_id}/duplicate")
+    async def duplicate(group_id: str):
+        return await call(service.duplicate(group_id))
+
     @router.get("/{group_id}")
     def get(group_id: str):
         return detail(group_id)

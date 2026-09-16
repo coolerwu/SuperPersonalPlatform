@@ -405,15 +405,53 @@ pre {
 
 .session-option {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 58px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  padding: 5px 6px 5px 10px;
+}
+
+.session-option-main {
+  display: grid;
   justify-content: stretch;
   gap: 6px;
   width: 100%;
-  height: auto;
-  min-height: 58px;
+  min-height: 0;
   border-color: transparent;
   background: transparent;
-  padding: 9px 10px;
+  padding: 4px 0;
   text-align: left;
+}
+
+.session-option-main:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+.session-option-delete {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+  place-items: center;
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+  color: var(--muted);
+  opacity: 0.65;
+}
+
+.session-option-delete:hover,
+.session-option-delete:focus-visible {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  opacity: 1;
 }
 
 .session-option:hover,
@@ -3146,8 +3184,12 @@ pre {
 .group-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .group-state { color: #8e9aa8; font-size: 11px; }
 .group-state.active { color: #6ad8c6; }
-.group-list-item { display: flex; width: calc(100% - 16px); margin: 8px; padding: 13px 10px; align-items: flex-start; flex-direction: column; gap: 6px; text-align: left; background: transparent; border-color: transparent; }
-.group-list-item span { overflow-wrap: anywhere; }
+.group-list-item { display: flex; width: calc(100% - 16px); margin: 8px; padding: 4px 6px 4px 4px; align-items: center; gap: 4px; border: 1px solid transparent; border-radius: 8px; background: transparent; }
+.group-list-main { display: flex; flex: 1 1 auto; min-width: 0; padding: 9px 8px; align-items: flex-start; flex-direction: column; gap: 6px; text-align: left; background: transparent; border-color: transparent; }
+.group-list-main:hover { background: transparent; border-color: transparent; }
+.group-list-main span { overflow-wrap: anywhere; }
+.group-list-copy { flex: 0 0 auto; width: 28px; height: 28px; min-height: 0; padding: 0; border-color: transparent; background: transparent; color: #8a9aa6; opacity: 0.75; }
+.group-list-copy:hover, .group-list-copy:focus-visible { border-color: #2d6256; background: transparent; color: #a9d8cf; opacity: 1; }
 .group-list-item small, .group-muted { color: #8a9aa6; font-size: 11px; line-height: 1.7; }
 .group-list-item.selected { background: #18332f; border-color: #2d6256; }
 .group-muted { padding: 12px 16px; }
@@ -3177,7 +3219,7 @@ pre {
 @media (max-width: 1200px) { .group-workspace { grid-template-columns: 170px minmax(0, 1fr); }.group-members { display: none; } }
 @media (max-width: 700px) {
   .group-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: calc(100dvh - 76px); gap: 8px; }
-  .group-list { display: flex; align-items: center; overflow-x: auto; }.group-list .group-local-toolbar { padding: 8px; border: 0; flex-shrink: 0; }.group-list .group-local-toolbar strong { display: none; }.group-list-item { min-width: 120px; margin: 4px; padding: 7px 10px; }.group-list-item small { display: none; }.group-list .group-muted { white-space: nowrap; padding: 4px; }
+  .group-list { display: flex; align-items: center; overflow-x: auto; }.group-list .group-local-toolbar { padding: 8px; border: 0; flex-shrink: 0; }.group-list .group-local-toolbar strong { display: none; }.group-list-item { min-width: 150px; margin: 4px; padding: 4px 6px 4px 4px; }.group-list-item small { display: none; }.group-list .group-muted { white-space: nowrap; padding: 4px; }
   .group-local-toolbar { padding: 10px; flex-wrap: wrap; }.group-chat-panel .chat-composer { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; }.group-chat-panel .chat-composer textarea { flex: 1 0 100%; }.group-chat-panel .chat-send-button { margin-left: auto; }.group-chat-panel .chat-messages { padding: 12px; }.group-chat-panel .chat-bubble { max-width: 100%; }.group-modal-backdrop { padding: 8px; }
 }
 
