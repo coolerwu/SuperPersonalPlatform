@@ -99,7 +99,7 @@ test("groups skills per agent and tolerates a missing skills directory", async (
   expect(screen.getByText("web-research")).toBeInTheDocument();
   expect(screen.getByText("结构化网页调研")).toBeInTheDocument();
   // advisor has no skills directory yet: empty state instead of an error.
-  expect(screen.getByText("还没有技能。可以让 Agent 在对话里创建，或点右上角 + 新建。")).toBeInTheDocument();
+  expect(screen.getByText("还没有技能。可以让 Agent 在对话里创建，或点右侧 + 新建。")).toBeInTheDocument();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 

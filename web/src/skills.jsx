@@ -96,7 +96,6 @@ function formatTime(value) {
 export function SkillsPage({ api }) {
   const [agents, setAgents] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [expanded, setExpanded] = useState({});
   const [selected, setSelected] = useState(null);
   const [draft, setDraft] = useState("");
   const [loadedContent, setLoadedContent] = useState("");
@@ -172,10 +171,6 @@ export function SkillsPage({ api }) {
       }
       setAgents(nextAgents);
       setGroups(nextGroups);
-      setExpanded((current) => {
-        if (Object.keys(current).length) return current;
-        return Object.fromEntries(nextAgents.map((agent) => [agent.id, true]));
-      });
       const target = preferred || selected;
       if (target) {
         const group = nextGroups.find((item) => item.agent.id === target.agentId);
@@ -307,19 +302,6 @@ export function SkillsPage({ api }) {
 
   return (
     <section className="console-screen skills-screen">
-      <div className="workspace-header">
-        <div>
-          <span className="section-label">Skills</span>
-          <h1>技能库</h1>
-        </div>
-        <div className="skills-header-actions">
-          <small>保存在各 Agent 私有工作区，下一次运行时生效</small>
-          <button className="icon-button" title="刷新技能列表" onClick={() => load(null)} disabled={busy}>
-            <RefreshCw size={15} />
-          </button>
-        </div>
-      </div>
-
       <div className={`workspace-feedback ${message || error ? "has-feedback" : ""}`}>
         {message ? <p className="ok">{message}</p> : null}
         {error ? <p className="error" role="alert">{error}</p> : null}
@@ -330,23 +312,24 @@ export function SkillsPage({ api }) {
           <div className="panel-title">
             <div>
               <span>Agent 技能</span>
-              <small>{agents.length} 个 Agent · {groups.reduce((total, group) => total + group.skills.length, 0)} 个技能</small>
+              <small>
+                {agents.length} 个 Agent · {groups.reduce((total, group) => total + group.skills.length, 0)} 个技能 ·
+                保存在各 Agent 私有工作区，下一次运行时生效
+              </small>
             </div>
+            <button className="icon-button" title="刷新技能列表" onClick={() => load(null)} disabled={busy}>
+              <RefreshCw size={15} />
+            </button>
           </div>
           <div className="skills-group-list">
             {groups.length === 0 ? <div className="empty-state">配置里还没有 Agent。</div> : null}
             {groups.map((group) => (
               <div className="skills-group" key={group.agent.id}>
                 <div className="skills-group-header">
-                  <button
-                    type="button"
-                    className="skills-group-toggle"
-                    aria-expanded={expanded[group.agent.id] !== false}
-                    onClick={() => setExpanded((current) => ({ ...current, [group.agent.id]: current[group.agent.id] === false }))}
-                  >
+                  <div className="skills-group-title">
                     <strong>{group.agent.name || group.agent.id}</strong>
                     <small>{group.agent.id} · {group.skills.length} 个技能</small>
-                  </button>
+                  </div>
                   <button
                     type="button"
                     className="icon-button"
@@ -357,8 +340,8 @@ export function SkillsPage({ api }) {
                     <Plus size={14} />
                   </button>
                 </div>
-                {expanded[group.agent.id] === false ? null : group.skills.length === 0 ? (
-                  <p className="skills-muted">还没有技能。可以让 Agent 在对话里创建，或点右上角 + 新建。</p>
+                {group.skills.length === 0 ? (
+                  <p className="skills-muted">还没有技能。可以让 Agent 在对话里创建，或点右侧 + 新建。</p>
                 ) : (
                   group.skills.map((skill) => (
                     <div
@@ -444,7 +427,7 @@ export function SkillsPage({ api }) {
             <div className="skills-empty-editor">
               <FileText size={26} />
               <strong>选择左侧技能开始编辑</strong>
-              <span>技能文件固定为 skills/{`{skill_id}`}/SKILL.md，frontmatter 的 name 必须与目录名一致。</span>
+              <span>技能文件固定为 skills/{`{skill_id}`}/SKILL.md；frontmatter 的 name 必须与目录名一致。</span>
             </div>
           )}
         </section>

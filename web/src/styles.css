@@ -1436,15 +1436,12 @@ pre {
   overflow: hidden;
 }
 
-.skills-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.skills-header-actions small {
-  color: var(--muted);
-  font-size: 12px;
+.skills-screen {
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  gap: 12px;
 }
 
 .skills-layout {
@@ -1455,10 +1452,15 @@ pre {
   overflow: hidden;
 }
 
-.skills-groups,
-.skills-editor {
+.skills-groups {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.skills-editor {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
 }
 
@@ -1485,20 +1487,18 @@ pre {
   border-bottom: 1px solid var(--line-soft);
 }
 
-.skills-group-toggle {
+.skills-group-title {
   display: grid;
   gap: 3px;
   flex: 1;
   min-width: 0;
-  background: none;
-  border: 0;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-  padding: 0;
 }
 
-.skills-group-toggle small {
+.skills-group-title strong {
+  font-size: 13px;
+}
+
+.skills-group-title small {
   color: var(--muted);
   font-size: 12px;
 }
@@ -1521,6 +1521,7 @@ pre {
   grid-template-columns: 18px minmax(0, 1fr);
   grid-template-areas: "icon name" "icon description";
   align-items: center;
+  justify-content: start;
   gap: 2px 8px;
   min-width: 0;
   background: none;
@@ -1579,10 +1580,6 @@ pre {
   font-size: 12px;
 }
 
-.skills-editor {
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
-}
-
 .skills-editor-actions {
   display: flex;
   gap: 8px;
@@ -1617,6 +1614,7 @@ pre {
 }
 
 .skills-textarea {
+  flex: 1 1 auto;
   margin: 10px;
   min-height: 0;
   resize: none;
@@ -3253,6 +3251,7 @@ pre {
 
   .runs-screen,
   .workspace-screen,
+  .skills-screen,
   .schedules-screen {
     height: auto;
     min-height: 100%;
