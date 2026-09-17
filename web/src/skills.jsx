@@ -6,8 +6,13 @@ export const SKILL_FILE_NAME = "SKILL.md";
 export const SKILL_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 export const MAX_SKILL_ID_CHARS = 64;
 export const MAX_SKILL_DESCRIPTION_CHARS = 1024;
+export const MAX_SKILL_FILE_BYTES = 10 * 1024 * 1024;
 export const SKILL_CONTRACT_START = "<!-- BEGIN USER CONTRACT -->";
 export const SKILL_CONTRACT_END = "<!-- END USER CONTRACT -->";
+
+// Mirrors deepagents.middleware.skills: frontmatter must start at byte 0 and be
+// terminated by a `---` line, otherwise the runtime skips the skill entirely.
+const RUNTIME_FRONTMATTER_PATTERN = /^---\s*\n([\s\S]*?)\n---\s*\n/;
 
 export function agentSkillsDir(agentId) {
   return `agents/${agentId}/workspace/skills`;
@@ -18,40 +23,66 @@ export function skillFilePath(agentId, skillId) {
 }
 
 export function parseSkillFrontmatter(content) {
-  const lines = String(content || "").split("\n");
-  if (lines[0]?.trim() !== "---") {
-    return { error: "缺少 YAML frontmatter：SKILL.md 必须以 --- 开头" };
+  const text = String(content || "");
+  const match = RUNTIME_FRONTMATTER_PATTERN.exec(text);
+  const lines = text.split("\n");
+  if (!match) {
+    if (lines[0]?.trim() !== "---") {
+      return { error: "缺少 YAML frontmatter：SKILL.md 必须以 --- 开头" };
+    }
+    if (lines.findIndex((line, index) => index > 0 && line.trim() === "---") < 0) {
+      return { error: "frontmatter 未闭合：缺少结尾的 ---" };
+    }
+    return { error: "frontmatter 之后必须换行：--- 结束行后需要紧跟内容或换行" };
   }
-  const end = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
-  if (end < 0) return { error: "frontmatter 未闭合：缺少结尾的 ---" };
+  const blocks = match[1].split("\n");
   const fields = {};
-  for (const line of lines.slice(1, end)) {
-    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!match) continue;
-    let value = match[2].trim();
+  for (const line of blocks) {
+    const field = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!field) continue;
+    let value = field[2].trim();
     if (value.length > 1 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
       value = value.slice(1, -1);
     }
-    fields[match[1]] = value;
+    fields[field[1]] = value;
   }
   return { name: fields.name || "", description: fields.description || "" };
 }
 
-export function validateSkillDocument({ content, skillId }) {
-  const parsed = parseSkillFrontmatter(content);
-  if (parsed.error) return parsed.error;
+/**
+ * Split what actually breaks the runtime from spec-only deviations.
+ *
+ * `blocking` means SkillsMiddleware will not load the skill at all; `spec` means it
+ * still loads, but the runtime logs an Agent Skills warning (name) or truncates the
+ * description.
+ */
+export function inspectSkillDocument({ content, skillId, size = 0 }) {
+  const text = String(content || "");
+  if (size > MAX_SKILL_FILE_BYTES || text.length > MAX_SKILL_FILE_BYTES) {
+    return { blocking: "SKILL.md 超过 10MB，运行时不会加载", spec: "" };
+  }
+  const parsed = parseSkillFrontmatter(text);
+  if (parsed.error) return { blocking: `${parsed.error}，运行时不会加载`, spec: "" };
   const name = String(parsed.name || "").trim();
-  if (!name) return "frontmatter 缺少 name";
-  if (name !== skillId) return `frontmatter 的 name（${name}）必须与目录名 ${skillId} 一致`;
-  if (!SKILL_ID_PATTERN.test(name) || name.length > MAX_SKILL_ID_CHARS) {
-    return `name 只能用小写字母、数字和连字符，且不超过 ${MAX_SKILL_ID_CHARS} 字符`;
-  }
   const description = String(parsed.description || "").trim();
-  if (!description) return "frontmatter 缺少 description";
-  if (description.length > MAX_SKILL_DESCRIPTION_CHARS) {
-    return `description 不能超过 ${MAX_SKILL_DESCRIPTION_CHARS} 字符`;
+  if (!name || !description) {
+    const missing = [!name ? "name" : "", !description ? "description" : ""].filter(Boolean).join(" 和 ");
+    return { blocking: `frontmatter 缺少 ${missing}，运行时不会加载`, spec: "" };
   }
-  return "";
+  const problems = [];
+  if (name !== skillId) problems.push(`name（${name}）与目录名 ${skillId} 不一致`);
+  if (!SKILL_ID_PATTERN.test(name) || name.length > MAX_SKILL_ID_CHARS) {
+    problems.push("name 不是小写字母、数字和连字符，或超过 64 字符");
+  }
+  if (description.length > MAX_SKILL_DESCRIPTION_CHARS) {
+    problems.push(`description ${description.length} 字符，运行时只取前 ${MAX_SKILL_DESCRIPTION_CHARS} 字符`);
+  }
+  return { blocking: "", spec: problems.join("；") };
+}
+
+export function validateSkillDocument({ content, skillId }) {
+  const { blocking } = inspectSkillDocument({ content, skillId });
+  return blocking;
 }
 
 export function validateSkillId(skillId) {
@@ -141,7 +172,9 @@ export function SkillsPage({ api }) {
         if (err.status !== 404) throw err;
       }
       const parsed = content ? parseSkillFrontmatter(content) : { error: readError || "缺少 SKILL.md" };
-      const invalid = content ? validateSkillDocument({ content, skillId }) : (readError || "缺少 SKILL.md");
+      const status = content
+        ? inspectSkillDocument({ content, skillId, size: entry.size })
+        : { blocking: readError || "SKILL.md 缺失或无法读取，运行时不会加载", spec: "" };
       return {
         id: skillId,
         path: skillFilePath(agent.id, skillId),
@@ -149,7 +182,7 @@ export function SkillsPage({ api }) {
         files,
         name: parsed.name || skillId,
         description: parsed.description || "",
-        invalid,
+        status,
         contract: content.includes(SKILL_CONTRACT_START),
         modifiedAt: entry.modified_at,
         missing: Boolean(readError) && !content,
@@ -222,11 +255,13 @@ export function SkillsPage({ api }) {
   }, [groups, selected]);
 
   const dirty = Boolean(currentSkill) && draft !== loadedContent;
-  const validation = currentSkill ? validateSkillDocument({ content: draft, skillId: currentSkill.id }) : "";
+  const draftStatus = currentSkill
+    ? inspectSkillDocument({ content: draft, skillId: currentSkill.id })
+    : { blocking: "", spec: "" };
 
   async function saveSkill() {
     if (!currentSkill || busy) return;
-    const problem = validateSkillDocument({ content: draft, skillId: currentSkill.id });
+    const problem = inspectSkillDocument({ content: draft, skillId: currentSkill.id }).blocking;
     if (problem) {
       setError("");
       setMessage("");
@@ -377,6 +412,7 @@ export function SkillsPage({ api }) {
                             <button
                               type="button"
                               className="skills-item-main"
+                              title={`目录 ${skill.id} · ${skill.path}`}
                               onClick={() => { setMessage(""); selectSkill({ agentId: group.agent.id, skillId: skill.id }, skill); }}
                             >
                               <BookOpen size={15} />
@@ -384,7 +420,11 @@ export function SkillsPage({ api }) {
                               <small>{skill.description || "（缺少 description）"}</small>
                               <time>{formatTime(skill.modifiedAt * 1000)}</time>
                             </button>
-                            {skill.invalid ? <em className="skills-badge" title={skill.invalid}>不生效</em> : null}
+                            {skill.status?.blocking ? (
+                              <em className="skills-badge danger" title={skill.status.blocking}>不会加载</em>
+                            ) : skill.status?.spec ? (
+                              <em className="skills-badge warn" title={skill.status.spec}>规格警告</em>
+                            ) : null}
                             {skill.contract ? <em className="skills-badge contract" title="包含用户硬约束区块">契约</em> : null}
                             <button
                               type="button"
@@ -418,7 +458,12 @@ export function SkillsPage({ api }) {
             </div>
             {currentSkill ? (
               <div className="skills-editor-actions">
-                <button type="button" onClick={saveSkill} disabled={busy || !dirty}>
+                <button
+                  type="button"
+                  onClick={saveSkill}
+                  disabled={busy || !dirty || Boolean(draftStatus.blocking)}
+                  title={draftStatus.blocking || ""}
+                >
                   <Save size={15} />
                   保存
                 </button>
@@ -433,8 +478,14 @@ export function SkillsPage({ api }) {
           ) : null}
           {currentSkill ? (
             <>
-              {validation && draft !== loadedContent ? (
-                <p className="skills-validation" role="alert">保存前请修正：{validation}</p>
+              {draftStatus.blocking ? (
+                <p className="skills-validation" role="alert">
+                  运行时不会加载这个技能：{draftStatus.blocking}。修正后才能保存。
+                </p>
+              ) : draftStatus.spec ? (
+                <p className="skills-note" role="status">
+                  规范警告（仍会加载）：{draftStatus.spec}。不影响生效，可以保存。
+                </p>
               ) : null}
               <textarea
                 className="skills-textarea"
@@ -456,7 +507,10 @@ export function SkillsPage({ api }) {
             <div className="skills-empty-editor">
               <FileText size={26} />
               <strong>选择左侧技能开始编辑</strong>
-              <span>技能文件固定为 skills/{`{skill_id}`}/SKILL.md；frontmatter 的 name 必须与目录名一致。</span>
+              <span>
+                技能文件固定为 skills/{`{skill_id}`}/SKILL.md；frontmatter 里必须有 name 和 description 才会被运行加载，
+                name 与目录名不一致只算规范警告。
+              </span>
             </div>
           )}
         </section>

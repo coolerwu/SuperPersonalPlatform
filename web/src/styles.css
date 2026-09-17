@@ -1598,6 +1598,16 @@ pre {
   color: #7dd3fc;
 }
 
+.skills-badge.danger {
+  border-color: rgba(248, 113, 113, 0.55);
+  color: #fca5a5;
+}
+
+.skills-badge.warn {
+  border-color: rgba(245, 158, 11, 0.42);
+  color: #fbbf24;
+}
+
 .skills-muted {
   margin: 0;
   padding: 10px;
@@ -1635,6 +1645,12 @@ pre {
 .skills-validation {
   margin: 10px 10px 0;
   color: #ffaaaa;
+  font-size: 12px;
+}
+
+.skills-note {
+  margin: 10px 10px 0;
+  color: var(--muted);
   font-size: 12px;
 }
 

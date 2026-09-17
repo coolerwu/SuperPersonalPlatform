@@ -32,10 +32,13 @@
   Web 审批卡片展示新旧对照，微信审批通知给截断预览并指向 Web 端，群聊内部 Run
   不提供该工具。需求见 `docs/requirements/F1-系统提示词对话内编辑.md`。
 - Skills 页面：侧栏新增 `/skills` 技能库，按 Agent 分组列出各自私有工作区里的
-  `skills/{skill_id}/SKILL.md`，支持查看、新建、编辑、删除整个技能目录，保存前校验
-  frontmatter（name 必须与目录名一致、description 必填且不超过 1024 字符）并提示
-  用户契约区块；为此 `PUT /api/workspace/write` 新增可选 `create` 语义用于创建新文件。
-  需求见 `docs/requirements/F2-Skill页面.md`。
+  `skills/{skill_id}/SKILL.md`，默认选中第一个 Agent 并只展开它的技能，支持查看、新建、
+  编辑、删除整个技能目录，并提示用户契约区块；为此 `PUT /api/workspace/write` 新增
+  可选 `create` 语义用于创建新文件。技能状态按 SkillsMiddleware 的真实口径分级：
+  缺 frontmatter/name/description 或 SKILL.md 缺失标记“不会加载”并禁用保存，
+  name 与目录名不一致、name 不符合规范、description 超过 1024 字符只标记“规格警告”
+  （运行时仍会加载，description 会被截断）并允许保存。需求见
+  `docs/requirements/F2-Skill页面.md`。
 
 ### Changed
 

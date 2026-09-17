@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, test, vi } from "vitest";
 import {
   SkillsPage,
+  inspectSkillDocument,
   skillFilePath,
   skillTemplate,
   validateSkillDocument,
@@ -109,7 +110,7 @@ test("shows only the selected agent skills and defaults to the first agent", asy
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
-test("blocks saving when frontmatter name does not match the skill directory", async () => {
+test("blocks saving when the runtime would not load the skill", async () => {
   const setup = makeApi({
     skills: {
       "agents/assistant/workspace/skills": [listEntry("web-research")],
@@ -121,11 +122,42 @@ test("blocks saving when frontmatter name does not match the skill directory", a
   renderPage(setup);
   fireEvent.click(await screen.findByText("web-research"));
   const editor = await screen.findByLabelText("SKILL.md");
-  fireEvent.change(editor, { target: { value: SKILL_A.replace("name: web-research", "name: other-name") } });
-  fireEvent.click(screen.getByRole("button", { name: /保存/ }));
+  fireEvent.change(editor, { target: { value: "# 没有 frontmatter 的内容\n" } });
 
-  expect(await screen.findByText(/frontmatter 的 name（other-name）必须与目录名 web-research 一致/)).toBeInTheDocument();
+  expect(await screen.findByText(/运行时不会加载这个技能/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /保存/ })).toBeDisabled();
   expect(setup.calls.some((call) => call.path === "/api/workspace/write")).toBe(false);
+});
+
+test("allows saving spec deviations that the runtime still loads", async () => {
+  const nonSpec = SKILL_A.replace("name: web-research", "name: 网页调研");
+  const setup = makeApi({
+    skills: {
+      "agents/assistant/workspace/skills": [listEntry("web-research")],
+      "agents/assistant/workspace/skills/web-research": [fileEntry("SKILL.md")],
+      [skillFilePath("assistant", "web-research")]: nonSpec,
+    },
+  });
+
+  renderPage(setup);
+  // The list marks it as a spec warning, not as "won't load".
+  expect(await screen.findByText("规格警告")).toBeInTheDocument();
+  expect(screen.queryByText("不会加载")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("网页调研"));
+  const editor = await screen.findByLabelText("SKILL.md");
+  fireEvent.change(editor, { target: { value: `${nonSpec}\n## 补充\n` } });
+
+  expect(await screen.findByText(/规范警告（仍会加载）/)).toBeInTheDocument();
+  const saveButton = screen.getByRole("button", { name: /保存/ });
+  expect(saveButton).toBeEnabled();
+  fireEvent.click(saveButton);
+
+  await waitFor(() => {
+    const write = setup.calls.find((call) => call.path === "/api/workspace/write");
+    expect(write).toBeTruthy();
+    expect(write.payload.content).toContain("## 补充");
+  });
 });
 
 test("saves a valid skill document with the skill file path", async () => {
@@ -233,12 +265,19 @@ test("skill document validation follows Agent Skills naming rules", () => {
   expect(validateSkillId("Web_Research")).toMatch(/小写字母/);
   expect(validateSkillId("a".repeat(65))).toMatch(/64/);
   expect(validateSkillDocument({ content: SKILL_A, skillId: "web-research" })).toBe("");
+  // Runtime-blocking problems.
   expect(validateSkillDocument({ content: "no frontmatter", skillId: "web-research" })).toMatch(/frontmatter/);
   expect(validateSkillDocument({ content: "---\nname: web-research\n---\n", skillId: "web-research" })).toMatch(/description/);
   expect(
-    validateSkillDocument({
-      content: `---\nname: web-research\ndescription: ${"x".repeat(1025)}\n---\n`,
-      skillId: "web-research",
-    })
-  ).toMatch(/1024/);
+    inspectSkillDocument({ content: "---\nname: web-research\ndescription: x\n# no closing marker\n", skillId: "web-research" })
+      .blocking
+  ).toMatch(/frontmatter/);
+  // Spec-only deviations: the runtime still loads the skill.
+  const mismatched = inspectSkillDocument({ content: SKILL_A, skillId: "other-dir" });
+  expect(mismatched.blocking).toBe("");
+  expect(mismatched.spec).toMatch(/与目录名 other-dir 不一致/);
+  expect(validateSkillDocument({ content: SKILL_A, skillId: "other-dir" })).toBe("");
+  const longDescription = `---\nname: web-research\ndescription: ${"x".repeat(1025)}\n---\n`;
+  expect(inspectSkillDocument({ content: longDescription, skillId: "web-research" }).blocking).toBe("");
+  expect(inspectSkillDocument({ content: longDescription, skillId: "web-research" }).spec).toMatch(/1024/);
 });
