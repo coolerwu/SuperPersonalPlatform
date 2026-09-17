@@ -453,6 +453,55 @@ def test_workspace_file_routes_are_scoped_and_edit_text(tmp_path) -> None:
     assert escape_response.status_code == 400
 
 
+def test_workspace_write_creates_skill_file_only_when_requested(tmp_path) -> None:
+    client = make_system_client(tmp_path)
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    skill_path = "agents/assistant/workspace/skills/web-research/SKILL.md"
+    content = "---\nname: web-research\ndescription: Research helper\n---\n\n# Web Research\n"
+
+    missing_response = client.put(
+        "/api/workspace/write",
+        json={"path": skill_path, "content": content},
+    )
+    assert missing_response.status_code == 404
+    assert not (tmp_path / "agents").exists()
+
+    create_response = client.put(
+        "/api/workspace/write",
+        json={"path": skill_path, "content": content, "create": True},
+    )
+    assert create_response.status_code == 200
+    assert create_response.json()["file"]["path"] == skill_path
+    assert (tmp_path / skill_path).read_text(encoding="utf-8") == content
+
+    update_response = client.put(
+        "/api/workspace/write",
+        json={"path": skill_path, "content": content + "\n## 补充\n"},
+    )
+    assert update_response.status_code == 200
+    assert (tmp_path / skill_path).read_text(encoding="utf-8").endswith("\n## 补充\n")
+
+    escape_response = client.put(
+        "/api/workspace/write",
+        json={"path": "../outside/SKILL.md", "content": content, "create": True},
+    )
+    assert escape_response.status_code == 400
+    assert not (tmp_path.parent / "outside").exists()
+
+    oversized_response = client.put(
+        "/api/workspace/write",
+        json={"path": skill_path, "content": "x" * (1_000_001), "create": True},
+    )
+    assert oversized_response.status_code == 413
+
+    delete_response = client.post(
+        "/api/workspace/delete",
+        json={"path": "agents/assistant/workspace/skills/web-research"},
+    )
+    assert delete_response.status_code == 200
+    assert not (tmp_path / "agents/assistant/workspace/skills/web-research").exists()
+
+
 def test_workspace_config_write_validates_settings(tmp_path) -> None:
     client = make_system_client(tmp_path)
     client.post("/api/auth/login", json={"token": "secret-token"})

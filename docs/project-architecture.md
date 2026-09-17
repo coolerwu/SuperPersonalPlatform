@@ -202,7 +202,7 @@ PUT /api/workspace/write
 POST /api/workspace/delete
 ```
 
-这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`context/`、`runs/`、`schedules/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
+这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”和“技能库”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`PUT /api/workspace/write` 可选 `create`（默认 `false`）：`false` 时保持“文件必须已存在、否则 404”，`true` 时允许创建缺失的父目录并写入新文件，供 `/skills` 新建 `SKILL.md` 使用；已存在文件的覆盖、1MB 上限、可编辑扩展名白名单、路径穿越与根层保护规则不变。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`context/`、`runs/`、`schedules/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
 
 System API 额外保留：
 
@@ -262,6 +262,7 @@ code_execution:
 - `/chat` 是页面 Chat 工作区，提供 Agent 选择、该 Agent 全部长期 session 切换、新会话、删除会话、文本输入和 assistant 流式气泡；session 列表展示微信/Web 等来源、渠道身份、消息数和更新时间，不展示其它 Agent 的 session。session 下拉项右侧提供删除按钮，点击后二次确认再调用 `DELETE /api/chat/sessions/{session_id}`；删除当前选中的会话后页面立即新建 Web 会话，删除其它会话后刷新列表，会话仍有活动 Run 时显示后端 409 提示并保留该 session。页面可以打开并续聊微信 session，但只改变 Web Chat 当前选择，不切换微信通道本身的活跃会话。消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。发送动作有同步 in-flight 锁，并由后端按 `client_message_id` 幂等创建 run，避免连续按键、双击或重复请求生成两条相同消息。用户和 assistant 消息都提供复制按钮，桌面端按钮位于气泡外侧操作位，移动端使用顶部操作位，不再通过贯穿全文的右内边距压缩正文；复制原始消息文本并短暂显示成功状态。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗、水平分隔线和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。`820px` 以下使用独立移动布局：全局侧栏收进顶部菜单控制的抽屉，Chat 占满剩余动态视口，会话诊断栏隐藏，Agent、session 和新会话操作保持在紧凑工具行，消息区独立滚动且输入框固定在工作区底部。
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮；详情页支持取消 `queued/running/waiting_approval` run、审批或拒绝待确认工具调用，以及重跑 `completed/failed/cancelled` run。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
+- `/skills` 是技能库页面，读取 `config.yaml` 的 Agent 列表后按 Agent 分组列出各自私有工作区里的技能，路径固定为 `workspace/agents/{agent_id}/workspace/skills/{skill_id}/SKILL.md`；左栏显示 frontmatter 的 name、description 摘要、修改时间和“不生效/契约”标记，右栏是 `SKILL.md` 纯文本编辑器，支持新建、保存和删除整个技能目录（删除二次确认），技能的辅助文件只列出名称与大小、仍到 `/workspace` 维护。保存前做 frontmatter 校验并阻止不合法内容落盘：必须有以 `---` 包围的 frontmatter，`name` 非空、与目录名一致、只含小写字母数字和连字符且不超过 64 字符，`description` 非空且不超过 1024 字符；包含 `<!-- BEGIN USER CONTRACT -->` 区块时页面提示该区块是用户硬约束、Agent 文件工具不能改。技能目录缺失按空态处理，改动在下一次 Agent 运行时由 SkillsMiddleware 生效，不影响运行中的 Run。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。
 - `/config` 基础配置栏目只承载访问 Token、服务监听和坚果云 WebDAV 等基础配置；访问 Token 按明文输入展示。
 - `/config` 基础配置栏目还承载 `browser.proxy`、`browser.timeout_ms` 和 `browser.allow_private_hosts`，用于 `browser_extract` 的 Playwright headless browser。微信账号代理只服务微信 iLink 连接，不自动复用为浏览器代理；`allow_private_hosts` 只允许管理员显式信任的 hostname 或 `.domain` 后缀在解析到内网/私有 IP 时继续访问。

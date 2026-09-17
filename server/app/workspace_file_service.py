@@ -101,12 +101,21 @@ class WorkspaceFileService:
             editable=self._is_editable(path),
         )
 
-    def write_text_file(self, relative_path: str, content: str) -> WorkspaceTextFile:
+    def write_text_file(
+        self,
+        relative_path: str,
+        content: str,
+        *,
+        create: bool = False,
+    ) -> WorkspaceTextFile:
         path = self._resolve(relative_path)
-        if not path.exists():
-            raise FileNotFoundError(relative_path)
-        if not path.is_file():
-            raise IsADirectoryError(relative_path)
+        if path.exists():
+            if not path.is_file():
+                raise IsADirectoryError(relative_path)
+        else:
+            if not create:
+                raise FileNotFoundError(relative_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
         if not self._is_editable(path):
             raise WorkspaceFileNotTextError(relative_path)
         if len(content.encode("utf-8")) > self.max_write_bytes:

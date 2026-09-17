@@ -31,6 +31,11 @@
   提交完整新提示词后必须经人工审批才写入，只替换目标字段并在下一次 Run 生效；
   Web 审批卡片展示新旧对照，微信审批通知给截断预览并指向 Web 端，群聊内部 Run
   不提供该工具。需求见 `docs/requirements/F1-系统提示词对话内编辑.md`。
+- Skills 页面：侧栏新增 `/skills` 技能库，按 Agent 分组列出各自私有工作区里的
+  `skills/{skill_id}/SKILL.md`，支持查看、新建、编辑、删除整个技能目录，保存前校验
+  frontmatter（name 必须与目录名一致、description 必填且不超过 1024 字符）并提示
+  用户契约区块；为此 `PUT /api/workspace/write` 新增可选 `create` 语义用于创建新文件。
+  需求见 `docs/requirements/F2-Skill页面.md`。
 
 ### Changed
 

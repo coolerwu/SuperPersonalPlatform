@@ -1436,6 +1436,220 @@ pre {
   overflow: hidden;
 }
 
+.skills-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.skills-header-actions small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.skills-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.5fr) minmax(520px, 1fr);
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.skills-groups,
+.skills-editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.skills-group-list {
+  overflow: auto;
+  padding: 10px;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.skills-group {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: rgba(8, 13, 20, 0.5);
+  overflow: hidden;
+}
+
+.skills-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.skills-group-toggle {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.skills-group-toggle small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.skills-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.skills-item.selected {
+  background: rgba(23, 168, 245, 0.12);
+}
+
+.skills-item-main {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-areas: "icon name" "icon description";
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 0;
+  background: none;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.skills-item-main svg {
+  grid-area: icon;
+}
+
+.skills-item-main span {
+  grid-area: name;
+  font-weight: 700;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skills-item-main small {
+  grid-area: description;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skills-item-main time {
+  display: none;
+}
+
+.skills-badge {
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  border-radius: 999px;
+  color: #fbbf24;
+  font-size: 11px;
+  font-style: normal;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+.skills-badge.contract {
+  border-color: rgba(23, 168, 245, 0.5);
+  color: #7dd3fc;
+}
+
+.skills-muted {
+  margin: 0;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.skills-editor {
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+
+.skills-editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.skills-editor-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+}
+
+.skills-contract-note {
+  display: grid;
+  gap: 4px;
+  margin: 10px 10px 0;
+  border: 1px solid rgba(23, 168, 245, 0.32);
+  border-radius: 7px;
+  background: rgba(9, 43, 65, 0.42);
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.skills-contract-note span {
+  color: var(--muted);
+}
+
+.skills-validation {
+  margin: 10px 10px 0;
+  color: #ffaaaa;
+  font-size: 12px;
+}
+
+.skills-textarea {
+  margin: 10px;
+  min-height: 0;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.skills-editor-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--line-soft);
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.skills-empty-editor {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.skills-empty-editor strong {
+  color: var(--text);
+}
+
 .file-browser,
 .file-editor,
 .system-control-panel {
@@ -2696,6 +2910,7 @@ pre {
   .chat-screen,
   .workspace-layout,
   .workspace-file-layout,
+  .skills-layout,
   .schedules-grid,
   .wechat-layout,
   .system-screen,

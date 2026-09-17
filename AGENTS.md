@@ -73,7 +73,7 @@
 
 - 微信图片/附件通过 send_attachment 显式选择已有文件，工具仅排队并返回 queued，成功 run 结束后由 RunDeliveryService 发送到固化的当前微信目标。不要让 Agent 自选收件人或把排队说成已发送。每个发送部分持久化进度和稳定 client_id；重试只处理未确认部分，重跑不复用旧轮次附件。
 
-- 不再有 Skill 自进化：运行时不注入 SkillImprovement middleware，Agent 不会主动创建或改写 `/skills/`，也不会写 `/improvements/`（该目录已从工作区契约移除）；但用户在对话里明确要求时，Agent 仍可用原生文件工具创建或更新 `/skills/{skill_id}/SKILL.md`，新 skill 在下一次 Agent 执行开始时生效，历史 improvement 记录不再作为判断依据。用户硬约束可放在 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 中，Agent 文件工具不得修改、覆盖或删除该区块及其所在 Skill，正式契约由用户通过平台文件入口调整。
+- 不再有 Skill 自进化：运行时不注入 SkillImprovement middleware，Agent 不会主动创建或改写 `/skills/`，也不会写 `/improvements/`（该目录已从工作区契约移除）；但用户在对话里明确要求时，Agent 仍可用原生文件工具创建或更新 `/skills/{skill_id}/SKILL.md`，新 skill 在下一次 Agent 执行开始时生效，历史 improvement 记录不再作为判断依据。用户也可以直接通过平台 `/skills` 技能库页面按 Agent 管理技能（新建/编辑/删除 `SKILL.md`，保存前校验 frontmatter 的 name 与目录名一致、description 必填）；用户硬约束可放在 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 中，Agent 文件工具不得修改、覆盖或删除该区块及其所在 Skill，正式契约只能由用户通过 `/skills` 或工作目录等平台入口调整。
 - 系统提示词只能通过始终注入的平台工具 `system_prompt` 在对话内读取或修改：`action=read` 免审批返回平台从 `config.yaml` 读到的该 Agent `system_prompt` 原文（Agent 文件工具读不到 config.yaml），`action=update` 必须逐次 HITL 审批，且只替换当前 Run 所属 Agent 的该字段，其它字段、注释与排版不变，下一次 Run 生效，当前 Run 继续用快照；群聊内部 Run 不提供该工具，通用子 Agent 不继承，审批卡片展示新旧对照，微信审批通知只给截断预览并提示到 Web 端查看完整对照。
 
 

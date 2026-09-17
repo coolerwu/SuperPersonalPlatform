@@ -19,6 +19,7 @@ class WorkspacePathRequest(BaseModel):
 class WorkspaceWriteRequest(BaseModel):
     path: str
     content: str
+    create: bool = False
 
 
 def create_workspace_router(container: AppContainer) -> APIRouter:
@@ -76,7 +77,11 @@ def create_workspace_router(container: AppContainer) -> APIRouter:
             return {"ok": True, "message": "config.yaml 已校验并保存", "file": file.__dict__}
 
         try:
-            file = container.workspace_file_service.write_text_file(payload.path, payload.content)
+            file = container.workspace_file_service.write_text_file(
+                payload.path,
+                payload.content,
+                create=payload.create,
+            )
         except InvalidWorkspacePathError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="工作目录路径无效") from exc
         except FileNotFoundError as exc:

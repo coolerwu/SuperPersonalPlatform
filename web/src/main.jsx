@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Bot,
+  BookOpen,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -32,6 +33,7 @@ import {
 import { AgentConfigEditor, ConfigVisualEditor, ProviderConfigEditor, parseConfigDraft } from "./configEditor.jsx";
 import { ChatMessageList, ChatComposer, ApprovalPanel, ThinkingPanel, MarkdownMessage } from "./chatComponents.jsx";
 import { ChatGroupsPage } from "./chatGroups.jsx";
+import { SkillsPage } from "./skills.jsx";
 import { runEventThinkingText } from "./chatRuntime.js";
 import "./styles.css";
 
@@ -40,6 +42,7 @@ const NAV_ITEMS = [
   { id: "chat-groups", path: "/chat-groups", label: "群聊", icon: Bot },
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
+  { id: "skills", path: "/skills", label: "Skills", icon: BookOpen },
   { id: "config", path: "/config", label: "配置", icon: SlidersHorizontal },
   { id: "schedules", path: "/schedules", label: "定时任务", icon: Clock3 },
   { id: "browser", path: "/browser", label: "浏览器", icon: Globe2 },
@@ -295,6 +298,7 @@ function App() {
         {page === "chat-groups" ? <ChatGroupsPage api={api} /> : null}
         {page === "runs" ? <RunsPage /> : null}
         {page === "workspace" ? <WorkspacePage /> : null}
+        {page === "skills" ? <SkillsPage api={api} /> : null}
         {page === "config" ? <ConfigPage onNavigate={navigate} /> : null}
         {page === "providers" ? <ProviderPage onNavigate={navigate} /> : null}
         {page === "agent-config" ? <AgentConfigPage onNavigate={navigate} /> : null}
