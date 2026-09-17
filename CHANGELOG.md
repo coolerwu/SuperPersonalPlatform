@@ -45,6 +45,9 @@
 - Chat 页面改为与群聊一致的左侧列表布局：左栏是当前 Agent 的 session 列表（新建会话 +
   Agent 选择 + 来源/渠道身份/消息数/更新时间 + 删除），中间是消息与输入区，右侧保留状态栏；
   原来的会话下拉菜单移除，`820px` 以下会话列表变成顶部横向滚动的会话条。
+- Chat 左栏的 Agent 选择不再用原生 `<select>`：原生弹层跟随系统外观（浅色 macOS 上无法
+  用 CSS 变暗），改为新的 `SelectMenu` 组件（深色列表、选中态、悬停高亮、支持方向键
+  /回车/Escape），组件放在 `web/src/selectMenu.jsx` 供其它页面复用。
 - 工作目录页面的约定目录说明与当前工作区契约对齐，移除已删除的
   `search_context` / `write_context` 描述，补上 `sessions/active.json`、群聊状态和
   Agent 私有工作区。

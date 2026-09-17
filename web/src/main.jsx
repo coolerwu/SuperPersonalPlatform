@@ -34,6 +34,7 @@ import { AgentConfigEditor, ConfigVisualEditor, ProviderConfigEditor, parseConfi
 import { ChatMessageList, ChatComposer, ApprovalPanel, ThinkingPanel, MarkdownMessage } from "./chatComponents.jsx";
 import { ChatGroupsPage } from "./chatGroups.jsx";
 import { SkillsPage } from "./skills.jsx";
+import { SelectMenu } from "./selectMenu.jsx";
 import { runEventThinkingText } from "./chatRuntime.js";
 import "./styles.css";
 
@@ -649,19 +650,13 @@ function ChatPage() {
           </div>
         </div>
         <div className="chat-agent-picker">
-          <select
-            aria-label="选择 Agent"
+          <SelectMenu
+            ariaLabel="选择 Agent"
             value={agentId}
-            onChange={(event) => changeAgent(event.target.value)}
             disabled={Boolean(activeRunId) || sending || Boolean(pendingSend)}
-          >
-            {agents.length === 0 ? <option value="">default</option> : null}
-            {agents.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name || agent.id}
-              </option>
-            ))}
-          </select>
+            options={agents.length ? agents.map((agent) => ({ value: agent.id, label: agent.name || agent.id, hint: agent.id })) : [{ value: "", label: "default", hint: "" }]}
+            onChange={(next) => changeAgent(next)}
+          />
         </div>
         <div className="chat-session-list-body" aria-label="Agent 会话">
           {chatSessions.map((item) => {
