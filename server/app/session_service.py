@@ -13,6 +13,11 @@ from typing import Any
 
 _SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9_.@-]+")
 
+MAX_SESSION_TITLE_CHARS = 80
+AUTO_SESSION_TITLE_CHARS = 24
+TITLE_SOURCE_MANUAL = "manual"
+TITLE_SOURCE_AUTO = "auto"
+
 
 @dataclass(frozen=True)
 class SessionIdentity:
@@ -323,7 +328,7 @@ class SessionService:
                 continue
             if item.get("channel") == "chat_group":
                 continue
-            summary = dict(item)
+            summary = self._with_derived_title(dict(item))
             summary["active"] = session_id in active_session_ids
             summary["selected"] = session_id == selected_session_id
             sessions.append(summary)
@@ -596,8 +601,23 @@ class SessionService:
         state["message_count"] = message_count
         state["last_message_at"] = now
         state["updated_at"] = now
+        if role == "user" and text and not str(state.get("title") or "").strip():
+            state["title"] = derive_session_title(text)
+            state["title_source"] = TITLE_SOURCE_AUTO
         _write_json(session_dir / "state.json", state)
         self._upsert_index(state)
+
+    def set_title(self, session_id: str, title: str, *, source: str = TITLE_SOURCE_MANUAL) -> dict[str, Any]:
+        """Persist a session title. Manual titles survive later auto-titling."""
+        normalized_id = str(session_id or "").strip()
+        if not normalized_id:
+            raise ValueError("session_id is required")
+        state = self._read_state(normalized_id)
+        state["title"] = _normalize_title(title)
+        state["title_source"] = source if source in {TITLE_SOURCE_MANUAL, TITLE_SOURCE_AUTO} else TITLE_SOURCE_MANUAL
+        _write_json(self._session_dir(normalized_id) / "state.json", state)
+        self._upsert_index(state)
+        return state
 
     def save_attachments(
         self,
@@ -769,10 +789,45 @@ class SessionService:
             return {}
         for item in self._read_index().get("sessions", []):
             if isinstance(item, dict) and str(item.get("session_id") or "") == normalized:
-                return dict(item)
+                return self._with_derived_title(dict(item))
         if self.exists(normalized):
-            return self._read_state(normalized)
+            return self._with_derived_title(self._read_state(normalized))
         return {}
+
+    def _with_derived_title(self, summary: dict[str, Any]) -> dict[str, Any]:
+        """Fill a title for sessions written before titles existed, without persisting it."""
+        if str(summary.get("title") or "").strip():
+            return summary
+        if int(summary.get("message_count") or 0) <= 0:
+            return summary
+        title = self._derive_title_from_history(str(summary.get("session_id") or ""))
+        if title:
+            summary["title"] = title
+            summary["title_source"] = TITLE_SOURCE_AUTO
+        return summary
+
+    def _derive_title_from_history(self, session_id: str) -> str:
+        if not session_id:
+            return ""
+        path = self._session_dir(session_id) / "messages.jsonl"
+        if not path.exists():
+            return ""
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for index, line in enumerate(handle):
+                    if index >= 20:
+                        break
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(item, dict) and str(item.get("role") or "") == "user":
+                        title = derive_session_title(item.get("content"))
+                        if title:
+                            return title
+        except OSError:
+            return ""
+        return ""
 
     def exists(self, session_id: str) -> bool:
         return (self._session_dir(session_id) / "state.json").exists()
@@ -803,6 +858,8 @@ class SessionService:
             "updated_at": state.get("updated_at", ""),
             "message_count": state.get("message_count", 0),
             "run_count": state.get("run_count", 0),
+            "title": state.get("title", ""),
+            "title_source": state.get("title_source", ""),
         }
         next_sessions = [
             item for item in sessions if isinstance(item, dict) and item.get("session_id") != summary["session_id"]
@@ -953,6 +1010,21 @@ class SessionService:
 def _safe_part(value: str) -> str:
     safe = _SAFE_ID_RE.sub("_", str(value or "").strip()).strip("._-")
     return safe[:80] or "unknown"
+
+
+def _normalize_title(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:MAX_SESSION_TITLE_CHARS]
+
+
+def derive_session_title(value: Any, *, limit: int = AUTO_SESSION_TITLE_CHARS) -> str:
+    """Short human title from a first user message: single line, markdown markers dropped."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(r"^(?:[#>*\-•]+\s*|\[[ xX]?\]\s*)+", "", text).strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}…"
 
 
 def _safe_filename(value: str) -> str:

@@ -25,6 +25,11 @@ class ChatSessionChangeRequest(BaseModel):
     selector: str
 
 
+class ChatSessionRenameRequest(BaseModel):
+    agent_id: str = ""
+    title: str = Field(default="", max_length=200)
+
+
 class ChatMessageRequest(BaseModel):
     content: str
     agent_id: str = ""
@@ -123,6 +128,30 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         resolved_agent_id = _resolve_agent_id(container.workspace, agent_id)
         _require_session_for_agent(session_service, session_id, resolved_agent_id)
         return {"messages": session_service.read_messages(session_id, limit=120)}
+
+    @router.post("/sessions/{session_id}/rename")
+    def rename_chat_session(session_id: str, payload: ChatSessionRenameRequest) -> dict[str, object]:
+        session_service = SessionService(container.workspace)
+        resolved_agent_id = _resolve_agent_id(container.workspace, payload.agent_id)
+        _require_session_for_agent(session_service, session_id, resolved_agent_id)
+        title = payload.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="会话标题不能为空")
+        session_service.set_title(session_id, title)
+        active_key = session_service.build_session_id(
+            channel=WEB_CHAT_CHANNEL,
+            channel_account_id=WEB_CHAT_ACCOUNT,
+            peer_type=WEB_CHAT_PEER_TYPE,
+            peer_id=WEB_CHAT_PEER_ID,
+            agent_id=resolved_agent_id,
+        )
+        return {
+            "session": session_service.session_summary(session_id),
+            "sessions": session_service.summaries_for_agent(
+                agent_id=resolved_agent_id,
+                selected_active_key=active_key,
+            ),
+        }
 
     @router.delete("/sessions/{session_id}")
     def delete_chat_session(session_id: str, agent_id: str = "") -> dict[str, object]:

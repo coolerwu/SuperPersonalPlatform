@@ -321,3 +321,31 @@ def test_chat_selected_quote_rejects_forgery_and_saves_excerpt(tmp_path):
     request["reply_excerpt"] = "重要内容"
     assert client.post("/api/chat/messages", json=request).status_code == 200
     assert sessions.read_messages(sid)[-1]["metadata"]["reply"]["content"] == "重要内容"
+
+
+def test_chat_session_rename_route_updates_title(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    client = TestClient(create_app(workspace=tmp_path))
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    session = client.post("/api/chat/session", json={"agent_id": "assistant"}).json()["session"]
+    sid = session["session_id"]
+    sessions = SessionService(tmp_path)
+    sessions.append_message(sid, role="user", content="先来一句自动标题")
+
+    renamed = client.post(
+        f"/api/chat/sessions/{sid}/rename",
+        json={"agent_id": "assistant", "title": "  论文精读  "},
+    )
+
+    assert renamed.status_code == 200
+    body = renamed.json()
+    assert body["session"]["title"] == "论文精读"
+    assert body["session"]["title_source"] == "manual"
+    assert body["sessions"][0]["session_id"] == sid
+    assert body["sessions"][0]["title"] == "论文精读"
+
+    empty = client.post(f"/api/chat/sessions/{sid}/rename", json={"agent_id": "assistant", "title": "   "})
+    assert empty.status_code == 400
+
+    foreign = client.post(f"/api/chat/sessions/{sid}/rename", json={"agent_id": "missing-agent", "title": "x"})
+    assert foreign.status_code in {400, 404}

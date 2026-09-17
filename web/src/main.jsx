@@ -17,6 +17,7 @@ import {
   LogOut,
   Menu,
   MessagesSquare,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -325,6 +326,8 @@ function ChatPage() {
   const [error, setError] = useState("");
   const sendingRef = useRef(false);
   const [pendingSend, setPendingSend] = useState(null);
+  const [renaming, setRenaming] = useState(null);
+  const [renameBusy, setRenameBusy] = useState(false);
   const chatEventSeqRef = useRef(0);
   const chatRunContentRef = useRef("");
 
@@ -583,6 +586,31 @@ function ChatPage() {
     loadChatSessions(agentId).catch((exc) => setError(exc.message));
   }
 
+  async function renameSession() {
+    const sessionId = renaming?.session_id || "";
+    const title = String(renaming?.title || "").trim();
+    if (!sessionId || renameBusy) return;
+    if (!title) {
+      setError("会话标题不能为空");
+      return;
+    }
+    setRenameBusy(true);
+    setError("");
+    try {
+      const data = await api(`/api/chat/sessions/${encodeURIComponent(sessionId)}/rename`, {
+        method: "POST",
+        body: JSON.stringify({ agent_id: agentId || "", title }),
+      });
+      setChatSessions(data.sessions || []);
+      if (data.session?.session_id === session?.session_id) setSession(data.session);
+      setRenaming(null);
+    } catch (exc) {
+      setError(`重命名失败：${exc.message}`);
+    } finally {
+      setRenameBusy(false);
+    }
+  }
+
   async function changeSession(selector) {
     if (!selector || activeRunId) return;
     setQuote(null);
@@ -670,11 +698,22 @@ function ChatPage() {
                   disabled={Boolean(activeRunId)}
                   onClick={() => changeSession(item.session_id).catch((exc) => setError(exc.message))}
                 >
-                  <span>{formatSessionSource(item)}</span>
+                  <span>{String(item.title || "").trim() || formatSessionSource(item)}</span>
                   <small>
+                    {item.title ? `${formatSessionSource(item)} · ` : ""}
                     {formatSessionIdentity(item)} · {Number(item.message_count || 0)} 条消息 ·{" "}
                     {formatTime(item.updated_at || item.created_at)}
                   </small>
+                </button>
+                <button
+                  type="button"
+                  className="group-list-action"
+                  aria-label={`重命名会话 ${shortSessionId(item.session_id)}`}
+                  title="重命名会话"
+                  disabled={sending || Boolean(pendingSend)}
+                  onClick={() => setRenaming({ session_id: item.session_id, title: String(item.title || "").trim() })}
+                >
+                  <Pencil size={14} />
                 </button>
                 <button
                   type="button"
@@ -727,6 +766,44 @@ function ChatPage() {
           <RailRow label="流式预览" value="runs/{run_id}/partial.json" />
         </RailCard>
       </aside>
+
+      {renaming ? (
+        <div className="group-modal-backdrop">
+          <form
+            className="panel group-editor"
+            aria-label="重命名会话"
+            onSubmit={(event) => { event.preventDefault(); renameSession(); }}
+          >
+            <div className="dialog-header">
+              <div>
+                <strong>重命名会话</strong>
+                <span>{shortSessionId(renaming.session_id)}</span>
+              </div>
+              <button type="button" className="icon-button" aria-label="关闭" disabled={renameBusy} onClick={() => setRenaming(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="group-editor-body">
+              <label>
+                标题
+                <input
+                  aria-label="会话标题"
+                  value={renaming.title}
+                  disabled={renameBusy}
+                  maxLength={80}
+                  placeholder="给这个会话起个名字"
+                  onChange={(event) => setRenaming((current) => ({ ...current, title: event.target.value }))}
+                />
+                <small>只用于列表展示；留空不能保存，手动改过之后不再被自动标题覆盖。</small>
+              </label>
+            </div>
+            <div className="dialog-footer">
+              <button type="button" disabled={renameBusy} onClick={() => setRenaming(null)}>取消</button>
+              <button type="submit" className="primary" disabled={renameBusy || !String(renaming.title || "").trim()}>保存</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2499,7 +2576,8 @@ function createClientMessageId() {
 
 function formatSessionButton(session, sessions) {
   const current = sessions.find((item) => item.session_id === session?.session_id) || session || {};
-  const prefix = formatSessionSource(current);
+  const title = String(current.title || session?.title || "").trim();
+  const prefix = title || formatSessionSource(current);
   const count = Number(current.message_count ?? session?.message_count ?? 0);
   const updated = formatTime(current.updated_at || current.created_at || session?.updated_at || session?.created_at);
   return `${prefix} · ${count} 条 · ${updated}`;

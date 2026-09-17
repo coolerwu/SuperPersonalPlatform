@@ -982,6 +982,60 @@ test("chat page deletes a session from the switcher menu", async () => {
   expect(screen.getByRole("button", { name: "删除会话 session_new" })).toBeInTheDocument();
 });
 
+test("chat session list shows titles and renames a session", async () => {
+  window.history.replaceState({}, "", "/chat");
+  const webSession = {
+    session_id: "session_new",
+    agent_id: "assistant",
+    channel: "web",
+    peer_type: "private",
+    peer_id: "browser",
+    active: true,
+    selected: true,
+    message_count: 4,
+    title: "论文精读",
+    title_source: "auto",
+    updated_at: "2026-08-20T08:00:00Z",
+  };
+  let renamed = false;
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) return response({ authenticated: true });
+    if (path.endsWith("/api/workspace/read")) return response({ path: "config.yaml", content: CONFIG_YAML });
+    if (path.endsWith("/api/chat/session")) return response({ session: webSession, messages: [] });
+    if (path.includes("/api/chat/sessions/session_new/rename") && options.method === "POST") {
+      renamed = true;
+      return response({
+        session: { ...webSession, title: "深度阅读计划", title_source: "manual" },
+        sessions: [{ ...webSession, title: "深度阅读计划", title_source: "manual" }],
+      });
+    }
+    if (path.startsWith("/api/chat/sessions?")) {
+      return response({ sessions: [{ ...webSession, title: renamed ? "深度阅读计划" : "论文精读" }] });
+    }
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  // The list shows the session title instead of the channel label.
+  expect(await screen.findByText("论文精读")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "重命名会话 session_new" }));
+  fireEvent.change(screen.getByLabelText("会话标题"), { target: { value: "深度阅读计划" } });
+  fireEvent.submit(screen.getByRole("form", { name: "重命名会话" }));
+  await flushReact();
+
+  const renameCall = global.fetch.mock.calls.find(
+    ([url, options]) => String(url).includes("/api/chat/sessions/session_new/rename") && options.method === "POST",
+  );
+  expect(renameCall).toBeTruthy();
+  expect(JSON.parse(renameCall[1].body)).toEqual({ agent_id: "assistant", title: "深度阅读计划" });
+  expect(await screen.findByText("深度阅读计划")).toBeInTheDocument();
+});
+
 test("opens config.yaml as a native workspace text file", async () => {
   window.history.replaceState({}, "", "/workspace");
   global.fetch = vi.fn(async (url) => {

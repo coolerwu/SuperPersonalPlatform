@@ -1,6 +1,11 @@
 import json
 
-from server.app.session_service import SessionService
+from server.app.session_service import (
+    AUTO_SESSION_TITLE_CHARS,
+    MAX_SESSION_TITLE_CHARS,
+    SessionService,
+    derive_session_title,
+)
 
 
 def test_session_service_uses_active_binding_and_can_rotate_session(tmp_path) -> None:
@@ -273,3 +278,87 @@ def test_clearing_web_binding_does_not_archive_session_still_active_in_wechat(tm
 
     assert created.session_id != wechat.session_id
     assert service.session_summary(wechat.session_id)["status"] == "active"
+
+
+def _web_session(service: SessionService) -> str:
+    return service.get_or_create(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+    ).session_id
+
+
+def test_session_title_derives_from_first_user_message(tmp_path) -> None:
+    service = SessionService(tmp_path)
+    session_id = _web_session(service)
+
+    service.append_message(session_id, role="user", content="  帮我\n总结一下  这篇论文的\n核心贡献  ")
+    service.append_message(session_id, role="assistant", content="好的")
+    service.append_message(session_id, role="user", content="再补充一个完全不同的后续问题")
+
+    summary = service.session_summary(session_id)
+    assert summary["title"] == "帮我 总结一下 这篇论文的 核心贡献"
+    assert summary["title_source"] == "auto"
+    # Later user messages never re-title an already titled session.
+    assert "后续问题" not in summary["title"]
+    assert service.summaries_for_agent(agent_id="assistant")[0]["title"] == summary["title"]
+
+
+def test_session_title_is_truncated_to_auto_limit(tmp_path) -> None:
+    service = SessionService(tmp_path)
+    session_id = _web_session(service)
+    long_message = "一" * 60
+
+    service.append_message(session_id, role="user", content=long_message)
+
+    title = service.session_summary(session_id)["title"]
+    assert len(title) == AUTO_SESSION_TITLE_CHARS + 1
+    assert title.startswith("一" * AUTO_SESSION_TITLE_CHARS)
+    assert title.endswith("…")
+
+
+def test_manual_title_survives_later_messages_and_is_clamped(tmp_path) -> None:
+    service = SessionService(tmp_path)
+    session_id = _web_session(service)
+
+    service.set_title(session_id, "  我的重点会话  ")
+    service.append_message(session_id, role="user", content="自动标题不应该覆盖它")
+
+    summary = service.session_summary(session_id)
+    assert summary["title"] == "我的重点会话"
+    assert summary["title_source"] == "manual"
+
+    service.set_title(session_id, "x" * 200)
+    assert len(service.session_summary(session_id)["title"]) == MAX_SESSION_TITLE_CHARS
+
+
+def test_legacy_session_without_title_derives_it_without_writing(tmp_path) -> None:
+    service = SessionService(tmp_path)
+    session_id = _web_session(service)
+    service.append_message(session_id, role="user", content="历史会话的第一句话")
+
+    state_path = tmp_path / "sessions" / session_id / "state.json"
+    index_path = tmp_path / "sessions" / "index.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.pop("title", None)
+    state.pop("title_source", None)
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    for item in index["sessions"]:
+        item.pop("title", None)
+        item.pop("title_source", None)
+    index_path.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+
+    summary = service.summaries_for_agent(agent_id="assistant")[0]
+
+    assert summary["title"] == "历史会话的第一句话"
+    # Reads must not rewrite state.json for legacy sessions.
+    assert "title" not in json.loads(state_path.read_text(encoding="utf-8"))
+
+
+def test_derive_session_title_strips_markdown_markers() -> None:
+    assert derive_session_title("- [ ] 明天要做的事") == "明天要做的事"
+    assert derive_session_title("### 标题") == "标题"
+    assert derive_session_title("   ") == ""

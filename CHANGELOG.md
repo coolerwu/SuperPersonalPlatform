@@ -10,6 +10,12 @@
 
 ### Added
 
+- 会话标题：长期 session 新增 `title` / `title_source` 字段（存在
+  `sessions/{session_id}/state.json` 并镜像到 `sessions/index.json`）；第一条用户消息
+  自动生成前 24 字标题，历史会话读取时按首条消息现推导（不写回文件），并新增
+  `POST /api/chat/sessions/{session_id}/rename` 支持手动重命名（手动标题不再被自动覆盖）。
+  Chat 左栏列表以标题为主标识并提供重命名弹窗。需求见
+  `docs/requirements/F3-会话标题.md`。
 - `./run.sh rollback <tag|branch|commit>`：把生产检出切到指定版本后走同一套依赖安装与
   重启流程；再次执行 `./run-prod.sh` 会自动回到生产分支。
 - `./run.sh prod --no-pull`：跳过远端拉取，用于回滚、离线重装和固定提交部署。
