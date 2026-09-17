@@ -533,7 +533,9 @@ class SessionService:
                 "generation": generation,
                 "status": "active",
                 "created_at": str(state.get("created_at") or now),
-                "updated_at": now,
+                # Binding an identity to a session is not content activity: keep the
+                # previous updated_at so the list order only follows real messages.
+                "updated_at": str(state.get("updated_at") or state.get("created_at") or now),
                 "message_count": int(state.get("message_count") or 0),
                 "run_count": int(state.get("run_count") or 0),
                 "metadata": current_metadata,
@@ -547,7 +549,7 @@ class SessionService:
         state = self._read_state(session_id)
         if str(state.get("status") or "") != "active":
             state["status"] = "active"
-            state["updated_at"] = _now()
+            state["last_selected_at"] = _now()
             _write_json(self._session_dir(session_id) / "state.json", state)
             self._upsert_index(state)
         return state
@@ -556,11 +558,9 @@ class SessionService:
         if not session_id or not self.exists(session_id) or session_id in self._active_session_ids():
             return
         state = self._read_state(session_id)
-        now = _now()
         state["status"] = "archived"
-        state["updated_at"] = now
         if reason:
-            state["cleared_at"] = now
+            state["cleared_at"] = _now()
             state["clear_reason"] = reason
         _write_json(self._session_dir(session_id) / "state.json", state)
         self._upsert_index(state)

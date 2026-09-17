@@ -362,3 +362,85 @@ def test_derive_session_title_strips_markdown_markers() -> None:
     assert derive_session_title("- [ ] 明天要做的事") == "明天要做的事"
     assert derive_session_title("### 标题") == "标题"
     assert derive_session_title("   ") == ""
+
+
+def test_selecting_or_rebinding_a_session_keeps_updated_at(tmp_path) -> None:
+    service = SessionService(tmp_path)
+    older = service.get_or_create(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+    )
+    service.append_message(older.session_id, role="user", content="第一条会话")
+    older_updated = service.session_summary(older.session_id)["updated_at"]
+
+    newer = service.get_or_create(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+    service.append_message(newer.session_id, role="user", content="更新的一条会话")
+    newer_updated = service.session_summary(newer.session_id)["updated_at"]
+    assert newer_updated > older_updated
+    assert [item["session_id"] for item in service.summaries_for_agent(agent_id="assistant")] == [
+        newer.session_id,
+        older.session_id,
+    ]
+
+    # Opening/rebinding the older session must not move it to the top.
+    service.select_active_for_agent(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+        selector=older.session_id,
+    )
+    service.get_or_create(
+        channel="web",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="browser",
+        agent_id="assistant",
+    )
+
+    assert service.session_summary(older.session_id)["updated_at"] == older_updated
+    assert [item["session_id"] for item in service.summaries_for_agent(agent_id="assistant")] == [
+        newer.session_id,
+        older.session_id,
+    ]
+
+    # Only real content changes move a session.
+    service.append_message(older.session_id, role="assistant", content="新回复")
+    assert service.session_summary(older.session_id)["updated_at"] > newer_updated
+    assert service.summaries_for_agent(agent_id="assistant")[0]["session_id"] == older.session_id
+
+
+def test_rotating_a_session_keeps_archived_updated_at(tmp_path) -> None:
+    service = SessionService(tmp_path)
+    first = service.get_or_create(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+    )
+    service.append_message(first.session_id, role="user", content="旧会话内容")
+    first_updated = service.session_summary(first.session_id)["updated_at"]
+
+    service.clear_active(
+        channel="wechat",
+        channel_account_id="default",
+        peer_type="private",
+        peer_id="wxid_user",
+        agent_id="assistant",
+        reason="user cleared context",
+    )
+
+    archived = service.session_summary(first.session_id)
+    assert archived["status"] == "archived"
+    assert archived["updated_at"] == first_updated
