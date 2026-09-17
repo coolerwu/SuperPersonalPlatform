@@ -4,7 +4,6 @@ import {
   Bot,
   BookOpen,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   Clock3,
   Cpu,
@@ -17,6 +16,7 @@ import {
   Keyboard,
   LogOut,
   Menu,
+  MessagesSquare,
   Play,
   Plus,
   RefreshCw,
@@ -321,7 +321,6 @@ function ChatPage() {
   const [quote, setQuote] = useState(null);
   const [sending, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState("");
-  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [error, setError] = useState("");
   const sendingRef = useRef(false);
   const [pendingSend, setPendingSend] = useState(null);
@@ -549,7 +548,6 @@ function ChatPage() {
   async function newSession() {
     if (activeRunId) return;
     setQuote(null);
-    setSessionMenuOpen(false);
     setError("");
     const data = await api("/api/chat/session/new", {
       method: "POST",
@@ -567,7 +565,6 @@ function ChatPage() {
     if (!sessionId || activeRunId) return;
     const label = `${formatSessionSource(target)} ${formatSessionIdentity(target)}`.trim();
     if (!window.confirm(`删除会话 ${shortSessionId(sessionId)}？${label ? `${label} 的` : "该会话的"}消息、附件和 checkpoint 会一并删除，无法恢复。`)) return;
-    setSessionMenuOpen(false);
     setError("");
     try {
       await api(
@@ -588,7 +585,6 @@ function ChatPage() {
   async function changeSession(selector) {
     if (!selector || activeRunId) return;
     setQuote(null);
-    setSessionMenuOpen(false);
     setError("");
     const data = await api("/api/chat/session/change", {
       method: "POST",
@@ -623,7 +619,6 @@ function ChatPage() {
 
   function changeAgent(nextAgentId) {
     setQuote(null);
-    setSessionMenuOpen(false);
     setAgentId(nextAgentId);
     setActiveRunId("");
     chatEventSeqRef.current = 0;
@@ -634,6 +629,75 @@ function ChatPage() {
 
   return (
     <section className="console-screen chat-screen">
+      <aside className="panel group-list chat-session-list">
+        <div className="group-local-toolbar">
+          <strong>
+            <MessagesSquare size={16} />
+            会话
+            <small>{chatSessions.length || 1}</small>
+          </strong>
+          <div className="group-controls">
+            <button
+              type="button"
+              aria-label="新会话"
+              title="新会话"
+              onClick={newSession}
+              disabled={Boolean(activeRunId) || sending || Boolean(pendingSend)}
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="chat-agent-picker">
+          <select
+            aria-label="选择 Agent"
+            value={agentId}
+            onChange={(event) => changeAgent(event.target.value)}
+            disabled={Boolean(activeRunId) || sending || Boolean(pendingSend)}
+          >
+            {agents.length === 0 ? <option value="">default</option> : null}
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name || agent.id}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="chat-session-list-body" aria-label="Agent 会话">
+          {chatSessions.map((item) => {
+            const selectedSession = item.session_id === session?.session_id;
+            return (
+              <div className={`group-list-item ${selectedSession ? "selected" : ""}`} key={item.session_id}>
+                <button
+                  type="button"
+                  className="group-list-main"
+                  aria-current={selectedSession ? "true" : undefined}
+                  disabled={Boolean(activeRunId)}
+                  onClick={() => changeSession(item.session_id).catch((exc) => setError(exc.message))}
+                >
+                  <span>{formatSessionSource(item)}</span>
+                  <small>
+                    {formatSessionIdentity(item)} · {Number(item.message_count || 0)} 条消息 ·{" "}
+                    {formatTime(item.updated_at || item.created_at)}
+                  </small>
+                </button>
+                <button
+                  type="button"
+                  className="group-list-action group-list-danger"
+                  aria-label={`删除会话 ${shortSessionId(item.session_id)}`}
+                  title="删除会话"
+                  disabled={sending || Boolean(pendingSend)}
+                  onClick={() => deleteSession(item)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            );
+          })}
+          {chatSessions.length === 0 ? <p className="group-muted">还没有会话，点右上角 + 新建。</p> : null}
+        </div>
+      </aside>
+
       <section className="panel chat-panel">
         <div className="chat-toolbar">
           <div>
@@ -641,74 +705,9 @@ function ChatPage() {
             <h2>DeepAgent 对话</h2>
           </div>
           <div className="chat-actions">
-            <select value={agentId} onChange={(event) => changeAgent(event.target.value)} disabled={Boolean(activeRunId) || sending || Boolean(pendingSend)}>
-              {agents.length === 0 ? <option value="">default</option> : null}
-              {agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name || agent.id}
-                </option>
-              ))}
-            </select>
-            <div className="session-switcher">
-              <button
-                type="button"
-                className="session-switch-button"
-                onClick={() => setSessionMenuOpen((open) => !open)}
-                disabled={Boolean(activeRunId) || sending || Boolean(pendingSend) || chatSessions.length === 0}
-                aria-expanded={sessionMenuOpen}
-                title="切换 Agent 会话"
-              >
-                <span>{formatSessionButton(session, chatSessions)}</span>
-                <small>全部 {chatSessions.length || 1}</small>
-                <ChevronDown size={15} />
-              </button>
-              {sessionMenuOpen && !activeRunId ? (
-                <div className="session-menu" aria-label="Agent 会话">
-                  {chatSessions.map((item) => (
-                    <div
-                      key={item.session_id}
-                      className={`session-option ${item.session_id === session?.session_id ? "selected" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        aria-current={item.session_id === session?.session_id ? "true" : undefined}
-                        className="session-option-main"
-                        onClick={() => changeSession(item.session_id).catch((exc) => setError(exc.message))}
-                      >
-                        <span className="session-option-title">
-                          <strong>{formatSessionSource(item)}</strong>
-                          {item.selected ? <span className="session-selected-badge">当前</span> : null}
-                          <code>{shortSessionId(item.session_id)}</code>
-                        </span>
-                        <span className="session-option-meta">
-                          {formatSessionIdentity(item)} · {Number(item.message_count || 0)} 条消息 · {formatTime(item.updated_at || item.created_at)}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="session-option-delete"
-                        aria-label={`删除会话 ${shortSessionId(item.session_id)}`}
-                        title="删除会话"
-                        disabled={sending || Boolean(pendingSend)}
-                        onClick={() => deleteSession(item)}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            <button
-              className="chat-secondary-button"
-              onClick={newSession}
-              disabled={Boolean(activeRunId) || sending || Boolean(pendingSend)}
-              aria-label="新会话"
-              title="新会话"
-            >
-              <Plus size={16} />
-              <span>新会话</span>
-            </button>
+            <span className="chat-session-summary" title="当前会话">
+              {formatSessionButton(session, chatSessions)}
+            </span>
           </div>
         </div>
 

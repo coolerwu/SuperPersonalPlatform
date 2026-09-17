@@ -905,9 +905,8 @@ test("chat page switches to a WeChat session owned by the selected agent", async
   });
   await flushReact();
 
-  await waitFor(() => expect(screen.getByTitle("切换 Agent 会话")).not.toBeDisabled());
-  fireEvent.click(screen.getByTitle("切换 Agent 会话"));
-  fireEvent.click(screen.getByRole("button", { name: /微信.*wxid_user/ }));
+  // Sessions live in the left list now; clicking an entry switches the chat.
+  fireEvent.click(await screen.findByRole("button", { name: /微信.*wxid_user/ }));
 
   expect(await screen.findByText("旧问题")).toBeInTheDocument();
   expect(await screen.findByText("旧回答")).toBeInTheDocument();
@@ -968,9 +967,7 @@ test("chat page deletes a session from the switcher menu", async () => {
   });
   await flushReact();
 
-  await waitFor(() => expect(screen.getByTitle("切换 Agent 会话")).not.toBeDisabled());
-  fireEvent.click(screen.getByTitle("切换 Agent 会话"));
-  fireEvent.click(screen.getByRole("button", { name: "删除会话 session_old" }));
+  fireEvent.click(await screen.findByRole("button", { name: "删除会话 session_old" }));
   await flushReact();
 
   expect(confirmSpy).toHaveBeenCalled();
@@ -980,7 +977,6 @@ test("chat page deletes a session from the switcher menu", async () => {
   expect(deleteCall).toBeTruthy();
   expect(deleteCall[0]).toContain("agent_id=assistant");
 
-  fireEvent.click(screen.getByTitle("切换 Agent 会话"));
   await flushReact();
   expect(screen.queryByRole("button", { name: "删除会话 session_old" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "删除会话 session_new" })).toBeInTheDocument();
