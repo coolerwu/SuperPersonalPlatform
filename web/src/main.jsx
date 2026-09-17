@@ -328,6 +328,12 @@ function ChatPage() {
   const [pendingSend, setPendingSend] = useState(null);
   const [renaming, setRenaming] = useState(null);
   const [renameBusy, setRenameBusy] = useState(false);
+  // A Web Chat binding exists as soon as the page opens (so typing works instantly),
+  // but an untouched session should not show up as a “0 条消息” row.
+  const visibleSessions = useMemo(
+    () => chatSessions.filter((item) => Number(item.message_count || 0) > 0 || String(item.title || "").trim()),
+    [chatSessions],
+  );
   const chatEventSeqRef = useRef(0);
   const chatRunContentRef = useRef("");
 
@@ -663,7 +669,7 @@ function ChatPage() {
           <strong>
             <MessagesSquare size={16} />
             会话
-            <small>{chatSessions.length || 1}</small>
+            <small>{visibleSessions.length}</small>
           </strong>
           <div className="group-controls">
             <button
@@ -687,7 +693,7 @@ function ChatPage() {
           />
         </div>
         <div className="chat-session-list-body" aria-label="Agent 会话">
-          {chatSessions.map((item) => {
+          {visibleSessions.map((item) => {
             const selectedSession = item.session_id === session?.session_id;
             return (
               <div className={`group-list-item ${selectedSession ? "selected" : ""}`} key={item.session_id}>
@@ -728,7 +734,9 @@ function ChatPage() {
               </div>
             );
           })}
-          {chatSessions.length === 0 ? <p className="group-muted">还没有会话，点右上角 + 新建。</p> : null}
+          {visibleSessions.length === 0 ? (
+            <p className="group-muted">还没有会话，直接发消息就会新建一条；也可以点右上角 + 再开一个。</p>
+          ) : null}
         </div>
       </aside>
 
@@ -757,7 +765,7 @@ function ChatPage() {
           <RailRow label="Agent" value={agentId || "-"} />
           <RailRow label="Session" value={shortSessionId(session?.session_id || "") || "-"} />
           <RailRow label="消息数" value={session?.message_count ?? messages.length} />
-          <RailRow label="Agent 会话" value={chatSessions.length || 1} />
+          <RailRow label="Agent 会话" value={visibleSessions.length} />
           <RailRow label="当前 Run" value={activeRunId || "-"} />
         </RailCard>
         <RailCard title="落盘路径" status="Context" tone="blue">
@@ -2580,6 +2588,7 @@ function formatSessionButton(session, sessions) {
   const prefix = title || formatSessionSource(current);
   const count = Number(current.message_count ?? session?.message_count ?? 0);
   const updated = formatTime(current.updated_at || current.created_at || session?.updated_at || session?.created_at);
+  if (!title && count === 0) return "新对话 · 未开始";
   return `${prefix} · ${count} 条 · ${updated}`;
 }
 

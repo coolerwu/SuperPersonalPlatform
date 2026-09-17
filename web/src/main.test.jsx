@@ -926,7 +926,8 @@ test("chat page deletes a session from the switcher menu", async () => {
     peer_id: "browser",
     active: true,
     selected: true,
-    message_count: 0,
+    message_count: 3,
+    title: "当前会话",
     updated_at: "2026-08-20T08:00:00Z",
   };
   const wechatSession = {
@@ -980,6 +981,53 @@ test("chat page deletes a session from the switcher menu", async () => {
   await flushReact();
   expect(screen.queryByRole("button", { name: "删除会话 session_old" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "删除会话 session_new" })).toBeInTheDocument();
+});
+
+test("chat session list hides untouched empty sessions", async () => {
+  window.history.replaceState({}, "", "/chat");
+  const emptySession = {
+    session_id: "session_empty",
+    agent_id: "assistant",
+    channel: "web",
+    peer_type: "private",
+    peer_id: "browser",
+    active: true,
+    selected: true,
+    message_count: 0,
+    updated_at: "2026-08-20T09:00:00Z",
+  };
+  const usedSession = {
+    session_id: "session_used",
+    agent_id: "assistant",
+    channel: "wechat",
+    channel_account_id: "main",
+    peer_type: "private",
+    peer_id: "wxid_user",
+    active: true,
+    selected: false,
+    message_count: 12,
+    title: "论文精读",
+    updated_at: "2026-08-20T08:00:00Z",
+  };
+  global.fetch = vi.fn(async (url) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) return response({ authenticated: true });
+    if (path.endsWith("/api/workspace/read")) return response({ path: "config.yaml", content: CONFIG_YAML });
+    if (path.endsWith("/api/chat/session")) return response({ session: emptySession, messages: [] });
+    if (path.startsWith("/api/chat/sessions?")) return response({ sessions: [emptySession, usedSession] });
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  // Only the session with content is listed, and the counter matches it.
+  expect(await screen.findByText("论文精读")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "删除会话 session_empty" })).not.toBeInTheDocument();
+  expect(screen.queryByText("还没有会话，直接发消息就会新建一条；也可以点右上角 + 再开一个。")).not.toBeInTheDocument();
+  expect(screen.getByText("新对话 · 未开始")).toBeInTheDocument();
 });
 
 test("chat session list shows titles and renames a session", async () => {
