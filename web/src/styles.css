@@ -1479,28 +1479,53 @@ pre {
   overflow: hidden;
 }
 
-.skills-group-header {
+.skills-group.selected {
+  border-color: rgba(23, 168, 245, 0.55);
+  background: rgba(10, 26, 38, 0.72);
+}
+
+.skills-agent-row {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
+}
+
+.skills-group.selected .skills-agent-row {
   border-bottom: 1px solid var(--line-soft);
 }
 
-.skills-group-title {
+.skills-agent-main {
   display: grid;
   gap: 3px;
   flex: 1;
   min-width: 0;
+  justify-content: start;
+  justify-items: start;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-align: left;
 }
 
-.skills-group-title strong {
+.skills-agent-main:hover {
+  background: none;
+  border-color: transparent;
+}
+
+.skills-agent-main strong {
   font-size: 13px;
 }
 
-.skills-group-title small {
+.skills-agent-main small {
   color: var(--muted);
   font-size: 12px;
+}
+
+.skills-agent-skills {
+  padding: 4px 0 4px 22px;
 }
 
 .skills-item {

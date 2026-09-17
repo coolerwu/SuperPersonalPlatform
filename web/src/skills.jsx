@@ -96,6 +96,7 @@ function formatTime(value) {
 export function SkillsPage({ api }) {
   const [agents, setAgents] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [selectedAgentId, setSelectedAgentId] = useState("");
   const [selected, setSelected] = useState(null);
   const [draft, setDraft] = useState("");
   const [loadedContent, setLoadedContent] = useState("");
@@ -171,6 +172,12 @@ export function SkillsPage({ api }) {
       }
       setAgents(nextAgents);
       setGroups(nextGroups);
+      setSelectedAgentId((current) => {
+        if (nextAgents.some((agent) => agent.id === current)) return current;
+        if (nextAgents.some((agent) => agent.id === preferred?.agentId)) return preferred.agentId;
+        if (nextAgents.some((agent) => agent.id === selected?.agentId)) return selected.agentId;
+        return nextAgents[0]?.id || "";
+      });
       const target = preferred || selected;
       if (target) {
         const group = nextGroups.find((item) => item.agent.id === target.agentId);
@@ -192,6 +199,16 @@ export function SkillsPage({ api }) {
     setDraft(skill.content);
     setLoadedContent(skill.content);
     setError("");
+  }
+
+  function selectAgent(agentId) {
+    setSelectedAgentId(agentId);
+    setError("");
+    if (selected && selected.agentId !== agentId) {
+      setSelected(null);
+      setDraft("");
+      setLoadedContent("");
+    }
   }
 
   useEffect(() => {
@@ -313,8 +330,8 @@ export function SkillsPage({ api }) {
             <div>
               <span>Agent 技能</span>
               <small>
-                {agents.length} 个 Agent · {groups.reduce((total, group) => total + group.skills.length, 0)} 个技能 ·
-                保存在各 Agent 私有工作区，下一次运行时生效
+                {agents.length} 个 Agent · 共 {groups.reduce((total, group) => total + group.skills.length, 0)} 个技能 ·
+                选中 Agent 后显示其技能，改动下一次运行时生效
               </small>
             </div>
             <button className="icon-button" title="刷新技能列表" onClick={() => load(null)} disabled={busy}>
@@ -323,57 +340,69 @@ export function SkillsPage({ api }) {
           </div>
           <div className="skills-group-list">
             {groups.length === 0 ? <div className="empty-state">配置里还没有 Agent。</div> : null}
-            {groups.map((group) => (
-              <div className="skills-group" key={group.agent.id}>
-                <div className="skills-group-header">
-                  <div className="skills-group-title">
-                    <strong>{group.agent.name || group.agent.id}</strong>
-                    <small>{group.agent.id} · {group.skills.length} 个技能</small>
-                  </div>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    title={`为 ${group.agent.id} 新建技能`}
-                    disabled={busy}
-                    onClick={() => { setCreateError(""); setCreating({ agentId: group.agent.id, skillId: "", description: "" }); }}
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-                {group.skills.length === 0 ? (
-                  <p className="skills-muted">还没有技能。可以让 Agent 在对话里创建，或点右侧 + 新建。</p>
-                ) : (
-                  group.skills.map((skill) => (
-                    <div
-                      key={skill.id}
-                      className={`skills-item ${selected?.agentId === group.agent.id && selected?.skillId === skill.id ? "selected" : ""}`}
+            {groups.map((group) => {
+              const agentSelected = selectedAgentId === group.agent.id;
+              return (
+                <div className={`skills-group ${agentSelected ? "selected" : ""}`} key={group.agent.id}>
+                  <div className="skills-agent-row">
+                    <button
+                      type="button"
+                      className="skills-agent-main"
+                      aria-pressed={agentSelected}
+                      onClick={() => selectAgent(group.agent.id)}
                     >
-                      <button
-                        type="button"
-                        className="skills-item-main"
-                        onClick={() => { setMessage(""); selectSkill({ agentId: group.agent.id, skillId: skill.id }, skill); }}
-                      >
-                        <BookOpen size={15} />
-                        <span>{skill.name}</span>
-                        <small>{skill.description || "（缺少 description）"}</small>
-                        <time>{formatTime(skill.modifiedAt * 1000)}</time>
-                      </button>
-                      {skill.invalid ? <em className="skills-badge" title={skill.invalid}>不生效</em> : null}
-                      {skill.contract ? <em className="skills-badge contract" title="包含用户硬约束区块">契约</em> : null}
-                      <button
-                        type="button"
-                        className="icon-button delete-button"
-                        title={`删除技能 ${skill.id}`}
-                        disabled={busy}
-                        onClick={() => deleteSkill(skill, group.agent.id)}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            ))}
+                      <strong>{group.agent.name || group.agent.id}</strong>
+                      <small>{group.agent.id} · {group.skills.length} 个技能</small>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title={`为 ${group.agent.id} 新建技能`}
+                      disabled={busy}
+                      onClick={() => { setCreateError(""); setCreating({ agentId: group.agent.id, skillId: "", description: "" }); }}
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
+                  {agentSelected ? (
+                    group.skills.length === 0 ? (
+                      <p className="skills-muted">还没有技能。可以让 Agent 在对话里创建，或点右侧 + 新建。</p>
+                    ) : (
+                      <div className="skills-agent-skills">
+                        {group.skills.map((skill) => (
+                          <div
+                            key={skill.id}
+                            className={`skills-item ${selected?.agentId === group.agent.id && selected?.skillId === skill.id ? "selected" : ""}`}
+                          >
+                            <button
+                              type="button"
+                              className="skills-item-main"
+                              onClick={() => { setMessage(""); selectSkill({ agentId: group.agent.id, skillId: skill.id }, skill); }}
+                            >
+                              <BookOpen size={15} />
+                              <span>{skill.name}</span>
+                              <small>{skill.description || "（缺少 description）"}</small>
+                              <time>{formatTime(skill.modifiedAt * 1000)}</time>
+                            </button>
+                            {skill.invalid ? <em className="skills-badge" title={skill.invalid}>不生效</em> : null}
+                            {skill.contract ? <em className="skills-badge contract" title="包含用户硬约束区块">契约</em> : null}
+                            <button
+                              type="button"
+                              className="icon-button delete-button"
+                              title={`删除技能 ${skill.id}`}
+                              disabled={busy}
+                              onClick={() => deleteSkill(skill, group.agent.id)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         </section>
 

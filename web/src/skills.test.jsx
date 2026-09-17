@@ -83,7 +83,7 @@ function renderPage(setup) {
   return render(<SkillsPage api={setup.api} />);
 }
 
-test("groups skills per agent and tolerates a missing skills directory", async () => {
+test("shows only the selected agent skills and defaults to the first agent", async () => {
   const setup = makeApi({
     skills: {
       "agents/assistant/workspace/skills": [listEntry("web-research")],
@@ -96,10 +96,16 @@ test("groups skills per agent and tolerates a missing skills directory", async (
 
   expect(await screen.findByText("个人助理")).toBeInTheDocument();
   expect(screen.getByText("投资助手")).toBeInTheDocument();
+  // First agent is selected by default, so only its skills are rendered.
   expect(screen.getByText("web-research")).toBeInTheDocument();
   expect(screen.getByText("结构化网页调研")).toBeInTheDocument();
-  // advisor has no skills directory yet: empty state instead of an error.
+  expect(screen.queryByText("还没有技能。可以让 Agent 在对话里创建，或点右侧 + 新建。")).not.toBeInTheDocument();
+
+  // Switching to an agent without a skills directory shows its empty state, not an error.
+  fireEvent.click(screen.getByText("投资助手"));
+
   expect(screen.getByText("还没有技能。可以让 Agent 在对话里创建，或点右侧 + 新建。")).toBeInTheDocument();
+  expect(screen.queryByText("web-research")).not.toBeInTheDocument();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
