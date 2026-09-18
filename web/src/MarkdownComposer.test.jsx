@@ -49,3 +49,14 @@ test("Shift Enter stays inside the code block", () => {
   expect(node.querySelector("pre")).toHaveTextContent("const a = 1;");
   expect(screen.getByTestId("draft")).toHaveTextContent("```js");
 });
+
+test("pasted clipboard images never become inline draft content", () => {
+  render(<Harness />);
+  const node = screen.getByRole("textbox");
+  const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", { type: "image/png" });
+
+  fireEvent.paste(node, { clipboardData: { files: [image], getData: () => "" } });
+
+  expect(node.querySelector("img")).toBeNull();
+  expect(screen.getByTestId("draft")).toHaveTextContent("");
+});

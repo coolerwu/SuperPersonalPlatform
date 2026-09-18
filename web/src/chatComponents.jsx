@@ -1,6 +1,6 @@
 import { MarkdownComposer } from "./MarkdownComposer.jsx";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, Copy, TerminalSquare, ArrowUp, Quote, X, Clock3, XCircle, CheckCircle2, ImagePlus } from "lucide-react";
+import { Check, Copy, TerminalSquare, ArrowUp, Quote, X, Clock3, XCircle, CheckCircle2, ImagePlus, Plus } from "lucide-react";
 import {
   CHAT_IMAGE_ACCEPT,
   MAX_CHAT_IMAGES,
@@ -159,9 +159,32 @@ function MessageImages({ message, attachmentUrl }) {
 
 export function ChatComposer({ value, onChange, onSend, busy = false, disabled = false, children, quote, onCancelQuote, attachments = [], onPickImages, onRemoveAttachment, onAttachmentError = () => {}, placeholder = "输入消息，Enter 发送，Shift+Enter 换行" }) {
   const fileInputRef = useRef(null);
+  const menuRef = useRef(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [dropping, setDropping] = useState(false);
   const canSend = Boolean(String(value || "").trim() || attachments.length);
-  const pickDisabled = busy || disabled || attachments.length >= MAX_CHAT_IMAGES;
+  const imageLimitReached = attachments.length >= MAX_CHAT_IMAGES;
+  const pickDisabled = busy || disabled || imageLimitReached;
+  const actionsAvailable = Boolean(onPickImages);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    function closeOnOutsidePress(event) {
+      if (!menuRef.current?.contains(event.target)) setMenuOpen(false);
+    }
+    function closeOnEscape(event) {
+      if (event.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", closeOnOutsidePress);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsidePress);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuOpen]);
+  useEffect(() => {
+    if (busy || disabled) setMenuOpen(false);
+  }, [busy, disabled]);
 
   function acceptFiles(fileList) {
     if (!onPickImages || !fileList?.length) return;
@@ -203,6 +226,36 @@ export function ChatComposer({ value, onChange, onSend, busy = false, disabled =
       </div>)}
     </div> : null}
     <div className="chat-composer">
+    {actionsAvailable ? <div className="chat-composer-menu" ref={menuRef}>
+      <button
+        type="button"
+        className="chat-composer-plus"
+        aria-label="添加内容"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        title="添加内容"
+        disabled={busy || disabled}
+        onClick={() => setMenuOpen((open) => !open)}
+      >
+        <Plus size={20} />
+      </button>
+      {menuOpen ? <div className="chat-composer-menu-list" role="menu" aria-label="添加内容">
+        <button
+          type="button"
+          role="menuitem"
+          className="chat-composer-menu-item"
+          disabled={pickDisabled}
+          onClick={() => {
+            setMenuOpen(false);
+            fileInputRef.current?.click();
+          }}
+        >
+          <ImagePlus size={16} />
+          <span>图片</span>
+          <small>{imageLimitReached ? `最多 ${MAX_CHAT_IMAGES} 张` : "PNG / JPEG / GIF / WebP"}</small>
+        </button>
+      </div> : null}
+    </div> : null}
     <MarkdownComposer value={value} onChange={onChange} onSend={onSend} busy={busy} disabled={disabled} canSend={canSend} placeholder={placeholder} quote={quote} />
     <div className="chat-composer-actions">{children}
       <input
@@ -217,7 +270,6 @@ export function ChatComposer({ value, onChange, onSend, busy = false, disabled =
           event.target.value = "";
         }}
       />
-      {onPickImages ? <button type="button" className="chat-attach-button" aria-label="添加图片" title={`添加图片（最多 ${MAX_CHAT_IMAGES} 张）`} disabled={pickDisabled} onClick={() => fileInputRef.current?.click()}><ImagePlus size={20} /></button> : null}
       <button className="primary chat-send-button" aria-label="发送" title="发送" onClick={onSend} disabled={!canSend || busy || disabled}><ArrowUp size={23} /></button>
     </div>
   </div></div>;

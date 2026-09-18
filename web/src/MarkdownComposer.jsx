@@ -73,6 +73,13 @@ export function MarkdownComposer({ value, onChange, onSend, busy, disabled, plac
         return true;
       },
       handlePaste: (view, event) => {
+        // Clipboard images become upload attachments, never inline editor content;
+        // the composer region above handles the files themselves.
+        const clipboardFiles = Array.from(event.clipboardData?.files || []);
+        if (clipboardFiles.some((file) => String(file.type || "").toLowerCase().startsWith("image/"))) {
+          event.preventDefault();
+          return true;
+        }
         const text = event.clipboardData?.getData("text/plain");
         if (!text || view.state.selection.$from.parent.type.name === "codeBlock") return false;
         event.preventDefault();

@@ -1945,6 +1945,10 @@ test("chat page attaches an image, sends it as an attachment, and renders the th
 
   const fileInput = document.querySelector(".chat-attachment-input");
   expect(fileInput).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "添加内容" }));
+  expect(screen.getByRole("menuitem", { name: /图片/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("menuitem", { name: /图片/ }));
+  expect(screen.queryByRole("menuitem", { name: /图片/ })).toBeNull();
   const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", { type: "image/png" });
   await act(async () => {
     fireEvent.change(fileInput, { target: { files: [file] } });
@@ -1960,4 +1964,45 @@ test("chat page attaches an image, sends it as an attachment, and renders the th
   expect(sent[0].attachments[0].mime).toBe("image/png");
   expect(sent[0].attachments[0].data_url.startsWith("data:image/png;base64,")).toBe(true);
   await waitFor(() => expect(document.querySelectorAll(".chat-message-images img")).toHaveLength(1));
+});
+
+test("chat page accepts a pasted screenshot as a pending image attachment", async () => {
+  window.history.replaceState({}, "", "/chat");
+  const sent = [];
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) return response({ authenticated: true });
+    if (path.endsWith("/api/workspace/read")) return response({ path: "config.yaml", content: CONFIG_YAML });
+    if (path.endsWith("/api/chat/session")) {
+      return response({ session: { session_id: "session_web", agent_id: "assistant", message_count: 0 }, messages: [] });
+    }
+    if (path.endsWith("/api/chat/messages")) {
+      sent.push(JSON.parse(options.body));
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 1 },
+        run: { run_id: "run_paste", state: { status: "queued" } },
+      });
+    }
+    if (path.startsWith("/api/runs/run_paste/events")) return response({ events: [] });
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  const region = document.querySelector(".chat-composer-region");
+  const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "clipboard.png", { type: "image/png" });
+  await act(async () => {
+    fireEvent.paste(region, { clipboardData: { files: [file], getData: () => "" } });
+  });
+  await waitFor(() => expect(screen.getByAltText("clipboard.png")).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0].content).toBe("");
+  expect(sent[0].attachments).toHaveLength(1);
+  expect(sent[0].attachments[0].filename).toBe("clipboard.png");
 });
