@@ -25,7 +25,7 @@ from server.infrastructure.agent_filesystem_backend import (
 )
 from server.infrastructure.tool_runtime import PlatformToolContext, build_platform_tools, _webdav_context_service
 from server.infrastructure.webdav_backend import WebDAVFilesystemBackend
-from server.infrastructure.agent_workspace import WebDAVPathPolicy
+from server.infrastructure.agent_workspace import WebDAVPathPolicy, skill_write_permissions
 
 
 from server.domain.tooling import (
@@ -172,6 +172,7 @@ class DeepAgentRuntime:
         include_self_config = (
             options.self_config and not options.group_control and self._tool_context is not None
         )
+        permissions = [*skill_write_permissions(), *WebDAVPathPolicy(options.webdav).permissions]
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
                 options.tools,
@@ -184,7 +185,7 @@ class DeepAgentRuntime:
             "model": self._chat_model(),
             "system_prompt": instructions.strip(),
             "backend": backend,
-            "permissions": WebDAVPathPolicy(options.webdav).permissions,
+            "permissions": permissions,
             "skills": ["/skills/"],
             "subagents": [general_purpose_subagent],
         }

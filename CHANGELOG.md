@@ -45,9 +45,22 @@
   name 与目录名不一致、name 不符合规范、description 超过 1024 字符只标记“规格警告”
   （运行时仍会加载，description 会被截断）并允许保存。需求见
   `docs/requirements/F2-Skill页面.md`。
+- Web Chat 图片上传：输入区新增附件按钮，支持选择、粘贴和拖拽图片，待发送图片以可移除的
+  缩略图挂在输入框上方，只发图片不写文字也能发送；后端在创建 run 前校验数量（最多 6 张）、
+  大小（单张 20MB）和字节头（PNG/JPEG/GIF/WebP），并按真实字节头修正 MIME 后落到
+  `sessions/{session_id}/attachments/{message_seq}/`；新增
+  `GET /api/chat/sessions/{session_id}/attachments` 按已记录的 `session_path` 提供图片，
+  用户消息气泡渲染缩略图。需求见 `docs/requirements/F7-聊天图片上传.md`。
 
 ### Changed
 
+- 技能编辑需要人工审批：Agent 通过文件工具写入、编辑或删除 `/skills/**` 时，
+  `skill_write_permissions()` 让 run 进入 `waiting_approval`，批准后才落盘，主 Agent 与
+  通用子 Agent 一致；技能审批不提供“批准当前文件（10 分钟）”免审批租约，用户在 `/skills`
+  页面的手工保存仍直接生效。需求见 `docs/requirements/F6-技能编辑审批.md`。
+- `deepagents` 依赖从 `>=0.7.13,<0.8` 升到 `>=0.7.15,<0.8`，运行时继续使用原生
+  permissions、HITL、skills、长期记忆和子 Agent 契约。需求见
+  `docs/requirements/F5-deepagents升级.md`。
 - Chat 页面改为与群聊一致的左侧列表布局：左栏是当前 Agent 的 session 列表（新建会话 +
   Agent 选择 + 来源/渠道身份/消息数/更新时间 + 删除），中间是消息与输入区，右侧保留状态栏；
   原来的会话下拉菜单移除，`820px` 以下会话列表变成顶部横向滚动的会话条。

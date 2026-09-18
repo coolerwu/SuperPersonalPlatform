@@ -1,9 +1,16 @@
 import { MarkdownComposer } from "./MarkdownComposer.jsx";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, Copy, TerminalSquare, ArrowUp, Quote, X, Clock3, XCircle, CheckCircle2 } from "lucide-react";
+import { Check, Copy, TerminalSquare, ArrowUp, Quote, X, Clock3, XCircle, CheckCircle2, ImagePlus } from "lucide-react";
+import {
+  CHAT_IMAGE_ACCEPT,
+  MAX_CHAT_IMAGES,
+  chatAttachmentSource,
+  imageFilesFromTransfer,
+  isImageAttachment,
+} from "./chatAttachments.js";
 
 
-export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled = false, onError = () => {}, emptyTitle = "开始一次页面对话", emptyDescription = "消息会进入长期 session；运行中输出会在这里实时刷新。" }) {
+export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled = false, onError = () => {}, attachmentUrl = null, emptyTitle = "开始一次页面对话", emptyDescription = "消息会进入长期 session；运行中输出会在这里实时刷新。" }) {
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const copyFeedbackTimerRef = useRef(0);
   const messagesRef = useRef(null);
@@ -80,7 +87,7 @@ export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled =
               key={message.id}
               className={`chat-message ${message.role === "user" ? "user" : "assistant"} ${message.failed ? "failed" : ""}`}
             >
-              <div className={`chat-bubble ${message.content ? "copyable" : ""}`}>
+              <div className={`chat-bubble ${message.content || (message.attachments || []).length ? "copyable" : ""}`}>
                 {message.reply ? <QuoteCard quote={message.reply} /> : null}
                 {message.speaker ? <div className="chat-speaker"><strong>{message.speaker}</strong>{message.run_id ? <a href={`/runs?run_id=${encodeURIComponent(message.run_id)}`}>Run ↗</a> : null}</div> : null}
                 {message.role === "assistant" && message.thinking?.length ? (
@@ -89,11 +96,12 @@ export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled =
                 <div data-quote-body={message.id}>
                 {message.role === "assistant" && message.content ? (
                   <MarkdownMessage content={message.content} />
-                ) : (
+                ) : message.content || message.streaming ? (
                   <pre className={message.streaming ? "chat-answer-placeholder" : ""}>
                     {message.content || (message.streaming ? "正在生成正文..." : "")}
                   </pre>
-                )}
+                ) : null}
+                <MessageImages message={message} attachmentUrl={attachmentUrl} />
                 </div>
                 {message.role === "assistant" && message.approval ? (
                   <ApprovalPanel
@@ -134,11 +142,84 @@ export function ChatMessageList({ messages, onDecision, onQuote, quoteDisabled =
   );
 }
 
-export function ChatComposer({ value, onChange, onSend, busy = false, disabled = false, children, quote, onCancelQuote, placeholder = "输入消息，Enter 发送，Shift+Enter 换行" }) {
-  return <div className="chat-composer-region">{quote ? <div className="chat-quote-draft"><QuoteCard quote={quote} onCancel={onCancelQuote} /></div> : null}<div className="chat-composer">
-    <MarkdownComposer value={value} onChange={onChange} onSend={onSend} busy={busy} disabled={disabled} placeholder={placeholder} quote={quote} />
+function MessageImages({ message, attachmentUrl }) {
+  const items = (message.attachments || []).filter(isImageAttachment);
+  if (items.length === 0) return null;
+  const sessionId = message.session_id || "";
+  return <div className="chat-message-images">
+    {items.map((attachment, index) => {
+      const src = chatAttachmentSource(attachment, sessionId, "") || (attachmentUrl ? attachmentUrl(sessionId, attachment) : "");
+      if (!src) return null;
+      return <a key={`${attachment.session_path || attachment.id || index}`} href={src} target="_blank" rel="noreferrer">
+        <img src={src} alt={String(attachment.filename || "图片")} loading="lazy" />
+      </a>;
+    })}
+  </div>;
+}
+
+export function ChatComposer({ value, onChange, onSend, busy = false, disabled = false, children, quote, onCancelQuote, attachments = [], onPickImages, onRemoveAttachment, onAttachmentError = () => {}, placeholder = "输入消息，Enter 发送，Shift+Enter 换行" }) {
+  const fileInputRef = useRef(null);
+  const [dropping, setDropping] = useState(false);
+  const canSend = Boolean(String(value || "").trim() || attachments.length);
+  const pickDisabled = busy || disabled || attachments.length >= MAX_CHAT_IMAGES;
+
+  function acceptFiles(fileList) {
+    if (!onPickImages || !fileList?.length) return;
+    Promise.resolve(onPickImages(Array.from(fileList))).catch((exc) => onAttachmentError(exc?.message || "添加图片失败"));
+  }
+
+  function handlePaste(event) {
+    const files = imageFilesFromTransfer(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    acceptFiles(files);
+  }
+
+  function handleDrop(event) {
+    setDropping(false);
+    if (Array.from(event.dataTransfer?.files || []).length > 0) event.preventDefault();
+    const files = imageFilesFromTransfer(event.dataTransfer);
+    if (files.length === 0) return;
+    acceptFiles(files);
+  }
+
+  return <div
+    className={`chat-composer-region ${dropping ? "dropping" : ""}`}
+    onPaste={handlePaste}
+    onDragOver={(event) => {
+      if (disabled || imageFilesFromTransfer(event.dataTransfer).length === 0) return;
+      event.preventDefault();
+      setDropping(true);
+    }}
+    onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropping(false); }}
+    onDrop={handleDrop}
+  >
+    {quote ? <div className="chat-quote-draft"><QuoteCard quote={quote} onCancel={onCancelQuote} /></div> : null}
+    {attachments.length ? <div className="chat-attachments-preview">
+      {attachments.map((attachment, index) => <div className="chat-attachment-chip" key={attachment.id || index}>
+        <img src={chatAttachmentSource(attachment, "", "")} alt={String(attachment.filename || "图片")} />
+        <span>{String(attachment.filename || "图片")}</span>
+        <button type="button" aria-label={`移除图片 ${attachment.filename || index + 1}`} title="移除图片" disabled={busy} onClick={() => onRemoveAttachment?.(attachment.id)}><X size={13} /></button>
+      </div>)}
+    </div> : null}
+    <div className="chat-composer">
+    <MarkdownComposer value={value} onChange={onChange} onSend={onSend} busy={busy} disabled={disabled} canSend={canSend} placeholder={placeholder} quote={quote} />
     <div className="chat-composer-actions">{children}
-    <button className="primary chat-send-button" aria-label="发送" title="发送" onClick={onSend} disabled={!value.trim() || busy || disabled}><ArrowUp size={23} /></button></div>
+      <input
+        ref={fileInputRef}
+        className="chat-attachment-input"
+        type="file"
+        accept={CHAT_IMAGE_ACCEPT}
+        multiple
+        tabIndex={-1}
+        onChange={(event) => {
+          acceptFiles(event.target.files || []);
+          event.target.value = "";
+        }}
+      />
+      {onPickImages ? <button type="button" className="chat-attach-button" aria-label="添加图片" title={`添加图片（最多 ${MAX_CHAT_IMAGES} 张）`} disabled={pickDisabled} onClick={() => fileInputRef.current?.click()}><ImagePlus size={20} /></button> : null}
+      <button className="primary chat-send-button" aria-label="发送" title="发送" onClick={onSend} disabled={!canSend || busy || disabled}><ArrowUp size={23} /></button>
+    </div>
   </div></div>;
 }
 

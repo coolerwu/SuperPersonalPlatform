@@ -1916,3 +1916,48 @@ function changeInput(node, event) {
     fireEvent.change(node, event);
   }
 }
+
+test("chat page attaches an image, sends it as an attachment, and renders the thumbnail", async () => {
+  window.history.replaceState({}, "", "/chat");
+  const sent = [];
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) return response({ authenticated: true });
+    if (path.endsWith("/api/workspace/read")) return response({ path: "config.yaml", content: CONFIG_YAML });
+    if (path.endsWith("/api/chat/session")) {
+      return response({ session: { session_id: "session_web", agent_id: "assistant", message_count: 0 }, messages: [] });
+    }
+    if (path.endsWith("/api/chat/messages")) {
+      sent.push(JSON.parse(options.body));
+      return response({
+        session: { session_id: "session_web", agent_id: "assistant", message_count: 1 },
+        run: { run_id: "run_image", state: { status: "queued" } },
+      });
+    }
+    if (path.startsWith("/api/runs/run_image/events")) return response({ events: [] });
+    return response({});
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  const fileInput = document.querySelector(".chat-attachment-input");
+  expect(fileInput).toBeTruthy();
+  const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", { type: "image/png" });
+  await act(async () => {
+    fireEvent.change(fileInput, { target: { files: [file] } });
+  });
+  await waitFor(() => expect(screen.getByAltText("shot.png")).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0].content).toBe("");
+  expect(sent[0].attachments).toHaveLength(1);
+  expect(sent[0].attachments[0].type).toBe("image");
+  expect(sent[0].attachments[0].mime).toBe("image/png");
+  expect(sent[0].attachments[0].data_url.startsWith("data:image/png;base64,")).toBe(true);
+  await waitFor(() => expect(document.querySelectorAll(".chat-message-images img")).toHaveLength(1));
+});

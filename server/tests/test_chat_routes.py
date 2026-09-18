@@ -349,3 +349,99 @@ def test_chat_session_rename_route_updates_title(tmp_path) -> None:
 
     foreign = client.post(f"/api/chat/sessions/{sid}/rename", json={"agent_id": "missing-agent", "title": "x"})
     assert foreign.status_code in {400, 404}
+
+
+PNG_BYTES = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+)
+
+
+def _image_attachment(payload: bytes = PNG_BYTES, name: str = "shot.png", attachment_id: str = "image_1") -> dict[str, object]:
+    import base64
+
+    return {
+        "id": attachment_id,
+        "type": "image",
+        "filename": name,
+        "mime": "image/png",
+        "data_url": "data:image/png;base64," + base64.b64encode(payload).decode("ascii"),
+    }
+
+
+def test_chat_routes_accept_image_attachment_and_serve_it(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    client = TestClient(create_app(workspace=tmp_path))
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    sid = client.post("/api/chat/session", json={"agent_id": "assistant"}).json()["session"]["session_id"]
+
+    response = client.post(
+        "/api/chat/messages",
+        json={"agent_id": "assistant", "session_id": sid, "content": "", "attachments": [_image_attachment()]},
+    )
+
+    assert response.status_code == 200
+    run = response.json()["run"]
+    saved = run["input"]["attachments"]
+    assert saved[0]["type"] == "image"
+    assert saved[0]["mime"] == "image/png"
+    assert saved[0]["session_path"].startswith("attachments/")
+    assert (tmp_path / "sessions" / sid / saved[0]["session_path"]).read_bytes() == PNG_BYTES
+
+    messages = client.get(f"/api/chat/sessions/{sid}/messages", params={"agent_id": "assistant"}).json()["messages"]
+    assert messages[-1]["content"] == "用户发送了图片。"
+    assert messages[-1]["attachments"][0]["session_path"] == saved[0]["session_path"]
+
+    served = client.get(
+        f"/api/chat/sessions/{sid}/attachments",
+        params={"agent_id": "assistant", "path": saved[0]["session_path"]},
+    )
+    assert served.status_code == 200
+    assert served.headers["content-type"] == "image/png"
+    assert served.content == PNG_BYTES
+
+    missing = client.get(
+        f"/api/chat/sessions/{sid}/attachments",
+        params={"agent_id": "assistant", "path": "attachments/9/shot.png"},
+    )
+    assert missing.status_code == 404
+
+
+def test_chat_routes_reject_non_image_and_oversized_attachments(tmp_path) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    client = TestClient(create_app(workspace=tmp_path))
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    sid = client.post("/api/chat/session", json={"agent_id": "assistant"}).json()["session"]["session_id"]
+
+    not_image = _image_attachment(payload=b"plain text", attachment_id="text_1")
+    rejected = client.post(
+        "/api/chat/messages",
+        json={"agent_id": "assistant", "session_id": sid, "content": "", "attachments": [not_image]},
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"] == "只支持 PNG、JPEG、GIF、WebP 图片"
+
+    too_many = client.post(
+        "/api/chat/messages",
+        json={
+            "agent_id": "assistant",
+            "session_id": sid,
+            "content": "",
+            "attachments": [_image_attachment(attachment_id=f"image_{index}") for index in range(7)],
+        },
+    )
+    assert too_many.status_code == 400
+    assert too_many.json()["detail"] == "一次最多上传 6 张图片"
+
+    oversized = client.post(
+        "/api/chat/messages",
+        json={
+            "agent_id": "assistant",
+            "session_id": sid,
+            "content": "",
+            "attachments": [_image_attachment(payload=PNG_BYTES + b"\x00" * (20 * 1024 * 1024), attachment_id="huge_1")],
+        },
+    )
+    assert oversized.status_code == 400
+    assert oversized.json()["detail"] == "单张图片不能超过 20MB"
+
+    assert SessionService(tmp_path).read_messages(sid) == []

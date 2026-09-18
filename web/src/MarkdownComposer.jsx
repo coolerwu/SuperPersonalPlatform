@@ -15,9 +15,9 @@ const ImageSyntax = Extension.create({
 });
 
 // A single document owns selection, composition and undo; React owns the draft.
-export function MarkdownComposer({ value, onChange, onSend, busy, disabled, placeholder, quote }) {
-  const current = useRef({ value, onChange, onSend, busy, disabled });
-  current.current = { value, onChange, onSend, busy, disabled };
+export function MarkdownComposer({ value, onChange, onSend, busy, disabled, placeholder, quote, canSend }) {
+  const current = useRef({ value, onChange, onSend, busy, disabled, canSend });
+  current.current = { value, onChange, onSend, busy, disabled, canSend };
   const emitted = useRef(value);
   const composing = useRef(false);
   const editor = useEditor({
@@ -67,7 +67,7 @@ export function MarkdownComposer({ value, onChange, onSend, busy, disabled, plac
             () => commands.liftEmptyBlock(),
             () => commands.splitBlock(),
           ]);
-        } else if (!current.current.busy && !current.current.disabled && current.current.value.trim()) {
+        } else if (!current.current.busy && !current.current.disabled && (current.current.canSend ?? Boolean(current.current.value.trim()))) {
           current.current.onSend();
         }
         return true;

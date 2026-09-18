@@ -23,6 +23,19 @@ WORKSPACE_DIRECTORIES = (
 AGENT_WORKSPACE_DIRECTORIES = tuple(d.name for d in WORKSPACE_DIRECTORIES if d.agent_access)
 
 
+def skill_write_permissions():
+    """Skill files are loaded as prompt material, so Agent writes always need approval.
+
+    The rule mirrors the WebDAV write gate: `interrupt` mode lets the native
+    filesystem middleware pause the run for HITL instead of denying the write.
+    Reads and directory listing stay untouched.
+    """
+    from deepagents import FilesystemPermission
+    from wcmatch import glob
+    root = glob.escape("/skills")
+    return [FilesystemPermission(operations=["write"], paths=[root, root + "/**"], mode="interrupt")]
+
+
 def agent_workspace_path(platform_workspace: Path, agent_id: str) -> Path:
     if not agent_id or agent_id in {".", ".."} or any(c in agent_id for c in ("/", "\\", "\0")):
         raise AgentConfigError("Agent ID must be a single path segment")

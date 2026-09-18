@@ -657,6 +657,41 @@ class SessionService:
             )
         return tuple(saved)
 
+    def attachment_path(self, session_id: str, session_path: str) -> tuple[Path, str] | None:
+        """Resolve a recorded session attachment to an on-disk file.
+
+        Only paths already recorded in this session's `messages.jsonl` are
+        served, so the read entry cannot reach unrelated workspace files.
+        """
+        relative = str(session_path or "").strip().lstrip("/")
+        if not relative or "\\" in relative or "\0" in relative:
+            return None
+        if any(part in {"", ".", ".."} for part in relative.split("/")):
+            return None
+        recorded = next(
+            (
+                attachment
+                for message in self.read_messages(session_id, limit=1000000)
+                for attachment in message.get("attachments") or []
+                if isinstance(attachment, dict) and str(attachment.get("session_path") or "") == relative
+            ),
+            None,
+        )
+        if recorded is None:
+            return None
+        session_dir = self._session_dir(session_id)
+        target = session_dir / relative
+        if target.is_symlink() or not target.is_file():
+            return None
+        if not target.resolve().is_relative_to(session_dir.resolve()):
+            return None
+        mime = str(recorded.get("mime") or "").strip()
+        if not mime:
+            import mimetypes
+
+            mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        return target, mime
+
     def append_run(
         self,
         session_id: str,
@@ -1103,6 +1138,11 @@ def _is_search_term(term: str) -> bool:
     if len(term) >= 2:
         return True
     return bool(re.fullmatch(r"[a-zA-Z0-9]", term))
+
+
+def attachment_bytes(attachment: dict[str, Any]) -> bytes:
+    """Public wrapper: decode an in-flight attachment payload to raw bytes."""
+    return _attachment_bytes(attachment)
 
 
 def _attachment_bytes(attachment: dict[str, Any]) -> bytes:

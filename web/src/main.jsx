@@ -37,6 +37,7 @@ import { ChatGroupsPage } from "./chatGroups.jsx";
 import { SkillsPage } from "./skills.jsx";
 import { SelectMenu } from "./selectMenu.jsx";
 import { runEventThinkingText } from "./chatRuntime.js";
+import { MAX_CHAT_IMAGES, chatAttachmentUrl, readChatImageFiles } from "./chatAttachments.js";
 import "./styles.css";
 
 const NAV_ITEMS = [
@@ -320,6 +321,7 @@ function ChatPage() {
   const [chatSessions, setChatSessions] = useState([]);
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState([]);
   const [quote, setQuote] = useState(null);
   const [sending, setSending] = useState(false);
   const [activeRunId, setActiveRunId] = useState("");
@@ -498,14 +500,21 @@ function ChatPage() {
   }, [activeRunId, session?.session_id]);
 
   async function sendMessage(retry = null) {
-    const request = retry || { content: draft.trim(), ...(quote ? { reply_to_seq: quote.seq, ...(quote.excerpt ? { reply_excerpt: quote.excerpt } : {}) } : {}), agent_id: agentId || "", session_id: session?.session_id || "", client_message_id: createClientMessageId() };
-    if (!request.content || activeRunId || sendingRef.current || (!retry && pendingSend)) return;
+    const request = retry || {
+      content: draft.trim(),
+      ...(attachments.length ? { attachments } : {}),
+      ...(quote ? { reply_to_seq: quote.seq, ...(quote.excerpt ? { reply_excerpt: quote.excerpt } : {}) } : {}),
+      agent_id: agentId || "",
+      session_id: session?.session_id || "",
+      client_message_id: createClientMessageId(),
+    };
+    if ((!request.content && !(request.attachments || []).length) || activeRunId || sendingRef.current || (!retry && pendingSend)) return;
     sendingRef.current = true;
     setSending(true);
     setPendingSend(request);
     if (!retry) {
       setDraft("");
-      setMessages((current) => [...current, { id: `local_user_${request.client_message_id}`, role: "user", content: request.content, reply: quote, created_at: new Date().toISOString() }]);
+      setMessages((current) => [...current, { id: `local_user_${request.client_message_id}`, role: "user", content: request.content, attachments: request.attachments || [], reply: quote, created_at: new Date().toISOString() }]);
     }
     setError("");
     try {
@@ -514,6 +523,7 @@ function ChatPage() {
       if (!runId) throw new Error("未收到任务确认，请重试确认发送");
       setPendingSend(null);
       setQuote(null);
+      setAttachments([]);
       setSession(data.session || session);
       loadChatSessions(data.session?.agent_id || agentId || "").catch(() => {});
       chatEventSeqRef.current = 0;
@@ -524,6 +534,7 @@ function ChatPage() {
       if ([400, 401, 403, 404, 409, 422].includes(exc.status)) {
         setPendingSend(null);
         setDraft((current) => current ? `${request.content}\n${current}` : request.content);
+        setAttachments(request.attachments || []);
         setMessages((current) => current.filter((item) => item.id !== `local_user_${request.client_message_id}`));
         setError(`发送被拒绝：${exc.message}。原文已恢复到输入框。`);
       } else {
@@ -533,6 +544,22 @@ function ChatPage() {
       sendingRef.current = false;
       setSending(false);
     }
+  }
+
+  async function addChatImages(fileList) {
+    const { attachments: picked, errors } = await readChatImageFiles(fileList, { existing: attachments.length });
+    if (errors.length) {
+      setError(errors.join("；"));
+    } else {
+      setError("");
+    }
+    if (picked.length) {
+      setAttachments((current) => [...current, ...picked].slice(0, MAX_CHAT_IMAGES));
+    }
+  }
+
+  function removeChatAttachment(attachmentId) {
+    setAttachments((current) => current.filter((item) => item.id !== attachmentId));
   }
 
   async function decideChatApproval(runId, decision, message = "", scope = "once") {
@@ -558,6 +585,7 @@ function ChatPage() {
   async function newSession() {
     if (activeRunId) return;
     setQuote(null);
+    setAttachments([]);
     setError("");
     const data = await api("/api/chat/session/new", {
       method: "POST",
@@ -620,6 +648,7 @@ function ChatPage() {
   async function changeSession(selector) {
     if (!selector || activeRunId) return;
     setQuote(null);
+    setAttachments([]);
     setError("");
     const data = await api("/api/chat/session/change", {
       method: "POST",
@@ -654,6 +683,7 @@ function ChatPage() {
 
   function changeAgent(nextAgentId) {
     setQuote(null);
+    setAttachments([]);
     setAgentId(nextAgentId);
     setActiveRunId("");
     chatEventSeqRef.current = 0;
@@ -753,11 +783,11 @@ function ChatPage() {
           </div>
         </div>
 
-        <ChatMessageList key={session?.session_id || "loading"} messages={messages} onQuote={setQuote} quoteDisabled={sending || Boolean(pendingSend)} onDecision={decideChatApproval} onError={setError} />
+        <ChatMessageList key={session?.session_id || "loading"} messages={messages} onQuote={setQuote} quoteDisabled={sending || Boolean(pendingSend)} onDecision={decideChatApproval} onError={setError} attachmentUrl={(sessionId, attachment) => chatAttachmentUrl(sessionId || session?.session_id || "", agentId, attachment)} />
 
         {error ? <div className="error chat-error">{error}</div> : null}
         {pendingSend ? <button disabled={sending} onClick={() => sendMessage(pendingSend)}>{sending ? "正在确认发送…" : "重试确认发送"}</button> : null}
-        <ChatComposer key={`composer_${session?.session_id || "new"}`} quote={quote} onCancelQuote={sending || pendingSend ? undefined : () => setQuote(null)} value={draft} onChange={setDraft} onSend={() => sendMessage()} busy={Boolean(activeRunId) || sending || Boolean(pendingSend)} />
+        <ChatComposer key={`composer_${session?.session_id || "new"}`} quote={quote} onCancelQuote={sending || pendingSend ? undefined : () => setQuote(null)} value={draft} onChange={setDraft} onSend={() => sendMessage()} attachments={attachments} onPickImages={addChatImages} onRemoveAttachment={removeChatAttachment} onAttachmentError={setError} busy={Boolean(activeRunId) || sending || Boolean(pendingSend)} />
       </section>
 
       <aside className="status-rail chat-rail">
@@ -2571,6 +2601,8 @@ function normalizeChatMessages(items) {
       role: item.role,
       content: item.content || "",
       seq: item.seq,
+      session_id: item.session_id || "",
+      attachments: Array.isArray(item.attachments) ? item.attachments : [],
       reply: item.metadata?.reply,
       created_at: item.created_at || "",
       run_id: item.run_id || "",

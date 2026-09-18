@@ -1,19 +1,23 @@
 from server.domain.message_quote import quote_content
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from server.adapter.dependencies import AppContainer
 from server.adapter.security import require_authenticated
 from server.app.run_service import RunNotFoundError, SessionRunConflictError
-from server.app.session_service import SessionService
+from server.app.session_service import SessionService, attachment_bytes
 from server.domain.agent_config import AgentConfigError
 from server.infrastructure.config import load_settings
+from server.infrastructure.outgoing_attachments import image_mime
 
 
 WEB_CHAT_CHANNEL = "web"
 WEB_CHAT_ACCOUNT = "default"
 WEB_CHAT_PEER_TYPE = "private"
 WEB_CHAT_PEER_ID = "browser"
+MAX_CHAT_ATTACHMENTS = 6
+MAX_CHAT_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 
 class ChatSessionRequest(BaseModel):
@@ -129,6 +133,17 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         _require_session_for_agent(session_service, session_id, resolved_agent_id)
         return {"messages": session_service.read_messages(session_id, limit=120)}
 
+    @router.get("/sessions/{session_id}/attachments")
+    def get_chat_attachment(session_id: str, path: str, agent_id: str = "") -> FileResponse:
+        session_service = SessionService(container.workspace)
+        resolved_agent_id = _resolve_agent_id(container.workspace, agent_id)
+        _require_session_for_agent(session_service, session_id, resolved_agent_id)
+        resolved = session_service.attachment_path(session_id, path)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="附件不存在")
+        target, media_type = resolved
+        return FileResponse(target, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+
     @router.post("/sessions/{session_id}/rename")
     def rename_chat_session(session_id: str, payload: ChatSessionRenameRequest) -> dict[str, object]:
         session_service = SessionService(container.workspace)
@@ -216,6 +231,7 @@ def create_chat_router(container: AppContainer) -> APIRouter:
             }
         if payload.reply_excerpt is not None and payload.reply_to_seq is None:
             raise HTTPException(400, "引用片段需要来源消息")
+        attachments = _normalize_chat_attachments(payload.attachments)
         reply = None
         if payload.reply_to_seq is not None:
             target = next((m for m in session_service.read_messages(session_id, limit=1000000)
@@ -233,7 +249,7 @@ def create_chat_router(container: AppContainer) -> APIRouter:
                 agent_id=agent_id,
                 source="web_chat",
                 session_id=session_id,
-                attachments=tuple(payload.attachments),
+                attachments=attachments,
                 metadata={
                     "source": "web_chat",
                     **({"reply": reply} if reply else {}),
@@ -256,6 +272,27 @@ def create_chat_router(container: AppContainer) -> APIRouter:
         }
 
     return router
+
+
+def _normalize_chat_attachments(attachments: list[dict[str, object]]) -> tuple[dict[str, object], ...]:
+    """Validate Chat image uploads and pin MIME to the detected bytes."""
+    items = [item for item in attachments if isinstance(item, dict)]
+    if not items:
+        return ()
+    if len(items) > MAX_CHAT_ATTACHMENTS:
+        raise HTTPException(status_code=400, detail=f"一次最多上传 {MAX_CHAT_ATTACHMENTS} 张图片")
+    normalized: list[dict[str, object]] = []
+    for item in items:
+        data = attachment_bytes(item)
+        if not data:
+            raise HTTPException(status_code=400, detail="图片内容为空或无法解析")
+        if len(data) > MAX_CHAT_ATTACHMENT_BYTES:
+            raise HTTPException(status_code=400, detail="单张图片不能超过 20MB")
+        mime = image_mime(data)
+        if not mime:
+            raise HTTPException(status_code=400, detail="只支持 PNG、JPEG、GIF、WebP 图片")
+        normalized.append({**item, "type": "image", "mime": mime})
+    return tuple(normalized)
 
 
 def _find_existing_chat_run(

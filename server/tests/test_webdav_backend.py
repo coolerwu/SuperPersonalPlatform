@@ -169,7 +169,9 @@ def test_runtime_routes_backend_and_passes_description_to_both_agents(tmp_path, 
     assert isinstance(captured["backend"], CompositeBackend)
     assert captured["name"] == "Agent A"
     assert captured["memory"] == ["/memories/AGENTS.md"]
-    assert captured["permissions"] == view.policy.permissions
+    from server.infrastructure.agent_workspace import skill_write_permissions
+    # Skill writes are gated first, then the WebDAV rules; both reach every filesystem tool.
+    assert captured["permissions"] == [*skill_write_permissions(), *view.policy.permissions]
     assert "permissions" not in captured["subagents"][0]  # native inheritance
     assert captured["interrupt_on"]["write_file"]["allowed_decisions"] == ["approve", "reject"]
     for middleware in (captured["middleware"], captured["subagents"][0]["middleware"]):
