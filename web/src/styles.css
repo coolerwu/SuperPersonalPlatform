@@ -3536,13 +3536,13 @@ pre {
 
 /* A send-only composer does not need a separate toolbar row. */
 .chat-composer:not(:has(.group-collaborate)) {
-  display: grid; grid-template-columns: minmax(0, 1fr) 40px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
   align-items: end; gap: 8px; padding: 8px 10px;
 }
 .chat-composer:not(:has(.group-collaborate)) textarea {
   min-height: 40px; padding: 8px 4px; resize: none;
 }
-.chat-composer:not(:has(.group-collaborate)) .chat-composer-actions { width: auto; }
+.chat-composer:not(:has(.group-collaborate)) .chat-composer-actions { width: auto; min-width: 0; flex-wrap: nowrap; }
 
 .chat-composer textarea, .group-chat-panel .chat-composer textarea {
   box-sizing: border-box; line-height: 24px; max-height: none; resize: none; overflow-y: hidden;
