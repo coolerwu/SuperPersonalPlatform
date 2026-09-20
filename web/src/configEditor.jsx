@@ -648,7 +648,7 @@ export function AgentConfigEditor({ draft, onChange, onSave, readOnly }) {
               <span className="agent-config-identity"><strong>{agent.name || agent.id}</strong><small>{agent.id}</small></span>
               <span><small>模型</small><strong>{agent.model_id || config.llm.default_model_id || "默认模型"}</strong></span>
               <span><small>工具</small><strong>{agent.deepagent.tools.length} 项</strong></span>
-              <span><small>WebDAV</small><strong>{agent.webdav.enabled ? `${agent.webdav.directories.length} 个目录` : "未启用"}</strong></span>
+              <span><small>WebDAV</small><strong>{webdavSummary(agent)}</strong></span>
               <span className="agent-config-edit-label">配置</span>
             </button>
             <button className="icon-button delete-button" type="button" title="删除 Agent"
@@ -725,9 +725,17 @@ function AgentSettingsDialog({ initialAgent, models, nutstore, sync, readOnly, o
     setAgent((current) => ({ ...current, webdav: { ...current.webdav, [field]: value } }));
   }
   function updateDirectory(index, field, value) {
+    updateDirectoryFields(index, { [field]: value });
+  }
+  function updateDirectoryFields(index, patch) {
     setAgent((current) => ({ ...current, webdav: { ...current.webdav,
-      directories: current.webdav.directories.map((directory, i) => i === index ? { ...directory, [field]: value } : directory),
+      directories: current.webdav.directories.map((directory, i) => i === index ? { ...directory, ...patch } : directory),
     } }));
+  }
+  function setDirectoryPermission(index, choice) {
+    updateDirectoryFields(index, choice === "read"
+      ? { permission: "read", approval_required: true }
+      : { permission: "write", approval_required: choice === "write" });
   }
   function toggleTool(toolId, enabled) {
     setAgent((current) => ({ ...current, deepagent: { ...current.deepagent,
@@ -821,7 +829,7 @@ function AgentSettingsDialog({ initialAgent, models, nutstore, sync, readOnly, o
             </section>
             <section className="config-subsection webdav-workspace">
               <div className="config-section-title compact"><strong>WebDAV 工作区</strong><span>来源：坚果云 · 同步目录 {sourceRoot}</span></div>
-              <p className="muted">WebDAV 写入需审批。<a href="/config" target="_blank" rel="noreferrer">查看全局 WebDAV 配置 ↗</a></p>
+              <p className="muted">WebDAV 默认逐次审批写入；可把个别目录设为“读写 · 免审批”。<a href="/config" target="_blank" rel="noreferrer">查看全局 WebDAV 配置 ↗</a></p>
               {!sourceEnabled ? <p role="status">全局 WebDAV 连接或同步未启用，当前挂载不可用。</p> : null}
               <label className="config-toggle field-toggle">
                 <input type="checkbox" checked={agent.webdav.enabled} disabled={readOnly}
@@ -842,9 +850,11 @@ function AgentSettingsDialog({ initialAgent, models, nutstore, sync, readOnly, o
                             onChange={(event) => updateDirectory(index, "path", event.target.value)} />
                         </ConfigField>
                         <ConfigField label="访问权限">
-                          <select value={directory.permission} disabled={readOnly}
-                            onChange={(event) => updateDirectory(index, "permission", event.target.value)}>
-                            <option value="write">读写 · 写入需审批</option><option value="read">只读</option>
+                          <select value={directoryPermissionChoice(directory)} disabled={readOnly}
+                            onChange={(event) => setDirectoryPermission(index, event.target.value)}>
+                            <option value="write">读写 · 写入需审批</option>
+                            <option value="write_free">读写 · 免审批</option>
+                            <option value="read">只读</option>
                           </select>
                         </ConfigField>
                         <ConfigField label="目录说明">
@@ -854,11 +864,13 @@ function AgentSettingsDialog({ initialAgent, models, nutstore, sync, readOnly, o
                         </ConfigField>
                       </div>
                       <small className="muted">坚果云 {joinWebDAVPath(sourceRoot, directory.path)} → Agent {joinWebDAVPath("/webdav", directory.path)}</small>
+                      {directoryPermissionChoice(directory) === "write_free"
+                        ? <p className="muted">免审批：Agent 写入会直接写回坚果云远端，不再逐次确认。</p> : null}
                       <WebDAVDirectoryPicker sourceRoot={sourceRoot} readOnly={readOnly || !sourceEnabled} onSelect={(path) => updateDirectory(index, "path", path)} />
                     </div>
                   ))}
                   {!agent.webdav.directories.length ? <p className="muted">尚未授权任何目录。</p> : null}
-                  <button type="button" disabled={readOnly} onClick={() => updateAgentWebdav("directories", [...agent.webdav.directories, { path: "", permission: "write", description: "" }])}>添加目录</button>
+                  <button type="button" disabled={readOnly} onClick={() => updateAgentWebdav("directories", [...agent.webdav.directories, { path: "", permission: "write", approval_required: true, description: "" }])}>添加目录</button>
                 </div>
               ) : null}
             </section>
@@ -933,7 +945,7 @@ function withDefaults(value) {
         ...agent,
         context_ids: normalizeList(agent.context_ids),
         deepagent: normalizeDeepAgent(agent.deepagent),
-        webdav: { enabled: false, directories: [], ...(isPlainObject(agent.webdav) ? agent.webdav : {}) },
+        webdav: normalizeAgentWebdav(agent.webdav),
       }))
     : [];
   config.channels.wechat_personal.accounts = Array.isArray(config.channels.wechat_personal.accounts)
@@ -962,6 +974,29 @@ function withDefaults(value) {
   if (config.llm.models.length === 0) config.llm.models = cloneConfig(DEFAULT_CONFIG.llm.models);
   if (config.agents.definitions.length === 0) config.agents.definitions = cloneConfig(DEFAULT_CONFIG.agents.definitions);
   return config;
+}
+
+function normalizeAgentWebdav(value) {
+  const webdav = { enabled: false, directories: [], ...(isPlainObject(value) ? value : {}) };
+  webdav.directories = Array.isArray(webdav.directories)
+    // Writes need approval unless a directory explicitly opts out; keep a stable key order for the YAML draft.
+    ? webdav.directories.map(({ path, permission, approval_required, description, ...rest }) => ({
+        path, permission, approval_required: approval_required !== false, description, ...rest,
+      }))
+    : [];
+  return webdav;
+}
+
+function directoryPermissionChoice(directory) {
+  if (directory.permission !== "write") return "read";
+  return directory.approval_required === false ? "write_free" : "write";
+}
+
+function webdavSummary(agent) {
+  const directories = agent.webdav?.directories || [];
+  if (!agent.webdav?.enabled) return "未启用";
+  const freeWrite = directories.filter((directory) => directoryPermissionChoice(directory) === "write_free").length;
+  return `${directories.length} 个目录${freeWrite ? ` · ${freeWrite} 免审批` : ""}`;
 }
 
 function mergeObjects(base, incoming) {

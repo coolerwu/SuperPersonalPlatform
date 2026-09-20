@@ -86,7 +86,8 @@ class WebDAVPathPolicy:
                 patterns = [escaped, escaped + "/**"]
                 rules.append(FilesystemPermission(operations=["read"], paths=patterns))
                 rules.append(FilesystemPermission(operations=["write"], paths=patterns,
-                    mode="interrupt" if directory.permission == "write" else "deny"))
+                    mode="deny" if directory.permission == "read"
+                    else ("interrupt" if directory.approval_required else "allow")))
                 ancestors.update(str(p) for p in PurePosixPath(path).parents if str(p).startswith("/webdav"))
         if ancestors:
             rules.append(FilesystemPermission(operations=["read"], paths=[glob.escape(p) for p in sorted(ancestors)]))

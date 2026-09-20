@@ -95,6 +95,9 @@ def test_mapping_config_defaults_validation_and_retired_options():
             AgentWebDAVDirectory(path=path)
     with pytest.raises(AgentConfigError):
         AgentWebDAVDirectory(permission="invalid")
+    assert AgentWebDAVDirectory(permission="write", approval_required=False).approval_required is False
+    # Read-only directories have no approval semantics, so a stale opt-out is normalized away.
+    assert AgentWebDAVDirectory(permission="read", approval_required=False).approval_required is True
 
 
 def test_cache_failure_reports_remote_success(tmp_path, monkeypatch):
@@ -247,12 +250,47 @@ def test_multiple_directory_validation_and_empty_permissions():
             parse_agent_webdav(raw)
     config = parse_agent_webdav({"enabled": True, "directories": [{"path": "/笔记"}, {"path": "/资料", "permission": "read"}]})
     assert config.directories[0].permission == "write"
+    assert config.directories[0].approval_required is True
     policy = WebDAVPathPolicy(config)
     assert policy.resolve("/笔记/new.md", write=True) == "/webdav/笔记/new.md"
     with pytest.raises(PermissionError):
         policy.resolve("/笔记2/new.md")
     for config in (AgentWebDAVConfig(True), AgentWebDAVConfig(False, config.directories)):
         assert _check_fs_permission(WebDAVPathPolicy(config).permissions, "read", "/webdav/笔记/new.md") == "deny"
+
+
+def test_directory_without_write_approval_writes_directly(tmp_path):
+    from types import SimpleNamespace
+    from deepagents.middleware._fs_interrupt import _build_interrupt_on_from_permissions
+    from deepagents.middleware.filesystem import FilesystemMiddleware, _check_fs_permission
+    from server.infrastructure.workspace_middleware import WorkspaceMiddleware
+    backend, view, remote, calls = setup_backend(tmp_path)
+    view.policy = WebDAVPathPolicy(AgentWebDAVConfig(True, (
+        AgentWebDAVDirectory("/llmwiki", "write", approval_required=False),
+        AgentWebDAVDirectory("/team", "write"),
+    )))
+    rules = view.policy.permissions
+    assert _check_fs_permission(rules, "read", "/webdav/llmwiki/note.md") == "allow"
+    assert _check_fs_permission(rules, "write", "/webdav/llmwiki/note.md") == "allow"
+    assert _check_fs_permission(rules, "write", "/webdav/team/note.md") == "interrupt"
+    assert _check_fs_permission(rules, "write", "/webdav/secret.md") == "deny"
+    assert _build_interrupt_on_from_permissions(
+        WebDAVPathPolicy(AgentWebDAVConfig(True, (AgentWebDAVDirectory("/llmwiki", "write", approval_required=False),))).permissions
+    ) == {}
+    interrupt_on = _build_interrupt_on_from_permissions(rules)
+    def request(path):
+        return SimpleNamespace(tool_call={"name": "write_file", "args": {"file_path": path}})
+    assert not interrupt_on["write_file"]["when"](request("/webdav/llmwiki/note.md"))
+    assert interrupt_on["write_file"]["when"](request("/webdav/team/note.md"))
+    tools = {tool.name: tool for tool in FilesystemMiddleware(backend=backend, _permissions=rules).tools}
+    runtime = SimpleNamespace(tool_call_id="test")
+    assert tools["write_file"].func(file_path="/webdav/llmwiki/note.md", content="free write", runtime=runtime).status == "success"
+    assert remote["/dav/notebook/llmwiki/note.md"] == b"free write"
+    prompt = WorkspaceMiddleware(view.policy.config).prompt.splitlines()
+    wiki_line = next(line for line in prompt if line.startswith("- /webdav/llmwiki/"))
+    team_line = next(line for line in prompt if line.startswith("- /webdav/team/"))
+    assert "no approval" in wiki_line
+    assert "human approval" in team_line and "no approval" not in team_line
 
 @pytest.mark.parametrize('delegate', [False, True])
 @pytest.mark.parametrize('decision,lease', [('approve', False), ('reject', False), ('approve', True)])

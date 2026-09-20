@@ -49,6 +49,7 @@ class ModelDefinition:
 class AgentWebDAVDirectory:
     path: str = "/"
     permission: str = "write"
+    approval_required: bool = True
     description: str = ""
 
     def __post_init__(self) -> None:
@@ -58,6 +59,9 @@ class AgentWebDAVDirectory:
         object.__setattr__(self, "path", "/" + "/".join(PurePosixPath(self.path).parts[1:]))
         if self.permission not in {"read", "write"}:
             raise AgentConfigError("agents.definitions[].webdav.directories[].permission must be read or write")
+        if self.permission == "read":
+            # Read-only directories have no approval semantics; normalize instead of rejecting stale drafts.
+            object.__setattr__(self, "approval_required", True)
 
 
 @dataclass(frozen=True)

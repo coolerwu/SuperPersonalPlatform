@@ -66,6 +66,56 @@ INTERRUPT_CONFIG = CONFIG.replace(
     "        tools:\n          - search_session\n",
     "        tools:\n          - search_session\n          - arxiv\n      webdav:\n        enabled: true\n        directories:\n          - path: /\n            permission: write\n",
 )
+FREE_WRITE_CONFIG = CONFIG.replace(
+    "        tools:\n          - search_session\n",
+    "        tools:\n          - search_session\n      webdav:\n        enabled: true\n        directories:\n          - path: /llmwiki\n            permission: write\n            approval_required: false\n",
+)
+
+
+def test_run_service_skips_approval_checkpoint_for_approval_free_writes(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(FREE_WRITE_CONFIG, encoding="utf-8")
+    captured = {}
+
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
+        captured["options"] = options
+        captured["checkpoint_path"] = checkpoint_path
+        captured["thread_id"] = thread_id
+        return "free write done"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path)
+    run_id = asyncio.run(service.create_run(content="write it", agent_id="assistant"))["run_id"]
+    completed = asyncio.run(service.execute_run(run_id))
+
+    assert completed["state"]["status"] == "completed"
+    assert captured["options"].webdav.enabled is True
+    assert captured["options"].webdav.directories[0].approval_required is False
+    # The snapshot round trip must carry the opt-out instead of resetting it to the default.
+    assert json.loads((tmp_path / "runs" / run_id / "input.json").read_text(encoding="utf-8"))[
+        "snapshot"]["agent"]["webdav"]["directories"][0]["approval_required"] is False
+
+
+def test_approval_checkpoint_is_only_needed_for_gated_writes() -> None:
+    from server.app.run_service import _uses_approval_checkpoint
+    from server.domain.agent_config import AgentWebDAVConfig, AgentWebDAVDirectory
+    from server.infrastructure.deepagent_runtime import DeepAgentRuntimeOptions
+
+    def options(*directories):
+        return DeepAgentRuntimeOptions(
+            self_config=False,
+            webdav=AgentWebDAVConfig(True, directories),
+        )
+
+    assert not _uses_approval_checkpoint(options(
+        AgentWebDAVDirectory("/llmwiki", "write", approval_required=False),
+        AgentWebDAVDirectory("/readonly", "read"),
+    ), None)
+    assert _uses_approval_checkpoint(options(
+        AgentWebDAVDirectory("/llmwiki", "write", approval_required=False),
+        AgentWebDAVDirectory("/team", "write"),
+    ), None)
+    assert _uses_approval_checkpoint(options(AgentWebDAVDirectory("/llmwiki", "write", approval_required=False)), "resume")
 
 
 def test_run_service_persists_index_state_events_and_result(tmp_path, monkeypatch) -> None:

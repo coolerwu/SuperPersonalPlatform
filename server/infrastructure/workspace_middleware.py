@@ -25,8 +25,14 @@ class WorkspaceMiddleware(AgentMiddleware):
             self.prompt += "\nWebDAV preserves the shared directory hierarchy under /webdav/. More specific child permissions override parents, regardless of configuration order. Unselected directories are inaccessible; ancestors are navigation only."
             for directory in webdav.directories:
                 purpose = directory.description or "User documents and shared knowledge from Nutstore."
-                self.prompt += f"\n- /webdav{directory.path.rstrip('/')}/: {purpose} Permission: {directory.permission}."
-            self.prompt += " All writes to writable WebDAV paths require human approval before execution and update remote Nutstore files only after approval. Read-only paths reject writes. Use /scratch/ for scripts, /artifacts/ for deliverables and /memories/ for private memory."
+                if directory.permission != "write":
+                    permission = "read; writes are rejected."
+                elif directory.approval_required:
+                    permission = "write; every write pauses for human approval before it is written back to remote Nutstore."
+                else:
+                    permission = "write; writes need no approval and land in remote Nutstore immediately, so keep them accurate and never overwrite content you did not mean to change."
+                self.prompt += f"\n- /webdav{directory.path.rstrip('/')}/: {purpose} Permission: {permission}"
+            self.prompt += " Use /scratch/ for scripts, /artifacts/ for deliverables and /memories/ for private memory."
 
     def modify_request(self, request: ModelRequest) -> ModelRequest:
         if self.prompt in (request.system_message.text if request.system_message else ""):

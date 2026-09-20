@@ -281,6 +281,7 @@ def parse_agent_webdav(raw: Any) -> AgentWebDAVConfig:
         directories=tuple(AgentWebDAVDirectory(
             path=str(item.get("path", "/")).strip(),
             permission=str(item.get("permission", "write")).strip(),
+            approval_required=bool(item.get("approval_required", True)),
             description=str(item.get("description", "")).strip(),
         ) for item in directories),
     )

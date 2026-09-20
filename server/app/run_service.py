@@ -267,10 +267,7 @@ class RunService:
             )
         use_session_checkpoint = bool(session_id)
         approval_resume = self._approval_resume(run_id)
-        use_approval_checkpoint = bool(
-            runtime_options.interrupt_on or approval_resume is not None
-            or (runtime_options.webdav.enabled and any(d.permission == "write" for d in runtime_options.webdav.directories))
-        )
+        use_approval_checkpoint = _uses_approval_checkpoint(runtime_options, approval_resume)
         history = (
             self._session_service.read_messages(session_id, limit=SESSION_HISTORY_READ_LIMIT)
             if session_id and self._session_service is not None
@@ -1465,7 +1462,8 @@ def _public_agent(agent: AgentDefinition) -> dict[str, Any]:
         "model_id": agent.model_id,
         "context_ids": list(agent.context_ids),
         "webdav": {"enabled": agent.webdav.enabled, "directories": [
-            {"path": d.path, "permission": d.permission, "description": d.description}
+            {"path": d.path, "permission": d.permission, "approval_required": d.approval_required,
+             "description": d.description}
             for d in agent.webdav.directories]},
         "deepagent": {
             "max_iterations": agent.deepagent.max_iterations,
@@ -1651,6 +1649,16 @@ def _initial_delivery_target(source: str, metadata: dict[str, Any], *, agent_id:
         "to_user_id": to_user_id,
         "context_token": str(raw.get("context_token") or "").strip(),
     }
+
+
+def _uses_approval_checkpoint(options: DeepAgentRuntimeOptions, approval_resume: Any) -> bool:
+    """Runs need a checkpoint only when some tool call can wait for human approval."""
+    if options.interrupt_on or approval_resume is not None:
+        return True
+    return options.webdav.enabled and any(
+        directory.permission == "write" and directory.approval_required
+        for directory in options.webdav.directories
+    )
 
 
 def _runtime_options(raw: Any, *, name: str = "", webdav: Any = None) -> DeepAgentRuntimeOptions:

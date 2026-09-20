@@ -79,8 +79,27 @@ test("multiple directories keep independent permissions and descriptions", async
   fireEvent.click(screen.getByRole("button", { name: "保存 Agent" }));
   await waitFor(() => expect(onSave).toHaveBeenCalled());
   expect(parseConfigDraft(onSave.mock.calls[0][0]).config.agents.definitions[0].webdav.directories).toEqual([
-    { path: "/资料", permission: "read", description: "" }, { path: "/资料/草稿", permission: "write", description: "保存草稿" },
+    { path: "/资料", permission: "read", approval_required: true, description: "" },
+    { path: "/资料/草稿", permission: "write", approval_required: true, description: "保存草稿" },
   ]);
+});
+
+test("a directory can opt out of write approval", async () => {
+  const { onSave } = setup();
+  fireEvent.click(screen.getByRole("button", { name: "配置 Agent 默认助手" }));
+  fireEvent.click(screen.getByLabelText("启用 WebDAV"));
+  fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
+  fireEvent.change(screen.getByLabelText("映射目录（相对于全局同步目录）"), { target: { value: "/llmwiki" } });
+  expect(screen.getByLabelText("访问权限")).toHaveValue("write");
+  fireEvent.change(screen.getByLabelText("访问权限"), { target: { value: "write_free" } });
+  expect(screen.getByText("免审批：Agent 写入会直接写回坚果云远端，不再逐次确认。")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "保存 Agent" }));
+  await waitFor(() => expect(onSave).toHaveBeenCalled());
+  const [agent] = parseConfigDraft(onSave.mock.calls[0][0]).config.agents.definitions;
+  expect(agent.webdav.directories).toEqual([
+    { path: "/llmwiki", permission: "write", approval_required: false, description: "" },
+  ]);
+  expect(onSave.mock.calls[0][0]).toContain("approval_required: false");
 });
 
 test("directory picker navigates folders and allows manual fallback", async () => {
@@ -114,4 +133,5 @@ test("shows source mapping and WebDAV approval requirement", () => {
   fireEvent.change(screen.getByLabelText("映射目录（相对于全局同步目录）"), { target: { value: "/日记" } });
   expect(screen.getByText("坚果云 /notebook/日记 → Agent /webdav/日记")).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "读写 · 写入需审批" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "读写 · 免审批" })).toBeInTheDocument();
 });

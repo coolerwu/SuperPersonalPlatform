@@ -1511,6 +1511,7 @@ test("saves deepagent options from the agent config menu", async () => {
     expect(content).toContain("enabled: true");
     expect(content).toContain('path: "/项目资料"');
     expect(content).toContain('permission: "write"');
+    expect(content).toContain("approval_required: true");
     expect(content).toContain('description: "项目共享文档"');
     expect(content).not.toContain("webdav_permissions:");
     expect(content).not.toContain('- "search_context"');
