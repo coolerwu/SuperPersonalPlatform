@@ -445,3 +445,12 @@ def test_chat_routes_reject_non_image_and_oversized_attachments(tmp_path) -> Non
     assert oversized.json()["detail"] == "单张图片不能超过 20MB"
 
     assert SessionService(tmp_path).read_messages(sid) == []
+
+
+def test_default_prompt_preview_requires_auth(tmp_path):
+    from server.domain.system_prompt import DEFAULT_SYSTEM_PROMPT
+    (tmp_path / "config.yaml").write_text(CONFIG)
+    client = TestClient(create_app(workspace=tmp_path))
+    assert client.get("/api/workspace/default-system-prompt").status_code == 401
+    client.post("/api/auth/login", json={"token": "secret-token"})
+    assert client.get("/api/workspace/default-system-prompt").json() == {"system_prompt": DEFAULT_SYSTEM_PROMPT}

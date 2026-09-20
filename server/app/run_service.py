@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from server.domain.system_prompt import resolve_system_prompt, system_prompt_source
+
 from server.infrastructure.agent_workspace import agent_workspace_path
 from server.domain.chat_group import GroupRunContext
 
@@ -1458,7 +1460,8 @@ def _public_agent(agent: AgentDefinition) -> dict[str, Any]:
     return {
         "id": agent.id,
         "name": agent.name,
-        "system_prompt": agent.system_prompt,
+        "system_prompt": resolve_system_prompt(agent.system_prompt),
+        "system_prompt_source": system_prompt_source(agent.system_prompt),
         "model_id": agent.model_id,
         "context_ids": list(agent.context_ids),
         "webdav": {"enabled": agent.webdav.enabled, "directories": [

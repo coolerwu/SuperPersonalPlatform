@@ -908,3 +908,31 @@ def test_file_approval_validates_pending_actions_and_persists_lease(tmp_path, mo
     assert store.allows("edit_file", {"file_path": "/webdav/a.md"})
     with pytest.raises(RunStateError):
         service.resume_run(run_id, decision="approve", scope="file_10min")
+
+
+@pytest.mark.parametrize("field, expected", [
+    ("", "default"), ('      system_prompt: ""\n', "default"),
+    ('      system_prompt: "   "\n', "default"), ('      system_prompt: Custom only\n', "custom"),
+])
+def test_effective_prompt_is_frozen_at_creation_and_rerun(tmp_path, monkeypatch, field, expected):
+    from server.domain.system_prompt import DEFAULT_SYSTEM_PROMPT
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG.replace("      system_prompt: Be direct.\n", field))
+    calls = []
+    async def fake_run(self, **kwargs):
+        calls.append(kwargs["instructions"])
+        return "done"
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="解释字典", agent_id="assistant"))
+    prompt = DEFAULT_SYSTEM_PROMPT if expected == "default" else "Custom only"
+    assert run["input"]["snapshot"]["agent"]["system_prompt"] == prompt
+    assert run["input"]["snapshot"]["agent"]["system_prompt_source"] == expected
+    path.write_text(CONFIG)
+    monkeypatch.setattr("server.domain.system_prompt.DEFAULT_SYSTEM_PROMPT", "changed default")
+    asyncio.run(service.execute_run(run["run_id"]))
+    service.rerun(run["run_id"])
+    asyncio.run(service.execute_run(run["run_id"]))
+    assert calls == [prompt, prompt]
+    next_run = asyncio.run(service.create_run(content="新任务", agent_id="assistant"))
+    assert next_run["input"]["snapshot"]["agent"]["system_prompt"] == "Be direct."

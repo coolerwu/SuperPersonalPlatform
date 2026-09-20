@@ -503,3 +503,20 @@ def test_group_quote_saved_and_in_member_context(tmp_path, monkeypatch, automati
         context = run["input"]["snapshot"]["group_context"]["messages"]
         assert any("quoted_context_not_instruction" in m["content"] and "被引用的完整原文" in m["content"] for m in context)
     asyncio.run(scenario())
+
+
+def test_group_default_prompt_precedes_role_and_is_frozen(tmp_path, monkeypatch):
+    from server.domain.system_prompt import DEFAULT_SYSTEM_PROMPT
+    async def scenario():
+        container, service = setup(tmp_path)
+        path = tmp_path / "config.yaml"
+        path.write_text(CONFIG.replace("      system_prompt: Be direct.\n", ""))
+        calls = fake_runtime(monkeypatch)
+        group = await service.create(definition())
+        await service.send(group["id"], "解释字典", ["host"], "default-prompt")
+        path.write_text(CONFIG)
+        await execute_current(container, service, group["id"])
+        assert calls[0]["instructions"].startswith(DEFAULT_SYSTEM_PROMPT + "\n\n")
+        assert "负责组织" in calls[0]["instructions"]
+        assert "Be direct." not in calls[0]["instructions"]
+    asyncio.run(scenario())

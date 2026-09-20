@@ -10,6 +10,8 @@
 
 ### Added
 
+- Agent 系统提示词支持留空使用平台完整默认规则，配置页可预览；创建 Run 固化实际正文，群角色要求后追加。提示词工具可读原文、实际正文与来源，显式清空经审批恢复默认。
+
 - 会话标题：长期 session 新增 `title` / `title_source` 字段（存在
   `sessions/{session_id}/state.json` 并镜像到 `sessions/index.json`）；第一条用户消息
   自动生成前 24 字标题，历史会话读取时按首条消息现推导（不写回文件），并新增

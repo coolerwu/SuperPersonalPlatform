@@ -120,7 +120,7 @@ const DEFAULT_CONFIG = {
       {
         id: "assistant",
         name: "默认助手",
-        system_prompt: "你是一个运行在后端的 DeepAgent。",
+        system_prompt: "",
         model_id: "default",
         context_ids: [],
         webdav: { enabled: false, directories: [] },
@@ -702,6 +702,31 @@ function WebDAVDirectoryPicker({ readOnly, onSelect, sourceRoot }) {
   </div>;
 }
 
+function DefaultSystemPromptPreview() {
+  const [open, setOpen] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState({ content: "", error: "" });
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    setState({ content: "", error: "" });
+    fetch("/api/workspace/default-system-prompt", { credentials: "include", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("默认规则读取失败，请重试。");
+        const data = await response.json();
+        if (!controller.signal.aborted) setState({ content: data.system_prompt, error: "" });
+      })
+      .catch((error) => { if (!controller.signal.aborted) setState({ content: "", error: error.message }); });
+    return () => controller.abort();
+  }, [open, attempt]);
+  return <section className="config-subsection">
+    <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "收起默认规则" : "预览默认规则"}</button>
+    {open ? state.error ? <div role="alert">{state.error} <button type="button" onClick={() => setAttempt(attempt + 1)}>重试</button></div>
+      : state.content ? <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", marginTop: "12px" }}>{state.content}</div>
+      : <p role="status">读取默认规则中…</p> : null}
+  </section>;
+}
+
 function AgentSettingsDialog({ initialAgent, models, nutstore, sync, readOnly, onClose, onSave }) {
   const sourceRoot = joinWebDAVPath(nutstore.root_path, sync.root_path);
   const sourceEnabled = nutstore.enabled && sync.enabled;
@@ -744,8 +769,8 @@ function AgentSettingsDialog({ initialAgent, models, nutstore, sync, readOnly, o
   }
   async function save() {
     if (saving) return;
-    if (!agent.id.trim() || !agent.name.trim() || !agent.system_prompt.trim()) {
-      setError("请填写 ID、名称和 System Prompt。"); return;
+    if (!agent.id.trim() || !agent.name.trim()) {
+      setError("请填写 ID 和名称。"); return;
     }
     const paths = agent.webdav.directories.map((directory) => directory.path.trim().replace(/\/+/g, "/").replace(/\/$/, "") || "/");
     if (agent.webdav.directories.some((directory) => !directory.path.trim().startsWith("/") || directory.path.split("/").some((part) => part === "." || part === ".." || part === "~") || /[\\\0]/.test(directory.path))) {
@@ -794,11 +819,14 @@ function AgentSettingsDialog({ initialAgent, models, nutstore, sync, readOnly, o
             </div>
             <ConfigField label="System Prompt">
               <textarea
-                value={agent.system_prompt}
+                value={agent.system_prompt || ""}
+                placeholder="留空使用平台默认规则"
                 readOnly={readOnly}
                 onChange={(event) => updateAgent("system_prompt", event.target.value)}
               />
             </ConfigField>
+            <p className="muted">留空使用平台默认规则；填写后使用自定义内容。</p>
+            <DefaultSystemPromptPreview />
             <section className="config-subsection">
               <div className="config-section-title compact">
                 <strong>DeepAgent 运行选项</strong>

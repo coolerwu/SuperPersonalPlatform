@@ -114,14 +114,16 @@ def test_update_agent_system_prompt_rejects_unknown_agent_without_writing(tmp_pa
 
 
 @pytest.mark.parametrize("prompt", ["", "   ", "\n\n"])
-def test_update_agent_system_prompt_rejects_empty_prompt(tmp_path, prompt) -> None:
+def test_update_agent_system_prompt_restores_default(tmp_path, prompt) -> None:
     service = _service(tmp_path)
-    before = (tmp_path / "config.yaml").read_bytes()
+    service.update_agent_system_prompt("assistant", prompt)
+    from server.domain.system_prompt import DEFAULT_SYSTEM_PROMPT
+    result = service.read_agent_system_prompt("assistant")
+    assert result["system_prompt"] == ""
+    assert result["source"] == "default"
+    assert result["effective_system_prompt"] == DEFAULT_SYSTEM_PROMPT
+    assert _prompts(tmp_path)["advisor"] == "多行\n引用写法"
 
-    with pytest.raises(AgentPromptUpdateError):
-        service.update_agent_system_prompt("assistant", prompt)
-
-    assert (tmp_path / "config.yaml").read_bytes() == before
 
 
 def test_update_agent_system_prompt_rejects_over_long_prompt(tmp_path) -> None:
@@ -154,3 +156,32 @@ def test_update_agent_system_prompt_reports_broken_yaml(tmp_path) -> None:
         service.update_agent_system_prompt("assistant", "新人格")
 
     assert (tmp_path / "config.yaml").read_bytes() == before
+
+
+def test_update_missing_prompt_inserts_only_target_field(tmp_path):
+    content = CONFIG.replace("      system_prompt: Be direct.  # 保留行尾注释\n", "")
+    service = _service(tmp_path, content)
+    service.update_agent_system_prompt("assistant", "新的规则")
+    updated = service.read_config()
+    assert updated.replace("      system_prompt: |-\n        新的规则\n", "") == content
+    assert service.read_agent_system_prompt("assistant")["system_prompt"] == "新的规则"
+
+
+def test_read_preserves_configured_whitespace(tmp_path):
+    service = _service(tmp_path, CONFIG.replace("Be direct.  # 保留行尾注释", '"   "'))
+    result = service.read_agent_system_prompt("assistant")
+    assert result["system_prompt"] == "   "
+    assert result["source"] == "default"
+
+
+def test_flow_agent_can_add_clear_and_replace_prompt(tmp_path):
+    import json
+    from server.domain.system_prompt import DEFAULT_SYSTEM_PROMPT
+    raw = yaml.safe_load(CONFIG)
+    del raw["agents"]["definitions"][0]["system_prompt"]
+    service = _service(tmp_path, json.dumps(raw))
+    for prompt in ["first\nsecond", "", "custom"]:
+        service.update_agent_system_prompt("assistant", prompt)
+        result = service.read_agent_system_prompt("assistant")
+        assert result["system_prompt"] == prompt
+        assert result["effective_system_prompt"] == (prompt or DEFAULT_SYSTEM_PROMPT)

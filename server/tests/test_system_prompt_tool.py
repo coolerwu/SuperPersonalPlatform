@@ -123,7 +123,7 @@ def test_system_prompt_tool_reads_and_writes_config(tmp_path) -> None:
     assert "你是新人格。" in (tmp_path / "config.yaml").read_text(encoding="utf-8")
     assert json.loads(tool.invoke({"action": "read"}))["system_prompt"] == "你是新人格。"
 
-    empty = json.loads(tool.invoke({"action": "update", "new_prompt": "   "}))
+    empty = json.loads(tool.invoke({"action": "update"}))
     unknown_action = json.loads(tool.invoke({"action": "delete"}))
     missing_agent = json.loads(
         build_platform_tools(
@@ -396,3 +396,40 @@ def test_runtime_skips_self_config_tool_for_group_runs(tmp_path, monkeypatch) ->
     assert tool_names == ["group_decision"]
     assert "system_prompt" not in [tool.name for tool in captured["subagents"][0]["tools"]]
     assert "system_prompt" not in captured.get("interrupt_on", {})
+
+
+def test_prompt_approval_displays_restore_default(tmp_path):
+    from server.domain.system_prompt import DEFAULT_SYSTEM_PROMPT
+    (tmp_path / "config.yaml").write_text(CONFIG)
+    description = describe_system_prompt_update(tmp_path / "config.yaml", "assistant", {"new_prompt": ""})
+    assert "恢复平台默认规则" in description
+    assert DEFAULT_SYSTEM_PROMPT in description
+    assert "Be direct." in description
+
+
+import pytest
+
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_clear_prompt_requires_approval_and_keeps_current_instructions(tmp_path, monkeypatch, decision):
+    from server.domain.system_prompt import DEFAULT_SYSTEM_PROMPT
+    from server.app.config_file_service import ConfigFileService
+    (tmp_path / "config.yaml").write_text(CONFIG)
+    recorded = []
+    runtime = _runtime(tmp_path, monkeypatch, model=_tool_call_model(
+        {"action": "update", "new_prompt": ""}, recorder=recorded))
+    checkpoint = tmp_path / "checkpoint.sqlite"
+    async def scenario():
+        request = await runtime.run(instructions="Be direct.", messages=(RuntimeMessage(role="user", content="恢复默认"),),
+            options=DeepAgentRuntimeOptions(), checkpoint_path=checkpoint, thread_id="clear")
+        assert isinstance(request, RunApprovalRequest)
+        assert (tmp_path / "config.yaml").read_text() == CONFIG
+        assert DEFAULT_SYSTEM_PROMPT in request.interrupts[0].actions[0].description
+        await runtime.run(instructions="Be direct.", messages=(), options=DeepAgentRuntimeOptions(),
+            checkpoint_path=checkpoint, thread_id="clear", resume=RunApprovalResume(values=((
+                request.interrupts[0].interrupt_id, (RunApprovalDecision(type=decision),)),)))
+    asyncio.run(scenario())
+    result = ConfigFileService(tmp_path).read_agent_system_prompt("assistant")
+    assert result["source"] == ("default" if decision == "approve" else "custom")
+    assert all(DEFAULT_SYSTEM_PROMPT not in str(m.content) for m in recorded if m.type == "system")
+    if decision == "reject":
+        assert (tmp_path / "config.yaml").read_text() == CONFIG

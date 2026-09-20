@@ -1,3 +1,4 @@
+from server.domain.system_prompt import DEFAULT_SYSTEM_PROMPT
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
@@ -31,6 +32,10 @@ def create_workspace_router(container: AppContainer) -> APIRouter:
         tags=["workspace"],
         dependencies=[Depends(require_workspace_auth)],
     )
+
+    @router.get("/default-system-prompt")
+    def default_system_prompt() -> dict[str, str]:
+        return {"system_prompt": DEFAULT_SYSTEM_PROMPT}
 
     @router.post("/list")
     def list_entries(payload: WorkspacePathRequest) -> dict[str, object]:

@@ -43,7 +43,7 @@
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
 - Agent 的 DeepAgent 配置只保留 `max_iterations`、`todo_list` 和工具授权 `tools`。长期记忆、私有文件系统及会话 Checkpointer 固定开启；运行名使用 Agent 名称，debug 默认关闭。系统从工具注册表的 `approval_required` 生成 HITL `interrupt_on`；WebDAV 文件写入由原生 Permission 规则生成审批谓词，只有 `approval_required=true` 的可写目录进入 HITL，免审批目录直接放行，不再接受 Agent 自定义审批列表。原生文件工具按路径授权执行。移除 `name/debug/filesystem/use_longterm_memory/interrupt_on/subagents/response_format/context_schema/checkpointer/cache` 配置；系统继续管理通用子 Agent 和 Skills。
 - 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前可选平台工具为 `send_attachment`、`search_session`、`arxiv`、`yahoo_finance_news`、`browser_extract`、`schedule` 和 `execute_code`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
-- `system_prompt` 是注册表里唯一的始终注入平台工具（`always_on=true`），不由 `deepagent.tools` 授权控制，也不进入通用子 Agent 的工具列表；它只作用于当前 Run 所属 Agent 的 `system_prompt`，群聊内部 Run 不注入。工具提供 `action=read` 与 `action=update`：`read` 由平台直接读 `config.yaml`，返回该 Agent 的 `system_prompt` 原文与长度，因为 Agent 自身的文件工具访问不到 `config.yaml`，而每轮注入的 system message 还包含平台 middleware 追加的工作区契约、长期记忆、技能和子 Agent 段落，Agent 无法自行分辨边界；`read` 走 `interrupt_on` 的 `when` 谓词跳过审批，`update`（以及缺省或非法 `action`）仍始终进入 `interrupt_on`，只开放 `approve` / `reject`，没有免审批租约。批准后平台用 PyYAML 节点位置做最小范围文本替换，把该 Agent 的 `system_prompt` 统一写成 `|-` 字面块，其它字段、注释与排版不变，再按 `parse_settings` 完整校验后用临时文件原子替换；写失败或校验失败时 `config.yaml` 字节不变。新提示词在该 Agent 的下一次 Run 生效，当前 Run 继续使用创建时的快照，旧文本只能从 Run 的 `approval.json` 与事件日志追溯，不保留独立历史或回滚入口。
+- `system_prompt` 是注册表里唯一的始终注入平台工具（`always_on=true`），不由 `deepagent.tools` 授权控制，也不进入通用子 Agent 的工具列表；它只作用于当前 Run 所属 Agent 的 `system_prompt`，群聊内部 Run 不注入。工具提供 `action=read` 与 `action=update`：`read` 由平台直接读 `config.yaml`，返回该 Agent 的 `system_prompt` 配置原文与长度、`effective_system_prompt` 实际基础正文和 `source=default|custom`，因为 Agent 自身的文件工具访问不到 `config.yaml`，而每轮注入的 system message 还包含平台 middleware 追加的工作区契约、长期记忆、技能和子 Agent 段落，Agent 无法自行分辨边界；`read` 走 `interrupt_on` 的 `when` 谓词跳过审批，`update`（以及缺省或非法 `action`）仍始终进入 `interrupt_on`，只开放 `approve` / `reject`，没有免审批租约。批准后平台用 PyYAML 节点位置做最小范围文本替换，把该 Agent 的 `system_prompt` 统一写成 `|-` 字面块，其它字段、注释与排版不变，再按 `parse_settings` 完整校验后用临时文件原子替换；写失败或校验失败时 `config.yaml` 字节不变。新提示词在该 Agent 的下一次 Run 生效，当前 Run 继续使用创建时的快照，旧文本只能从 Run 的 `approval.json` 与事件日志追溯，不保留独立历史或回滚入口。
 - 系统提示词审批的可见性由服务端在中断时生成的 `description` 提供，内含“拟修改为（新）”与“当前（旧）”完整对照，读取当前配置失败时退回摘要并提示到 Web 端核对；Web 审批卡片按该对照文本渲染（不再展示 `new_prompt` 原始 JSON），微信审批通知展示约 600 字符的截断预览并提示到 Web 端查看完整对照，其它工具的审批通知保持原样。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
 - Run 创建时必须固化 Agent + Context + Knowledge 快照。
@@ -480,3 +480,12 @@ POST /api/chat-groups/{group_id}/collaborations/{execution_id}/stop
 - Enter 发送，Shift+Enter 换行、列表续项或在代码块内换行；输入 ```language 后 Shift+Enter 建立代码块，代码块末行输入 ``` 后 Shift+Enter 退出。IME 确认候选不发送。引用聚焦、群 @ 成员、失败草稿恢复及原请求重试沿用现有流程。切换会话重建编辑器，避免遗留选区或格式。
 - 输入框自然增高，普通正文约 20 行后内部滚动；格式块占用实际高度。保留细滚动条与右下发送按钮。长路径、表格及代码在窄屏内换行，不撑宽页面。
 - 前端构建环境要求 Node.js 20+，依赖与锁文件一并提交；编辑器依赖拆成单独构建 chunk。生产继续使用已提交的 dist，不现场安装 Node 依赖。测试环境为 jsdom 补齐空布局 API，真实键盘、IME 防误发、滚动及桌面/手机布局用浏览器模拟 API 验证。
+
+
+## Agent 默认系统提示词
+
+- `server/domain/system_prompt.py` 统一维护完整默认规则（按当前请求回答、区分事实与推断、控制查询与追问、长期记忆）。`system_prompt` 缺省、空或纯空白使用默认；非空使用自定义内容，不叠加默认。DeepAgent 的权限、工作区、技能等 middleware 指令继续注入。记忆规则是模型行为约束，不是文件写入拦截。
+- Agent 编辑允许留空，新建与配置示例默认空；通过认证接口 `GET /api/workspace/default-system-prompt` 获取 `{system_prompt: string}` 预览，前端不维护默认正文副本。
+- 单聊创建 Run、群聊创建成员执行快照时将实际正文固化为 `snapshot.agent.system_prompt`，另存 `system_prompt_source`；群成员角色要求追加在解析后的正文之后。审批恢复、重试、重跑读取原快照，不重新解析默认值，不迁移旧 Run。
+- `system_prompt(action=read)` 的 `system_prompt`/`length` 对应配置原文，`effective_system_prompt` 与 `source` 对应下一次 Run 的基础正文和来源，不包含 middleware 指令，也不代表当前 Run 的旧快照。`action=update` 必须显式提供字符串 `new_prompt`，空白字符串恢复默认；缺少/null 参数报错。更新仍逐次审批，拒绝不改文件，批准后下次 Run 生效。审批的新旧对照展示实际默认正文；配置缺少该字段时仅为目标 Agent 插入字段。
+- 本次生产仅一次性清空 `default.system_prompt`，其余 Agent 与字段保持；旧会话历史不清除，效果验证使用新会话。需求见 F11。

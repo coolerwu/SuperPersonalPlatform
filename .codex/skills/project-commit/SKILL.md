@@ -110,3 +110,5 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
 - Explicit file approval leases last 600 seconds and apply only to one exact WebDAV file within one session and Agent. Keep ordinary approve one-shot. Verify persisted expiry without renewal on restart, per-call checks for main/subagents, unchanged filesystem deny rules, and file/Agent/session isolation; mixed pending targets must not receive a single-file grant.
 
 - Frontend development, tests and builds require Node.js 20+ for the Markdown editor dependencies. Check the runtime before npm commands; production still serves committed web/dist and does not need a frontend dependency install.
+
+- For default system prompt changes, verify missing/blank/custom resolution, backend-served preview, frozen single/group Run prompts, and explicit empty-string HITL restore versus missing parameters. Production prompt resets are targeted one-time config edits: preserve other fields and Agents, verify before/after, and use fresh sessions for behavior checks; do not clear user history or memory.

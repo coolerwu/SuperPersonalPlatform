@@ -90,7 +90,7 @@ class DeepAgentOptions:
 class AgentDefinition:
     id: str
     name: str
-    system_prompt: str
+    system_prompt: str = ""
     model_id: str | None = None
     context_ids: tuple[str, ...] = ()
     deepagent: DeepAgentOptions = DeepAgentOptions()
@@ -101,8 +101,6 @@ class AgentDefinition:
             raise AgentConfigError("agents.definitions[].id is required")
         if not self.name.strip():
             raise AgentConfigError(f"agents.definitions[{self.id}].name is required")
-        if not self.system_prompt.strip():
-            raise AgentConfigError(f"agents.definitions[{self.id}].system_prompt is required")
 
 
 @dataclass(frozen=True)

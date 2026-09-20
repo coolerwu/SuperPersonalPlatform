@@ -76,7 +76,7 @@ agents:
   definitions:
     - id: "assistant"
       name: "默认助手"
-      system_prompt: "你是一个运行在后端的 DeepAgent。"
+      system_prompt: ""  # 留空使用平台默认规则
       model_id: "default"
       context_ids: []
       webdav:

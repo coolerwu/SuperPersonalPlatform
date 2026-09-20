@@ -182,17 +182,17 @@ def _system_prompt_tool(workspace: Path, tool_context: PlatformToolContext) -> A
         normalize_system_prompt_action,
     )
 
-    def system_prompt(action: str, new_prompt: str = "", reason: str = "") -> str:
+    def system_prompt(action: str, new_prompt: str | None = None, reason: str = "") -> str:
         """Read or replace this Agent's own system prompt in workspace/config.yaml.
 
-        action=read returns the exact system prompt text this Agent runs with, straight from
+        action=read returns configured and effective base prompt text for the next Run from
         workspace/config.yaml; reading needs no approval. Use it whenever the user asks what your
         system prompt is, or before proposing any change, because your file tools cannot open
         config.yaml and the text injected into a turn also contains platform middleware sections
         that are not part of this field.
 
         action=update replaces the field with new_prompt (pass the complete text, never a diff or a
-        fragment) and requires the user to explicitly ask for the change. The platform pauses the
+        fragment; an explicit empty string restores platform defaults; omission is invalid) and requires the user to explicitly ask for the change. The platform pauses the
         run for human approval before anything is written; a rejected call changes nothing, and an
         approved change applies to this Agent's next runs, not the current one. This tool cannot
         touch other Agents, models, tools, WebDAV or any other config field.
@@ -221,7 +221,9 @@ def _system_prompt_tool(workspace: Path, tool_context: PlatformToolContext) -> A
                         "name": result["name"],
                         "system_prompt": result["system_prompt"],
                         "length": result["length"],
-                        "message": "这是当前 config.yaml 中该 Agent 的 system_prompt 原文，也是运行时注入的那一段。",
+                        "effective_system_prompt": result["effective_system_prompt"],
+                        "source": result["source"],
+                        "message": "system_prompt 是配置原文；effective_system_prompt 是下一次 Run 使用的基础提示词，不含平台追加指令。",
                     },
                     ensure_ascii=False,
                 )
@@ -255,10 +257,10 @@ def _system_prompt_tool(workspace: Path, tool_context: PlatformToolContext) -> A
         name=SYSTEM_PROMPT_TOOL_ID,
         description=(
             "Read or replace this Agent's own system prompt (workspace/config.yaml system_prompt). "
-            "action=read returns the exact current text and needs no approval; use it when the user "
+            "action=read returns configured text, effective_system_prompt and source (default/custom) for the next Run without approval; use it when the user "
             "asks what your prompt is or before editing, since file tools cannot read config.yaml "
             "and the prompt injected into a turn also contains platform middleware sections. "
-            "action=update replaces the field with new_prompt (complete text, not a diff) and only "
+            "action=update requires new_prompt (complete text, not a diff; explicit empty string restores platform defaults) and only "
             "when the user explicitly asks to change this Agent's persona or rules; every update "
             "pauses for human approval and applies to this Agent's next runs, not the current one. "
             "Never claim a change is applied before the tool returns status=applied, and never use "

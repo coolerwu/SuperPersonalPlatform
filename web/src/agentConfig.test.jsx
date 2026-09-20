@@ -135,3 +135,37 @@ test("shows source mapping and WebDAV approval requirement", () => {
   expect(screen.getByRole("option", { name: "读写 · 写入需审批" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "读写 · 免审批" })).toBeInTheDocument();
 });
+
+
+test("new Agent saves an empty prompt and previews server defaults without copying them", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ system_prompt: "后端完整默认规则" }) });
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    const { onSave } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "新增" }));
+    expect(screen.getByLabelText("System Prompt")).toHaveValue("");
+    expect(screen.getByPlaceholderText("留空使用平台默认规则")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "预览默认规则" }));
+    expect(await screen.findByText("后端完整默认规则")).toBeInTheDocument();
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/workspace/default-system-prompt");
+    expect(screen.getByLabelText("System Prompt")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "保存 Agent" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const config = parseConfigDraft(onSave.mock.calls[0][0]).config;
+    expect(config.agents.definitions.at(-1).system_prompt).toBe("");
+  } finally { vi.unstubAllGlobals(); }
+});
+
+test("default preview failure supports retry without altering custom prompt", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({ ok: false }).mockResolvedValueOnce({ ok: true, json: async () => ({ system_prompt: "默认正文" }) }));
+  try {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "配置 Agent 默认助手" }));
+    fireEvent.change(screen.getByLabelText("System Prompt"), { target: { value: "自定义规则" } });
+    fireEvent.click(screen.getByRole("button", { name: "预览默认规则" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("默认正文")).toBeInTheDocument();
+    expect(screen.getByLabelText("System Prompt")).toHaveValue("自定义规则");
+  } finally { vi.unstubAllGlobals(); }
+});

@@ -1,9 +1,11 @@
+import json
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from server.infrastructure.config import parse_settings
+from server.domain.system_prompt import resolve_system_prompt, system_prompt_source
 
 
 class InvalidConfigFileError(Exception):
@@ -44,9 +46,9 @@ class ConfigFileService:
         normalized_id = str(agent_id or "").strip()
         if not normalized_id:
             raise AgentPromptUpdateError("缺少要修改的 Agent ID")
+        if not isinstance(system_prompt, str):
+            raise AgentPromptUpdateError("必须提供字符串 new_prompt；空字符串表示恢复平台默认规则")
         normalized_prompt = _normalize_system_prompt(system_prompt)
-        if not normalized_prompt:
-            raise AgentPromptUpdateError("新的系统提示词不能为空")
         if len(normalized_prompt) > MAX_SYSTEM_PROMPT_CHARS:
             raise AgentPromptUpdateError(
                 f"新的系统提示词超过 {MAX_SYSTEM_PROMPT_CHARS} 字符上限"
@@ -63,7 +65,7 @@ class ConfigFileService:
         return {"agent_id": normalized_id, "length": len(normalized_prompt)}
 
     def read_agent_system_prompt(self, agent_id: str) -> dict[str, Any]:
-        """Return the exact system prompt the runtime injects for this Agent."""
+        """Return configured text and the effective base prompt for the next Run."""
         normalized_id = str(agent_id or "").strip()
         if not normalized_id:
             raise AgentPromptUpdateError("缺少要读取的 Agent ID")
@@ -74,17 +76,24 @@ class ConfigFileService:
         except OSError as exc:
             raise AgentPromptUpdateError(f"读取 config.yaml 失败：{exc}") from exc
         try:
-            settings = parse_settings(yaml.safe_load(content) or {})
+            raw = yaml.safe_load(content) or {}
+            settings = parse_settings(raw)
         except Exception as exc:  # noqa: BLE001
             raise AgentPromptUpdateError(f"config.yaml 未通过校验：{exc}") from exc
         if not any(agent.id == normalized_id for agent in settings.agent_workspace.agents):
             raise AgentPromptUpdateError(f"config.yaml 中不存在 Agent「{normalized_id}」")
         agent = settings.agent_workspace.get_agent(normalized_id)
+        configured = str(next(
+            item for item in raw["agents"]["definitions"]
+            if str(item.get("id", "")).strip() == agent.id
+        ).get("system_prompt") or "")
         return {
             "agent_id": agent.id,
             "name": agent.name,
-            "system_prompt": agent.system_prompt,
-            "length": len(agent.system_prompt),
+            "system_prompt": configured,
+            "length": len(configured),
+            "effective_system_prompt": resolve_system_prompt(agent.system_prompt),
+            "source": system_prompt_source(agent.system_prompt),
         }
 
 
@@ -101,7 +110,7 @@ def describe_system_prompt_update(config_path: Path, agent_id: str, args: Any) -
     try:
         settings = parse_settings(yaml.safe_load(config_path.read_text(encoding="utf-8")) or {})
         agent = settings.agent_workspace.get_agent(label)
-        current_prompt = agent.system_prompt
+        current_prompt = agent.system_prompt if agent.system_prompt.strip() else "（平台默认规则）\n" + resolve_system_prompt(agent.system_prompt)
         label = f"{agent.name}（{agent.id}）"
     except Exception:  # noqa: BLE001 - approval text must survive a broken config
         current_prompt = "（读取当前 config.yaml 失败，请在 Web 端核对后决定）"
@@ -112,7 +121,10 @@ def describe_system_prompt_update(config_path: Path, agent_id: str, args: Any) -
         lines.append(f"理由：{reason}")
     lines.append("")
     lines.append("拟修改为（新）：")
-    lines.append(new_prompt or "（未提供新的提示词文本）")
+    if not isinstance(payload.get("new_prompt"), str):
+        lines.append("（未提供新的提示词文本）")
+    else:
+        lines.append(new_prompt or "（恢复平台默认规则）\n" + resolve_system_prompt(new_prompt))
     lines.append("")
     lines.append("当前（旧）：")
     lines.append(current_prompt)
@@ -133,9 +145,22 @@ def _replace_agent_system_prompt(content: str, agent_id: str, system_prompt: str
         raise AgentPromptUpdateError(f"config.yaml 中不存在 Agent「{agent_id}」")
     key_node, value_node = _find_mapping_entry(item, "system_prompt")
     if key_node is None or value_node is None:
-        raise AgentPromptUpdateError(f"Agent「{agent_id}」没有可替换的 system_prompt")
+        if item.flow_style:
+            # Flow mappings cannot contain literal blocks; insert a JSON-quoted YAML scalar.
+            end = item.end_mark.index - 1
+            return content[:end] + ", system_prompt: " + json.dumps(system_prompt, ensure_ascii=False) + content[end:]
+        first_key = item.value[0][0]
+        line_end = content.find("\n", first_key.start_mark.index)
+        if line_end == -1:
+            line_end = len(content)
+            content += "\n"
+        indent = first_key.start_mark.column
+        insertion = " " * indent + "system_prompt: " + _literal_block(system_prompt, indent=indent + 2)
+        return content[:line_end + 1] + insertion + content[line_end + 1:]
     start = value_node.start_mark.index
     end = value_node.end_mark.index
+    if item.flow_style:
+        return content[:start] + json.dumps(system_prompt, ensure_ascii=False) + content[end:]
     original = content[start:end]
     # Keep a same-line trailing comment attached to the new block indicator line
     # instead of letting it fall inside the replaced scalar content.
