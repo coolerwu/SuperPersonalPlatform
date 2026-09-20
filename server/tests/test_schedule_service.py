@@ -256,6 +256,46 @@ def test_schedule_service_bootstraps_and_runs_webdav_sync(tmp_path) -> None:
     assert all(not item["id"].startswith("agent_meditation_") for item in index["schedules"])
 
 
+def test_scheduled_webdav_sync_follows_saved_config(tmp_path, monkeypatch) -> None:
+    """The saved config.yaml decides the sync root and interval, not the startup snapshot."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(CONFIG, encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class CapturingWebDAVService:
+        def __init__(self, *, workspace, nutstore, context) -> None:
+            captured["root_path"] = context.webdav_sync.root_path
+
+        async def refresh(self) -> None:
+            captured["refreshed"] = True
+
+    monkeypatch.setattr("server.app.schedule_service.WebDAVContextService", CapturingWebDAVService)
+    service = ScheduleService(
+        workspace=tmp_path,
+        settings=parse_settings(_raw_config()),
+        run_service=FakeRunService(),
+        system_log_service=SystemLogService(tmp_path),
+    )
+
+    # Same process, edited config: the built-in definition and the executed sync must follow it.
+    config_path.write_text(
+        CONFIG.replace("root_path: /notebook", "root_path: /").replace("interval_seconds: 600", "interval_seconds: 900"),
+        encoding="utf-8",
+    )
+
+    asyncio.run(service.run_now("context_webdav_sync"))
+
+    assert captured["root_path"] == "/"
+    assert captured["refreshed"] is True
+    definition = _read_json(tmp_path / "schedules" / "context_webdav_sync" / "definition.json")
+    assert definition["trigger"]["seconds"] == 900
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "schedules" / "context_webdav_sync" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event for event in events if event["type"] == "completed"][-1]["payload"]["sync_root_path"] == "/"
+
+
 def test_schedule_service_bootstraps_and_runs_maintenance_cleanup(tmp_path) -> None:
     settings = parse_settings(_raw_config())
     fake_maintenance = FakeMaintenanceService()

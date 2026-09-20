@@ -127,11 +127,11 @@ test("directory picker navigates folders and allows manual fallback", async () =
 test("shows source mapping and WebDAV approval requirement", () => {
   setup();
   fireEvent.click(screen.getByRole("button", { name: "配置 Agent 默认助手" }));
-  expect(screen.getByText("来源：坚果云 · 同步目录 /notebook")).toBeInTheDocument();
+  expect(screen.getByText("来源：坚果云 · 同步目录 /")).toBeInTheDocument();
   fireEvent.click(screen.getByLabelText("启用 WebDAV"));
   fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
   fireEvent.change(screen.getByLabelText("映射目录（相对于全局同步目录）"), { target: { value: "/日记" } });
-  expect(screen.getByText("坚果云 /notebook/日记 → Agent /webdav/日记")).toBeInTheDocument();
+  expect(screen.getByText("坚果云 /日记 → Agent /webdav/日记")).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "读写 · 写入需审批" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "读写 · 免审批" })).toBeInTheDocument();
 });

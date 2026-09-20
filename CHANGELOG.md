@@ -84,6 +84,13 @@
 
 ### Fixed
 
+- 内置定时任务不再固化服务启动时的配置：`ScheduleService` 每次轮询都按当前
+  `workspace/config.yaml` 刷新 `context_webdav_sync` 与 `maintenance_cleanup` 的定义，执行
+  WebDAV 同步时按当前配置构造服务，完成事件记录本次 `sync_root_path`。修复“配置页把坚果云
+  根目录改成 `/` 后，后台定时同步仍按旧根 `/notebook` 同步、把缓存与索引重写成 notebook
+  内部结构”的问题；配置读取失败时保留上一份可用设置，不中断其它调度任务。同时把前端配置
+  编辑器的默认 `context.webdav_sync.root_path` 由 `/notebook` 改为 `/`，与后端默认和
+  `config.example.yaml` 对齐。需求见 `docs/requirements/F10-定时任务按当前配置执行.md`。
 - Chat 输入区加上图片按钮后被挤爆：`.chat-composer` 的操作列原本写死 `40px`，两个按钮溢出到气泡外、
   发送按钮被裁切；操作列改为 `auto` 并允许收缩，桌面与移动布局下发送按钮都回到输入框内。
 - Chat 左栏不再显示没有内容的空会话：没发过消息、也没有标题的 session 不占列表行

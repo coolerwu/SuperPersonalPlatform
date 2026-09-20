@@ -15,7 +15,7 @@ from server.app.maintenance_service import MaintenanceService
 from server.app.run_service import RunService
 from server.app.system_log_service import SystemLogService
 from server.app.webdav_context_service import WebDAVContextService
-from server.infrastructure.config import Settings
+from server.infrastructure.config import Settings, load_settings
 
 
 SCHEDULE_STATUSES = {"idle", "running", "retrying", "completed", "failed", "disabled"}
@@ -65,11 +65,14 @@ class ScheduleService:
         system_log_service: SystemLogService,
         maintenance_service: MaintenanceService | None = None,
         webdav_context_service: WebDAVContextService | None = None,
+        config_path: Path | None = None,
         channel_delivery_service: Any = None,
         run_delivery_service: Any = None,
     ) -> None:
         self._workspace = workspace
         self._settings = settings
+        self._config_path = Path(config_path) if config_path is not None else Path(workspace) / "config.yaml"
+        self._config_reload_error = ""
         self._run_service = run_service
         self._run_worker_service = run_worker_service
         self._system_log_service = system_log_service
@@ -181,6 +184,7 @@ class ScheduleService:
         return self.get_schedule(schedule_id)
 
     def bootstrap(self) -> None:
+        self._reload_settings()
         self._schedules_dir.mkdir(parents=True, exist_ok=True)
         schedules = self._read_index().get("schedules")
         if not isinstance(schedules, list):
@@ -205,6 +209,40 @@ class ScheduleService:
             self._builtin_webdav_definition(),
             self._builtin_maintenance_definition(),
         )
+
+    def _reload_settings(self) -> None:
+        """Built-in schedules follow the saved config.yaml instead of the startup snapshot.
+
+        The service starts long before the user edits the config page, so keeping the
+        startup settings would keep syncing an outdated WebDAV root until a restart.
+        """
+        try:
+            settings = load_settings(self._config_path)
+        except Exception as exc:  # noqa: BLE001 - a broken config must never stop scheduling
+            message = f"schedule config reload failed: {exc}"
+            if message != self._config_reload_error:
+                self._config_reload_error = message
+                self._system_log_service.append_line(message)
+            return
+        self._config_reload_error = ""
+        self._settings = settings
+
+    def _webdav_service_for_run(self) -> WebDAVContextService:
+        if self._webdav_context_service is not None:
+            return self._webdav_context_service
+        if not (self._settings.nutstore.enabled and self._settings.context.webdav_sync.enabled):
+            raise RuntimeError("webdav context sync is not enabled")
+        # Rebuild per run so root path or credential edits apply without a restart.
+        return WebDAVContextService(
+            workspace=self._workspace,
+            nutstore=self._settings.nutstore,
+            context=self._settings.context,
+        )
+
+    def _maintenance_service_for_run(self) -> MaintenanceService:
+        if self._maintenance_service is not None:
+            return self._maintenance_service
+        return MaintenanceService(self._workspace, self._settings.maintenance)
 
     def _builtin_webdav_definition(self) -> ScheduleDefinition:
         return ScheduleDefinition(
@@ -342,14 +380,14 @@ class ScheduleService:
 
     async def _execute_type(self, definition: ScheduleDefinition) -> dict[str, Any]:
         if definition.type == "webdav_sync":
-            if self._webdav_context_service is None:
-                raise RuntimeError("webdav context sync is not enabled")
-            await self._webdav_context_service.refresh()
-            return {"message": "webdav context synced"}
+            await self._webdav_service_for_run().refresh()
+            return {
+                "message": "webdav context synced",
+                # Record the root that actually ran, so a stale config is visible in schedule events.
+                "sync_root_path": self._settings.context.webdav_sync.root_path,
+            }
         if definition.type == "maintenance_cleanup":
-            if self._maintenance_service is None:
-                raise RuntimeError("maintenance cleanup is not enabled")
-            report = await asyncio.to_thread(self._maintenance_service.cleanup)
+            report = await asyncio.to_thread(self._maintenance_service_for_run().cleanup)
             return {
                 "message": "maintenance cleanup completed",
                 "dry_run": report.get("dry_run", False),

@@ -31,7 +31,6 @@ from server.app.system_log_service import SystemLogService
 from server.app.system_update_service import SystemUpdateService
 from server.app.wechat_channel_manager import WechatChannelManager
 from server.app.workspace_file_service import WorkspaceFileService
-from server.app.webdav_context_service import WebDAVContextService
 from server.domain.auth import AuthToken
 from server.infrastructure.config import Settings, load_settings
 from server.infrastructure.session import SessionCodec
@@ -45,6 +44,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     project_root = Path(__file__).resolve().parents[2]
     active_workspace = workspace or current_workspace()
     system_log_service = SystemLogService(active_workspace)
+    config_file_service = ConfigFileService(active_workspace)
     session_service = SessionService(active_workspace)
     run_service = RunService(active_workspace, session_service=session_service)
     run_worker_service = RunWorkerService(
@@ -64,13 +64,6 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         system_log_service=system_log_service,
     )
     wechat_channel_manager.set_run_delivery_service(run_delivery_service)
-    webdav_context_service = None
-    if settings.nutstore.enabled and settings.context.webdav_sync.enabled:
-        webdav_context_service = WebDAVContextService(
-            workspace=active_workspace,
-            nutstore=settings.nutstore,
-            context=settings.context,
-        )
     maintenance_service = MaintenanceService(active_workspace, settings.maintenance)
     schedule_service = ScheduleService(
         workspace=active_workspace,
@@ -79,7 +72,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         run_worker_service=run_worker_service,
         system_log_service=system_log_service,
         maintenance_service=maintenance_service,
-        webdav_context_service=webdav_context_service,
+        config_path=config_file_service.config_path,
         channel_delivery_service=wechat_channel_manager,
         run_delivery_service=run_delivery_service,
     )
@@ -89,7 +82,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         chat_group_service=ChatGroupService(active_workspace, run_service, run_worker_service),
         auth_service=AuthService(AuthToken(settings.auth.token)),
         browser_profile_service=BrowserProfileService(active_workspace),
-        config_file_service=ConfigFileService(active_workspace),
+        config_file_service=config_file_service,
         run_service=run_service,
         run_worker_service=run_worker_service,
         run_delivery_service=run_delivery_service,
