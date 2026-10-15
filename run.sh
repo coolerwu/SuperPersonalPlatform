@@ -239,34 +239,24 @@ install_python_deps() {
 
 ensure_playwright_chromium() {
   cd "$SCRIPT_DIR"
-  if ! "${SCRIPT_DIR}/.venv/bin/python" - <<'PY'
-from pathlib import Path
-try:
-    from playwright.sync_api import sync_playwright
-except Exception:
-    raise SystemExit(1)
-
-with sync_playwright() as playwright:
-    path = Path(playwright.chromium.executable_path)
-    raise SystemExit(0 if path.exists() else 1)
-PY
-  then
-    local attempt delay=2
-    for ((attempt = 1; attempt <= PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS; attempt += 1)); do
-      echo "Installing Playwright Chromium, attempt ${attempt}/${PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS}"
-      if "${SCRIPT_DIR}/.venv/bin/python" -m playwright install chromium; then
-        return 0
-      fi
-      if [[ "$attempt" -lt "$PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS" ]]; then
-        echo "Playwright Chromium install failed; retrying in ${delay}s..." >&2
-        sleep "$delay"
-        delay=$((delay * 2))
-      fi
-    done
-    echo "Playwright Chromium install failed after ${PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS} attempts." >&2
-    return 1
-  fi
-  echo "Playwright Chromium already installed; skipping install."
+  # 'playwright install chromium' covers both the full build and the headless
+  # shell, and is a silent no-op once they are present. Probing for a single
+  # executable path missed a missing headless shell and leaked an asyncio
+  # teardown warning from the driver on every deploy.
+  local attempt delay=2
+  for ((attempt = 1; attempt <= PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS; attempt += 1)); do
+    if "${SCRIPT_DIR}/.venv/bin/python" -m playwright install chromium; then
+      return 0
+    fi
+    echo "Playwright Chromium install failed, attempt ${attempt}/${PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS}." >&2
+    if [[ "$attempt" -lt "$PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS" ]]; then
+      echo "Retrying in ${delay}s..." >&2
+      sleep "$delay"
+      delay=$((delay * 2))
+    fi
+  done
+  echo "Playwright Chromium install failed after ${PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS} attempts." >&2
+  return 1
 }
 
 resolve_service_user() {

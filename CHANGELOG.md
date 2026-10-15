@@ -92,6 +92,11 @@
 
 ### Fixed
 
+- `run.sh` 不再启动 Playwright 驱动去探测浏览器是否已安装：该探测只检查 `chromium` 可执行文件，
+  漏掉了无头浏览同时需要的 `chromium_headless_shell`，而且每次部署都会从驱动拆除过程中漏出
+  一段 `Task was destroyed but it is pending!` 栈信息。现在直接执行 `playwright install chromium`，
+  已安装时静默跳过（实测约 0.5 秒）。
+
 - `pip install .` 在源码目录留下的 `/build/` 构建产物此前未被 `.gitignore` 覆盖，会让下一次
   `run.sh prod` 因工作区不干净而拒绝部署；根目录 `/build/` 现已加入忽略列表。
 

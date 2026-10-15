@@ -49,6 +49,19 @@ def test_python_dependency_install_skips_when_fingerprint_unchanged() -> None:
     assert 'install_python_deps "." "prod"' in script
 
 
+def test_playwright_install_is_idempotent_and_retried() -> None:
+    script = read_run_sh()
+
+    assert "PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS=3" in script
+    assert "ensure_playwright_chromium()" in script
+    assert "-m playwright install chromium" in script
+    assert "Playwright Chromium install failed, attempt ${attempt}/${PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS}." in script
+    assert "Playwright Chromium install failed after ${PLAYWRIGHT_BROWSER_INSTALL_ATTEMPTS} attempts." in script
+    # The install command doubles as the presence check: probing a single
+    # executable path missed the headless shell and leaked driver teardown noise.
+    assert "sync_playwright" not in script
+
+
 def test_prod_service_file_compare_avoids_reinstall_when_unchanged() -> None:
     script = read_run_sh()
 
