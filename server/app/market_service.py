@@ -131,7 +131,9 @@ class MarketService:
         if self._config != previous:
             self._log(
                 f"market config updated: enabled={self._config.enabled} "
-                f"sources={','.join(self._config.source_names())} symbols={len(self._config.symbols)}"
+                f"sources={','.join(self._config.source_names())} "
+                f"watchlist={len(self._store.list_watchlist())} "
+                f"commentary={self._config.commentary.agent_id or '未配置'}"
             )
         return self._config
 

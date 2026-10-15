@@ -1264,3 +1264,35 @@ def test_telegram_message_is_readable_on_a_phone() -> None:
         "严重度 中",
         "2026-10-15 15:42:07",
     ]
+
+
+def test_config_reload_log_reports_watchlist_and_commentary(tmp_path: Path) -> None:
+    """这条日志是排查"配置到底有没有被读到"的第一现场，内容必须是真的。"""
+    lines: list[str] = []
+
+    class CapturingLog:
+        def append_line(self, message: str) -> None:
+            lines.append(message)
+
+    session_service = SessionService(tmp_path)
+    service = MarketService(
+        workspace=tmp_path,
+        config_path=tmp_path / "config.yaml",
+        session_service=session_service,
+        run_service=RunService(tmp_path, session_service=session_service),
+        system_log_service=CapturingLog(),
+    )
+    try:
+        service.add_symbol("ETH/USDT")
+        (tmp_path / "config.yaml").write_text(
+            "auth:\n  token: t\n"
+            "market:\n  commentary:\n    agent_id: \"trade_agent\"\n",
+            encoding="utf-8",
+        )
+        service.reload_config()
+        joined = "\n".join(lines)
+        assert "watchlist=1" in joined
+        assert "commentary=trade_agent" in joined
+        assert "symbols=" not in joined
+    finally:
+        service._store.close()
