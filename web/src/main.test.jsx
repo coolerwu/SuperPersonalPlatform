@@ -637,10 +637,27 @@ test("chat page shows thinking events while running and folds them after complet
               seq: 2,
               type: "agent_update",
               created_at: "2026-08-20T07:01:02Z",
-              payload: { kind: "deepagent_graph_update", preview: "正在搜索资料" },
+              payload: {
+                kind: "deepagent_graph_update",
+                nodes: ["model"],
+                preview: "我先看一下文件",
+                message_type: "ai",
+                tool_calls: ["read_file"],
+              },
             },
             {
               seq: 3,
+              type: "agent_update",
+              created_at: "2026-08-20T07:01:02Z",
+              payload: {
+                kind: "deepagent_graph_update",
+                nodes: ["tools"],
+                preview: "正在搜索资料",
+                message_type: "tool",
+              },
+            },
+            {
+              seq: 4,
               type: "subagent_response",
               created_at: "2026-08-20T07:01:02Z",
               payload: { kind: "deepagent_subagent_response", agent: "researcher", content: "已完成资料核对" },
@@ -651,12 +668,12 @@ test("chat page shows thinking events while running and folds them after complet
       return response({
         events: [
           {
-            seq: 4,
+            seq: 5,
             type: "assistant_delta",
             created_at: "2026-08-20T07:01:03Z",
             payload: { kind: "deepagent_message_delta", delta: "最终正文" },
           },
-          { seq: 5, type: "completed", created_at: "2026-08-20T07:01:04Z", payload: { message: "run completed" } },
+          { seq: 6, type: "completed", created_at: "2026-08-20T07:01:04Z", payload: { message: "run completed" } },
         ],
       });
     }
@@ -665,7 +682,7 @@ test("chat page shows thinking events while running and folds them after complet
         run_id: "run_thinking",
         agent_id: "assistant",
         input: { agent_id: "assistant", source: "web_chat", session_id: "session_web" },
-        state: { status: "completed", seq: 5 },
+        state: { status: "completed", seq: 6 },
         result: { status: "completed", content: "最终正文" },
       });
     }
@@ -692,6 +709,7 @@ test("chat page shows thinking events while running and folds them after complet
 
   await flushReact();
 
+  expect(screen.getByText("调用工具：read_file")).toBeInTheDocument();
   expect(screen.getByText("正在搜索资料")).toBeInTheDocument();
   expect(screen.getByText("子 Agent researcher：已完成资料核对")).toBeInTheDocument();
   expect(screen.getByText("思考过程").closest("details").open).toBe(true);

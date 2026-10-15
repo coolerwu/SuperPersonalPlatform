@@ -246,6 +246,73 @@ def test_runtime_streams_agent_messages_when_available(tmp_path, monkeypatch) ->
     assert captured["events"][0].payload.node == "model"
 
 
+def test_runtime_records_tool_calls_and_message_type_on_graph_updates(tmp_path, monkeypatch) -> None:
+    from langchain_core.messages import AIMessage
+
+    captured = {"events": []}
+
+    class FakeAgent:
+        async def astream(self, input_state, config, stream_mode, subgraphs):
+            yield (
+                (),
+                "updates",
+                {
+                    "model": {
+                        "messages": [
+                            AIMessage(
+                                content="我先看一下文件",
+                                tool_calls=[
+                                    {"name": "read_file", "args": {"path": "/notes.md"}, "id": "call-1"},
+                                    {"name": "glob", "args": {"pattern": "*"}, "id": "call-2"},
+                                ],
+                            )
+                        ]
+                    }
+                },
+            )
+            yield ((), "updates", {"model": {"messages": [AIMessage(content="结论")]}})
+            yield ((), "values", {"messages": [AIMessage(content="结论")]})
+
+        async def ainvoke(self, input_state, config):
+            raise AssertionError("streaming path should not call ainvoke")
+
+    def fake_create_deep_agent(**kwargs):
+        return FakeAgent()
+
+    import deepagents
+
+    monkeypatch.setattr(deepagents, "create_deep_agent", fake_create_deep_agent)
+    runtime = DeepAgentRuntime(
+        ModelDefinition(
+            id="default",
+            name="Default",
+            base_url="https://api.openai.com/v1",
+            api_key="test-key",
+            model="gpt-4o-mini",
+        ),
+        context_workspace=tmp_path / "context",
+        agent_id="assistant",
+        agent_workspace=tmp_path / "agents" / "assistant",
+    )
+
+    asyncio.run(
+        runtime.run(
+            instructions="base prompt",
+            messages=(RuntimeMessage(role="user", content="hello"),),
+            options=DeepAgentRuntimeOptions(),
+            stream_callback=lambda event: captured["events"].append(event),
+        )
+    )
+
+    payloads = [event.payload for event in captured["events"] if event.type == RunEventType.AGENT_UPDATE]
+    assert payloads[0].tool_calls == ("read_file", "glob")
+    assert payloads[0].message_type == "ai"
+    assert payloads[0].preview == "我先看一下文件"
+    assert payloads[1].tool_calls == ()
+    assert payloads[1].message_type == "ai"
+    assert payloads[1].preview == "结论"
+
+
 def test_runtime_persists_subagent_responses_without_merging_them_into_main_output(tmp_path, monkeypatch) -> None:
     from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
@@ -318,7 +385,9 @@ def test_runtime_persists_subagent_responses_without_merging_them_into_main_outp
     assert payload.namespace == ("tools:task-123",)
     assert payload.agent == "researcher"
     assert captured["events"][1].payload.preview == ""
+    assert captured["events"][1].payload.message_type == "tool"
     assert captured["events"][2].payload.preview == "另一个子任务失败"
+    assert captured["events"][2].payload.message_type == "tool"
 
 
 def test_runtime_uses_sqlite_checkpointer_when_thread_id_is_provided(tmp_path, monkeypatch) -> None:

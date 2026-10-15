@@ -35,7 +35,7 @@ import { AgentConfigEditor, ConfigVisualEditor, ProviderConfigEditor, parseConfi
 import { ChatMessageList, ChatComposer, ApprovalPanel, ThinkingPanel, MarkdownMessage } from "./chatComponents.jsx";
 import { SkillsPage } from "./skills.jsx";
 import { SelectMenu } from "./selectMenu.jsx";
-import { runEventThinkingText } from "./chatRuntime.js";
+import { mergeChatThinking, runEventThinkingText } from "./chatRuntime.js";
 import { MAX_CHAT_IMAGES, chatAttachmentUrl, readChatImageFiles } from "./chatAttachments.js";
 import "./styles.css";
 
@@ -2770,16 +2770,6 @@ function upsertChatAssistantMessage(messages, runId, patch) {
       thinking: mergeChatThinking(rest.thinking, thinkingAppend),
     },
   ];
-}
-
-function mergeChatThinking(current = [], updates = []) {
-  const merged = Array.isArray(current) ? [...current] : [];
-  for (const update of Array.isArray(updates) ? updates : []) {
-    const text = String(update || "").trim();
-    if (!text || merged.includes(text)) continue;
-    merged.push(text);
-  }
-  return merged.slice(-10);
 }
 
 function carryChatAssistantRuntimeState(nextMessages, currentMessages, runId) {

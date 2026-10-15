@@ -56,6 +56,8 @@ SESSION_HISTORY_READ_LIMIT = 120
 SESSION_RUNTIME_MESSAGE_LIMIT = 60
 STREAM_PARTIAL_FLUSH_SECONDS = 0.5
 STREAM_PARTIAL_FLUSH_CHARS = 160
+# Keep in sync with CHAT_THINKING_LIMIT in web/src/chatRuntime.js.
+THINKING_SNAPSHOT_LIMIT = 20
 RUN_EXECUTION_TIMEOUT_SECONDS = 30 * 60
 RUN_LOCK_HEARTBEAT_SECONDS = 15
 RUN_STALE_HEARTBEAT_SECONDS = 120
@@ -1401,9 +1403,14 @@ def _thinking_text(event_type: RunEventType | str, payload: RunEventPayload) -> 
     if event_type == RunEventType.RUNNING and isinstance(payload, RunLifecyclePayload):
         return payload.message or "DeepAgent 已开始处理"
     if event_type == RunEventType.AGENT_UPDATE and isinstance(payload, DeepAgentGraphUpdatePayload):
-        # 只有带消息正文的图更新才是用户可读的进展；中间件钩子节点没有正文，
-        # 节点名属内部实现，只留在 events.jsonl 里供排查。
-        return payload.preview
+        # The thinking panel shows the tool trace: which tools ran and what they
+        # returned. Model text already streams into the answer body, and middleware
+        # hook node names are implementation detail; both stay in events.jsonl only.
+        if payload.tool_calls:
+            return f"调用工具：{', '.join(payload.tool_calls)}"
+        if payload.message_type == "tool" and payload.preview:
+            return payload.preview
+        return ""
     if event_type == RunEventType.SUBAGENT_RESPONSE and isinstance(payload, DeepAgentSubagentResponsePayload):
         label = payload.agent or "sub-agent"
         content = payload.content.strip()
@@ -1428,7 +1435,7 @@ def _merge_thinking(current: tuple[str, ...], updates: tuple[str, ...]) -> tuple
         if not text or (merged and merged[-1] == text):
             continue
         merged.append(text)
-    return tuple(merged[-20:])
+    return tuple(merged[-THINKING_SNAPSHOT_LIMIT:])
 
 
 def _public_agent(agent: AgentDefinition) -> dict[str, Any]:

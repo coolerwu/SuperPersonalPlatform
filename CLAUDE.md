@@ -62,6 +62,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 同一长期 session 同时只能有一个 queued/running/waiting_approval Run；创建第二个 Run 必须在写附件、消息和 Run 目录前拒绝。微信等待审批时普通消息只提示先回复 `approve` 或 `reject`，避免覆盖 LangGraph checkpoint。
 - `/workspace` 是原生文件浏览和文本编辑，不承载 `config.yaml` 的可视化表单；配置可视化只放在 `/config` 主菜单下的基础配置、Providers、Agents 栏目。
 - Runs 页面通过 1 分钟轮询读取落盘状态；轮询更新必须保留当前详情快照，只在内容实际变化时替换，避免短暂重刷、`unknown` 闪动或结果预览丢失。
+- 思考过程只聚合工具轨迹：`agent_update` 有工具调用记 `调用工具：<名称>`、工具返回取正文，模型正文与中间件钩子节点名只留在 `events.jsonl`；后端 `_thinking_text`/`_merge_thinking` 与前端 `runEventThinkingText`/`mergeChatThinking` 必须同口径，条数上限同为 20（`THINKING_SNAPSHOT_LIMIT` / `CHAT_THINKING_LIMIT`），任一侧单独改动都会让刷新前后的思考过程不一致。
 - React 表单列表不要用会随输入变化的字段作为 key，例如 Provider/Agent 的 `id`；否则输入一个字符会 remount 并丢焦点。
 - 前端开发、测试和构建使用 Node.js 20+（Markdown 编辑器依赖要求）。
 - 生产环境使用已提交的 `web/dist`，前端改动需要执行 `cd web && npm run build` 并提交新的 dist 产物。

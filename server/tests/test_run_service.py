@@ -446,7 +446,7 @@ def test_run_service_persists_streaming_thinking_snapshot(tmp_path, monkeypatch)
         stream_callback(
             DeepAgentStreamEvent(
                 RunEventType.AGENT_UPDATE,
-                DeepAgentGraphUpdatePayload(nodes=("agent",), preview="正在搜索资料"),
+                DeepAgentGraphUpdatePayload(nodes=("tools",), preview="正在搜索资料", message_type="tool"),
             )
         )
         stream_callback(
@@ -490,7 +490,7 @@ def test_run_service_persists_streaming_thinking_snapshot(tmp_path, monkeypatch)
     }
 
 
-def test_run_service_keeps_bare_graph_updates_out_of_thinking(tmp_path, monkeypatch) -> None:
+def test_run_service_thinking_follows_the_tool_trace(tmp_path, monkeypatch) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
 
     async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
@@ -504,7 +504,18 @@ def test_run_service_keeps_bare_graph_updates_out_of_thinking(tmp_path, monkeypa
         stream_callback(
             DeepAgentStreamEvent(
                 RunEventType.AGENT_UPDATE,
-                DeepAgentGraphUpdatePayload(nodes=("model",), preview="正在搜索资料"),
+                DeepAgentGraphUpdatePayload(
+                    nodes=("model",),
+                    preview="我先看一下文件",
+                    message_type="ai",
+                    tool_calls=("read_file",),
+                ),
+            )
+        )
+        stream_callback(
+            DeepAgentStreamEvent(
+                RunEventType.AGENT_UPDATE,
+                DeepAgentGraphUpdatePayload(nodes=("tools",), preview="文件内容", message_type="tool"),
             )
         )
         return "最终正文"
@@ -515,13 +526,28 @@ def test_run_service_keeps_bare_graph_updates_out_of_thinking(tmp_path, monkeypa
     run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
     completed = asyncio.run(service.execute_run(run["run_id"]))
 
-    assert completed["partial"]["thinking"] == ["DeepAgent started", "正在搜索资料"]
+    assert completed["partial"]["thinking"] == ["DeepAgent started", "调用工具：read_file", "文件内容"]
     updates = [event for event in service.get_events(run["run_id"], after=0) if event["type"] == "agent_update"]
     assert [event["payload"]["nodes"] for event in updates] == [
         ("HumanInTheLoopMiddleware.after_model",),
         ("model",),
+        ("tools",),
     ]
     assert updates[0]["payload"]["preview"] == ""
+    assert updates[1]["payload"]["preview"] == "我先看一下文件"
+    assert updates[1]["payload"]["message_type"] == "ai"
+    assert updates[1]["payload"]["tool_calls"] == ("read_file",)
+    assert updates[2]["payload"]["message_type"] == "tool"
+
+
+def test_merge_thinking_keeps_the_shared_entry_limit() -> None:
+    from server.app.run_service import THINKING_SNAPSHOT_LIMIT, _merge_thinking
+
+    assert THINKING_SNAPSHOT_LIMIT == 20
+    merged = _merge_thinking((), tuple(f"工具返回 {index}" for index in range(25)))
+    assert len(merged) == THINKING_SNAPSHOT_LIMIT
+    assert merged[0] == "工具返回 5"
+    assert merged[-1] == "工具返回 24"
 
 
 def test_run_service_finds_latest_active_schedule_run(tmp_path) -> None:

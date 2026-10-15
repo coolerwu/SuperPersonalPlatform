@@ -85,6 +85,8 @@ class DeepAgentGraphUpdatePayload(RunEventPayload):
     nodes: tuple[str, ...]
     preview: str = ""
     source_class: str = ""
+    message_type: str = ""
+    tool_calls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,10 +168,14 @@ def run_event_payload_from_json(event_type: str, payload: Any) -> RunEventPayloa
     if event_type == RunEventType.AGENT_UPDATE:
         raw_nodes = data.get("nodes") or ()
         nodes = tuple(str(item) for item in raw_nodes) if isinstance(raw_nodes, list | tuple) else ()
+        raw_tool_calls = data.get("tool_calls") or ()
+        tool_calls = tuple(str(item) for item in raw_tool_calls) if isinstance(raw_tool_calls, list | tuple) else ()
         return DeepAgentGraphUpdatePayload(
             nodes=nodes,
             preview=str(data.get("preview") or ""),
             source_class=str(data.get("source_class") or ""),
+            message_type=str(data.get("message_type") or ""),
+            tool_calls=tool_calls,
         )
     if event_type == RunEventType.SUBAGENT_RESPONSE:
         raw_namespace = data.get("namespace") or ()

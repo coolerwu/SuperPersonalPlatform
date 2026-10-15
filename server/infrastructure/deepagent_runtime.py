@@ -470,7 +470,8 @@ def _update_event(data: Any, *, suppressed_previews: set[str] | None = None) -> 
     if not isinstance(data, dict) or not data:
         return None
     nodes = tuple(str(key) for key in data.keys())
-    preview = _content_to_text(_latest_message_content(data))
+    message = _latest_message(data)
+    preview = _content_to_text(getattr(message, "content", message)) if message is not None else ""
     if preview.strip() in (suppressed_previews or set()):
         preview = ""
     return DeepAgentStreamEvent(
@@ -479,19 +480,37 @@ def _update_event(data: Any, *, suppressed_previews: set[str] | None = None) -> 
             nodes=nodes,
             preview=preview[-500:] if preview else "",
             source_class=data.__class__.__name__,
+            message_type=_message_type(message),
+            tool_calls=_tool_call_names(message),
         ),
     )
 
 
-def _latest_message_content(value: Any) -> Any:
+def _message_type(message: Any) -> str:
+    message_type = getattr(message, "type", None)
+    if message_type is None and isinstance(message, dict):
+        message_type = message.get("type") or message.get("role")
+    return str(message_type or "")
+
+
+def _tool_call_names(message: Any) -> tuple[str, ...]:
+    names: list[str] = []
+    for call in getattr(message, "tool_calls", None) or ():
+        name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
+        if name:
+            names.append(str(name))
+    return tuple(names)
+
+
+def _latest_message(value: Any) -> Any | None:
     if isinstance(value, dict):
         messages = value.get("messages")
         if isinstance(messages, list) and messages:
-            return getattr(messages[-1], "content", messages[-1])
+            return messages[-1]
         for item in value.values():
-            content = _latest_message_content(item)
-            if content:
-                return content
+            message = _latest_message(item)
+            if message is not None:
+                return message
     return None
 
 
