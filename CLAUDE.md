@@ -31,7 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 如果实现改变了 Agent 工作约定、提交流程、技能使用方式或长期协作规则，必须同步更新本文件、对应 `.claude/skills/*/SKILL.md`，以及受影响的说明文件后，才能进入提交步骤。
 
-需求文档统一放在 `docs/requirements/`，命名 `F<n>-<名称>.md`，编号规则与模板见 `docs/requirements/README.md`。没有需求文档覆盖的改动不进入实现。
+需求统一写在 `docs/intent.md`，按 `F<n>` 编号分节，分档与写法见该文件开头的「怎么用」。没有该文件覆盖的改动不进入实现。
 
 提交项目前必须执行项目内 `$project-commit` skill。
 
@@ -41,12 +41,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 版本、发布与回滚约定见 `docs/release.md`，变更记录写在 `CHANGELOG.md`。需要把生产退回旧版本时，在远端 `SuperPersonalPlatform/` 执行 `./run.sh rollback <tag|branch|commit>`（先确认工作区干净，脚本会切到目标版本、安装该版本依赖并重启服务）；再次执行 `./run-prod.sh` 即可回到生产分支。不要在仓库或命令文本里写入 SSH/sudo 密码。
 
-## 多角色协作（omni-roles skill）
+## 需求与方案
 
-- 需要按「需求 → 方案 → 实现 → 验证 → 发布」多角色推进时，使用 `.claude/skills/omni-roles`：用户用 `$omni-roles` 调用，或在消息里用 `@req` / `@arch` / `@dev` / `@qa` / `@ops` 指定角色；该技能默认不隐式触发，普通问答和小改动不进入角色流程。
-- 每条回复第一行带当前角色标记；角色在需求确认、方案确认、提交与发布三个闸口停下等用户拍板，不得自动跳过。
-- 需求文档落在 `docs/requirements/F<n>-<名称>.md`。该技能不覆盖本文件的铁律，提交仍必须执行 `$project-commit`。
-- 该技能不派发子 agent，架构 Review 与 qa 验证属于同一会话内的复核，结论必须如实标注独立性有限。
+- 新需求在 `docs/intent.md` 的「需求记录」末尾追加 `F<n>` 小节，编号不复用已删除的编号。
+- 需求小节只写意图、场景、边界和成功标准，不在里面定技术路线或写实现代码。
+- 方案先定后做：用 Claude Code 原生 plan mode 给出计划再动手；涉及新依赖、破坏性接口变更、数据迁移或 schema 变更时，必须在动手前单独列出并等用户确认。
+- 提交前先逐条列出将要执行的动作再执行，然后走 `$project-commit`。
+- 同会话复核（架构 Review、验证）独立性有限，结论必须如实标注。
 
 ## 前端设计约定
 
@@ -90,6 +91,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - 不再有 Skill 自进化：运行时不注入 SkillImprovement middleware，Agent 不会主动创建或改写 `/skills/`，也不会写 `/improvements/`（该目录已从工作区契约移除）；但用户在对话里明确要求时，Agent 仍可用原生文件工具创建或更新 `/skills/{skill_id}/SKILL.md`，新 skill 在下一次 Agent 执行开始时生效，历史 improvement 记录不再作为判断依据。Agent 对 `/skills` 与 `/skills/**` 的写入、编辑和删除都必须经过 HITL 审批：`skill_write_permissions()` 给 `create_deep_agent` 追加 write `interrupt` 规则，run 进入 `waiting_approval`，批准后才落盘，拒绝后技能文件不变；读取、列举和 `glob`/`grep` 不触发审批，技能审批也没有“批准当前文件（10 分钟）”免审批租约。用户也可以直接通过平台 `/skills` 技能库页面按 Agent 管理技能（新建/编辑/删除 `SKILL.md`，保存前校验 frontmatter 的 name 与目录名一致、description 必填），平台侧保存不需要审批；用户硬约束可放在 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 中，Agent 文件工具不得修改、覆盖或删除该区块及其所在 Skill，正式契约只能由用户通过 `/skills` 或工作目录等平台入口调整。
 - 系统提示词只能通过始终注入的平台工具 `system_prompt` 在对话内读取或修改：`action=read` 免审批返回平台从 `config.yaml` 读到的该 Agent `system_prompt` 原文（Agent 文件工具读不到 config.yaml），`action=update` 必须逐次 HITL 审批，且只替换当前 Run 所属 Agent 的该字段，其它字段、注释与排版不变，下一次 Run 生效，当前 Run 继续用快照；通用子 Agent 不继承，审批卡片展示新旧对照，微信审批通知只给截断预览并提示到 Web 端查看完整对照。
+
+## 行情工作台约定
+
+- `/market` 的分层是硬约束：1h 以下的判断必须由平台代码产出（`MarketService` + `server/domain/market_indicators.py`），全链路不调用模型；Agent 只做 1h 及以上的解读。理由是一轮 Run 要几十秒到几分钟，而 1m K 线 60 秒就换一根，结论产出时已经过期，且同一份输入两次 Run 可能给出不同判断。
+- 指标与信号只有一份实现。页面矩阵、信号事件、`market_snapshot` 工具和解读提示词都必须调用 `market_indicators.py`；出现第二套口径就是缺陷。
+- `SessionService.build_session_id` 返回的是渠道身份 active key，**不是** session id。需要 session id 时必须走 `get_or_create`（会创建）或读已记录的映射，不能拿 active key 当 session id 用。
+- 行情库按「超过 `market.retention_days`」与「每个 series 至少保留 `history_limit` 根」取较大范围清理。只按保留期删会让 `1d` 剩不下 200 根，EMA200 永久为 None，而增量补数只补最近几根，不会回补历史。
+- 行情数据源默认是 Binance 官方只读行情域 `https://data-api.binance.vision`，生产机（境内、无代理）实测直连可用，`api.binance.com` 在同机超时、经代理出口会被判 451。换默认域名前先在生产机上验证。
+- 自选列表是数据库里的运行时状态，不要为了「添加标的」去改 `config.yaml`。
+- 行情 API 的 `symbol` 含斜杠，一律走查询参数，不能做路径参数。
 
 ## 默认系统提示词约定
 

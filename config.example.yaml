@@ -63,6 +63,53 @@ maintenance:
   interval_seconds: 86400
   retention_days: 15
   dry_run: false
+market:
+  enabled: false
+  exchange: "binance"
+  # 留空用官方只读行情域 data-api.binance.vision。境内实测：该域名可直连，
+  # api.binance.com 直连超时、经代理出口还会被判 HTTP 451。
+  base_url: ""
+  # 留空则直连（生产机实测不需要代理）；填了则所有行情请求都走它。
+  proxy: ""
+  poll_seconds: 5
+  history_limit: 400
+  retention_days: 30
+  timeframes:
+    - "1m"
+    - "5m"
+    - "15m"
+    - "30m"
+    - "1h"
+    - "4h"
+    - "1d"
+  # 只在自选列表为空时作为一次性种子；之后以 /market 页面维护的列表为准。
+  symbols:
+    - symbol: "BTC/USDT"
+      alias: "比特币"
+  signals:
+    enabled: true
+    volume_spike_ratio: 1.8
+    atr_high_ratio: 1.5
+    atr_low_ratio: 0.75
+    rsi_overbought: 70
+    rsi_oversold: 30
+    breakout_lookback: 20
+    cooldown_seconds: 900
+    notify_min_severity: "high"
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+    min_severity: "high"
+  commentary:
+    enabled: true
+    # 慢层解读使用的 Agent；留空则不能从页面触发分析。
+    agent_id: "assistant"
+    interval_seconds: 3600
+    timeframes:
+      - "1h"
+      - "4h"
+      - "1d"
 channels:
   wechat_personal:
     enabled: false

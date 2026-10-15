@@ -50,6 +50,7 @@ class WorkspaceFileService:
         "channels",
         "logs",
         "schedules",
+        "market",
     }
 
     def __init__(self, workspace: Path) -> None:

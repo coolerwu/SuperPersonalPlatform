@@ -110,6 +110,7 @@ class DeepAgentRuntime:
         agent_workspace: Path,
         agent_id: str,
         schedule_service: Any = None,
+        market_service: Any = None,
         tool_context: PlatformToolContext | None = None,
     ) -> None:
         self._model = model
@@ -117,6 +118,7 @@ class DeepAgentRuntime:
         self._agent_workspace = agent_workspace
         self._agent_id = agent_id
         self._schedule_service = schedule_service
+        self._market_service = market_service
         self._tool_context = tool_context
 
     async def run(
@@ -167,6 +169,7 @@ class DeepAgentRuntime:
                 options.tools,
                 context_workspace=self._context_workspace,
                 schedule_service=self._schedule_service,
+                market_service=self._market_service,
                 tool_context=self._tool_context,
                 file_backend=backend,
                 include_self_config=include_self_config,

@@ -66,6 +66,7 @@ def build_platform_tools(
     *,
     context_workspace: Path,
     schedule_service: Any = None,
+    market_service: Any = None,
     tool_context: PlatformToolContext | None = None,
     file_backend: Any = None,
     include_self_config: bool = False,
@@ -106,6 +107,10 @@ def build_platform_tools(
             if schedule_service is None or tool_context is None:
                 continue
             tools.append(_schedule_tool(schedule_service, tool_context))
+        elif definition.id == "market_snapshot":
+            if market_service is None:
+                continue
+            tools.append(_market_snapshot_tool(market_service))
         elif definition.id == "execute_code":
             if tool_context is None:
                 continue
@@ -487,9 +492,68 @@ def _yahoo_finance_news_tool() -> Any:
     )
 
 
+def _market_snapshot_tool(market_service: Any) -> Any:
+    from langchain_core.tools import StructuredTool
+
+    def market_snapshot(symbol: str = "", timeframe: str = "") -> str:
+        """Read the platform's own multi-timeframe market snapshot for a watchlist symbol."""
+        config = getattr(market_service, "config", None)
+        if config is None or not getattr(config, "enabled", False):
+            return _tool_observation("market_snapshot", "行情功能未启用，请提示用户在 /config 打开 market.enabled。")
+        wanted = str(symbol or "").strip()
+        if not wanted:
+            return _json_dumps(
+                {
+                    "ok": True,
+                    "exchange": config.exchange,
+                    "symbols": [item.to_dict() for item in market_service.all_snapshots()],
+                    "hint": "传 symbol 可以只看一个标的。",
+                }
+            )
+        snapshot = market_service.snapshot(wanted)
+        if snapshot is None:
+            watch = [item.symbol for item in market_service.watchlist()]
+            return _tool_observation(
+                "market_snapshot",
+                f"{wanted} 不在自选列表里，或还没有采到数据。当前自选：{', '.join(watch) or '（空）'}。",
+            )
+        payload = snapshot.to_dict()
+        wanted_timeframe = str(timeframe or "").strip()
+        if wanted_timeframe:
+            matching = [item for item in payload["timeframes"] if item["timeframe"] == wanted_timeframe]
+            if not matching:
+                available = ", ".join(item["timeframe"] for item in payload["timeframes"])
+                return _tool_observation(
+                    "market_snapshot",
+                    f"{wanted} 没有 {wanted_timeframe} 周期数据，可用周期：{available}。",
+                )
+            payload["timeframes"] = matching
+        return _json_dumps({"ok": True, "snapshot": payload})
+
+    return StructuredTool.from_function(
+        market_snapshot,
+        name="market_snapshot",
+        description=(
+            "Read the platform's own multi-timeframe market snapshot for a watchlist symbol. "
+            "Indicators (EMA/RSI/MACD/ATR/Bollinger/volume ratio) and rule signals are computed by "
+            "platform code on the live bar, so this is the single source of truth for market state. "
+            "Timeframes under 1h are marked fast=true and are refreshed within seconds. "
+            "Never re-fetch quotes from the web when this tool can answer. "
+            "Args: symbol (for example BTC/USDT, empty lists every watchlist symbol), timeframe (optional)."
+        ),
+    )
+
+
+def _json_dumps(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _tool_observation(tool_id: str, message: str) -> str:
+    return _json_dumps({"ok": False, "tool": tool_id, "message": message})
+
+
 def _ensure_user_agent() -> None:
     os.environ.setdefault("USER_AGENT", "SuperPersonalPlatform/0.1")
-
 
 def _schedule_tool(schedule_service: Any, tool_context: PlatformToolContext) -> Any:
     from langchain_core.tools import StructuredTool

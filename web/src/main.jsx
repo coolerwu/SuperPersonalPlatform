@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import {
   Bot,
   BookOpen,
+  CandlestickChart,
   CheckCircle2,
   ChevronRight,
   Clock3,
@@ -41,6 +42,7 @@ import "./styles.css";
 
 const NAV_ITEMS = [
   { id: "chat", path: "/chat", label: "Chat", icon: Send },
+  { id: "market", path: "/market", label: "行情", icon: CandlestickChart },
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
   { id: "skills", path: "/skills", label: "Skills", icon: BookOpen },
@@ -295,6 +297,7 @@ function App() {
       </aside>
       <main className="content">
         {page === "chat" ? <ChatPage /> : null}
+        {page === "market" ? <MarketPage /> : null}
         {page === "runs" ? <RunsPage /> : null}
         {page === "workspace" ? <WorkspacePage /> : null}
         {page === "skills" ? <SkillsPage api={api} /> : null}
@@ -1946,6 +1949,557 @@ const EMPTY_SCHEDULE = {
   cron_timezone: "Asia/Shanghai",
   once_at: "",
 };
+
+const MARKET_POLL_MS = 5000;
+const MARKET_TIMEFRAME_LABELS = { "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "4h", "1d": "1d" };
+const MARKET_TREND_GLYPH = { up: "↑", down: "↓", flat: "→" };
+const MARKET_SEVERITY_LABEL = { high: "高", medium: "中", low: "低" };
+
+function formatMarketPrice(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  if (Math.abs(number) >= 1000) return number.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (Math.abs(number) >= 1) return number.toFixed(4);
+  return number.toFixed(8).replace(/0+$/, "");
+}
+
+function formatMarketPercent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  return `${number >= 0 ? "+" : ""}${number.toFixed(2)}%`;
+}
+
+function formatMarketClock(iso) {
+  const text = String(iso || "");
+  return text.includes("T") ? text.split("T")[1] : text;
+}
+
+function formatMarketBarTime(openTime) {
+  const stamp = Number(openTime);
+  if (!Number.isFinite(stamp)) return "—";
+  return new Date(stamp).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+}
+
+function MarketSparkline({ closes, tone }) {
+  const values = (closes || []).map(Number).filter((item) => Number.isFinite(item));
+  if (values.length < 2) return <span className="market-spark-empty">—</span>;
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  const span = high - low || 1;
+  const points = values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * 100;
+      const y = 20 - ((value - low) / span) * 18 - 1;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  return (
+    <svg className="market-spark" viewBox="0 0 100 20" preserveAspectRatio="none" style={{ color: tone }} aria-hidden="true">
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function MarketMeter({ level, text }) {
+  const rank = level === "strong" ? 3 : level === "weak" ? 1 : 2;
+  return (
+    <span className="market-meter-wrap">
+      <span className={`market-meter market-meter-${rank}`}>
+        {[0, 1, 2].map((index) => (
+          <i key={index} className={index < rank ? "on" : ""} />
+        ))}
+      </span>
+      <span className="market-meter-text">{text}</span>
+    </span>
+  );
+}
+
+function MarketPage() {
+  const [overview, setOverview] = useState({ enabled: false, exchange: "", symbols: [], events: { unread: 0, latest_seq: 0, last_read_seq: 0 } });
+  const [symbol, setSymbol] = useState("");
+  const [snapshot, setSnapshot] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [commentary, setCommentary] = useState({ commentary: [], active_run: null, session_id: "" });
+  const [adding, setAdding] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const snapshotRef = useRef(null);
+  const eventsCursorRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const data = await api("/api/market/overview");
+        if (cancelled) return;
+        setOverview(data);
+        setError("");
+        const list = data.symbols || [];
+        setSymbol((current) => (list.some((item) => item.symbol === current) ? current : list[0]?.symbol || ""));
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      }
+    }
+    tick();
+    const timer = setInterval(tick, MARKET_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // 事件流是跨标的的告警流：未读徽标本来就是全局的，所以不按当前标的过滤，
+  // 也不随切换标的清空。
+  useEffect(() => {
+    let cancelled = false;
+    async function tickEvents() {
+      try {
+        const data = await api(`/api/market/events?after=${eventsCursorRef.current}&limit=50`);
+        if (cancelled) return;
+        const incoming = data.events || [];
+        if (incoming.length) {
+          eventsCursorRef.current = Math.max(...incoming.map((item) => Number(item.seq) || 0));
+          setEvents((previous) => {
+            const seen = new Set(previous.map((item) => item.seq));
+            const merged = [...incoming.filter((item) => !seen.has(item.seq)), ...previous];
+            return merged.sort((left, right) => right.seq - left.seq).slice(0, 60);
+          });
+        }
+        if (data.summary) setOverview((current) => ({ ...current, events: data.summary }));
+      } catch {
+        // 事件流拉取失败不该打断矩阵刷新。
+      }
+    }
+    tickEvents();
+    const timer = setInterval(tickEvents, MARKET_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    snapshotRef.current = null;
+    if (!symbol) {
+      setSnapshot(null);
+      setCommentary({ commentary: [], active_run: null, session_id: "" });
+      return undefined;
+    }
+    let cancelled = false;
+    async function tickSnapshot() {
+      try {
+        const data = await api(`/api/market/snapshot?symbol=${encodeURIComponent(symbol)}`);
+        if (cancelled) return;
+        // 只在内容真的变了才替换，避免 5 秒轮询把矩阵刷闪。
+        if (!sameSnapshot(snapshotRef.current, data.snapshot)) {
+          snapshotRef.current = data.snapshot;
+          setSnapshot(data.snapshot);
+        }
+      } catch (err) {
+        // 404 表示这个标的还没采到数据，不是错误。
+        if (!cancelled && err.status !== 404) setError(err.message);
+      }
+    }
+    async function tickCommentary() {
+      try {
+        const data = await api(`/api/market/commentary?symbol=${encodeURIComponent(symbol)}`);
+        if (!cancelled) setCommentary(data);
+      } catch {
+        // 解读面板是慢层，取不到时保持上一次内容。
+      }
+    }
+    async function loadAll() {
+      await Promise.all([tickSnapshot(), tickCommentary()]);
+    }
+    loadAll();
+    const timer = setInterval(loadAll, MARKET_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [symbol]);
+
+  async function addSymbol() {
+    const value = adding.trim();
+    if (!value) return;
+    setNotice("");
+    setError("");
+    try {
+      const created = await api("/api/market/symbols", {
+        method: "POST",
+        body: JSON.stringify({ symbol: value }),
+      });
+      setAdding("");
+      setNotice(`已添加 ${created.symbol}`);
+      setSymbol(created.symbol);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function removeSymbol(target) {
+    if (!window.confirm(`从自选列表移除 ${target}？`)) return;
+    setNotice("");
+    setError("");
+    try {
+      await api(`/api/market/symbols?symbol=${encodeURIComponent(target)}`, { method: "DELETE" });
+      setNotice(`已移除 ${target}`);
+      if (target === symbol) setSymbol("");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function analyze() {
+    if (!symbol) return;
+    setNotice("");
+    setError("");
+    setBusy(true);
+    try {
+      await api("/api/market/analyze", { method: "POST", body: JSON.stringify({ symbol }) });
+      setNotice("已派给 Agent，解读会在几分钟内贴回右栏");
+      const data = await api(`/api/market/commentary?symbol=${encodeURIComponent(symbol)}`);
+      setCommentary(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function markRead() {
+    try {
+      const summary = await api("/api/market/events/read", { method: "POST" });
+      setOverview((current) => ({ ...current, events: summary }));
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  const enabled = Boolean(overview.enabled);
+  const activeRun = commentary.active_run;
+  const latestCommentary = (commentary.commentary || [])[0] || null;
+  const unread = Number(overview.events?.unread || 0);
+
+  return (
+    <section className="console-screen market-screen">
+      {notice ? <p className="ok">{notice}</p> : null}
+      {error ? <p className="error">{error}</p> : null}
+
+      {!enabled ? (
+        <section className="panel market-disabled">
+          <div className="panel-title">
+            <div>
+              <span>行情工作台</span>
+              <small>market.enabled 当前为 false</small>
+            </div>
+          </div>
+          <div className="market-disabled-body">
+            <p>行情快层没有启用，所以没有采集、没有指标、也没有信号事件。</p>
+            <p>
+              到 <code>/config</code> 的基础配置里打开 <code>market.enabled</code>，填好
+              <code>market.proxy</code>（境内直连交易所通常需要），以及慢层解读要用的
+              <code>market.commentary.agent_id</code>，保存后本页会自动接上。
+            </p>
+          </div>
+        </section>
+      ) : (
+        <div className="market-grid">
+          <section className="panel market-symbols">
+            <div className="panel-title">
+              <div>
+                <span>自选标的</span>
+                <small>{overview.exchange || "—"}</small>
+              </div>
+            </div>
+            <div className="market-symbol-list">
+              {(overview.symbols || []).length === 0 ? (
+                <div className="empty-state">还没有自选标的，先在下面添加一个。</div>
+              ) : null}
+              {overview.symbols.map((item) => (
+                <div key={item.symbol} className={`market-symbol-row ${item.symbol === symbol ? "selected" : ""}`}>
+                  <button className="market-symbol-main" onClick={() => setSymbol(item.symbol)}>
+                    <span className="market-symbol-name">
+                      {item.symbol}
+                      {item.alias ? <em>{item.alias}</em> : null}
+                    </span>
+                    <span className="market-symbol-price num">{formatMarketPrice(item.last_price)}</span>
+                    <span className={`market-symbol-change num ${Number(item.change_pct_24h) < 0 ? "down" : "up"}`}>
+                      {formatMarketPercent(item.change_pct_24h)}
+                    </span>
+                    <span className="market-symbol-dots">
+                      {(item.timeframes || []).map((frame) => (
+                        <i
+                          key={frame.timeframe}
+                          className={frame.fast ? "fast" : "slow"}
+                          data-trend={frame.trend}
+                          title={`${frame.timeframe} ${MARKET_TREND_GLYPH[frame.trend] || ""}`}
+                        />
+                      ))}
+                    </span>
+                  </button>
+                  <button className="icon-button market-symbol-remove" onClick={() => removeSymbol(item.symbol)} title="移除">
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="market-add">
+              <input
+                value={adding}
+                placeholder="BTC/USDT"
+                onChange={(event) => setAdding(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") addSymbol();
+                }}
+              />
+              <button onClick={addSymbol} disabled={!adding.trim()}>
+                <Plus size={14} />
+              </button>
+            </div>
+          </section>
+
+          <section className="market-core">
+            {snapshot ? (
+              <div className="panel market-quote">
+                <div className="market-quote-id">
+                  <strong>{snapshot.symbol}</strong>
+                  {snapshot.alias ? <em>{snapshot.alias}</em> : null}
+                  <span className="market-chip market-chip-exchange">{snapshot.exchange}</span>
+                  <span className="market-chip market-chip-fast">快层 秒级</span>
+                  <span className="market-chip market-chip-slow">慢层 1h+</span>
+                </div>
+                <div className="market-quote-price">
+                  <span className="num">{formatMarketPrice(snapshot.last_price)}</span>
+                  <b className={`num ${Number(snapshot.change_pct_24h) < 0 ? "down" : "up"}`}>
+                    {formatMarketPercent(snapshot.change_pct_24h)}
+                  </b>
+                </div>
+                <div className="market-quote-stats">
+                  <span>
+                    24H 高 <b className="num">{formatMarketPrice(snapshot.high_24h)}</b>
+                  </span>
+                  <span>
+                    24H 低 <b className="num">{formatMarketPrice(snapshot.low_24h)}</b>
+                  </span>
+                  <span>
+                    24H 量 <b className="num">{Number(snapshot.volume_24h).toLocaleString("en-US")}</b>
+                  </span>
+                </div>
+                <div className={`market-health ${snapshot.stale ? "stale" : ""}`}>
+                  {snapshot.stale ? "数据延迟" : "行情实时"} · 快照 {formatMarketClock(snapshot.updated_at)} ·{" "}
+                  {snapshot.data_age_seconds}s 前
+                </div>
+              </div>
+            ) : (
+              <div className="panel market-quote market-quote-empty">
+                还没有这个标的的快照，等下一轮采集（约 {MARKET_POLL_MS / 1000} 秒）。
+              </div>
+            )}
+
+            <section className="panel market-matrix">
+              <div className="panel-title">
+                <div>
+                  <span>多周期信号矩阵</span>
+                  <small>1m–30m 由平台代码秒级计算，不经模型</small>
+                </div>
+              </div>
+              {snapshot ? (
+                <div className="market-table-wrap">
+                  <table className="market-table">
+                    <thead>
+                      <tr>
+                        <th>周期</th>
+                        <th>K 线状态</th>
+                        <th className="center">趋势</th>
+                        <th>动量 RSI</th>
+                        <th>波动 ATR</th>
+                        <th>量能</th>
+                        <th>信号</th>
+                        <th className="right">近 20 根</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {snapshot.timeframes.map((frame, index) => (
+                        <React.Fragment key={frame.timeframe}>
+                          {index > 0 && snapshot.timeframes[index - 1].fast && !frame.fast ? (
+                            <tr className="market-divider">
+                              <td colSpan={8}>
+                                慢层 · 1h 及以上
+                                <span>下方周期的研判会附带 Agent 解读，Agent 不参与 30m 以下</span>
+                              </td>
+                            </tr>
+                          ) : null}
+                          <tr className={frame.fast ? "fast" : "slow"}>
+                            <td>
+                              <span className="market-tf">{MARKET_TIMEFRAME_LABELS[frame.timeframe] || frame.timeframe}</span>
+                            </td>
+                            <td>
+                              <span className={`market-state ${frame.closed ? "" : "live"}`}>
+                                {frame.closed ? "已收盘" : "进行中"}
+                                <em>{formatMarketBarTime(frame.last_bar_time)}</em>
+                              </span>
+                            </td>
+                            <td className="center">
+                              <span className={`market-trend ${frame.trend}`}>
+                                {MARKET_TREND_GLYPH[frame.trend] || "→"}
+                              </span>
+                            </td>
+                            <td>
+                              <MarketMeter
+                                level={frame.momentum === "强" ? "strong" : frame.momentum === "弱" ? "weak" : "mid"}
+                                text={`${frame.indicators.rsi14 == null ? "—" : Number(frame.indicators.rsi14).toFixed(1)} ${frame.momentum}`}
+                              />
+                            </td>
+                            <td>
+                              <span className="market-soft num">
+                                {frame.indicators.atr14 == null ? "—" : Number(frame.indicators.atr14).toFixed(2)}
+                              </span>
+                              <span className={`market-tag market-tag-${frame.volatility === "高" ? "high" : frame.volatility === "低" ? "low" : "mid"}`}>
+                                {frame.volatility}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`num ${frame.volume_level === "放量" ? "hot" : ""}`}>
+                                {frame.indicators.volume_ratio == null ? "—" : `${Number(frame.indicators.volume_ratio).toFixed(1)}x`}
+                              </span>
+                            </td>
+                            <td>
+                              {frame.signals.length === 0 ? (
+                                <span className="market-soft">—</span>
+                              ) : (
+                                frame.signals.map((signal) => (
+                                  <span key={signal} className="market-signal">
+                                    {signal}
+                                  </span>
+                                ))
+                              )}
+                            </td>
+                            <td className="right">
+                              <MarketSparkline
+                                closes={frame.closes}
+                                tone={
+                                  frame.fast
+                                    ? "#17a8f5"
+                                    : frame.trend === "up"
+                                      ? "#a78bfa"
+                                      : frame.trend === "down"
+                                        ? "#ff5d5d"
+                                        : "#8d9aaa"
+                                }
+                              />
+                            </td>
+                          </tr>
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="empty-state">等待第一轮采集。</div>
+              )}
+            </section>
+
+            <section className="panel market-events">
+              <div className="panel-title">
+                <div>
+                  <span>信号事件流</span>
+                  <small>全部标的 · 最近 {events.length} 条</small>
+                </div>
+                <div className="config-inline-actions">
+                  <button className="icon-button" onClick={markRead} title="全部标为已读" disabled={unread === 0}>
+                    <CheckCircle2 size={15} />
+                    {unread > 0 ? unread : null}
+                  </button>
+                </div>
+              </div>
+              <div className="market-event-list">
+                {events.length === 0 ? <div className="empty-state">还没有命中任何信号规则。</div> : null}
+                {events.map((event) => (
+                  <div key={event.seq} className={`market-event ${event.seq > Number(overview.events?.last_read_seq || 0) ? "unread" : ""}`}>
+                    <span className="market-event-time num">{formatMarketClock(event.at)}</span>
+                    <span className="market-event-symbol">
+                      <i className={`market-sev market-sev-${event.severity}`} />
+                      {event.symbol}
+                    </span>
+                    <span className="market-event-text">
+                      <b>{event.title}</b>
+                      {event.detail ? <em>{event.detail}</em> : null}
+                    </span>
+                    <span className={`market-event-sev sev-${event.severity}`}>
+                      {MARKET_SEVERITY_LABEL[event.severity] || event.severity}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </section>
+
+          <section className="panel market-agent">
+            <div className="panel-title">
+              <div>
+                <span>Agent 解读</span>
+                <small>慢层 · 只覆盖 1h 及以上</small>
+              </div>
+            </div>
+            <div className="market-agent-body">
+              {latestCommentary ? (
+                <div className="market-card">
+                  <div className="market-card-head">
+                    <Bot size={13} />
+                    最近一次研判
+                    <em>{formatMarketClock(latestCommentary.at)}</em>
+                  </div>
+                  <div className="market-card-body">
+                    <MarkdownMessage content={latestCommentary.content} />
+                    <div className="market-card-meta">
+                      {latestCommentary.confidence ? <span>置信度 {latestCommentary.confidence}</span> : null}
+                      {(latestCommentary.timeframes || []).map((timeframe) => (
+                        <span key={timeframe} className="market-chip market-chip-slow">
+                          {timeframe}
+                        </span>
+                      ))}
+                    </div>
+                    {latestCommentary.run_id ? (
+                      <a className="market-run-link" href={`/runs?run_id=${encodeURIComponent(latestCommentary.run_id)}`}>
+                        <ExternalLink size={12} />
+                        在 Runs 里查看完整过程 · {latestCommentary.run_id}
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="empty-state">这个标的还没有 Agent 解读。</div>
+              )}
+
+              <button className="primary market-analyze" onClick={analyze} disabled={!symbol || busy || Boolean(activeRun)}>
+                <RefreshCw size={14} className={activeRun ? "spin" : ""} />
+                {activeRun ? "Agent 正在分析…" : "让 Agent 分析一次"}
+              </button>
+              <p className="market-analyze-hint">
+                基于 1h / 4h / 1d 快照做跨周期研判，约需 1–3 分钟；期间矩阵与事件流照常刷新。
+              </p>
+
+              {(commentary.commentary || []).length > 1 ? (
+                <div className="market-history">
+                  <div className="market-history-title">历史解读</div>
+                  {(commentary.commentary || []).slice(1).map((item) => (
+                    <div key={`${item.run_id}-${item.at}`} className="market-history-row">
+                      <span className="num">{formatMarketClock(item.at)}</span>
+                      <span className="market-history-text">{(item.content || "").split("\n")[0].slice(0, 40)}</span>
+                      <em>{item.confidence ? `置信 ${item.confidence}` : ""}</em>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </section>
+        </div>
+      )}
+    </section>
+  );
+}
 
 function SchedulesPage() {
   const [schedules, setSchedules] = useState([]);

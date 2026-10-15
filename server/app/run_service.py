@@ -101,9 +101,13 @@ class RunService:
         self._runs_dir = workspace / "runs"
         self._session_service = session_service
         self._schedule_service: Any = None
+        self._market_service: Any = None
 
     def set_schedule_service(self, schedule_service: Any) -> None:
         self._schedule_service = schedule_service
+
+    def set_market_service(self, market_service: Any) -> None:
+        self._market_service = market_service
 
     def reconcile_incomplete_runs(self) -> int:
         """Recover runs left non-terminal by a previous service process."""
@@ -323,6 +327,7 @@ class RunService:
                     agent_id=str(run_input.get("agent_id") or ""),
                     agent_workspace=self._agent_workspace(str(run_input.get("agent_id") or "")),
                     schedule_service=self._schedule_service,
+                    market_service=self._market_service,
                     tool_context=PlatformToolContext(
                         run_id=str(run_input.get("run_id") or run_id),
                         source=str(run_input.get("source") or "api"),

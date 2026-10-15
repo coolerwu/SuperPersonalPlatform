@@ -10,6 +10,7 @@ from server.adapter.auth_routes import create_auth_router
 from server.adapter.chat_routes import create_chat_router
 from server.adapter.channel_routes import create_channel_router
 from server.adapter.dependencies import AppContainer
+from server.adapter.market_routes import create_market_router
 from server.adapter.run_routes import create_run_router
 from server.adapter.schedule_routes import create_schedule_router
 from server.adapter.static_routes import mount_frontend
@@ -19,6 +20,7 @@ from server.app.auth_service import AuthService
 from server.app.browser_profile_service import BrowserProfileService
 from server.app.config_file_service import ConfigFileService
 from server.app.maintenance_service import MaintenanceService
+from server.app.market_service import MarketService
 from server.app.nutstore_service import NutstoreService
 from server.app.run_delivery_service import RunDeliveryService
 from server.app.run_service import RunService
@@ -63,6 +65,14 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
     )
     wechat_channel_manager.set_run_delivery_service(run_delivery_service)
     maintenance_service = MaintenanceService(active_workspace, settings.maintenance)
+    market_service = MarketService(
+        workspace=active_workspace,
+        config_path=config_file_service.config_path,
+        session_service=session_service,
+        run_service=run_service,
+        run_worker_service=run_worker_service,
+        system_log_service=system_log_service,
+    )
     schedule_service = ScheduleService(
         workspace=active_workspace,
         settings=settings,
@@ -75,6 +85,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         run_delivery_service=run_delivery_service,
     )
     run_service.set_schedule_service(schedule_service)
+    run_service.set_market_service(market_service)
     return AppContainer(
         workspace=active_workspace,
         auth_service=AuthService(AuthToken(settings.auth.token)),
@@ -84,6 +95,7 @@ def create_container(settings: Settings, workspace: Path | None = None) -> AppCo
         run_worker_service=run_worker_service,
         run_delivery_service=run_delivery_service,
         maintenance_service=maintenance_service,
+        market_service=market_service,
         nutstore_service=NutstoreService(settings.nutstore),
         schedule_service=schedule_service,
         system_log_service=system_log_service,
@@ -134,9 +146,11 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
         schedule_task: asyncio.Task | None = None
         run_worker_task: asyncio.Task | None = None
         run_delivery_task: asyncio.Task | None = None
+        market_task: asyncio.Task | None = None
         schedule_stop = asyncio.Event()
         run_worker_stop = asyncio.Event()
         run_delivery_stop = asyncio.Event()
+        market_stop = asyncio.Event()
         container.run_service.reconcile_incomplete_runs()
         run_worker_task = (
             asyncio.create_task(container.run_worker_service.run_forever(run_worker_stop))
@@ -149,11 +163,16 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
             else None
         )
         schedule_task = asyncio.create_task(container.schedule_service.run_forever(schedule_stop))
+        market_task = asyncio.create_task(container.market_service.run_forever(market_stop))
         if container.wechat_channel_manager is not None:
             await container.wechat_channel_manager.auto_start_all()
         try:
             yield
         finally:
+            if market_task is not None:
+                market_stop.set()
+                await market_task
+                await container.market_service.aclose()
             if schedule_task is not None:
                 schedule_stop.set()
                 await schedule_task
@@ -176,6 +195,7 @@ def create_app(settings: Settings | None = None, workspace: Path | None = None) 
     app.include_router(create_auth_router(container))
     app.include_router(create_chat_router(container))
     app.include_router(create_run_router(container))
+    app.include_router(create_market_router(container))
     app.include_router(create_schedule_router(container))
     app.include_router(create_channel_router(container))
     app.include_router(create_system_router(container))

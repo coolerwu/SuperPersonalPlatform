@@ -14,6 +14,16 @@ from server.domain.agent_config import (
     ModelDefinition,
     ModelProvider,
 )
+from server.domain.market import (
+    DEFAULT_COMMENTARY_TIMEFRAMES,
+    DEFAULT_TIMEFRAMES,
+    MarketCommentaryConfig,
+    MarketConfig,
+    MarketConfigError,
+    MarketSignalsConfig,
+    TelegramNotifyConfig,
+    WatchSymbol,
+)
 
 
 @dataclass(frozen=True)
@@ -149,6 +159,7 @@ class Settings:
     nutstore: NutstoreConfig = field(default_factory=NutstoreConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     maintenance: MaintenanceConfig = field(default_factory=MaintenanceConfig)
+    market: MarketConfig = field(default_factory=MarketConfig)
     agent_workspace: AgentWorkspaceDefinition = field(
         default_factory=lambda: AgentWorkspaceDefinition(
             models=(),
@@ -189,6 +200,7 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
         nutstore=parse_nutstore_config(nutstore_raw),
         context=parse_context_config(raw.get("context") or {}),
         maintenance=parse_maintenance_config(raw.get("maintenance") or {}),
+        market=parse_market_config(raw.get("market") or {}),
         agent_workspace=parse_agent_workspace(raw),
     )
 
@@ -376,6 +388,93 @@ def parse_maintenance_config(raw: Any) -> MaintenanceConfig:
         interval_seconds=int(raw.get("interval_seconds") or 86400),
         retention_days=int(raw.get("retention_days") or 15),
         dry_run=bool(raw.get("dry_run", False)),
+    )
+
+
+def parse_market_config(raw: Any) -> MarketConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise MarketConfigError("market must be an object")
+
+    timeframes_raw = raw.get("timeframes")
+    timeframes = (
+        _string_tuple(timeframes_raw, field_name="market.timeframes")
+        if timeframes_raw
+        else DEFAULT_TIMEFRAMES
+    )
+
+    symbols_raw = raw.get("symbols") or []
+    if not isinstance(symbols_raw, list):
+        raise MarketConfigError("market.symbols must be a list")
+    symbols: list[WatchSymbol] = []
+    for item in symbols_raw:
+        if isinstance(item, str):
+            symbols.append(WatchSymbol(symbol=item))
+        elif isinstance(item, dict):
+            symbols.append(
+                WatchSymbol(symbol=str(item.get("symbol") or ""), alias=str(item.get("alias") or ""))
+            )
+        else:
+            raise MarketConfigError("market.symbols[] entries must be strings or objects")
+
+    return MarketConfig(
+        enabled=bool(raw.get("enabled", False)),
+        exchange=str(raw.get("exchange") or "binance").strip().lower(),
+        base_url=str(raw.get("base_url") or "").strip(),
+        proxy=str(raw.get("proxy") or "").strip(),
+        poll_seconds=int(raw.get("poll_seconds") or 5),
+        timeframes=timeframes,
+        history_limit=int(raw.get("history_limit") or 400),
+        retention_days=int(raw.get("retention_days") or 30),
+        symbols=tuple(symbols),
+        signals=parse_market_signals(raw.get("signals") or {}),
+        telegram=parse_market_telegram(raw.get("telegram") or {}),
+        commentary=parse_market_commentary(raw.get("commentary") or {}),
+    )
+
+
+def parse_market_signals(raw: Any) -> MarketSignalsConfig:
+    if not isinstance(raw, dict):
+        raise MarketConfigError("market.signals must be an object")
+    return MarketSignalsConfig(
+        enabled=bool(raw.get("enabled", True)),
+        volume_spike_ratio=float(raw.get("volume_spike_ratio") or 1.8),
+        atr_high_ratio=float(raw.get("atr_high_ratio") or 1.5),
+        atr_low_ratio=float(raw.get("atr_low_ratio") or 0.75),
+        rsi_overbought=float(raw.get("rsi_overbought") or 70.0),
+        rsi_oversold=float(raw.get("rsi_oversold") or 30.0),
+        breakout_lookback=int(raw.get("breakout_lookback") or 20),
+        cooldown_seconds=int(raw.get("cooldown_seconds") or 900),
+        notify_min_severity=str(raw.get("notify_min_severity") or "high").strip().lower(),
+    )
+
+
+def parse_market_telegram(raw: Any) -> TelegramNotifyConfig:
+    if not isinstance(raw, dict):
+        raise MarketConfigError("market.telegram must be an object")
+    return TelegramNotifyConfig(
+        enabled=bool(raw.get("enabled", False)),
+        bot_token=str(raw.get("bot_token") or "").strip(),
+        chat_id=str(raw.get("chat_id") or "").strip(),
+        min_severity=str(raw.get("min_severity") or "high").strip().lower(),
+    )
+
+
+def parse_market_commentary(raw: Any) -> MarketCommentaryConfig:
+    if not isinstance(raw, dict):
+        raise MarketConfigError("market.commentary must be an object")
+    timeframes_raw = raw.get("timeframes")
+    timeframes = (
+        _string_tuple(timeframes_raw, field_name="market.commentary.timeframes")
+        if timeframes_raw
+        else DEFAULT_COMMENTARY_TIMEFRAMES
+    )
+    return MarketCommentaryConfig(
+        enabled=bool(raw.get("enabled", True)),
+        agent_id=str(raw.get("agent_id") or "").strip(),
+        interval_seconds=int(raw.get("interval_seconds") or 3600),
+        timeframes=timeframes,
     )
 
 

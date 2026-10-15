@@ -5,6 +5,7 @@ from server.app.auth_service import AuthService
 from server.app.browser_profile_service import BrowserProfileService
 from server.app.config_file_service import ConfigFileService
 from server.app.maintenance_service import MaintenanceService
+from server.app.market_service import MarketService
 from server.app.nutstore_service import NutstoreService
 from server.app.run_delivery_service import RunDeliveryService
 from server.app.run_service import RunService
@@ -34,3 +35,4 @@ class AppContainer:
     wechat_channel_manager: WechatChannelManager | None = None
     run_worker_service: RunWorkerService | None = None
     run_delivery_service: RunDeliveryService | None = None
+    market_service: MarketService | None = None

@@ -2025,3 +2025,226 @@ test("chat page accepts a pasted screenshot as a pending image attachment", asyn
   expect(sent[0].attachments).toHaveLength(1);
   expect(sent[0].attachments[0].filename).toBe("clipboard.png");
 });
+
+const MARKET_FRAME = (timeframe, fast, overrides = {}) => ({
+  timeframe,
+  fast,
+  last_bar_time: 1700000000000,
+  last_close: fast ? 67842.15 : 412.6,
+  change_pct: fast ? 0.42 : -0.31,
+  closed: true,
+  seconds_to_close: 0,
+  trend: fast ? "up" : "flat",
+  momentum: fast ? "强" : "中",
+  volatility: fast ? "低" : "高",
+  volume_level: fast ? "放量" : "正常",
+  signals: [],
+  closes: Array.from({ length: 20 }, (_, index) => 100 + index),
+  indicators: {
+    ema20: 1,
+    ema60: 1,
+    ema200: 1,
+    rsi14: fast ? 71.4 : 55.8,
+    macd: 1,
+    macd_signal: 1,
+    macd_hist: 0.5,
+    atr14: 12.3,
+    atr_ratio: 1,
+    bollinger_upper: 1,
+    bollinger_middle: 1,
+    bollinger_lower: 1,
+    volume_ratio: fast ? 1.8 : 1.1,
+    swing_high: 1,
+    swing_low: 1,
+  },
+  ...overrides,
+});
+
+function marketSnapshotPayload() {
+  return {
+    snapshot: {
+      symbol: "BTC/USDT",
+      alias: "比特币",
+      exchange: "binance",
+      last_price: 67842.15,
+      change_pct_24h: 1.24,
+      high_24h: 68410,
+      low_24h: 66215.5,
+      volume_24h: 18402,
+      updated_at: "2026-10-15T09:31:04",
+      data_age_seconds: 1,
+      stale: false,
+      timeframes: [
+        MARKET_FRAME("1m", true, { signals: ["1m 放量突破 67,800"] }),
+        MARKET_FRAME("5m", true),
+        MARKET_FRAME("1h", false, { signals: ["1h 均线金叉"] }),
+        MARKET_FRAME("4h", false),
+      ],
+    },
+    events: { unread: 0, latest_seq: 0, last_read_seq: 0 },
+  };
+}
+
+function marketFetch({ enabled = true, snapshot = marketSnapshotPayload(), events = [], onAnalyze = null } = {}) {
+  return vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.endsWith("/api/auth/me")) return response({ authenticated: true });
+    if (path.includes("/api/market/overview")) {
+      return response({
+        enabled,
+        exchange: "binance",
+        symbols: enabled
+          ? [{ symbol: "BTC/USDT", alias: "比特币", last_price: 67842.15, change_pct_24h: 1.24, timeframes: [] }]
+          : [],
+        events: { unread: 2, latest_seq: 4, last_read_seq: 2 },
+      });
+    }
+    if (path.includes("/api/market/snapshot")) return response(snapshot);
+    if (path.includes("/api/market/events")) {
+      return response({ events, summary: { unread: 0, latest_seq: 0, last_read_seq: 0 } });
+    }
+    if (path.includes("/api/market/commentary")) return response({ commentary: [], active_run: null, session_id: "" });
+    if (path.includes("/api/market/analyze")) {
+      if (onAnalyze) onAnalyze(options);
+      return response({ run_id: "run_market_1", session_id: "session_1", symbol: "BTC/USDT" });
+    }
+    return response({});
+  });
+}
+
+const MARKET_EVENT = {
+  seq: 7,
+  at: "2026-10-15T19:52:36",
+  symbol: "ETH/USDT",
+  timeframe: "1d",
+  rule_id: "breakdown_low",
+  severity: "high",
+  title: "1d 跌破 2,403.69",
+  detail: "收盘 2,366.14 低于前 20 根低点",
+  price: 2366.14,
+};
+
+test("market page explains how to enable the fast layer when it is switched off", async () => {
+  window.history.replaceState({}, "", "/market");
+  global.fetch = marketFetch({ enabled: false });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect(await screen.findByText("market.enabled 当前为 false")).toBeInTheDocument();
+  expect(await screen.findByText(/行情快层没有启用/)).toBeInTheDocument();
+  expect(screen.queryByText("多周期信号矩阵")).not.toBeInTheDocument();
+});
+
+test("market matrix splits fast and slow timeframes and shows their signals", async () => {
+  window.history.replaceState({}, "", "/market");
+  global.fetch = marketFetch();
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect(await screen.findByText("多周期信号矩阵")).toBeInTheDocument();
+  expect(await screen.findByText("慢层 · 1h 及以上")).toBeInTheDocument();
+  expect(await screen.findByText("1m 放量突破 67,800")).toBeInTheDocument();
+  expect(await screen.findByText("1h 均线金叉")).toBeInTheDocument();
+
+  const rows = document.querySelectorAll(".market-table tbody tr");
+  const fastRows = [...rows].filter((row) => row.classList.contains("fast"));
+  const slowRows = [...rows].filter((row) => row.classList.contains("slow"));
+  expect(fastRows).toHaveLength(2);
+  expect(slowRows).toHaveLength(2);
+  expect(screen.getByText("快层 秒级")).toBeInTheDocument();
+  expect(screen.getByText("慢层 1h+")).toBeInTheDocument();
+});
+
+test("market polling keeps the matrix DOM when the snapshot has not changed", async () => {
+  vi.useFakeTimers();
+  window.history.replaceState({}, "", "/market");
+  global.fetch = marketFetch();
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+  await flushReact();
+
+  const divider = screen.getByText("慢层 · 1h 及以上");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+
+  // 同样的快照不应该重建节点，否则每 5 秒矩阵都会闪一下。
+  expect(screen.getByText("慢层 · 1h 及以上")).toBe(divider);
+});
+
+test("market analyze hands the symbol to the agent and reports it back", async () => {
+  window.history.replaceState({}, "", "/market");
+  const analyzeBodies = [];
+  global.fetch = marketFetch({
+    onAnalyze: (options) => analyzeBodies.push(JSON.parse(options.body)),
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  const button = await screen.findByRole("button", { name: /让 Agent 分析一次/ });
+  await act(async () => {
+    fireEvent.click(button);
+  });
+
+  expect(analyzeBodies).toEqual([{ symbol: "BTC/USDT" }]);
+  expect(await screen.findByText(/已派给 Agent/)).toBeInTheDocument();
+});
+
+test("market watchlist posts a new symbol and rejects a malformed one", async () => {
+  window.history.replaceState({}, "", "/market");
+  const posted = [];
+  const base = marketFetch();
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.includes("/api/market/symbols") && (options.method || "GET") === "POST") {
+      const body = JSON.parse(options.body);
+      posted.push(body);
+      if (body.symbol !== "BTC/USDT" && body.symbol !== "ETH/USDT") {
+        return { ok: false, status: 400, json: async () => ({ detail: "symbol must look like BTC/USDT" }) };
+      }
+      return response({ symbol: body.symbol, alias: "" });
+    }
+    return base(url, options);
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  const input = await screen.findByPlaceholderText("BTC/USDT");
+  fireEvent.change(input, { target: { value: "ETH/USDT" } });
+  await act(async () => {
+    fireEvent.keyDown(input, { key: "Enter" });
+  });
+  expect(posted).toEqual([{ symbol: "ETH/USDT" }]);
+  expect(await screen.findByText("已添加 ETH/USDT")).toBeInTheDocument();
+
+  fireEvent.change(input, { target: { value: "BTCUSDT" } });
+  await act(async () => {
+    fireEvent.keyDown(input, { key: "Enter" });
+  });
+  expect(await screen.findByText("symbol must look like BTC/USDT")).toBeInTheDocument();
+});
+
+test("market event feed is cross-symbol and matches the unread badge", async () => {
+  window.history.replaceState({}, "", "/market");
+  // 当前选中的是 BTC，但事件来自 ETH：告警流不该被选中的标的过滤掉。
+  global.fetch = marketFetch({ events: [MARKET_EVENT] });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  expect(await screen.findByText("1d 跌破 2,403.69")).toBeInTheDocument();
+  expect(screen.getByText("ETH/USDT")).toBeInTheDocument();
+  expect(screen.getByText(/全部标的 · 最近 1 条/)).toBeInTheDocument();
+  expect(document.querySelector(".market-event")).toHaveClass("unread");
+});

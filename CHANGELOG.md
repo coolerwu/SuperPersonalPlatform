@@ -10,6 +10,14 @@
 
 ### Added
 
+- 行情工作台：侧栏新增 `/market`，把「有时效性要求的判断」和「需要推理的判断」拆成两层。
+  快层（1m/5m/15m/30m 的行情采集、指标与信号）全部由平台确定性代码产出，全链路不调用模型，
+  经 `/api/market/*` 提供给三栏页面（左栏自选标的、中栏多周期信号矩阵与事件流、右栏 Agent
+  解读面板）；慢层由 Agent 对 1h 及以上周期做跨周期解读，结果异步贴回右侧，运行期间矩阵
+  继续刷新。行情只做分析与呈现，不接交易接口、不下单。新增平台工具 `market_snapshot`
+  （与页面矩阵同源）、Telegram 出站信号推送，行情库按保留期纳入维护清理。需求见
+  `docs/intent.md` F17。
+
 - Agent 系统提示词支持留空使用平台完整默认规则，配置页可预览；创建 Run 固化实际正文，群角色要求后追加。提示词工具可读原文、实际正文与来源，显式清空经审批恢复默认。
 
 - 会话标题：长期 session 新增 `title` / `title_source` 字段（存在
@@ -49,6 +57,10 @@
 
 ### Changed
 
+- 需求文档由每需求一个文件改为单文件 `docs/intent.md`：原 `docs/requirements/F1`–`F17`
+  的内容无损合并为该文件的 `### F<n>` 小节（正文与原文逐行一致，只把 F15 里指向已删除
+  路径的自引用改成「本文 F16」），原目录删除。新增需求改为在「需求记录」末尾追加小节，
+  编号规则不变。归档的 `CHANGELOG.md` 历史条目保留原来的文件路径，不追改历史记录。
 - Chat「思考过程」改为只呈现工具轨迹：`agent_update` 事件新增 `message_type` 与 `tool_calls`
   字段，思考过程按「有工具调用显示 `调用工具：<名称>`、工具返回显示返回正文」渲染，模型输出
   原文（已由 `assistant_delta` 写进正文）和 `HumanInTheLoopMiddleware.after_model` 这类中间件
@@ -97,6 +109,10 @@
 
 ### Removed
 
+- 删除 `.claude/skills/omni-roles` 技能：req/arch/dev/qa/ops 角色卡、每条回复的角色标记
+  和三个确认闸口一并移除，不再有角色协作流程。取代它的是 `CLAUDE.md` 的「需求与方案」
+  一节 —— 新需求写 `docs/intent.md` 的 `F<n>` 小节，方案用 Claude Code 原生 plan mode
+  先定后做，提交仍走 `$project-commit`。
 - 多 Agent 群聊整体移除：`/chat-groups` 页面、`ChatGroupService`、`group_decision`
   控制工具、群成员库、群内部 session 与 `run_group_*` Run 相关代码，以及
   `chat_groups/` 工作区目录约定、维护清理保护和对应测试与文档一并删除。目标机器上的

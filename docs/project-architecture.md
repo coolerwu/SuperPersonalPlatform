@@ -10,7 +10,7 @@
 - 生产环境仍使用已提交的 `web/dist`，生产启动不现场构建前端。
 - 工作区默认仍是项目目录下 `.super-personal-platform`，可通过 `--workspace` 覆盖。
 - 目标产品边界收缩为：deepagents 公开 API 的后端任务执行、Web 单聊、微信个人号入口、坚果云 WebDAV Context、单 token 登录、基础配置、基础日志和生产更新。
-- 版本、发布与回滚约定见 `docs/release.md`，变更记录见 `CHANGELOG.md`；需求文档统一落在 `docs/requirements/`，命名 `F<n>-<名称>.md`，规则见该目录 `README.md`。
+- 版本、发布与回滚约定见 `docs/release.md`，变更记录见 `CHANGELOG.md`；需求统一落在 `docs/intent.md`，按 `F<n>` 编号分节。
 
 ## 发布与回滚命令
 
@@ -42,7 +42,7 @@
 - 同一 `session_id` 同时只允许一个 `queued`、`running` 或 `waiting_approval` Run。RunService 在保存附件、追加消息或创建 Run 目录前强制检查，冲突通过 HTTP 409 返回当前 Run ID 和状态，防止多个 Run 覆盖同一个 LangGraph checkpoint。
 - `Agent` 保存人格、模型、可选 Context 绑定和 DeepAgent 运行选项。
 - Agent 的 DeepAgent 配置只保留 `max_iterations`、`todo_list` 和工具授权 `tools`。长期记忆、私有文件系统及会话 Checkpointer 固定开启；运行名使用 Agent 名称，debug 默认关闭。系统从工具注册表的 `approval_required` 生成 HITL `interrupt_on`；WebDAV 文件写入由原生 Permission 规则生成审批谓词，只有 `approval_required=true` 的可写目录进入 HITL，免审批目录直接放行，不再接受 Agent 自定义审批列表。原生文件工具按路径授权执行。移除 `name/debug/filesystem/use_longterm_memory/interrupt_on/subagents/response_format/context_schema/checkpointer/cache` 配置；系统继续管理通用子 Agent 和 Skills。
-- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前可选平台工具为 `send_attachment`、`search_session`、`arxiv`、`yahoo_finance_news`、`browser_extract`、`schedule` 和 `execute_code`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
+- 平台工具定义在代码中，不放入 workspace 散落配置；Agent 的 `deepagent.tools` 只是授权选择。当前可选平台工具为 `send_attachment`、`search_session`、`arxiv`、`yahoo_finance_news`、`browser_extract`、`market_snapshot`、`schedule` 和 `execute_code`。授权 `browser_extract` 时运行时会同时注入隐藏的 `browser_search` 工具；搜索引擎固定为 Bing，不提供 workspace 配置或 Agent 入参选择。
 - `system_prompt` 是注册表里唯一的始终注入平台工具（`always_on=true`），不由 `deepagent.tools` 授权控制，也不进入通用子 Agent 的工具列表；它只作用于当前 Run 所属 Agent 的 `system_prompt`。工具提供 `action=read` 与 `action=update`：`read` 由平台直接读 `config.yaml`，返回该 Agent 的 `system_prompt` 配置原文与长度、`effective_system_prompt` 实际基础正文和 `source=default|custom`，因为 Agent 自身的文件工具访问不到 `config.yaml`，而每轮注入的 system message 还包含平台 middleware 追加的工作区契约、长期记忆、技能和子 Agent 段落，Agent 无法自行分辨边界；`read` 走 `interrupt_on` 的 `when` 谓词跳过审批，`update`（以及缺省或非法 `action`）仍始终进入 `interrupt_on`，只开放 `approve` / `reject`，没有免审批租约。批准后平台用 PyYAML 节点位置做最小范围文本替换，把该 Agent 的 `system_prompt` 统一写成 `|-` 字面块，其它字段、注释与排版不变，再按 `parse_settings` 完整校验后用临时文件原子替换；写失败或校验失败时 `config.yaml` 字节不变。新提示词在该 Agent 的下一次 Run 生效，当前 Run 继续使用创建时的快照，旧文本只能从 Run 的 `approval.json` 与事件日志追溯，不保留独立历史或回滚入口。
 - 系统提示词审批的可见性由服务端在中断时生成的 `description` 提供，内含“拟修改为（新）”与“当前（旧）”完整对照，读取当前配置失败时退回摘要并提示到 Web 端核对；Web 审批卡片按该对照文本渲染（不再展示 `new_prompt` 原始 JSON），微信审批通知展示约 600 字符的截断预览并提示到 Web 端查看完整对照，其它工具的审批通知保持原样。
 - 当前默认 Context 收敛为唯一的 `workspace/context/`；知识文件放在 `workspace/context/knowledge/files/`，作为工具读写的目录。
@@ -112,6 +112,9 @@ workspace/
       runs.jsonl
       attachments/
       artifacts/
+
+  market/
+    market.sqlite     # bars / events / event_cooldown / watchlist / meta
 
   channels/
     wechat/
@@ -201,10 +204,27 @@ PUT /api/workspace/write
 POST /api/workspace/delete
 ```
 
-这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”和“技能库”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`PUT /api/workspace/write` 可选 `create`（默认 `false`）：`false` 时保持“文件必须已存在、否则 404”，`true` 时允许创建缺失的父目录并写入新文件，供 `/skills` 新建 `SKILL.md` 使用；已存在文件的覆盖、1MB 上限、可编辑扩展名白名单、路径穿越与根层保护规则不变。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`context/`、`runs/`、`schedules/`、`sessions/`、`channels/`、`logs/` 不能删除，其它 workspace 内文件或目录允许删除。
+这些接口只允许访问 active workspace 内部路径，用于前端“工作目录”和“技能库”页面浏览、编辑 UTF-8 文本文件和删除非固定路径。`PUT /api/workspace/write` 可选 `create`（默认 `false`）：`false` 时保持“文件必须已存在、否则 404”，`true` 时允许创建缺失的父目录并写入新文件，供 `/skills` 新建 `SKILL.md` 使用；已存在文件的覆盖、1MB 上限、可编辑扩展名白名单、路径穿越与根层保护规则不变。`config.yaml` 通过写入入口保存时仍执行配置校验；`config.yaml` 和根层固定目录 `agents/`、`context/`、`runs/`、`schedules/`、`sessions/`、`channels/`、`logs/`、`market/` 不能删除，其它 workspace 内文件或目录允许删除。
+
+行情 API：
+
+```text
+GET    /api/market/overview
+GET    /api/market/snapshot
+GET    /api/market/bars
+GET    /api/market/events
+POST   /api/market/events/read
+GET    /api/market/symbols
+POST   /api/market/symbols
+DELETE /api/market/symbols
+GET    /api/market/commentary
+POST   /api/market/analyze
+POST   /api/market/refresh
+```
+
+`symbol` 一律走查询参数（写法固定为 `BTC/USDT`，含斜杠，不能做路径参数），删除自选也走 `DELETE /api/market/symbols?symbol=`。`/api/market/overview` 只返回左栏需要的报价、24h 涨跌和各周期方向，不返回整份指标；`/api/market/snapshot` 是页面主轮询接口，返回一个标的的全部周期快照（指标、信号、最近 20 根收盘价、数据时间与是否陈旧）；`/api/market/bars` 返回原始 K 线供画图；`/api/market/events` 按 `after={seq}` 增量返回信号事件，不按标的过滤（未读游标是全局的，事件流定位为跨标的告警流），`/api/market/events/read` 推进已读游标；`/api/market/symbols` 读写页面维护的自选列表；`/api/market/commentary` 返回该标的的 Agent 解读历史与当前是否有解读 Run 在跑；`/api/market/analyze` 为一个标的创建一次 Agent 解读 Run，同一标的已有解读 Run 时返回 409，配置缺失或还没有快照时返回 400；`/api/market/refresh` 立即执行一次快层采集，用于配置改动后不等下一轮。
 
 System API 额外保留：
-
 ```text
 POST /api/system/logs/list
 POST /api/system/logs/read
@@ -261,6 +281,7 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 
 - `/chat` 是页面 Chat 工作区，采用左侧列表布局：左栏是当前 Agent 的 session 列表（顶部为新建会话按钮和 Agent 选择，列表项第一行是会话标题、第二行是微信/Web 等来源与渠道身份、消息数和更新时间，选中项高亮，右侧提供重命名和删除按钮），中间是消息与输入区，右侧保留当前会话状态栏；不展示其它 Agent 的 session。左栏只列出有内容的会话（`message_count > 0` 或已有标题）：Web Chat 的 active binding 在页面打开时就存在，但没发过消息的空会话不占列表行，也没有 0 条消息的 Web Chat 行；无会话时提示直接发消息即新建。会话标题存在 `workspace/sessions/{session_id}/state.json` 的 `title`/`title_source`，列表里没有标题时退回渠道标签（如“微信”“Web Chat”）；重命名打开只含标题字段的轻量弹窗，调用 `POST /api/chat/sessions/{session_id}/rename` 写入手动标题并刷新列表。删除会话点击后二次确认再调用 `DELETE /api/chat/sessions/{session_id}`；删除当前选中的会话后页面立即新建 Web 会话，删除其它会话后刷新列表，会话仍有活动 Run 时显示后端 409 提示并保留该 session。页面可以打开并续聊微信 session，但只改变 Web Chat 当前选择，不切换微信通道本身的活跃会话。消息进入长期 session，执行仍由后端 DeepAgent run 完成。Chat 输入框使用普通 `Enter` 发送、`Shift+Enter` 换行；中文/日文等输入法正在 composition 组词时不拦截 `Enter`，避免拼音选词直接发送。发送动作有同步 in-flight 锁，并由后端按 `client_message_id` 幂等创建 run，避免连续按键、双击或重复请求生成两条相同消息。用户和 assistant 消息都提供复制按钮，桌面端按钮位于气泡外侧操作位，移动端使用顶部操作位，不再通过贯穿全文的右内边距压缩正文；复制原始消息文本并短暂显示成功状态。Chat 的 assistant 气泡内置轻量 Markdown 渲染，支持标题、列表、引用、代码、链接、加粗、水平分隔线和 GitHub 风格表格；宽表格只在表格容器内横向滚动，不撑开聊天布局。Chat 气泡运行中会把后端 `running`、`agent_update`、`stream_fallback`、`image_attachments_textified` 等可公开运行事件聚合到“思考过程”区域并展开显示，`assistant_delta` 只作为正文增量；图更新事件只在工具轨迹上有意义时才聚合：带工具调用显示 `调用工具：<名称>`，工具返回显示返回正文，模型正文和中间件钩子节点名都不显示；思考过程前后端统一保留最近 20 条，前端 `runEventThinkingText`/`mergeChatThinking` 与后端 `_thinking_text`/`_merge_thinking` 使用同一口径，避免实时与刷新后的思考过程不一致；run 结束后正文保留为主内容，“思考过程”自动折叠并可手动展开查看。页面刷新或切换 session 后，Chat 先读 `workspace/sessions/{session_id}/messages.jsonl` 展示正文，再按 assistant 消息的 `run_id` 读取 `workspace/runs/{run_id}/partial.json` 恢复已折叠的思考过程；如果后端返回 `active_run`，页面会先显示该 run 的 `partial.json` 正文和思考过程，再从 `events.jsonl` 重新接上事件轮询，直到 run 完成或失败。`820px` 以下使用独立移动布局：全局侧栏收进顶部菜单控制的抽屉，session 列表变成顶部可横向滚动的会话条（含新建会话按钮与 Agent 选择），Chat 占满剩余动态视口，会话诊断栏隐藏，消息区独立滚动且输入框固定在工作区底部。
 - `/`, `/runs`, `/agents` 都进入新的 Runs 工作区；`/agents` 只是旧入口跳转，不恢复旧 Agent 管理页面。Runs 工作区只承担运行记录查看、状态轮询、事件与结果展示，不提供 Prompt/Agent ID 表单或手动创建按钮；详情页支持取消 `queued/running/waiting_approval` run、审批或拒绝待确认工具调用，以及重跑 `completed/failed/cancelled` run。
+- `/market` 是行情工作台，侧栏排在 Chat 之后。三栏布局：左栏是自选标的列表（报价、24h 涨跌、各周期方向点）；中栏上半是多周期信号矩阵，下半是信号事件流；右栏是 Agent 解读面板。矩阵每行一个周期，列为 K 线状态（进行中 / 已收盘及收盘时间）、趋势、动量、波动、量能、信号和最近 20 根收盘价的迷你走势。1m–30m 行标记为「快层」、1h 及以上标记为「慢层」，两者之间有明确分隔，让用户一眼看出哪些是平台代码算的、哪些有 Agent 参与。矩阵按 5 秒轮询 `/api/market/snapshot`，只在返回内容实际变化时替换视图（`sameSnapshot` 比较后再 setState），避免闪动或结果丢失；数据陈旧时该行显式标注延迟。事件流是跨标的的告警流，按 `after={seq}` 增量合并并按 seq 去重，右上的未读徽标与 `/api/market/events` 的全局游标口径一致。右栏的「让 Agent 分析一次」按钮标注预计耗时，解读期间中栏和左栏保持可用。K 线图（`lightweight-charts`）不在本期范围内，本期只有矩阵与迷你走势。
 - `/workspace` 展示真实 workspace 文件浏览器，可查看和编辑 UTF-8 文本文件，并可删除非固定路径；`config.yaml` 在这里按原生 YAML 文本展示和编辑，不承载专用配置表单；`config.yaml` 和根层固定骨架目录不可删除。
 - `/skills` 是技能库页面，读取 `config.yaml` 的 Agent 列表后按 Agent 分组列出各自私有工作区里的技能，路径固定为 `workspace/agents/{agent_id}/workspace/skills/{skill_id}/SKILL.md`；左栏默认选中第一个 Agent、只展开该 Agent 的技能，行内显示 frontmatter 的 name、description 摘要、修改时间，以及“不会加载/规格警告/契约”标记（鼠标悬停给出具体原因），右栏是 `SKILL.md` 纯文本编辑器，支持新建、保存和删除整个技能目录（删除二次确认），技能的辅助文件只列出名称与大小、仍到 `/workspace` 维护。页面按 SkillsMiddleware 的真实口径分级：缺少 `---` frontmatter、frontmatter 未闭合或不是映射、缺 `name` 或 `description`、SKILL.md 缺失或超过 10MB 才会让运行时跳过该技能（标记“不会加载”并禁用保存）；`name` 与目录名不一致、`name` 不符合 Agent Skills 规范、`description` 超过 1024 字符只是规范警告，运行时仍会加载（description 会被截断），页面标记“规格警告”但允许保存。包含 `<!-- BEGIN USER CONTRACT -->` 区块时页面提示该区块是用户硬约束、Agent 文件工具不能改。技能目录缺失按空态处理，改动在下一次 Agent 运行时由 SkillsMiddleware 生效，不影响运行中的 Run。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。
@@ -270,7 +291,7 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 - `/config` 的 Agent 栏目提供 WebDAV 开关、映射目录、read/write 权限与目录说明；原运行时参数区仅保留最大执行步数。全局页面移除 WebDAV 权限规则。
 - `/config` 的 WebDAV 文件同步区域提供“测试连接”和“立即同步”操作；测试连接使用当前表单草稿测试 WebDAV，不保存配置且不回传 secret；立即同步调用后端手动同步接口读取已保存的 `workspace/config.yaml`，立刻把坚果云远端文件缓存到 `workspace/context/webdav/` 并返回文本/图片资源数量；保存配置本身仍只负责校验并写回 `config.yaml`。
 - `/providers` 是配置页内的模型 Provider 栏目直达入口，维护 `llm.default_model_id` 和 `llm.models[]`，包括 provider 类型、base URL、API key、模型名、temperature 和图片能力；Provider 至少保留一个，删除被引用的 Provider 时前端会把默认模型和 Agent 引用迁移到剩余模型。
-- `/agent-config` 是配置页内的 Agent 栏目直达入口，默认显示 Agent 列表摘要（名称、ID、模型、工具数量和 WebDAV 状态）。点击列表项或新增打开一个原生模态弹窗，使用独立草稿编辑，取消/关闭/Escape 丢弃本次编辑；保存直接调用配置写入 API，成功后关闭并刷新列表，失败保留内容并在弹窗显示错误。工具选择内嵌同一弹窗，不再嵌套工具弹窗；字段编辑不以可变 ID 为 React key。列表删除仍进入页面草稿，由页面保存按钮落盘。该页面维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 会话历史检索工具 `search_session`、学术检索工具 `arxiv`、轻量财经新闻工具 `yahoo_finance_news`、浏览器能力 `browser_extract`、用于对话式创建定时任务的 `schedule` 和 Docker/gVisor 沙箱代码执行器 `execute_code`；授权 `browser_extract` 会同时提供固定 Bing 的 `browser_search`，前端不单独展示搜索引擎或搜索工具选择；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
+- `/agent-config` 是配置页内的 Agent 栏目直达入口，默认显示 Agent 列表摘要（名称、ID、模型、工具数量和 WebDAV 状态）。点击列表项或新增打开一个原生模态弹窗，使用独立草稿编辑，取消/关闭/Escape 丢弃本次编辑；保存直接调用配置写入 API，成功后关闭并刷新列表，失败保留内容并在弹窗显示错误。工具选择内嵌同一弹窗，不再嵌套工具弹窗；字段编辑不以可变 ID 为 React key。列表删除仍进入页面草稿，由页面保存按钮落盘。该页面维护 `agents.definitions[]`，包括人格提示词、模型选择、Context 绑定和 DeepAgent 运行选项；Agent 工具通过弹窗里的可视化卡片选择，当前写入 `agents.definitions[].deepagent.tools`，平台工具包括 会话历史检索工具 `search_session`、学术检索工具 `arxiv`、轻量财经新闻工具 `yahoo_finance_news`、浏览器能力 `browser_extract`、读取平台自己算好的多周期行情快照的 `market_snapshot`、用于对话式创建定时任务的 `schedule` 和 Docker/gVisor 沙箱代码执行器 `execute_code`；授权 `browser_extract` 会同时提供固定 Bing 的 `browser_search`，前端不单独展示搜索引擎或搜索工具选择；不再展示可手填的 `Tool IDs` 输入框；`/agents` 仍跳转 Runs，不作为配置页路径。
 - `/schedules` 是定时任务管理页面，读取 `workspace/schedules/index.json` 和每个任务详情，支持查看内置 WebDAV 同步任务和维护清理任务、创建/编辑/删除 Agent 定时任务、启用/停用、立即运行和查看调度事件；任务创建表单只暴露 `prompt + agent + trigger` 等必要字段，不在前端执行 Agent。
 - `/browser` 是浏览器授权页，读取 `config.yaml` 中的 Agent 列表，允许管理员按 Agent 启动一个截图式 Playwright 授权会话，profile 路径固定为 `workspace/agents/{agent_id}/workspace/browser/`；授权页提供 Agent/profile 列表、目标 URL、截图点击、文本输入、按键、完成和取消操作，不放入 `/config` 或 `/system`。
 - `/wechat` 展示微信账号列表、当前账号详情、二维码、运行态、绑定 Agent、投递路径和通道日志，并提供新增、删除、启动和停止操作；微信账号不在 `/config`、`/providers` 或 `/agent-config` 重复展示。
@@ -279,6 +300,21 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 - 前端是运行台，不做营销首页；第一屏直接展示可操作的后端 run 工作区。
 - Runs 工作区通过 1 分钟一次的轮询读取后端落盘状态，但前端必须保留当前详情快照、只在返回内容实际变化时更新状态，避免每次拉取 `workspace/runs/index.json` 时出现短暂重刷或 `unknown` 状态闪动。
 - Runs 详情区使用更短的 2 秒轮询读取选中 run 的详情和事件；运行中若存在 `partial.json` 且尚无最终 `result.json`，结果预览显示 partial 内容和“正在生成”状态。
+
+## 行情工作台
+
+行情工作台把「有时效性要求的判断」和「需要推理的判断」拆成两层，这是它存在的理由：一次 Agent Run 从创建到出结论要经过 session/checkpoint 恢复、middleware 与提示词注入、多轮模型与工具调用，实际耗时数十秒到数分钟，而 1m K 线每 60 秒就换一根；同一份输入两次 Run 还可能给出不同判断。所以 1h 以下的判断不能交给模型。
+
+- 快层（`1m`/`5m`/`15m`/`30m`）完全由平台代码产出：`MarketService` 在 FastAPI lifespan 内以 `market.poll_seconds`（默认 5 秒）为周期，通过 `ExchangeClient` 只读交易所公开行情接口，把 K 线写入 `workspace/market/market.sqlite`，再用 `server/domain/market_indicators.py` 计算指标与信号。全链路不产生任何模型调用，指标和信号是纯函数，同一份 bar 数据必然得到同一份结果。
+- 数据源固定为 Binance 现货公开接口，不持有 API key，只读。默认域名是官方只读行情域 `https://data-api.binance.vision`；`market.base_url` 可覆盖为自建镜像或网关。选这个默认值是因为实测生产机（中国电信出口）直连它返回 200，而 `api.binance.com` 直连超时、经代理出口被判 HTTP 451。`market.proxy` 留空时 `httpx` 沿用进程代理环境变量（生产机实测无代理也可直连，因此留空即可）；注意 `httpx` 在 macOS 上还会读取系统代理设置且不读系统代理的例外列表，所以把 `base_url` 指向内网地址时要显式设置 `no_proxy`。任一标的采集失败只记录并保留上一份快照，靠 `data_age_seconds` / `stale` 在页面上标注延迟，不静默显示旧值。
+- 慢层（`1h`/`4h`/`1d`）由 Agent 解读。`POST /api/market/analyze` 把平台算好的快照作为唯一行情来源交给 Agent（`build_analysis_prompt`），并明确要求不要再自行取行情；解读异步产出，页面在 Agent 运行期间照常刷新矩阵。Agent 侧还有 `market_snapshot` 平台工具读取同一份快照，避免它去爬行情网站。
+- 指标与信号只有一份实现（`server/domain/market_indicators.py`）：页面矩阵、信号事件、Agent 工具和解读提示词全部调用它，不允许出现第二套口径。指标为 EMA20/60/200、RSI14、MACD(12,26,9)、ATR14 及其相对自身近 100 根基线的 `atr_ratio`、布林带(20,2)、量比（对前 20 根均量）和前 20 根摆动高低点。
+- 信号规则命中即写入 `market.sqlite` 的 `events` 表，用自增 `seq` 作为页面增量游标；同一 `symbol + timeframe + rule_id` 在 `cooldown_seconds` 内不重复产生事件。1h 以下的信号严重度整体降一级：分钟级噪音不应和小时级信号同级提醒。
+- `market.telegram` 是只出站的单选通知通道，命中 `notify_min_severity` 的信号推送一条文本。它不接入平台的渠道、session 和 `RunDeliveryService` 投递体系，因此不影响微信通道和 Run 的 `delivery.json` 语义；微信投递路径保持不变。
+- 自选列表是页面可编辑的运行时状态，存在 `market.sqlite` 的 `watchlist` 表，而不是 `config.yaml`：这样不需要在代码里对用户配置文件做保注释的 YAML 手术。`market.symbols` 只在 `watchlist` 为空时作为一次性种子。
+- 每个「标的 + Agent」组合有自己固定的长期 session（`channel=market`、`peer_id` 为去掉斜杠的交易对）。因此 Agent 解读不占用用户的 Web Chat session，两者不会互相触发「同一 session 只能有一个活动 Run」的 409；解读结果同时是会话消息，用户可以在 Chat 里接着追问。session id 由 `SessionService.get_or_create` 在首次解读时生成并记入 `market.sqlite` 的 `meta`，只读路径只查这份记录、不创建会话（`build_session_id` 返回的是渠道身份 active key，不是 session id，两者不能混用）；重新解读复用同一 session，会话被删除后会重新建一个，标题固定写成「行情解读 · <symbol>」。
+- 单个标的采集失败不影响其它标的，快照照常返回并靠 `data_age_seconds` / `stale` 标注延迟，不静默显示旧值。`market.sqlite` 的保留期由 `market.retention_days`（默认 30 天）控制，独立于 `maintenance.retention_days`，由 `MarketService` 每天执行一次清理，不反向依赖 `MaintenanceService`。清理按「超过保留期」与「每个 series 至少保留 `history_limit` 根」两者取较大范围，否则 `1d` 会被删到只剩二三十根，而增量补数只补最近几根，EMA200 之类的指标会永久退化。
+- 只读：平台不持有交易所 API key，不下单、不持仓、不做盈亏，也不向交易所写入。
 
 ## Retained Capabilities
 
@@ -350,7 +386,7 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 - 服务单元安装在调用用户的 `~/.config/systemd/user/`，靠 `loginctl enable-linger` 实现开机自启；`run.sh prod` 在缺少 linger 时提示并执行一次，其余 `systemctl --user enable/restart/status` 都不需要 sudo。该机制取代了早期的系统级 unit 与受限 sudoers 规则；旧单元与 sudoers 规则在迁移时一次性人工清除，`run.sh` 不保留任何系统级单元的检测或迁移代码。
 - `run.sh prod` 生成 systemd unit 时只使用系统临时文件，再安装到用户级 systemd 目录，不把临时 service 文件写入 workspace。
 - 提交项目前必须执行 `.claude/skills/project-commit` 工作流。
-- 需要按「需求 → 方案 → 实现 → 验证 → 发布」多角色协作时使用 `.claude/skills/omni-roles` 技能：需求文档落在 `docs/requirements/F<n>-<名称>.md`，角色规则、产物落点和确认闸口由该技能定义，不改变本文件的架构约定。
+- 需求统一落在 `docs/intent.md` 的 `F<n>` 小节；方案先用 Claude Code 原生 plan mode 定下来，提交走 `.claude/skills/project-commit`。不再有角色技能或多角色协作流程。
 
 ## Run Usage Visibility
 

@@ -28,6 +28,12 @@ const AGENT_TOOL_CARDS = [
     badge: "浏览器",
   },
   {
+    id: "market_snapshot",
+    name: "Market Snapshot",
+    summary: "读取平台自己算好的多周期行情快照（指标与信号同源），不需要再爬行情网站。",
+    badge: "行情",
+  },
+  {
     id: "schedule",
     name: "Schedule",
     summary: "创建、查看、修改或删除当前会话自己创建的定时任务，并回发到渠道。",

@@ -59,4 +59,4 @@ rollback rules live in `docs/release.md`; the change log is `CHANGELOG.md`.
 
 `docs/project-architecture.md` is part of the project contract. `docs/architecture-qa.md` records the DeepAgent rebuild decisions. Update both when implementation changes behavior, architecture, commands, or operating assumptions.
 
-Requirement documents live in `docs/requirements/` and follow `F<n>-<name>.md`; see `docs/requirements/README.md` for the numbering and template rules.
+Requirements live in `docs/intent.md` as numbered `F<n>` sections; see the "怎么用" section at the top of that file for the numbering and template rules.

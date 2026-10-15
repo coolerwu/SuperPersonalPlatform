@@ -52,6 +52,15 @@ PLATFORM_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
         description="Open a public http/https page with Playwright and extract rendered text and links.",
     ),
     ToolDefinition(
+        id="market_snapshot",
+        name="Market Snapshot",
+        description=(
+            "Read the platform's own multi-timeframe market snapshot for a watchlist symbol. "
+            "Indicators and signals are computed by platform code, so this is the single source "
+            "of truth for market state; do not re-fetch quotes from the web."
+        ),
+    ),
+    ToolDefinition(
         id="schedule",
         name="Schedule",
         description="Create, list, get, update, and delete this Agent's own scheduled tasks with current-channel delivery.",
