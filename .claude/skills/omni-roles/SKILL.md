@@ -11,7 +11,7 @@ description: 按角色卡推进「需求 → 方案 → 实现 → 验证 → �
 ## 启动与边界
 
 - 用户用 `$omni-roles` 调用本技能，或消息里出现 `@req`、`@arch`、`@dev`、`@qa`、`@ops` 时生效。
-- 本技能只约束工作视角和流程，不覆盖 `AGENTS.md` 的项目铁律；冲突时以 `AGENTS.md` 为准。
+- 本技能只约束工作视角和流程，不覆盖 `CLAUDE.md` 的项目铁律；冲突时以 `CLAUDE.md` 为准。
 - 实现类改动照旧遵守项目约定：同步 `docs/project-architecture.md`，提交走 `project-commit` 技能。
 - 不派发子 agent：角色是当前会话里的视角切换，不是启动别的进程或别的会话。
 
@@ -110,5 +110,5 @@ F 文档两档：
 
 - 需求文档：`docs/requirements/F<n>-<名称>.md`
 - 长期知识：`docs/architecture-qa.md`
-- 架构 / 行为 / 命令 / 依赖 / 运维方式变更：同步 `docs/project-architecture.md`；工作约定变更同步 `AGENTS.md`
+- 架构 / 行为 / 命令 / 依赖 / 运维方式变更：同步 `docs/project-architecture.md`；工作约定变更同步 `CLAUDE.md`
 - 不引入本项目不存在的体系：不新建 `docs/知识库/`、`docs/模板/`、`docs/代码Review记录.md`、`.agent-flow/`
