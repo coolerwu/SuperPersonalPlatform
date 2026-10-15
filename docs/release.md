@@ -27,8 +27,7 @@
    `PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright} .venv/bin/python -m playwright install chromium`。
 5. `systemctl --user restart super-personal-platform.service`，再用
    `systemctl --user is-active/status` 验证。服务单元位于调用用户的用户级
-   systemd 目录，这些命令都不需要 sudo；只有首次从系统级单元迁移时需要一次
-   sudo 来移除旧单元。
+   systemd 目录，以上命令都不需要 sudo。
 6. 需要留痕的发布按"版本号"一节打 tag 并推送。
 
 前端只在开发与构建阶段需要 Node.js 20+；生产不现场构建，直接使用仓库中已提交的

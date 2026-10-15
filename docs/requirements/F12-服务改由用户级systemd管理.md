@@ -1,6 +1,6 @@
 # F12 生产服务改由用户级 systemd 管理
 
-- 状态：已确认，实现中
+- 状态：已完成
 - 日期：2026-10-15
 - 范围：生产服务的进程管理方式、`run.sh` 的 systemd 集成、部署与回滚流程
 - 前置依赖：现有系统级 unit、运行用户 `qiuqiu` 的 user systemd（`Linger=yes` 已开启）
@@ -31,9 +31,9 @@ systemd（`~/.config/systemd/user/`）下，靠 `Linger=yes` 实现开机自启�
 1. `run.sh prod` 把服务单元生成并安装到 `~/.config/systemd/user/${SERVICE_NAME}`，不再写 `/etc/systemd/system/`。
 2. 单元内容按 user 级调整：去掉 `User=` / `Group=`，`WantedBy=default.target`，`After=network-online.target` 并配 `Wants=`，保留 `Restart=always`、`RestartSec=5`、`KillMode=process` 与三个 `SUPER_PERSONAL_*` 环境变量。
 3. 所有 `systemctl` 调用改为 `systemctl --user`；安装单元、`daemon-reload`、`enable`、`restart`、`status` 都不再需要 sudo。
-4. 删除 `setup-sudo` 子命令与 `install_restart_sudoers()`；`can_restart_without_prompt()` 与 no-TTY 的 sudo 预检随之简化，保留 `trigger_restart_by_service_exit()` 作为兜底重启路径。
+4. 删除 `setup-sudo` 子命令与 `install_restart_sudoers()`；原来的 no-TTY sudo 预检改为 user systemd 管理器的可达性预检，`trigger_restart_by_service_exit()` 兜底路径一并移除——user systemd 下重启始终可用，该兜底不可能成功。
 5. 首次启用时确保 user systemd 的 linger 已打开（`loginctl enable-linger`）；这是整个流程里唯一可能仍需要 sudo 的一次性动作。
-6. 提供一次性迁移：检测到系统级单元存在时，停用并移除它之后才安装 user 单元，避免两个实例同时抢占 8888。
+6. 迁移时一次性停用并移除系统级单元，避免两个实例同时抢占 8888；该动作在目标机器上人工执行一次，`run.sh` 不保留系统级单元的检测或迁移代码。
 7. `run-prod.sh` 与 `run-dev.sh` 保持不变，它们只是 `run.sh` 的薄壳。
 
 ## 验收标准
@@ -52,4 +52,4 @@ systemd（`~/.config/systemd/user/`）下，靠 `Linger=yes` 实现开机自启�
 
 ## 开放问题
 
-- 迁移动作里移除系统级单元需要一次 sudo。若首次迁移是通过 web 无 TTY 触发，是否要求必须先在 TTY 下人工执行一次？当前倾向：要求人工在 TTY 下完成首次迁移，之后所有路径都不再需要 sudo。
+- 迁移动作里移除系统级单元需要一次 sudo。2026-10-15 已按"人工在 TTY 下完成首次迁移"执行：在目标机器上停用并移除了系统级单元，之后所有路径都不再需要 sudo。

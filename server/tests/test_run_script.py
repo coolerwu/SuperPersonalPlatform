@@ -76,29 +76,27 @@ def test_prod_service_keeps_update_process_alive_during_restart() -> None:
     assert "KillMode=process" in script
 
 
-def test_prod_preflights_user_systemd_for_background_updates() -> None:
+def test_prod_preflights_the_user_systemd_manager() -> None:
     script = read_run_sh()
 
     assert "can_restart_without_prompt()" in script
     assert "user_systemctl show-environment >/dev/null 2>&1" in script
-    assert "trigger_restart_by_service_exit()" in script
     run_prod_body = script.split("run_prod() {", 1)[1]
-    assert 'if ! can_restart_without_prompt && [[ ! -t 0 ]]; then' in run_prod_body
-    assert "This no-TTY update cannot reach the user-level systemd manager." in run_prod_body
-    assert "systemd Restart=always starts the code currently on disk." in run_prod_body
-    assert "Skipping systemd unit refresh/status because restart is using the service-exit fallback." in run_prod_body
-    assert "trigger_restart_by_service_exit" in run_prod_body
+    assert 'ensure_linger "$service_user"' in run_prod_body
+    assert "if ! can_restart_without_prompt; then" in run_prod_body
+    assert "is not reachable, so the" in run_prod_body
     assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then' in run_prod_body
     assert "No code or systemd unit changes; skipping systemctl enable/restart/status." in run_prod_body
     service_changed_block = run_prod_body.split('if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then', 1)[1]
     assert 'user_systemctl enable "$SERVICE_NAME"' in service_changed_block
 
 
-def test_exit_based_restart_terminates_service_main_pid() -> None:
+def test_no_exit_based_restart_fallback_remains() -> None:
     script = read_run_sh()
 
-    assert 'user_systemctl show "$SERVICE_NAME" --property=MainPID --value' in script
-    assert 'kill -TERM "$main_pid"' in script
+    assert "trigger_restart_by_service_exit" not in script
+    assert "RESTART_BY_EXIT" not in script
+    assert "kill -TERM" not in script
 
 
 def test_prod_enables_linger_so_the_user_service_starts_on_boot() -> None:
@@ -110,15 +108,13 @@ def test_prod_enables_linger_so_the_user_service_starts_on_boot() -> None:
     assert 'ensure_linger "$service_user"' in script.split("run_prod() {", 1)[1]
 
 
-def test_prod_retires_the_legacy_system_unit_once() -> None:
+def test_no_system_level_unit_handling_remains() -> None:
     script = read_run_sh()
 
-    assert 'LEGACY_SYSTEM_SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"' in script
-    assert "migrate_legacy_system_unit()" in script
-    assert 'if [[ ! -e "$LEGACY_SYSTEM_SERVICE_PATH" ]]; then' in script
-    assert 'sudo systemctl disable --now "$SERVICE_NAME"' in script
-    assert 'sudo rm -f "$LEGACY_SYSTEM_SERVICE_PATH"' in script
-    assert "migrate_legacy_system_unit" in script.split("run_prod() {", 1)[1]
+    assert "LEGACY_SYSTEM_SERVICE_PATH" not in script
+    assert "migrate_legacy_system_unit" not in script
+    assert "/etc/systemd/system" not in script
+    assert "sudo systemctl" not in script
 
 
 def test_no_sudoers_bootstrap_remains() -> None:
@@ -127,9 +123,6 @@ def test_no_sudoers_bootstrap_remains() -> None:
     assert "setup-sudo" not in script
     assert "install_restart_sudoers" not in script
     assert "SUDOERS_PATH" not in script
-    assert "sudo systemctl restart" not in script
-    assert "sudo systemctl enable" not in script
-    assert "sudo systemctl status" not in script
 
 
 def test_prod_detects_code_change_with_head_compare() -> None:

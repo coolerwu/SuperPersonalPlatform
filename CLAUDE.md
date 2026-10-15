@@ -22,8 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   确保浏览器工具运行时可用；再执行
   `systemctl --user restart super-personal-platform.service`，最后用
   `systemctl --user is-active/status super-personal-platform.service` 验证。服务单元装在
-  调用用户的用户级 systemd 目录，重启、状态与日志都不需要 sudo；从系统级单元迁移时只有
-  移除旧单元需要一次 sudo。不要把 SSH/sudo
+  调用用户的用户级 systemd 目录，重启、状态与日志都不需要 sudo。不要把 SSH/sudo
   密码写入仓库文件或命令文本；运行时使用用户输入、已认证 SSH 会话或本地未提交环境变量。
 
 ## 文档同步与需求

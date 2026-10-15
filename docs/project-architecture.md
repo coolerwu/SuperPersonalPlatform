@@ -351,7 +351,7 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 - `config.yaml` 属于本地 workspace 数据，不提交。
 - 开发启动使用 `./run-dev.sh` 或 `./run.sh dev`。
 - 生产启动使用 `./run-prod.sh` 或 `./run.sh prod`。
-- 服务单元安装在调用用户的 `~/.config/systemd/user/`，靠 `loginctl enable-linger` 实现开机自启；`run.sh prod` 在缺少 linger 时提示并执行一次，其余 `systemctl --user enable/restart/status` 都不需要 sudo。该机制取代了早期的系统级 unit 与受限 sudoers 规则，`run.sh prod` 检测到旧的 `/etc/systemd/system/super-personal-platform.service` 时会一次性停用并移除它。
+- 服务单元安装在调用用户的 `~/.config/systemd/user/`，靠 `loginctl enable-linger` 实现开机自启；`run.sh prod` 在缺少 linger 时提示并执行一次，其余 `systemctl --user enable/restart/status` 都不需要 sudo。该机制取代了早期的系统级 unit 与受限 sudoers 规则；旧单元与 sudoers 规则在迁移时一次性人工清除，`run.sh` 不保留任何系统级单元的检测或迁移代码。
 - `run.sh prod` 生成 systemd unit 时只使用系统临时文件，再安装到用户级 systemd 目录，不把临时 service 文件写入 workspace。
 - 提交项目前必须执行 `.claude/skills/project-commit` 工作流。
 - 需要按「需求 → 方案 → 实现 → 验证 → 发布」多角色协作时使用 `.claude/skills/omni-roles` 技能：需求文档落在 `docs/requirements/F<n>-<名称>.md`，角色规则、产物落点和确认闸口由该技能定义，不改变本文件的架构约定。

@@ -4,9 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SERVICE_NAME="super-personal-platform.service"
 # F12: the unit lives in the invoking user's user-level systemd directory, so
-# restart/status/enable never need sudo. The legacy system-level path is only
-# probed once so prod mode can retire the unit it replaces.
-LEGACY_SYSTEM_SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+# restart/status/enable never need sudo.
 PROD_GIT_URL="https://github.com/coolerwu/SuperPersonalPlatform.git"
 PROD_GIT_BRANCH="main"
 PROD_GIT_PULL_ATTEMPTS=3
@@ -344,33 +342,6 @@ ensure_linger() {
   echo "Enabled user systemd linger for ${user}; the service now starts on boot."
 }
 
-migrate_legacy_system_unit() {
-  if [[ ! -e "$LEGACY_SYSTEM_SERVICE_PATH" ]]; then
-    return 0
-  fi
-  echo "Found legacy system-level unit ${LEGACY_SYSTEM_SERVICE_PATH}; retiring it in favour of the user-level unit."
-  require_sudo "removing the legacy system-level unit"
-  sudo systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
-  sudo rm -f "$LEGACY_SYSTEM_SERVICE_PATH"
-  sudo systemctl daemon-reload
-  echo "Removed legacy system-level unit ${LEGACY_SYSTEM_SERVICE_PATH}."
-}
-
-trigger_restart_by_service_exit() {
-  if ! has_systemctl; then
-    echo "systemctl is required to find the running service process for exit-based restart." >&2
-    return 1
-  fi
-  local main_pid
-  main_pid="$(user_systemctl show "$SERVICE_NAME" --property=MainPID --value 2>/dev/null || true)"
-  if [[ -z "$main_pid" || "$main_pid" == "0" ]]; then
-    echo "Cannot trigger exit-based restart because ${SERVICE_NAME} has no active MainPID." >&2
-    return 1
-  fi
-  echo "Triggering systemd Restart=always by sending SIGTERM to ${SERVICE_NAME} MainPID=${main_pid}."
-  kill -TERM "$main_pid"
-}
-
 pid_cwd() {
   local pid="$1"
   lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
@@ -498,14 +469,6 @@ run_prod() {
   else
     update_git
   fi
-  RESTART_BY_EXIT=0
-  if ! can_restart_without_prompt && [[ ! -t 0 ]]; then
-    RESTART_BY_EXIT=1
-    cat <<'MSG'
-This no-TTY update cannot reach the user-level systemd manager.
-The update will install dependencies, skip systemd unit refresh/status, then terminate the current service process so systemd Restart=always starts the code currently on disk.
-MSG
-  fi
   ensure_venv
   install_python_deps "." "prod"
   ensure_playwright_chromium
@@ -519,24 +482,26 @@ MSG
     return 0
   fi
 
-  if [[ "${RESTART_BY_EXIT:-0}" == "1" ]]; then
-    echo "Skipping systemd unit refresh/status because restart is using the service-exit fallback."
-    trigger_restart_by_service_exit
-    return
-  fi
   local service_user
   service_user="$(resolve_service_user)"
   if [[ "$service_user" != "$(id -un)" ]]; then
     cat >&2 <<MSG
 User-level systemd only manages the calling user's own service.
 Resolved service user is ${service_user}, but this script is running as $(id -un).
-Run './run.sh prod' as ${service_user} without sudo; the one-time linger and
-legacy-unit steps prompt for sudo on their own.
+Run './run.sh prod' as ${service_user} without sudo; the linger step prompts for
+sudo on its own if it is not enabled yet.
 MSG
     exit 1
   fi
   ensure_linger "$service_user"
-  migrate_legacy_system_unit
+  if ! can_restart_without_prompt; then
+    cat >&2 <<MSG
+The user-level systemd manager for ${service_user} is not reachable, so the
+service cannot be installed, enabled or restarted. Run
+'loginctl enable-linger ${service_user}' and retry './run.sh prod'.
+MSG
+    exit 1
+  fi
   write_service_file
   local needs_restart=0
   if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then

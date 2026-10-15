@@ -57,9 +57,8 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
      `systemctl --user is-active super-personal-platform.service` and
      `systemctl --user status super-personal-platform.service --no-pager --lines=12`.
      The unit lives in the invoking user's user-level systemd directory, so none
-     of these need sudo; only retiring a legacy system-level unit does, and only
-     once. If a status check fails after restart, rerun the checks before
-     treating the deployment as failed.
+     of these need sudo. If a status check fails after restart, rerun the checks
+     before treating the deployment as failed.
    - Do not store the SSH/sudo password in repository files. Use an existing
      authenticated SSH session, ask the user for the password, or read it from a
      local uncommitted environment variable such as
