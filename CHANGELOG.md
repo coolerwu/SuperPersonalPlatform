@@ -92,6 +92,9 @@
 
 ### Fixed
 
+- `pip install .` 在源码目录留下的 `/build/` 构建产物此前未被 `.gitignore` 覆盖，会让下一次
+  `run.sh prod` 因工作区不干净而拒绝部署；根目录 `/build/` 现已加入忽略列表。
+
 - 内置定时任务不再固化服务启动时的配置：`ScheduleService` 每次轮询都按当前
   `workspace/config.yaml` 刷新 `context_webdav_sync` 与 `maintenance_cleanup` 的定义，执行
   WebDAV 同步时按当前配置构造服务，完成事件记录本次 `sync_root_path`。修复“配置页把坚果云
