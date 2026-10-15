@@ -56,6 +56,12 @@
 
 ### Changed
 
+- 生产服务改用用户级 systemd 管理：`run.sh prod` 把单元安装到
+  `~/.config/systemd/user/`，重启、状态与日志一律走 `systemctl --user`，不再需要 sudo；
+  `setup-sudo` 子命令与受限 sudoers 规则随之删除。首次部署会一次性停用并移除旧的系统级
+  单元，`loginctl enable-linger` 保证服务开机自启。需求见
+  `docs/requirements/F12-服务改由用户级systemd管理.md`。
+
 - WebDAV 映射目录新增 `approval_required` 开关：`permission: write` 的目录可以显式设为
   `approval_required: false`，Agent 对该目录的写入不再逐次进入 `waiting_approval`，直接落到本地
   缓存并写回坚果云远端；缺省仍为逐次 HITL，只读目录、未选择目录、删除与二进制上传的限制不变，

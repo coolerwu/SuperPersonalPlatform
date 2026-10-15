@@ -347,12 +347,12 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 - `CLAUDE.md` 是仓库级 Agent 指令入口。
 - `config.example.yaml` 是 workspace 配置模板，不得放入真实密钥。
 - 使用平台工具和运行时能力需要安装对应依赖：会话 checkpoint 依赖 `langgraph-checkpoint-sqlite`；`search_session` 中文关键词分词依赖 `jieba`；`browser_extract`/`browser_search` 依赖 `langchain-community`、`playwright`、`beautifulsoup4` 和 `lxml`；`arxiv` 依赖 `langchain-community` 和 `arxiv`；`yahoo_finance_news` 依赖 `langchain-community` 和 `yfinance`；`execute_code` 依赖生产机 Docker、已注册的 gVisor `runsc` runtime，以及已拉取的 `python:3.12-slim-bookworm` 或配置中的等价镜像。`run.sh dev/prod` 会在依赖安装后检查并执行 `python -m playwright install chromium` 准备浏览器二进制。
-- 当前生产 systemd unit 直接运行 `.venv/bin/python -m server`，单独 `systemctl restart` 不会安装新依赖；提交后远端部署必须在 pull 和 HEAD 校验之后执行 `.venv/bin/python -m pip install .`，并确保 Playwright Chromium 已安装，再重启服务。
+- 生产服务由用户级 systemd 管理（`~/.config/systemd/user/super-personal-platform.service`），unit 直接运行 `.venv/bin/python -m server`，单独 `systemctl --user restart` 不会安装新依赖；提交后远端部署必须在 pull 和 HEAD 校验之后执行 `.venv/bin/python -m pip install .`，并确保 Playwright Chromium 已安装，再重启服务。
 - `config.yaml` 属于本地 workspace 数据，不提交。
 - 开发启动使用 `./run-dev.sh` 或 `./run.sh dev`。
 - 生产启动使用 `./run-prod.sh` 或 `./run.sh prod`。
-- `./run.sh setup-sudo` 仍用于安装受限 sudoers 规则，使生产服务能无密码执行受限的 `systemctl restart/status/is-active super-personal-platform.service`。
-- `run.sh prod` 生成 systemd unit 时只使用系统临时文件并安装到 systemd 路径，不再把临时 service 文件写入 workspace。
+- 服务单元安装在调用用户的 `~/.config/systemd/user/`，靠 `loginctl enable-linger` 实现开机自启；`run.sh prod` 在缺少 linger 时提示并执行一次，其余 `systemctl --user enable/restart/status` 都不需要 sudo。该机制取代了早期的系统级 unit 与受限 sudoers 规则，`run.sh prod` 检测到旧的 `/etc/systemd/system/super-personal-platform.service` 时会一次性停用并移除它。
+- `run.sh prod` 生成 systemd unit 时只使用系统临时文件，再安装到用户级 systemd 目录，不把临时 service 文件写入 workspace。
 - 提交项目前必须执行 `.claude/skills/project-commit` 工作流。
 - 需要按「需求 → 方案 → 实现 → 验证 → 发布」多角色协作时使用 `.claude/skills/omni-roles` 技能：需求文档落在 `docs/requirements/F<n>-<名称>.md`，角色规则、产物落点和确认闸口由该技能定义，不改变本文件的架构约定。
 

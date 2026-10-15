@@ -49,13 +49,11 @@ def test_python_dependency_install_skips_when_fingerprint_unchanged() -> None:
     assert 'install_python_deps "." "prod"' in script
 
 
-def test_prod_service_file_compare_avoids_sudo_when_unchanged() -> None:
+def test_prod_service_file_compare_avoids_reinstall_when_unchanged() -> None:
     script = read_run_sh()
 
-    assert '[[ -f "$SERVICE_PATH" ]] && cmp -s "$generated_service" "$SERVICE_PATH"' in script
-    assert "systemd service unchanged; skipping install and daemon-reload" in script
-    assert "SERVICE_FILE_REFRESH_SKIPPED=1" in script
-    assert "skipping unit refresh for this run" in script
+    assert 'if [[ -f "$service_path" ]] && cmp -s "$generated_service" "$service_path"; then' in script
+    assert "systemd user service unchanged; skipping install and daemon-reload" in script
     assert "sudo test -f" not in script
     assert "sudo cmp -s" not in script
 
@@ -66,9 +64,9 @@ def test_prod_enable_only_runs_when_service_file_changed() -> None:
     assert "SERVICE_FILE_CHANGED=0" in script
     assert "SERVICE_FILE_CHANGED=1" in script
     assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then' in script
-    assert 'sudo systemctl enable "$SERVICE_NAME"' in script
+    assert 'user_systemctl enable "$SERVICE_NAME"' in script
     assert 'echo "Restarting ${SERVICE_NAME} because code_updated=${CODE_UPDATED:-0} service_file_changed=${SERVICE_FILE_CHANGED:-0}."' in script
-    assert 'sudo systemctl restart "$SERVICE_NAME"' in script
+    assert 'user_systemctl restart "$SERVICE_NAME"' in script
     assert 'echo "Restart command completed for ${SERVICE_NAME}; fetching service status."' in script
 
 
@@ -78,42 +76,60 @@ def test_prod_service_keeps_update_process_alive_during_restart() -> None:
     assert "KillMode=process" in script
 
 
-def test_prod_preflights_restart_sudo_for_background_updates() -> None:
+def test_prod_preflights_user_systemd_for_background_updates() -> None:
     script = read_run_sh()
 
     assert "can_restart_without_prompt()" in script
-    assert 'sudo -n -l "$systemctl_path" restart "$SERVICE_NAME" >/dev/null 2>&1' in script
+    assert "user_systemctl show-environment >/dev/null 2>&1" in script
     assert "trigger_restart_by_service_exit()" in script
     run_prod_body = script.split("run_prod() {", 1)[1]
     assert 'if ! can_restart_without_prompt && [[ ! -t 0 ]]; then' in run_prod_body
-    assert "This no-TTY update cannot run passwordless sudo for systemctl restart." in run_prod_body
+    assert "This no-TTY update cannot reach the user-level systemd manager." in run_prod_body
     assert "systemd Restart=always starts the code currently on disk." in run_prod_body
     assert "Skipping systemd unit refresh/status because restart is using the service-exit fallback." in run_prod_body
     assert "trigger_restart_by_service_exit" in run_prod_body
-    assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${SERVICE_FILE_REFRESH_SKIPPED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then' in run_prod_body
+    assert 'if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then' in run_prod_body
     assert "No code or systemd unit changes; skipping systemctl enable/restart/status." in run_prod_body
     service_changed_block = run_prod_body.split('if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then', 1)[1]
-    assert 'require_sudo "systemctl enable/restart/status"' in service_changed_block
+    assert 'user_systemctl enable "$SERVICE_NAME"' in service_changed_block
 
 
 def test_exit_based_restart_terminates_service_main_pid() -> None:
     script = read_run_sh()
 
-    assert 'systemctl show "$SERVICE_NAME" --property=MainPID --value' in script
+    assert 'user_systemctl show "$SERVICE_NAME" --property=MainPID --value' in script
     assert 'kill -TERM "$main_pid"' in script
 
 
-def test_setup_sudo_installs_limited_restart_sudoers() -> None:
+def test_prod_enables_linger_so_the_user_service_starts_on_boot() -> None:
     script = read_run_sh()
 
-    assert 'SUDOERS_PATH="/etc/sudoers.d/super-personal-platform"' in script
-    assert "install_restart_sudoers()" in script
-    assert "Managed by SuperPersonalPlatform run.sh." in script
-    assert '${service_user} ALL=(root) NOPASSWD: ${systemctl_path} restart ${SERVICE_NAME}' in script
-    assert '${service_user} ALL=(root) NOPASSWD: ${systemctl_path} status ${SERVICE_NAME} --no-pager' in script
-    assert '${service_user} ALL=(root) NOPASSWD: ${systemctl_path} is-active ${SERVICE_NAME}' in script
-    assert 'visudo -cf "$temp_file"' in script
-    assert 'setup-sudo)' in script
+    assert "ensure_linger()" in script
+    assert 'loginctl show-user "$user" -p Linger --value' in script
+    assert 'sudo loginctl enable-linger "$user"' in script
+    assert 'ensure_linger "$service_user"' in script.split("run_prod() {", 1)[1]
+
+
+def test_prod_retires_the_legacy_system_unit_once() -> None:
+    script = read_run_sh()
+
+    assert 'LEGACY_SYSTEM_SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"' in script
+    assert "migrate_legacy_system_unit()" in script
+    assert 'if [[ ! -e "$LEGACY_SYSTEM_SERVICE_PATH" ]]; then' in script
+    assert 'sudo systemctl disable --now "$SERVICE_NAME"' in script
+    assert 'sudo rm -f "$LEGACY_SYSTEM_SERVICE_PATH"' in script
+    assert "migrate_legacy_system_unit" in script.split("run_prod() {", 1)[1]
+
+
+def test_no_sudoers_bootstrap_remains() -> None:
+    script = read_run_sh()
+
+    assert "setup-sudo" not in script
+    assert "install_restart_sudoers" not in script
+    assert "SUDOERS_PATH" not in script
+    assert "sudo systemctl restart" not in script
+    assert "sudo systemctl enable" not in script
+    assert "sudo systemctl status" not in script
 
 
 def test_prod_detects_code_change_with_head_compare() -> None:
@@ -132,9 +148,27 @@ def test_prod_service_uses_resolved_terminal_user() -> None:
     assert 'if [[ -n "${SUDO_USER:-}" ]]; then' in script
     assert "id -un" in script
     assert 'service_user="$(resolve_service_user)"' in script
-    assert 'service_group="$(resolve_service_group "$service_user")"' in script
-    assert "User=${service_user}" in script
-    assert "Group=${service_group}" in script
+    assert 'service_path="$(service_unit_path "$service_user")"' in script
+    assert '"$(service_user_home "$user")/.config/systemd/user/${SERVICE_NAME}"' in script
+
+
+def test_prod_refuses_to_manage_another_users_service() -> None:
+    script = read_run_sh()
+
+    run_prod_body = script.split("run_prod() {", 1)[1]
+    assert 'if [[ "$service_user" != "$(id -un)" ]]; then' in run_prod_body
+    assert "User-level systemd only manages the calling user's own service." in run_prod_body
+
+
+def test_prod_unit_targets_user_systemd_without_a_privileged_user_binding() -> None:
+    script = read_run_sh()
+
+    assert "WantedBy=default.target" in script
+    assert "After=network-online.target" in script
+    assert "Wants=network-online.target" in script
+    assert "multi-user.target" not in script
+    assert "User=${service_user}" not in script
+    assert "Group=${service_group}" not in script
 
 
 def test_prod_supports_no_pull_for_offline_and_pinned_deploys() -> None:

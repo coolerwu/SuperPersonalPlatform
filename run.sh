@@ -3,8 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SERVICE_NAME="super-personal-platform.service"
-SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
-SUDOERS_PATH="/etc/sudoers.d/super-personal-platform"
+# F12: the unit lives in the invoking user's user-level systemd directory, so
+# restart/status/enable never need sudo. The legacy system-level path is only
+# probed once so prod mode can retire the unit it replaces.
+LEGACY_SYSTEM_SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 PROD_GIT_URL="https://github.com/coolerwu/SuperPersonalPlatform.git"
 PROD_GIT_BRANCH="main"
 PROD_GIT_PULL_ATTEMPTS=3
@@ -18,7 +20,6 @@ Usage:
   ./run.sh dev [--workspace PATH]
   ./run.sh prod [--workspace PATH] [--no-pull]
   ./run.sh rollback <tag|branch|commit> [--workspace PATH]
-  ./run.sh setup-sudo
   ./run-dev.sh [--workspace PATH]
   ./run-prod.sh [--workspace PATH] [--no-pull]
 
@@ -27,6 +28,9 @@ Modes:
   rollback  Check out a tag/branch/commit, then deploy it with the prod pipeline.
             Run ./run-prod.sh again afterwards to return to the production branch.
   --no-pull Skip the git pull in prod mode (offline redeploy or pinned commit).
+
+The service unit is installed into the invoking user's user-level systemd
+directory, so restart, status and enable never require sudo.
 
 Environment:
   SUPER_PERSONAL_HOST    default: 0.0.0.0
@@ -279,9 +283,26 @@ resolve_service_user() {
   id -un
 }
 
-resolve_service_group() {
+service_user_home() {
+  local user="$1" home=""
+  home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
+  printf '%s\n' "${home:-${HOME}}"
+}
+
+service_unit_path() {
   local user="$1"
-  id -gn "$user" 2>/dev/null || true
+  printf '%s\n' "$(service_user_home "$user")/.config/systemd/user/${SERVICE_NAME}"
+}
+
+ensure_user_systemd_env() {
+  if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+  fi
+}
+
+user_systemctl() {
+  ensure_user_systemd_env
+  systemctl --user "$@"
 }
 
 require_sudo() {
@@ -299,18 +320,40 @@ require_sudo() {
   fi
   cat >&2 <<MSG
 Production mode needs sudo for ${reason}, but this environment cannot prompt for a password.
-Run './run.sh setup-sudo' once from a TTY to allow web-triggered restarts, or run './run.sh prod' from a terminal.
+Run './run.sh prod' once from a terminal so this one-time step can complete.
 MSG
   exit 1
 }
 
 can_restart_without_prompt() {
-  if [[ "${EUID}" -eq 0 ]]; then
+  if ! has_systemctl; then
+    return 1
+  fi
+  user_systemctl show-environment >/dev/null 2>&1
+}
+
+ensure_linger() {
+  local user="$1" linger
+  linger="$(loginctl show-user "$user" -p Linger --value 2>/dev/null || true)"
+  if [[ "$linger" == "yes" ]]; then
+    echo "User systemd linger already enabled for ${user}."
     return 0
   fi
-  local systemctl_path
-  systemctl_path="$(command -v systemctl)"
-  sudo -n -l "$systemctl_path" restart "$SERVICE_NAME" >/dev/null 2>&1
+  require_sudo "enabling systemd linger for ${user}"
+  sudo loginctl enable-linger "$user"
+  echo "Enabled user systemd linger for ${user}; the service now starts on boot."
+}
+
+migrate_legacy_system_unit() {
+  if [[ ! -e "$LEGACY_SYSTEM_SERVICE_PATH" ]]; then
+    return 0
+  fi
+  echo "Found legacy system-level unit ${LEGACY_SYSTEM_SERVICE_PATH}; retiring it in favour of the user-level unit."
+  require_sudo "removing the legacy system-level unit"
+  sudo systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+  sudo rm -f "$LEGACY_SYSTEM_SERVICE_PATH"
+  sudo systemctl daemon-reload
+  echo "Removed legacy system-level unit ${LEGACY_SYSTEM_SERVICE_PATH}."
 }
 
 trigger_restart_by_service_exit() {
@@ -319,42 +362,13 @@ trigger_restart_by_service_exit() {
     return 1
   fi
   local main_pid
-  main_pid="$(systemctl show "$SERVICE_NAME" --property=MainPID --value 2>/dev/null || true)"
+  main_pid="$(user_systemctl show "$SERVICE_NAME" --property=MainPID --value 2>/dev/null || true)"
   if [[ -z "$main_pid" || "$main_pid" == "0" ]]; then
     echo "Cannot trigger exit-based restart because ${SERVICE_NAME} has no active MainPID." >&2
     return 1
   fi
   echo "Triggering systemd Restart=always by sending SIGTERM to ${SERVICE_NAME} MainPID=${main_pid}."
   kill -TERM "$main_pid"
-}
-
-install_restart_sudoers() {
-  if ! has_systemctl; then
-    echo "systemctl is required for setup-sudo." >&2
-    exit 1
-  fi
-  if ! command -v visudo >/dev/null 2>&1; then
-    echo "visudo is required for setup-sudo." >&2
-    exit 1
-  fi
-
-  local service_user systemctl_path temp_file
-  service_user="$(resolve_service_user)"
-  systemctl_path="$(command -v systemctl)"
-  temp_file="$(mktemp)"
-  cat >"$temp_file" <<SUDOERS
-# Managed by SuperPersonalPlatform run.sh.
-# Allows web-triggered code updates to restart the existing service unit.
-${service_user} ALL=(root) NOPASSWD: ${systemctl_path} restart ${SERVICE_NAME}
-${service_user} ALL=(root) NOPASSWD: ${systemctl_path} status ${SERVICE_NAME} --no-pager
-${service_user} ALL=(root) NOPASSWD: ${systemctl_path} is-active ${SERVICE_NAME}
-SUDOERS
-
-  visudo -cf "$temp_file"
-  require_sudo "installing ${SUDOERS_PATH}"
-  sudo install -m 0440 "$temp_file" "$SUDOERS_PATH"
-  rm -f "$temp_file"
-  echo "Installed limited sudoers rule at ${SUDOERS_PATH} for ${service_user}."
 }
 
 pid_cwd() {
@@ -430,25 +444,22 @@ write_service_file() {
 
   local host="${SUPER_PERSONAL_HOST:-0.0.0.0}"
   local port="${SUPER_PERSONAL_PORT:-8888}"
-  local generated_service
-  generated_service="$(mktemp "${TMPDIR:-/tmp}/super-personal-platform.service.XXXXXX")"
-  local service_user service_group group_line=""
+  local service_user service_path service_dir
   service_user="$(resolve_service_user)"
-  service_group="$(resolve_service_group "$service_user")"
-  if [[ -n "$service_group" ]]; then
-    group_line="Group=${service_group}"
-  fi
+  service_path="$(service_unit_path "$service_user")"
+  service_dir="$(dirname "$service_path")"
   SERVICE_FILE_CHANGED=0
 
+  local generated_service
+  generated_service="$(mktemp "${TMPDIR:-/tmp}/super-personal-platform.service.XXXXXX")"
   cat >"$generated_service" <<SERVICE
 [Unit]
 Description=Super Personal Platform
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=${service_user}
-${group_line}
 WorkingDirectory=${SCRIPT_DIR}
 Environment=SUPER_PERSONAL_HOST=${host}
 Environment=SUPER_PERSONAL_PORT=${port}
@@ -459,27 +470,21 @@ RestartSec=5
 KillMode=process
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 SERVICE
 
-  if [[ -f "$SERVICE_PATH" ]] && cmp -s "$generated_service" "$SERVICE_PATH"; then
-    echo "systemd service unchanged; skipping install and daemon-reload"
+  if [[ -f "$service_path" ]] && cmp -s "$generated_service" "$service_path"; then
+    echo "systemd user service unchanged; skipping install and daemon-reload"
     rm -f "$generated_service"
     return
   fi
 
-  if [[ ! -t 0 ]] && ! sudo -n true 2>/dev/null; then
-    SERVICE_FILE_REFRESH_SKIPPED=1
-    echo "systemd service file changed, but this no-TTY update cannot install it without broader sudo; skipping unit refresh for this run."
-    rm -f "$generated_service"
-    return
-  fi
-
-  require_sudo "installing or reloading the systemd service file"
-  sudo install -m 0644 "$generated_service" "$SERVICE_PATH"
+  mkdir -p "$service_dir"
+  install -m 0644 "$generated_service" "$service_path"
   rm -f "$generated_service"
-  sudo systemctl daemon-reload
+  user_systemctl daemon-reload
   SERVICE_FILE_CHANGED=1
+  echo "Installed user-level systemd unit at ${service_path}."
 }
 
 run_prod() {
@@ -497,7 +502,7 @@ run_prod() {
   if ! can_restart_without_prompt && [[ ! -t 0 ]]; then
     RESTART_BY_EXIT=1
     cat <<'MSG'
-This no-TTY update cannot run passwordless sudo for systemctl restart.
+This no-TTY update cannot reach the user-level systemd manager.
 The update will install dependencies, skip systemd unit refresh/status, then terminate the current service process so systemd Restart=always starts the code currently on disk.
 MSG
   fi
@@ -519,25 +524,37 @@ MSG
     trigger_restart_by_service_exit
     return
   fi
-  write_service_file
-  local needs_sudo=0
-  if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${SERVICE_FILE_REFRESH_SKIPPED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then
-    needs_sudo=1
+  local service_user
+  service_user="$(resolve_service_user)"
+  if [[ "$service_user" != "$(id -un)" ]]; then
+    cat >&2 <<MSG
+User-level systemd only manages the calling user's own service.
+Resolved service user is ${service_user}, but this script is running as $(id -un).
+Run './run.sh prod' as ${service_user} without sudo; the one-time linger and
+legacy-unit steps prompt for sudo on their own.
+MSG
+    exit 1
   fi
-  if [[ "$needs_sudo" == "0" ]]; then
+  ensure_linger "$service_user"
+  migrate_legacy_system_unit
+  write_service_file
+  local needs_restart=0
+  if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" || "${CODE_UPDATED:-0}" == "1" ]]; then
+    needs_restart=1
+  fi
+  if [[ "$needs_restart" == "0" ]]; then
     echo "No code or systemd unit changes; skipping systemctl enable/restart/status."
     return
   fi
   if [[ "${SERVICE_FILE_CHANGED:-0}" == "1" ]]; then
-    require_sudo "systemctl enable/restart/status"
-    sudo systemctl enable "$SERVICE_NAME"
+    user_systemctl enable "$SERVICE_NAME"
   else
-    echo "systemd service unchanged; skipping enable"
+    echo "systemd user service unchanged; skipping enable"
   fi
   echo "Restarting ${SERVICE_NAME} because code_updated=${CODE_UPDATED:-0} service_file_changed=${SERVICE_FILE_CHANGED:-0}."
-  sudo systemctl restart "$SERVICE_NAME"
+  user_systemctl restart "$SERVICE_NAME"
   echo "Restart command completed for ${SERVICE_NAME}; fetching service status."
-  sudo systemctl status "$SERVICE_NAME" --no-pager
+  user_systemctl status "$SERVICE_NAME" --no-pager
 }
 
 run_rollback() {
@@ -587,15 +604,6 @@ main() {
       ;;
     help|--help|-h)
       usage
-      ;;
-    setup-sudo)
-      shift
-      if [[ $# -gt 0 ]]; then
-        echo "setup-sudo does not accept arguments." >&2
-        usage >&2
-        exit 1
-      fi
-      install_restart_sudoers
       ;;
     *)
       usage >&2

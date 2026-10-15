@@ -16,7 +16,7 @@
 
 ## 发布流程
 
-生产是"单机 + systemd + 已提交 `web/dist`"的单体部署，版本即 `main` 的提交：
+生产是"单机 + 用户级 systemd + 已提交 `web/dist`"的单体部署，版本即 `main` 的提交：
 
 1. 本地完成实现与文档同步，执行项目 `$project-commit` 流程要求的检查：
    `.venv/bin/python -m pytest`、`cd web && npm test`、`cd web && npm run build`。
@@ -25,8 +25,10 @@
    `git rev-parse HEAD` 与本地刚推送的 HEAD 完全一致。
 4. 远端同步运行时依赖：`.venv/bin/python -m pip install .`，必要时执行
    `PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright} .venv/bin/python -m playwright install chromium`。
-5. `sudo -n systemctl restart super-personal-platform.service`，再用非 sudo
-   `systemctl is-active/status` 验证。
+5. `systemctl --user restart super-personal-platform.service`，再用
+   `systemctl --user is-active/status` 验证。服务单元位于调用用户的用户级
+   systemd 目录，这些命令都不需要 sudo；只有首次从系统级单元迁移时需要一次
+   sudo 来移除旧单元。
 6. 需要留痕的发布按"版本号"一节打 tag 并推送。
 
 前端只在开发与构建阶段需要 Node.js 20+；生产不现场构建，直接使用仓库中已提交的

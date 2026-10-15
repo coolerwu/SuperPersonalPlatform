@@ -52,12 +52,14 @@ Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonal
      `PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright} .venv/bin/python -m playwright install chromium`
      on the production host so CDN issues do not leave `browser_extract` without
      Chromium.
-   - Restart with `sudo -n systemctl restart super-personal-platform.service`.
-     Check service health with non-sudo
-     `systemctl is-active super-personal-platform.service` and
-     `systemctl status super-personal-platform.service --no-pager --lines=12`.
-     If a sudo status check fails after restart, rerun the non-sudo checks
-     before treating the deployment as failed.
+   - Restart with `systemctl --user restart super-personal-platform.service`.
+     Check service health with
+     `systemctl --user is-active super-personal-platform.service` and
+     `systemctl --user status super-personal-platform.service --no-pager --lines=12`.
+     The unit lives in the invoking user's user-level systemd directory, so none
+     of these need sudo; only retiring a legacy system-level unit does, and only
+     once. If a status check fails after restart, rerun the checks before
+     treating the deployment as failed.
    - Do not store the SSH/sudo password in repository files. Use an existing
      authenticated SSH session, ask the user for the password, or read it from a
      local uncommitted environment variable such as

@@ -20,8 +20,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   `.venv` 依赖：执行 `.venv/bin/python -m pip install .`，并执行
   `PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright} .venv/bin/python -m playwright install chromium`
   确保浏览器工具运行时可用；再执行
-  `sudo -n systemctl restart super-personal-platform.service`，最后用非 sudo
-  `systemctl is-active/status super-personal-platform.service` 验证。不要把 SSH/sudo
+  `systemctl --user restart super-personal-platform.service`，最后用
+  `systemctl --user is-active/status super-personal-platform.service` 验证。服务单元装在
+  调用用户的用户级 systemd 目录，重启、状态与日志都不需要 sudo；从系统级单元迁移时只有
+  移除旧单元需要一次 sudo。不要把 SSH/sudo
   密码写入仓库文件或命令文本；运行时使用用户输入、已认证 SSH 会话或本地未提交环境变量。
 
 ## 文档同步与需求
