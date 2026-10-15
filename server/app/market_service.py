@@ -395,9 +395,12 @@ class MarketService:
             self._log(f"telegram notify failed for {event.symbol} {event.timeframe}: {detail}")
 
     def _ensure_notifier(self, config: MarketConfig) -> TelegramNotifier | None:
-        key = (config.telegram.bot_token, config.telegram.chat_id, config.proxy)
+        # 和行情采集用同一套解析：market.proxy 为空就跟随全局代理。
+        # Telegram 的 API 在境内不通，漏掉这一步会让推送静默地全部失败。
+        proxy = resolve_proxy(config.proxy, self._global_proxy)
+        key = (config.telegram.bot_token, config.telegram.chat_id, proxy)
         if self._notifier is None or self._notifier_key != key:
-            self._notifier = TelegramNotifier(config.telegram, config.proxy)
+            self._notifier = TelegramNotifier(config.telegram, proxy)
             self._notifier_key = key
         return self._notifier
 
@@ -548,14 +551,22 @@ class MarketService:
         return self._store.prune(days, min_bars_per_series=self._config.history_limit)
 
 
+SEVERITY_ICON = {"high": "🔴", "medium": "🟠", "low": "⚪"}
+SEVERITY_LABEL = {"high": "高", "medium": "中", "low": "低"}
+
+
 def _telegram_text(event: MarketEvent) -> str:
-    icon = {"high": "🔴", "medium": "🟠", "low": "⚪"}.get(event.severity, "⚪")
+    """手机上读的一小段：发生了什么、什么价位、多严重。"""
+    icon = SEVERITY_ICON.get(event.severity, "⚪")
+    label = SEVERITY_LABEL.get(event.severity, event.severity)
     lines = [f"{icon} {event.symbol} {event.title}"]
     if event.detail:
         lines.append(event.detail)
     if event.price:
-        lines.append(f"现价 {event.price:,.6g}")
-    lines.append(f"{event.at} · 严重度 {event.severity}")
+        lines.append(f"现价 {event.price:,.6g} · 严重度 {label}")
+    else:
+        lines.append(f"严重度 {label}")
+    lines.append(event.at.replace("T", " "))
     return "\n".join(lines)
 
 

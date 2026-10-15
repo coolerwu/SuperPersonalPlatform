@@ -304,7 +304,7 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 ## 网络代理
 
 - `network.proxy` 是全局出口代理，需要出网的子系统默认跟随它。子系统自己的 `proxy` 字段语法统一：留空或缺失 = **跟随全局**；`direct` = **强制直连**（忽略全局）；URL = **只用它**。解析统一走 `server/infrastructure/config.py` 的 `resolve_proxy()`。
-- 跟随全局的子系统：`browser.proxy`（Playwright）和 `market.proxy`（行情采集）。
+- 跟随全局的子系统：`browser.proxy`（Playwright）、`market.proxy`（行情采集）和 Telegram 信号推送。Telegram 的 API 在境内不通，推送器必须用解析后的代理，漏掉这一步会**静默地全部失败**（不影响采集，只在状态里报错）。
 - **微信通道刻意不跟随**：微信账号的 `proxy` 空值就是直连（`resolve_proxy(..., inherit=False)`）。微信是境内服务，走境外出口既没有收益，还会让登录态被判成异常登录。要显式指定才填 URL。
 - `network.proxy` 只接受 `http(s)://` 或 `socks*://` 开头；写成 `host:port` 会在配置校验时直接失败，而不是等到发请求才报错。
 - 生产机的 `~/.bashrc` 里另有指向 `192.168.1.2:7893` 的 `http_proxy`/`https_proxy`，那是给交互式 shell 用的；systemd 用户单元不读 `.bashrc`，服务只认 `network.proxy` 和它自己的进程环境变量。
@@ -335,7 +335,7 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 - 慢层（`1h`/`4h`/`1d`）由 Agent 解读。`POST /api/market/analyze` 把平台算好的快照作为唯一行情来源交给 Agent（`build_analysis_prompt`），并明确要求不要再自行取行情；解读异步产出，页面在 Agent 运行期间照常刷新矩阵。Agent 侧还有 `market_snapshot` 平台工具读取同一份快照，避免它去爬行情网站。
 - 指标与信号只有一份实现（`server/domain/market_indicators.py`）：页面矩阵、信号事件、Agent 工具和解读提示词全部调用它，不允许出现第二套口径。指标为 EMA20/60/200、RSI14、MACD(12,26,9)、ATR14 及其相对自身近 100 根基线的 `atr_ratio`、布林带(20,2)、量比（对前 20 根均量）和前 20 根摆动高低点。
 - 信号规则命中即写入 `market.sqlite` 的 `events` 表，用自增 `seq` 作为页面增量游标；同一 `symbol + timeframe + rule_id` 在 `cooldown_seconds` 内不重复产生事件。1h 以下的信号严重度整体降一级：分钟级噪音不应和小时级信号同级提醒。
-- `market.telegram` 是只出站的单选通知通道，命中 `notify_min_severity` 的信号推送一条文本。它不接入平台的渠道、session 和 `RunDeliveryService` 投递体系，因此不影响微信通道和 Run 的 `delivery.json` 语义；微信投递路径保持不变。
+- `market.telegram` 是只出站的单选通知通道：只往配置的 `chat_id` 发，平台完全不读 Telegram 的入站消息；命中阈值（`signals.notify_min_severity` 与 `telegram.min_severity` 取更严的那个）的信号推送一条纯文本。它不接入平台的渠道、session 和 `RunDeliveryService` 投递体系，因此不影响微信通道和 Run 的 `delivery.json` 语义；微信投递路径保持不变。
 - 自选列表是页面可编辑的运行时状态，存在 `market.sqlite` 的 `watchlist` 表，而不是 `config.yaml`：这样不需要在代码里对用户配置文件做保注释的 YAML 手术。`market.symbols` 只在 `watchlist` 为空时作为一次性种子。
 - 每个「标的 + Agent」组合有自己固定的长期 session（`channel=market`、`peer_id` 为去掉斜杠的交易对）。因此 Agent 解读不占用用户的 Web Chat session，两者不会互相触发「同一 session 只能有一个活动 Run」的 409；解读结果同时是会话消息，用户可以在 Chat 里接着追问。session id 由 `SessionService.get_or_create` 在首次解读时生成并记入 `market.sqlite` 的 `meta`，只读路径只查这份记录、不创建会话（`build_session_id` 返回的是渠道身份 active key，不是 session id，两者不能混用）；重新解读复用同一 session，会话被删除后会重新建一个，标题固定写成「行情解读 · <symbol>」。
 - 单个标的采集失败不影响其它标的，快照照常返回并靠 `data_age_seconds` / `stale` 标注延迟，不静默显示旧值。`market.sqlite` 的保留期由 `market.retention_days`（默认 30 天）控制，独立于 `maintenance.retention_days`，由 `MarketService` 每天执行一次清理，不反向依赖 `MaintenanceService`。清理按「超过保留期」与「每个 series 至少保留 `history_limit` 根」两者取较大范围，否则 `1d` 会被删到只剩二三十根，而增量补数只补最近几根，EMA200 之类的指标会永久退化。

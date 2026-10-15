@@ -17,9 +17,11 @@ from server.domain.market import (
     Bar,
     MarketConfig,
     MarketConfigError,
+    MarketEvent,
     MarketSignalsConfig,
     MarketSource,
     SPOT_MARKET_KEY,
+    TelegramNotifyConfig,
     TIMEFRAME_SECONDS,
     WatchSymbol,
     normalize_symbol,
@@ -1207,3 +1209,58 @@ def test_adapter_error_message_names_the_failure_when_httpx_says_nothing() -> No
         assert "ConnectError" in str(caught.value)
     finally:
         asyncio.run(adapter.aclose())
+
+
+def test_telegram_notifier_follows_the_global_proxy(tmp_path: Path) -> None:
+    """Telegram API 在境内不通；market.proxy 为空时必须跟随全局代理，否则推送静默全失败。"""
+    from server.app.market_service import MarketService
+
+    config = _two_sources(
+        symbols=(WatchSymbol(symbol="BTC/USDT"),),
+        telegram=TelegramNotifyConfig(enabled=True, bot_token="t", chat_id="c"),
+    )
+    service = _service(tmp_path, config)
+    try:
+        service._global_proxy = "http://192.168.1.2:7893"
+        notifier = service._ensure_notifier(config)
+        assert notifier._proxy == "http://192.168.1.2:7893"
+
+        # 显式 direct 时不带代理
+        service._config = MarketConfig(
+            enabled=True,
+            sources=config.sources,
+            proxy="direct",
+            telegram=config.telegram,
+        )
+        service._notifier = None
+        assert service._ensure_notifier(service._config)._proxy == ""
+    finally:
+        service._store.close()
+
+
+def test_telegram_message_is_readable_on_a_phone() -> None:
+    from server.app.market_service import _telegram_text
+
+    event = MarketEvent(
+        seq=1, at="2026-10-15T15:42:07", symbol="BTC/USDT", timeframe="1h",
+        rule_id="breakdown_low", severity="high", title="1h 跌破 81,200",
+        detail="收盘 81,180.00 低于前 20 根低点", price=81175.0,
+    )
+    text = _telegram_text(event)
+    assert text.splitlines() == [
+        "🔴 BTC/USDT 1h 跌破 81,200",
+        "收盘 81,180.00 低于前 20 根低点",
+        "现价 81,175 · 严重度 高",
+        "2026-10-15 15:42:07",
+    ]
+
+    no_price = MarketEvent(
+        seq=2, at="2026-10-15T15:42:07", symbol="ETH/USDT", timeframe="4h",
+        rule_id="volume_spike", severity="medium", title="4h 量比 2.1x 放量",
+        detail="", price=0.0,
+    )
+    assert _telegram_text(no_price).splitlines() == [
+        "🟠 ETH/USDT 4h 量比 2.1x 放量",
+        "严重度 中",
+        "2026-10-15 15:42:07",
+    ]
