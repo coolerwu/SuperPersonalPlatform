@@ -54,7 +54,7 @@ cd SuperPersonalPlatform
 - 不需要重新构建前端：回滚到旧提交会同时回滚 `web/dist`。
 - 回到主线只需再执行一次 `./run-prod.sh`：`update_git` 检测到 detached HEAD 会先
   切回生产分支再拉取。
-- 回滚不会回退工作区数据。`workspace/` 中的 Run、session、checkpoint 和群聊状态是
+- 回滚不会回退工作区数据。`workspace/` 中的 Run、session 和 checkpoint 是
   向前兼容的运行时数据，回滚代码前必须确认目标版本能读取现有数据；做不到时先备份
   `workspace/` 再回滚。
 

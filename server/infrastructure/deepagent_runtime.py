@@ -76,7 +76,6 @@ class DeepAgentRuntimeOptions:
     name: str = ""
     todo_list: bool = True
     file_approval_path: Path | None = None
-    group_control: dict | None = None
     tools: tuple[str, ...] = ()
     webdav: AgentWebDAVConfig = AgentWebDAVConfig()
     self_config: bool = True
@@ -161,17 +160,7 @@ class DeepAgentRuntime:
         if webdav_view is not None:
             routes["/webdav/"] = WebDAVFilesystemBackend(webdav_view)
         backend = CompositeBackend(default=backend, routes=routes)
-        control_tools = []
-        if options.group_control:
-            from server.infrastructure.group_control import group_control_tool
-            control = options.group_control
-            control_tools = [group_control_tool(
-                self._context_workspace.parent / "runs" / control["run_id"] / "group_decision.json",
-                control["control_members"], control["finish_only"],
-            )]
-        include_self_config = (
-            options.self_config and not options.group_control and self._tool_context is not None
-        )
+        include_self_config = options.self_config and self._tool_context is not None
         permissions = [*skill_write_permissions(), *WebDAVPathPolicy(options.webdav).permissions]
         create_kwargs: dict[str, Any] = {
             "tools": build_platform_tools(
@@ -181,7 +170,7 @@ class DeepAgentRuntime:
                 tool_context=self._tool_context,
                 file_backend=backend,
                 include_self_config=include_self_config,
-            ) + control_tools,
+            ),
             "model": self._chat_model(),
             "system_prompt": instructions.strip(),
             "backend": backend,
@@ -189,8 +178,8 @@ class DeepAgentRuntime:
             "skills": ["/skills/"],
             "subagents": [general_purpose_subagent],
         }
-        # Subagents inherit the platform tools, except self-config and host-only control tools.
-        excluded_subagent_tools = {SELF_CONFIG_TOOL_ID, "group_decision"}
+        # Subagents inherit the platform tools, except the self-config tool.
+        excluded_subagent_tools = {SELF_CONFIG_TOOL_ID}
         general_purpose_subagent["tools"] = [
             tool for tool in create_kwargs["tools"] if tool.name not in excluded_subagent_tools
         ]

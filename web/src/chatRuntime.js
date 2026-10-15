@@ -1,5 +1,3 @@
-import { useEffect, useState } from "react";
-
 export function runEventThinkingText(event) {
   const payload = event?.payload || {};
   if (event?.type === "running") {
@@ -33,42 +31,4 @@ export function runEventThinkingText(event) {
     return payload.decision === "reject" ? "操作已拒绝，DeepAgent 继续处理" : "操作已批准，DeepAgent 继续运行";
   }
   return "";
-}
-
-
-export function useGroupRunEvents(api, run) {
-  const [live, setLive] = useState(null);
-  const id = run?.run_id;
-  const generation = run?.state?.rerun_count || 0;
-  useEffect(() => {
-    if (!id) return undefined;
-    let cancelled = false;
-    let timer;
-    let seq = 0;
-    let content = "";
-    let thinking = [];
-    let approval;
-    async function poll() {
-      try {
-        const data = await api(`/api/runs/${encodeURIComponent(id)}/events?after=${seq}`);
-        if (cancelled) return;
-        for (const event of data.events || []) {
-          seq = Math.max(seq, Number(event.seq || 0));
-          if (event.type === "queued" && event.payload?.message === "run rerun queued") {
-            content = ""; thinking = []; approval = null;
-          }
-          if (event.type === "assistant_delta") content += event.payload?.delta || "";
-          const text = runEventThinkingText(event);
-          if (text && !thinking.includes(text)) thinking = [...thinking, text].slice(-10);
-          if (event.type === "approval_required") approval = event.payload?.request;
-          if (event.type === "approval_resolved") approval = null;
-        }
-        if (data.events?.length) setLive({ id, generation, seq, content, thinking, approval });
-      } catch { /* The durable group snapshot remains visible while polling recovers. */ }
-      if (!cancelled) timer = window.setTimeout(poll, 750);
-    }
-    poll();
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [api, id, generation]);
-  return live && live.id === id && live.generation === generation && live.seq >= Number(run?.state?.seq || 0) ? live : null;
 }

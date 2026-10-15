@@ -27,18 +27,11 @@
   领取任务的契约。
 - `docs/requirements/`：需求文档编号与分档约定。
 - `docs/release.md`、本 `CHANGELOG.md`：版本号、发布与回滚约定。
-- 群聊列表新增“重命名群聊”和“删除群聊”入口，对应
-  `POST /api/chat-groups/{group_id}/rename` 与 `DELETE /api/chat-groups/{group_id}`；
-  删除在群仍在协作中时返回 409，重命名在协作中也可用。
-- 群聊成员库：可复用的群成员预设（群内名称 + 基础 Agent + 附加 prompt）存于
-  `workspace/chat_groups/members.json`，通过 `GET/POST /api/chat-groups/members` 与
-  `DELETE /api/chat-groups/members/{member_id}` 管理；新建/编辑群时可一键选入，
-  也可把现有成员存回成员库。预设是编辑期模板，不影响已建群。
 - 系统提示词对话内读写：新增始终注入的平台工具 `system_prompt`，`action=read`
   免审批返回平台从 `config.yaml` 读到的该 Agent `system_prompt` 原文，`action=update`
   提交完整新提示词后必须经人工审批才写入，只替换目标字段并在下一次 Run 生效；
-  Web 审批卡片展示新旧对照，微信审批通知给截断预览并指向 Web 端，群聊内部 Run
-  不提供该工具。需求见 `docs/requirements/F1-系统提示词对话内编辑.md`。
+  Web 审批卡片展示新旧对照，微信审批通知给截断预览并指向 Web 端。需求见
+  `docs/requirements/F1-系统提示词对话内编辑.md`。
 - Skills 页面：侧栏新增 `/skills` 技能库，按 Agent 分组列出各自私有工作区里的
   `skills/{skill_id}/SKILL.md`，默认选中第一个 Agent 并只展开它的技能，支持查看、新建、
   编辑、删除整个技能目录，并提示用户契约区块；为此 `PUT /api/workspace/write` 新增
@@ -56,6 +49,11 @@
 
 ### Changed
 
+- 平台默认系统提示词改为 Hermes 式分节结构：身份段 → 按请求行事 → 任务完成 →
+  区分事实与推断 → 控制查询与追问 → 长期记忆 → 技能，保留原有四节实质内容并补上
+  「任务完成」（成果须有真实工具输出支撑、只报改了什么/验证了什么/还剩什么）与
+  「技能」（匹配才加载）。需求见
+  `docs/requirements/F13-架构面收敛与群聊删除及默认提示词.md`。
 - 生产服务改用用户级 systemd 管理：`run.sh prod` 把单元安装到
   `~/.config/systemd/user/`，重启、状态与日志一律走 `systemctl --user`，不再需要 sudo；
   `setup-sudo` 子命令与受限 sudoers 规则随之删除，`run.sh` 也不再保留系统级单元的检测与
@@ -69,7 +67,7 @@
   / “读写 · 免审批” / “只读”三选一，选中免审批时在目录卡片内提示会直接写回远端，Agent 列表摘要
   显示免审批目录数量。需求见 `docs/requirements/F9-WebDAV目录免审批写入.md`。
 - Chat 输入区的附件动作收到左侧“+”菜单：发送按钮回到最右侧，点“+”展开当前只有“图片”一项的
-  动作菜单（`Esc`/点击外部关闭、运行中或满 6 张时禁用，群聊不渲染），为后续文件、截图等入口留位置；
+  动作菜单（`Esc`/点击外部关闭、运行中或满 6 张时禁用），为后续文件、截图等入口留位置；
   粘贴图片改为由输入区拦截成待发送图片，不再有机会把剪贴板图片插进 Markdown 草稿。需求见
   `docs/requirements/F8-输入区动作入口.md`。
 - 技能编辑需要人工审批：Agent 通过文件工具写入、编辑或删除 `/skills/**` 时，
@@ -79,16 +77,27 @@
 - `deepagents` 依赖从 `>=0.7.13,<0.8` 升到 `>=0.7.15,<0.8`，运行时继续使用原生
   permissions、HITL、skills、长期记忆和子 Agent 契约。需求见
   `docs/requirements/F5-deepagents升级.md`。
-- Chat 页面改为与群聊一致的左侧列表布局：左栏是当前 Agent 的 session 列表（新建会话 +
+- Chat 页面改为左侧列表布局：左栏是当前 Agent 的 session 列表（新建会话 +
   Agent 选择 + 来源/渠道身份/消息数/更新时间 + 删除），中间是消息与输入区，右侧保留状态栏；
   原来的会话下拉菜单移除，`820px` 以下会话列表变成顶部横向滚动的会话条。
 - Chat 左栏的 Agent 选择不再用原生 `<select>`：原生弹层跟随系统外观（浅色 macOS 上无法
   用 CSS 变暗），改为新的 `SelectMenu` 组件（深色列表、选中态、悬停高亮、支持方向键
   /回车/Escape），组件放在 `web/src/selectMenu.jsx` 供其它页面复用。
 - 工作目录页面的约定目录说明与当前工作区契约对齐，移除已删除的
-  `search_context` / `write_context` 描述，补上 `sessions/active.json`、群聊状态和
+  `search_context` / `write_context` 描述，补上 `sessions/active.json` 和
   Agent 私有工作区。
 - `docs/project-architecture.md` 补齐认证 API 与日志、生产更新接口的路径清单。
+
+### Removed
+
+- 多 Agent 群聊整体移除：`/chat-groups` 页面、`ChatGroupService`、`group_decision`
+  控制工具、群成员库、群内部 session 与 `run_group_*` Run 相关代码，以及
+  `chat_groups/` 工作区目录约定、维护清理保护和对应测试与文档一并删除。目标机器上的
+  群聊数据按一次性受控操作清理，不保留迁移或兼容分支。需求见
+  `docs/requirements/F13-架构面收敛与群聊删除及默认提示词.md`。
+- 架构面收敛到 `deepagents` 公开 API：不再把手写 LangGraph 图作为产品编排方式，也不
+  引入 LangChain 平台组件；实现面的 langchain 适配器、工具 wrapper 与 middleware 基类
+  保留。边界与两条登记例外见 `docs/architecture-qa.md`。
 
 ### Fixed
 

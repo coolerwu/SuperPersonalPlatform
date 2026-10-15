@@ -33,7 +33,6 @@ import {
 } from "lucide-react";
 import { AgentConfigEditor, ConfigVisualEditor, ProviderConfigEditor, parseConfigDraft } from "./configEditor.jsx";
 import { ChatMessageList, ChatComposer, ApprovalPanel, ThinkingPanel, MarkdownMessage } from "./chatComponents.jsx";
-import { ChatGroupsPage } from "./chatGroups.jsx";
 import { SkillsPage } from "./skills.jsx";
 import { SelectMenu } from "./selectMenu.jsx";
 import { runEventThinkingText } from "./chatRuntime.js";
@@ -42,7 +41,6 @@ import "./styles.css";
 
 const NAV_ITEMS = [
   { id: "chat", path: "/chat", label: "Chat", icon: Send },
-  { id: "chat-groups", path: "/chat-groups", label: "群聊", icon: Bot },
   { id: "runs", path: "/runs", label: "Runs", icon: Play },
   { id: "workspace", path: "/workspace", label: "工作目录", icon: FolderTree },
   { id: "skills", path: "/skills", label: "Skills", icon: BookOpen },
@@ -74,7 +72,6 @@ const WORKSPACE_TREE = [
   ["workspace/runs/{run_id}/partial.json", "DeepAgent stream 运行中的聚合输出"],
   ["workspace/runs/{run_id}/result.json", "DeepAgent 最终输出"],
   ["workspace/runs/{run_id}/delivery.json", "微信等渠道投递状态"],
-  ["workspace/chat_groups/{group_id}/state.json", "群聊权威状态：定义、消息、协作与游标"],
   ["workspace/agents/{agent_id}/agent.json", "Agent 配置；运行数据在 workspace/ 子目录"],
   ["workspace/agents/{agent_id}/workspace/", "Agent 私有工作区：/artifacts /scratch /skills /memories /browser"],
   ["workspace/schedules/index.json", "统一调度索引，WebDAV 同步和未来 Agent 定时任务共用"],
@@ -298,7 +295,6 @@ function App() {
       </aside>
       <main className="content">
         {page === "chat" ? <ChatPage /> : null}
-        {page === "chat-groups" ? <ChatGroupsPage api={api} /> : null}
         {page === "runs" ? <RunsPage /> : null}
         {page === "workspace" ? <WorkspacePage /> : null}
         {page === "skills" ? <SkillsPage api={api} /> : null}

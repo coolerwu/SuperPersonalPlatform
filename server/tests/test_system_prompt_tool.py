@@ -367,37 +367,6 @@ def test_runtime_rejected_system_prompt_update_keeps_config(tmp_path, monkeypatc
     assert "你是新人格。" not in (tmp_path / "config.yaml").read_text(encoding="utf-8")
 
 
-def test_runtime_skips_self_config_tool_for_group_runs(tmp_path, monkeypatch) -> None:
-    import deepagents
-
-    captured = {}
-
-    class FakeAgent:
-        async def ainvoke(self, state, config):
-            return {"messages": [type("Message", (), {"content": "ok"})()]}
-
-    monkeypatch.setattr(deepagents, "create_deep_agent", lambda **kwargs: captured.update(kwargs) or FakeAgent())
-    runtime = _runtime(tmp_path, monkeypatch)
-
-    asyncio.run(
-        runtime.run(
-            instructions="主持",
-            messages=(RuntimeMessage(role="user", content="任务"),),
-            options=DeepAgentRuntimeOptions(self_config=False, group_control={
-                "run_id": "run_group",
-                "control_members": ["host"],
-                "finish_only": False,
-            }),
-        )
-    )
-
-    tool_names = [tool.name for tool in captured["tools"]]
-    assert "system_prompt" not in tool_names
-    assert tool_names == ["group_decision"]
-    assert "system_prompt" not in [tool.name for tool in captured["subagents"][0]["tools"]]
-    assert "system_prompt" not in captured.get("interrupt_on", {})
-
-
 def test_prompt_approval_displays_restore_default(tmp_path):
     from server.domain.system_prompt import DEFAULT_SYSTEM_PROMPT
     (tmp_path / "config.yaml").write_text(CONFIG)

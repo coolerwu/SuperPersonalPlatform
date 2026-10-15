@@ -65,9 +65,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - React 表单列表不要用会随输入变化的字段作为 key，例如 Provider/Agent 的 `id`；否则输入一个字符会 remount 并丢焦点。
 - 前端开发、测试和构建使用 Node.js 20+（Markdown 编辑器依赖要求）。
 - 生产环境使用已提交的 `web/dist`，前端改动需要执行 `cd web && npm run build` 并提交新的 dist 产物。
-- 后端命名要区分配置领域和运行时封装：`server/domain/agent_config.py` 只能放 Agent/LLM/DeepAgent 选项配置对象和校验；真正调用或封装 `deepagents`、LangChain 模型的代码只能放在 `server/infrastructure/deepagent_runtime.py` 或同层 infrastructure 模块。
+- 后端命名要区分配置领域和运行时封装：`server/domain/agent_config.py` 只能放 Agent/LLM/DeepAgent 选项配置对象和校验；真正调用或封装 `deepagents` 及其模型适配器的代码只能放在 `server/infrastructure/deepagent_runtime.py` 或同层 infrastructure 模块。
 - `DeepAgentRuntime.run()` 的入参必须保持清晰：`instructions` 是 system prompt，`messages` 是完整会话消息，`options` 是结构化运行选项；不要重新引入 `user_message`、`max_iterations`、`deepagent_options` 这种和 `messages/options` 重复的散参数。
 - Agent 的 Checkpointer、长期记忆和私有 filesystem 固定开启，不提供配置开关。带 `session_id` 的 run 只传当前 run 消息，由 LangGraph checkpoint 恢复状态；WebDAV 写入默认由原生 FilesystemPermission 的 interrupt 规则触发审批，只有显式配置 `approval_required=false` 的目录才免审批；其它平台工具审批由系统注册表的 `approval_required` 决定，不读取 Agent 自定义 `interrupt_on`。
+- Checkpoint 按 session 存储于 `sessions/{session_id}/checkpoints.sqlite`；无 session 的审批 Run 存于自身 Run 目录。旧公共库需停服备份后按 thread_id 一次性拆分并核验，不加入自动迁移。
+- WebDAV 文件审批可由用户显式选择“批准当前文件（10 分钟）”：仅当前 session + Agent 的精确文件写入免重复确认，持久化绝对到期时间；主/子 Agent 每次调用实时检查。原生权限和只读限制不变，禁止扩为目录、跨会话或永久授权，普通 approve 仍仅批准本次。发布前验证到期、重启恢复、不同文件/Agent/session 隔离及子 Agent checkpoint 恢复。
 
 ## Agent Workspace 约定
 
@@ -86,24 +88,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Web Chat 支持上传图片作为多模态输入：输入区左侧“+”菜单是附件类动作的统一入口（当前只有“图片”，后续加文件/截图等只往菜单里加条目，发送按钮固定在最右侧）；页面通过 `POST /api/chat/messages` 的 `attachments[]` 提交 `data_url`，后端在创建 run 前校验数量（最多 6 张）、大小（单张 20MB）和字节头（PNG/JPEG/GIF/WebP），再落到 `workspace/sessions/{session_id}/attachments/{message_seq}/`；纯图片消息允许正文为空，粘贴的剪贴板图片只作为待发送附件、不插入草稿。历史图片只通过 `GET /api/chat/sessions/{session_id}/attachments` 读取已记录的附件路径，随会话删除或维护清理一起回收；Provider 不支持图片时沿用 `image_attachments_textified` 文本降级。
 
 - 不再有 Skill 自进化：运行时不注入 SkillImprovement middleware，Agent 不会主动创建或改写 `/skills/`，也不会写 `/improvements/`（该目录已从工作区契约移除）；但用户在对话里明确要求时，Agent 仍可用原生文件工具创建或更新 `/skills/{skill_id}/SKILL.md`，新 skill 在下一次 Agent 执行开始时生效，历史 improvement 记录不再作为判断依据。Agent 对 `/skills` 与 `/skills/**` 的写入、编辑和删除都必须经过 HITL 审批：`skill_write_permissions()` 给 `create_deep_agent` 追加 write `interrupt` 规则，run 进入 `waiting_approval`，批准后才落盘，拒绝后技能文件不变；读取、列举和 `glob`/`grep` 不触发审批，技能审批也没有“批准当前文件（10 分钟）”免审批租约。用户也可以直接通过平台 `/skills` 技能库页面按 Agent 管理技能（新建/编辑/删除 `SKILL.md`，保存前校验 frontmatter 的 name 与目录名一致、description 必填），平台侧保存不需要审批；用户硬约束可放在 `<!-- BEGIN USER CONTRACT -->` / `<!-- END USER CONTRACT -->` 中，Agent 文件工具不得修改、覆盖或删除该区块及其所在 Skill，正式契约只能由用户通过 `/skills` 或工作目录等平台入口调整。
-- 系统提示词只能通过始终注入的平台工具 `system_prompt` 在对话内读取或修改：`action=read` 免审批返回平台从 `config.yaml` 读到的该 Agent `system_prompt` 原文（Agent 文件工具读不到 config.yaml），`action=update` 必须逐次 HITL 审批，且只替换当前 Run 所属 Agent 的该字段，其它字段、注释与排版不变，下一次 Run 生效，当前 Run 继续用快照；群聊内部 Run 不提供该工具，通用子 Agent 不继承，审批卡片展示新旧对照，微信审批通知只给截断预览并提示到 Web 端查看完整对照。
-
-## 群聊约定
-
-- 单聊和群聊共用 `web/src/chatComponents.jsx`，不要复制消息气泡、Markdown、思考过程、审批或输入框实现。
-- 群记录归 `workspace/chat_groups/`；成员执行 session 归 `workspace/sessions/`，每群成员独立 checkpoint，普通 Chat 不列出或选用内部 session。临时角色仍共享基础 Agent 的文件和长期记忆。
-- 可复用的群成员预设（群内名称 + 基础 Agent + 附加 prompt）归 `workspace/chat_groups/members.json`，由 `/chat-groups` 的成员库维护；它是编辑期模板，选入群即复制成该群独立成员，改预设不改写已建群，也不跨群共享 session。
-- 群步骤使用确定性 Run ID 与稳定 LangGraph 消息 ID，推进前先落盘，发布结果与游标原子更新。自动协作最多三轮、每轮四名成员；只接受主持结构化工具决定，不从回答中的 @ 派工，控制工具不得下放给子 Agent。
-- 群引用 session 和未结束步骤 Run 必须得到清理保护；群任务重试从群入口发起，不能绕过编排。发布前验证中断恢复、审批、停止和上下文隔离。
-
-- Checkpoint 按 session 存储于 `sessions/{session_id}/checkpoints.sqlite`；无 session 的审批 Run 存于自身 Run 目录。旧公共库需停服备份后按 thread_id 一次性拆分并核验，不加入自动迁移；群公共消息增量与成员 checkpoint 衔接，主持工具生成的公开消息也必须补齐。
-
-- WebDAV 文件审批可由用户显式选择“批准当前文件（10 分钟）”：仅当前 session + Agent 的精确文件写入免重复确认，持久化绝对到期时间；主/子 Agent 每次调用实时检查。原生权限和只读限制不变，禁止扩为目录、跨会话或永久授权，普通 approve 仍仅批准本次。发布前验证到期、重启恢复、不同文件/Agent/session 隔离及子 Agent checkpoint 恢复。
+- 系统提示词只能通过始终注入的平台工具 `system_prompt` 在对话内读取或修改：`action=read` 免审批返回平台从 `config.yaml` 读到的该 Agent `system_prompt` 原文（Agent 文件工具读不到 config.yaml），`action=update` 必须逐次 HITL 审批，且只替换当前 Run 所属 Agent 的该字段，其它字段、注释与排版不变，下一次 Run 生效，当前 Run 继续用快照；通用子 Agent 不继承，审批卡片展示新旧对照，微信审批通知只给截断预览并提示到 Web 端查看完整对照。
 
 ## 默认系统提示词约定
 
-- Agent `system_prompt` 缺省或空白使用后端统一完整默认规则，非空自定义替代默认；前端只从认证接口读取预览。普通解释、会议材料与临时分析默认不主动写记忆，这只是提示词约束，不是新权限规则。
-- 实际正文在 Run 创建及群成员执行快照创建时固化，群角色要求后追加；审批恢复和重试不得重新解析默认值。系统提示词工具读取区分配置原文、下一次 Run 实际正文与来源；显式空字符串更新表示恢复默认，缺参数报错，仍逐次 HITL。
+- Agent `system_prompt` 缺省或空白使用后端统一完整默认规则，非空自定义替代默认；前端只从认证接口读取预览。默认规则按 Hermes 式分节组织：身份段 → 按请求行事 → 任务完成 → 区分事实与推断 → 控制查询与追问 → 长期记忆 → 技能。普通解释、会议材料与临时分析默认不主动写记忆，这只是提示词约束，不是新权限规则。
+- 实际正文在 Run 创建时固化；审批恢复和重试不得重新解析默认值。系统提示词工具读取区分配置原文、下一次 Run 实际正文与来源；显式空字符串更新表示恢复默认，缺参数报错，仍逐次 HITL。
 
 ## Development Commands
 
@@ -134,7 +124,7 @@ This is a full-stack personal platform with FastAPI backend (port 8888) and Reac
 - `server/domain/` - Framework-free domain models (no FastAPI, httpx, or filesystem imports)
 - `server/infrastructure/` - Config loading, HTTP clients, session implementation, app factory
 
-Agent Chat uses LangGraph for execution and LangChain for OpenAI-compatible LLM adapters.
+Agent Chat 通过 `deepagents` 公开 API 执行（底层为 LangGraph，属实现细节）；模型经 LangChain 适配器接入，当前生产模型是 OpenAI 兼容网关上的 DeepSeek。
 
 ## Workspace and Configuration
 

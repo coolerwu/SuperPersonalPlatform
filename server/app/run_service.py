@@ -3,7 +3,6 @@ from __future__ import annotations
 from server.domain.system_prompt import resolve_system_prompt, system_prompt_source
 
 from server.infrastructure.agent_workspace import agent_workspace_path
-from server.domain.chat_group import GroupRunContext
 
 import asyncio
 import json
@@ -140,18 +139,9 @@ class RunService:
         session_id: str = "",
         attachments: tuple[dict[str, Any], ...] = (),
         metadata: dict[str, Any] | None = None,
-        group_context: GroupRunContext | None = None,
     ) -> dict[str, Any]:
         if session_id and self._session_service is not None and not self._session_service.exists(session_id):
             raise ValueError("session does not exist")
-        if group_context is not None:
-            existing = self._run_dir(group_context.run_id)
-            if (existing / "state.json").exists():
-                if not any(item.get("run_id") == group_context.run_id for item in self._list_runs_no_reconcile()):
-                    self._upsert_index(self._summary_from_state(group_context.run_id))
-                return self.get_run(group_context.run_id)
-        elif session_id and self._session_service and self._session_service.session_summary(session_id).get("channel") == "chat_group":
-            raise ValueError("群成员会话只能通过群聊接口执行")
         if session_id:
             active_run = self.active_run_for_session(session_id)
             if active_run is not None:
@@ -172,13 +162,13 @@ class RunService:
 
         settings = load_settings(self._workspace / "config.yaml")
         agent = self._resolve_agent(settings.agent_workspace.agents, agent_id)
-        model_id = (group_context.agent_snapshot.get("model_id") if group_context else agent.model_id) or settings.agent_workspace.default_model_id
+        model_id = agent.model_id or settings.agent_workspace.default_model_id
         model = settings.agent_workspace.get_model(model_id)
         now = _now()
-        run_id = group_context.run_id if group_context else self._new_run_id()
+        run_id = self._new_run_id()
         selected_context_ids = context_ids or agent.context_ids
         run_dir = self._run_dir(run_id)
-        run_dir.mkdir(parents=True, exist_ok=group_context is not None)
+        run_dir.mkdir(parents=True)
 
         run_input = RunInput(
             run_id=run_id,
@@ -191,9 +181,8 @@ class RunService:
             created_at=now,
             metadata=metadata or {},
             snapshot={
-                "agent": group_context.agent_snapshot if group_context else _public_agent(agent),
-                **({"group_context": group_context.model_dump()} if group_context else {}),
-                "model": group_context.model_snapshot if group_context and group_context.model_snapshot else _public_model(model),
+                "agent": _public_agent(agent),
+                "model": _public_model(model),
                 "context": self._snapshot_context(),
             },
         )
@@ -256,17 +245,6 @@ class RunService:
         runtime_options = _runtime_options(agent_snapshot.get("deepagent"), name=str(agent_snapshot.get("name") or ""), webdav=agent_snapshot.get("webdav"))
         from dataclasses import replace
         runtime_options = replace(runtime_options, file_approval_path=self._file_approval_path(run_id, run_input))
-        group_data = run_input.get("snapshot", {}).get("group_context")
-        if group_data:
-            from dataclasses import replace
-            from server.domain.agent_config import ModelProvider
-            frozen_model = run_input["snapshot"]["model"]
-            model = replace(model, **{**frozen_model, "provider": ModelProvider(frozen_model["provider"])})
-            runtime_options = replace(
-                runtime_options,
-                group_control=group_data if group_data.get("control_members") else None,
-                self_config=False,
-            )
         use_session_checkpoint = bool(session_id)
         approval_resume = self._approval_resume(run_id)
         use_approval_checkpoint = _uses_approval_checkpoint(runtime_options, approval_resume)
@@ -289,8 +267,6 @@ class RunService:
             fallback_attachments=fallback_attachments,
             workspace=self._workspace,
         )
-        if group_data:
-            runtime_messages = tuple(RuntimeMessage(role="user", content=item["content"], id=item["id"]) for item in group_data["messages"])
         downgraded_image_count = 0
         if any(message.has_images for message in runtime_messages) and not model.supports_images:
             runtime_messages, downgraded_image_count = _textify_image_attachments(

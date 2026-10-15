@@ -8,7 +8,7 @@
 
 保留：
 
-- DeepAgent / LangGraph 后端执行。
+- deepagents 公开 API 的后端执行。
 - 微信个人号接入。
 - 坚果云 WebDAV。
 - 单 token 登录、基础配置、基础日志、生产启动脚本。
@@ -22,6 +22,27 @@
 - Proxy 嵌入站点功能。
 - 旧 WebSocket 聊天接口。
 - 旧 Session/Skill/Agent 管理产品模型。
+
+## 架构面边界：只用 deepagents 公开 API
+
+**Q: 平台允许在哪些地方调用 LangChain / LangGraph？**
+
+按「架构面 / 实现面」划线，而不是「凡 LangChain 皆例外」，否则例外清单会长到失去意义。
+
+**架构面（编排层）**：装配 Agent、决定「图长什么样」的地方，只走 deepagents 公开 API。不使用 `StateGraph` 手写节点与边作为产品编排方式；不使用 LangSmith 部署、LangGraph Platform 或其它 LangChain 平台组件。**唯一例外**：当 deepagents 公开 API 无法表达某个确定性编排时才自建 LangGraph 图。
+
+**实现面（箱内内容）**：单个工具怎么实现、用哪个包的消息/模型适配器/middleware 回调基类，属于实现面。它们最终都以 `create_deep_agent` 的公开参数类型（`tools=`、`config=`、`permissions=`、middleware 基类、消息类型）注入，因此不算绕过 deepagents。`langchain-core` / `langchain-openai` / `langchain-anthropic` / `langchain-community` 都属于这一类。
+
+**允许的运行期事实描述**：`create_deep_agent` 内部用 LangGraph checkpoint 保存会话状态、`astream(..., subgraphs=True)` 产出 LangGraph stream chunk、工具用 LangChain Community 的 wrapper 实现——这些说的是 deepagents 的实际行为，不是架构选择，文档里保持原样。
+
+**登记在案的两条例外**（都是 deepagents 该给但当前没给或没公开的地方）：
+
+- `TodoListMiddleware` 兼容降级（`server/infrastructure/deepagent_runtime.py`）：先用 `inspect.getsource` 探测 `create_deep_agent` 是否已自带 `TodoListMiddleware`，缺失才手动补一个。这是补 deepagents 默认 middleware 的缺口，耦合到 `langchain.agents.middleware` 命名空间。**退出条件**：确认目标 deepagents 版本稳定自带该 middleware 后删除这段 fallback。
+- 用量采集 `UsageCallback(AsyncCallbackHandler)`（同文件）：deepagents 没有公开的用量 API，LangChain 回调是唯一可用路径，依赖上游把 `config` 里的 `callbacks` 透传到每次模型调用。**已知风险**：上游改回调协议时用量会被标为「未知」而**不报错**，属于静默降级点，排查用量缺失时先看这里。
+
+**不登记**：`arxiv` / `yahoo_finance_news` 用 LangChain Community wrapper 只是工具实现，替换成自写 HTTP 客户端不会改变任何图结构；`workspace_middleware.py` 的 `AgentMiddleware` / `ModelRequest` / `ModelResponse`、各处 `StructuredTool` 同理。
+
+依赖立场：上述 langchain* 与 `langgraph` / `langgraph-checkpoint-sqlite` 都保留，前者是 deepagents 公开参数类型的直接依赖，后者是运行期依赖与用户可见的运行契约。需求见 F13。
 
 ## 后端执行和前端轮询
 
@@ -297,4 +318,4 @@ WebDAV 可写目录通过原生 HITL 审批后才写回，读取无需审批；�
 
 ## Chat 输入框为何采用文档编辑器？
 
-Chat 和群聊需要在同一输入区域即时呈现 Markdown，不能依赖 textarea 加独立预览。统一使用 Tiptap/ProseMirror 管理选区、撤销和输入法，草稿与发送接口继续使用 Markdown；不自写 contenteditable DOM 重绘。详见项目架构中的“Chat 与群聊实时 Markdown 编辑”。
+Chat 需要在输入区域即时呈现 Markdown，不能依赖 textarea 加独立预览。统一使用 Tiptap/ProseMirror 管理选区、撤销和输入法，草稿与发送接口继续使用 Markdown；不自写 contenteditable DOM 重绘。详见项目架构中的“Chat 实时 Markdown 编辑”。
