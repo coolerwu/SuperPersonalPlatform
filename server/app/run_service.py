@@ -1401,10 +1401,9 @@ def _thinking_text(event_type: RunEventType | str, payload: RunEventPayload) -> 
     if event_type == RunEventType.RUNNING and isinstance(payload, RunLifecyclePayload):
         return payload.message or "DeepAgent 已开始处理"
     if event_type == RunEventType.AGENT_UPDATE and isinstance(payload, DeepAgentGraphUpdatePayload):
-        if payload.preview:
-            return payload.preview
-        nodes = ", ".join(item for item in payload.nodes if item)
-        return f"图节点更新：{nodes}" if nodes else "DeepAgent 状态已更新"
+        # 只有带消息正文的图更新才是用户可读的进展；中间件钩子节点没有正文，
+        # 节点名属内部实现，只留在 events.jsonl 里供排查。
+        return payload.preview
     if event_type == RunEventType.SUBAGENT_RESPONSE and isinstance(payload, DeepAgentSubagentResponsePayload):
         label = payload.agent or "sub-agent"
         content = payload.content.strip()

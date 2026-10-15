@@ -490,6 +490,40 @@ def test_run_service_persists_streaming_thinking_snapshot(tmp_path, monkeypatch)
     }
 
 
+def test_run_service_keeps_bare_graph_updates_out_of_thinking(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
+
+    async def fake_run(self, *, instructions, messages, options, checkpoint_path=None, thread_id="", stream_callback=None):
+        assert stream_callback is not None
+        stream_callback(
+            DeepAgentStreamEvent(
+                RunEventType.AGENT_UPDATE,
+                DeepAgentGraphUpdatePayload(nodes=("HumanInTheLoopMiddleware.after_model",)),
+            )
+        )
+        stream_callback(
+            DeepAgentStreamEvent(
+                RunEventType.AGENT_UPDATE,
+                DeepAgentGraphUpdatePayload(nodes=("model",), preview="正在搜索资料"),
+            )
+        )
+        return "最终正文"
+
+    monkeypatch.setattr("server.infrastructure.deepagent_runtime.DeepAgentRuntime.run", fake_run)
+
+    service = RunService(tmp_path)
+    run = asyncio.run(service.create_run(content="hello", agent_id="assistant"))
+    completed = asyncio.run(service.execute_run(run["run_id"]))
+
+    assert completed["partial"]["thinking"] == ["DeepAgent started", "正在搜索资料"]
+    updates = [event for event in service.get_events(run["run_id"], after=0) if event["type"] == "agent_update"]
+    assert [event["payload"]["nodes"] for event in updates] == [
+        ("HumanInTheLoopMiddleware.after_model",),
+        ("model",),
+    ]
+    assert updates[0]["payload"]["preview"] == ""
+
+
 def test_run_service_finds_latest_active_schedule_run(tmp_path) -> None:
     (tmp_path / "config.yaml").write_text(CONFIG, encoding="utf-8")
 

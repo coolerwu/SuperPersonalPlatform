@@ -4,9 +4,9 @@ export function runEventThinkingText(event) {
     return payload.message || "DeepAgent 已开始处理";
   }
   if (event?.type === "agent_update") {
-    if (payload.preview) return payload.preview;
-    const nodes = Array.isArray(payload.nodes) ? payload.nodes.filter(Boolean).join(", ") : "";
-    return nodes ? `图节点更新：${nodes}` : "DeepAgent 状态已更新";
+    // Only graph updates carrying message content read as progress; node names are
+    // implementation detail and stay in the event stream for debugging.
+    return payload.preview || "";
   }
   if (event?.type === "subagent_response") {
     const label = String(payload.agent || "sub-agent");

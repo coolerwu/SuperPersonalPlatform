@@ -49,6 +49,11 @@
 
 ### Changed
 
+- Chat「思考过程」不再显示图节点名：`agent_update` 只有携带消息正文时才聚合进
+  `partial.thinking[]`，`HumanInTheLoopMiddleware.after_model`、`MemoryMiddleware.before_agent`
+  等中间件钩子节点的空更新只留在 `events.jsonl` 供排查，避免工具循环里每轮噪声挤掉真实进展；
+  后端 `_thinking_text` 与前端 `runEventThinkingText` 使用同一口径。需求见
+  `docs/requirements/F15-思考过程过滤图节点更新.md`。
 - 平台默认系统提示词改为 Hermes 式分节结构：身份段 → 按请求行事 → 任务完成 →
   区分事实与推断 → 控制查询与追问 → 长期记忆 → 技能，保留原有四节实质内容并补上
   「任务完成」（成果须有真实工具输出支撑、只报改了什么/验证了什么/还剩什么）与
