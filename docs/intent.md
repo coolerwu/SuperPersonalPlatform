@@ -23,7 +23,7 @@
 
 ## 现行意图
 
-- **F17 行情工作台**：已实现，未提交，待验收。见下方 F17。
+- **F17 行情工作台**：已实现、已提交并发布（`7dd44c4`）。见下方 F17；当前状态以该小节的文档头为准。
 
 ## 与其他文档的关系
 
@@ -1035,10 +1035,22 @@ F15 之后，思考过程只保留带正文的图更新，但还有两个问题�
 
 #### 决策记录
 
-1. **数据源**：Binance 现货公开接口，**默认域名取官方只读行情域 `https://data-api.binance.vision`，生产机不需要任何代理**。实测依据（在 192.168.1.3 上跑）：直连该域名 httpx 返回 200、七个周期的 klines 都可取、最后一根 1m bar 起始距今 23 秒、连续 5 次全成功，出口是无代理的中国电信 IP 106.92.108.83；同机直连 `api.binance.com` 是 ConnectTimeout，经开发机代理（出口判为地区受限）返回 HTTP 451。`market.base_url` 保留为覆盖项，用于自建镜像或网关；`market.proxy` 默认留空走直连。
+1. **数据源**：Binance 现货公开接口，**默认域名取官方只读行情域 `https://data-api.binance.vision`**。选它的理由是它在两条路上都通，而 `api.binance.com` 两条路都不通。在 192.168.1.3 上实测（各 3 轮，结果稳定）：
+
+   | 域名 | 裸直连 | 经局域网代理 192.168.1.2:7893 |
+   | --- | --- | --- |
+   | `api.binance.com` | 连不上 | HTTP 451 |
+   | `api-gcp.binance.com` | 连不上 | HTTP 451 |
+   | `data-api.binance.vision` | 200 | 200 |
+
+   451 的响应体是 Binance 的 `Service unavailable from a restricted location according to 'b. Eligibility'`，即代理出口节点位于受限地区。直连该域名时取到七个周期的 klines、最后一根 1m bar 起始距今 23 秒、连续 5 次全成功。`market.base_url` 保留为覆盖项，用于自建镜像或网关；`market.proxy` 默认留空，跟随进程代理环境变量——生产机的 systemd 单元没有设置代理变量，所以服务实际走直连，而直连恰好也只有该域名可用。
 2. **高优先级信号推送**：只做 Telegram **出站**推送（`market.telegram`，按严重度阈值过滤）。它不接入平台的渠道、session 和 `RunDeliveryService` 投递体系，因此不影响微信通道和 Run 的 `delivery.json`。在 Telegram 里跟 Agent 双向对话是另一件事，需要接入渠道抽象，不在本需求范围内。
 3. **慢层形态**：给一份整体综述（各周期当前状态 + 跨周期矛盾 + 关键位 + 观察条件），不是每个周期各给一条独立判断。
 4. **K 线图**：本期不做。前端不引入 `lightweight-charts`，矩阵行尾用纯 SVG 迷你走势替代。留作下一期。
+5. **多源兜底**：`market.sources` 是有序列表，按顺序尝试，第一个成功的接管并保持粘性（只有当前源真的失败才轮到下一个），全部失败时保留上一份快照并在页面上标注延迟与降级来源。粘性是必须的：不同交易所同一根 K 线有微小差异（实测 Binance 82476.01 vs Gate 82479.80），每轮随机换源会让指标抖动。一个源只要有一个周期取不到就整体换源，先前的数据不落盘，避免半份数据混进历史。
+6. **默认开启**：`market.enabled` 默认 `true`。这是用户主动要的功能，让人先去配置页打开它是多余的；没有自选标的时它什么都不做（不建 feed、不发请求），所以默认开启是安全的。同理，慢层没配 `commentary.agent_id` 时页面直接把「让 Agent 分析一次」置灰并说明去哪里配，而不是让人点了才吃一个 400。
+7. **代理是全局的**：新增 `network.proxy` 作为全局出口代理，`browser.proxy` 和 `market.proxy` 留空即跟随它，写 `direct` 强制直连。**微信通道刻意不跟随**——微信是境内服务，走境外出口既没有收益，还会让登录态被判成异常登录，所以微信账号的 `proxy` 空值就是直连。语法和理由见 `docs/project-architecture.md` 的「网络代理」一节。
+8. **不引入 ccxt**：评估后决定自己写适配器。实测依据：① 在项目 venv 里 `pip install ccxt` 会失败（拉的 `cryptography` 新版本无 wheel，回落 Rust 源码编译，Cargo lock 版本不匹配），必须和已有的 `cryptography>=38,<49` 一起解析才能装上，净增 5 个包（aiodns / ccxt / coincurve / pycares / setuptools）；② ccxt 的 binance 连纯现货也会去拉 `dapi`/`fapi` 合约域名建市场表，而那两台在境内不通，必须显式设 `options.fetchMarkets=["spot"]`；③ 要让 binance 走 `.vision` 得手改 `urls['api']['public'/'private']`，用 `hostname` 参数反而会被引到 `dapi`；④ 实测 Bitget 的 `spot/public/symbols` 经代理要 15 秒以上，ccxt 的 `load_markets` 直接超时——即用户问到的 Bitget 在这套网络里不是可用来源。我们的实际需求是 2 个只读接口 × 2 家交易所，手写适配器（Gate 的 `candlesticks` 字段顺序特殊，已单独解析并测试）成本更低。**若以后要接 OKX/Bybit/Bitget 等第 3 家以上，再重新评估 ccxt**：适配器接口（`fetch_klines` / `fetch_ticker` / `aclose`）已经隔离好，换实现只动 `market_client.py` 一个文件。
 
 #### 实现说明
 
@@ -1047,6 +1059,9 @@ F15 之后，思考过程只保留带正文的图更新，但还有两个问题�
 - 解读会话 id 由 `SessionService.get_or_create` 在首次解读时生成并记入 `market.sqlite` 的 `meta`；只读路径只查这份记录、不创建会话。`build_session_id` 返回的是渠道身份 active key，不是 session id，两者不能混用。
 - 保留清理按「超过 `retention_days`」与「每个 series 至少保留 `history_limit` 根」取较大范围，否则 `1d` 会被删到只剩二三十根，而指标需要 200 根（EMA200）。
 - 信号严重度按周期降级：1h 以下整体降一级，分钟级噪音不与小时级信号同级提醒。
+- 多源兜底的粘性体现在 `MarketFeed._active`：每轮从当前源开始试，成功就继续用它，只有它失败才顺延到下一个；即使主源恢复了也不立刻切回去（Gate 仍在工作就继续用 Gate），避免每轮来回换源。一个源只要有一个周期取不到就整体换源，且先前的数据不写库。
+- K 线按 `market_key`（固定 `"spot"`）存，不按来源交易所：否则降级切换会把同一标的的历史切成两段。
+- 降级原因会去掉空消息：httpx 的连接类异常 `str()` 常为空，`market_client._get` 会退回异常类名（例如 `ConnectTimeout`），否则 `/api/market/overview` 的 `feed[].last_error` 只剩一句无用的前缀。
 
 #### 尚未覆盖
 
@@ -1054,3 +1069,5 @@ F15 之后，思考过程只保留带正文的图更新，但还有两个问题�
 - 事件触发的 Agent Run（当前只有页面按钮手动触发）。
 - Telegram 双向对话渠道。
 - 加密货币现货以外的市场（合约、A 股、美股）。
+- 第三家以上的交易所。当前只写了 `binance` 和 `gate` 两个适配器；真要加 OKX/Bybit/Bitget 时按决策 6 重新评估 ccxt，适配器接口已经隔离好，换实现只动 `market_client.py`。
+- 每个标的单独指定来源（现在是一份全局有序列表，所有标的共用）。

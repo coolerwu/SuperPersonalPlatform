@@ -13,8 +13,10 @@ const CONFIG_YAML = [
   "server:",
   '  host: "0.0.0.0"',
   "  port: 8888",
+  "network:",
+  '  proxy: "http://192.168.1.2:7893"',
   "browser:",
-  '  proxy: "http://127.0.0.1:7890"',
+  '  proxy: ""',
   "  timeout_ms: 60000",
   "llm:",
   '  default_model_id: "default"',
@@ -1202,8 +1204,10 @@ test("saves system config from the dedicated config menu", async () => {
   expect(screen.getByRole("tab", { name: /Agents/ })).toBeInTheDocument();
   expect(screen.getByLabelText("访问 Token")).toHaveValue("secret-token");
   expect(screen.getByLabelText("访问 Token")).toHaveAttribute("type", "text");
+  expect(screen.getByText("网络代理")).toBeInTheDocument();
+  expect(screen.getByLabelText("全局出口代理")).toHaveValue("http://192.168.1.2:7893");
   expect(screen.getByText("浏览器抓取")).toBeInTheDocument();
-  expect(screen.getByLabelText("代理")).toHaveValue("http://127.0.0.1:7890");
+  expect(screen.getByLabelText("代理覆盖")).toHaveValue("");
   expect(screen.getByText("坚果云 WebDAV")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /测试连接/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /立即同步/ })).toBeInTheDocument();
@@ -1212,14 +1216,15 @@ test("saves system config from the dedicated config menu", async () => {
   expect(screen.queryByText("微信账号")).not.toBeInTheDocument();
 
   changeInput(screen.getByLabelText("监听端口"), { target: { value: "9999" } });
-  changeInput(screen.getByLabelText("代理"), { target: { value: "socks5://127.0.0.1:7890" } });
+  changeInput(screen.getByLabelText("代理覆盖"), { target: { value: "direct" } });
   fireEvent.click(screen.getByRole("button", { name: /保存/ }));
 
   await waitFor(() => {
     const writeCall = global.fetch.mock.calls.find(([url]) => String(url).endsWith("/api/workspace/write"));
     expect(writeCall).toBeTruthy();
     expect(JSON.parse(writeCall[1].body).content).toContain("port: 9999");
-    expect(JSON.parse(writeCall[1].body).content).toContain('proxy: "socks5://127.0.0.1:7890"');
+    expect(JSON.parse(writeCall[1].body).content).toContain('proxy: "direct"');
+    expect(JSON.parse(writeCall[1].body).content).toContain('proxy: "http://192.168.1.2:7893"');
   });
 
   fireEvent.click(screen.getByRole("button", { name: /立即同步/ }));
@@ -2065,7 +2070,7 @@ function marketSnapshotPayload() {
     snapshot: {
       symbol: "BTC/USDT",
       alias: "比特币",
-      exchange: "binance",
+      source: "binance",
       last_price: 67842.15,
       change_pct_24h: 1.24,
       high_24h: 68410,
@@ -2092,7 +2097,10 @@ function marketFetch({ enabled = true, snapshot = marketSnapshotPayload(), event
     if (path.includes("/api/market/overview")) {
       return response({
         enabled,
-        exchange: "binance",
+        sources: ["binance", "gate"],
+        feed: [],
+        commentary_agent: "assistant",
+        commentary_enabled: true,
         symbols: enabled
           ? [{ symbol: "BTC/USDT", alias: "比特币", last_price: 67842.15, change_pct_24h: 1.24, timeframes: [] }]
           : [],
@@ -2133,7 +2141,8 @@ test("market page explains how to enable the fast layer when it is switched off"
   });
 
   expect(await screen.findByText("market.enabled 当前为 false")).toBeInTheDocument();
-  expect(await screen.findByText(/行情快层没有启用/)).toBeInTheDocument();
+  expect(await screen.findByText(/行情工作台被显式关掉了/)).toBeInTheDocument();
+  expect(screen.getByText(/代理不用在这里配/)).toBeInTheDocument();
   expect(screen.queryByText("多周期信号矩阵")).not.toBeInTheDocument();
 });
 
@@ -2247,4 +2256,49 @@ test("market event feed is cross-symbol and matches the unread badge", async () 
   expect(screen.getByText("ETH/USDT")).toBeInTheDocument();
   expect(screen.getByText(/全部标的 · 最近 1 条/)).toBeInTheDocument();
   expect(document.querySelector(".market-event")).toHaveClass("unread");
+});
+
+test("market flags a degraded feed when the primary source is not serving", async () => {
+  window.history.replaceState({}, "", "/market");
+  const payload = marketSnapshotPayload();
+  payload.snapshot.source = "gate";
+  global.fetch = marketFetch({ snapshot: payload });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  // 配置里 binance 是第一顺位，实际服务的是 gate，页面必须显式说明降级了。
+  const chip = await screen.findByText("gate · 已降级");
+  expect(chip).toHaveAttribute("title", "主源 binance 不可用，已降级到 gate");
+  expect(screen.getByText("binance → gate")).toBeInTheDocument();
+});
+
+test("market disables the analyze action when no commentary agent is configured", async () => {
+  window.history.replaceState({}, "", "/market");
+  const base = marketFetch();
+  global.fetch = vi.fn(async (url, options = {}) => {
+    const path = String(url);
+    if (path.includes("/api/market/overview")) {
+      return response({
+        enabled: true,
+        sources: ["binance"],
+        feed: [],
+        commentary_agent: "",
+        commentary_enabled: true,
+        symbols: [{ symbol: "BTC/USDT", alias: "比特币", last_price: 1, change_pct_24h: 0, timeframes: [] }],
+        events: { unread: 0, latest_seq: 0, last_read_seq: 0 },
+      });
+    }
+    return base(url, options);
+  });
+
+  await act(async () => {
+    await import("./main.jsx");
+  });
+
+  // 点了才报 400 是坏体验：没配好就直接禁用并说清去哪里配。
+  const button = await screen.findByRole("button", { name: /让 Agent 分析一次/ });
+  expect(button).toBeDisabled();
+  expect(screen.getByText(/慢层还没指定 Agent/)).toBeInTheDocument();
 });

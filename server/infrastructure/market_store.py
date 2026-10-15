@@ -16,7 +16,7 @@ from server.domain.market import Bar, MarketEvent
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS bars (
-  exchange TEXT NOT NULL,
+  market_key TEXT NOT NULL,
   symbol TEXT NOT NULL,
   timeframe TEXT NOT NULL,
   open_time INTEGER NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS bars (
   close REAL NOT NULL,
   volume REAL NOT NULL,
   closed INTEGER NOT NULL DEFAULT 1,
-  PRIMARY KEY (exchange, symbol, timeframe, open_time)
+  PRIMARY KEY (market_key, symbol, timeframe, open_time)
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -85,13 +85,16 @@ class MarketStore:
             self._connection.close()
 
     # ---------- K 线 ----------
+    #
+    # market_key 是逻辑市场标识（当前固定 "spot"），不是数据源交易所：
+    # 多源兜底切换来源时，同一标的的历史不能因为换了交易所就被切成两段。
 
-    def upsert_bars(self, exchange: str, symbol: str, timeframe: str, bars: list[Bar]) -> int:
+    def upsert_bars(self, market_key: str, symbol: str, timeframe: str, bars: list[Bar]) -> int:
         if not bars:
             return 0
         rows = [
             (
-                exchange,
+                market_key,
                 symbol,
                 timeframe,
                 bar.open_time,
@@ -106,9 +109,9 @@ class MarketStore:
         ]
         with self._lock:
             self._connection.executemany(
-                "INSERT INTO bars (exchange, symbol, timeframe, open_time, open, high, low, close, volume, closed)"
+                "INSERT INTO bars (market_key, symbol, timeframe, open_time, open, high, low, close, volume, closed)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                " ON CONFLICT(exchange, symbol, timeframe, open_time)"
+                " ON CONFLICT(market_key, symbol, timeframe, open_time)"
                 " DO UPDATE SET open=excluded.open, high=excluded.high, low=excluded.low,"
                 " close=excluded.close, volume=excluded.volume, closed=excluded.closed",
                 rows,
@@ -116,13 +119,13 @@ class MarketStore:
             self._connection.commit()
         return len(rows)
 
-    def load_bars(self, exchange: str, symbol: str, timeframe: str, limit: int) -> list[Bar]:
+    def load_bars(self, market_key: str, symbol: str, timeframe: str, limit: int) -> list[Bar]:
         with self._lock:
             cursor = self._connection.execute(
                 "SELECT open_time, open, high, low, close, volume, closed FROM bars"
-                " WHERE exchange = ? AND symbol = ? AND timeframe = ?"
+                " WHERE market_key = ? AND symbol = ? AND timeframe = ?"
                 " ORDER BY open_time DESC LIMIT ?",
-                (exchange, symbol, timeframe, max(1, limit)),
+                (market_key, symbol, timeframe, max(1, limit)),
             )
             rows = cursor.fetchall()
         return [
@@ -138,11 +141,11 @@ class MarketStore:
             for row in reversed(rows)
         ]
 
-    def latest_bar_time(self, exchange: str, symbol: str, timeframe: str) -> int:
+    def latest_bar_time(self, market_key: str, symbol: str, timeframe: str) -> int:
         with self._lock:
             cursor = self._connection.execute(
-                "SELECT MAX(open_time) AS latest FROM bars WHERE exchange = ? AND symbol = ? AND timeframe = ?",
-                (exchange, symbol, timeframe),
+                "SELECT MAX(open_time) AS latest FROM bars WHERE market_key = ? AND symbol = ? AND timeframe = ?",
+                (market_key, symbol, timeframe),
             )
             row = cursor.fetchone()
         return int(row["latest"]) if row and row["latest"] is not None else 0
@@ -296,7 +299,7 @@ class MarketStore:
         now_ms: int | None = None,
         min_bars_per_series: int = 0,
     ) -> dict[str, int]:
-        """按保留期清理，但每个 (exchange, symbol, timeframe) 至少保留 min_bars_per_series 根。
+        """按保留期清理，但每个 (market_key, symbol, timeframe) 至少保留 min_bars_per_series 根。
 
         没有这个下限时，`1d` 这类长周期会被保留期删到只剩二三十根，而指标需要 200 根
         （EMA200），且增量补数只补最近几根，不会把历史补回来 —— 指标会永久退化。
@@ -307,20 +310,20 @@ class MarketStore:
             bar_count = 0
             if min_bars_per_series > 0:
                 series = self._connection.execute(
-                    "SELECT DISTINCT exchange, symbol, timeframe FROM bars"
+                    "SELECT DISTINCT market_key, symbol, timeframe FROM bars"
                 ).fetchall()
                 for row in series:
                     newest = self._connection.execute(
-                        "SELECT open_time FROM bars WHERE exchange = ? AND symbol = ? AND timeframe = ?"
+                        "SELECT open_time FROM bars WHERE market_key = ? AND symbol = ? AND timeframe = ?"
                         " ORDER BY open_time DESC LIMIT 1 OFFSET ?",
-                        (row["exchange"], row["symbol"], row["timeframe"], min_bars_per_series - 1),
+                        (row["market_key"], row["symbol"], row["timeframe"], min_bars_per_series - 1),
                     ).fetchone()
                     if newest is None:
                         continue
                     floor_ms = min(cutoff_ms, int(newest["open_time"]))
                     bar_count += self._connection.execute(
-                        "DELETE FROM bars WHERE exchange = ? AND symbol = ? AND timeframe = ? AND open_time < ?",
-                        (row["exchange"], row["symbol"], row["timeframe"], floor_ms),
+                        "DELETE FROM bars WHERE market_key = ? AND symbol = ? AND timeframe = ? AND open_time < ?",
+                        (row["market_key"], row["symbol"], row["timeframe"], floor_ms),
                     ).rowcount or 0
             else:
                 bar_count = self._connection.execute(

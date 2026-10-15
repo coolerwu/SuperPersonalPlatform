@@ -18,6 +18,8 @@ from server.domain.market import (
     MarketConfig,
     MarketConfigError,
     MarketSignalsConfig,
+    MarketSource,
+    SPOT_MARKET_KEY,
     TIMEFRAME_SECONDS,
     WatchSymbol,
     normalize_symbol,
@@ -39,7 +41,14 @@ from server.domain.market_indicators import (
     sma,
     volume_ratio,
 )
-from server.infrastructure.config import parse_market_config, parse_settings
+from server.infrastructure.config import parse_market_config, parse_settings, resolve_proxy
+from server.infrastructure.market_client import (
+    DEFAULT_BASE_URLS,
+    BinanceAdapter,
+    GateAdapter,
+    MarketDataError,
+    MarketFeed,
+)
 from server.infrastructure.fastapi_app import create_app
 from server.infrastructure.market_client import Ticker24h
 from server.infrastructure.market_store import MarketStore
@@ -238,13 +247,12 @@ def test_watch_symbol_exposes_base_quote_and_native_pair() -> None:
     entry = WatchSymbol(symbol="btc/usdt", alias=" 比特币 ")
     assert entry.base == "BTC"
     assert entry.quote == "USDT"
-    assert entry.native == "BTCUSDT"
     assert entry.alias == "比特币"
 
 
 def test_market_config_rejects_unsupported_values() -> None:
     with pytest.raises(MarketConfigError):
-        MarketConfig(exchange="nasdaq")
+        MarketConfig(sources=(MarketSource(exchange="nasdaq"),))
     with pytest.raises(MarketConfigError):
         MarketConfig(poll_seconds=1)
     with pytest.raises(MarketConfigError):
@@ -257,9 +265,10 @@ def test_market_config_rejects_unsupported_values() -> None:
         MarketSignalsConfig(rsi_oversold=80, rsi_overbought=70)
 
 
-def test_market_config_defaults_are_disabled_and_cover_seven_timeframes() -> None:
+def test_market_config_is_on_by_default_and_covers_seven_timeframes() -> None:
+    # 这是用户主动要的功能，不该先让人去配置页打开它；没有自选标的时它不做任何事。
     config = MarketConfig()
-    assert config.enabled is False
+    assert config.enabled is True
     assert config.sorted_timeframes() == ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
     assert config.find_symbol("btc/usdt") is None
 
@@ -268,7 +277,7 @@ def test_parse_market_config_reads_symbols_and_nested_sections() -> None:
     config = parse_market_config(
         {
             "enabled": True,
-            "exchange": "BINANCE",
+            "sources": [{"exchange": "BINANCE"}, {"exchange": "gate"}],
             "proxy": "http://127.0.0.1:7890",
             "poll_seconds": 5,
             "symbols": ["BTC/USDT", {"symbol": "eth/usdt", "alias": "以太坊"}],
@@ -278,7 +287,7 @@ def test_parse_market_config_reads_symbols_and_nested_sections() -> None:
         }
     )
     assert config.enabled is True
-    assert config.exchange == "binance"
+    assert config.source_names() == ("binance", "gate")
     assert [entry.symbol for entry in config.symbols] == ["BTC/USDT", "ETH/USDT"]
     assert config.symbols[1].alias == "以太坊"
     assert config.signals.volume_spike_ratio == 2.0
@@ -301,9 +310,40 @@ def test_parse_market_config_refuses_malformed_shapes() -> None:
         parse_market_config({"symbols": [42]})
 
 
-def test_settings_without_a_market_section_stay_disabled() -> None:
+def test_settings_without_a_market_section_are_enabled_with_no_watchlist() -> None:
     settings = parse_settings({"auth": {"token": "t"}})
-    assert settings.market.enabled is False
+    assert settings.market.enabled is True
+    assert settings.market.symbols == ()
+    assert settings.market.source_names() == ("binance",)
+
+
+def test_network_proxy_is_global_and_resolved_per_subsystem() -> None:
+    settings = parse_settings({
+        "auth": {"token": "t"},
+        "network": {"proxy": "http://192.168.1.2:7893"},
+        "browser": {},
+        "market": {},
+    })
+    assert settings.network.proxy == "http://192.168.1.2:7893"
+    # 行情和浏览器默认跟随全局
+    assert resolve_proxy(settings.market.proxy, settings.network.proxy) == "http://192.168.1.2:7893"
+    assert resolve_proxy(settings.browser.proxy, settings.network.proxy) == "http://192.168.1.2:7893"
+    # 显式 direct 才直连
+    assert resolve_proxy("direct", settings.network.proxy) == ""
+    assert resolve_proxy("DIRECT", settings.network.proxy) == ""
+    # 显式 URL 覆盖全局
+    assert resolve_proxy("socks5://127.0.0.1:1080", settings.network.proxy) == "socks5://127.0.0.1:1080"
+    # 没有全局代理时大家都是直连
+    assert resolve_proxy("", "") == ""
+    # 微信这类必须本地出口的子系统：空值就是直连，不跟随全局
+    assert resolve_proxy("", settings.network.proxy, inherit=False) == ""
+    assert resolve_proxy("direct", settings.network.proxy, inherit=False) == ""
+
+
+def test_network_proxy_must_be_a_proxy_url() -> None:
+    with pytest.raises(ValueError):
+        parse_settings({"auth": {"token": "t"}, "network": {"proxy": "192.168.1.2:7893"}})
+    assert parse_settings({"auth": {"token": "t"}, "network": {}}).network.proxy == ""
 
 
 # --------------------------------------------------------------------- 存储
@@ -313,17 +353,17 @@ def test_store_round_trips_bars_and_overwrites_the_live_bar(tmp_path: Path) -> N
     store = MarketStore(tmp_path)
     try:
         bars = _ramp_bars(count=5)
-        store.upsert_bars("binance", "BTC/USDT", "1m", bars)
-        loaded = store.load_bars("binance", "BTC/USDT", "1m", 10)
+        store.upsert_bars(SPOT_MARKET_KEY, "BTC/USDT", "1m", bars)
+        loaded = store.load_bars(SPOT_MARKET_KEY, "BTC/USDT", "1m", 10)
         assert [bar.close for bar in loaded] == [bar.close for bar in bars]
 
         live = Bar(**{**bars[-1].__dict__, "close": 999.0, "closed": False})
-        store.upsert_bars("binance", "BTC/USDT", "1m", [live])
-        refreshed = store.load_bars("binance", "BTC/USDT", "1m", 10)
+        store.upsert_bars(SPOT_MARKET_KEY, "BTC/USDT", "1m", [live])
+        refreshed = store.load_bars(SPOT_MARKET_KEY, "BTC/USDT", "1m", 10)
         assert len(refreshed) == 5
         assert refreshed[-1].close == 999.0
         assert refreshed[-1].closed is False
-        assert store.latest_bar_time("binance", "BTC/USDT", "1m") == bars[-1].open_time
+        assert store.latest_bar_time(SPOT_MARKET_KEY, "BTC/USDT", "1m") == bars[-1].open_time
     finally:
         store.close()
 
@@ -331,8 +371,8 @@ def test_store_round_trips_bars_and_overwrites_the_live_bar(tmp_path: Path) -> N
 def test_store_limits_and_orders_bars_ascending(tmp_path: Path) -> None:
     store = MarketStore(tmp_path)
     try:
-        store.upsert_bars("binance", "BTC/USDT", "1m", _ramp_bars(count=30))
-        loaded = store.load_bars("binance", "BTC/USDT", "1m", 10)
+        store.upsert_bars(SPOT_MARKET_KEY, "BTC/USDT", "1m", _ramp_bars(count=30))
+        loaded = store.load_bars(SPOT_MARKET_KEY, "BTC/USDT", "1m", 10)
         assert len(loaded) == 10
         assert loaded == sorted(loaded, key=lambda bar: bar.open_time)
         assert loaded[-1].open_time == 29 * 60_000
@@ -411,11 +451,11 @@ def test_store_prune_drops_only_data_older_than_the_retention_window(tmp_path: P
     try:
         old_ms = NOW_MS - 40 * 86400 * 1000
         store.upsert_bars(
-            "binance", "BTC/USDT", "1m",
+            SPOT_MARKET_KEY, "BTC/USDT", "1m",
             [Bar(open_time=old_ms, open=1, high=1, low=1, close=1, volume=1)],
         )
         store.upsert_bars(
-            "binance", "BTC/USDT", "1m",
+            SPOT_MARKET_KEY, "BTC/USDT", "1m",
             [Bar(open_time=NOW_MS, open=1, high=1, low=1, close=1, volume=1)],
         )
         store.insert_event(
@@ -430,7 +470,7 @@ def test_store_prune_drops_only_data_older_than_the_retention_window(tmp_path: P
         assert removed["events"] == 1
         assert removed["bars"] == 1
         assert [item.title for item in store.list_events()] == ["new"]
-        assert len(store.load_bars("binance", "BTC/USDT", "1m", 10)) == 1
+        assert len(store.load_bars(SPOT_MARKET_KEY, "BTC/USDT", "1m", 10)) == 1
     finally:
         store.close()
 
@@ -443,21 +483,21 @@ def test_store_prune_never_drops_below_the_bars_indicators_need(tmp_path: Path) 
             Bar(open_time=NOW_MS - (299 - index) * step, open=1, high=1, low=1, close=1, volume=1)
             for index in range(300)
         ]
-        store.upsert_bars("binance", "BTC/USDT", "1d", bars)
+        store.upsert_bars(SPOT_MARKET_KEY, "BTC/USDT", "1d", bars)
         # 保留期只有 1 天，但 1d 周期必须留住 EMA200 需要的历史。
         removed = store.prune(1, now_ms=NOW_MS, min_bars_per_series=200)
         assert removed["bars"] == 100
-        kept = store.load_bars("binance", "BTC/USDT", "1d", 1000)
+        kept = store.load_bars(SPOT_MARKET_KEY, "BTC/USDT", "1d", 1000)
         assert len(kept) == 200
         assert kept[-1].open_time == bars[-1].open_time
 
         # 保留期比所需历史更长时，保留下限不该阻止过期数据被清理。
         store.prune(10_000, now_ms=NOW_MS, min_bars_per_series=200)
-        assert len(store.load_bars("binance", "BTC/USDT", "1d", 1000)) == 200
+        assert len(store.load_bars(SPOT_MARKET_KEY, "BTC/USDT", "1d", 1000)) == 200
 
         # 序列本身不足下限时全部保留。
         assert store.prune(1, now_ms=NOW_MS, min_bars_per_series=10_000)["bars"] == 0
-        assert len(store.load_bars("binance", "BTC/USDT", "1d", 1000)) == 200
+        assert len(store.load_bars(SPOT_MARKET_KEY, "BTC/USDT", "1d", 1000)) == 200
     finally:
         store.close()
 
@@ -465,19 +505,25 @@ def test_store_prune_never_drops_below_the_bars_indicators_need(tmp_path: Path) 
 # --------------------------------------------------------------------- 服务
 
 
-class FakeClient:
-    """替掉真实交易所客户端：快层的行为不该依赖网络。"""
+class FakeAdapter:
+    """替掉真实交易所：快层的行为不该依赖网络。"""
 
-    def __init__(self, bars: dict[tuple[str, str], list[Bar]], ticker: Ticker24h) -> None:
+    def __init__(self, name: str, bars: dict[str, list[Bar]], ticker: Ticker24h, *, fail: bool = False) -> None:
+        self.name = name
         self.bars = bars
         self.ticker = ticker
+        self.fail = fail
         self.calls: list[tuple[str, str]] = []
 
     async def fetch_klines(self, symbol: str, timeframe: str, limit: int, now_ms: int) -> list[Bar]:
         self.calls.append((symbol, timeframe))
-        return self.bars[(symbol, timeframe)][-limit:]
+        if self.fail:
+            raise MarketDataError(f"{self.name} is down")
+        return self.bars[timeframe][-limit:]
 
     async def fetch_ticker(self, symbol: str) -> Ticker24h:
+        if self.fail:
+            raise MarketDataError(f"{self.name} is down")
         return self.ticker
 
     async def aclose(self) -> None:
@@ -496,16 +542,15 @@ def _service(tmp_path: Path, config: MarketConfig) -> MarketService:
     return service
 
 
-def _bars_for(config: MarketConfig, symbol: str = "BTC/USDT") -> dict[tuple[str, str], list[Bar]]:
+def _bars_for(config: MarketConfig) -> dict[str, list[Bar]]:
     """平稳上涨 + 最后一根放量突破，让每个周期都稳定命中 breakout 与 volume_spike。"""
-    native = symbol.replace("/", "")
-    bars: dict[tuple[str, str], list[Bar]] = {}
+    bars: dict[str, list[Bar]] = {}
     for timeframe in config.timeframes:
         step = TIMEFRAME_SECONDS[timeframe] * 1000
         base = NOW_MS - step * 300
         closes = [100.0 + index * 0.5 for index in range(300)]
         closes[-1] = max(closes[-21:-1]) + 5
-        bars[(native, timeframe)] = [
+        bars[timeframe] = [
             Bar(
                 open_time=base + index * step,
                 open=close,
@@ -520,11 +565,45 @@ def _bars_for(config: MarketConfig, symbol: str = "BTC/USDT") -> dict[tuple[str,
     return bars
 
 
-def _run_cycle(service: MarketService, client: FakeClient) -> None:
-    async def fake_ensure(_config: MarketConfig) -> FakeClient:
-        return client
+DEFAULT_TICKER = Ticker24h(200.0, 0.0, 210.0, 190.0, 1.0)
 
-    service._ensure_client = fake_ensure  # type: ignore[assignment]
+
+class FeedHarness:
+    """真实 MarketFeed + 假适配器，所以兜底与粘性是被测代码自己走一遍的。"""
+
+    def __init__(self, config: MarketConfig, ticker: Ticker24h | None = None) -> None:
+        self.config = config
+        self.bars = _bars_for(config)
+        self.adapters = {
+            source.exchange: FakeAdapter(source.exchange, self.bars, ticker or DEFAULT_TICKER)
+            for source in config.sources
+        }
+        self.feed = MarketFeed(
+            config.sources,
+            adapter_factory=lambda source, proxy, timeout: self.adapters[source.exchange],
+        )
+
+    def adapter(self, name: str) -> FakeAdapter:
+        return self.adapters[name]
+
+    def only_adapter(self) -> FakeAdapter:
+        return next(iter(self.adapters.values()))
+
+
+def _two_sources(**overrides) -> MarketConfig:
+    return MarketConfig(
+        enabled=True,
+        sources=(MarketSource(exchange="binance"), MarketSource(exchange="gate")),
+        **overrides,
+    )
+
+
+def _run_cycle(service: MarketService, harness: FeedHarness) -> None:
+    async def fake_ensure(_config: MarketConfig) -> MarketFeed:
+        return harness.feed
+
+    service._ensure_feed = fake_ensure  # type: ignore[assignment]
+    service._feed = harness.feed
     asyncio.run(service.run_cycle())
 
 
@@ -534,12 +613,13 @@ def test_snapshot_covers_every_configured_timeframe_and_flags_fast_ones(tmp_path
         symbols=(WatchSymbol(symbol="BTC/USDT", alias="比特币"),),
     )
     service = _service(tmp_path, config)
-    client = FakeClient(_bars_for(config), Ticker24h(200.0, 1.5, 210.0, 190.0, 1234.0))
+    harness = FeedHarness(config, ticker=Ticker24h(200.0, 1.5, 210.0, 190.0, 1234.0))
     try:
-        _run_cycle(service, client)
+        _run_cycle(service, harness)
         snapshot = service.snapshot("btc/usdt")
         assert snapshot is not None
         assert snapshot.alias == "比特币"
+        assert snapshot.source == "binance"
         assert snapshot.last_price == 200.0
         assert snapshot.change_pct_24h == 1.5
         assert [frame.timeframe for frame in snapshot.timeframes] == list(config.sorted_timeframes())
@@ -555,10 +635,10 @@ def test_snapshot_covers_every_configured_timeframe_and_flags_fast_ones(tmp_path
 def test_every_timeframe_is_fetched_every_cycle(tmp_path: Path) -> None:
     config = MarketConfig(enabled=True, symbols=(WatchSymbol(symbol="BTC/USDT"),))
     service = _service(tmp_path, config)
-    client = FakeClient(_bars_for(config), Ticker24h(200.0, 0.0, 210.0, 190.0, 1.0))
+    harness = FeedHarness(config)
     try:
-        _run_cycle(service, client)
-        assert sorted(item[1] for item in client.calls) == sorted(config.timeframes)
+        _run_cycle(service, harness)
+        assert sorted(item[1] for item in harness.adapter("binance").calls) == sorted(config.timeframes)
     finally:
         service._store.close()
 
@@ -570,9 +650,9 @@ def test_fast_timeframe_signals_land_in_events_with_downgraded_severity(tmp_path
         signals=MarketSignalsConfig(cooldown_seconds=900),
     )
     service = _service(tmp_path, config)
-    client = FakeClient(_bars_for(config), Ticker24h(200.0, 0.0, 210.0, 190.0, 1.0))
+    harness = FeedHarness(config)
     try:
-        _run_cycle(service, client)
+        _run_cycle(service, harness)
         events = service.list_events(limit=500)
         by_rule = {}
         for event in events:
@@ -596,11 +676,11 @@ def test_cooldown_stops_the_same_rule_from_repeating_every_cycle(tmp_path: Path)
         signals=MarketSignalsConfig(cooldown_seconds=900),
     )
     service = _service(tmp_path, config)
-    client = FakeClient(_bars_for(config), Ticker24h(200.0, 0.0, 210.0, 190.0, 1.0))
+    harness = FeedHarness(config)
     try:
-        _run_cycle(service, client)
+        _run_cycle(service, harness)
         after_first = len(service.list_events(limit=500))
-        _run_cycle(service, client)
+        _run_cycle(service, harness)
         assert len(service.list_events(limit=500)) == after_first
     finally:
         service._store.close()
@@ -690,9 +770,9 @@ def test_analyze_uses_a_session_that_reads_back_through_the_same_id(tmp_path: Pa
         commentary=MarketCommentaryConfig(agent_id="trader"),
     )
     service = _service(tmp_path, config)
-    client = FakeClient(_bars_for(config), Ticker24h(200.0, 0.0, 210.0, 190.0, 1.0))
+    harness = FeedHarness(config)
     try:
-        _run_cycle(service, client)
+        _run_cycle(service, harness)
         dispatched = asyncio.run(service.analyze("BTC/USDT"))
         session_id = dispatched["session_id"]
 
@@ -710,12 +790,12 @@ def test_analyze_uses_a_session_that_reads_back_through_the_same_id(tmp_path: Pa
         service._store.close()
 
 
-def test_analysis_prompt_marks_fast_timeframes_as_background_only() -> None:
+def test_analysis_prompt_marks_fast_timeframes_as_background_only(tmp_path: Path) -> None:
     config = MarketConfig(enabled=True, symbols=(WatchSymbol(symbol="BTC/USDT"),))
-    service = _service(Path("/tmp"), config)
-    client = FakeClient(_bars_for(config), Ticker24h(200.0, 0.0, 210.0, 190.0, 1.0))
+    service = _service(tmp_path, config)
+    harness = FeedHarness(config)
     try:
-        _run_cycle(service, client)
+        _run_cycle(service, harness)
         prompt = build_analysis_prompt(service.snapshot("BTC/USDT"), time.time())
         assert "快层" in prompt and "慢层" in prompt
         assert "只对 1h 及以上的周期给出判断" in prompt
@@ -782,7 +862,10 @@ def test_market_api_survives_a_workspace_outside_the_market_loop(tmp_path: Path)
     assert overview.status_code == 200
     assert overview.json() == {
         "enabled": True,
-        "exchange": "binance",
+        "sources": ["binance"],
+        "feed": [],
+        "commentary_agent": "assistant",
+        "commentary_enabled": True,
         "symbols": [],
         "events": {"latest_seq": 0, "last_read_seq": 0, "unread": 0},
     }
@@ -820,23 +903,307 @@ def test_market_api_read_endpoints_do_not_create_a_commentary_session(tmp_path: 
     assert not (tmp_path / "sessions").exists()
 
 
-def test_default_market_domain_is_the_keyless_public_market_data_host() -> None:
-    """生产机（境内、无代理）只有这个域名连得上，改动它等于让快层整体失效。"""
-    from server.infrastructure.market_client import DEFAULT_BASE_URL, ExchangeClient
+def test_default_domains_are_the_ones_measured_to_work_in_production() -> None:
+    """生产网实测只有这两个默认域名可用，改动它等于让快层整体失效。"""
+    assert DEFAULT_BASE_URLS["binance"] == "https://data-api.binance.vision"
+    assert DEFAULT_BASE_URLS["gate"] == "https://api.gateio.ws"
 
-    assert DEFAULT_BASE_URL == "https://data-api.binance.vision"
-    assert MarketConfig().base_url == ""
+    assert BinanceAdapter().base_url == DEFAULT_BASE_URLS["binance"]
+    assert GateAdapter().base_url == DEFAULT_BASE_URLS["gate"]
 
-    client = ExchangeClient()
+    configured = parse_market_config({"sources": [{"exchange": "binance", "base_url": "https://mirror.internal/"}]})
+    assert configured.sources[0].base_url == "https://mirror.internal"
+    assert BinanceAdapter(base_url=configured.sources[0].base_url).base_url == "https://mirror.internal"
+
+
+def test_a_single_exchange_config_still_parses_into_one_source() -> None:
+    config = parse_market_config({"enabled": True, "exchange": "GATE", "base_url": "https://api.gateio.ws/"})
+    assert config.source_names() == ("gate",)
+    assert config.sources[0].base_url == "https://api.gateio.ws"
+    assert MarketConfig().source_names() == ("binance",)
+
+
+def test_source_config_rejects_unknown_exchange_and_bad_url() -> None:
+    with pytest.raises(MarketConfigError):
+        parse_market_config({"sources": [{"exchange": "nasdaq"}]})
+    with pytest.raises(MarketConfigError):
+        parse_market_config({"sources": [{"exchange": "binance", "base_url": "ftp://x/"}]})
+    with pytest.raises(MarketConfigError):
+        parse_market_config({"sources": []})
+    with pytest.raises(MarketConfigError):
+        parse_market_config({"sources": [{"exchange": "binance"}, {"exchange": "binance"}]})
+    with pytest.raises(MarketConfigError):
+        parse_market_config({"sources": ["binance/okx"]})
+
+
+# --------------------------------------------------------------------- 多源兜底
+
+
+def test_feed_falls_over_to_the_next_source_and_sticks_to_it(tmp_path: Path) -> None:
+    config = _two_sources(symbols=(WatchSymbol(symbol="BTC/USDT"),))
+    service = _service(tmp_path, config)
+    harness = FeedHarness(config)
+    harness.adapter("binance").fail = True
     try:
-        assert client._base_url == DEFAULT_BASE_URL
-    finally:
-        asyncio.run(client.aclose())
+        _run_cycle(service, harness)
+        snapshot = service.snapshot("BTC/USDT")
+        assert snapshot is not None and snapshot.source == "gate"
+        assert harness.feed.active_source == "gate"
 
-    configured = parse_market_config({"base_url": "https://mirror.internal/"})
-    assert configured.base_url == "https://mirror.internal/"
-    client = ExchangeClient(base_url=configured.base_url)
-    try:
-        assert client._base_url == "https://mirror.internal"
+        # 粘性：下一轮先从还在工作的 gate 开始，不再去撞已经坏掉的 binance。
+        harness.adapter("binance").calls.clear()
+        harness.adapter("gate").calls.clear()
+        _run_cycle(service, harness)
+        assert harness.adapter("binance").calls == []
+        assert harness.adapter("gate").calls
+        assert service.snapshot("BTC/USDT").source == "gate"
     finally:
-        asyncio.run(client.aclose())
+        service._store.close()
+
+
+def test_feed_prefers_the_first_configured_source_while_it_works(tmp_path: Path) -> None:
+    config = _two_sources(symbols=(WatchSymbol(symbol="BTC/USDT"),))
+    service = _service(tmp_path, config)
+    harness = FeedHarness(config)
+    try:
+        _run_cycle(service, harness)
+        assert harness.adapter("binance").calls
+        assert harness.adapter("gate").calls == []
+        assert service.snapshot("BTC/USDT").source == "binance"
+    finally:
+        service._store.close()
+
+
+def test_feed_returns_to_the_primary_source_once_it_recovers(tmp_path: Path) -> None:
+    config = _two_sources(symbols=(WatchSymbol(symbol="BTC/USDT"),))
+    service = _service(tmp_path, config)
+    harness = FeedHarness(config)
+    harness.adapter("binance").fail = True
+    try:
+        _run_cycle(service, harness)
+        assert service.snapshot("BTC/USDT").source == "gate"
+        harness.adapter("binance").fail = False
+        _run_cycle(service, harness)
+        # gate 还在工作，所以继续用它，不每轮来回切
+        assert service.snapshot("BTC/USDT").source == "gate"
+    finally:
+        service._store.close()
+
+
+def test_all_sources_failing_keeps_the_previous_snapshot(tmp_path: Path) -> None:
+    config = _two_sources(symbols=(WatchSymbol(symbol="BTC/USDT"),))
+    service = _service(tmp_path, config)
+    harness = FeedHarness(config)
+    try:
+        _run_cycle(service, harness)
+        good = service.snapshot("BTC/USDT")
+        assert good is not None
+
+        harness.adapter("binance").fail = True
+        harness.adapter("gate").fail = True
+        _run_cycle(service, harness)
+        assert service.snapshot("BTC/USDT") is good
+    finally:
+        service._store.close()
+
+
+def test_switching_source_does_not_fork_the_stored_history(tmp_path: Path) -> None:
+    """bar 按标的和周期存，不按来源 —— 否则换源会丢掉历史、指标直接退化。"""
+    config = _two_sources(symbols=(WatchSymbol(symbol="BTC/USDT"),))
+    service = _service(tmp_path, config)
+    harness = FeedHarness(config)
+    try:
+        _run_cycle(service, harness)
+        from_binance = service._store.load_bars(SPOT_MARKET_KEY, "BTC/USDT", "1m", 500)
+        assert len(from_binance) == 300
+
+        harness.adapter("binance").fail = True
+        _run_cycle(service, harness)
+        after_failover = service._store.load_bars(SPOT_MARKET_KEY, "BTC/USDT", "1m", 500)
+        assert len(after_failover) == len(from_binance)
+        assert [bar.open_time for bar in after_failover] == [bar.open_time for bar in from_binance]
+    finally:
+        service._store.close()
+
+
+# --------------------------------------------------------------------- 适配器解析
+
+
+def _adapter_with_transport(adapter_class, handler, base_url: str = "https://example.invalid"):
+    import httpx
+
+    adapter = adapter_class(base_url=base_url)
+    asyncio.run(adapter._client.aclose())
+    adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return adapter
+
+
+def test_gate_adapter_reads_its_unusual_candle_field_order() -> None:
+    """Gate 的 candlesticks 是 [时间戳, 计价量, 收盘, 最高, 最低, 开盘, 基础量, 是否收盘]。"""
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["currency_pair"] == "BTC_USDT"
+        assert request.url.params["interval"] == "5m"
+        return httpx.Response(200, json=[
+            ["1792072800", "93660512.04", "81875.6", "82041.4", "80117.7", "80211.3", "1153.98", "true"],
+            ["1792076400", "54260132.62", "82293.8", "82389.2", "81756", "81875.5", "660.34", "false"],
+        ])
+
+    adapter = _adapter_with_transport(GateAdapter, handler)
+    try:
+        bars = asyncio.run(adapter.fetch_klines("BTC/USDT", "5m", 10, NOW_MS))
+        assert [bar.open_time for bar in bars] == [1792072800000, 1792076400000]
+        last = bars[-1]
+        assert (last.open, last.high, last.low, last.close) == (81875.5, 82389.2, 81756.0, 82293.8)
+        assert last.volume == pytest.approx(660.34)
+        assert last.closed is False
+        assert bars[0].closed is True
+    finally:
+        asyncio.run(adapter.aclose())
+
+
+def test_gate_adapter_sorts_candles_ascending_whatever_the_exchange_returns() -> None:
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[
+            ["1792076400", "1", "2", "3", "1", "1.5", "9", "false"],
+            ["1792072800", "1", "2", "3", "1", "1.5", "9", "true"],
+        ])
+
+    adapter = _adapter_with_transport(GateAdapter, handler)
+    try:
+        bars = asyncio.run(adapter.fetch_klines("BTC/USDT", "5m", 10, NOW_MS))
+        assert [bar.open_time for bar in bars] == [1792072800000, 1792076400000]
+    finally:
+        asyncio.run(adapter.aclose())
+
+
+def test_gate_adapter_maps_the_ticker_fields() -> None:
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{
+            "currency_pair": "BTC_USDT", "last": "82281.3", "change_percentage": "0.47",
+            "base_volume": "12604.38", "high_24h": "82389.2", "low_24h": "79795",
+        }])
+
+    adapter = _adapter_with_transport(GateAdapter, handler)
+    try:
+        ticker = asyncio.run(adapter.fetch_ticker("BTC/USDT"))
+        assert ticker.last_price == 82281.3
+        assert ticker.change_pct == 0.47
+        assert ticker.high == 82389.2
+        assert ticker.low == 79795.0
+        assert ticker.volume == pytest.approx(12604.38)
+    finally:
+        asyncio.run(adapter.aclose())
+
+
+def test_binance_adapter_converts_symbol_and_derives_closed() -> None:
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["symbol"] == "BTCUSDT"
+        assert request.url.params["interval"] == "1h"
+        return httpx.Response(200, json=[
+            [1792072800000, "80208.89", "81900.0", "80115.99", "81668.26", "12.5", 1792076399999,
+             "0", 0, "0", "0", "0"],
+            [1792076400000, "81668.26", "81800.0", "81500.0", "81700.0", "9.0", 1792080000000,
+             "0", 0, "0", "0", "0"],
+        ])
+
+    adapter = _adapter_with_transport(BinanceAdapter, handler)
+    try:
+        # now 落在第二根 bar 的收盘时间之前：第一根已收盘，第二根进行中。
+        now_ms = 1792077000000
+        bars = asyncio.run(adapter.fetch_klines("BTC/USDT", "1h", 10, now_ms))
+        assert bars[0].closed is True
+        assert bars[1].closed is False
+        assert bars[1].close == 81700.0
+        assert bars[0].volume == pytest.approx(12.5)
+    finally:
+        asyncio.run(adapter.aclose())
+
+
+def test_adapter_rejects_a_response_that_is_not_json() -> None:
+    import httpx
+
+    adapter = _adapter_with_transport(
+        BinanceAdapter, lambda request: httpx.Response(200, text="<html>nope</html>")
+    )
+    try:
+        with pytest.raises(MarketDataError):
+            asyncio.run(adapter.fetch_klines("BTC/USDT", "1m", 5, NOW_MS))
+    finally:
+        asyncio.run(adapter.aclose())
+
+
+def test_adapter_reports_an_http_error_as_market_data_error() -> None:
+    import httpx
+
+    adapter = _adapter_with_transport(
+        BinanceAdapter, lambda request: httpx.Response(451, json={"msg": "restricted location"})
+    )
+    try:
+        with pytest.raises(MarketDataError, match="451"):
+            asyncio.run(adapter.fetch_ticker("BTC/USDT"))
+    finally:
+        asyncio.run(adapter.aclose())
+
+
+def test_feed_reports_which_source_is_serving_and_what_failed(tmp_path: Path) -> None:
+    config = _two_sources(symbols=(WatchSymbol(symbol="BTC/USDT"),))
+    service = _service(tmp_path, config)
+    harness = FeedHarness(config)
+    harness.adapter("binance").fail = True
+    try:
+        _run_cycle(service, harness)
+        status = service.feed_status()
+        assert [item["exchange"] for item in status] == ["binance", "gate"]
+        assert status[0]["active"] is False and "down" in status[0]["last_error"]
+        assert status[1]["active"] is True and status[1]["last_error"] == ""
+    finally:
+        service._store.close()
+
+
+def test_feed_status_falls_back_to_the_exception_type_when_str_is_empty(tmp_path: Path) -> None:
+    """httpx 的连接异常 str() 可能是空的，状态里不能只剩一句无用的前缀。"""
+
+    class BlankError(Exception):
+        def __str__(self) -> str:
+            return ""
+
+    class BlankAdapter(FakeAdapter):
+        async def fetch_klines(self, symbol, timeframe, limit, now_ms):
+            raise BlankError()
+
+    config = _two_sources(symbols=(WatchSymbol(symbol="BTC/USDT"),))
+    service = _service(tmp_path, config)
+    harness = FeedHarness(config)
+    harness.adapters["binance"] = BlankAdapter("binance", harness.bars, DEFAULT_TICKER)
+    try:
+        _run_cycle(service, harness)
+        status = service.feed_status()
+        assert status[0]["last_error"] == "BlankError"
+        assert status[1]["active"] is True
+        assert service.snapshot("BTC/USDT").source == "gate"
+    finally:
+        service._store.close()
+
+
+def test_adapter_error_message_names_the_failure_when_httpx_says_nothing() -> None:
+    """连接类 httpx 异常的 str() 常为空；降级原因里必须留下能排查的东西。"""
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("")
+
+    adapter = _adapter_with_transport(BinanceAdapter, handler)
+    try:
+        with pytest.raises(MarketDataError) as caught:
+            asyncio.run(adapter.fetch_ticker("BTC/USDT"))
+        assert "ConnectError" in str(caught.value)
+    finally:
+        asyncio.run(adapter.aclose())

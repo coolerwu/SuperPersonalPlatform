@@ -222,7 +222,7 @@ POST   /api/market/analyze
 POST   /api/market/refresh
 ```
 
-`symbol` 一律走查询参数（写法固定为 `BTC/USDT`，含斜杠，不能做路径参数），删除自选也走 `DELETE /api/market/symbols?symbol=`。`/api/market/overview` 只返回左栏需要的报价、24h 涨跌和各周期方向，不返回整份指标；`/api/market/snapshot` 是页面主轮询接口，返回一个标的的全部周期快照（指标、信号、最近 20 根收盘价、数据时间与是否陈旧）；`/api/market/bars` 返回原始 K 线供画图；`/api/market/events` 按 `after={seq}` 增量返回信号事件，不按标的过滤（未读游标是全局的，事件流定位为跨标的告警流），`/api/market/events/read` 推进已读游标；`/api/market/symbols` 读写页面维护的自选列表；`/api/market/commentary` 返回该标的的 Agent 解读历史与当前是否有解读 Run 在跑；`/api/market/analyze` 为一个标的创建一次 Agent 解读 Run，同一标的已有解读 Run 时返回 409，配置缺失或还没有快照时返回 400；`/api/market/refresh` 立即执行一次快层采集，用于配置改动后不等下一轮。
+`symbol` 一律走查询参数（写法固定为 `BTC/USDT`，含斜杠，不能做路径参数），删除自选也走 `DELETE /api/market/symbols?symbol=`。`/api/market/overview` 只返回左栏需要的报价、24h 涨跌和各周期方向，不返回整份指标，另外带上配置的 `sources` 顺序和每个来源的 `feed` 状态（是否在用、最近一次成功与失败原因）；`/api/market/snapshot` 是页面主轮询接口，返回一个标的的全部周期快照（指标、信号、最近 20 根收盘价、数据时间与是否陈旧）；`/api/market/bars` 返回原始 K 线供画图；`/api/market/events` 按 `after={seq}` 增量返回信号事件，不按标的过滤（未读游标是全局的，事件流定位为跨标的告警流），`/api/market/events/read` 推进已读游标；`/api/market/symbols` 读写页面维护的自选列表；`/api/market/commentary` 返回该标的的 Agent 解读历史与当前是否有解读 Run 在跑；`/api/market/analyze` 为一个标的创建一次 Agent 解读 Run，同一标的已有解读 Run 时返回 409，配置缺失或还没有快照时返回 400；`/api/market/refresh` 立即执行一次快层采集，用于配置改动后不等下一轮。
 
 System API 额外保留：
 ```text
@@ -286,7 +286,7 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 - `/skills` 是技能库页面，读取 `config.yaml` 的 Agent 列表后按 Agent 分组列出各自私有工作区里的技能，路径固定为 `workspace/agents/{agent_id}/workspace/skills/{skill_id}/SKILL.md`；左栏默认选中第一个 Agent、只展开该 Agent 的技能，行内显示 frontmatter 的 name、description 摘要、修改时间，以及“不会加载/规格警告/契约”标记（鼠标悬停给出具体原因），右栏是 `SKILL.md` 纯文本编辑器，支持新建、保存和删除整个技能目录（删除二次确认），技能的辅助文件只列出名称与大小、仍到 `/workspace` 维护。页面按 SkillsMiddleware 的真实口径分级：缺少 `---` frontmatter、frontmatter 未闭合或不是映射、缺 `name` 或 `description`、SKILL.md 缺失或超过 10MB 才会让运行时跳过该技能（标记“不会加载”并禁用保存）；`name` 与目录名不一致、`name` 不符合 Agent Skills 规范、`description` 超过 1024 字符只是规范警告，运行时仍会加载（description 会被截断），页面标记“规格警告”但允许保存。包含 `<!-- BEGIN USER CONTRACT -->` 区块时页面提示该区块是用户硬约束、Agent 文件工具不能改。技能目录缺失按空态处理，改动在下一次 Agent 运行时由 SkillsMiddleware 生效，不影响运行中的 Run。
 - 侧栏只保留一个 `/config` 配置主菜单，右侧用栏目切换基础配置、Providers 和 Agents；保存仍写回 `workspace/config.yaml` 并经后端配置校验。
 - `/config` 基础配置栏目只承载访问 Token、服务监听和坚果云 WebDAV 等基础配置；访问 Token 按明文输入展示。
-- `/config` 基础配置栏目还承载 `browser.proxy`、`browser.timeout_ms` 和 `browser.allow_private_hosts`，用于 `browser_extract` 的 Playwright headless browser。微信账号代理只服务微信 iLink 连接，不自动复用为浏览器代理；`allow_private_hosts` 只允许管理员显式信任的 hostname 或 `.domain` 后缀在解析到内网/私有 IP 时继续访问。
+- `/config` 基础配置栏目承载全局出口代理 `network.proxy`，以及 `browser.proxy`（覆盖项）、`browser.timeout_ms` 和 `browser.allow_private_hosts`。`allow_private_hosts` 只允许管理员显式信任的 hostname 或 `.domain` 后缀在解析到内网/私有 IP 时继续访问。
 - `/config` 基础配置栏目还维护 `maintenance` 清理配置，默认启用、保留 15 天、每天运行一次；也可设置为 dry run 只预览不删除。
 - `/config` 的 Agent 栏目提供 WebDAV 开关、映射目录、read/write 权限与目录说明；原运行时参数区仅保留最大执行步数。全局页面移除 WebDAV 权限规则。
 - `/config` 的 WebDAV 文件同步区域提供“测试连接”和“立即同步”操作；测试连接使用当前表单草稿测试 WebDAV，不保存配置且不回传 secret；立即同步调用后端手动同步接口读取已保存的 `workspace/config.yaml`，立刻把坚果云远端文件缓存到 `workspace/context/webdav/` 并返回文本/图片资源数量；保存配置本身仍只负责校验并写回 `config.yaml`。
@@ -301,12 +301,36 @@ Chat 输入区左侧是常驻“+”动作菜单：点开后当前只有“图�
 - Runs 工作区通过 1 分钟一次的轮询读取后端落盘状态，但前端必须保留当前详情快照、只在返回内容实际变化时更新状态，避免每次拉取 `workspace/runs/index.json` 时出现短暂重刷或 `unknown` 状态闪动。
 - Runs 详情区使用更短的 2 秒轮询读取选中 run 的详情和事件；运行中若存在 `partial.json` 且尚无最终 `result.json`，结果预览显示 partial 内容和“正在生成”状态。
 
+## 网络代理
+
+- `network.proxy` 是全局出口代理，需要出网的子系统默认跟随它。子系统自己的 `proxy` 字段语法统一：留空或缺失 = **跟随全局**；`direct` = **强制直连**（忽略全局）；URL = **只用它**。解析统一走 `server/infrastructure/config.py` 的 `resolve_proxy()`。
+- 跟随全局的子系统：`browser.proxy`（Playwright）和 `market.proxy`（行情采集）。
+- **微信通道刻意不跟随**：微信账号的 `proxy` 空值就是直连（`resolve_proxy(..., inherit=False)`）。微信是境内服务，走境外出口既没有收益，还会让登录态被判成异常登录。要显式指定才填 URL。
+- `network.proxy` 只接受 `http(s)://` 或 `socks*://` 开头；写成 `host:port` 会在配置校验时直接失败，而不是等到发请求才报错。
+- 生产机的 `~/.bashrc` 里另有指向 `192.168.1.2:7893` 的 `http_proxy`/`https_proxy`，那是给交互式 shell 用的；systemd 用户单元不读 `.bashrc`，服务只认 `network.proxy` 和它自己的进程环境变量。
+
 ## 行情工作台
 
 行情工作台把「有时效性要求的判断」和「需要推理的判断」拆成两层，这是它存在的理由：一次 Agent Run 从创建到出结论要经过 session/checkpoint 恢复、middleware 与提示词注入、多轮模型与工具调用，实际耗时数十秒到数分钟，而 1m K 线每 60 秒就换一根；同一份输入两次 Run 还可能给出不同判断。所以 1h 以下的判断不能交给模型。
 
+- `market.enabled` 默认开启：这是用户主动要的功能，不该先让人去配置页打开它。没有自选标的时它什么都不做（不建 feed、不发请求），所以默认开启是安全的。
 - 快层（`1m`/`5m`/`15m`/`30m`）完全由平台代码产出：`MarketService` 在 FastAPI lifespan 内以 `market.poll_seconds`（默认 5 秒）为周期，通过 `ExchangeClient` 只读交易所公开行情接口，把 K 线写入 `workspace/market/market.sqlite`，再用 `server/domain/market_indicators.py` 计算指标与信号。全链路不产生任何模型调用，指标和信号是纯函数，同一份 bar 数据必然得到同一份结果。
-- 数据源固定为 Binance 现货公开接口，不持有 API key，只读。默认域名是官方只读行情域 `https://data-api.binance.vision`；`market.base_url` 可覆盖为自建镜像或网关。选这个默认值是因为实测生产机（中国电信出口）直连它返回 200，而 `api.binance.com` 直连超时、经代理出口被判 HTTP 451。`market.proxy` 留空时 `httpx` 沿用进程代理环境变量（生产机实测无代理也可直连，因此留空即可）；注意 `httpx` 在 macOS 上还会读取系统代理设置且不读系统代理的例外列表，所以把 `base_url` 指向内网地址时要显式设置 `no_proxy`。任一标的采集失败只记录并保留上一份快照，靠 `data_age_seconds` / `stale` 在页面上标注延迟，不静默显示旧值。
+- 已实测的交易所可达性（在 192.168.1.3 上各跑 6 轮，2026-10-15 的结论，换网络或换节点后要重测）：
+
+  | 交易所公开行情 | 裸直连（服务实际走的路径） | 经 192.168.1.2:7893 |
+  | --- | --- | --- |
+  | Binance `data-api.binance.vision` | 200，七个周期可取，1m 滞后约 23 秒 | 200，延迟 0.9–3.6s |
+  | Binance `api.binance.com` | 连不上 | 451（受限地区） |
+  | Gate `api.gateio.ws` | 200，延迟 0.34–0.68s，1m 滞后约 1.7 秒 | 200 |
+  | Bitget `api.bitget.com` | 连不上 | 200，延迟 0.8–1.8s，1m 滞后约 35 秒 |
+  | OKX `www.okx.com` | 连不上 | 200 |
+  | Bybit `api.bybit.com` | 连不上 | 200 |
+
+  也就是说：**不挂代理时只有 Binance `.vision` 和 Gate 可用**，挂了 192.168.1.2 的代理则五家都能用。Gate 的 `candlesticks` 返回字段顺序不是常规 OHLCV（`[秒级时间戳, 计价成交量, 收盘, 最高, 最低, 开盘, 基础成交量, 是否收盘]`），接入时需要单独的解析。
+- 数据源是多源兜底：`market.sources` 是有序列表，`MarketFeed` 按顺序尝试，第一个成功的接管并**保持粘性**——只有当前源真的失败才轮到下一个，全部失败时保留上一份快照并在页面上标注延迟与降级来源。粘性是必须的：不同交易所同一根 K 线有微小差异（实测 Binance 82476.01 vs Gate 82479.80），每轮随机换源会让指标抖动。一个源只要有一个周期取不到就整体换源，先前的数据不写库，避免半份数据混进历史。适配器在 `market_client.py`，对外只有 `fetch_klines` / `fetch_ticker` / `aclose`，当前支持 `binance` 和 `gate`；加第三家要同时补 `ADAPTERS` 和 `SUPPORTED_EXCHANGES`。
+- 默认域名按实测可用性选定：`binance` → `https://data-api.binance.vision`（官方只读行情域），`gate` → `https://api.gateio.ws`。两者在生产网都能裸直连；`api.binance.com` 直连不通、经局域网代理被判 HTTP 451。`market.sources[].base_url` 可覆盖为自建镜像或网关。`market.proxy` 留空时跟随全局 `network.proxy`（见「网络代理」一节）；全局为空时适配器还会沿用进程代理环境变量。给 systemd unit 添加代理变量前要先确认目标域名在那个代理上可用。`httpx` 在 macOS 上还会读取系统代理设置且不读系统代理的例外列表，所以把 `base_url` 指向内网地址时要显式设置 `no_proxy`。
+- 某一根 K 线来自哪个交易所不写进存储：`bars` 按 `market_key`（固定 `"spot"`）+ 标的 + 周期 + 开盘时间存储，切换来源不会把同一标的的历史切成两段。当前实际服务的是哪家只在快照的 `source` 字段和 `/api/market/overview` 的 `feed` 里体现，页面在这种情况下显示「已降级」。
+- 单个标的采集失败只记录并保留上一份快照，靠 `data_age_seconds` / `stale` 在页面上标注延迟，不静默显示旧值。
 - 慢层（`1h`/`4h`/`1d`）由 Agent 解读。`POST /api/market/analyze` 把平台算好的快照作为唯一行情来源交给 Agent（`build_analysis_prompt`），并明确要求不要再自行取行情；解读异步产出，页面在 Agent 运行期间照常刷新矩阵。Agent 侧还有 `market_snapshot` 平台工具读取同一份快照，避免它去爬行情网站。
 - 指标与信号只有一份实现（`server/domain/market_indicators.py`）：页面矩阵、信号事件、Agent 工具和解读提示词全部调用它，不允许出现第二套口径。指标为 EMA20/60/200、RSI14、MACD(12,26,9)、ATR14 及其相对自身近 100 根基线的 `atr_ratio`、布林带(20,2)、量比（对前 20 根均量）和前 20 根摆动高低点。
 - 信号规则命中即写入 `market.sqlite` 的 `events` 表，用自增 `seq` 作为页面增量游标；同一 `symbol + timeframe + rule_id` 在 `cooldown_seconds` 内不重复产生事件。1h 以下的信号严重度整体降一级：分钟级噪音不应和小时级信号同级提醒。

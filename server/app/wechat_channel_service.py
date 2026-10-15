@@ -15,6 +15,7 @@ from urllib.parse import quote, urljoin
 import yaml
 
 from server.app.debounce_executor import DebouncedTaskExecutor
+from server.infrastructure.config import resolve_proxy
 from server.app.run_service import SessionRunConflictError
 from server.infrastructure.ilink_client import (
     ILinkAPIError,
@@ -130,7 +131,7 @@ class WechatChannelService:
                     await self._login_phase()
                 else:
                     proxy = self._channel_config().get("proxy", "")
-                    self._client = ILinkClient(proxy=str(proxy).strip() if proxy else None)
+                    self._client = ILinkClient(proxy=_account_proxy(proxy) or None)
                 await self._message_loop()
         except asyncio.CancelledError:
             async with self._lock:
@@ -160,7 +161,7 @@ class WechatChannelService:
 
     async def _login_phase(self) -> None:
         proxy = self._channel_config().get("proxy", "")
-        self._client = ILinkClient(proxy=str(proxy).strip() if proxy else None)
+        self._client = ILinkClient(proxy=_account_proxy(proxy) or None)
         try:
             qr_response = await self._client.get_bot_qrcode()
         except Exception as exc:
@@ -892,7 +893,7 @@ class WechatChannelService:
         if not self._client or not self._baseurl or not self._bot_token:
             proxy = self._channel_config().get("proxy", "")
             if self._client is None:
-                self._client = ILinkClient(proxy=str(proxy).strip() if proxy else None)
+                self._client = ILinkClient(proxy=_account_proxy(proxy) or None)
             if not self._baseurl or not self._bot_token:
                 resumed = await self._try_resume_session()
                 if not resumed:
@@ -1434,6 +1435,15 @@ def _wechat_cdn_download_url(encrypt_query_param: str) -> str:
     else:
         query = f"encrypted_query_param={quote(value, safe='')}"
     return f"https://novac2c.cdn.weixin.qq.com/c2c/download?{query}"
+
+
+def _account_proxy(value: Any) -> str:
+    """微信账号的代理：空或 direct 都表示直连。
+
+    微信是境内服务，**刻意不跟随全局 network.proxy**：走境外出口既没有收益，
+    还会让登录态被判成异常登录。要显式指定才填 URL。
+    """
+    return resolve_proxy(value, "", inherit=False)
 
 
 def _image_aes_key(payload: dict[str, Any], media: dict[str, Any] | None) -> bytes | None:

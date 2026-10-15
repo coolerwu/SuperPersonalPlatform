@@ -37,7 +37,10 @@ def create_market_router(container: AppContainer) -> APIRouter:
         snapshots = market_service.all_snapshots()
         return {
             "enabled": market_service.config.enabled,
-            "exchange": market_service.config.exchange,
+            "sources": list(market_service.config.source_names()),
+            "feed": market_service.feed_status(),
+            "commentary_agent": market_service.config.commentary.agent_id,
+            "commentary_enabled": market_service.config.commentary.enabled,
             "symbols": [_overview_item(item) for item in snapshots],
             "events": market_service.events_summary(),
         }

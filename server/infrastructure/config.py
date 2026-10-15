@@ -21,6 +21,7 @@ from server.domain.market import (
     MarketConfig,
     MarketConfigError,
     MarketSignalsConfig,
+    MarketSource,
     TelegramNotifyConfig,
     WatchSymbol,
 )
@@ -37,8 +38,40 @@ class ServerConfig:
     port: int = 8888
 
 
+DIRECT_PROXY = "direct"
+_PROXY_SCHEMES = ("http://", "https://", "socks5://", "socks5h://", "socks4://", "socks4a://")
+
+
+@dataclass(frozen=True)
+class NetworkConfig:
+    """全局出口代理。需要出网的子系统默认跟随它。"""
+
+    proxy: str = ""
+
+    def __post_init__(self) -> None:
+        if self.proxy and not self.proxy.startswith(_PROXY_SCHEMES):
+            raise ValueError("network.proxy must be an http(s) or socks URL")
+
+
+def resolve_proxy(value: Any, global_proxy: str = "", *, inherit: bool = True) -> str:
+    """把某个子系统的 proxy 字段解析成实际要用的代理地址。
+
+    - `""`：跟随全局 `network.proxy`；`inherit=False` 时表示强制直连
+      （微信这类必须从本地出口的子系统用后者）
+    - `"direct"`：强制直连，忽略全局代理
+    - 其它：显式使用该地址
+    """
+    raw = str(value or "").strip()
+    if raw.lower() == DIRECT_PROXY:
+        return ""
+    if raw:
+        return raw
+    return global_proxy if inherit else ""
+
+
 @dataclass(frozen=True)
 class BrowserConfig:
+    # 空 = 跟随 network.proxy；"direct" = 强制直连；URL = 只用这个代理。
     proxy: str = ""
     timeout_ms: int = 60000
     allow_private_hosts: tuple[str, ...] = ()
@@ -155,6 +188,7 @@ class Settings:
     auth: AuthConfig
     server: ServerConfig
     browser: BrowserConfig = field(default_factory=BrowserConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
     code_execution: CodeExecutionConfig = field(default_factory=CodeExecutionConfig)
     nutstore: NutstoreConfig = field(default_factory=NutstoreConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
@@ -196,6 +230,7 @@ def parse_settings(raw: dict[str, Any]) -> Settings:
             port=int(server_raw.get("port") or 8888),
         ),
         browser=parse_browser_config(raw.get("browser") or {}),
+        network=parse_network_config(raw.get("network") or {}),
         code_execution=parse_code_execution_config(raw.get("code_execution") or {}),
         nutstore=parse_nutstore_config(nutstore_raw),
         context=parse_context_config(raw.get("context") or {}),
@@ -313,6 +348,14 @@ def parse_nutstore_config(raw: Any) -> NutstoreConfig:
     )
 
 
+def parse_network_config(raw: Any) -> NetworkConfig:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("network must be an object")
+    return NetworkConfig(proxy=str(raw.get("proxy") or "").strip())
+
+
 def parse_browser_config(raw: Any) -> BrowserConfig:
     if raw is None:
         raw = {}
@@ -419,9 +462,8 @@ def parse_market_config(raw: Any) -> MarketConfig:
             raise MarketConfigError("market.symbols[] entries must be strings or objects")
 
     return MarketConfig(
-        enabled=bool(raw.get("enabled", False)),
-        exchange=str(raw.get("exchange") or "binance").strip().lower(),
-        base_url=str(raw.get("base_url") or "").strip(),
+        enabled=bool(raw.get("enabled", True)),
+        sources=parse_market_sources(raw),
         proxy=str(raw.get("proxy") or "").strip(),
         poll_seconds=int(raw.get("poll_seconds") or 5),
         timeframes=timeframes,
@@ -432,6 +474,38 @@ def parse_market_config(raw: Any) -> MarketConfig:
         telegram=parse_market_telegram(raw.get("telegram") or {}),
         commentary=parse_market_commentary(raw.get("commentary") or {}),
     )
+
+
+def parse_market_sources(raw: dict[str, Any]) -> tuple[MarketSource, ...]:
+    """`sources` 是有序兜底列表；只写了单个 exchange/base_url 的旧配置也能用。"""
+    sources_raw = raw.get("sources")
+    if sources_raw is None:
+        return (
+            MarketSource(
+                exchange=str(raw.get("exchange") or "binance").strip().lower(),
+                base_url=str(raw.get("base_url") or "").strip(),
+            ),
+        )
+    if not isinstance(sources_raw, list):
+        raise MarketConfigError("market.sources must be a list")
+    if not sources_raw:
+        raise MarketConfigError("market.sources must not be empty")
+    entries: list[MarketSource] = []
+    for item in sources_raw:
+        if isinstance(item, str):
+            entries.append(MarketSource(exchange=item))
+            continue
+        if not isinstance(item, dict):
+            raise MarketConfigError("market.sources[] entries must be strings or objects")
+        if "exchange" not in item:
+            raise MarketConfigError("market.sources[].exchange is required")
+        entries.append(
+            MarketSource(
+                exchange=str(item.get("exchange") or ""),
+                base_url=str(item.get("base_url") or ""),
+            )
+        )
+    return tuple(entries)
 
 
 def parse_market_signals(raw: Any) -> MarketSignalsConfig:

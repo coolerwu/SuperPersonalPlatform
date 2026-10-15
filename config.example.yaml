@@ -3,7 +3,13 @@ auth:
 server:
   host: "0.0.0.0"
   port: 8888
+network:
+  # 全局出口代理。需要出网的子系统默认跟随它（行情、浏览器）；
+  # 子系统里写 "direct" 表示强制直连，"http://..." 表示只用它自己的。
+  # 留空 = 全部直连。
+  proxy: ""
 browser:
+  # 空 = 跟随 network.proxy。
   proxy: ""
   timeout_ms: 60000
   allow_private_hosts: []
@@ -64,12 +70,16 @@ maintenance:
   retention_days: 15
   dry_run: false
 market:
-  enabled: false
-  exchange: "binance"
-  # 留空用官方只读行情域 data-api.binance.vision。境内实测：该域名可直连，
-  # api.binance.com 直连超时、经代理出口还会被判 HTTP 451。
-  base_url: ""
-  # 留空则直连（生产机实测不需要代理）；填了则所有行情请求都走它。
+  # 默认开启；没有自选标的时它什么都不做，不会产生任何请求。
+  enabled: true
+  # 按顺序尝试，第一个成功的接管并保持粘性；某个源连续失败就自动降级到下一个，
+  # 全部失败时保留上一份快照并在页面上标注延迟。
+  # 默认域名：binance -> data-api.binance.vision（生产网实测 api.binance.com 直连不通、
+  # 经代理被判 451，只有这个只读行情域名两条路都通），gate -> api.gateio.ws（可直连）。
+  sources:
+    - exchange: "binance"
+    - exchange: "gate"
+  # 空 = 跟随 network.proxy；"direct" = 强制直连；URL = 只用它。
   proxy: ""
   poll_seconds: 5
   history_limit: 400

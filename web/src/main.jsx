@@ -2181,6 +2181,9 @@ function MarketPage() {
   const activeRun = commentary.active_run;
   const latestCommentary = (commentary.commentary || [])[0] || null;
   const unread = Number(overview.events?.unread || 0);
+  const primarySource = (overview.sources || [])[0] || "";
+  const commentaryAgent = overview.commentary_agent || "";
+  const commentaryReady = Boolean(commentaryAgent) && overview.commentary_enabled !== false;
 
   return (
     <section className="console-screen market-screen">
@@ -2196,11 +2199,10 @@ function MarketPage() {
             </div>
           </div>
           <div className="market-disabled-body">
-            <p>行情快层没有启用，所以没有采集、没有指标、也没有信号事件。</p>
+            <p>行情工作台被显式关掉了（<code>market.enabled: false</code>），所以没有采集、没有指标、也没有信号事件。</p>
             <p>
-              到 <code>/config</code> 的基础配置里打开 <code>market.enabled</code>，填好
-              <code>market.proxy</code>（境内直连交易所通常需要），以及慢层解读要用的
-              <code>market.commentary.agent_id</code>，保存后本页会自动接上。
+              把 <code>config.yaml</code> 里的 <code>market.enabled</code> 改回 <code>true</code> 即可，
+              保存后本页会自动接上。代理不用在这里配——行情跟随全局的 <code>network.proxy</code>。
             </p>
           </div>
         </section>
@@ -2210,7 +2212,7 @@ function MarketPage() {
             <div className="panel-title">
               <div>
                 <span>自选标的</span>
-                <small>{overview.exchange || "—"}</small>
+                <small>{(overview.sources || []).join(" → ") || "—"}</small>
               </div>
             </div>
             <div className="market-symbol-list">
@@ -2266,7 +2268,19 @@ function MarketPage() {
                 <div className="market-quote-id">
                   <strong>{snapshot.symbol}</strong>
                   {snapshot.alias ? <em>{snapshot.alias}</em> : null}
-                  <span className="market-chip market-chip-exchange">{snapshot.exchange}</span>
+                  <span
+                    className={`market-chip market-chip-exchange ${
+                      primarySource && snapshot.source !== primarySource ? "degraded" : ""
+                    }`}
+                    title={
+                      primarySource && snapshot.source !== primarySource
+                        ? `主源 ${primarySource} 不可用，已降级到 ${snapshot.source}`
+                        : "当前实际服务的数据源"
+                    }
+                  >
+                    {snapshot.source}
+                    {primarySource && snapshot.source !== primarySource ? " · 已降级" : ""}
+                  </span>
                   <span className="market-chip market-chip-fast">快层 秒级</span>
                   <span className="market-chip market-chip-slow">慢层 1h+</span>
                 </div>
@@ -2473,12 +2487,18 @@ function MarketPage() {
                 <div className="empty-state">这个标的还没有 Agent 解读。</div>
               )}
 
-              <button className="primary market-analyze" onClick={analyze} disabled={!symbol || busy || Boolean(activeRun)}>
+              <button
+                className="primary market-analyze"
+                onClick={analyze}
+                disabled={!symbol || busy || Boolean(activeRun) || !commentaryReady}
+              >
                 <RefreshCw size={14} className={activeRun ? "spin" : ""} />
                 {activeRun ? "Agent 正在分析…" : "让 Agent 分析一次"}
               </button>
               <p className="market-analyze-hint">
-                基于 1h / 4h / 1d 快照做跨周期研判，约需 1–3 分钟；期间矩阵与事件流照常刷新。
+                {commentaryReady
+                  ? `由 ${commentaryAgent} 基于 1h / 4h / 1d 快照做跨周期研判，约需 1–3 分钟；期间矩阵与事件流照常刷新。`
+                  : "慢层还没指定 Agent。到 /config 的 Agents 栏目，或直接在 config.yaml 里填 market.commentary.agent_id。"}
               </p>
 
               {(commentary.commentary || []).length > 1 ? (

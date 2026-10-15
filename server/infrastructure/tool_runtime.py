@@ -16,7 +16,7 @@ from server.app.session_service import SessionService
 from server.app.webdav_context_service import WebDAVContextService
 from server.domain.tooling import get_tool_definition
 from server.infrastructure.browser_tools import build_browser_extract_tool, build_browser_search_tool
-from server.infrastructure.config import load_settings
+from server.infrastructure.config import load_settings, resolve_proxy
 from server.domain.agent_config import AgentWebDAVConfig
 from server.infrastructure.agent_workspace import WebDAVPathPolicy
 from server.infrastructure.webdav_backend import AgentWebDAVView
@@ -142,7 +142,8 @@ def _browser_config(context_workspace: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return {
-        "proxy": settings.browser.proxy,
+        # browser.proxy 为空就跟随全局 network.proxy；写 direct 才强制直连。
+        "proxy": resolve_proxy(settings.browser.proxy, settings.network.proxy),
         "timeout_ms": settings.browser.timeout_ms,
         "allow_private_hosts": settings.browser.allow_private_hosts,
     }
@@ -505,7 +506,7 @@ def _market_snapshot_tool(market_service: Any) -> Any:
             return _json_dumps(
                 {
                     "ok": True,
-                    "exchange": config.exchange,
+                    "sources": list(config.source_names()),
                     "symbols": [item.to_dict() for item in market_service.all_snapshots()],
                     "hint": "传 symbol 可以只看一个标的。",
                 }

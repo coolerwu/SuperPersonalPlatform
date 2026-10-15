@@ -26,11 +26,37 @@ DEFAULT_COMMENTARY_TIMEFRAMES: tuple[str, ...] = ("1h", "4h", "1d")
 
 SEVERITIES: tuple[str, ...] = ("low", "medium", "high")
 
-SUPPORTED_EXCHANGES: tuple[str, ...] = ("binance",)
+# 有适配器的交易所。加一家要同时补 market_client 里的 adapter。
+SUPPORTED_EXCHANGES: tuple[str, ...] = ("binance", "gate")
+
+# K 线按标的和周期存储，不按数据源：多源兜底切换来源时不能把历史切成两段。
+SPOT_MARKET_KEY = "spot"
 
 
 class MarketConfigError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class MarketSource:
+    """一个行情来源。base_url 留空用该交易所的默认域名。"""
+
+    exchange: str
+    base_url: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "exchange", str(self.exchange or "").strip().lower())
+        object.__setattr__(self, "base_url", str(self.base_url or "").strip().rstrip("/"))
+        if self.exchange not in SUPPORTED_EXCHANGES:
+            raise MarketConfigError(
+                f"market.sources[].exchange must be one of {', '.join(SUPPORTED_EXCHANGES)}"
+            )
+        if self.base_url and not self.base_url.startswith(("http://", "https://")):
+            raise MarketConfigError("market.sources[].base_url must be an http(s) URL")
+
+    @property
+    def label(self) -> str:
+        return self.exchange
 
 
 @dataclass(frozen=True)
@@ -54,11 +80,6 @@ class WatchSymbol:
     @property
     def quote(self) -> str:
         return self.symbol.split("/", 1)[1]
-
-    @property
-    def native(self) -> str:
-        """交易所原生交易对写法，例如 BTCUSDT。"""
-        return f"{self.base}{self.quote}"
 
     @property
     def display(self) -> str:
@@ -153,10 +174,11 @@ class MarketCommentaryConfig:
 
 @dataclass(frozen=True)
 class MarketConfig:
-    enabled: bool = False
-    exchange: str = "binance"
-    # 留空用交易所默认域名；可指向镜像域名或内网网关。
-    base_url: str = ""
+    # 默认开启：这是用户主动要的功能，不该先让人去配置页打开它。
+    # 没有自选标的时它什么都不做（不建 feed、不发请求），所以默认开启是安全的。
+    enabled: bool = True
+    # 按顺序尝试，第一个成功的源接管；全部失败时保留上一份快照。
+    sources: tuple[MarketSource, ...] = ()
     proxy: str = ""
     poll_seconds: int = 5
     timeframes: tuple[str, ...] = DEFAULT_TIMEFRAMES
@@ -168,10 +190,13 @@ class MarketConfig:
     commentary: MarketCommentaryConfig = field(default_factory=MarketCommentaryConfig)
 
     def __post_init__(self) -> None:
-        if self.exchange not in SUPPORTED_EXCHANGES:
-            raise MarketConfigError(
-                f"market.exchange must be one of {', '.join(SUPPORTED_EXCHANGES)}"
-            )
+        if not self.sources:
+            object.__setattr__(self, "sources", (MarketSource(exchange="binance"),))
+        seen: set[str] = set()
+        for source in self.sources:
+            if source.exchange in seen:
+                raise MarketConfigError(f"market.sources[] repeats exchange {source.exchange}")
+            seen.add(source.exchange)
         if self.poll_seconds < 5:
             raise MarketConfigError("market.poll_seconds must be at least 5")
         if self.history_limit < 60:
@@ -190,6 +215,13 @@ class MarketConfig:
             if entry.symbol in seen:
                 raise MarketConfigError(f"market.symbols[] has duplicate symbol {entry.symbol}")
             seen.add(entry.symbol)
+
+    @property
+    def primary_exchange(self) -> str:
+        return self.sources[0].exchange if self.sources else ""
+
+    def source_names(self) -> tuple[str, ...]:
+        return tuple(source.exchange for source in self.sources)
 
     def sorted_timeframes(self) -> tuple[str, ...]:
         """按周期从短到长排列，与矩阵自上而下的顺序一致。"""
@@ -284,7 +316,7 @@ class TimeframeSnapshot:
 class SymbolSnapshot:
     symbol: str
     alias: str
-    exchange: str
+    source: str
     last_price: float
     change_pct_24h: float
     high_24h: float
@@ -299,7 +331,7 @@ class SymbolSnapshot:
         return {
             "symbol": self.symbol,
             "alias": self.alias,
-            "exchange": self.exchange,
+            "source": self.source,
             "last_price": self.last_price,
             "change_pct_24h": self.change_pct_24h,
             "high_24h": self.high_24h,

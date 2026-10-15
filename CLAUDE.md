@@ -98,7 +98,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 指标与信号只有一份实现。页面矩阵、信号事件、`market_snapshot` 工具和解读提示词都必须调用 `market_indicators.py`；出现第二套口径就是缺陷。
 - `SessionService.build_session_id` 返回的是渠道身份 active key，**不是** session id。需要 session id 时必须走 `get_or_create`（会创建）或读已记录的映射，不能拿 active key 当 session id 用。
 - 行情库按「超过 `market.retention_days`」与「每个 series 至少保留 `history_limit` 根」取较大范围清理。只按保留期删会让 `1d` 剩不下 200 根，EMA200 永久为 None，而增量补数只补最近几根，不会回补历史。
-- 行情数据源默认是 Binance 官方只读行情域 `https://data-api.binance.vision`，生产机（境内、无代理）实测直连可用，`api.binance.com` 在同机超时、经代理出口会被判 451。换默认域名前先在生产机上验证。
+- 代理只有一个全局入口 `network.proxy`。子系统自己的 `proxy` 字段留空 = 跟随全局，`direct` = 强制直连，URL = 只用它，统一走 `resolve_proxy()`。**微信不能跟随全局代理**（境内服务走境外出口会被判异常登录），它的空值就是直连。
+- 行情默认开启（`market.enabled` 默认 `true`）。不要把它改回默认关闭：没有自选标的时它什么都不做，默认关闭只会让人先去配置页白点一次。
+- 行情是多源兜底：`market.sources` 有序，第一个可用的源接管并**保持粘性**，只有它真的失败才降级。不要改成「每轮挑一个能用的」——不同交易所同一根 K 线有微小差异，来回换源会让指标抖动。
+- 默认域名：`binance` → `https://data-api.binance.vision`，`gate` → `https://api.gateio.ws`。两者在生产网都能裸直连；`api.binance.com` 直连不通、经局域网代理 192.168.1.2:7893 被判 HTTP 451（受限地区）。换默认域名前必须在生产机上把两条路都验一遍。
+- 生产机的 `~/.bashrc` 设了指向 `192.168.1.2:7893` 的 `http_proxy`/`https_proxy`，但 systemd 用户单元不读 `.bashrc`，所以服务走直连。往 unit 里加代理变量前，先确认行情域名在那个代理上可用。
+- K 线按 `market_key`（固定 `"spot"`）+ 标的 + 周期存储，**不按来源交易所**。按来源存会让降级切换把同一标的的历史切成两段。
+- 加第三家交易所前先看 `docs/intent.md` F17 的决策 6：ccxt 在项目 venv 里装不上（要跟 `cryptography` 的钉版本一起解析）、binance 要额外设 `fetchMarkets=["spot"]` 并手改域名、Bitget 的 `load_markets` 在这套网络里会超时。
 - 自选列表是数据库里的运行时状态，不要为了「添加标的」去改 `config.yaml`。
 - 行情 API 的 `symbol` 含斜杠，一律走查询参数，不能做路径参数。
 

@@ -17,6 +17,7 @@ from server.domain.market import (
     Bar,
     MarketConfig,
     MarketEvent,
+    SPOT_MARKET_KEY,
     SymbolSnapshot,
     TIMEFRAME_SECONDS,
     TimeframeSnapshot,
@@ -36,8 +37,8 @@ from server.domain.market_indicators import (
     classify_volatility,
     classify_volume,
 )
-from server.infrastructure.config import load_settings
-from server.infrastructure.market_client import ExchangeClient, MarketDataError, Ticker24h
+from server.infrastructure.config import load_settings, resolve_proxy
+from server.infrastructure.market_client import MarketDataError, MarketFeed, SymbolFetch, Ticker24h
 from server.infrastructure.market_store import MarketStore
 from server.infrastructure.telegram_notifier import TelegramNotifier
 
@@ -76,9 +77,10 @@ class MarketService:
 
         self._store = MarketStore(self._workspace)
         self._config: MarketConfig = MarketConfig()
+        self._global_proxy = ""
         self._config_error_logged = ""
-        self._client: ExchangeClient | None = None
-        self._client_key: tuple[str, str, str] = ("", "", "")
+        self._feed: MarketFeed | None = None
+        self._feed_key: tuple[tuple[str, str], ...] = ()
         self._snapshots: dict[str, SymbolSnapshot] = {}
         self._tickers: dict[str, Ticker24h] = {}
         self._notifier: TelegramNotifier | None = None
@@ -105,9 +107,9 @@ class MarketService:
                 continue
 
     async def aclose(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        if self._feed is not None:
+            await self._feed.aclose()
+            self._feed = None
         self._store.close()
 
     # ------------------------------------------------------------------ 配置
@@ -125,10 +127,11 @@ class MarketService:
         self._config_error_logged = ""
         previous = self._config
         self._config = settings.market
+        self._global_proxy = settings.network.proxy
         if self._config != previous:
             self._log(
                 f"market config updated: enabled={self._config.enabled} "
-                f"exchange={self._config.exchange} symbols={len(self._config.symbols)}"
+                f"sources={','.join(self._config.source_names())} symbols={len(self._config.symbols)}"
             )
         return self._config
 
@@ -153,11 +156,11 @@ class MarketService:
         config = self._config
         if not config.enabled:
             return
-        client = await self._ensure_client(config)
+        feed = await self._ensure_feed(config)
         now_ms = int(time.time() * 1000)
         for watch in self.watchlist(config):
             try:
-                await self._ingest_symbol(client, config, watch, now_ms)
+                await self._ingest_symbol(feed, config, watch, now_ms)
             except MarketDataError as exc:
                 # 单个标的失败不影响其它标的；页面会按快照的数据时间标注延迟。
                 self._log(f"market ingest failed for {watch.symbol}: {exc}")
@@ -166,41 +169,56 @@ class MarketService:
 
     async def _ingest_symbol(
         self,
-        client: ExchangeClient,
+        feed: MarketFeed,
         config: MarketConfig,
         watch: WatchSymbol,
         now_ms: int,
     ) -> None:
-        for timeframe in config.sorted_timeframes():
-            limit = self._plan_limit(config, watch, timeframe, now_ms)
-            bars = await client.fetch_klines(watch.native, timeframe, limit, now_ms)
-            self._store.upsert_bars(config.exchange, watch.symbol, timeframe, bars)
+        timeframes = config.sorted_timeframes()
+        fetched: SymbolFetch = await feed.fetch_symbol(
+            watch.symbol,
+            timeframes,
+            lambda timeframe: self._plan_limit(config, watch, timeframe, now_ms),
+            now_ms,
+        )
+        # 只有整个标的从同一个来源取全了才落盘，避免半份数据混进历史。
+        for timeframe in timeframes:
+            self._store.upsert_bars(
+                SPOT_MARKET_KEY, watch.symbol, timeframe, fetched.bars[timeframe]
+            )
+        self._tickers[watch.symbol] = fetched.ticker
 
-        ticker = await client.fetch_ticker(watch.native)
-        self._tickers[watch.symbol] = ticker
-
-        snapshot, raw_signals = self._build_snapshot(config, watch, ticker, now_ms)
+        snapshot, raw_signals = self._build_snapshot(
+            config, watch, fetched.ticker, fetched.source, now_ms
+        )
         self._snapshots[watch.symbol] = snapshot
         await self._emit_signals(config, watch, raw_signals, now_ms)
 
     def _plan_limit(self, config: MarketConfig, watch: WatchSymbol, timeframe: str, now_ms: int) -> int:
         """只补回停机期间缺的 bar，避免每轮都拉满历史。"""
-        latest = self._store.latest_bar_time(config.exchange, watch.symbol, timeframe)
+        latest = self._store.latest_bar_time(SPOT_MARKET_KEY, watch.symbol, timeframe)
         if latest <= 0:
             return config.history_limit
         span = TIMEFRAME_SECONDS[timeframe] * 1000
         missing = int(max(0, now_ms - latest) // span) + 1
         return max(3, min(config.history_limit, missing + 2))
 
-    async def _ensure_client(self, config: MarketConfig) -> ExchangeClient:
-        key = (config.exchange, config.base_url, config.proxy)
-        if self._client is not None and self._client_key == key:
-            return self._client
-        if self._client is not None:
-            await self._client.aclose()
-        self._client = ExchangeClient(base_url=config.base_url, proxy=config.proxy)
-        self._client_key = key
-        return self._client
+    async def _ensure_feed(self, config: MarketConfig) -> MarketFeed:
+        # market.proxy 为空就跟随全局 network.proxy；写 direct 才强制直连。
+        proxy = resolve_proxy(config.proxy, self._global_proxy)
+        key = tuple((source.exchange, source.base_url) for source in config.sources) + (
+            ("__proxy__", proxy),
+        )
+        if self._feed is not None and self._feed_key == key:
+            return self._feed
+        if self._feed is not None:
+            await self._feed.aclose()
+        self._feed = MarketFeed(config.sources, proxy=proxy)
+        self._feed_key = key
+        return self._feed
+
+    def feed_status(self) -> list[dict[str, Any]]:
+        return self._feed.status() if self._feed is not None else []
 
     # ------------------------------------------------------------------ 自选标的
 
@@ -239,7 +257,7 @@ class MarketService:
         normalized = normalize_symbol(symbol)
         if not normalized or timeframe not in TIMEFRAME_SECONDS:
             return []
-        bars = self._store.load_bars(self._config.exchange, normalized, timeframe, limit)
+        bars = self._store.load_bars(SPOT_MARKET_KEY, normalized, timeframe, limit)
         return [
             {
                 "open_time": bar.open_time,
@@ -266,13 +284,14 @@ class MarketService:
         config: MarketConfig,
         watch: WatchSymbol,
         ticker: Ticker24h,
+        source: str,
         now_ms: int,
     ) -> tuple[SymbolSnapshot, list[tuple[str, DetectedSignal]]]:
         frames: list[TimeframeSnapshot] = []
         raw_signals: list[tuple[str, DetectedSignal]] = []
         newest_bar_ms = 0
         for timeframe in config.sorted_timeframes():
-            bars = self._store.load_bars(config.exchange, watch.symbol, timeframe, config.history_limit)
+            bars = self._store.load_bars(SPOT_MARKET_KEY, watch.symbol, timeframe, config.history_limit)
             if not bars:
                 continue
             frame, detected = self._build_timeframe(config, timeframe, bars, now_ms)
@@ -286,7 +305,7 @@ class MarketService:
             SymbolSnapshot(
                 symbol=watch.symbol,
                 alias=watch.alias,
-                exchange=config.exchange,
+                source=source,
                 last_price=ticker.last_price,
                 change_pct_24h=ticker.change_pct,
                 high_24h=ticker.high,
@@ -398,7 +417,7 @@ class MarketService:
     # ------------------------------------------------------------------ Agent 慢层
 
     def _commentary_session_key(self, config: MarketConfig, symbol: str) -> str:
-        return f"commentary_session:{config.exchange}:{config.commentary.agent_id}:{symbol}"
+        return f"commentary_session:{SPOT_MARKET_KEY}:{config.commentary.agent_id}:{symbol}"
 
     def commentary_session_id(self, symbol: str, config: MarketConfig | None = None) -> str:
         """返回这个标的已经创建过的解读会话；没创建过就返回空。
@@ -434,7 +453,7 @@ class MarketService:
 
         identity = self._session_service.get_or_create(
             channel=COMMENTARY_CHANNEL,
-            channel_account_id=config.exchange,
+            channel_account_id=SPOT_MARKET_KEY,
             peer_type="symbol",
             peer_id=normalized.replace("/", ""),
             agent_id=config.commentary.agent_id,

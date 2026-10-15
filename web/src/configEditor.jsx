@@ -57,6 +57,7 @@ const AGENT_TOOL_CARDS = [
 const DEFAULT_CONFIG = {
   auth: { token: "" },
   server: { host: "0.0.0.0", port: 8888 },
+  network: { proxy: "" },
   browser: { proxy: "", timeout_ms: 60000, allow_private_hosts: [] },
   code_execution: {
     enabled: true,
@@ -227,15 +228,36 @@ export function ConfigVisualEditor({ draft, onChange, readOnly, onSyncWebdav, on
 
       <section className="config-section">
         <div className="config-section-title">
+          <strong>网络代理</strong>
+          <span>network</span>
+        </div>
+        <div className="config-grid">
+          <ConfigField label="全局出口代理">
+            <input
+              value={config.network.proxy}
+              readOnly={readOnly}
+              placeholder="http://192.168.1.2:7893 或 socks5://..."
+              onChange={(event) => update((next) => (next.network.proxy = event.target.value))}
+            />
+          </ConfigField>
+        </div>
+        <p className="config-hint">
+          需要出网的子系统（行情、浏览器）默认跟随这里；子系统里填 <code>direct</code> 表示强制直连，
+          填 URL 表示只用它自己的。微信通道始终直连，不跟随这里。
+        </p>
+      </section>
+
+      <section className="config-section">
+        <div className="config-section-title">
           <strong>浏览器抓取</strong>
           <span>browser / Playwright</span>
         </div>
         <div className="config-grid">
-          <ConfigField label="代理">
+          <ConfigField label="代理覆盖">
             <input
               value={config.browser.proxy}
               readOnly={readOnly}
-              placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7890"
+              placeholder="留空 = 跟随全局；direct = 强制直连"
               onChange={(event) => update((next) => (next.browser.proxy = event.target.value))}
             />
           </ConfigField>
@@ -993,6 +1015,9 @@ function withDefaults(value) {
         dry_run: Boolean(config.maintenance.dry_run),
       }
     : cloneConfig(DEFAULT_CONFIG.maintenance);
+  config.network = isPlainObject(config.network)
+    ? { proxy: String(config.network.proxy || "") }
+    : cloneConfig(DEFAULT_CONFIG.network);
   config.browser = isPlainObject(config.browser)
     ? {
         proxy: String(config.browser.proxy || ""),
