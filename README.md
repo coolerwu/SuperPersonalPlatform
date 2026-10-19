@@ -1,6 +1,6 @@
 # Agent Command Center
 
-v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置页）。
+v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置页），浅色界面，assistant 消息支持 Markdown。
 
 - `apps/api`：FastAPI + deepagents + LangGraph
 - `apps/web`：React + Vite + TypeScript
@@ -27,12 +27,20 @@ npm run dev
 
 本地聊天需要有效模型密钥：通过 `export LLM_API_KEY=...` 或在 `apps/api/.env` 配置；不要提交。也可以登录后在侧栏「配置」里填写。
 
+## Chat
+
+- assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
+- 消息操作：复制、引用到输入框；失败 Run 可重试；
+- 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
+- 空状态提供建议提示词。
+
 ## 配置页
 
 侧栏底部「配置」进入配置页，集中管理：
 
 - Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
 - Agent：选择并编辑名称、Provider、instructions，或新建 Agent；
+- Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
 - 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
 
 Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流式片段，在右侧抽屉里展开查看。
@@ -62,10 +70,10 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
 
 ## 前端构建产物
 
-`apps/web/dist` 提交到仓库。修改前端后先构建再提交：
+`apps/web/dist` 提交到仓库。修改前端后先构建再提交；`package.json` 变化时先 `npm install`：
 
 ```bash
-cd apps/web && npm run build
+cd apps/web && npm install && npm run build
 ```
 
 生产不再构建 Web 镜像：FastAPI 直接托管已提交的 `apps/web/dist`（含 SPA fallback），API 和页面在同一个进程里。

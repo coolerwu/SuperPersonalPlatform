@@ -111,3 +111,50 @@ def test_web_dist_and_spa_fallback(client) -> None:
 def test_timestamps_are_utc(client) -> None:
     created_at = client.get("/api/providers").json()[0]["created_at"]
     assert created_at.endswith("Z") or created_at.endswith("+00:00")
+
+
+def test_agent_permanent_delete_cascades_sessions(client) -> None:
+    agent_id = client.post("/api/agents", json={"name": "DeleteMe"}).json()["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+
+    response = client.delete(f"/api/agents/{agent_id}/permanent")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deleted"] is True
+    assert body["sessions"] == 1
+
+    assert all(item["id"] != agent_id for item in client.get("/api/agents").json())
+    assert client.get(f"/api/sessions/{session_id}/messages").status_code == 404
+
+
+def test_agent_permanent_delete_blocks_active_run(client) -> None:
+    agent_id = client.post("/api/agents", json={"name": "Busy"}).json()["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+    client.post("/api/chat/messages", json={"session_id": session_id, "content": "hi"})
+
+    response = client.delete(f"/api/agents/{agent_id}/permanent")
+    assert response.status_code == 409
+
+
+def test_retry_requires_failed_run(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+    run_id = client.post(
+        "/api/chat/messages", json={"session_id": session_id, "content": "retry me"}
+    ).json()["run_id"]
+
+    response = client.post(f"/api/runs/{run_id}/retry")
+    assert response.status_code == 409
+
+
+def test_agent_permanent_delete_removes_checkpoint(client) -> None:
+    from app.config import settings
+
+    agent_id = client.post("/api/agents", json={"name": "CheckpointMe"}).json()["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+    checkpoint = settings.checkpoint_dir / f"{session_id}.sqlite"
+    checkpoint.write_bytes(b"checkpoint")
+
+    response = client.delete(f"/api/agents/{agent_id}/permanent")
+    assert response.status_code == 200
+    assert not checkpoint.exists()

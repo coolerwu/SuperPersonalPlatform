@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
+from app.config import settings
 from app.db import get_db
-from app.models import Agent, Provider, Run
+from app.models import Agent, Message, Provider, Run, RunEvent, Session
 from app.schemas import AgentCreate, AgentOut, AgentUpdate
 
 router = APIRouter(prefix="/api/agents", tags=["agents"], dependencies=[Depends(require_auth)])
@@ -90,6 +93,33 @@ async def update_agent(
     return agent_out(agent, provider)
 
 
+@router.delete("/{agent_id}/permanent")
+async def delete_agent_permanently(agent_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    active = await db.scalar(
+        select(Run).where(Run.agent_id == agent_id, Run.status.in_(("queued", "running"))).limit(1)
+    )
+    if active is not None:
+        raise HTTPException(status_code=409, detail="agent has an active run")
+
+    session_ids = list((await db.scalars(select(Session.id).where(Session.agent_id == agent_id))).all())
+    run_ids = list((await db.scalars(select(Run.id).where(Run.agent_id == agent_id))).all())
+    if run_ids:
+        await db.execute(delete(RunEvent).where(RunEvent.run_id.in_(run_ids)))
+        await db.execute(delete(Run).where(Run.id.in_(run_ids)))
+    if session_ids:
+        await db.execute(delete(Message).where(Message.session_id.in_(session_ids)))
+        await db.execute(delete(Session).where(Session.id.in_(session_ids)))
+    await db.delete(agent)
+    await db.commit()
+
+    for session_id in session_ids:
+        _remove_checkpoint(session_id)
+    return {"deleted": True, "sessions": len(session_ids), "runs": len(run_ids)}
+
+
 @router.delete("/{agent_id}")
 async def archive_agent(agent_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
     agent = await db.get(Agent, agent_id)
@@ -103,3 +133,9 @@ async def archive_agent(agent_id: str, db: AsyncSession = Depends(get_db)) -> di
     agent.status = "archived"
     await db.commit()
     return {"archived": True}
+
+
+def _remove_checkpoint(session_id: str) -> None:
+    base = settings.checkpoint_dir / f"{session_id}.sqlite"
+    for path in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
+        path.unlink(missing_ok=True)

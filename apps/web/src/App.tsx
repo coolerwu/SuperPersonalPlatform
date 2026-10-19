@@ -30,6 +30,7 @@ export default function App() {
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [view, setView] = useState<"chat" | "settings">("chat");
+  const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
 
@@ -125,6 +126,7 @@ export default function App() {
     const list = await api.listMessages(id);
     setMessages(list);
     if (!syncRun) return;
+    setError("");
 
     const lastRunId = [...list].reverse().find((message) => message.run_id)?.run_id;
     if (!lastRunId) {
@@ -135,6 +137,9 @@ export default function App() {
     const [run, runEvents] = await Promise.all([api.getRun(lastRunId), api.getRunEvents(lastRunId)]);
     setActiveRun(run);
     setEvents(runEvents);
+    if (run.status === "failed") {
+      setError(run.error || "Run failed");
+    }
     if ((run.status === "queued" || run.status === "running") && !finishedRuns.current.has(run.id)) {
       setSending(true);
       setStreamText(
@@ -266,6 +271,43 @@ export default function App() {
     }
   }
 
+  function quote(text: string) {
+    const quoted = text.split("\n").map((line) => `> ${line}`).join("\n");
+    setDraft((current) => (current.trim() ? `${quoted}\n\n${current}` : `${quoted}\n\n`));
+    setFocusSignal((current) => current + 1);
+  }
+
+  async function retry(runId: string) {
+    if (sending) return;
+    setError("");
+    setSending(true);
+    setStreamText("");
+    setEvents([]);
+    try {
+      const response = await api.retryRun(runId);
+      const run = await api.getRun(response.run_id);
+      setActiveRun(run);
+      subscribe(response.run_id);
+      void refreshSessions();
+    } catch (exc) {
+      setError(errorText(exc));
+      setSending(false);
+    }
+  }
+
+  async function deleteAgentPermanently(id: string) {
+    const result = await api.deleteAgentPermanently(id);
+    await loadWorkspace();
+    if (id === agentId) {
+      setSessionId("");
+      setMessages([]);
+      setActiveRun(null);
+      setEvents([]);
+      setStreamText("");
+    }
+    return result;
+  }
+
   async function newSession() {
     if (!agentId) return;
     try {
@@ -393,6 +435,7 @@ export default function App() {
           onSaveProvider={saveProvider}
           onCreateProvider={createProvider}
           onNewAgent={() => setNewAgentOpen(true)}
+          onDeleteAgent={deleteAgentPermanently}
           onClose={() => setView("chat")}
         />
       ) : (
@@ -423,6 +466,7 @@ export default function App() {
             </div>
           ) : (
             <ChatPanel
+              key={sessionId}
               messages={messages}
               streamText={visibleStream}
               sending={chatSending}
@@ -431,9 +475,12 @@ export default function App() {
               draft={draft}
               canSend={Boolean(sessionId && agentId)}
               agentName={agent?.name ?? "Agent"}
+              focusSignal={focusSignal}
               onDraftChange={setDraft}
               onSend={() => void send()}
               onCancel={() => void cancel()}
+              onQuote={quote}
+              onRetry={(runId) => void retry(runId)}
             />
           )}
         </main>

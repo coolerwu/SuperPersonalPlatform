@@ -1,7 +1,9 @@
-import { KeyboardEvent, useEffect, useRef } from "react";
+import { KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { Message, Run } from "../types";
 import { formatTime } from "../format";
+import { copyText } from "../clipboard";
+import { Markdown } from "./Markdown";
 
 type ChatPanelProps = {
   messages: Message[];
@@ -12,17 +14,64 @@ type ChatPanelProps = {
   draft: string;
   canSend: boolean;
   agentName: string;
+  focusSignal: number;
   onDraftChange: (value: string) => void;
   onSend: () => void;
   onCancel: () => void;
+  onQuote: (text: string) => void;
+  onRetry: (runId: string) => void;
 };
+
+const SUGGESTIONS = [
+  "帮我写一个 Python 脚本",
+  "总结这段内容的要点",
+  "解释一个技术概念",
+];
+
+function CopyButton({ text, label = "复制" }: { text: string; label?: string }) {
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+
+  async function copy() {
+    const copied = await copyText(text);
+    setStatus(copied ? "copied" : "failed");
+    window.setTimeout(() => setStatus("idle"), 1500);
+  }
+
+  return (
+    <button type="button" className="message-action" onClick={() => void copy()}>
+      {status === "copied" ? "已复制" : status === "failed" ? "复制失败" : label}
+    </button>
+  );
+}
 
 export function ChatPanel(props: ChatPanelProps) {
   const endRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const stickRef = useRef(true);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (props.focusSignal > 0) textareaRef.current?.focus();
+  }, [props.focusSignal]);
+
+  useEffect(() => {
+    const element = textareaRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
+  }, [props.draft]);
+
+  useEffect(() => {
+    if (stickRef.current) {
+      endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
   }, [props.messages, props.streamText, props.sending]);
+
+  function handleScroll() {
+    const element = scrollRef.current;
+    if (!element) return;
+    stickRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+  }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || event.shiftKey) return;
@@ -31,76 +80,131 @@ export function ChatPanel(props: ChatPanelProps) {
     props.onSend();
   }
 
+  function useSuggestion(text: string) {
+    props.onDraftChange(text);
+    textareaRef.current?.focus();
+  }
+
   return (
     <section className="chat-panel">
-      <div className="message-scroll">
+      <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
         {props.messages.length === 0 && !props.sending && (
           <div className="chat-empty">
             <div className="chat-empty-mark">ACC</div>
             <h2>和 {props.agentName || "Agent"} 开始对话</h2>
-            <p>每条消息都会创建一个 Run；工具调用、子 Agent 和用量会出现在右侧抽屉。</p>
+            <p>支持 Markdown、代码块和消息复制；流式输出会实时显示。</p>
+            <div className="suggestion-list">
+              {SUGGESTIONS.map((suggestion) => (
+                <button key={suggestion} type="button" onClick={() => useSuggestion(suggestion)}>
+                  {suggestion}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
-        {props.messages.map((message) => (
-          <div key={message.id} className={`message-row ${message.role}`}>
-            <div className={`message-bubble ${message.role}`}>
-              <div className="message-content">{message.content}</div>
-              <div className="message-meta">
-                {message.role === "user" ? "你" : props.agentName || "Agent"} · {formatTime(message.created_at)}
+        {props.messages.map((message) =>
+          message.role === "user" ? (
+            <div key={message.id} className="message-row user">
+              <div className="message-bubble user">
+                <div className="message-content plain">{message.content}</div>
+                <div className="message-meta">你 · {formatTime(message.created_at)}</div>
+                <div className="message-actions">
+                  <CopyButton text={message.content} />
+                  <button
+                    type="button"
+                    className="message-action"
+                    onClick={() => props.onQuote(message.content)}
+                  >
+                    引用
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          ) : (
+            <div key={message.id} className="message-row assistant">
+              <div className="message-avatar">ACC</div>
+              <div className="message-bubble assistant">
+                <div className="message-head">
+                  <span className="message-author">{props.agentName || "Agent"}</span>
+                  <span className="message-time">{formatTime(message.created_at)}</span>
+                </div>
+                <Markdown content={message.content} />
+                <div className="message-actions">
+                  <CopyButton text={message.content} />
+                </div>
+              </div>
+            </div>
+          ),
+        )}
 
         {(props.sending || props.streamText) && (
           <div className="message-row assistant">
+            <div className="message-avatar">ACC</div>
             <div className="message-bubble assistant streaming">
-              <div className="message-content">
-                {props.streamText || <span className="muted">正在生成…</span>}
-                <span className="cursor" />
+              <div className="message-head">
+                <span className="message-author">{props.agentName || "Agent"}</span>
+                <span className="streaming-label">{props.activeRun?.status ?? "running"}</span>
               </div>
-              <div className="message-meta">
-                {props.activeRun?.status ?? "running"} · 流式输出
-              </div>
+              {props.streamText ? (
+                <Markdown content={props.streamText} />
+              ) : (
+                <div className="muted">正在生成…</div>
+              )}
+              <span className="cursor" />
             </div>
           </div>
         )}
 
-        {props.error && <div className="error-banner in-chat">{props.error}</div>}
+        {props.error && (
+          <div className="error-banner in-chat">
+            <span>{props.error}</span>
+            {props.activeRun?.status === "failed" && (
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => props.onRetry(props.activeRun!.id)}
+              >
+                重试这个 Run
+              </button>
+            )}
+          </div>
+        )}
         <div ref={endRef} />
       </div>
 
       <div className="composer">
-        <textarea
-          value={props.draft}
-          onChange={(event) => props.onDraftChange(event.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={props.canSend ? "发消息…  Enter 发送，Shift+Enter 换行" : "先选择一个 Agent 和会话"}
-          rows={2}
-          disabled={!props.canSend}
-        />
-        <div className="composer-bar">
-          <div className="composer-hint">
-            {props.activeRun && (
-              <span className={`status-dot ${props.activeRun.status}`} />
-            )}
-            {props.activeRun ? props.activeRun.status : "idle"}
-          </div>
-          <div className="composer-actions">
-            {props.sending && (
-              <button className="ghost-button" type="button" onClick={props.onCancel}>
-                取消 Run
+        <div className="composer-card">
+          <textarea
+            ref={textareaRef}
+            value={props.draft}
+            onChange={(event) => props.onDraftChange(event.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={props.canSend ? "给 Agent 发消息…" : "先选择一个 Agent 和会话"}
+            rows={1}
+            disabled={!props.canSend}
+          />
+          <div className="composer-bar">
+            <div className="composer-hint">
+              {props.activeRun && <span className={`status-dot ${props.activeRun.status}`} />}
+              <span>{props.activeRun ? props.activeRun.status : "idle"}</span>
+              <span className="composer-shortcut">Enter 发送 · Shift+Enter 换行</span>
+            </div>
+            <div className="composer-actions">
+              {props.sending && (
+                <button className="ghost-button" type="button" onClick={props.onCancel}>
+                  停止
+                </button>
+              )}
+              <button
+                className="primary send-button"
+                type="button"
+                onClick={props.onSend}
+                disabled={!props.canSend || props.sending || !props.draft.trim()}
+              >
+                发送
               </button>
-            )}
-            <button
-              className="primary send-button"
-              type="button"
-              onClick={props.onSend}
-              disabled={!props.canSend || props.sending || !props.draft.trim()}
-            >
-              发送
-            </button>
+            </div>
           </div>
         </div>
       </div>

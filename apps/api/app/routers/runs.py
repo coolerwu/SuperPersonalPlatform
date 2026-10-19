@@ -5,11 +5,12 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.db import SessionLocal, get_db
-from app.models import Run
+from app.models import Run, RunEvent, Session, utcnow
 from app.schemas import RunEventOut, RunOut
 from app.services.run_service import get_run_events, serialize_event
 
@@ -56,6 +57,52 @@ async def stream_events(run_id: str, request: Request, after: int = Query(defaul
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/{run_id}/retry")
+async def retry_run(run_id: str, request: Request, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
+    original = await db.get(Run, run_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if original.status not in ("failed", "cancelled"):
+        raise HTTPException(status_code=409, detail="only failed or cancelled runs can be retried")
+    active = await db.scalar(
+        select(Run)
+        .where(Run.session_id == original.session_id, Run.status.in_(("queued", "running")))
+        .limit(1)
+    )
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "session already has an active run", "active_run_id": active.id},
+        )
+
+    retry = Run(
+        agent_id=original.agent_id,
+        session_id=original.session_id,
+        source="retry",
+        status="queued",
+        input=original.input,
+    )
+    db.add(retry)
+    await db.flush()
+    db.add(
+        RunEvent(
+            run_id=retry.id,
+            type="run_queued",
+            payload={"content": original.input, "retry_of": original.id},
+        )
+    )
+    session = await db.get(Session, original.session_id)
+    if session is not None:
+        session.updated_at = utcnow()
+    await db.commit()
+    await db.refresh(retry)
+
+    worker = getattr(request.app.state, "worker", None)
+    if worker is not None:
+        worker.wake()
+    return {"run_id": retry.id}
 
 
 @router.post("/{run_id}/cancel")

@@ -19,6 +19,9 @@
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
 - v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs，以及集中配置页。
 - v1 不暴露 filesystem / skills / memory / shell / browser，也没有审批。
+- UI 视觉方向：明亮简洁（浅色画布 + 悬浮输入卡片），assistant 消息按 Markdown 渲染；依赖 `react-markdown`、`remark-gfm`、`rehype-highlight`。
+- 消息操作：复制、引用、失败 Run 重试；不做编辑/重新生成/删除单条消息（需要 checkpoint 分支方案）。
+- Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints；有活动 Run 时 409。
 - 配置页集中管理 Provider（查看/新增/编辑）、Agent 和运行环境；`GET /api/system` 只返回非敏感信息。
 - Chat 内容列统一宽度：header、消息流、composer 都以 `--chat-lane` 对齐。
 
@@ -45,7 +48,6 @@ cd apps/api && ../../.venv/bin/uvicorn app.main:app --reload --port 8000
 
 # 前端开发
 cd apps/web && npm install && npm run dev
-
 # 测试
 .venv/bin/python -m pytest apps/api/app/tests
 cd apps/web && npm run build

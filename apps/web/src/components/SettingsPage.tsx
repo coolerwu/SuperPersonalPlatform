@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, errorText } from "../api";
 import type { Agent, Provider, SystemInfo } from "../types";
 import { AgentEditor } from "./AgentEditor";
+import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { ProviderCreateForm } from "./ProviderCreateForm";
 import { ProviderSettings } from "./ProviderSettings";
 
@@ -23,6 +24,7 @@ type SettingsPageProps = {
     api_key?: string;
   }) => Promise<Provider>;
   onNewAgent: () => void;
+  onDeleteAgent: (id: string) => Promise<{ deleted: boolean; sessions: number; runs: number }>;
   onClose: () => void;
 };
 
@@ -44,6 +46,8 @@ export function SettingsPage(props: SettingsPageProps) {
   const [savingProvider, setSavingProvider] = useState(false);
   const [savingAgent, setSavingAgent] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Agent | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [systemError, setSystemError] = useState("");
 
@@ -192,6 +196,21 @@ export function SettingsPage(props: SettingsPageProps) {
 
             <div className="settings-subhead">编辑 {agent?.name ?? "Agent"}</div>
             <AgentEditor agent={agent} providers={props.providers} saving={savingAgent} onSave={saveAgent} />
+            {agent && (
+              <div className="danger-zone">
+                <div>
+                  <strong>彻底删除这个 Agent</strong>
+                  <p>删除它的全部会话、消息、Run、事件和 checkpoint，无法恢复。</p>
+                </div>
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={() => setDeleteTarget(agent)}
+                >
+                  彻底删除
+                </button>
+              </div>
+            )}
           </section>
 
           <section className="settings-card">
@@ -232,6 +251,21 @@ export function SettingsPage(props: SettingsPageProps) {
           </section>
         </div>
       </div>
+
+      <DeleteAgentDialog
+        agent={deleteTarget}
+        busy={deleting}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={async (target) => {
+          setDeleting(true);
+          try {
+            await props.onDeleteAgent(target.id);
+            setDeleteTarget(null);
+          } finally {
+            setDeleting(false);
+          }
+        }}
+      />
     </main>
   );
 }

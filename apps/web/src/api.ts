@@ -71,6 +71,10 @@ export const api = {
   updateAgent: (id: string, payload: Partial<Pick<Agent, "name" | "instructions" | "provider_id" | "status">>) =>
     request<Agent>(`/api/agents/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   archiveAgent: (id: string) => request<{ archived: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),
+  deleteAgentPermanently: (id: string) =>
+    request<{ deleted: boolean; sessions: number; runs: number }>(`/api/agents/${id}/permanent`, {
+      method: "DELETE",
+    }),
 
   listProviders: () => request<Provider[]>("/api/providers"),
   createProvider: (payload: { name: string; base_url: string; model: string; api_key?: string }) =>
@@ -96,6 +100,7 @@ export const api = {
   getRun: (runId: string) => request<Run>(`/api/runs/${runId}`),
   getRunEvents: (runId: string, after = 0) => request<RunEvent[]>(`/api/runs/${runId}/events?after=${after}`),
   cancelRun: (runId: string) => request<{ cancelled: boolean }>(`/api/runs/${runId}/cancel`, { method: "POST" }),
+  retryRun: (runId: string) => request<{ run_id: string }>(`/api/runs/${runId}/retry`, { method: "POST" }),
   streamUrl: (runId: string) => `/api/runs/${runId}/stream`,
 
   getSystem: () => request<SystemInfo>("/api/system"),
