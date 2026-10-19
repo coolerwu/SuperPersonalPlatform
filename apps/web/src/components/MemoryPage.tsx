@@ -167,7 +167,7 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
         <div className="settings-lane">
           <section className="settings-card">
             <div className="memory-toolbar">
-              <div className="memory-tabs">
+              <div className="settings-tabs">
                 <button
                   type="button"
                   className={scope === "user" ? "active" : ""}

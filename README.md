@@ -39,7 +39,7 @@ npm run dev
 
 ## 配置页
 
-侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；集中管理：
+侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；Provider/Agent 默认只显示列表，点「编辑」或条目再展开表单。集中管理：
 
 - Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
 - Agent：选择并编辑名称、Provider、instructions，或新建 Agent；

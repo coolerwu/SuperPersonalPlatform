@@ -48,6 +48,8 @@ const CAPABILITY_LABELS: Record<string, string> = {
 export function SettingsPage(props: SettingsPageProps) {
   const [tab, setTab] = useState<"provider" | "agent" | "runtime">("provider");
   const [providerId, setProviderId] = useState("");
+  const [providerEditing, setProviderEditing] = useState(false);
+  const [agentEditing, setAgentEditing] = useState(false);
   const [creatingProvider, setCreatingProvider] = useState(false);
   const [savingProvider, setSavingProvider] = useState(false);
   const [savingAgent, setSavingAgent] = useState(false);
@@ -122,6 +124,7 @@ export function SettingsPage(props: SettingsPageProps) {
       const created = await props.onCreateProvider(payload);
       setProviderId(created.id);
       setCreatingProvider(false);
+      setProviderEditing(true);
     } finally {
       setCreating(false);
     }
@@ -171,12 +174,27 @@ export function SettingsPage(props: SettingsPageProps) {
                 <h2>Provider</h2>
                 <p>OpenAI-compatible 端点；密钥只保存在后端，不会回传前端。</p>
               </div>
-              <button
-                className="ghost-button"
-                onClick={() => setCreatingProvider((current) => !current)}
-              >
-                {creatingProvider ? "收起" : "新增 Provider"}
-              </button>
+              <div className="settings-card-actions">
+                <button
+                  className="ghost-button"
+                  disabled={!provider}
+                  onClick={() => {
+                    setProviderEditing((current) => !current);
+                    setCreatingProvider(false);
+                  }}
+                >
+                  {providerEditing ? "收起" : "编辑"}
+                </button>
+                <button
+                  className="ghost-button"
+                  onClick={() => {
+                    setCreatingProvider((current) => !current);
+                    setProviderEditing(false);
+                  }}
+                >
+                  {creatingProvider ? "收起" : "新增 Provider"}
+                </button>
+              </div>
             </div>
 
             <div className="settings-provider-list">
@@ -186,7 +204,11 @@ export function SettingsPage(props: SettingsPageProps) {
                   key={item.id}
                   type="button"
                   className={`settings-provider-row ${item.id === provider?.id ? "selected" : ""}`}
-                  onClick={() => setProviderId(item.id)}
+                  onClick={() => {
+                    setProviderId(item.id);
+                    setProviderEditing(true);
+                    setCreatingProvider(false);
+                  }}
                 >
                   <span className="settings-provider-name">{item.name}</span>
                   <span className="settings-provider-meta">{item.model} · {item.base_url}</span>
@@ -205,8 +227,12 @@ export function SettingsPage(props: SettingsPageProps) {
               />
             )}
 
-            <div className="settings-subhead">编辑 {provider?.name ?? "Provider"}</div>
-            <ProviderSettings provider={provider} saving={savingProvider} onSave={saveProvider} />
+            {providerEditing && provider && (
+              <>
+                <div className="settings-subhead">编辑 {provider.name}</div>
+                <ProviderSettings provider={provider} saving={savingProvider} onSave={saveProvider} />
+              </>
+            )}
           </section>
           )}
 
@@ -217,7 +243,16 @@ export function SettingsPage(props: SettingsPageProps) {
                 <h2>Agent</h2>
                 <p>每个 Agent 有自己的 instructions、Provider 和独立会话。</p>
               </div>
-              <button className="ghost-button" onClick={props.onNewAgent}>新建 Agent</button>
+              <div className="settings-card-actions">
+                <button
+                  className="ghost-button"
+                  disabled={!agent}
+                  onClick={() => setAgentEditing((current) => !current)}
+                >
+                  {agentEditing ? "收起" : "编辑"}
+                </button>
+                <button className="ghost-button" onClick={props.onNewAgent}>新建 Agent</button>
+              </div>
             </div>
 
             <div className="settings-agent-list">
@@ -226,7 +261,10 @@ export function SettingsPage(props: SettingsPageProps) {
                   key={item.id}
                   type="button"
                   className={`settings-agent-row ${item.id === props.agentId ? "selected" : ""}`}
-                  onClick={() => props.onSelectAgent(item.id)}
+                  onClick={() => {
+                    props.onSelectAgent(item.id);
+                    setAgentEditing(true);
+                  }}
                 >
                   <span className="settings-provider-name">{item.name}</span>
                   <span className="settings-provider-meta">
@@ -237,22 +275,24 @@ export function SettingsPage(props: SettingsPageProps) {
               ))}
             </div>
 
-            <div className="settings-subhead">编辑 {agent?.name ?? "Agent"}</div>
-            <AgentEditor agent={agent} providers={props.providers} saving={savingAgent} onSave={saveAgent} />
-            {agent && (
-              <div className="danger-zone">
-                <div>
-                  <strong>彻底删除这个 Agent</strong>
-                  <p>删除它的全部会话、消息、Run、事件和 checkpoint，无法恢复。</p>
+            {agentEditing && agent && (
+              <>
+                <div className="settings-subhead">编辑 {agent.name}</div>
+                <AgentEditor agent={agent} providers={props.providers} saving={savingAgent} onSave={saveAgent} />
+                <div className="danger-zone">
+                  <div>
+                    <strong>彻底删除这个 Agent</strong>
+                    <p>删除它的全部会话、消息、Run、事件和 checkpoint，无法恢复。</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => setDeleteTarget(agent)}
+                  >
+                    彻底删除
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="danger-button"
-                  onClick={() => setDeleteTarget(agent)}
-                >
-                  彻底删除
-                </button>
-              </div>
+              </>
             )}
           </section>
           )}

@@ -1229,6 +1229,8 @@ textarea {
 
 .editor .primary {
   margin-top: 16px;
+  align-self: flex-end;
+  min-width: 120px;
 }
 
 .form-actions {
@@ -1338,6 +1340,13 @@ textarea {
   color: var(--faint);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.settings-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .settings-subhead {
@@ -1566,29 +1575,6 @@ textarea {
   color: #166534;
   font-size: 12px;
   line-height: 1.5;
-}
-
-.memory-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--panel-3);
-}
-
-.memory-tabs button {
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  border-radius: 999px;
-  padding: 6px 12px;
-  font-size: 12px;
-}
-
-.memory-tabs button.active {
-  background: #fff;
-  color: var(--accent);
-  box-shadow: var(--shadow-sm);
 }
 
 .memory-search {
