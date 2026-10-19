@@ -18,7 +18,6 @@ htmlcov/
 
 # Node
 node_modules/
-apps/web/dist/
 
 # Editors / OS
 .idea/

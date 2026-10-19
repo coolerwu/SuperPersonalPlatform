@@ -22,6 +22,8 @@ Use this skill to finish changes in `/Users/wulang/Desktop/AI/SuperPersonalPlatf
 5. Run the required checks:
    - `.venv/bin/python -m pytest apps/api/app/tests`
    - `cd apps/web && npm run build`
+   - `apps/web/dist` is committed; include the rebuilt assets in the commit.
+   Production does not run npm; the web image copies the committed dist into nginx.
 6. Stage all uncommitted code with the exact command `git add .`.
 7. Commit with a concise imperative message.
 8. Push the current branch with `git push origin HEAD`.

@@ -46,6 +46,11 @@ cd apps/web && npm install && npm run dev
 cd apps/web && npm run build
 ```
 
+## 前端构建产物
+
+- `apps/web/dist` 提交到仓库；修改前端后执行 `cd apps/web && npm run build`，把新的 `dist` 一起提交。
+- 生产 Web 镜像只复制已提交的 `dist`，不在生产机安装 Node/npm。
+
 ## 提交约定
 
 - 提交前先跑后端测试与前端构建。

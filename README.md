@@ -47,6 +47,16 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
 | `LLM_API_KEY` | 模型密钥 | 空 |
 | `LLM_MODEL` | 模型名 | `deepseek-v4-flash` |
 
+## 前端构建产物
+
+`apps/web/dist` 提交到仓库。修改前端后先构建再提交：
+
+```bash
+cd apps/web && npm run build
+```
+
+生产 Web 镜像只把已提交的 `dist` 复制进 nginx，不在服务器上安装 Node/npm。
+
 ## V1 生产部署（GitHub pull）
 
 v1 部署以 GitHub 的 `rewrite/v2` 分支为准，不从本地工作目录直接复制。
