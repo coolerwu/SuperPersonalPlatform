@@ -45,6 +45,9 @@ Production deployment source is **GitHub pull** from `origin`. Do not deploy
 from a developer working tree or a mutable `rc-clone`. The legacy systemd
 service is not used for v1.
 
+Current v1 production: `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`,
+Docker Compose, port 8080. The legacy 8888 service stays untouched.
+
 If the user explicitly asks to deploy v1 on a target machine:
 
 1. Push the target branch to `origin` first and record the pushed SHA.

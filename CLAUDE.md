@@ -57,6 +57,8 @@ cd apps/web && npm run build
 - `git status --short` 确认范围；不要提交 `.super-personal-platform/`、`.env`、`data/`。
 - 需要提交时执行 `.claude/skills/project-commit/SKILL.md`；该技能需要随新栈更新。
 - 只 push `origin`（GitHub）。本地的 `rc-clone` 是独立 checkout，push 不会改动它；需要同步时在 `rc-clone` 里单独 `git pull`，不要从当前仓库对它执行 pull/reset。
+- 当前 v1 生产：`qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，Docker Compose，端口 8080；旧的 8888 服务保留，不要覆盖旧 checkout。
+- 生产从 GitHub `main` pull；`deploy/.env` 只存在目标机本地，不提交。`apps/web/dist` 提交到仓库，生产 Web 镜像只复制 dist。
 - 旧的部署与版本流程已随旧代码删除；新的生产部署在 `deploy/` 落地后再补文档。
 
 ## 文档同步

@@ -68,11 +68,11 @@ git push origin rewrite/v2
 在目标机新建 v1 目录并拉取（不要覆盖旧的 legacy checkout）：
 
 ```bash
-git clone --branch rewrite/v2 git@github.com:coolerwu/SuperPersonalPlatform.git ~/SuperPersonalPlatform-v1
+git clone --branch main https://github.com/coolerwu/SuperPersonalPlatform.git ~/SuperPersonalPlatform-v1-deploy
 ```
 
 ```bash
-cd ~/SuperPersonalPlatform-v1 && git rev-parse HEAD && git status --short
+cd ~/SuperPersonalPlatform-v1-deploy && git rev-parse HEAD && git status --short
 ```
 
 确认 HEAD 等于本地刚 push 的 SHA、工作区干净后：
@@ -89,6 +89,8 @@ curl --noproxy '*' http://127.0.0.1:8080/api/health
 ```
 
 旧生产服务不要动；v1 在 8080 端口验证通过后再切。
+
+当前生产 v1 部署在 `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，监听 8080；旧的 8888 服务保留。
 
 ## 测试
 
