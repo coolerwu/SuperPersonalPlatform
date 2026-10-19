@@ -11,7 +11,6 @@ type SettingsPageProps = {
   agents: Agent[];
   agentId: string;
   providers: Provider[];
-  onSelectAgent: (id: string) => void;
   onSaveAgent: (payload: AgentSavePayload) => Promise<void>;
   onSaveProvider: (
     providerId: string,
@@ -252,29 +251,32 @@ export function SettingsPage(props: SettingsPageProps) {
             </div>
 
             <div className="settings-agent-list">
-              {props.agents.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`settings-agent-row ${item.id === props.agentId ? "selected" : ""}`}
-                  onClick={() => {
-                    props.onSelectAgent(item.id);
-                    setAgentEditing(true);
-                  }}
-                >
-                  <span className="settings-provider-name">{item.name}</span>
+              {agent ? (
+                <div className="settings-agent-row selected static">
+                  <span className="settings-provider-name">{agent.name}</span>
                   <span className="settings-provider-meta">
-                    {item.provider_name} · {item.model}
+                    {agent.provider_name} · {agent.model}
                   </span>
-                  <span className="agent-status">{item.status}</span>
-                </button>
-              ))}
+                  <span className="agent-status">{agent.status}</span>
+                </div>
+              ) : (
+                <div className="empty-note">还没有 Agent。</div>
+              )}
+            </div>
+            <div className="hint">
+              当前编辑左上角选中的 Agent；要切换 Agent，请使用侧边栏顶部的选择器。
             </div>
 
             {agentEditing && agent && (
               <>
                 <div className="settings-subhead">编辑 {agent.name}</div>
-                <AgentEditor agent={agent} providers={props.providers} saving={savingAgent} onSave={saveAgent} />
+                <AgentEditor
+                  agent={agent}
+                  providers={props.providers}
+                  saving={savingAgent}
+                  workspaceRoot={system?.workspace_root}
+                  onSave={saveAgent}
+                />
                 <div className="danger-zone">
                   <div>
                     <strong>彻底删除这个 Agent</strong>

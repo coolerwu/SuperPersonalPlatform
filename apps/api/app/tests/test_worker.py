@@ -82,14 +82,13 @@ async def test_worker_passes_workspace_config(monkeypatch) -> None:
     worker = RunWorker()
     await worker.execute_run(run.id)
 
-    assert captured["workspace_mode"] == "directory"
     assert captured["workspace_path"] == "worker-projected"
 
     async with SessionLocal() as db:
         agent = await db.get(Agent, agent_id)
         assert agent is not None
         agent.workspace_mode = "virtual"
-        agent.workspace_path = ""
+        agent.workspace_path = agent.id
         await db.commit()
 
 

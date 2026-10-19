@@ -50,15 +50,16 @@ npm run dev
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
+- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell、浏览器或 skills 工具；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 
 ## 配置页
 
-侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；Provider/Agent 默认只显示列表，点「编辑」或条目再展开表单。切换 Agent 时，Provider tab 会自动选中该 Agent 的 Provider，并清空输入框草稿。集中管理：
+侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；Provider/Agent 默认只显示列表，点「编辑」或条目再展开表单。**配置页始终编辑左上角侧边栏选中的 Agent，不提供第二套 Agent 选择**；切换 Agent 请使用侧边栏顶部的选择器。切换 Agent 时，Provider tab 会自动选中该 Agent 的 Provider，并清空输入框草稿。集中管理：
 
 - Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
 - Agent：选择并编辑名称、Provider、instructions、工作区，或新建 Agent；
-- 工作区：每个 Agent 可选「虚拟工作区」（文件只在会话状态中）或「本地目录」；本地目录使用 `~/.super-personal-platform/workspaces/` 下的相对路径，保存时自动创建。侧边栏 Agent 选择器下方也可以直接切换当前 Agent 的工作区；
+- 工作区：每个 Agent 都使用真实目录。「自动目录」为 `~/.super-personal-platform/workspaces/<agent_id>/`，「自定义目录」使用指定的相对路径，保存时自动创建；Agent 可以查看和修改工作区内的文件。侧边栏 Agent 选择器下方也可以直接切换当前 Agent 的工作区；
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
 - 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
 
@@ -89,7 +90,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
   - `run_memories`：某次 Run 实际注入了哪些记忆；
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
-- `~/.super-personal-platform/workspaces/`：Agent 真实工作区目录；删除 Agent 不会删除这里的文件。
+- `~/.super-personal-platform/workspaces/`：Agent 真实工作区目录；「自动目录」按 Agent id 命名，「自定义目录」使用配置的相对路径。Agent 的文件工具只能访问当前工作区；删除 Agent 不会删除这里的文件。
 
 备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
 

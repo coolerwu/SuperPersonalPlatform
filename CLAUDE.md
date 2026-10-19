@@ -17,18 +17,19 @@
 - 执行核：`AgentExecutor` 端口 + `DeepAgentExecutor`；平台拥有 session/messages/run，deepagents checkpointer 只存 Agent 状态。
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
 - v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs、集中配置页和长期记忆。
-- v1 不暴露 filesystem / shell / browser / skills 工具；memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
+- v1 暴露工作区内的 filesystem 工具（ls / read_file / write_file / edit_file / delete / glob / grep，由 `FilesystemMiddleware` 提供）；不暴露 shell / browser / skills 工具。memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
 - 记忆：`memory_items`（scope=user|agent，无 status）+ `run_memories`；user memory 全局、agent memory 按 Agent 隔离；session 工作记忆仍由 checkpoint 负责。
 - 写入：配置页手动 CRUD、对话里“记住……”写 user memory、每个 Agent 的 `auto_memory` 开关在 Run 完成后提取 agent memory；先用 FTS5（trigram）找相关历史记忆，再让模型返回 add/update/delete 做合并，最多 12 个操作、200 条上限。
 - 读取：每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入，标注为数据而非指令；记录本次使用的 memory id。
 - 记忆页面提供「整理记忆」：分批让模型对现有记忆做 update/delete，只合并不新增。
-- Workspace：`Agent.workspace_mode`（`virtual` / `directory`）+ `workspace_path`；默认 `virtual`，真实目录根为 `~/.super-personal-platform/workspaces/`（`APP_WORKSPACES_DIR` 可覆盖）。侧边栏 Agent 选择器下方提供工作区选择并立即保存；执行器据此选择 `StateBackend` 或 `FilesystemBackend(virtual_mode=True)`。本轮仍不暴露文件工具。
+- Workspace：`Agent.workspace_mode`（`virtual` / `directory`）+ `workspace_path`；两种模式都使用真实目录，根为 `~/.super-personal-platform/workspaces/`（`APP_WORKSPACES_DIR` 可覆盖）。`virtual` 自动使用 `workspaces/<agent_id>/`，`directory` 使用自定义相对路径。侧边栏 Agent 选择器下方提供工作区选择并立即保存；执行器用 `FilesystemBackend(virtual_mode=True)` + `FilesystemMiddleware` 开放工作区文件工具。
 - 运行时目录统一在 `~/.super-personal-platform/`（`APP_HOME` 可覆盖）：`.env`、`data/app.db`、`data/checkpoints/`、`workspaces/`。
 - 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec：直接、长度匹配问题、无 filler、反谄媚、深度按需；默认简体中文回复，并明确 v1 只有 Chat。
 - UI 视觉方向：明亮简洁（浅色画布 + 悬浮输入卡片），assistant 消息按 Markdown 渲染；依赖 `react-markdown`、`remark-gfm`、`rehype-highlight`。
 - 消息操作：复制、引用、失败 Run 重试；不做编辑/重新生成/删除单条消息（需要 checkpoint 分支方案）。
 - Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints；有活动 Run 时 409。
 - 配置页集中管理 Provider（查看/新增/编辑）、Agent 和运行环境；另有独立的「记忆」页面管理 user/agent 记忆。`GET /api/system` 只返回非敏感信息。
+- 所有 per-agent 配置都以左上角侧边栏的 Agent 选择器为唯一入口；配置页只编辑当前 Agent，不提供第二套 Agent 选择。新增 per-agent 配置时必须沿用这一规则。
 - Chat 内容列统一宽度：header、消息流、composer 都以 `--chat-lane` 对齐。
 
 ## 运行约定

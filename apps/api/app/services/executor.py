@@ -10,7 +10,7 @@ from typing import Any
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
-from app.services.workspace import DIRECTORY_MODE, resolve_workspace_path
+from app.services.workspace import resolve_workspace_path
 
 
 @dataclass(frozen=True)
@@ -90,13 +90,17 @@ def _split_stream_chunk(chunk: Any) -> tuple[tuple[str, ...], Any]:
     return (), chunk
 
 
-def build_backend(workspace_mode: str, workspace_path: str):
-    from deepagents.backends import FilesystemBackend, StateBackend
+def build_backend(workspace_path: str):
+    from deepagents.backends import FilesystemBackend
 
-    if workspace_mode == DIRECTORY_MODE:
-        root = resolve_workspace_path(workspace_path, create=True)
-        return FilesystemBackend(root_dir=root, virtual_mode=True)
-    return StateBackend()
+    root = resolve_workspace_path(workspace_path, create=True)
+    return FilesystemBackend(root_dir=root, virtual_mode=True)
+
+
+def build_filesystem_middleware(backend: Any):
+    from deepagents import FilesystemMiddleware
+
+    return FilesystemMiddleware(backend=backend)
 
 
 class DeepAgentExecutor:
@@ -107,19 +111,17 @@ class DeepAgentExecutor:
         checkpoint_dir: Path,
         agent_name: str,
         memory_context: str = "",
-        workspace_mode: str = "virtual",
         workspace_path: str = "",
     ) -> None:
         self.provider = provider
         self.checkpoint_dir = checkpoint_dir
         self.agent_name = agent_name
         self.memory_context = memory_context
-        self.workspace_mode = workspace_mode
         self.workspace_path = workspace_path
 
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
         try:
-            from deepagents import HarnessProfile, create_deep_agent, register_harness_profile
+            from deepagents import create_deep_agent
             from langchain_openai import ChatOpenAI
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         except Exception as exc:  # pragma: no cover - import guard
@@ -147,28 +149,18 @@ class DeepAgentExecutor:
                 temperature=0.7,
                 stream_usage=True,
             )
-            excluded_tools = frozenset(
-                {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute"}
-            )
-            profile = HarnessProfile(
-                excluded_tools=excluded_tools,
-                system_prompt_suffix=(
-                    "This environment only exposes chat and the task subagent tool. "
-                    "You do not have file, shell, or browser tools."
-                ),
-            )
-            for key in ("openai", f"openai:{self.provider.model}"):
-                register_harness_profile(key, profile)
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
                 system_prompt = instructions or "You are a helpful assistant."
                 if self.memory_context:
                     system_prompt = f"{system_prompt}\n\n{self.memory_context}"
+                backend = build_backend(self.workspace_path)
                 agent = create_deep_agent(
                     model=chat_model,
                     tools=[],
                     system_prompt=system_prompt,
                     checkpointer=checkpointer,
-                    backend=build_backend(self.workspace_mode, self.workspace_path),
+                    backend=backend,
+                    middleware=[build_filesystem_middleware(backend)],
                     name=self.agent_name or "assistant",
                 )
                 config = {

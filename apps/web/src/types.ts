@@ -87,6 +87,7 @@ export type SystemInfo = {
   version: string;
   execution_core: string;
   database: string;
+  workspace_root: string;
   run_timeout_seconds: number;
   max_history_messages: number;
   counts: {

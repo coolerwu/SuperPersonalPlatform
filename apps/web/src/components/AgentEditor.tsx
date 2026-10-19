@@ -7,10 +7,11 @@ type AgentEditorProps = {
   agent: Agent | undefined;
   providers: Provider[];
   saving: boolean;
+  workspaceRoot?: string;
   onSave: (payload: AgentSavePayload) => Promise<void>;
 };
 
-export function AgentEditor({ agent, providers, saving, onSave }: AgentEditorProps) {
+export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }: AgentEditorProps) {
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
   const [providerId, setProviderId] = useState("");
@@ -83,13 +84,13 @@ export function AgentEditor({ agent, providers, saving, onSave }: AgentEditorPro
       <Select
         value={workspaceMode}
         options={[
-          { value: "virtual", label: "虚拟工作区", description: "文件只保存在会话状态中" },
-          { value: "directory", label: "本地目录", description: "服务端 workspaces 下的真实目录" },
+          { value: "virtual", label: "自动目录", description: `每个 Agent 独立目录（${agent.id}）` },
+          { value: "directory", label: "自定义目录", description: "指定 workspaces 下的相对路径" },
         ]}
         onChange={(value) => setWorkspaceMode(value as WorkspaceMode)}
         ariaLabel="工作区"
       />
-      {workspaceMode === "directory" && (
+      {workspaceMode === "directory" ? (
         <>
           <label className="field-label" htmlFor="agent-workspace-path">目录路径</label>
           <input
@@ -98,10 +99,16 @@ export function AgentEditor({ agent, providers, saving, onSave }: AgentEditorPro
             placeholder="my-project"
             onChange={(event) => setWorkspacePath(event.target.value)}
           />
-          <div className="hint">
-            相对路径，位于 ~/.super-personal-platform/workspaces 下；不能使用绝对路径或 ..；保存时自动创建。
+          <div className="hint">相对路径；不能使用绝对路径或 ..；保存时自动创建。</div>
+          <div className="hint workspace-path-preview">
+            机器目录：{workspaceRoot || "~/.super-personal-platform/workspaces"}/
+            {workspacePath.trim() || "…"}
           </div>
         </>
+      ) : (
+        <div className="hint workspace-path-preview">
+          机器目录：{workspaceRoot || "~/.super-personal-platform/workspaces"}/{agent.id}
+        </div>
       )}
 
       <label className="field-label" htmlFor="agent-instructions">Instructions</label>

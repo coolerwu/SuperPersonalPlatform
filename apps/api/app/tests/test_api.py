@@ -16,8 +16,10 @@ def test_default_agent_and_provider(client) -> None:
     assert payload[0]["name"] == "Assistant"
     assert payload[0]["provider_name"] == "DeepSeek"
     assert "保持直接" in payload[0]["instructions"]
-    assert "只支持聊天" in payload[0]["instructions"]
+    assert "工作区文件操作" in payload[0]["instructions"]
     assert "简体中文" in payload[0]["instructions"]
+    assert payload[0]["workspace_mode"] == "virtual"
+    assert payload[0]["workspace_path"] == "default"
 
     providers = client.get("/api/providers").json()
     assert providers[0]["id"] == "default"
@@ -84,7 +86,7 @@ def test_provider_create_and_system_info(client) -> None:
     info = system.json()
     assert info["version"] == "0.1.0"
     assert info["database"] == "sqlite"
-    assert info["capabilities"]["filesystem"] is False
+    assert info["capabilities"]["filesystem"] is True
     assert info["capabilities"]["chat"] is True
     assert info["capabilities"]["memory"] is True
     assert info["counts"]["providers"] >= 2

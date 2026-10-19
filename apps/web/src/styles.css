@@ -1403,6 +1403,14 @@ textarea {
   background: var(--accent-soft);
 }
 
+.settings-agent-row.static:hover {
+  border-color: var(--border);
+}
+
+.workspace-path-preview {
+  word-break: break-all;
+}
+
 .settings-provider-name {
   font-size: 13px;
   font-weight: 600;

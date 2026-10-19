@@ -68,14 +68,20 @@ def resolve_workspace_path(relative_path: str, *, create: bool) -> Path:
     return candidate
 
 
-def prepare_workspace(mode: str, raw_path: str) -> tuple[str, str]:
+def prepare_workspace(mode: str, raw_path: str, *, agent_id: str) -> tuple[str, str]:
+    """Resolve an agent's workspace to a real directory under the workspace root.
+
+    `virtual` means a platform-managed directory named after the agent id;
+    `directory` means a user-supplied relative path. Both are real directories.
+    """
     if mode == VIRTUAL_MODE:
-        return VIRTUAL_MODE, ""
-    if mode == DIRECTORY_MODE:
+        normalized = normalize_workspace_path(agent_id)
+    elif mode == DIRECTORY_MODE:
         normalized = normalize_workspace_path(raw_path)
-        resolve_workspace_path(normalized, create=True)
-        return DIRECTORY_MODE, normalized
-    raise WorkspaceError("unknown workspace mode")
+    else:
+        raise WorkspaceError("unknown workspace mode")
+    resolve_workspace_path(normalized, create=True)
+    return mode, normalized
 
 
 def list_workspace_dirs() -> list[dict[str, str]]:

@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
-from app.db import _ensure_agent_workspace_columns
+from app.db import _backfill_agent_workspaces, _ensure_agent_workspace_columns
 from app.main import create_app
-from app.services.executor import DeepAgentExecutor, build_backend
+from app.services.executor import DeepAgentExecutor, build_backend, build_filesystem_middleware
 
 
 def _create_agent(client, name: str) -> dict:
@@ -24,10 +24,11 @@ def test_workspace_required_auth() -> None:
         assert client.get("/api/workspaces").status_code == 401
 
 
-def test_agent_workspace_defaults_to_virtual(client) -> None:
+def test_agent_workspace_defaults_to_auto_directory(client) -> None:
     agent = _create_agent(client, "Workspace default")
     assert agent["workspace_mode"] == "virtual"
-    assert agent["workspace_path"] == ""
+    assert agent["workspace_path"] == agent["id"]
+    assert (settings.workspaces_dir / agent["id"]).is_dir()
 
 
 def test_agent_workspace_directory_is_created(client) -> None:
@@ -57,10 +58,11 @@ def test_agent_workspace_partial_updates(client) -> None:
     assert renamed["workspace_mode"] == "directory"
     assert renamed["workspace_path"] == "partial"
 
-    # Switching back to virtual clears the path but keeps the directory.
+    # Switching back to virtual gives the agent its auto-managed directory again.
     reverted = client.put(f"/api/agents/{agent_id}", json={"workspace_mode": "virtual"}).json()
     assert reverted["workspace_mode"] == "virtual"
-    assert reverted["workspace_path"] == ""
+    assert reverted["workspace_path"] == agent_id
+    assert (settings.workspaces_dir / agent_id).is_dir()
     assert (settings.workspaces_dir / "partial").is_dir()
 
 
@@ -148,7 +150,7 @@ def test_list_workspaces_only_returns_top_level_directories(client) -> None:
     assert paths == sorted(paths)
 
 
-async def test_workspace_columns_migration_is_idempotent(tmp_path: Path) -> None:
+async def test_workspace_columns_migration_and_backfill(tmp_path: Path) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/legacy.db")
     async with engine.begin() as conn:
         await conn.exec_driver_sql("CREATE TABLE agents (id VARCHAR(32) PRIMARY KEY)")
@@ -160,26 +162,46 @@ async def test_workspace_columns_migration_is_idempotent(tmp_path: Path) -> None
         rows = (await conn.exec_driver_sql("PRAGMA table_info(agents)")).fetchall()
         columns = {row[1] for row in rows}
         assert {"workspace_mode", "workspace_path"} <= columns
+
         await conn.exec_driver_sql("INSERT INTO agents (id) VALUES ('legacy')")
+        await _backfill_agent_workspaces(conn)
         values = (
             await conn.exec_driver_sql(
                 "SELECT workspace_mode, workspace_path FROM agents WHERE id = 'legacy'"
             )
         ).fetchone()
-        assert values == ("virtual", "")
+        assert values == ("virtual", "legacy")
+        assert (settings.workspaces_dir / "legacy").is_dir()
 
     await engine.dispose()
 
 
-def test_build_backend_selects_state_or_filesystem() -> None:
-    from deepagents.backends import FilesystemBackend, StateBackend
+def test_build_backend_uses_workspace_directory() -> None:
+    from deepagents.backends import FilesystemBackend
 
-    assert isinstance(build_backend("virtual", ""), StateBackend)
-
-    backend = build_backend("directory", "backend-proj")
+    backend = build_backend("backend-proj")
     assert isinstance(backend, FilesystemBackend)
     assert backend.virtual_mode is True
     assert backend.cwd == (settings.workspaces_dir / "backend-proj").resolve()
+
+
+def test_filesystem_middleware_exposes_workspace_tools() -> None:
+    middleware = build_filesystem_middleware(build_backend("middleware-proj"))
+    names = {tool.name for tool in middleware.tools}
+    assert {"ls", "read_file", "write_file", "edit_file", "glob", "grep"} <= names
+
+
+def test_workspace_backend_reads_and_writes_real_files() -> None:
+    backend = build_backend("io-project")
+    write = backend.write("/note.txt", "hello workspace")
+    assert write.error is None
+    saved = settings.workspaces_dir / "io-project" / "note.txt"
+    assert saved.read_text() == "hello workspace"
+
+    read = backend.read("/note.txt")
+    assert read.error is None
+    assert read.file_data is not None
+    assert read.file_data["content"] == "hello workspace"
 
 
 async def test_executor_invalid_workspace_fails_without_calling_model(tmp_path: Path) -> None:
@@ -188,7 +210,6 @@ async def test_executor_invalid_workspace_fails_without_calling_model(tmp_path: 
         provider=provider,
         checkpoint_dir=tmp_path,
         agent_name="test",
-        workspace_mode="directory",
         workspace_path="../escape",
     )
     events = [event async for event in executor.run(instructions="x", session_id="s-1", content="hi")]

@@ -503,7 +503,6 @@ export default function App() {
           agents={agents}
           agentId={agentId}
           providers={providers}
-          onSelectAgent={setAgentId}
           onSaveAgent={saveAgent}
           onSaveProvider={saveProvider}
           onCreateProvider={createProvider}

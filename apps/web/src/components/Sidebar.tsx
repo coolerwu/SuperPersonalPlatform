@@ -31,11 +31,15 @@ export function Sidebar(props: SidebarProps) {
   const directoryPath = agent?.workspace_mode === "directory" ? agent.workspace_path : "";
   const currentWorkspace = directoryPath ? `dir:${directoryPath}` : "virtual";
   const workspaceOptions = [
-    { value: "virtual", label: "虚拟工作区", description: "文件只保存在会话状态中" },
+    {
+      value: "virtual",
+      label: "自动目录",
+      description: agent ? `workspaces/${agent.id}` : "每个 Agent 独立目录",
+    },
     ...props.workspaces.map((item) => ({
       value: `dir:${item.path}`,
       label: item.path,
-      description: "本地目录",
+      description: "自定义目录",
     })),
   ];
   if (directoryPath && !props.workspaces.some((item) => item.path === directoryPath)) {

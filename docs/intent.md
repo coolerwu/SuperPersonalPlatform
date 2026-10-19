@@ -262,7 +262,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - 改动 SQLite 数据或部署目录结构。
 
 
-### F8 Agent Workspace（虚拟 / 真实目录 + 左侧联动）
+### F8 Agent Workspace（真实目录 + 文件工具）
 
 - 状态：进行中
 - 日期：2026-10-19
@@ -270,24 +270,26 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 #### 功能点
 
-1. Agent 新增 `workspace_mode`（`virtual` / `directory`）和 `workspace_path`（相对路径）；默认虚拟，现有 Agent 行为不变。
-2. 侧边栏 Agent 选择器下方新增工作区选择器：切换 Agent 自动显示该 Agent 的工作区；选择「虚拟工作区」或已有目录后立即保存到该 Agent，并影响后续 Run。
-3. 真实目录根目录为 `~/.super-personal-platform/workspaces/`（`APP_WORKSPACES_DIR` 可覆盖）；只接受相对路径，拒绝绝对路径、`..`、反斜杠、控制字符和逃逸符号链接；保存时自动创建。
-4. 执行器按配置选择 backend：`virtual` → `StateBackend`；`directory` → `FilesystemBackend(virtual_mode=True)`。
-5. 配置页 Agent 编辑器提供完整工作区配置（模式 + 相对路径），用于新建目录或填写自定义路径。
-6. 删除 Agent 不删除 workspace 目录；多个 Agent 可共享同一目录。
-7. 本轮仍不向 Agent 暴露文件工具；workspace 只是执行核的 backend 基础。
+1. Agent 新增 `workspace_mode`（`virtual` / `directory`）和 `workspace_path`（相对路径）；两种模式都映射到真实目录。
+2. `virtual` 为自动目录：`workspaces/<agent_id>/`；`directory` 为用户指定的相对路径。旧 Agent 启动时自动回填为自动目录。
+3. 侧边栏 Agent 选择器下方新增工作区选择器：切换 Agent 自动显示该 Agent 的工作区；选择「自动目录」或已有目录后立即保存到该 Agent，并影响后续 Run。
+4. 工作区根目录为 `~/.super-personal-platform/workspaces/`（`APP_WORKSPACES_DIR` 可覆盖）；路径拒绝绝对路径、`..`、反斜杠、控制字符和逃逸符号链接；保存时自动创建。
+5. 执行器使用 `FilesystemBackend(virtual_mode=True)` 作为 backend，并通过 `FilesystemMiddleware` 向 Agent 开放工作区文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）。
+6. 配置页 Agent 编辑器提供工作区模式与相对路径，并显示机器目录。
+7. 删除 Agent 不删除 workspace 目录；多个 Agent 可共享同一目录；不开放 shell / browser / skills。
 
 #### 验收标准
 
 - 侧边栏可查看并切换当前 Agent 的工作区，切换 Agent 时显示跟随变化，刷新后保持。
-- 新建真实目录成功；非法路径返回 400；指向普通文件或符号链接的路径被拒绝。
-- 旧数据库启动时自动补齐 workspace 列。
+- 每个 Agent 都有真实机器目录；新建目录成功；非法路径返回 400；指向普通文件或符号链接的路径被拒绝。
+- Agent 能在工作区内列出、读取、创建和修改文件，无法越出工作区根目录。
+- 旧数据库启动时自动补齐 workspace 列并回填自动目录。
 - 后端测试与前端构建通过。
 
 #### 非目标
 
-- 工具 / skills 开关与 deepagents 升级（后续需求）；
+- 每 Agent 的 shell / skills / 细粒度工具开关（后续需求）；
+- deepagents 升级；
 - 多用户或跨机器 workspace 隔离；
 - 删除 Agent 时级联删除 workspace 文件。
 

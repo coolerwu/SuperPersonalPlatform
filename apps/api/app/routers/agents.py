@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.config import settings
 from app.db import get_db
-from app.models import Agent, MemoryItem, Message, Provider, Run, RunEvent, RunMemory, Session
+from app.models import Agent, MemoryItem, Message, Provider, Run, RunEvent, RunMemory, Session, new_id
 from app.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.workspace import WorkspaceError, prepare_workspace
 
@@ -49,11 +49,15 @@ async def create_agent(payload: AgentCreate, db: AsyncSession = Depends(get_db))
     provider = await db.get(Provider, payload.provider_id) if payload.provider_id else await _default_provider(db)
     if provider is None:
         raise HTTPException(status_code=400, detail="configure a provider first")
+    agent_id = new_id()
     try:
-        workspace_mode, workspace_path = prepare_workspace(payload.workspace_mode, payload.workspace_path)
+        workspace_mode, workspace_path = prepare_workspace(
+            payload.workspace_mode, payload.workspace_path, agent_id=agent_id
+        )
     except WorkspaceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     agent = Agent(
+        id=agent_id,
         name=payload.name.strip(),
         instructions=payload.instructions,
         provider_id=provider.id,
@@ -106,7 +110,9 @@ async def update_agent(
         if raw_path is None:
             raw_path = agent.workspace_path
         try:
-            workspace_mode, workspace_path = prepare_workspace(str(mode), str(raw_path))
+            workspace_mode, workspace_path = prepare_workspace(
+                str(mode), str(raw_path), agent_id=agent.id
+            )
         except WorkspaceError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         agent.workspace_mode = workspace_mode
