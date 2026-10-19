@@ -2,7 +2,7 @@
 
 - 状态：现行
 - 最后更新：2026-10-19
-- 编号水位：F4
+- 编号水位：F5
 
 本文件是新项目的需求唯一来源。v1 从 0 到 1 重建，旧代码与旧数据模型已废弃；旧需求不再作为实现依据。
 
@@ -177,3 +177,30 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - 编辑消息、重新生成、删除单条消息（需要 checkpoint 分支/回滚方案）；
 - 会话搜索、重命名、导出；
 - 移动端导航改造。
+
+### F5 默认 Agent 提示词对齐 Hermes
+
+- 状态：进行中
+- 日期：2026-10-19
+- 来源：用户反馈默认 Assistant 的 instructions 过于泛化
+
+#### 背景
+
+默认 Agent 的提示词是 “You are a helpful personal assistant. Answer clearly and concisely.”，缺少 Hermes Agent 默认身份中的直接、长度匹配、无 filler、反谄媚和“深度按需”行为规范。
+
+#### 功能点
+
+1. 默认 seed 提示词参考 Hermes Agent 的默认身份 behavior spec。
+2. 适配 Agent Command Center：明确当前只有 Chat，没有文件、Shell、浏览器、skills、memory；用用户语言回复。
+3. 生产已有默认 Agent 一次性更新 instructions，不改名称、Provider、会话或 checkpoint。
+
+#### 验收标准
+
+- 新装环境的默认 Assistant 使用新提示词。
+- 生产 `default` Agent 的 instructions 更新为新版本，其他 Agent 不受影响。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 不引入 Hermes 的 SOUL.md 体系、记忆、工具或平台提示；
+- 不改变模型、Provider、Agent 数量或会话数据。
