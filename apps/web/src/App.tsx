@@ -44,7 +44,6 @@ export default function App() {
   const chatSending = sending && (!activeRun || activeRun.session_id === sessionId);
   const visibleRun = activeRun && activeRun.session_id === sessionId ? activeRun : null;
   const visibleStream = chatSending ? streamText : "";
-  const statusLabel = chatSending ? "running" : visibleRun?.status ?? "idle";
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -441,20 +440,10 @@ export default function App() {
       ) : (
         <main className="chat-column">
           <header className="chat-header">
-            <div className="chat-heading">
-              <div className="eyebrow">AGENT</div>
-              <div className="chat-title">{agent?.name ?? "No Agent"}</div>
-              <div className="chat-subtitle">
-                {agent ? `${agent.provider_name} · ${agent.model}` : "创建一个 Agent 开始"}
-                {session ? ` · ${session.title}` : ""}
-              </div>
-            </div>
-            <div className="header-actions">
-              <span className={`status-pill ${statusLabel}`}>{statusLabel}</span>
-              <button className="ghost-button" onClick={() => setDrawerOpen((current) => !current)}>
-                {drawerOpen ? "收起详情" : "打开详情"}
-              </button>
-            </div>
+            <div className="chat-session-title">{session?.title ?? "新会话"}</div>
+            <button className="ghost-button" onClick={() => setDrawerOpen((current) => !current)}>
+              {drawerOpen ? "收起详情" : "打开详情"}
+            </button>
           </header>
 
           {agents.length === 0 ? (
