@@ -46,7 +46,8 @@ from a developer working tree or a mutable `rc-clone`. The legacy systemd
 service is not used for v1.
 
 Current v1 production: `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`,
-Docker Compose, port 8080. The legacy 8888 service stays untouched.
+Docker Compose, port 8888. The legacy service is stopped and disabled; its
+checkout and data are retained for rollback.
 
 If the user explicitly asks to deploy v1 on a target machine:
 
@@ -60,7 +61,7 @@ If the user explicitly asks to deploy v1 on a target machine:
    `docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`
 5. Verify with:
    `docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps`
-   and `curl --noproxy '*' http://127.0.0.1:${WEB_PORT:-8080}/api/health`.
+   and `curl --noproxy '*' http://127.0.0.1:8888/api/health`.
 6. Report pull/HEAD, build, service status, and health separately. Do not claim
    deployment success if any phase failed.
 7. Direct tarball/image copy is only an explicit emergency fallback. If used,

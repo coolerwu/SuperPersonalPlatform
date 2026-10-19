@@ -85,12 +85,18 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 
 ```bash
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps
-curl --noproxy '*' http://127.0.0.1:8080/api/health
+curl --noproxy '*' http://127.0.0.1:8888/api/health
 ```
 
-旧生产服务不要动；v1 在 8080 端口验证通过后再切。
+旧 8888 服务已停止并禁用；v1 现在监听 8888。旧仓库与 `.super-personal-platform/` 数据保留。
+回滚：先停 v1 web，再重新启用旧服务：
 
-当前生产 v1 部署在 `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，监听 8080；旧的 8888 服务保留。
+```bash
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env stop web
+ssh qiuqiu@192.168.1.3 'systemctl --user enable --now super-personal-platform.service'
+```
+
+当前生产 v1 部署在 `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，监听 8888；旧的 8888 服务已 stop + disable。
 
 ## 测试
 
