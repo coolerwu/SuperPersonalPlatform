@@ -418,7 +418,6 @@ export default function App() {
         onSelectSession={setSessionId}
         onNewSession={() => void newSession()}
         onDeleteSession={(id) => void deleteSession(id)}
-        onNewAgent={() => setNewAgentOpen(true)}
         onOpenSettings={() => setView("settings")}
         settingsActive={view === "settings"}
         onLogout={() => void logout()}

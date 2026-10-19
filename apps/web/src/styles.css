@@ -313,9 +313,30 @@ textarea {
 }
 
 .agent-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.agent-row-icon {
+  flex: 0 0 auto;
+  width: 20px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
-  gap: 8px;
+  place-items: center;
+  color: var(--faint);
+}
+
+.agent-row .select {
+  flex: 1;
+}
+
+.agent-row .select-trigger {
+  padding: 7px 10px;
+  background: var(--panel-2);
+}
+
+.agent-row .select-value {
+  font-size: 13px;
 }
 
 .sessions-section {

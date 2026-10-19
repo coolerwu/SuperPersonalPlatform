@@ -11,7 +11,6 @@ type SidebarProps = {
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
-  onNewAgent: () => void;
   onOpenSettings: () => void;
   settingsActive: boolean;
   onLogout: () => void;
@@ -58,8 +57,24 @@ export function Sidebar(props: SidebarProps) {
       </div>
 
       <div className="sidebar-section">
-        <div className="field-label">Agent</div>
         <div className="agent-row">
+          <span className="agent-row-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              width="17"
+              height="17"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="9" cy="8" r="3" />
+              <path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6" />
+              <path d="M16 4.5a3 3 0 0 1 0 5.5" />
+              <path d="M18 14.5c2.3.5 4 2.5 4 5.5" />
+            </svg>
+          </span>
           <Select
             value={props.agentId}
             options={props.agents.map((agent) => ({
@@ -70,7 +85,6 @@ export function Sidebar(props: SidebarProps) {
             onChange={props.onAgentChange}
             ariaLabel="Agent"
           />
-          <button className="icon-button" title="新建 Agent" onClick={props.onNewAgent}>+</button>
         </div>
       </div>
 
