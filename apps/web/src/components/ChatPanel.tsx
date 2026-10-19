@@ -108,16 +108,18 @@ export function ChatPanel(props: ChatPanelProps) {
             <div key={message.id} className="message-row user">
               <div className="message-bubble user">
                 <Markdown content={message.content} />
-                <div className="message-meta">你 · {formatTime(message.created_at)}</div>
-                <div className="message-actions">
-                  <CopyButton text={message.content} />
-                  <button
-                    type="button"
-                    className="message-action"
-                    onClick={() => props.onQuote(message.content)}
-                  >
-                    引用
-                  </button>
+                <div className="message-meta">
+                  <span>你 · {formatTime(message.created_at)}</span>
+                  <div className="message-actions">
+                    <CopyButton text={message.content} />
+                    <button
+                      type="button"
+                      className="message-action"
+                      onClick={() => props.onQuote(message.content)}
+                    >
+                      引用
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -128,11 +130,11 @@ export function ChatPanel(props: ChatPanelProps) {
                 <div className="message-head">
                   <span className="message-author">{props.agentName || "Agent"}</span>
                   <span className="message-time">{formatTime(message.created_at)}</span>
+                  <div className="message-actions">
+                    <CopyButton text={message.content} />
+                  </div>
                 </div>
                 <Markdown content={message.content} />
-                <div className="message-actions">
-                  <CopyButton text={message.content} />
-                </div>
               </div>
             </div>
           ),
