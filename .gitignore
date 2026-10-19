@@ -1,21 +1,29 @@
-# Local workspace configuration and runtime data.
-config.yaml
-.run/
-.super-personal-platform/
-.superpowers/
+# Secrets and local environment
+.env
+.env.*
+!.env.example
 
-# Local Python environment and packaging output.
+# Local data
+data/
+apps/api/data/
+
+# Python
 .venv/
-*.egg-info/
-/build/
 __pycache__/
 *.pyc
 .pytest_cache/
-.mypy_cache/
+*.egg-info/
 .coverage
 htmlcov/
 
-# Frontend dependency/cache output. The production build in web/dist is committed.
-web/node_modules/
-web/.vite/
-.idea
+# Node
+node_modules/
+apps/web/dist/
+
+# Editors / OS
+.idea/
+.DS_Store
+
+# Legacy workspace data (never committed)
+.super-personal-platform/
+.superpowers/

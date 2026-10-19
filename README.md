@@ -1,62 +1,90 @@
-# Super Personal Platform
+# Agent Command Center
 
-A compact DeepAgent platform served as one deployable Python application. It keeps backend run execution, WeChat channel control, Nutstore WebDAV context support, and system config/log/update screens. The frontend is built with Vite and served by the FastAPI backend on port `8888`.
+v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs）。
 
-## Requirements
+- `apps/api`：FastAPI + deepagents + LangGraph
+- `apps/web`：React + Vite + TypeScript
+- `deploy/`：Docker Compose（Postgres + API + Web）
 
-- Python 3.12.x
-- Node.js 20+ for frontend development, tests and builds (production serves committed `web/dist`)
-- Linux systemd + sudo for production deployment
-
-## Setup
+## 本地开发
 
 ```bash
-./run-dev.sh
+python3.12 -m venv .venv
+.venv/bin/pip install -e "apps/api[dev]"
+
+cd apps/api
+../../.venv/bin/uvicorn app.main:app --reload --port 8000
 ```
-
-Open `http://localhost:8888` and log in with the token from `config.yaml`.
-
-Development mode uses `.super-personal-platform` under the project directory as its workspace by default. The workspace holds `config.yaml`, logs, and runtime files. It does not check git status or pull code. If the configured port is already held by a process whose working directory is this project, dev mode stops that process before starting.
-If the default workspace does not contain `config.yaml`, the script first reuses an existing project `config.yaml` when present; otherwise it creates one from `config.example.yaml`.
-
-To use a different workspace:
 
 ```bash
-mkdir -p /path/to/workspace
-./run-dev.sh --workspace /path/to/workspace
+cd apps/web
+npm install
+npm run dev
 ```
 
-## Production
+打开 `http://localhost:5173`，默认 token 见 `APP_AUTH_TOKEN`（默认 `dev-token`）。
+
+本地聊天需要有效模型密钥：通过 `export LLM_API_KEY=...` 或在 `apps/api/.env` 配置；不要提交。也可以登录后在右侧 Settings 里填写。
+
+## Docker Compose
 
 ```bash
-./run-prod.sh
+cp deploy/.env.example deploy/.env
+# 编辑 deploy/.env，填入 APP_AUTH_TOKEN 和 LLM_API_KEY
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
 ```
 
-Production mode uses `.super-personal-platform` under the project directory as its workspace by default. It updates the git checkout with `git pull --ff-only`, prepares the Python virtualenv, registers or refreshes the systemd service with the current workspace path, and restarts it. The frontend build output in `web/dist` is expected to be committed; the run scripts do not install or build frontend assets.
-If the default production workspace does not contain `config.yaml`, the script first reuses an existing project `config.yaml` when present, then tries `~/.super-personal-platform/config.yaml`, and otherwise creates one from `config.example.yaml`.
+打开 `http://localhost:8080`。
 
-To deploy with a different workspace:
+## 配置
+
+| 环境变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `APP_AUTH_TOKEN` | 单用户访问 token | `dev-token` |
+| `APP_DATABASE_URL` | SQLAlchemy 数据库 URL | `sqlite+aiosqlite:///./data/app.db` |
+| `APP_DATA_DIR` | 数据/checkpoint 目录 | `./data` |
+| `LLM_BASE_URL` | OpenAI-compatible 端点 | `https://api.deepseek.com` |
+| `LLM_API_KEY` | 模型密钥 | 空 |
+| `LLM_MODEL` | 模型名 | `deepseek-v4-flash` |
+
+## V1 生产部署（GitHub pull）
+
+v1 部署以 GitHub 的 `rewrite/v2` 分支为准，不从本地工作目录直接复制。
 
 ```bash
-./run-prod.sh --workspace /path/to/workspace
+git push origin rewrite/v2
 ```
 
-After login, use `系统 -> 更新` to trigger the same production update flow from the web UI.
-
-The production systemd service runs as `SUPER_PERSONAL_SERVICE_USER` when set; otherwise it uses `SUDO_USER` or the current `id -un` user.
-
-To roll back to an earlier tag or commit, run this on the production host:
+在目标机新建 v1 目录并拉取（不要覆盖旧的 legacy checkout）：
 
 ```bash
-./run.sh rollback v0.1.0 --workspace /path/to/workspace
+git clone --branch rewrite/v2 git@github.com:coolerwu/SuperPersonalPlatform.git ~/SuperPersonalPlatform-v1
 ```
 
-The rollback checks out the target version, installs that version's dependencies, and restarts
-the service. Run `./run-prod.sh` again to return to the production branch. Version, release and
-rollback rules live in `docs/release.md`; the change log is `CHANGELOG.md`.
+```bash
+cd ~/SuperPersonalPlatform-v1 && git rev-parse HEAD && git status --short
+```
 
-## Project Architecture
+确认 HEAD 等于本地刚 push 的 SHA、工作区干净后：
 
-`docs/project-architecture.md` is part of the project contract. `docs/architecture-qa.md` records the DeepAgent rebuild decisions. Update both when implementation changes behavior, architecture, commands, or operating assumptions.
+```bash
+cp deploy/.env.example deploy/.env
+# 填 APP_AUTH_TOKEN、LLM_API_KEY、POSTGRES_PASSWORD、WEB_PORT
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+```
 
-Requirements live in `docs/intent.md` as numbered `F<n>` sections; see the "怎么用" section at the top of that file for the numbering and template rules.
+```bash
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps
+curl --noproxy '*' http://127.0.0.1:8080/api/health
+```
+
+旧生产服务不要动；v1 在 8080 端口验证通过后再切。
+
+## 测试
+
+```bash
+.venv/bin/python -m pytest apps/api/app/tests
+cd apps/web && npm run build
+```
+
+详细需求见 `docs/intent.md`；协作约定见 `CLAUDE.md`。
