@@ -7,6 +7,21 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 - `deploy/`：systemd unit 与 `.env` 模板（生产）
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888
 
+## 运行时目录
+
+配置与数据统一在 `~/.super-personal-platform/`（`APP_HOME` 可覆盖）：
+
+```text
+~/.super-personal-platform/
+├── .env                 # APP_AUTH_TOKEN、LLM_* 等配置
+├── data/
+│   ├── app.db           # SQLite
+│   └── checkpoints/     # 每个 session 的 LangGraph checkpoint
+└── workspaces/          # Agent 真实工作区根目录
+```
+
+启动目录下的 `.env` 会覆盖 home 配置，便于本地临时覆盖。
+
 ## 本地开发
 
 ```bash
@@ -25,7 +40,7 @@ npm run dev
 
 打开 `http://localhost:5173`，默认 token 见 `APP_AUTH_TOKEN`（默认 `dev-token`）。
 
-本地聊天需要有效模型密钥：通过 `export LLM_API_KEY=...` 或在 `apps/api/.env` 配置；不要提交。也可以登录后在侧栏「配置」里填写。
+本地聊天需要有效模型密钥：通过 `export LLM_API_KEY=...`、`~/.super-personal-platform/.env` 或启动目录 `.env` 配置；不要提交。也可以登录后在侧栏「配置」里填写。
 
 ## Chat
 
@@ -42,7 +57,8 @@ npm run dev
 侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；Provider/Agent 默认只显示列表，点「编辑」或条目再展开表单。切换 Agent 时，Provider tab 会自动选中该 Agent 的 Provider，并清空输入框草稿。集中管理：
 
 - Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
-- Agent：选择并编辑名称、Provider、instructions，或新建 Agent；
+- Agent：选择并编辑名称、Provider、instructions、工作区，或新建 Agent；
+- 工作区：每个 Agent 可选「虚拟工作区」（文件只在会话状态中）或「本地目录」；本地目录使用 `~/.super-personal-platform/workspaces/` 下的相对路径，保存时自动创建。侧边栏 Agent 选择器下方也可以直接切换当前 Agent 的工作区；
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
 - 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
 
@@ -61,10 +77,10 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
 
 ## 数据存储
 
-生产数据都在 `~/SuperPersonalPlatform-v1-deploy/data/`：
+生产数据都在 `~/.super-personal-platform/data/`：
 
 - `app.db`：SQLite（WAL），文件权限 600；
-  - `agents`：Agent 名称、instructions、Provider；
+  - `agents`：Agent 名称、instructions、Provider、workspace 配置；
   - `sessions`：会话，首次发送消息时才创建；标题取第一条用户消息前 24 个字；
   - `messages`：每条用户/assistant 消息一行，assistant 消息在 Run 完成时写入；
   - `runs`：每次发送/重试一行，含状态、input/output、错误、token 用量、时间；
@@ -73,6 +89,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
   - `run_memories`：某次 Run 实际注入了哪些记忆；
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
+- `~/.super-personal-platform/workspaces/`：Agent 真实工作区目录；删除 Agent 不会删除这里的文件。
 
 备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
 
@@ -80,9 +97,11 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
 
 | 环境变量 | 说明 | 默认 |
 | --- | --- | --- |
+| `APP_HOME` | 配置与数据根目录 | `~/.super-personal-platform` |
 | `APP_AUTH_TOKEN` | 单用户访问 token | `dev-token` |
-| `APP_DATABASE_URL` | SQLAlchemy 数据库 URL | `sqlite+aiosqlite:///./data/app.db` |
-| `APP_DATA_DIR` | 数据/checkpoint 目录 | `./data` |
+| `APP_DATABASE_URL` | SQLAlchemy 数据库 URL | `sqlite+aiosqlite:///$APP_HOME/data/app.db` |
+| `APP_DATA_DIR` | 数据/checkpoint 目录 | `$APP_HOME/data` |
+| `APP_WORKSPACES_DIR` | 真实工作区根目录 | `$APP_HOME/workspaces` |
 | `LLM_BASE_URL` | OpenAI-compatible 端点 | `https://api.deepseek.com` |
 | `LLM_API_KEY` | 模型密钥 | 空 |
 | `LLM_MODEL` | 模型名 | `deepseek-v4-flash` |
@@ -99,7 +118,7 @@ cd apps/web && npm install && npm run build
 
 ## V1 生产部署（宿主机 systemd + SQLite）
 
-生产机：`qiuqiu@192.168.1.3`，目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，数据在 `data/app.db` 和 `data/checkpoints`。
+生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。
 
 首次准备：
 
@@ -107,13 +126,31 @@ cd apps/web && npm install && npm run build
 cd ~/SuperPersonalPlatform-v1-deploy
 python3.12 -m venv .venv
 .venv/bin/pip install -e apps/api
-cp deploy/.env.example deploy/.env
-# 填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
-mkdir -p data
+mkdir -p ~/.super-personal-platform/data
+cp deploy/.env.example ~/.super-personal-platform/.env
+# 编辑 ~/.super-personal-platform/.env，填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
 cp deploy/agent-command-center.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now agent-command-center.service
 ```
+
+从旧布局迁移（`deploy/.env` + 部署目录 `data/`）：
+
+```bash
+# 先备份 data/ 和 deploy/.env
+systemctl --user stop agent-command-center.service
+# 确认旧 ~/.super-personal-platform 只有历史数据后再清空
+rm -rf ~/.super-personal-platform
+mkdir -p ~/.super-personal-platform
+mv ~/SuperPersonalPlatform-v1-deploy/data ~/.super-personal-platform/data
+mv ~/SuperPersonalPlatform-v1-deploy/deploy/.env ~/.super-personal-platform/.env
+cp ~/SuperPersonalPlatform-v1-deploy/deploy/agent-command-center.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user start agent-command-center.service
+curl --noproxy '*' http://127.0.0.1:8888/api/health
+```
+
+迁移前确认旧 `~/.super-personal-platform/` 只有历史数据（用户已确认清空）；迁移后核对会话、消息、Run 和记忆数量。
 
 日常更新：
 
@@ -126,7 +163,7 @@ systemctl --user restart agent-command-center.service
 curl --noproxy '*' http://127.0.0.1:8888/api/health
 ```
 
-`deploy/agent-command-center.service` 使用 `deploy/.env` 作为 `EnvironmentFile`，并强制 `APP_DATABASE_URL=sqlite+aiosqlite:///./data/app.db`、`APP_DATA_DIR=./data`。用户级服务依赖 linger（`loginctl show-user qiuqiu -p Linger` 应为 `yes`），否则退出登录后进程会被回收。
+`deploy/agent-command-center.service` 使用 `~/.super-personal-platform/.env` 作为 `EnvironmentFile`，并强制 `APP_DATA_DIR=%h/.super-personal-platform/data`、`APP_DATABASE_URL=sqlite+aiosqlite:///%h/.super-personal-platform/data/app.db`。用户级服务依赖 linger（`loginctl show-user qiuqiu -p Linger` 应为 `yes`），否则退出登录后进程会被回收。
 
 回滚 v1 版本：checkout 上一个已验证的提交，重新安装依赖（如需要）并重启：
 
@@ -134,7 +171,7 @@ curl --noproxy '*' http://127.0.0.1:8888/api/health
 cd ~/SuperPersonalPlatform-v1-deploy && git checkout <commit> && systemctl --user restart agent-command-center.service
 ```
 
-备份：停服务后复制 `data/app.db` 和 `data/checkpoints/`；或在服务运行时用 SQLite backup API 导出 `app.db`。`data/` 已被 Git 忽略，不会提交。
+备份：停服务后复制 `~/.super-personal-platform/data/app.db` 和 `data/checkpoints/`；或在服务运行时用 SQLite backup API 导出 `app.db`。
 
 当前生产为宿主机 systemd + SQLite；Docker Compose、Dockerfile、nginx 与 Postgres 的部署配置已从仓库移除。
 

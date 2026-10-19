@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { Agent, DrawerTab, Provider, Run, RunEvent } from "../types";
+import type { Agent, AgentSavePayload, DrawerTab, Provider, Run, RunEvent } from "../types";
 import { formatTime, previewPayload, truncate } from "../format";
 import { AgentEditor } from "./AgentEditor";
 
@@ -11,12 +11,7 @@ type DrawerProps = {
   events: RunEvent[];
   agent: Agent | undefined;
   providers: Provider[];
-  onSaveAgent: (payload: {
-    name: string;
-    instructions: string;
-    provider_id: string;
-    auto_memory: boolean;
-  }) => Promise<void>;
+  onSaveAgent: (payload: AgentSavePayload) => Promise<void>;
   onClose: () => void;
 };
 
@@ -69,12 +64,7 @@ export function Drawer(props: DrawerProps) {
     ? props.events
     : props.events.filter((event) => event.type !== "assistant_delta");
 
-  async function saveAgent(payload: {
-    name: string;
-    instructions: string;
-    provider_id: string;
-    auto_memory: boolean;
-  }) {
+  async function saveAgent(payload: AgentSavePayload) {
     setSavingAgent(true);
     try {
       await props.onSaveAgent(payload);

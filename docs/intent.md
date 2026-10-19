@@ -261,3 +261,57 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - 恢复容器化部署；
 - 改动 SQLite 数据或部署目录结构。
 
+
+### F8 Agent Workspace（虚拟 / 真实目录 + 左侧联动）
+
+- 状态：进行中
+- 日期：2026-10-19
+- 来源：workspace 设计讨论
+
+#### 功能点
+
+1. Agent 新增 `workspace_mode`（`virtual` / `directory`）和 `workspace_path`（相对路径）；默认虚拟，现有 Agent 行为不变。
+2. 侧边栏 Agent 选择器下方新增工作区选择器：切换 Agent 自动显示该 Agent 的工作区；选择「虚拟工作区」或已有目录后立即保存到该 Agent，并影响后续 Run。
+3. 真实目录根目录为 `~/.super-personal-platform/workspaces/`（`APP_WORKSPACES_DIR` 可覆盖）；只接受相对路径，拒绝绝对路径、`..`、反斜杠、控制字符和逃逸符号链接；保存时自动创建。
+4. 执行器按配置选择 backend：`virtual` → `StateBackend`；`directory` → `FilesystemBackend(virtual_mode=True)`。
+5. 配置页 Agent 编辑器提供完整工作区配置（模式 + 相对路径），用于新建目录或填写自定义路径。
+6. 删除 Agent 不删除 workspace 目录；多个 Agent 可共享同一目录。
+7. 本轮仍不向 Agent 暴露文件工具；workspace 只是执行核的 backend 基础。
+
+#### 验收标准
+
+- 侧边栏可查看并切换当前 Agent 的工作区，切换 Agent 时显示跟随变化，刷新后保持。
+- 新建真实目录成功；非法路径返回 400；指向普通文件或符号链接的路径被拒绝。
+- 旧数据库启动时自动补齐 workspace 列。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 工具 / skills 开关与 deepagents 升级（后续需求）；
+- 多用户或跨机器 workspace 隔离；
+- 删除 Agent 时级联删除 workspace 文件。
+
+### F9 统一 home 数据目录
+
+- 状态：进行中
+- 日期：2026-10-19
+- 来源：workspace 讨论中的目录统一要求
+
+#### 功能点
+
+1. 运行时目录统一到 `~/.super-personal-platform/`（`APP_HOME` 可覆盖）：配置 `.env`、数据库 `data/app.db`、checkpoint `data/checkpoints/`、工作区 `workspaces/`。
+2. 配置读取顺序：`$APP_HOME/.env` → 启动目录 `.env`（后者覆盖）；生产继续由 systemd `EnvironmentFile` 注入。
+3. systemd unit 改为 home 下的环境文件与数据库/数据目录。
+4. 启用前清空旧 `~/.super-personal-platform` 历史数据；生产按“停服务 → 备份 → 迁移 data 与 .env → 更新 unit → 启动验证”执行。
+
+#### 验收标准
+
+- 新环境首次启动自动创建 `data/`、`data/checkpoints/`、`workspaces/`。
+- 生产迁移后会话、消息、Run 与记忆数量与迁移前一致；`/api/health` 200，`/api/system` 返回 sqlite。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 迁移或保留旧 `.super-personal-platform` 历史数据；
+- 多实例 / 多用户目录隔离；
+- 改变 workspace 的虚拟 / 真实目录语义。

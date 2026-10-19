@@ -120,6 +120,8 @@ class RunWorker:
                 checkpoint_dir=settings.checkpoint_dir,
                 agent_name=agent.name,
                 memory_context=memory_context,
+                workspace_mode=agent.workspace_mode,
+                workspace_path=agent.workspace_path,
             )
             instructions = agent.instructions or "You are a helpful assistant."
             auto_memory = agent.auto_memory

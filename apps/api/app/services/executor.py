@@ -10,6 +10,8 @@ from typing import Any
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
+from app.services.workspace import DIRECTORY_MODE, resolve_workspace_path
+
 
 @dataclass(frozen=True)
 class ExecutorEvent:
@@ -88,6 +90,15 @@ def _split_stream_chunk(chunk: Any) -> tuple[tuple[str, ...], Any]:
     return (), chunk
 
 
+def build_backend(workspace_mode: str, workspace_path: str):
+    from deepagents.backends import FilesystemBackend, StateBackend
+
+    if workspace_mode == DIRECTORY_MODE:
+        root = resolve_workspace_path(workspace_path, create=True)
+        return FilesystemBackend(root_dir=root, virtual_mode=True)
+    return StateBackend()
+
+
 class DeepAgentExecutor:
     def __init__(
         self,
@@ -96,11 +107,15 @@ class DeepAgentExecutor:
         checkpoint_dir: Path,
         agent_name: str,
         memory_context: str = "",
+        workspace_mode: str = "virtual",
+        workspace_path: str = "",
     ) -> None:
         self.provider = provider
         self.checkpoint_dir = checkpoint_dir
         self.agent_name = agent_name
         self.memory_context = memory_context
+        self.workspace_mode = workspace_mode
+        self.workspace_path = workspace_path
 
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
         try:
@@ -153,6 +168,7 @@ class DeepAgentExecutor:
                     tools=[],
                     system_prompt=system_prompt,
                     checkpointer=checkpointer,
+                    backend=build_backend(self.workspace_mode, self.workspace_path),
                     name=self.agent_name or "assistant",
                 )
                 config = {

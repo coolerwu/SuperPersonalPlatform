@@ -61,13 +61,15 @@ If the user explicitly asks to deploy v1 on the target machine:
 6. Verify separately with:
    `systemctl --user is-active agent-command-center.service`
    `curl --noproxy '*' http://127.0.0.1:8888/api/health`
-   Authenticate with `APP_AUTH_TOKEN` from `deploy/.env` without printing it.
+   Authenticate with `APP_AUTH_TOKEN` from `~/.super-personal-platform/.env`
+   without printing it.
 7. Report pull/HEAD, dependency install, service state, and health separately.
    Do not claim deployment success if any phase failed.
 8. Never put SSH/sudo passwords, API keys, or tokens in repository files or
    command text.
-9. Do not delete `data/` or `deploy/.env`. Back up `data/app.db` and
-   `data/checkpoints/` before schema changes.
+9. Do not delete `~/.super-personal-platform/`. Back up
+   `~/.super-personal-platform/data/app.db` and `data/checkpoints/` before
+   schema changes.
 10. Docker deployment files have been removed; do not reintroduce Docker
     Compose, nginx, or Postgres.
 

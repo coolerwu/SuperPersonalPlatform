@@ -21,6 +21,7 @@ from app.routers.providers import router as providers_router
 from app.routers.runs import router as runs_router
 from app.routers.sessions import router as sessions_router
 from app.routers.system import router as system_router
+from app.routers.workspaces import router as workspaces_router
 from app.services.run_service import seed_default_provider
 from app.services.worker import RunWorker
 
@@ -56,6 +57,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     async def lifespan(app: FastAPI):
         settings.app_data_dir.mkdir(parents=True, exist_ok=True)
         settings.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
         await init_db()
         await seed_default_provider()
         await seed_default_agent()
@@ -85,6 +87,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(memories_router)
     app.include_router(runs_router)
     app.include_router(system_router)
+    app.include_router(workspaces_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, bool]:

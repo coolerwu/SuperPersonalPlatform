@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
-import type { Agent, Provider, SystemInfo } from "../types";
+import type { Agent, AgentSavePayload, Provider, SystemInfo } from "../types";
 import { AgentEditor } from "./AgentEditor";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { ProviderCreateForm } from "./ProviderCreateForm";
@@ -12,12 +12,7 @@ type SettingsPageProps = {
   agentId: string;
   providers: Provider[];
   onSelectAgent: (id: string) => void;
-  onSaveAgent: (payload: {
-    name: string;
-    instructions: string;
-    provider_id: string;
-    auto_memory: boolean;
-  }) => Promise<void>;
+  onSaveAgent: (payload: AgentSavePayload) => Promise<void>;
   onSaveProvider: (
     providerId: string,
     payload: { name: string; base_url: string; model: string; api_key?: string },
@@ -95,12 +90,7 @@ export function SettingsPage(props: SettingsPageProps) {
     };
   }, []);
 
-  async function saveAgent(payload: {
-    name: string;
-    instructions: string;
-    provider_id: string;
-    auto_memory: boolean;
-  }) {
+  async function saveAgent(payload: AgentSavePayload) {
     setSavingAgent(true);
     try {
       await props.onSaveAgent(payload);

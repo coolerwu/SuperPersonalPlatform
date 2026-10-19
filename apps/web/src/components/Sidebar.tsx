@@ -1,4 +1,6 @@
-import type { Agent, Session } from "../types";
+import { useState } from "react";
+
+import type { Agent, Session, WorkspaceMode, WorkspaceOption } from "../types";
 import { formatTime } from "../format";
 import { Select } from "./Select";
 
@@ -6,6 +8,8 @@ type SidebarProps = {
   agents: Agent[];
   agentId: string;
   onAgentChange: (id: string) => void;
+  workspaces: WorkspaceOption[];
+  onWorkspaceChange: (mode: WorkspaceMode, path: string) => Promise<void>;
   sessions: Session[];
   sessionId: string;
   onSelectSession: (id: string) => void;
@@ -20,6 +24,39 @@ type SidebarProps = {
 };
 
 export function Sidebar(props: SidebarProps) {
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
+
+  const agent = props.agents.find((item) => item.id === props.agentId);
+  const directoryPath = agent?.workspace_mode === "directory" ? agent.workspace_path : "";
+  const currentWorkspace = directoryPath ? `dir:${directoryPath}` : "virtual";
+  const workspaceOptions = [
+    { value: "virtual", label: "虚拟工作区", description: "文件只保存在会话状态中" },
+    ...props.workspaces.map((item) => ({
+      value: `dir:${item.path}`,
+      label: item.path,
+      description: "本地目录",
+    })),
+  ];
+  if (directoryPath && !props.workspaces.some((item) => item.path === directoryPath)) {
+    workspaceOptions.push({ value: `dir:${directoryPath}`, label: directoryPath, description: "本地目录" });
+  }
+
+  async function changeWorkspace(value: string) {
+    if (!agent || workspaceBusy) return;
+    const mode: WorkspaceMode = value === "virtual" ? "virtual" : "directory";
+    const path = value === "virtual" ? "" : value.slice(4);
+    setWorkspaceBusy(true);
+    setWorkspaceError("");
+    try {
+      await props.onWorkspaceChange(mode, path);
+    } catch (exc) {
+      setWorkspaceError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -60,6 +97,55 @@ export function Sidebar(props: SidebarProps) {
             ariaLabel="Agent"
           />
         </div>
+      </div>
+
+      <div className="sidebar-section">
+        <div className="agent-row">
+          <span className="agent-row-icon" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+            </svg>
+          </span>
+          <Select
+            value={currentWorkspace}
+            options={workspaceOptions}
+            onChange={(value) => void changeWorkspace(value)}
+            disabled={!agent || workspaceBusy}
+            ariaLabel="工作区"
+          />
+          <button
+            type="button"
+            className="icon-button subtle workspace-config"
+            title="管理工作区"
+            aria-label="管理工作区"
+            onClick={props.onOpenSettings}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
+              <circle cx="16" cy="7" r="2" />
+              <circle cx="8" cy="17" r="2" />
+            </svg>
+          </button>
+        </div>
+        {workspaceError && <div className="workspace-error">{workspaceError}</div>}
       </div>
 
       <div className="sidebar-actions">

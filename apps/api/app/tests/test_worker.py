@@ -58,6 +58,42 @@ async def test_worker_completes_run(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_passes_workspace_config(monkeypatch) -> None:
+    captured: dict = {}
+
+    class CapturingExecutor(FakeExecutor):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            captured.update(self.kwargs)
+
+    monkeypatch.setattr("app.services.worker.DeepAgentExecutor", CapturingExecutor)
+    session_id = await _new_session()
+    async with SessionLocal() as db:
+        session = await db.get(Session, session_id)
+        assert session is not None
+        agent = await db.get(Agent, session.agent_id)
+        assert agent is not None
+        agent.workspace_mode = "directory"
+        agent.workspace_path = "worker-projected"
+        await db.commit()
+        agent_id = agent.id
+
+    run, _ = await create_run(session_id, "hi")
+    worker = RunWorker()
+    await worker.execute_run(run.id)
+
+    assert captured["workspace_mode"] == "directory"
+    assert captured["workspace_path"] == "worker-projected"
+
+    async with SessionLocal() as db:
+        agent = await db.get(Agent, agent_id)
+        assert agent is not None
+        agent.workspace_mode = "virtual"
+        agent.workspace_path = ""
+        await db.commit()
+
+
+@pytest.mark.asyncio
 async def test_worker_cancels_queued_run() -> None:
     session_id = await _new_session()
     run, _ = await create_run(session_id, "hi")

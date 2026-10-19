@@ -11,6 +11,7 @@ from app.config import settings
 from app.db import get_db
 from app.models import Agent, MemoryItem, Message, Provider, Run, RunEvent, RunMemory, Session
 from app.schemas import AgentCreate, AgentOut, AgentUpdate
+from app.services.workspace import WorkspaceError, prepare_workspace
 
 router = APIRouter(prefix="/api/agents", tags=["agents"], dependencies=[Depends(require_auth)])
 
@@ -25,6 +26,8 @@ def agent_out(agent: Agent, provider: Provider | None) -> AgentOut:
         model=provider.model if provider else "",
         status=agent.status,
         auto_memory=agent.auto_memory,
+        workspace_mode=agent.workspace_mode,
+        workspace_path=agent.workspace_path,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
@@ -46,12 +49,18 @@ async def create_agent(payload: AgentCreate, db: AsyncSession = Depends(get_db))
     provider = await db.get(Provider, payload.provider_id) if payload.provider_id else await _default_provider(db)
     if provider is None:
         raise HTTPException(status_code=400, detail="configure a provider first")
+    try:
+        workspace_mode, workspace_path = prepare_workspace(payload.workspace_mode, payload.workspace_path)
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     agent = Agent(
         name=payload.name.strip(),
         instructions=payload.instructions,
         provider_id=provider.id,
         status="active",
         auto_memory=payload.auto_memory,
+        workspace_mode=workspace_mode,
+        workspace_path=workspace_path,
     )
     db.add(agent)
     await db.commit()
@@ -91,6 +100,17 @@ async def update_agent(
         agent.status = str(data["status"])
     if "auto_memory" in data and data["auto_memory"] is not None:
         agent.auto_memory = bool(data["auto_memory"])
+    if "workspace_mode" in data or "workspace_path" in data:
+        mode = data.get("workspace_mode") or agent.workspace_mode
+        raw_path = data.get("workspace_path")
+        if raw_path is None:
+            raw_path = agent.workspace_path
+        try:
+            workspace_mode, workspace_path = prepare_workspace(str(mode), str(raw_path))
+        except WorkspaceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        agent.workspace_mode = workspace_mode
+        agent.workspace_path = workspace_path
     await db.commit()
     await db.refresh(agent)
     provider = await db.get(Provider, agent.provider_id)

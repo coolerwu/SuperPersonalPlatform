@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator
 import logging
 
 from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
@@ -68,6 +68,24 @@ async def _ensure_memory_fts() -> None:
         await conn.exec_driver_sql("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild')")
 
 
+async def _ensure_agent_workspace_columns(conn: AsyncConnection) -> None:
+    """Add workspace columns to pre-existing SQLite databases.
+
+    `create_all` only creates missing tables, so databases created before the
+    workspace feature need an explicit ALTER.
+    """
+    rows = (await conn.exec_driver_sql("PRAGMA table_info(agents)")).fetchall()
+    existing = {row[1] for row in rows}
+    if "workspace_mode" not in existing:
+        await conn.exec_driver_sql(
+            "ALTER TABLE agents ADD COLUMN workspace_mode VARCHAR(16) NOT NULL DEFAULT 'virtual'"
+        )
+    if "workspace_path" not in existing:
+        await conn.exec_driver_sql(
+            "ALTER TABLE agents ADD COLUMN workspace_path VARCHAR(256) NOT NULL DEFAULT ''"
+        )
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
@@ -75,6 +93,8 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
     if settings.app_database_url.startswith("sqlite"):
+        async with engine.begin() as conn:
+            await _ensure_agent_workspace_columns(conn)
         try:
             await _ensure_memory_fts()
         except Exception:

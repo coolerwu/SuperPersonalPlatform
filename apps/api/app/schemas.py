@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,6 +41,8 @@ class AgentCreate(BaseModel):
     instructions: str = ""
     provider_id: str | None = None
     auto_memory: bool = True
+    workspace_mode: Literal["virtual", "directory"] = "virtual"
+    workspace_path: str = ""
 
 
 class AgentUpdate(BaseModel):
@@ -48,6 +51,8 @@ class AgentUpdate(BaseModel):
     provider_id: str | None = None
     status: str | None = None
     auto_memory: bool | None = None
+    workspace_mode: Literal["virtual", "directory"] | None = None
+    workspace_path: str | None = None
 
 
 class AgentOut(BaseModel):
@@ -59,8 +64,15 @@ class AgentOut(BaseModel):
     model: str = ""
     status: str
     auto_memory: bool = True
+    workspace_mode: str = "virtual"
+    workspace_path: str = ""
     created_at: datetime
     updated_at: datetime
+
+
+class WorkspaceOut(BaseModel):
+    path: str
+    name: str
 
 
 class SessionCreate(BaseModel):

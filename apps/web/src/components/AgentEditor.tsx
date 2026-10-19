@@ -1,18 +1,13 @@
 import { FormEvent, useEffect, useState } from "react";
 
-import type { Agent, Provider } from "../types";
+import type { Agent, AgentSavePayload, Provider, WorkspaceMode } from "../types";
 import { Select } from "./Select";
 
 type AgentEditorProps = {
   agent: Agent | undefined;
   providers: Provider[];
   saving: boolean;
-  onSave: (payload: {
-    name: string;
-    instructions: string;
-    provider_id: string;
-    auto_memory: boolean;
-  }) => Promise<void>;
+  onSave: (payload: AgentSavePayload) => Promise<void>;
 };
 
 export function AgentEditor({ agent, providers, saving, onSave }: AgentEditorProps) {
@@ -20,6 +15,8 @@ export function AgentEditor({ agent, providers, saving, onSave }: AgentEditorPro
   const [instructions, setInstructions] = useState("");
   const [providerId, setProviderId] = useState("");
   const [autoMemory, setAutoMemory] = useState(true);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("virtual");
+  const [workspacePath, setWorkspacePath] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -27,16 +24,29 @@ export function AgentEditor({ agent, providers, saving, onSave }: AgentEditorPro
     setInstructions(agent?.instructions ?? "");
     setProviderId(agent?.provider_id ?? providers[0]?.id ?? "");
     setAutoMemory(agent?.auto_memory ?? true);
+    setWorkspaceMode(agent?.workspace_mode ?? "virtual");
+    setWorkspacePath(agent?.workspace_path ?? "");
     setError("");
-  }, [agent?.id, agent?.name, agent?.instructions, agent?.provider_id, agent?.auto_memory, providers]);
+  }, [
+    agent?.id,
+    agent?.name,
+    agent?.instructions,
+    agent?.provider_id,
+    agent?.auto_memory,
+    agent?.workspace_mode,
+    agent?.workspace_path,
+    providers,
+  ]);
 
   if (!agent) {
     return <div className="empty-note">选择一个 Agent 后编辑。</div>;
   }
 
+  const workspaceInvalid = workspaceMode === "directory" && !workspacePath.trim();
+
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim() || saving) return;
+    if (!name.trim() || saving || workspaceInvalid) return;
     setError("");
     try {
       await onSave({
@@ -44,6 +54,8 @@ export function AgentEditor({ agent, providers, saving, onSave }: AgentEditorPro
         instructions,
         provider_id: providerId,
         auto_memory: autoMemory,
+        workspace_mode: workspaceMode,
+        workspace_path: workspaceMode === "directory" ? workspacePath.trim() : "",
       });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -66,6 +78,31 @@ export function AgentEditor({ agent, providers, saving, onSave }: AgentEditorPro
         onChange={setProviderId}
         ariaLabel="Provider"
       />
+
+      <div className="field-label">工作区</div>
+      <Select
+        value={workspaceMode}
+        options={[
+          { value: "virtual", label: "虚拟工作区", description: "文件只保存在会话状态中" },
+          { value: "directory", label: "本地目录", description: "服务端 workspaces 下的真实目录" },
+        ]}
+        onChange={(value) => setWorkspaceMode(value as WorkspaceMode)}
+        ariaLabel="工作区"
+      />
+      {workspaceMode === "directory" && (
+        <>
+          <label className="field-label" htmlFor="agent-workspace-path">目录路径</label>
+          <input
+            id="agent-workspace-path"
+            value={workspacePath}
+            placeholder="my-project"
+            onChange={(event) => setWorkspacePath(event.target.value)}
+          />
+          <div className="hint">
+            相对路径，位于 ~/.super-personal-platform/workspaces 下；不能使用绝对路径或 ..；保存时自动创建。
+          </div>
+        </>
+      )}
 
       <label className="field-label" htmlFor="agent-instructions">Instructions</label>
       <textarea
@@ -90,7 +127,7 @@ export function AgentEditor({ agent, providers, saving, onSave }: AgentEditorPro
       </label>
 
       {error && <div className="error-banner">{error}</div>}
-      <button className="primary" type="submit" disabled={saving || !name.trim()}>
+      <button className="primary" type="submit" disabled={saving || !name.trim() || workspaceInvalid}>
         {saving ? "保存中…" : "保存 Agent"}
       </button>
       <div className="hint">修改在下一轮对话生效；当前 session 的 checkpoint 不会被清空。</div>
