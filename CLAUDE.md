@@ -17,8 +17,9 @@
 - 执行核：`AgentExecutor` 端口 + `DeepAgentExecutor`；平台拥有 session/messages/run，deepagents checkpointer 只存 Agent 状态。
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
 - v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs、集中配置页和长期记忆。
-- v1 暴露工作区内的 filesystem 工具（ls / read_file / write_file / edit_file / delete / glob / grep，由 `FilesystemMiddleware` 提供）；不暴露 shell / browser 工具。memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
-- Skills/Tools：全局技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）+ 每个 Agent 的 `enabled_skills` / `enabled_tools` 启用列表。系统提示只列出启用技能；模型用 `read_file` 读取 `/skills/<name>/SKILL.md` 后，技能在 `metadata.include_tools` 中声明、且已为该 Agent 启用的平台工具才解锁，读取前不可见也不可调用；文件工具始终可用。技能工具来自代码注册表 `apps/api/app/services/skill_tools.py`（当前提供 `web_search` 和 `web_fetch`：DeepSeek Search/Fetch API，按成功请求计费），不在技能目录执行 Python。Agent 可以在对话中直接用文件工具创建或修改 `/skills/**` 下的技能，不需要表单；因此技能声明不是安全边界，工具是否可用由每 Agent 的 `enabled_tools` 控制。首次启动 seed `web-search` 和 `web-fetch` 技能，已存在不覆盖。
+- v1 暴露工作区内的 filesystem 工具（ls / read_file / write_file / edit_file / delete / glob / grep，由 `FilesystemMiddleware` 提供）；不暴露 shell 工具；浏览器工具通过 `web-browser` 技能门控解锁（Playwright 无头 Chromium，文本快照，最多 2 个标签页）。memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
+- Skills/Tools：全局技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）+ 每个 Agent 的 `enabled_skills` 启用列表。系统提示只列出启用技能；模型用 `read_file` 读取 `/skills/<name>/SKILL.md` 后，技能在 `metadata.include_tools` 中声明的已注册工具才解锁，读取前不可见也不可调用；文件工具始终可用。技能工具来自代码注册表 `apps/api/app/services/skill_tools.py`（`web_search` / `web_fetch`，DeepSeek Search/Fetch API，按成功请求计费）和 `apps/api/app/services/browser_tools.py`（`browser_open` / `browser_snapshot` / `browser_click` / `browser_fill` / `browser_press` / `browser_close`），不在技能目录执行 Python。Agent 可以在对话中直接用文件工具创建或修改 `/skills/**` 下的技能，不需要表单；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具；技能声明本身不是安全边界。首次启动 seed `web-search`、`web-fetch` 和 `web-browser` 技能，已存在不覆盖。
+- Browser：每次 Run 懒启动一个 Chromium + context，`BROWSER_CONCURRENCY`（默认 2）限制标签页；执行器在 `finally` 关闭（含失败、超时、取消）；只允许公开 http/https，拒绝 localhost、私网、`file://` 和下载；只返回文字和元素 ref，不返回截图；相关配置为 `BROWSER_*`。
 - 记忆：`memory_items`（scope=user|agent，无 status）+ `run_memories`；user memory 全局、agent memory 按 Agent 隔离；session 工作记忆仍由 checkpoint 负责。
 - 写入：配置页手动 CRUD、对话里“记住……”写 user memory、每个 Agent 的 `auto_memory` 开关在 Run 完成后提取 agent memory；先用 FTS5（trigram）找相关历史记忆，再让模型返回 add/update/delete 做合并，最多 12 个操作、200 条上限。
 - 读取：每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入，标注为数据而非指令；记录本次使用的 memory id。
@@ -30,7 +31,7 @@
 - 消息操作：复制、引用、失败 Run 重试；不做编辑/重新生成/删除单条消息（需要 checkpoint 分支方案）。
 - Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints；有活动 Run 时 409。
 - 配置页集中管理 Provider（查看/新增/编辑）、Agent 和运行环境；另有独立的「记忆」页面管理 user/agent 记忆。`GET /api/system` 只返回非敏感信息。
-- 所有 per-agent 配置都以左上角侧边栏的 Agent 选择器为唯一入口；配置页只编辑当前 Agent，不提供第二套 Agent 选择。新增 per-agent 配置时必须沿用这一规则。侧边栏左上角另有独立的「技能」「工具」页面：技能启停按当前 Agent 立即保存，工具页展示文件工具与技能工具的注册/声明情况。
+- 所有 per-agent 配置都以左上角侧边栏的 Agent 选择器为唯一入口；配置页只编辑当前 Agent，不提供第二套 Agent 选择。新增 per-agent 配置时必须沿用这一规则。侧边栏左上角另有独立的「技能」「工具」页面：技能启停按当前 Agent 立即保存；工具页只展示文件工具与技能工具的注册/声明情况，不单独启停工具。
 - Chat 内容列统一宽度：header、消息流、composer 都以 `--chat-lane` 对齐。
 
 ## 运行约定

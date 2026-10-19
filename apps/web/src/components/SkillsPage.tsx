@@ -80,8 +80,8 @@ export function SkillsPage({
               <>
                 <div className="hint">
                   技能库：~/.super-personal-platform/skills。直接让 Agent 在对话里创建或修改技能即可；
-                  新技能需要在这里为当前 Agent 启用，技能声明的工具还需要在「工具」页面启用。
-                  未读取 SKILL.md 前，技能工具不可见也不可调用。文件工具始终可用。
+                  新技能需要在这里为当前 Agent 启用。启用技能即允许它声明的工具，读取 SKILL.md 后解锁。
+                  文件工具始终可用。
                 </div>
                 <div className="skill-list">
                   {skills.map((skill) => (

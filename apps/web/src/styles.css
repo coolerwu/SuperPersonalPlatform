@@ -1194,6 +1194,10 @@ textarea {
   border-left-color: var(--warn);
 }
 
+.event-row.browser_action {
+  border-left-color: var(--accent-2);
+}
+
 .event-top {
   display: flex;
   align-items: center;
@@ -1620,11 +1624,6 @@ textarea {
   color: var(--faint);
   font-size: 11px;
   line-height: 1.5;
-}
-
-.tool-toggle .capability {
-  margin-left: auto;
-  flex: 0 0 auto;
 }
 
 .memory-toolbar {

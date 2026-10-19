@@ -9,6 +9,7 @@ from app.auth import require_auth
 from app.config import settings
 from app.db import get_db
 from app.models import Agent, Message, Provider, Run, Session
+from app.services.browser_tools import playwright_installed
 
 router = APIRouter(prefix="/api/system", tags=["system"], dependencies=[Depends(require_auth)])
 
@@ -49,7 +50,7 @@ async def system_info(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
             "checkpoints": True,
             "filesystem": True,
             "shell": False,
-            "browser": False,
+            "browser": playwright_installed(),
             "skills": True,
             "memory": True,
         },

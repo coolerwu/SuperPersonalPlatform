@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import aclosing
 
 from sqlalchemy import select
 
@@ -122,7 +123,6 @@ class RunWorker:
                 memory_context=memory_context,
                 workspace_path=agent.id,
                 enabled_skills=list(agent.enabled_skills or []),
-                enabled_tools=list(agent.enabled_tools or []),
             )
             instructions = agent.instructions
             auto_memory = agent.auto_memory
@@ -138,39 +138,42 @@ class RunWorker:
 
         try:
             async with asyncio.timeout(settings.run_timeout_seconds):
-                async for event in executor.run(
-                    instructions=instructions,
-                    session_id=session_id,
-                    content=content,
-                ):
-                    if event.type == "run_completed":
-                        payload = event.payload
-                        output = str(payload.get("output") or "")
-                        await complete_run(
-                            run_id,
-                            output=output,
-                            input_tokens=int(payload.get("input_tokens") or 0),
-                            output_tokens=int(payload.get("output_tokens") or 0),
-                            total_tokens=int(payload.get("total_tokens") or 0),
-                        )
-                        if auto_memory:
-                            await self._extract_memories(
-                                provider=provider,
-                                agent_id=agent_id,
-                                run_id=run_id,
-                                content=content,
+                async with aclosing(
+                    executor.run(
+                        instructions=instructions,
+                        session_id=session_id,
+                        content=content,
+                    )
+                ) as events:
+                    async for event in events:
+                        if event.type == "run_completed":
+                            payload = event.payload
+                            output = str(payload.get("output") or "")
+                            await complete_run(
+                                run_id,
                                 output=output,
+                                input_tokens=int(payload.get("input_tokens") or 0),
+                                output_tokens=int(payload.get("output_tokens") or 0),
+                                total_tokens=int(payload.get("total_tokens") or 0),
                             )
-                        return
-                    if event.type == "run_failed":
-                        error = event.payload.get("error") or {}
-                        await fail_run(
-                            run_id,
-                            str(error.get("type") or "RunError"),
-                            str(error.get("message") or "run failed"),
-                        )
-                        return
-                    await append_event(run_id, event.type, event.payload)
+                            if auto_memory:
+                                await self._extract_memories(
+                                    provider=provider,
+                                    agent_id=agent_id,
+                                    run_id=run_id,
+                                    content=content,
+                                    output=output,
+                                )
+                            return
+                        if event.type == "run_failed":
+                            error = event.payload.get("error") or {}
+                            await fail_run(
+                                run_id,
+                                str(error.get("type") or "RunError"),
+                                str(error.get("message") or "run failed"),
+                            )
+                            return
+                        await append_event(run_id, event.type, event.payload)
         except asyncio.CancelledError:
             await cancel_run_record(run_id)
             raise

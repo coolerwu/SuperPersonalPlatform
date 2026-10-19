@@ -79,3 +79,30 @@ def test_disabled_skill_read_does_not_unlock_tools() -> None:
 
     messages = _read_messages("/skills/other/SKILL.md")
     assert _visible_tools(middleware, messages, metadata) == []
+
+
+def test_browser_skill_unlocks_all_browser_tools() -> None:
+    from deepagents.backends import StateBackend
+
+    from app.services.browser_tools import BROWSER_TOOL_NAMES, register_browser_tools
+    from app.services.skill_tools import SkillToolContext, SkillToolRegistry
+
+    registry = SkillToolRegistry()
+    register_browser_tools(registry)
+    tools = registry.resolve_names(
+        sorted(BROWSER_TOOL_NAMES),
+        SkillToolContext(api_key="", base_url="", browser=None),
+    )
+    middleware = AgentSkillsMiddleware(
+        backend=StateBackend(),
+        sources=[("/skills/", "Test")],
+        enabled_skills={"web-browser"},
+        tools=tools,
+    )
+    metadata = [_skill("web-browser", " ".join(sorted(BROWSER_TOOL_NAMES)))]
+
+    assert _visible_tools(middleware, [HumanMessage(content="hi")], metadata) == []
+    visible = _visible_tools(
+        middleware, _read_messages("/skills/web-browser/SKILL.md"), metadata
+    )
+    assert set(visible) == BROWSER_TOOL_NAMES

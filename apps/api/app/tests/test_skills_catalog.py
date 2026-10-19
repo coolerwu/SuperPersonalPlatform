@@ -144,9 +144,21 @@ def test_catalog_and_middleware_agree_on_names(tmp_path: Path) -> None:
 def test_default_web_skills_seeded(client) -> None:
     body = client.get("/api/skills").json()
     skills = {item["name"]: item for item in body["skills"]}
-    for name, tool_name in (("web-fetch", "web_fetch"), ("web-search", "web_search")):
+    expected = {
+        "web-fetch": ["web_fetch"],
+        "web-search": ["web_search"],
+        "web-browser": [
+            "browser_open",
+            "browser_snapshot",
+            "browser_click",
+            "browser_fill",
+            "browser_press",
+            "browser_close",
+        ],
+    }
+    for name, tool_names in expected.items():
         assert (settings.skills_dir / name / "SKILL.md").is_file()
-        assert skills[name]["include_tools"] == [tool_name]
+        assert skills[name]["include_tools"] == tool_names
 
 
 def test_skills_api_requires_auth() -> None:

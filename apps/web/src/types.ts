@@ -8,7 +8,6 @@ export type Agent = {
   status: string;
   auto_memory: boolean;
   enabled_skills: string[];
-  enabled_tools: string[];
   created_at: string;
   updated_at: string;
 };

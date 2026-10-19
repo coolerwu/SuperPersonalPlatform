@@ -58,6 +58,35 @@ async def test_worker_completes_run(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_closes_executor_stream(monkeypatch) -> None:
+    closed: list[bool] = []
+
+    class ClosingExecutor(FakeExecutor):
+        async def run(self, *, instructions: str, session_id: str, content: str):
+            try:
+                yield ExecutorEvent("assistant_delta", {"delta": "hello"})
+                yield ExecutorEvent(
+                    "run_completed",
+                    {
+                        "output": "hello",
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                )
+            finally:
+                closed.append(True)
+
+    monkeypatch.setattr("app.services.worker.DeepAgentExecutor", ClosingExecutor)
+    session_id = await _new_session()
+    run, _ = await create_run(session_id, "hi")
+    worker = RunWorker()
+    await worker.execute_run(run.id)
+
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
 async def test_worker_passes_workspace_config(monkeypatch) -> None:
     captured: dict = {}
 
@@ -75,7 +104,6 @@ async def test_worker_passes_workspace_config(monkeypatch) -> None:
         agent = await db.get(Agent, agent_id)
         assert agent is not None
         agent.enabled_skills = ["demo"]
-        agent.enabled_tools = ["web_fetch"]
         await db.commit()
 
     run, _ = await create_run(session_id, "hi")
@@ -84,7 +112,6 @@ async def test_worker_passes_workspace_config(monkeypatch) -> None:
 
     assert captured["workspace_path"] == agent_id
     assert captured["enabled_skills"] == ["demo"]
-    assert captured["enabled_tools"] == ["web_fetch"]
 
 
 @pytest.mark.asyncio

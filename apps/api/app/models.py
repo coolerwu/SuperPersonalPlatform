@@ -57,9 +57,6 @@ class Agent(Base):
     enabled_skills: Mapped[list[str]] = mapped_column(
         JSON, default=list, nullable=False, server_default="[]"
     )
-    enabled_tools: Mapped[list[str]] = mapped_column(
-        JSON, default=list, nullable=False, server_default="[]"
-    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 

@@ -85,7 +85,7 @@ async def _ensure_agent_column(conn, column: str) -> None:  # noqa: ANN001
 
 
 async def _ensure_agent_columns(conn) -> None:  # noqa: ANN001
-    for column in ("enabled_skills", "enabled_tools"):
+    for column in ("enabled_skills",):
         await _ensure_agent_column(conn, column)
 
 

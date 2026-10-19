@@ -54,6 +54,11 @@ If the user explicitly asks to deploy v1 on the target machine:
    `cd ~/SuperPersonalPlatform-v1-deploy && git pull --ff-only origin main`
    Verify `git rev-parse HEAD` equals the pushed SHA and `git status --short` is clean.
 3. If `apps/api/pyproject.toml` changed, run `.venv/bin/pip install -e apps/api`.
+   If Playwright was added or upgraded, also run
+   `.venv/bin/playwright install chromium` (prefix
+   `PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright` when the
+   default download is slow). If Chromium fails to start for missing shared
+   libraries, run `sudo .venv/bin/playwright install-deps chromium`.
 4. If `deploy/agent-command-center.service` changed, copy it to
    `~/.config/systemd/user/` and run `systemctl --user daemon-reload`.
 5. Restart the service:
@@ -83,9 +88,10 @@ If the user explicitly asks to deploy v1 on the target machine:
 - Do not reset or overwrite existing changes unless the user explicitly asks.
 - Do not assume a push synchronized `rc-clone`; it is an independent checkout.
 - v1 has workspace filesystem tools, long-term memory, and a skills library
-  (per-agent enabled list; skill-provided tools unlock only after the model
-  reads the skill's `SKILL.md`). It has no shell/browser tools and no approval
-  flow; do not describe it as having those capabilities.
+  (per-agent enabled skills; skill-provided tools unlock only after the model
+  reads the skill's `SKILL.md`). Browser tools (`browser_*`) are skill-gated via
+  `web-browser` and use a local Playwright Chromium; there are no shell tools and
+  no approval flow; do not describe those as available.
 - Production uses systemd + venv + SQLite. Docker deployment is deprecated:
   do not reintroduce Docker Compose, Dockerfiles, nginx, or Postgres.
 - If a commit workflow change is requested, update both `CLAUDE.md` and this

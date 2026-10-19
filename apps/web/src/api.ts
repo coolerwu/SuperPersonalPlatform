@@ -88,7 +88,7 @@ export const api = {
   updateAgent: (
     id: string,
     payload: Partial<
-      Pick<Agent, "name" | "instructions" | "provider_id" | "status" | "auto_memory" | "enabled_skills" | "enabled_tools">
+      Pick<Agent, "name" | "instructions" | "provider_id" | "status" | "auto_memory" | "enabled_skills">
     >,
   ) => request<Agent>(`/api/agents/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   archiveAgent: (id: string) => request<{ archived: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),

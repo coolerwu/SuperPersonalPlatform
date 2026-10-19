@@ -77,9 +77,9 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
         placeholder="你是一个……"
       />
 
-      <div className="field-label">技能与工具</div>
+      <div className="field-label">技能</div>
       <div className="hint">
-        在左侧「技能」「工具」页面为当前 Agent 启用；读取 SKILL.md 后，已启用的技能工具才会解锁。
+        在左侧「技能」页面为当前 Agent 启用；读取 SKILL.md 后，该技能声明的工具才会解锁。
         文件工具始终可用。
       </div>
 

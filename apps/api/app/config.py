@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     run_timeout_seconds: int = 300
     max_history_messages: int = 40
 
+    # Browser tools are skill-gated; these bound one Run's browser session.
+    browser_concurrency: int = 2
+    browser_navigation_timeout_ms: int = 30_000
+    browser_action_timeout_ms: int = 10_000
+    browser_settle_ms: int = 500
+    browser_max_elements: int = 120
+    browser_max_text_chars: int = 4_000
+    browser_max_snapshot_chars: int = 12_000
+    browser_no_sandbox: bool = False
+
     @property
     def checkpoint_dir(self) -> Path:
         return self.app_data_dir / "checkpoints"

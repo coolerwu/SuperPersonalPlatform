@@ -26,6 +26,10 @@ function eventText(event: RunEvent): string {
       const tools = Array.isArray(payload.tool_calls) ? payload.tool_calls.join(", ") : "";
       return tools ? `调用工具: ${tools}` : `agent: ${String(payload.agent ?? "")}`;
     }
+    case "browser_action": {
+      const tool = String(payload.tool ?? "browser");
+      return `浏览器 ${tool}: ${truncate(String(payload.summary ?? ""), 180)}`;
+    }
     case "model_usage":
       return `usage: ${String(payload.input_tokens ?? 0)} in / ${String(payload.output_tokens ?? 0)} out`;
     case "memory_saved": {

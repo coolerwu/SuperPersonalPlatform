@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
@@ -8,11 +9,15 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.callbacks import AsyncCallbackHandler
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage, ToolMessageChunk
 
 from app.config import settings
+from app.services.browser_tools import BROWSER_TOOL_NAMES, BrowserSession
 from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolContext, SkillToolRegistry
 from app.services.workspace import resolve_workspace_path
+
+logger = logging.getLogger(__name__)
+_BROWSER_CLEANUP_TASKS: set[asyncio.Task[Any]] = set()
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,38 @@ def _split_stream_chunk(chunk: Any) -> tuple[tuple[str, ...], Any]:
     return (), chunk
 
 
+def _tool_output_text(message: ToolMessage) -> str:
+    content = message.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "".join(parts)
+    return str(content or "")
+
+
+def browser_action_payload(
+    namespace: Sequence[str],
+    agent_name: str,
+    tool_name: str,
+    message: ToolMessage,
+) -> dict[str, Any]:
+    content = _tool_output_text(message)
+    stripped = content.strip()
+    first_line = stripped.splitlines()[0] if stripped else ""
+    return {
+        "agent": ", ".join(namespace) or agent_name,
+        "tool": tool_name,
+        "summary": " ".join(first_line.split())[:240],
+        "ok": not content.lstrip().startswith("Error"),
+    }
+
+
 def build_backend(workspace_path: str, *, skills_dir: Path | str | None = None):
     from deepagents.backends import CompositeBackend, FilesystemBackend
 
@@ -116,7 +153,6 @@ class DeepAgentExecutor:
         memory_context: str = "",
         workspace_path: str = "",
         enabled_skills: Sequence[str] = (),
-        enabled_tools: Sequence[str] = (),
         skill_tools: SkillToolRegistry | None = None,
         skills_dir: Path | None = None,
     ) -> None:
@@ -126,7 +162,6 @@ class DeepAgentExecutor:
         self.memory_context = memory_context
         self.workspace_path = workspace_path
         self.enabled_skills = tuple(enabled_skills)
-        self.enabled_tools = tuple(enabled_tools)
         self.skill_tools = skill_tools if skill_tools is not None else SKILL_TOOL_REGISTRY
         self.skills_dir = skills_dir
 
@@ -153,6 +188,9 @@ class DeepAgentExecutor:
         collector = UsageCollector()
         usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         output_parts: list[str] = []
+        browser = BrowserSession()
+        seen_tool_results: set[str] = set()
+        tool_names_by_call_id: dict[str, str] = {}
 
         try:
             chat_model = ChatOpenAI(
@@ -176,11 +214,11 @@ class DeepAgentExecutor:
                     backend=backend,
                     sources=[("/skills/", "Platform")],
                     enabled_skills=self.enabled_skills,
-                    tools=self.skill_tools.resolve_names(
-                        self.enabled_tools,
+                    tools=self.skill_tools.build(
                         SkillToolContext(
                             api_key=self.provider.api_key,
                             base_url=self.provider.base_url,
+                            browser=browser,
                         ),
                     ),
                 )
@@ -213,8 +251,36 @@ class DeepAgentExecutor:
                     if not (isinstance(data, tuple) and len(data) >= 2):
                         continue
                     message = data[0]
+                    if isinstance(message, ToolMessage) and not isinstance(
+                        message, ToolMessageChunk
+                    ):
+                        call_id = str(getattr(message, "tool_call_id", "") or "")
+                        tool_name = str(getattr(message, "name", "") or "") or (
+                            tool_names_by_call_id.get(call_id, "")
+                        )
+                        dedupe_key = call_id or str(id(message))
+                        if (
+                            tool_name in BROWSER_TOOL_NAMES
+                            and dedupe_key not in seen_tool_results
+                        ):
+                            seen_tool_results.add(dedupe_key)
+                            yield ExecutorEvent(
+                                "browser_action",
+                                browser_action_payload(
+                                    namespace, self.agent_name, tool_name, message
+                                ),
+                            )
+                        continue
                     if not isinstance(message, AIMessageChunk):
                         continue
+
+                    for item in getattr(message, "tool_calls", None) or []:
+                        if not isinstance(item, dict):
+                            continue
+                        call_id = str(item.get("id") or "")
+                        call_name = str(item.get("name") or "")
+                        if call_id and call_name:
+                            tool_names_by_call_id[call_id] = call_name
 
                     tool_names = [
                         str(item.get("name"))
@@ -246,6 +312,16 @@ class DeepAgentExecutor:
                 {"error": {"type": type(exc).__name__, "message": str(exc)}},
             )
             return
+        finally:
+            try:
+                cleanup = asyncio.ensure_future(browser.aclose())
+                _BROWSER_CLEANUP_TASKS.add(cleanup)
+                cleanup.add_done_callback(_BROWSER_CLEANUP_TASKS.discard)
+                await asyncio.wait_for(asyncio.shield(cleanup), timeout=5)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("failed to close browser session")
 
         for entry in collector.entries:
             usage["input_tokens"] += int(entry.get("input_tokens") or 0)

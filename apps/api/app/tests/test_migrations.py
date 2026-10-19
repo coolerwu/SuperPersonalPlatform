@@ -17,14 +17,13 @@ async def test_ensure_agent_columns_is_idempotent(tmp_path: Path) -> None:
 
         result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
         columns = {row[1] for row in result.fetchall()}
-        assert {"enabled_skills", "enabled_tools"} <= columns
+        assert "enabled_skills" in columns
 
         row = (
             await conn.exec_driver_sql(
-                "SELECT enabled_skills, enabled_tools FROM agents WHERE id='a'"
+                "SELECT enabled_skills FROM agents WHERE id='a'"
             )
         ).fetchone()
         assert row is not None
         assert row[0] == "[]"
-        assert row[1] == "[]"
     await engine.dispose()

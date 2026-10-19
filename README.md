@@ -28,6 +28,7 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -e "apps/api[dev]"
+.venv/bin/playwright install chromium   # 下载慢时可加 PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
 
 cd apps/api
 ../../.venv/bin/uvicorn app.main:app --reload --port 8000
@@ -51,8 +52,8 @@ npm run dev
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
-- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell 或浏览器工具；
-- 技能与工具：左侧「技能」「工具」页面分别为当前 Agent 启用；模型读取 `/skills/<name>/SKILL.md` 后，已启用的技能工具才会解锁；文件工具始终可用；
+- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell 工具；浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，只返回文字和元素引用，不返回截图）；
+- 技能与工具：左侧「技能」页面为当前 Agent 启用技能；模型读取 `/skills/<name>/SKILL.md` 后，技能声明的工具才会解锁；文件工具始终可用；「工具」页面只展示注册与声明情况；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 
 ## 配置页
@@ -73,7 +74,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
 侧边栏左上角（Agent 选择器下方）提供两个独立页面：
 
 - **技能**：列出全局技能库，按当前 Agent 勾选/取消启用，立即保存、下一轮 Run 生效；展示 description、声明的工具、SKILL.md 路径和解析警告。
-- **工具**：展示文件工具（始终可用）和技能工具；技能工具按当前 Agent 勾选启用，并显示是否已在平台注册、由哪些技能声明。只有“已启用 + 已注册 + 被已启用技能声明 + SKILL.md 已读取”四个条件都满足时，工具才会解锁。
+- **工具**：展示文件工具（始终可用）和技能工具；技能工具显示是否已在平台注册、由哪些技能声明。启用声明它的技能并在对话中读取 SKILL.md 后解锁，没有单独的工具开关。
 
 ## Skills
 
@@ -104,20 +105,29 @@ metadata:
 - 未读取 `SKILL.md` 前，技能工具不会出现在模型工具列表里，调用会被当作未知工具；读取成功后，在同一会话内只要这段读取还在上下文中，工具就保持可用；上下文被摘要压缩掉后重新锁定。
 - 每次 Run 都会重新扫描技能目录并重新应用 Agent 的启用列表，所以新增/编辑技能或修改启用状态在下一轮对话生效。
 - 文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不受技能开关影响。
-- 技能创建：直接让 Agent 在对话里创建或修改 `/skills/<name>/SKILL.md`，不需要表单；也可以在主机上编辑文件。Agent 写入的技能同样需要为当前 Agent 启用，声明的工具也需要在「工具」页面启用。
-- 因为 Agent 可以写技能，技能声明本身不是安全边界；真正限制能力的仍是每个 Agent 的 `enabled_tools`。
-- 首次启动会在技能库中 seed `web-fetch` 和 `web-search` 两个技能（已存在则不覆盖），分别声明 `include_tools: web_fetch` / `web_search`。
+- 技能创建：直接让 Agent 在对话里创建或修改 `/skills/<name>/SKILL.md`，不需要表单；也可以在主机上编辑文件。Agent 写入的技能同样需要为当前 Agent 启用。
+- 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
+- 首次启动会在技能库中 seed `web-fetch`、`web-search` 和 `web-browser` 三个技能（已存在则不覆盖），分别声明 `include_tools: web_fetch` / `web_search` / 六个 `browser_*` 工具。
 
 ## 工具
 
-平台注册表当前提供两个联网工具：
+平台注册表当前提供以下联网工具：
 
 - **`web_search`**：调用 DeepSeek Search API（`POST {provider.base_url}/v1/tools/search`），请求 `query`（1-128 字）、`count`（1-50，默认 10）、`need_content`，返回标题、链接、摘要、来源、日期、权威性评分。支持 `site:`、`-`、引号、`lang:`、`after:`、`before:` 等搜索语法。
 - **`web_fetch`**：调用 DeepSeek Fetch API（`POST {provider.base_url}/v1/tools/fetch`），请求 `{url}`，返回 `{title, content}`（Markdown）。`url` 必须是完整 http/https 地址，不能带用户名/密码。
+- **浏览器工具**（Playwright，本地无头 Chromium）：
+  - `browser_open(url, tab="main")`：打开网页，返回标题、正文和可交互元素 ref；
+  - `browser_snapshot(tab="main")`：读取当前标签页的最新快照；
+  - `browser_click(ref, tab)`：点击快照中的元素；
+  - `browser_fill(ref, text, tab, submit=false)`：填写输入框或 select；
+  - `browser_press(key, tab)`：按下按键；
+  - `browser_close(tab)`：关闭标签页并释放并发槽位。
+  - 每次 Run 懒启动一个浏览器进程和一个 context，最多 `BROWSER_CONCURRENCY=2` 个标签页；Run 结束、失败、超时或取消时自动关闭。ref 只对最近一次快照有效，动作后会返回新快照。
+  - 只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地地址、带凭据 URL、`file://` 和下载；只处理主 frame，不接管弹窗。
 
-两个工具都使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：在「工具」页面为 Agent 启用工具，并在「技能」页面启用声明它的技能（`web-search` / `web-fetch`），对话中读取该 SKILL.md 后解锁。
+`web_search` 和 `web_fetch` 使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：在「技能」页面启用声明它的技能（`web-search` / `web-fetch` / `web-browser`），对话中读取该 SKILL.md 后解锁。
 
-工具实现在 `apps/api/app/services/skill_tools.py`；新增工具时注册一个 factory，按运行时 Provider 构建 LangChain `BaseTool`。
+工具实现分别在 `apps/api/app/services/skill_tools.py`（Search/Fetch）和 `apps/api/app/services/browser_tools.py`（浏览器）；新增工具时注册一个 factory，按运行时 Provider/会话构建 LangChain `BaseTool`。
 
 ## 记忆
 
@@ -135,7 +145,7 @@ metadata:
 生产数据都在 `~/.super-personal-platform/data/`：
 
 - `app.db`：SQLite（WAL），文件权限 600；
-  - `agents`：Agent 名称、instructions、Provider、`enabled_skills` 和 `enabled_tools`（启用的技能/工具名 JSON 列表）；
+  - `agents`：Agent 名称、instructions、Provider、`enabled_skills`（启用的技能名 JSON 列表）；
   - `sessions`：会话，首次发送消息时才创建；标题取第一条用户消息前 24 个字；
   - `messages`：每条用户/assistant 消息一行，assistant 消息在 Run 完成时写入；
   - `runs`：每次发送/重试一行，含状态、input/output、错误、token 用量、时间；
@@ -159,6 +169,13 @@ metadata:
 | `APP_DATA_DIR` | 数据/checkpoint 目录 | `$APP_HOME/data` |
 | `APP_WORKSPACES_DIR` | 真实工作区根目录 | `$APP_HOME/workspaces` |
 | `APP_SKILLS_DIR` | 全局技能库根目录 | `$APP_HOME/skills` |
+| `BROWSER_CONCURRENCY` | 每个 Run 的浏览器标签页上限 | `2` |
+| `BROWSER_NAVIGATION_TIMEOUT_MS` | 页面导航超时 | `30000` |
+| `BROWSER_ACTION_TIMEOUT_MS` | 点击/填写动作超时 | `10000` |
+| `BROWSER_MAX_ELEMENTS` | 每次快照的交互元素上限 | `120` |
+| `BROWSER_MAX_TEXT_CHARS` | 每次快照回传的正文上限 | `4000` |
+| `BROWSER_MAX_SNAPSHOT_CHARS` | 单次快照总字符上限 | `12000` |
+| `BROWSER_NO_SANDBOX` | Chromium 启动失败时的逃生开关 | `false` |
 | `LLM_BASE_URL` | OpenAI-compatible 端点 | `https://api.deepseek.com` |
 | `LLM_API_KEY` | 模型密钥 | 空 |
 | `LLM_MODEL` | 模型名 | `deepseek-v4-flash` |
@@ -183,6 +200,7 @@ cd apps/web && npm install && npm run build
 cd ~/SuperPersonalPlatform-v1-deploy
 python3.12 -m venv .venv
 .venv/bin/pip install -e apps/api
+.venv/bin/playwright install chromium
 mkdir -p ~/.super-personal-platform/data
 cp deploy/.env.example ~/.super-personal-platform/.env
 # 编辑 ~/.super-personal-platform/.env，填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
@@ -216,11 +234,14 @@ cd ~/SuperPersonalPlatform-v1-deploy
 git pull --ff-only origin main
 # 只有 pyproject 依赖变化时才需要重新安装
 .venv/bin/pip install -e apps/api
+.venv/bin/playwright install chromium
 systemctl --user restart agent-command-center.service
 curl --noproxy '*' http://127.0.0.1:8888/api/health
 ```
 
 `deploy/agent-command-center.service` 使用 `~/.super-personal-platform/.env` 作为 `EnvironmentFile`，并强制 `APP_DATA_DIR=%h/.super-personal-platform/data`、`APP_DATABASE_URL=sqlite+aiosqlite:///%h/.super-personal-platform/data/app.db`。用户级服务依赖 linger（`loginctl show-user qiuqiu -p Linger` 应为 `yes`），否则退出登录后进程会被回收。
+
+如果 Chromium 启动报缺少共享库，执行 `sudo .venv/bin/playwright install-deps chromium`；仍无法启动时可临时设置 `BROWSER_NO_SANDBOX=true`（会降低浏览器隔离级别）。
 
 回滚 v1 版本：checkout 上一个已验证的提交，重新安装依赖（如需要）并重启：
 

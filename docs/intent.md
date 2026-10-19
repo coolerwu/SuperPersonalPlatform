@@ -1,8 +1,8 @@
 # Intent
 
 - 状态：现行
-- 最后更新：2026-10-19
-- 编号水位：F10
+- 最后更新：2026-10-20
+- 编号水位：F11
 
 本文件是新项目的需求唯一来源。v1 从 0 到 1 重建，旧代码与旧数据模型已废弃；旧需求不再作为实现依据。
 
@@ -325,29 +325,29 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 #### 功能点
 
 1. 全局技能库：技能放在 `~/.super-personal-platform/skills/<name>/SKILL.md`；`APP_SKILLS_DIR` 可覆盖。技能通过文件系统维护，不做 CRUD 表单；用户可以让 Agent 在对话中创建/编辑。首次启动 seed `web-search` 和 `web-fetch` 技能，已存在则不覆盖。
-2. 每个 Agent 有 `enabled_skills` 和 `enabled_tools` 启用列表；侧边栏左上角的「技能」「工具」页面按当前 Agent 勾选启用并立即保存。系统提示只列出当前 Agent 启用的技能。不新增 Agent 选择器。
+2. 每个 Agent 有 `enabled_skills` 启用列表；侧边栏左上角的「技能」页面按当前 Agent 勾选启用并立即保存，系统提示只列出当前 Agent 启用的技能。不新增 Agent 选择器。「工具」页面只展示注册/声明情况，不单独启停工具。
 3. FileMiddleware 提供的文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不参与解锁，也不需要启用。
-4. 技能工具来自平台代码注册表（`apps/api/app/services/skill_tools.py`）；`SKILL.md` 的 `metadata.include_tools` 是空格分隔的工具名。工具必须同时满足：注册表存在、为当前 Agent 启用、被已启用技能声明、SKILL.md 已读取。
+4. 技能工具来自平台代码注册表（`apps/api/app/services/skill_tools.py`）；`SKILL.md` 的 `metadata.include_tools` 是空格分隔的工具名。工具必须同时满足：注册表存在、被已启用技能声明、SKILL.md 已读取。
 5. 注册表提供两个联网工具：
    - `web_search`：调用 DeepSeek Search API（`POST {base_url}/v1/tools/search`），请求 `query`（1-128 字）、`count`（1-50）、`need_content`，返回标题、链接、摘要、来源和权威性评分。
    - `web_fetch`：调用 DeepSeek Fetch API（`POST {base_url}/v1/tools/fetch`），请求 `{url}`，返回 `{title, content}`（Markdown）。
    两者均使用 Agent Provider 的 key，按成功请求计费，受 DeepSeek QPS 限制。
 6. 模型必须先用 `read_file` 读取 `/skills/<name>/SKILL.md`，该技能声明的已启用工具才会在当次模型调用中披露并允许执行；读取之前工具不可见，调用会失败。
 7. 解锁在会话内保持：读取记录随 checkpoint 保留，只要技能读取还在上下文中就可用；被摘要压缩掉后自动重新锁定。
-8. 每次 Run 重新扫描技能目录并应用最新的技能/工具启用列表。
-9. Agent 可以在对话中通过文件工具创建/修改 `/skills/<name>/SKILL.md`，不需要表单；技能声明不是安全边界，工具是否可用由每 Agent 的 `enabled_tools` 控制。
+8. 每次 Run 重新扫描技能目录并应用最新的技能启用列表。
+9. Agent 可以在对话中通过文件工具创建/修改 `/skills/<name>/SKILL.md`，不需要表单；技能声明不是安全边界，工具是否可用由每 Agent 启用的技能控制。
 10. `GET /api/skills` 返回扫描到的技能与解析错误；「技能」页面展示并启停技能。
-11. `GET /api/tools` 返回文件工具与技能工具；「工具」页面展示文件工具（始终可用）、技能工具的注册状态和声明技能，并支持按 Agent 启停。
+11. `GET /api/tools` 返回文件工具与技能工具；「工具」页面展示文件工具（始终可用）、技能工具的注册状态和声明技能，不提供工具级启停。
 
 #### 验收标准
 
 - 左侧「技能」页面能看到全局技能库，并为当前 Agent 勾选/取消技能；保存后下一轮 Run 生效。
-- 左侧「工具」页面能看到文件工具与技能工具，并为当前 Agent 启用/停用技能工具。
-- 未启用的技能不出现在系统提示中，读取它的 SKILL.md 不会解锁工具；未启用的技能工具也不会解锁。
+- 左侧「工具」页面能看到文件工具与技能工具的注册/声明情况；工具不单独启停。
+- 未启用的技能不出现在系统提示中，读取它的 SKILL.md 不会解锁工具。
 - 技能工具在读取 SKILL.md 前不可见且不可调用，读取后在同一会话内可用。
 - `web_search` 和 `web_fetch` 能按 DeepSeek Search/Fetch 协议返回结构化结果与页面正文；错误码能回传给模型。
 - 用户可以让 Agent 在对话中创建/修改技能；创建后能在「技能」页面为当前 Agent 启用。
-- Agent 无法绕过工具启用限制：只有在 `enabled_tools` 中启用的工具才可能被技能解锁。
+- Agent 无法绕过技能启用限制：只有已启用技能声明的已注册工具才可能解锁。
 - 后端测试与前端构建通过。
 
 #### 非目标
@@ -357,3 +357,36 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - 每 session 的技能/工具启用、工具级细粒度权限；
 - 禁用技能的读取拦截（只做提示过滤与解锁门控）；
 - Shell / 浏览器工具、多用户隔离、技能沙箱。
+
+### F11 Playwright 无头浏览器工具（技能门控）
+
+- 状态：进行中
+- 日期：2026-10-20
+- 来源：用户确认浏览器并发数 2、纯文本感知、保留 web_fetch/web_search
+
+#### 功能点
+
+1. 新增 seed 技能 `web-browser`，声明并解锁 6 个浏览器工具：`browser_open`、`browser_snapshot`、`browser_click`、`browser_fill`、`browser_press`、`browser_close`；沿用 F10 的「已注册 + 被已启用技能声明 + SKILL.md 已读取」三条件。
+2. 每次 Run 懒启动一个无头 Chromium 和一个浏览器 context；同一 Run 最多 `BROWSER_CONCURRENCY=2` 个标签页，工具用 `tab` 参数区分，默认 `main`；Run 结束、失败、超时或取消时自动关闭。
+3. 工具只返回页面文字：标题、URL、可见正文和可交互元素 ref；不返回截图，不依赖视觉模型。ref 只对最近一次快照有效，动作后返回新快照。
+4. 支持打开网页、读取快照、点击、填写（含 select）、按键和关闭标签页。
+5. 安全边界：只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地/保留地址、带凭据 URL、`file://` 和下载；导航请求进入页面前做 DNS 校验。
+6. Playwright 或 Chromium 不可用时，工具向模型返回可读错误并提示安装命令，不中断 Run。
+7. Run 事件新增 `browser_action`（工具名 + 紧凑摘要），前端抽屉可读展示。
+8. `BROWSER_*` 配置控制标签页上限、导航/动作超时、快照元素与文字上限，以及 Chromium sandbox 逃生开关。
+
+#### 验收标准
+
+- 「技能」页面能启用 `web-browser`；未读取 SKILL.md 前工具不可见且不可调用。
+- Agent 能打开 example.com，读取标题与正文，点击链接后拿到新快照，并用 `browser_close` 释放标签页。
+- 同一 Run 打开第 3 个标签页返回上限错误，不阻塞其他工具调用。
+- `http://127.0.0.1`、`http://localhost`、`http://169.254.169.254`、`file:///etc/passwd`、带凭据 URL 均返回 `Error:` 且不发生导航。
+- Run 完成、失败或取消后没有残留 Chromium 进程。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 截图/视觉、iframe/shadow DOM 穿透、弹窗接管；
+- 持久登录态、Cookie/Profile 管理、下载/上传、任意 JS 执行；
+- 反检测/stealth、代理配置、用浏览器替代 web_search；
+- 多用户隔离、每 session 的浏览器状态。

@@ -28,7 +28,6 @@ def agent_out(agent: Agent, provider: Provider | None) -> AgentOut:
         status=agent.status,
         auto_memory=agent.auto_memory,
         enabled_skills=list(agent.enabled_skills or []),
-        enabled_tools=list(agent.enabled_tools or []),
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
@@ -60,7 +59,6 @@ async def create_agent(payload: AgentCreate, db: AsyncSession = Depends(get_db))
         status="active",
         auto_memory=payload.auto_memory,
         enabled_skills=payload.enabled_skills,
-        enabled_tools=payload.enabled_tools,
     )
     db.add(agent)
     await db.commit()
@@ -102,8 +100,6 @@ async def update_agent(
         agent.auto_memory = bool(data["auto_memory"])
     if "enabled_skills" in data and data["enabled_skills"] is not None:
         agent.enabled_skills = list(data["enabled_skills"])
-    if "enabled_tools" in data and data["enabled_tools"] is not None:
-        agent.enabled_tools = list(data["enabled_tools"])
     await db.commit()
     await db.refresh(agent)
     provider = await db.get(Provider, agent.provider_id)

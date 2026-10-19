@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 import httpx
 from langchain_core.tools import BaseTool, StructuredTool
 
+if TYPE_CHECKING:
+    from app.services.browser_tools import BrowserSession
 
 # These tools are always exposed by deepagents; a skill tool with the same name
 # would be treated as already visible and never gated.
@@ -52,6 +54,7 @@ class SkillToolContext:
     api_key: str
     base_url: str
     http_client: httpx.AsyncClient | None = None
+    browser: BrowserSession | None = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +293,9 @@ class SkillToolRegistry:
 
     def specs(self) -> list[SkillToolSpec]:
         return list(self._specs.values())
+
+    def has(self, name: str) -> bool:
+        return name in self._specs
 
     def build(self, context: SkillToolContext) -> list[BaseTool]:
         return [spec.factory(context) for spec in self._specs.values()]

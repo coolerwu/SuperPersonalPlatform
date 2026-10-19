@@ -26,6 +26,16 @@ def test_tools_api_includes_builtin_web_tools(client) -> None:
     assert tools["web_search"]["registered"] is True
     assert tools["web_fetch"]["skills"] == ["web-fetch"]
     assert tools["web_search"]["skills"] == ["web-search"]
+    for name in (
+        "browser_open",
+        "browser_snapshot",
+        "browser_click",
+        "browser_fill",
+        "browser_press",
+        "browser_close",
+    ):
+        assert tools[name]["registered"] is True
+        assert tools[name]["skills"] == ["web-browser"]
 
 
 def test_tools_api_reports_filesystem_and_skill_tools(client, monkeypatch) -> None:

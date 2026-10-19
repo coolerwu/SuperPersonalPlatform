@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.auth import require_auth
 from app.schemas import ToolOut, ToolsOut
+from app.services import browser_tools  # noqa: F401 - registers browser tools
 from app.services.skill_tools import SKILL_TOOL_REGISTRY
 from app.services.skills import scan_skills
 
