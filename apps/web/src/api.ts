@@ -8,7 +8,6 @@ import type {
   RunEvent,
   Session,
   SystemInfo,
-  WorkspaceMode,
 } from "./types";
 
 export class ApiError extends Error {
@@ -82,23 +81,10 @@ export const api = {
     instructions: string;
     provider_id?: string;
     auto_memory?: boolean;
-    workspace_mode?: WorkspaceMode;
-    workspace_path?: string;
   }) => request<Agent>("/api/agents", { method: "POST", body: JSON.stringify(payload) }),
   updateAgent: (
     id: string,
-    payload: Partial<
-      Pick<
-        Agent,
-        | "name"
-        | "instructions"
-        | "provider_id"
-        | "status"
-        | "auto_memory"
-        | "workspace_mode"
-        | "workspace_path"
-      >
-    >,
+    payload: Partial<Pick<Agent, "name" | "instructions" | "provider_id" | "status" | "auto_memory">>,
   ) => request<Agent>(`/api/agents/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   archiveAgent: (id: string) => request<{ archived: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),
   deleteAgentPermanently: (id: string) =>

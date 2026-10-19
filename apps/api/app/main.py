@@ -24,7 +24,7 @@ from app.routers.sessions import router as sessions_router
 from app.routers.system import router as system_router
 from app.services.run_service import seed_default_provider
 from app.services.worker import RunWorker
-from app.services.workspace import resolve_workspace_path
+from app.services.workspace import ensure_agent_workspaces, resolve_workspace_path
 
 
 async def seed_default_agent() -> None:
@@ -43,11 +43,16 @@ async def seed_default_agent() -> None:
                 instructions=DEFAULT_AGENT_INSTRUCTIONS,
                 provider_id=provider.id,
                 status="active",
-                workspace_mode="virtual",
-                workspace_path="default",
             )
         )
         await db.commit()
+
+
+LEGACY_DEFAULT_MARKERS = (
+    "当前版本你只支持聊天",
+    "你是 Agent Command Center 里的个人助理",
+    "你是 Hermes Agent，由 Nous Research 构建",
+)
 
 
 async def sync_default_agent_instructions() -> None:
@@ -58,7 +63,7 @@ async def sync_default_agent_instructions() -> None:
     """
     async with SessionLocal() as db:
         agent = await db.get(Agent, "default")
-        if agent is not None and "当前版本你只支持聊天" in agent.instructions:
+        if agent is not None and any(marker in agent.instructions for marker in LEGACY_DEFAULT_MARKERS):
             agent.instructions = DEFAULT_AGENT_INSTRUCTIONS
             await db.commit()
 
@@ -73,6 +78,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
         await seed_default_provider()
         await seed_default_agent()
         await sync_default_agent_instructions()
+        await ensure_agent_workspaces()
         if start_worker:
             worker = RunWorker()
             app.state.worker = worker

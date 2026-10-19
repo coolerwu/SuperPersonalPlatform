@@ -1,5 +1,3 @@
-export type WorkspaceMode = "virtual" | "directory";
-
 export type Agent = {
   id: string;
   name: string;
@@ -9,8 +7,6 @@ export type Agent = {
   model: string;
   status: string;
   auto_memory: boolean;
-  workspace_mode: WorkspaceMode;
-  workspace_path: string;
   created_at: string;
   updated_at: string;
 };
@@ -20,8 +16,6 @@ export type AgentSavePayload = {
   instructions: string;
   provider_id: string;
   auto_memory: boolean;
-  workspace_mode: WorkspaceMode;
-  workspace_path: string;
 };
 
 export type Provider = {

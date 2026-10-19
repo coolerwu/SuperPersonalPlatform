@@ -22,9 +22,9 @@
 - 写入：配置页手动 CRUD、对话里“记住……”写 user memory、每个 Agent 的 `auto_memory` 开关在 Run 完成后提取 agent memory；先用 FTS5（trigram）找相关历史记忆，再让模型返回 add/update/delete 做合并，最多 12 个操作、200 条上限。
 - 读取：每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入，标注为数据而非指令；记录本次使用的 memory id。
 - 记忆页面提供「整理记忆」：分批让模型对现有记忆做 update/delete，只合并不新增。
-- Workspace：`Agent.workspace_mode`（`virtual` / `directory`）+ `workspace_path`；两种模式都使用真实目录，根为 `~/.super-personal-platform/workspaces/`（`APP_WORKSPACES_DIR` 可覆盖）。`virtual` 自动使用 `workspaces/<agent_id>/`，`directory` 使用自定义相对路径。每个 Agent 只有一个工作区，只在配置页 Agent 编辑区配置，并跟随左上角选中的 Agent；执行器用 `FilesystemBackend(virtual_mode=True)` + 默认 `FilesystemMiddleware` 开放工作区文件工具。
+- Workspace：每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/`（`APP_WORKSPACES_DIR` 可覆盖），不支持自定义路径；配置页只读展示机器目录，并跟随左上角选中的 Agent。执行器用 `FilesystemBackend(virtual_mode=True)` + 默认 `FilesystemMiddleware` 开放工作区文件工具。
 - 运行时目录统一在 `~/.super-personal-platform/`（`APP_HOME` 可覆盖）：`.env`、`data/app.db`、`data/checkpoints/`、`workspaces/`。
-- 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec：直接、长度匹配问题、无 filler、反谄媚、深度按需；默认简体中文回复，并明确 v1 只有 Chat。新建 Agent 未填写 instructions 时使用同一套默认提示词；运行时不使用任何兜底提示词或兜底 Agent 名称。
+- 默认 Assistant 使用中文个人助手提示词：先说明自己是个人助手，并列出可做的对话、工作区文件、general-purpose 子 Agent、记忆注入与会话 checkpoint；行为规范参考 Hermes（直接、长度匹配问题、无 filler、反谄媚、深度按需），默认简体中文回复，不宣称 Hermes 身份。新建 Agent 未填写 instructions 时使用同一套默认提示词；运行时不使用任何兜底提示词或兜底 Agent 名称。
 - UI 视觉方向：明亮简洁（浅色画布 + 悬浮输入卡片），assistant 消息按 Markdown 渲染；依赖 `react-markdown`、`remark-gfm`、`rehype-highlight`。
 - 消息操作：复制、引用、失败 Run 重试；不做编辑/重新生成/删除单条消息（需要 checkpoint 分支方案）。
 - Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints；有活动 Run 时 409。

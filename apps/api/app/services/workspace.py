@@ -5,9 +5,6 @@ from pathlib import Path
 
 from app.config import settings
 
-VIRTUAL_MODE = "virtual"
-DIRECTORY_MODE = "directory"
-
 MAX_PATH_CHARS = 200
 MAX_SEGMENT_BYTES = 255
 
@@ -68,17 +65,14 @@ def resolve_workspace_path(relative_path: str, *, create: bool) -> Path:
     return candidate
 
 
-def prepare_workspace(mode: str, raw_path: str, *, agent_id: str) -> tuple[str, str]:
-    """Resolve an agent's workspace to a real directory under the workspace root.
+async def ensure_agent_workspaces() -> None:
+    """Create `workspaces/<agent_id>` for every existing agent."""
+    from sqlalchemy import select
 
-    `virtual` means a platform-managed directory named after the agent id;
-    `directory` means a user-supplied relative path. Both are real directories.
-    """
-    if mode == VIRTUAL_MODE:
-        normalized = normalize_workspace_path(agent_id)
-    elif mode == DIRECTORY_MODE:
-        normalized = normalize_workspace_path(raw_path)
-    else:
-        raise WorkspaceError("unknown workspace mode")
-    resolve_workspace_path(normalized, create=True)
-    return mode, normalized
+    from app.db import SessionLocal
+    from app.models import Agent
+
+    async with SessionLocal() as db:
+        agent_ids = list((await db.scalars(select(Agent.id))).all())
+    for agent_id in agent_ids:
+        resolve_workspace_path(agent_id, create=True)

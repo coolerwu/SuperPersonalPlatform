@@ -54,8 +54,6 @@ class Agent(Base):
     provider_id: Mapped[str] = mapped_column(String(32), ForeignKey("providers.id"), default="default")
     status: Mapped[str] = mapped_column(String(20), default="active")
     auto_memory: Mapped[bool] = mapped_column(Boolean, default=True)
-    workspace_mode: Mapped[str] = mapped_column(String(16), default="virtual", server_default="virtual")
-    workspace_path: Mapped[str] = mapped_column(String(256), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 

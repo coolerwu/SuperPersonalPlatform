@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 
-import type { Agent, AgentSavePayload, Provider, WorkspaceMode } from "../types";
+import type { Agent, AgentSavePayload, Provider } from "../types";
 import { Select } from "./Select";
 
 type AgentEditorProps = {
@@ -16,8 +16,6 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
   const [instructions, setInstructions] = useState("");
   const [providerId, setProviderId] = useState("");
   const [autoMemory, setAutoMemory] = useState(true);
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("virtual");
-  const [workspacePath, setWorkspacePath] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -25,29 +23,16 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
     setInstructions(agent?.instructions ?? "");
     setProviderId(agent?.provider_id ?? providers[0]?.id ?? "");
     setAutoMemory(agent?.auto_memory ?? true);
-    setWorkspaceMode(agent?.workspace_mode ?? "virtual");
-    setWorkspacePath(agent?.workspace_path ?? "");
     setError("");
-  }, [
-    agent?.id,
-    agent?.name,
-    agent?.instructions,
-    agent?.provider_id,
-    agent?.auto_memory,
-    agent?.workspace_mode,
-    agent?.workspace_path,
-    providers,
-  ]);
+  }, [agent?.id, agent?.name, agent?.instructions, agent?.provider_id, agent?.auto_memory, providers]);
 
   if (!agent) {
     return <div className="empty-note">选择一个 Agent 后编辑。</div>;
   }
 
-  const workspaceInvalid = workspaceMode === "directory" && !workspacePath.trim();
-
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim() || saving || workspaceInvalid) return;
+    if (!name.trim() || saving) return;
     setError("");
     try {
       await onSave({
@@ -55,8 +40,6 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
         instructions,
         provider_id: providerId,
         auto_memory: autoMemory,
-        workspace_mode: workspaceMode,
-        workspace_path: workspaceMode === "directory" ? workspacePath.trim() : "",
       });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -81,35 +64,9 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
       />
 
       <div className="field-label">工作区</div>
-      <Select
-        value={workspaceMode}
-        options={[
-          { value: "virtual", label: "自动目录", description: `每个 Agent 独立目录（${agent.id}）` },
-          { value: "directory", label: "自定义目录", description: "指定 workspaces 下的相对路径" },
-        ]}
-        onChange={(value) => setWorkspaceMode(value as WorkspaceMode)}
-        ariaLabel="工作区"
-      />
-      {workspaceMode === "directory" ? (
-        <>
-          <label className="field-label" htmlFor="agent-workspace-path">目录路径</label>
-          <input
-            id="agent-workspace-path"
-            value={workspacePath}
-            placeholder="my-project"
-            onChange={(event) => setWorkspacePath(event.target.value)}
-          />
-          <div className="hint">相对路径；不能使用绝对路径或 ..；保存时自动创建。</div>
-          <div className="hint workspace-path-preview">
-            机器目录：{workspaceRoot || "~/.super-personal-platform/workspaces"}/
-            {workspacePath.trim() || "…"}
-          </div>
-        </>
-      ) : (
-        <div className="hint workspace-path-preview">
-          机器目录：{workspaceRoot || "~/.super-personal-platform/workspaces"}/{agent.id}
-        </div>
-      )}
+      <div className="hint workspace-path-preview">
+        机器目录：{workspaceRoot || "~/.super-personal-platform/workspaces"}/{agent.id}
+      </div>
 
       <label className="field-label" htmlFor="agent-instructions">Instructions</label>
       <textarea
@@ -134,7 +91,7 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
       </label>
 
       {error && <div className="error-banner">{error}</div>}
-      <button className="primary" type="submit" disabled={saving || !name.trim() || workspaceInvalid}>
+      <button className="primary" type="submit" disabled={saving || !name.trim()}>
         {saving ? "保存中…" : "保存 Agent"}
       </button>
       <div className="hint">修改在下一轮对话生效；当前 session 的 checkpoint 不会被清空。</div>

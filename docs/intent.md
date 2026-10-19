@@ -190,7 +190,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 #### 功能点
 
-1. 默认 seed 提示词参考 Hermes Agent 的默认身份 behavior spec，并用中文书写。
+1. 默认 seed 提示词是中文个人助手说明：介绍自己是个人助手并列出可做的事（对话、工作区文件、子 Agent、记忆注入、会话 checkpoint），行为规范参考 Hermes Agent 的 behavior spec；不宣称 Hermes 身份。
 2. 适配 Agent Command Center：明确当前只有 Chat，没有文件、Shell、浏览器、skills、memory；默认用简体中文回复，用户明确要求其他语言时再切换。
 3. 生产已有默认 Agent 一次性更新 instructions，不改名称、Provider、会话或 checkpoint。
 
@@ -270,24 +270,22 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 #### 功能点
 
-1. Agent 新增 `workspace_mode`（`virtual` / `directory`）和 `workspace_path`（相对路径）；两种模式都映射到真实目录。
-2. `virtual` 为自动目录：`workspaces/<agent_id>/`；`directory` 为用户指定的相对路径。旧 Agent 启动时自动回填为自动目录。
-3. 工作区只在配置页 Agent 编辑区配置，跟随左上角选中的 Agent；每个 Agent 只有一个工作区，不在侧边栏提供工作区选择器。
-4. 工作区根目录为 `~/.super-personal-platform/workspaces/`（`APP_WORKSPACES_DIR` 可覆盖）；路径拒绝绝对路径、`..`、反斜杠、控制字符和逃逸符号链接；保存时自动创建。
-5. 执行器使用 `FilesystemBackend(virtual_mode=True)` 作为 backend，并通过 `FilesystemMiddleware` 向 Agent 开放工作区文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）。
-6. 配置页 Agent 编辑器提供工作区模式与相对路径，并显示机器目录。
-7. 删除 Agent 不删除 workspace 目录；多个 Agent 可共享同一目录；不开放 shell / browser / skills。
+1. 每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/` 作为工作区，不支持自定义目录、工作区模式或路径配置。
+2. 工作区根目录可用 `APP_WORKSPACES_DIR` 覆盖；目录在 Agent 创建时自动创建，已有 Agent 在服务启动时补齐。
+3. 工作区只在配置页 Agent 编辑区只读展示，跟随左上角选中的 Agent；不在侧边栏或 API 提供工作区选择。
+4. 执行器使用 `FilesystemBackend(virtual_mode=True)` 作为 backend，并通过默认 `FilesystemMiddleware` 向 Agent 开放工作区文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）。
+5. 删除 Agent 不删除 workspace 目录；不开放 shell / browser / skills。
 
 #### 验收标准
 
-- 配置页显示当前 Agent 的工作区与机器目录，切换左上角 Agent 时跟随变化。
-- 每个 Agent 都有真实机器目录；新建目录成功；非法路径返回 400；指向普通文件或符号链接的路径被拒绝。
+- 配置页显示当前 Agent 的机器目录 `workspaces/<agent_id>`，切换左上角 Agent 时跟随变化。
+- 新建 Agent 后对应目录自动存在；Agent API 不暴露 workspace 配置字段。
 - Agent 能在工作区内列出、读取、创建和修改文件，无法越出工作区根目录。
-- 旧数据库启动时自动补齐 workspace 列并回填自动目录。
 - 后端测试与前端构建通过。
 
 #### 非目标
 
+- 自定义工作区路径或多工作区；
 - 每 Agent 的 shell / skills / 细粒度工具开关（后续需求）；
 - deepagents 升级；
 - 多用户或跨机器 workspace 隔离；

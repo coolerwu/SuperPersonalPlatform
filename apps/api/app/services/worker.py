@@ -120,7 +120,7 @@ class RunWorker:
                 checkpoint_dir=settings.checkpoint_dir,
                 agent_name=agent.name,
                 memory_context=memory_context,
-                workspace_path=agent.workspace_path or agent.id,
+                workspace_path=agent.id,
             )
             instructions = agent.instructions
             auto_memory = agent.auto_memory

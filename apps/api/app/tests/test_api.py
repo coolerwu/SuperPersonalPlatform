@@ -15,11 +15,10 @@ def test_default_agent_and_provider(client) -> None:
     assert payload
     assert payload[0]["name"] == "Assistant"
     assert payload[0]["provider_name"] == "DeepSeek"
+    assert "个人助手" in payload[0]["instructions"]
+    assert "工作区" in payload[0]["instructions"]
     assert "保持直接" in payload[0]["instructions"]
-    assert "工作区文件操作" in payload[0]["instructions"]
     assert "简体中文" in payload[0]["instructions"]
-    assert payload[0]["workspace_mode"] == "virtual"
-    assert payload[0]["workspace_path"] == "default"
 
     providers = client.get("/api/providers").json()
     assert providers[0]["id"] == "default"
@@ -30,7 +29,8 @@ def test_new_agent_defaults_to_hermes_instructions(client) -> None:
     created = client.post("/api/agents", json={"name": "Default instructions"})
     assert created.status_code == 201
     instructions = created.json()["instructions"]
-    assert "保持直接" in instructions
+    assert "个人助手" in instructions
+    assert "工作区" in instructions
     assert "简体中文" in instructions
 
 
