@@ -28,11 +28,26 @@ metadata:
 
 # Web Fetch
 
-1. 确认用户给出的 URL，或先从上下文/搜索结果中选择要读取的链接。
+1. 确认用户给出的 URL，或先从 web-search 的结果中选择要读取的链接。
 2. 调用 `web_fetch`，`url` 必须是完整的 http/https 地址。
 3. 工具返回页面标题和 Markdown 正文；引用内容时保留来源 URL。
 4. 抓取失败时根据返回的 HTTP 错误码说明原因，不要假装已经读取页面。
 5. 每次成功抓取都按 DeepSeek Fetch 计费（每 1000 次 5 元），不要重复抓取同一页面。
+""",
+    "web-search": """---
+name: web-search
+description: 需要查最新信息、新闻、事实核验或寻找资料时使用。读取本技能后解锁 web_search 工具，可按关键词搜索网页并返回标题、链接、摘要、来源和权威性评分；需要正文时再配合 web-fetch 或把 need_content 设为 true。
+metadata:
+  include_tools: web_search
+---
+
+# Web Search
+
+1. 把用户问题改写成 1-128 字的关键词；可使用 site:、-、引号、lang:、after:、before: 等搜索语法。
+2. 调用 `web_search`，`count` 取 1-50（默认 10）；需要正文时把 `need_content` 设为 true。
+3. 优先参考 rerank 分高、authority 高、date 新的结果；摘要不足以回答时，用 web-fetch 抓取具体链接。
+4. 引用时保留标题和 URL，不要把摘要当成全文。
+5. 每次成功搜索都按 DeepSeek Search 计费（每 1000 次 5 元），不要重复搜索同一问题。
 """,
 }
 

@@ -104,17 +104,18 @@ metadata:
 - 未读取 `SKILL.md` 前，技能工具不会出现在模型工具列表里，调用会被当作未知工具；读取成功后，在同一会话内只要这段读取还在上下文中，工具就保持可用；上下文被摘要压缩掉后重新锁定。
 - 每次 Run 都会重新扫描技能目录并重新应用 Agent 的启用列表，所以新增/编辑技能或修改启用状态在下一轮对话生效。
 - 文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不受技能开关影响。
-- `/skills/**` 对 Agent 禁止写入，避免模型改写技能定义来绕过解锁。
-- 首次启动会在技能库中 seed 一个 `web-fetch` 技能（已存在则不覆盖），它声明 `include_tools: web_fetch`，用于解锁下面的抓取工具。
+- 技能创建：直接让 Agent 在对话里创建或修改 `/skills/<name>/SKILL.md`，不需要表单；也可以在主机上编辑文件。Agent 写入的技能同样需要为当前 Agent 启用，声明的工具也需要在「工具」页面启用。
+- 因为 Agent 可以写技能，技能声明本身不是安全边界；真正限制能力的仍是每个 Agent 的 `enabled_tools`。
+- 首次启动会在技能库中 seed `web-fetch` 和 `web-search` 两个技能（已存在则不覆盖），分别声明 `include_tools: web_fetch` / `web_search`。
 
 ## 工具
 
-平台注册表当前提供 `web_fetch`：
+平台注册表当前提供两个联网工具：
 
-- 调用 DeepSeek Fetch API：`POST {provider.base_url}/v1/tools/fetch`，Bearer 鉴权，请求 `{url}`，返回 `{title, content}`（Markdown）。
-- `url` 必须是完整的 http/https 地址，不能带用户名/密码；成功后按请求计费（DeepSeek 定价：每 1000 次成功请求 5 元，QPS 25）。
-- 需要当前 Agent 的 Provider 支持该接口（DeepSeek）；换用其他 Provider 时工具会返回接口错误。
-- 使用条件：在「工具」页面为 Agent 启用 `web_fetch`，并在「技能」页面启用 `web-fetch`（或任何声明了 `web_fetch` 的技能），对话中读取该 SKILL.md 后解锁。
+- **`web_search`**：调用 DeepSeek Search API（`POST {provider.base_url}/v1/tools/search`），请求 `query`（1-128 字）、`count`（1-50，默认 10）、`need_content`，返回标题、链接、摘要、来源、日期、权威性评分。支持 `site:`、`-`、引号、`lang:`、`after:`、`before:` 等搜索语法。
+- **`web_fetch`**：调用 DeepSeek Fetch API（`POST {provider.base_url}/v1/tools/fetch`），请求 `{url}`，返回 `{title, content}`（Markdown）。`url` 必须是完整 http/https 地址，不能带用户名/密码。
+
+两个工具都使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：在「工具」页面为 Agent 启用工具，并在「技能」页面启用声明它的技能（`web-search` / `web-fetch`），对话中读取该 SKILL.md 后解锁。
 
 工具实现在 `apps/api/app/services/skill_tools.py`；新增工具时注册一个 factory，按运行时 Provider 构建 LangChain `BaseTool`。
 

@@ -108,8 +108,8 @@ export function ToolsPage({ agent, onSaveEnabled, onClose }: ToolsPageProps) {
             {agent && (
               <>
                 <div className="hint">
-                  web_fetch 使用当前 Agent Provider 的 DeepSeek Fetch API，按成功请求计费；
-                  未注册的工具不会生效。
+                  web_search / web_fetch 使用当前 Agent Provider 的 DeepSeek Search/Fetch API，
+                  按成功请求计费；未注册的工具不会生效。
                 </div>
                 {error && <div className="error-banner">{error}</div>}
                 {!data && !error && <div className="empty-note">读取中…</div>}

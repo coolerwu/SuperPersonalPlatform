@@ -19,6 +19,15 @@ def test_tools_api_requires_auth() -> None:
         assert anonymous.get("/api/tools").status_code == 401
 
 
+def test_tools_api_includes_builtin_web_tools(client) -> None:
+    body = client.get("/api/tools").json()
+    tools = {tool["name"]: tool for tool in body["skill_tools"]}
+    assert tools["web_fetch"]["registered"] is True
+    assert tools["web_search"]["registered"] is True
+    assert tools["web_fetch"]["skills"] == ["web-fetch"]
+    assert tools["web_search"]["skills"] == ["web-search"]
+
+
 def test_tools_api_reports_filesystem_and_skill_tools(client, monkeypatch) -> None:
     import app.routers.tools as tools_router
 

@@ -32,6 +32,14 @@ def _write_skill(root: Path, directory: str, name: str) -> None:
     )
 
 
+def test_builtin_registry_has_web_tools() -> None:
+    from app.services.skill_tools import SKILL_TOOL_REGISTRY
+
+    assert {"web_fetch", "web_search"} <= {
+        spec.name for spec in SKILL_TOOL_REGISTRY.specs()
+    }
+
+
 def test_registry_builds_registered_tools() -> None:
     registry = SkillToolRegistry([_tool("alpha")])
     assert [spec.name for spec in registry.specs()] == ["alpha"]

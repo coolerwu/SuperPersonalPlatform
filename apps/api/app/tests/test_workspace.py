@@ -56,6 +56,21 @@ def test_build_backend_composes_skills_route(tmp_path: Path) -> None:
     assert (settings.workspaces_dir / "skills-proj" / "note.txt").read_text() == "workspace note"
 
 
+def test_composite_backend_allows_agent_to_write_skills(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    backend = build_backend("skill-writer", skills_dir=skills_dir)
+
+    write = backend.write(
+        "/skills/chat-made/SKILL.md",
+        "---\nname: chat-made\ndescription: Made in chat\n---\nbody\n",
+    )
+    assert write.error is None
+    written = skills_dir / "chat-made" / "SKILL.md"
+    assert written.is_file()
+    assert "Made in chat" in written.read_text()
+
+
 def test_workspace_backend_reads_and_writes_real_files() -> None:
     backend = build_backend("io-project")
     write = backend.write("/note.txt", "hello workspace")

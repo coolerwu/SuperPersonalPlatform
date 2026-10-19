@@ -56,6 +56,7 @@ LEGACY_DEFAULT_MARKERS = (
     "你是 Agent Command Center 里的个人助理",
     "你是 Hermes Agent，由 Nous Research 构建",
     "你没有 Shell、浏览器或 skills 工具；需要这些能力时直接说明，不要假装拥有。",
+    "文件工具始终可用，不受技能限制。\n- 会话：",
 )
 
 

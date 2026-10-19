@@ -141,11 +141,12 @@ def test_catalog_and_middleware_agree_on_names(tmp_path: Path) -> None:
     assert loaded == {skill.name for skill in catalog.skills}
 
 
-def test_default_web_fetch_skill_seeded(client) -> None:
-    assert (settings.skills_dir / "web-fetch" / "SKILL.md").is_file()
+def test_default_web_skills_seeded(client) -> None:
     body = client.get("/api/skills").json()
-    skill = next(item for item in body["skills"] if item["name"] == "web-fetch")
-    assert skill["include_tools"] == ["web_fetch"]
+    skills = {item["name"]: item for item in body["skills"]}
+    for name, tool_name in (("web-fetch", "web_fetch"), ("web-search", "web_search")):
+        assert (settings.skills_dir / name / "SKILL.md").is_file()
+        assert skills[name]["include_tools"] == [tool_name]
 
 
 def test_skills_api_requires_auth() -> None:

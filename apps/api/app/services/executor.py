@@ -132,7 +132,7 @@ class DeepAgentExecutor:
 
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
         try:
-            from deepagents import FilesystemPermission, create_deep_agent
+            from deepagents import create_deep_agent
             from langchain_openai import ChatOpenAI
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -193,13 +193,6 @@ class DeepAgentExecutor:
                     name=self.agent_name,
                     skills=["/skills/"],
                     middleware=[skills_middleware],
-                    permissions=[
-                        FilesystemPermission(
-                            operations=["write"],
-                            paths=["/skills", "/skills/**"],
-                            mode="deny",
-                        )
-                    ],
                 )
                 config = {
                     "configurable": {"thread_id": session_id},
