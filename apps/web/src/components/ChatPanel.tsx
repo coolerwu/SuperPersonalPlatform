@@ -185,9 +185,8 @@ export function ChatPanel(props: ChatPanelProps) {
             disabled={!props.canSend}
           />
           <div className="composer-bar">
-            <div className="composer-hint">
+            <div className="composer-hint" title={props.activeRun ? props.activeRun.status : undefined}>
               {props.activeRun && <span className={`status-dot ${props.activeRun.status}`} />}
-              <span>{props.activeRun ? props.activeRun.status : "idle"}</span>
               <span className="composer-shortcut">Enter 发送 · Shift+Enter 换行 · Markdown</span>
             </div>
             <div className="composer-actions">

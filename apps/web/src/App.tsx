@@ -40,7 +40,6 @@ export default function App() {
   const finishedRuns = useRef<Set<string>>(new Set());
 
   const agent = agents.find((item) => item.id === agentId);
-  const session = sessions.find((item) => item.id === sessionId);
   const chatSending = sending && (!activeRun || activeRun.session_id === sessionId);
   const visibleRun = activeRun && activeRun.session_id === sessionId ? activeRun : null;
   const visibleStream = chatSending ? streamText : "";
@@ -438,13 +437,30 @@ export default function App() {
         />
       ) : (
         <main className="chat-column">
-          <header className="chat-header">
-            <div className="chat-session-title">{session?.title ?? "新会话"}</div>
-            <button className="ghost-button" onClick={() => setDrawerOpen((current) => !current)}>
-              {drawerOpen ? "收起详情" : "打开详情"}
+          {!drawerOpen && (
+            <button
+              className="drawer-fab"
+              type="button"
+              title="打开详情"
+              aria-label="打开详情"
+              onClick={() => setDrawerOpen(true)}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M15 4v16" />
+              </svg>
             </button>
-          </header>
-
+          )}
           {agents.length === 0 ? (
             <div className="chat-empty full">
               <div className="chat-empty-mark">ACC</div>
