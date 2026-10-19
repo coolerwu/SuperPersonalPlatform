@@ -191,7 +191,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 #### 功能点
 
 1. 默认 seed 提示词参考 Hermes Agent 的默认身份 behavior spec。
-2. 适配 Agent Command Center：明确当前只有 Chat，没有文件、Shell、浏览器、skills、memory；用用户语言回复。
+2. 适配 Agent Command Center：明确当前只有 Chat，没有文件、Shell、浏览器、skills、memory；默认用简体中文回复，用户明确要求其他语言时再切换。
 3. 生产已有默认 Agent 一次性更新 instructions，不改名称、Provider、会话或 checkpoint。
 
 #### 验收标准
