@@ -14,8 +14,12 @@ type SidebarProps = {
   onDeleteSession: (id: string) => void;
   onOpenSettings: () => void;
   onOpenMemory: () => void;
+  onOpenSkills: () => void;
+  onOpenTools: () => void;
   settingsActive: boolean;
   memoryActive: boolean;
+  skillsActive: boolean;
+  toolsActive: boolean;
   onLogout: () => void;
 };
 
@@ -60,6 +64,52 @@ export function Sidebar(props: SidebarProps) {
             ariaLabel="Agent"
           />
         </div>
+      </div>
+
+      <div className="sidebar-actions sidebar-top-nav">
+        <button
+          className={`sidebar-action ${props.skillsActive ? "active" : ""}`}
+          onClick={props.onOpenSkills}
+        >
+          <span className="sidebar-action-icon">
+            <svg
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" />
+              <path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16z" />
+            </svg>
+          </span>
+          <span>技能</span>
+        </button>
+        <button
+          className={`sidebar-action ${props.toolsActive ? "active" : ""}`}
+          onClick={props.onOpenTools}
+        >
+          <span className="sidebar-action-icon">
+            <svg
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z" />
+            </svg>
+          </span>
+          <span>工具</span>
+        </button>
       </div>
 
       <div className="sidebar-actions">

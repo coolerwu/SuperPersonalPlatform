@@ -17,7 +17,6 @@ export type AgentSavePayload = {
   instructions: string;
   provider_id: string;
   auto_memory: boolean;
-  enabled_skills: string[];
 };
 
 export type SkillInfo = {
@@ -33,6 +32,18 @@ export type SkillInfo = {
 export type SkillCatalog = {
   skills: SkillInfo[];
   errors: string[];
+};
+
+export type ToolInfo = {
+  name: string;
+  description: string;
+  registered: boolean;
+  skills: string[];
+};
+
+export type ToolsCatalog = {
+  filesystem_tools: ToolInfo[];
+  skill_tools: ToolInfo[];
 };
 
 export type Provider = {

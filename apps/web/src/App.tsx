@@ -19,6 +19,8 @@ import { MemoryPage } from "./components/MemoryPage";
 import { NewAgentDialog } from "./components/NewAgentDialog";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
+import { SkillsPage } from "./components/SkillsPage";
+import { ToolsPage } from "./components/ToolsPage";
 
 function terminal(status: string): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
@@ -42,7 +44,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [view, setView] = useState<"chat" | "settings" | "memory">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "memory" | "skills" | "tools">("chat");
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
@@ -441,6 +443,12 @@ export default function App() {
     setAgents((current) => current.map((item) => (item.id === updated.id ? updated : item)));
   }
 
+  async function saveEnabledSkills(names: string[]) {
+    if (!agent) return;
+    const updated = await api.updateAgent(agent.id, { enabled_skills: names });
+    setAgents((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+  }
+
   async function saveProvider(
     providerId: string,
     payload: { name: string; base_url: string; model: string; api_key?: string },
@@ -506,8 +514,12 @@ export default function App() {
         onDeleteSession={(id) => void deleteSession(id)}
         onOpenSettings={() => setView("settings")}
         onOpenMemory={() => setView("memory")}
+        onOpenSkills={() => setView("skills")}
+        onOpenTools={() => setView("tools")}
         settingsActive={view === "settings"}
         memoryActive={view === "memory"}
+        skillsActive={view === "skills"}
+        toolsActive={view === "tools"}
         onLogout={() => void logout()}
       />
 
@@ -517,14 +529,22 @@ export default function App() {
           agentId={agentId}
           onClose={() => setView("chat")}
         />
+      ) : view === "skills" ? (
+        <SkillsPage
+          agent={agent}
+          skills={skills}
+          skillsErrors={skillsErrors}
+          onRefresh={refreshSkills}
+          onSaveEnabled={saveEnabledSkills}
+          onClose={() => setView("chat")}
+        />
+      ) : view === "tools" ? (
+        <ToolsPage onClose={() => setView("chat")} />
       ) : view === "settings" ? (
         <SettingsPage
           agents={agents}
           agentId={agentId}
           providers={providers}
-          skills={skills}
-          skillsErrors={skillsErrors}
-          onRefreshSkills={refreshSkills}
           onSaveAgent={saveAgent}
           onSaveProvider={saveProvider}
           onCreateProvider={createProvider}
@@ -595,9 +615,6 @@ export default function App() {
           events={events}
           agent={agent}
           providers={providers}
-          skills={skills}
-          skillsErrors={skillsErrors}
-          onRefreshSkills={refreshSkills}
           onSaveAgent={saveAgent}
           onClose={() => setDrawerOpen(false)}
         />

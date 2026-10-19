@@ -411,6 +411,12 @@ textarea {
   gap: 2px;
 }
 
+.sidebar-top-nav {
+  margin-top: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
 .sidebar-action {
   display: flex;
   align-items: center;
@@ -1245,7 +1251,9 @@ textarea {
 }
 
 .settings-page,
-.memory-page {
+.memory-page,
+.skills-page,
+.tools-page {
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -1560,19 +1568,6 @@ textarea {
   line-height: 1.5;
 }
 
-.skills-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.ghost-small {
-  padding: 4px 10px;
-  font-size: 11px;
-}
-
 .skill-list {
   display: grid;
   gap: 8px;
@@ -1590,6 +1585,41 @@ textarea {
 
 .skill-warning {
   color: var(--warn);
+}
+
+.tool-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tool-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.tool-main {
+  min-width: 0;
+}
+
+.tool-main strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tool-main small {
+  display: block;
+  margin-top: 3px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .memory-toolbar {

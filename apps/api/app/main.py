@@ -23,6 +23,7 @@ from app.routers.runs import router as runs_router
 from app.routers.sessions import router as sessions_router
 from app.routers.skills import router as skills_router
 from app.routers.system import router as system_router
+from app.routers.tools import router as tools_router
 from app.services.run_service import seed_default_provider
 from app.services.worker import RunWorker
 from app.services.workspace import ensure_agent_workspaces, resolve_workspace_path
@@ -108,6 +109,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(memories_router)
     app.include_router(runs_router)
     app.include_router(skills_router)
+    app.include_router(tools_router)
     app.include_router(system_router)
 
     @app.get("/api/health")

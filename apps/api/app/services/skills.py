@@ -117,16 +117,21 @@ def _parse_skill(directory: Path, root: Path) -> tuple[SkillInfo | None, str | N
             warnings.append("metadata is not a mapping and was ignored")
         else:
             raw_tools = metadata.get("include_tools")
-            if isinstance(raw_tools, list) or (
-                isinstance(raw_tools, str) and "," in raw_tools
-            ):
+            if isinstance(raw_tools, list):
                 warnings.append(
-                    "metadata.include_tools should be a space-separated string of tool names"
+                    "metadata.include_tools must be a space-separated string of tool names; "
+                    "the list form is ignored"
                 )
-            if isinstance(raw_tools, str):
-                include_tools = tuple(item for item in raw_tools.split() if item)
-            elif isinstance(raw_tools, list):
-                include_tools = tuple(str(item).strip() for item in raw_tools if str(item).strip())
+            elif isinstance(raw_tools, str):
+                if "," in raw_tools:
+                    warnings.append(
+                        "metadata.include_tools must be a space-separated string of tool names; "
+                        "comma-separated values are ignored"
+                    )
+                else:
+                    include_tools = tuple(item for item in raw_tools.split() if item)
+            elif raw_tools is not None:
+                warnings.append("metadata.include_tools must be a space-separated string of tool names")
 
     return (
         SkillInfo(

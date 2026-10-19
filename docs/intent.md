@@ -325,18 +325,20 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 #### 功能点
 
 1. 全局技能库：技能放在 `~/.super-personal-platform/skills/<name>/SKILL.md`；`APP_SKILLS_DIR` 可覆盖。技能只通过文件系统维护，不做 CRUD UI。
-2. 每个 Agent 有 `enabled_skills` 启用列表；系统提示只列出当前 Agent 启用的技能。配置页编辑当前侧边栏选中的 Agent，不新增 Agent 选择器。
+2. 每个 Agent 有 `enabled_skills` 启用列表；侧边栏左上角的「技能」页面按当前 Agent 勾选启用并立即保存，系统提示只列出当前 Agent 启用的技能。不新增 Agent 选择器。
 3. FileMiddleware 提供的文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不参与解锁。
 4. 技能工具来自平台代码注册表（`apps/api/app/services/skill_tools.py`）；`SKILL.md` 的 `metadata.include_tools` 是空格分隔的工具名，只有注册表里存在的名字才生效。v1 注册表为空。
 5. 模型必须先用 `read_file` 读取 `/skills/<name>/SKILL.md`，该技能声明的工具才会在当次模型调用中披露并允许执行；读取之前工具不可见，调用会失败。
 6. 解锁在会话内保持：读取记录随 checkpoint 保留，只要技能读取还在上下文中就可用；被摘要压缩掉后自动重新锁定。
 7. 每次 Run 重新扫描技能目录并应用最新启用列表。
 8. `/skills/**` 对 Agent 禁止写入；Agent 不能通过改写 SKILL.md 注入 `include_tools`。
-9. `GET /api/skills` 返回扫描到的技能与解析错误；配置页展示技能名称、描述、声明工具、路径和警告。
+9. `GET /api/skills` 返回扫描到的技能与解析错误；侧边栏左上角的「技能」页面展示并启停技能。
+10. `GET /api/tools` 返回文件工具与技能工具；侧边栏左上角的「工具」页面展示文件工具（始终可用）以及技能工具的注册状态和声明它的技能。
 
 #### 验收标准
 
-- 配置页能看到全局技能库，并为当前 Agent 勾选/取消技能；保存后下一轮 Run 生效。
+- 左侧「技能」页面能看到全局技能库，并为当前 Agent 勾选/取消技能；保存后下一轮 Run 生效。
+- 左侧「工具」页面能看到文件工具与技能工具的注册/声明情况。
 - 未启用的技能不出现在系统提示中，读取它的 SKILL.md 不会解锁工具。
 - 技能工具在读取 SKILL.md 前不可见且不可调用，读取后在同一会话内可用。
 - Agent 无法写入 `/skills/**`。

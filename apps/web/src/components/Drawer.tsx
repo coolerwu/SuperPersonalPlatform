@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { Agent, AgentSavePayload, DrawerTab, Provider, Run, RunEvent, SkillInfo } from "../types";
+import type { Agent, AgentSavePayload, DrawerTab, Provider, Run, RunEvent } from "../types";
 import { formatTime, previewPayload, truncate } from "../format";
 import { AgentEditor } from "./AgentEditor";
 
@@ -11,9 +11,6 @@ type DrawerProps = {
   events: RunEvent[];
   agent: Agent | undefined;
   providers: Provider[];
-  skills: SkillInfo[];
-  skillsErrors: string[];
-  onRefreshSkills: () => void;
   onSaveAgent: (payload: AgentSavePayload) => Promise<void>;
   onClose: () => void;
 };
@@ -146,9 +143,6 @@ export function Drawer(props: DrawerProps) {
             agent={props.agent}
             providers={props.providers}
             saving={savingAgent}
-            skills={props.skills}
-            skillsErrors={props.skillsErrors}
-            onRefreshSkills={props.onRefreshSkills}
             onSave={saveAgent}
           />
         )}

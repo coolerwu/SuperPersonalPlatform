@@ -9,6 +9,7 @@ import type {
   Session,
   SkillCatalog,
   SystemInfo,
+  ToolsCatalog,
 } from "./types";
 
 export class ApiError extends Error {
@@ -125,6 +126,7 @@ export const api = {
 
   getSystem: () => request<SystemInfo>("/api/system"),
   listSkills: () => request<SkillCatalog>("/api/skills"),
+  listTools: () => request<ToolsCatalog>("/api/tools"),
 
   listMemories: (params: { scope: MemoryScope; agentId?: string; q?: string }) => {
     const search = new URLSearchParams({ scope: params.scope });

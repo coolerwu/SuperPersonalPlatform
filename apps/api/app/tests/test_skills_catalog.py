@@ -106,8 +106,8 @@ def test_scan_skills_warns_when_include_tools_is_a_list(tmp_path: Path) -> None:
 
     catalog = scan_skills(tmp_path)
     skill = catalog.skills[0]
-    assert skill.include_tools == ("alpha", "beta")
-    assert any("space-separated" in warning for warning in skill.warnings)
+    assert skill.include_tools == ()
+    assert any("list form is ignored" in warning for warning in skill.warnings)
 
 
 def test_normalize_skill_names_dedupes_and_validates() -> None:

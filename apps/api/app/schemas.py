@@ -93,6 +93,18 @@ class SkillCatalogOut(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class ToolOut(BaseModel):
+    name: str
+    description: str = ""
+    registered: bool = False
+    skills: list[str] = Field(default_factory=list)
+
+
+class ToolsOut(BaseModel):
+    filesystem_tools: list[ToolOut] = Field(default_factory=list)
+    skill_tools: list[ToolOut] = Field(default_factory=list)
+
+
 class SessionCreate(BaseModel):
     title: str | None = None
 
