@@ -962,45 +962,45 @@ textarea {
   gap: 8px;
 }
 
-.composer-icon-button {
-  width: 38px;
+.composer-send-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 38px;
-  border-radius: 50%;
-  border: 1px solid var(--border-strong);
-  background: #fff;
-  color: var(--muted);
-  display: grid;
-  place-items: center;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.composer-icon-button.primary {
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
   background: var(--accent);
-  border-color: var(--accent);
   color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 3px 8px rgba(15, 118, 110, 0.18);
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease,
+    box-shadow 120ms ease;
 }
 
-.composer-icon-button.primary:hover:not(:disabled) {
+.composer-send-button:hover:not(:disabled) {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
 }
 
-.composer-icon-button.stop {
+.composer-send-button.stop {
   background: var(--text);
   border-color: var(--text);
-  color: #fff;
+  box-shadow: 0 3px 8px rgba(32, 36, 42, 0.16);
 }
 
-.composer-icon-button.stop:hover {
+.composer-send-button.stop:hover {
   background: #000;
   border-color: #000;
 }
 
-.composer-icon-button:disabled {
-  background: var(--panel-3);
-  border-color: var(--border);
-  color: var(--faint);
-  opacity: 0.75;
+.composer-send-button:disabled {
+  background: #eeeae1;
+  border-color: #e0dbd0;
+  color: #8f8779;
+  opacity: 1;
+  box-shadow: none;
 }
 
 .drawer {

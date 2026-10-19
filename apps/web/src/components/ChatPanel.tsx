@@ -193,19 +193,20 @@ export function ChatPanel(props: ChatPanelProps) {
             <div className="composer-actions">
               {props.sending ? (
                 <button
-                  className="composer-icon-button stop"
+                  className="composer-send-button stop"
                   type="button"
                   onClick={props.onCancel}
                   aria-label="停止生成"
                   title="停止生成"
                 >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
                     <rect x="6" y="6" width="12" height="12" rx="2" />
                   </svg>
+                  <span>停止</span>
                 </button>
               ) : (
                 <button
-                  className="composer-icon-button primary"
+                  className="composer-send-button"
                   type="button"
                   onClick={props.onSend}
                   disabled={!props.canSend || !props.draft.trim()}
@@ -214,18 +215,19 @@ export function ChatPanel(props: ChatPanelProps) {
                 >
                   <svg
                     viewBox="0 0 24 24"
-                    width="18"
-                    height="18"
+                    width="15"
+                    height="15"
                     fill="none"
                     stroke="currentColor"
-                    strokeWidth="2.2"
+                    strokeWidth="1.9"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     aria-hidden="true"
                   >
-                    <path d="M12 19V5" />
-                    <path d="m5 12 7-7 7 7" />
+                    <path d="M22 2 11 13" />
+                    <path d="M22 2 15 22l-4-9-9-4Z" />
                   </svg>
+                  <span>发送</span>
                 </button>
               )}
             </div>
