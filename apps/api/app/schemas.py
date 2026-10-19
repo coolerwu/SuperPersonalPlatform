@@ -21,6 +21,13 @@ class ProviderOut(BaseModel):
     updated_at: datetime
 
 
+class ProviderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    base_url: str = Field(min_length=1, max_length=500)
+    model: str = Field(min_length=1, max_length=200)
+    api_key: str = ""
+
+
 class ProviderUpdate(BaseModel):
     name: str | None = None
     base_url: str | None = None

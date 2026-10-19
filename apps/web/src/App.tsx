@@ -6,6 +6,7 @@ import { ChatPanel } from "./components/ChatPanel";
 import { Drawer } from "./components/Drawer";
 import { Login } from "./components/Login";
 import { NewAgentDialog } from "./components/NewAgentDialog";
+import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 
 function terminal(status: string): boolean {
@@ -28,6 +29,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(true);
+  const [view, setView] = useState<"chat" | "settings">("chat");
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
 
@@ -327,6 +329,18 @@ export default function App() {
     await loadWorkspace();
   }
 
+  async function createProvider(payload: {
+    name: string;
+    base_url: string;
+    model: string;
+    api_key?: string;
+  }): Promise<Provider> {
+    const created = await api.createProvider(payload);
+    setProviders((current) => [...current, created]);
+    await loadWorkspace();
+    return created;
+  }
+
   async function logout() {
     closeStream();
     await api.logout().catch(() => undefined);
@@ -341,6 +355,7 @@ export default function App() {
     setEvents([]);
     setStreamText("");
     setDraft("");
+    setView("chat");
   }
 
   if (auth === null) {
@@ -352,7 +367,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app-shell ${drawerOpen ? "with-drawer" : ""}`}>
+    <div className={`app-shell ${view === "chat" && drawerOpen ? "with-drawer" : ""}`}>
       <Sidebar
         agents={agents}
         agentId={agentId}
@@ -363,52 +378,68 @@ export default function App() {
         onNewSession={() => void newSession()}
         onDeleteSession={(id) => void deleteSession(id)}
         onNewAgent={() => setNewAgentOpen(true)}
+        onOpenSettings={() => setView("settings")}
+        settingsActive={view === "settings"}
         onLogout={() => void logout()}
       />
 
-      <main className="chat-column">
-        <header className="chat-header">
-          <div className="chat-heading">
-            <div className="eyebrow">AGENT</div>
-            <div className="chat-title">{agent?.name ?? "No Agent"}</div>
-            <div className="chat-subtitle">
-              {agent ? `${agent.provider_name} · ${agent.model}` : "创建一个 Agent 开始"}
-              {session ? ` · ${session.title}` : ""}
+      {view === "settings" ? (
+        <SettingsPage
+          agents={agents}
+          agentId={agentId}
+          providers={providers}
+          onSelectAgent={setAgentId}
+          onSaveAgent={saveAgent}
+          onSaveProvider={saveProvider}
+          onCreateProvider={createProvider}
+          onNewAgent={() => setNewAgentOpen(true)}
+          onClose={() => setView("chat")}
+        />
+      ) : (
+        <main className="chat-column">
+          <header className="chat-header">
+            <div className="chat-heading">
+              <div className="eyebrow">AGENT</div>
+              <div className="chat-title">{agent?.name ?? "No Agent"}</div>
+              <div className="chat-subtitle">
+                {agent ? `${agent.provider_name} · ${agent.model}` : "创建一个 Agent 开始"}
+                {session ? ` · ${session.title}` : ""}
+              </div>
             </div>
-          </div>
-          <div className="header-actions">
-            <span className={`status-pill ${statusLabel}`}>{statusLabel}</span>
-            <button className="ghost-button" onClick={() => setDrawerOpen((current) => !current)}>
-              {drawerOpen ? "收起详情" : "打开详情"}
-            </button>
-          </div>
-        </header>
+            <div className="header-actions">
+              <span className={`status-pill ${statusLabel}`}>{statusLabel}</span>
+              <button className="ghost-button" onClick={() => setDrawerOpen((current) => !current)}>
+                {drawerOpen ? "收起详情" : "打开详情"}
+              </button>
+            </div>
+          </header>
 
-        {agents.length === 0 ? (
-          <div className="chat-empty full">
-            <div className="chat-empty-mark">ACC</div>
-            <h2>还没有 Agent</h2>
-            <p>创建一个 Agent，选择 Provider，然后开始对话。</p>
-            <button className="primary" onClick={() => setNewAgentOpen(true)}>新建 Agent</button>
-          </div>
-        ) : (
-          <ChatPanel
-            messages={messages}
-            streamText={visibleStream}
-            sending={chatSending}
-            error={error}
-            activeRun={visibleRun}
-            draft={draft}
-            canSend={Boolean(sessionId && agentId)}
-            agentName={agent?.name ?? "Agent"}
-            onDraftChange={setDraft}
-            onSend={() => void send()}
-            onCancel={() => void cancel()}
-          />
-        )}
-      </main>
+          {agents.length === 0 ? (
+            <div className="chat-empty full">
+              <div className="chat-empty-mark">ACC</div>
+              <h2>还没有 Agent</h2>
+              <p>创建一个 Agent，选择 Provider，然后开始对话。</p>
+              <button className="primary" onClick={() => setNewAgentOpen(true)}>新建 Agent</button>
+            </div>
+          ) : (
+            <ChatPanel
+              messages={messages}
+              streamText={visibleStream}
+              sending={chatSending}
+              error={error}
+              activeRun={visibleRun}
+              draft={draft}
+              canSend={Boolean(sessionId && agentId)}
+              agentName={agent?.name ?? "Agent"}
+              onDraftChange={setDraft}
+              onSend={() => void send()}
+              onCancel={() => void cancel()}
+            />
+          )}
+        </main>
+      )}
 
-      {drawerOpen && (
+      {view === "chat" && drawerOpen && (
         <Drawer
           tab={drawerTab}
           onTab={setDrawerTab}
@@ -417,7 +448,6 @@ export default function App() {
           agent={agent}
           providers={providers}
           onSaveAgent={saveAgent}
-          onSaveProvider={saveProvider}
           onClose={() => setDrawerOpen(false)}
         />
       )}

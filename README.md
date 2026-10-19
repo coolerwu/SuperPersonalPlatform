@@ -1,6 +1,6 @@
 # Agent Command Center
 
-v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs）。
+v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置页）。
 
 - `apps/api`：FastAPI + deepagents + LangGraph
 - `apps/web`：React + Vite + TypeScript
@@ -24,7 +24,17 @@ npm run dev
 
 打开 `http://localhost:5173`，默认 token 见 `APP_AUTH_TOKEN`（默认 `dev-token`）。
 
-本地聊天需要有效模型密钥：通过 `export LLM_API_KEY=...` 或在 `apps/api/.env` 配置；不要提交。也可以登录后在右侧 Settings 里填写。
+本地聊天需要有效模型密钥：通过 `export LLM_API_KEY=...` 或在 `apps/api/.env` 配置；不要提交。也可以登录后在侧栏「配置」里填写。
+
+## 配置页
+
+侧栏底部「配置」进入配置页，集中管理：
+
+- Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
+- Agent：选择并编辑名称、Provider、instructions，或新建 Agent；
+- 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
+
+Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流式片段，在右侧抽屉里展开查看。
 
 ## Docker Compose
 
@@ -59,13 +69,13 @@ cd apps/web && npm run build
 
 ## V1 生产部署（GitHub pull）
 
-v1 部署以 GitHub 的 `rewrite/v2` 分支为准，不从本地工作目录直接复制。
+v1 部署以 GitHub 的 `main` 分支为准，不从本地工作目录直接复制。
 
 ```bash
-git push origin rewrite/v2
+git push origin main
 ```
 
-在目标机新建 v1 目录并拉取（不要覆盖旧的 legacy checkout）：
+在目标机新建 v1 目录并拉取：
 
 ```bash
 git clone --branch main https://github.com/coolerwu/SuperPersonalPlatform.git ~/SuperPersonalPlatform-v1-deploy
@@ -88,15 +98,15 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps
 curl --noproxy '*' http://127.0.0.1:8888/api/health
 ```
 
-旧 8888 服务已停止并禁用；v1 现在监听 8888。旧仓库与 `.super-personal-platform/` 数据保留。
-回滚：先停 v1 web，再重新启用旧服务：
+旧 8888 服务已停止并禁用；v1 现在监听 8888。旧 unit、旧仓库与 `.super-personal-platform/` 数据已删除，不能回滚到旧 systemd 服务。
+
+回滚 v1 版本：在部署目录 checkout 上一个已验证的提交，然后重新构建：
 
 ```bash
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env stop web
-ssh qiuqiu@192.168.1.3 'systemctl --user enable --now super-personal-platform.service'
+cd ~/SuperPersonalPlatform-v1-deploy && git checkout <commit> && docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 ```
 
-当前生产 v1 部署在 `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，监听 8888；旧的 8888 服务已 stop + disable。
+当前生产 v1 部署在 `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，监听 8888。
 
 ## 测试
 

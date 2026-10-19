@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
+from app import APP_VERSION
 from app.auth import router as auth_router
 from app.config import settings
 from app.db import SessionLocal, init_db
@@ -15,6 +16,7 @@ from app.routers.chat import router as chat_router
 from app.routers.providers import router as providers_router
 from app.routers.runs import router as runs_router
 from app.routers.sessions import router as sessions_router
+from app.routers.system import router as system_router
 from app.services.run_service import seed_default_provider
 from app.services.worker import RunWorker
 
@@ -57,7 +59,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             if worker is not None:
                 await worker.stop()
 
-    app = FastAPI(title="Agent Command Center", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Agent Command Center", version=APP_VERSION, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -71,6 +73,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(sessions_router)
     app.include_router(chat_router)
     app.include_router(runs_router)
+    app.include_router(system_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, bool]:

@@ -12,6 +12,8 @@ type SidebarProps = {
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
   onNewAgent: () => void;
+  onOpenSettings: () => void;
+  settingsActive: boolean;
   onLogout: () => void;
 };
 
@@ -78,6 +80,12 @@ export function Sidebar(props: SidebarProps) {
       </div>
 
       <div className="sidebar-footer">
+        <button
+          className={`ghost-button ${props.settingsActive ? "active" : ""}`}
+          onClick={props.onOpenSettings}
+        >
+          配置
+        </button>
         <button className="ghost-button" onClick={props.onLogout}>退出登录</button>
       </div>
     </aside>

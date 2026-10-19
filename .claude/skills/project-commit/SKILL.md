@@ -47,14 +47,15 @@ service is not used for v1.
 
 Current v1 production: `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`,
 Docker Compose, port 8888. The legacy service is stopped and disabled; its
-checkout and data are retained for rollback.
+unit, checkout, and data have been removed, so there is no legacy rollback.
+Roll back v1 by checking out a previously verified commit and rebuilding.
 
 If the user explicitly asks to deploy v1 on a target machine:
 
 1. Push the target branch to `origin` first and record the pushed SHA.
 2. On the target host, check out/pull the branch into a v1 directory; do not
-   overwrite the legacy checkout. Verify `git rev-parse HEAD` equals the pushed
-   SHA and `git status --short` is clean.
+   deploy from a developer working tree. Verify `git rev-parse HEAD` equals the
+   pushed SHA and `git status --short` is clean.
 3. Ensure `deploy/.env` exists on the target with `APP_AUTH_TOKEN`, a valid
    `LLM_API_KEY`, and `POSTGRES_PASSWORD`; never commit that file.
 4. From the target repository root run:
@@ -74,7 +75,8 @@ If the user explicitly asks to deploy v1 on a target machine:
 - This project intentionally commits all uncommitted code during this workflow.
 - Always use `git add .`; do not stage files one by one.
 - Do not commit `.env`, `data/`, `.super-personal-platform/`, `node_modules/`,
-  `apps/web/dist/`, virtualenvs, caches, or dependency directories.
+  virtualenvs, caches, or dependency directories.
+- `apps/web/dist/` **is** committed; include the rebuilt assets.
 - Do not reset or overwrite existing changes unless the user explicitly asks.
 - Do not assume a push synchronized `rc-clone`; it is an independent checkout.
 - v1 exposes no file/shell/browser/skills/memory tools and has no approval flow;

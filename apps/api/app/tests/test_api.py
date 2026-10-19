@@ -58,3 +58,38 @@ def test_chat_creates_run_and_enforces_one_active_run(client) -> None:
     messages = client.get(f"/api/sessions/{session_id}/messages").json()
     assert [message["role"] for message in messages] == ["user"]
     assert messages[0]["run_id"] == run_id
+
+
+def test_provider_create_and_system_info(client) -> None:
+    created = client.post(
+        "/api/providers",
+        json={
+            "name": "Backup",
+            "base_url": "https://api.example.com",
+            "model": "example-model",
+            "api_key": "secret",
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["name"] == "Backup"
+    assert body["has_api_key"] is True
+    assert "api_key" not in body
+
+    system = client.get("/api/system")
+    assert system.status_code == 200
+    info = system.json()
+    assert info["version"] == "0.1.0"
+    assert info["database"] == "sqlite"
+    assert info["capabilities"]["filesystem"] is False
+    assert info["capabilities"]["chat"] is True
+    assert info["counts"]["providers"] >= 2
+    assert info["counts"]["agents"] >= 1
+
+
+def test_provider_create_rejects_blank_fields(client) -> None:
+    response = client.post(
+        "/api/providers",
+        json={"name": "   ", "base_url": " ", "model": " "},
+    )
+    assert response.status_code == 400

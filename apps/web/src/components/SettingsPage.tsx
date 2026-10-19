@@ -1,0 +1,237 @@
+import { useEffect, useState } from "react";
+
+import { api, errorText } from "../api";
+import type { Agent, Provider, SystemInfo } from "../types";
+import { AgentEditor } from "./AgentEditor";
+import { ProviderCreateForm } from "./ProviderCreateForm";
+import { ProviderSettings } from "./ProviderSettings";
+
+type SettingsPageProps = {
+  agents: Agent[];
+  agentId: string;
+  providers: Provider[];
+  onSelectAgent: (id: string) => void;
+  onSaveAgent: (payload: { name: string; instructions: string; provider_id: string }) => Promise<void>;
+  onSaveProvider: (
+    providerId: string,
+    payload: { name: string; base_url: string; model: string; api_key?: string },
+  ) => Promise<void>;
+  onCreateProvider: (payload: {
+    name: string;
+    base_url: string;
+    model: string;
+    api_key?: string;
+  }) => Promise<Provider>;
+  onNewAgent: () => void;
+  onClose: () => void;
+};
+
+const CAPABILITY_LABELS: Record<string, string> = {
+  chat: "Chat",
+  multi_agent: "多 Agent",
+  subagent: "子 Agent",
+  checkpoints: "Checkpoint",
+  filesystem: "文件系统",
+  shell: "Shell",
+  browser: "浏览器",
+  skills: "Skills",
+  memory: "Memory",
+};
+
+export function SettingsPage(props: SettingsPageProps) {
+  const [providerId, setProviderId] = useState("");
+  const [creatingProvider, setCreatingProvider] = useState(false);
+  const [savingProvider, setSavingProvider] = useState(false);
+  const [savingAgent, setSavingAgent] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [system, setSystem] = useState<SystemInfo | null>(null);
+  const [systemError, setSystemError] = useState("");
+
+  const provider = props.providers.find((item) => item.id === providerId) ?? props.providers[0];
+  const agent = props.agents.find((item) => item.id === props.agentId);
+
+  useEffect(() => {
+    if (!props.providers.some((item) => item.id === providerId)) {
+      setProviderId(props.providers[0]?.id ?? "");
+    }
+  }, [props.providers, providerId]);
+
+  useEffect(() => {
+    let active = true;
+    setSystemError("");
+    void api
+      .getSystem()
+      .then((info) => {
+        if (active) setSystem(info);
+      })
+      .catch((exc) => {
+        if (active) setSystemError(errorText(exc));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function saveAgent(payload: { name: string; instructions: string; provider_id: string }) {
+    setSavingAgent(true);
+    try {
+      await props.onSaveAgent(payload);
+    } finally {
+      setSavingAgent(false);
+    }
+  }
+
+  async function saveProvider(payload: { name: string; base_url: string; model: string; api_key?: string }) {
+    if (!provider) return;
+    setSavingProvider(true);
+    try {
+      await props.onSaveProvider(provider.id, payload);
+    } finally {
+      setSavingProvider(false);
+    }
+  }
+
+  async function createProvider(payload: {
+    name: string;
+    base_url: string;
+    model: string;
+    api_key?: string;
+  }) {
+    setCreating(true);
+    try {
+      const created = await props.onCreateProvider(payload);
+      setProviderId(created.id);
+      setCreatingProvider(false);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <main className="settings-page">
+      <header className="settings-header">
+        <div>
+          <div className="eyebrow">CONFIGURATION</div>
+          <h1>配置</h1>
+          <p>Provider、Agent 和运行环境都集中在这里。</p>
+        </div>
+        <button className="ghost-button" onClick={props.onClose}>返回对话</button>
+      </header>
+
+      <div className="settings-scroll">
+        <div className="settings-lane">
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <div>
+                <h2>Provider</h2>
+                <p>OpenAI-compatible 端点；密钥只保存在后端，不会回传前端。</p>
+              </div>
+              <button
+                className="ghost-button"
+                onClick={() => setCreatingProvider((current) => !current)}
+              >
+                {creatingProvider ? "收起" : "新增 Provider"}
+              </button>
+            </div>
+
+            <div className="settings-provider-list">
+              {props.providers.length === 0 && <div className="empty-note">还没有 Provider。</div>}
+              {props.providers.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`settings-provider-row ${item.id === provider?.id ? "selected" : ""}`}
+                  onClick={() => setProviderId(item.id)}
+                >
+                  <span className="settings-provider-name">{item.name}</span>
+                  <span className="settings-provider-meta">{item.model} · {item.base_url}</span>
+                  <span className={`key-badge ${item.has_api_key ? "ok" : "missing"}`}>
+                    {item.has_api_key ? "密钥已配置" : "缺少密钥"}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {creatingProvider && (
+              <ProviderCreateForm
+                busy={creating}
+                onCreate={createProvider}
+                onCancel={() => setCreatingProvider(false)}
+              />
+            )}
+
+            <div className="settings-subhead">编辑 {provider?.name ?? "Provider"}</div>
+            <ProviderSettings provider={provider} saving={savingProvider} onSave={saveProvider} />
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <div>
+                <h2>Agent</h2>
+                <p>每个 Agent 有自己的 instructions、Provider 和独立会话。</p>
+              </div>
+              <button className="ghost-button" onClick={props.onNewAgent}>新建 Agent</button>
+            </div>
+
+            <div className="settings-agent-list">
+              {props.agents.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`settings-agent-row ${item.id === props.agentId ? "selected" : ""}`}
+                  onClick={() => props.onSelectAgent(item.id)}
+                >
+                  <span className="settings-provider-name">{item.name}</span>
+                  <span className="settings-provider-meta">
+                    {item.provider_name} · {item.model}
+                  </span>
+                  <span className="agent-status">{item.status}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="settings-subhead">编辑 {agent?.name ?? "Agent"}</div>
+            <AgentEditor agent={agent} providers={props.providers} saving={savingAgent} onSave={saveAgent} />
+          </section>
+
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <div>
+                <h2>运行环境</h2>
+                <p>当前进程的实际配置与能力边界。</p>
+              </div>
+            </div>
+
+            {systemError && <div className="error-banner">{systemError}</div>}
+            {!system && !systemError && <div className="empty-note">读取中…</div>}
+            {system && (
+              <>
+                <div className="system-grid">
+                  <div><span>版本</span><strong>{system.version}</strong></div>
+                  <div><span>执行核</span><strong>{system.execution_core}</strong></div>
+                  <div><span>数据库</span><strong>{system.database}</strong></div>
+                  <div><span>Run 超时</span><strong>{system.run_timeout_seconds}s</strong></div>
+                  <div><span>历史消息上限</span><strong>{system.max_history_messages}</strong></div>
+                  <div><span>Run 总数</span><strong>{system.counts.runs}</strong></div>
+                </div>
+
+                <div className="system-counts">
+                  {system.counts.providers} providers · {system.counts.agents} agents ·{" "}
+                  {system.counts.sessions} sessions · {system.counts.messages} messages
+                </div>
+
+                <div className="capability-list">
+                  {Object.entries(system.capabilities).map(([key, enabled]) => (
+                    <span key={key} className={`capability ${enabled ? "on" : "off"}`}>
+                      {CAPABILITY_LABELS[key] ?? key} · {enabled ? "启用" : "未启用"}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      </div>
+    </main>
+  );
+}

@@ -1,10 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { Agent, DrawerTab, Provider, Run, RunEvent } from "../types";
 import { formatTime, previewPayload, truncate } from "../format";
 import { AgentEditor } from "./AgentEditor";
-import { ProviderSettings } from "./ProviderSettings";
-import { Select } from "./Select";
 
 type DrawerProps = {
   tab: DrawerTab;
@@ -14,7 +12,6 @@ type DrawerProps = {
   agent: Agent | undefined;
   providers: Provider[];
   onSaveAgent: (payload: { name: string; instructions: string; provider_id: string }) => Promise<void>;
-  onSaveProvider: (providerId: string, payload: { name: string; base_url: string; model: string; api_key?: string }) => Promise<void>;
   onClose: () => void;
 };
 
@@ -48,16 +45,12 @@ function eventText(event: RunEvent): string {
 
 export function Drawer(props: DrawerProps) {
   const [savingAgent, setSavingAgent] = useState(false);
-  const [savingProvider, setSavingProvider] = useState(false);
-  const [providerId, setProviderId] = useState("");
+  const [showRawEvents, setShowRawEvents] = useState(false);
 
-  useEffect(() => {
-    if (!props.providers.some((provider) => provider.id === providerId)) {
-      setProviderId(props.providers[0]?.id ?? "");
-    }
-  }, [props.providers, providerId]);
-
-  const provider = props.providers.find((item) => item.id === providerId) ?? props.providers[0];
+  const deltaCount = props.events.filter((event) => event.type === "assistant_delta").length;
+  const visibleEvents = showRawEvents
+    ? props.events
+    : props.events.filter((event) => event.type !== "assistant_delta");
 
   async function saveAgent(payload: { name: string; instructions: string; provider_id: string }) {
     setSavingAgent(true);
@@ -68,23 +61,12 @@ export function Drawer(props: DrawerProps) {
     }
   }
 
-  async function saveProvider(payload: { name: string; base_url: string; model: string; api_key?: string }) {
-    if (!provider) return;
-    setSavingProvider(true);
-    try {
-      await props.onSaveProvider(provider.id, payload);
-    } finally {
-      setSavingProvider(false);
-    }
-  }
-
   return (
     <aside className="drawer">
       <div className="drawer-header">
         <div className="drawer-tabs">
           <button className={props.tab === "run" ? "active" : ""} onClick={() => props.onTab("run")}>Run</button>
           <button className={props.tab === "agent" ? "active" : ""} onClick={() => props.onTab("agent")}>Agent</button>
-          <button className={props.tab === "settings" ? "active" : ""} onClick={() => props.onTab("settings")}>Settings</button>
         </div>
         <button className="icon-button" title="关闭详情" onClick={props.onClose}>×</button>
       </div>
@@ -116,8 +98,19 @@ export function Drawer(props: DrawerProps) {
                   <span>finished {formatTime(props.run.finished_at)}</span>
                 </div>
                 <div className="eyebrow events-heading">EVENTS</div>
+                {deltaCount > 0 && (
+                  <button
+                    type="button"
+                    className="event-toggle"
+                    onClick={() => setShowRawEvents((current) => !current)}
+                  >
+                    {showRawEvents
+                      ? "隐藏原始流式片段"
+                      : `已折叠 ${deltaCount} 条流式片段；展开查看原始事件`}
+                  </button>
+                )}
                 <div className="event-list">
-                  {props.events.map((event) => (
+                  {visibleEvents.map((event) => (
                     <div key={event.id} className={`event-row ${event.type}`}>
                       <div className="event-top">
                         <span className="event-type">{event.type}</span>
@@ -126,7 +119,7 @@ export function Drawer(props: DrawerProps) {
                       <div className="event-text">{eventText(event)}</div>
                     </div>
                   ))}
-                  {props.events.length === 0 && <div className="empty-note">暂无事件。</div>}
+                  {visibleEvents.length === 0 && <div className="empty-note">暂无事件。</div>}
                 </div>
               </>
             )}
@@ -140,30 +133,6 @@ export function Drawer(props: DrawerProps) {
             saving={savingAgent}
             onSave={saveAgent}
           />
-        )}
-
-        {props.tab === "settings" && (
-          <div className="settings-view">
-            <div className="section-heading">
-              <span>Provider</span>
-              <Select
-                className="compact-select"
-                value={provider?.id ?? ""}
-                options={props.providers.map((item) => ({
-                  value: item.id,
-                  label: item.name,
-                  description: item.model,
-                }))}
-                onChange={setProviderId}
-                ariaLabel="Provider"
-              />
-            </div>
-            <ProviderSettings
-              provider={provider}
-              saving={savingProvider}
-              onSave={saveProvider}
-            />
-          </div>
         )}
       </div>
     </aside>

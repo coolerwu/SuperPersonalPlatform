@@ -1,4 +1,4 @@
-import type { Agent, Message, Provider, Run, RunEvent, Session } from "./types";
+import type { Agent, Message, Provider, Run, RunEvent, Session, SystemInfo } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -22,10 +22,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (!response.ok) {
     let detail: unknown = response.statusText;
-    try {
-      detail = await response.json();
-    } catch {
-      detail = await response.text();
+    const body = await response.text();
+    if (body) {
+      try {
+        detail = JSON.parse(body);
+      } catch {
+        detail = body;
+      }
     }
     throw new ApiError(response.status, detail);
   }
@@ -70,6 +73,8 @@ export const api = {
   archiveAgent: (id: string) => request<{ archived: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),
 
   listProviders: () => request<Provider[]>("/api/providers"),
+  createProvider: (payload: { name: string; base_url: string; model: string; api_key?: string }) =>
+    request<Provider>("/api/providers", { method: "POST", body: JSON.stringify(payload) }),
   updateProvider: (
     id: string,
     payload: Partial<Pick<Provider, "name" | "base_url" | "model">> & { api_key?: string },
@@ -92,4 +97,6 @@ export const api = {
   getRunEvents: (runId: string, after = 0) => request<RunEvent[]>(`/api/runs/${runId}/events?after=${after}`),
   cancelRun: (runId: string) => request<{ cancelled: boolean }>(`/api/runs/${runId}/cancel`, { method: "POST" }),
   streamUrl: (runId: string) => `/api/runs/${runId}/stream`,
+
+  getSystem: () => request<SystemInfo>("/api/system"),
 };

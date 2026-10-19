@@ -64,4 +64,20 @@ export type RunEvent = {
   created_at: string;
 };
 
-export type DrawerTab = "run" | "agent" | "settings";
+export type SystemInfo = {
+  version: string;
+  execution_core: string;
+  database: string;
+  run_timeout_seconds: number;
+  max_history_messages: number;
+  counts: {
+    providers: number;
+    agents: number;
+    sessions: number;
+    messages: number;
+    runs: number;
+  };
+  capabilities: Record<string, boolean>;
+};
+
+export type DrawerTab = "run" | "agent";
