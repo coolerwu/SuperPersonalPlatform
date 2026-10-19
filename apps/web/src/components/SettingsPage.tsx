@@ -74,6 +74,12 @@ export function SettingsPage(props: SettingsPageProps) {
   }, [props.providers, providerId]);
 
   useEffect(() => {
+    if (agent?.provider_id) {
+      setProviderId(agent.provider_id);
+    }
+  }, [agent?.id, agent?.provider_id]);
+
+  useEffect(() => {
     let active = true;
     setSystemError("");
     void api

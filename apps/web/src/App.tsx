@@ -50,6 +50,10 @@ export default function App() {
   }, [sessionId]);
 
   useEffect(() => {
+    setDraft("");
+  }, [agentId]);
+
+  useEffect(() => {
     void bootstrap().catch((exc) => {
       setError(errorText(exc));
       setAuth(false);
