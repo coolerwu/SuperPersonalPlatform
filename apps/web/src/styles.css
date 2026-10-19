@@ -1622,6 +1622,11 @@ textarea {
   line-height: 1.5;
 }
 
+.tool-toggle .capability {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
 .memory-toolbar {
   display: flex;
   align-items: center;

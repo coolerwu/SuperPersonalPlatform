@@ -80,7 +80,8 @@ export function SkillsPage({
               <>
                 <div className="hint">
                   技能库：~/.super-personal-platform/skills。只有启用的技能会出现在系统提示里；
-                  未读取 SKILL.md 前，技能工具不可见也不可调用。文件工具始终可用。
+                  未读取 SKILL.md 前，技能工具不可见也不可调用。技能声明的工具还需要在「工具」页面为当前
+                  Agent 启用。文件工具始终可用。
                 </div>
                 <div className="skill-list">
                   {skills.map((skill) => (

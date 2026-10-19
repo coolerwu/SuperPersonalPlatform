@@ -52,7 +52,7 @@ npm run dev
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
 - Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell 或浏览器工具；
-- 技能：左侧「技能」页面可为当前 Agent 启用全局技能库里的技能；模型读取 `/skills/<name>/SKILL.md` 后，该技能声明的专用工具才会解锁；文件工具始终可用；
+- 技能与工具：左侧「技能」「工具」页面分别为当前 Agent 启用；模型读取 `/skills/<name>/SKILL.md` 后，已启用的技能工具才会解锁；文件工具始终可用；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 
 ## 配置页
@@ -73,7 +73,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
 侧边栏左上角（Agent 选择器下方）提供两个独立页面：
 
 - **技能**：列出全局技能库，按当前 Agent 勾选/取消启用，立即保存、下一轮 Run 生效；展示 description、声明的工具、SKILL.md 路径和解析警告。
-- **工具**：展示文件工具（始终可用）和技能工具（是否已在平台注册、由哪些技能声明）。未注册的声明不会生效。
+- **工具**：展示文件工具（始终可用）和技能工具；技能工具按当前 Agent 勾选启用，并显示是否已在平台注册、由哪些技能声明。只有“已启用 + 已注册 + 被已启用技能声明 + SKILL.md 已读取”四个条件都满足时，工具才会解锁。
 
 ## Skills
 
@@ -105,7 +105,18 @@ metadata:
 - 每次 Run 都会重新扫描技能目录并重新应用 Agent 的启用列表，所以新增/编辑技能或修改启用状态在下一轮对话生效。
 - 文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不受技能开关影响。
 - `/skills/**` 对 Agent 禁止写入，避免模型改写技能定义来绕过解锁。
-- v1 平台注册表为空，因此 `include_tools` 里的名字暂时不会产生可用工具；机制本身由后端测试覆盖。
+- 首次启动会在技能库中 seed 一个 `web-fetch` 技能（已存在则不覆盖），它声明 `include_tools: web_fetch`，用于解锁下面的抓取工具。
+
+## 工具
+
+平台注册表当前提供 `web_fetch`：
+
+- 调用 DeepSeek Fetch API：`POST {provider.base_url}/v1/tools/fetch`，Bearer 鉴权，请求 `{url}`，返回 `{title, content}`（Markdown）。
+- `url` 必须是完整的 http/https 地址，不能带用户名/密码；成功后按请求计费（DeepSeek 定价：每 1000 次成功请求 5 元，QPS 25）。
+- 需要当前 Agent 的 Provider 支持该接口（DeepSeek）；换用其他 Provider 时工具会返回接口错误。
+- 使用条件：在「工具」页面为 Agent 启用 `web_fetch`，并在「技能」页面启用 `web-fetch`（或任何声明了 `web_fetch` 的技能），对话中读取该 SKILL.md 后解锁。
+
+工具实现在 `apps/api/app/services/skill_tools.py`；新增工具时注册一个 factory，按运行时 Provider 构建 LangChain `BaseTool`。
 
 ## 记忆
 
@@ -123,7 +134,7 @@ metadata:
 生产数据都在 `~/.super-personal-platform/data/`：
 
 - `app.db`：SQLite（WAL），文件权限 600；
-  - `agents`：Agent 名称、instructions、Provider、`enabled_skills`（启用的技能名 JSON 列表）；
+  - `agents`：Agent 名称、instructions、Provider、`enabled_skills` 和 `enabled_tools`（启用的技能/工具名 JSON 列表）；
   - `sessions`：会话，首次发送消息时才创建；标题取第一条用户消息前 24 个字；
   - `messages`：每条用户/assistant 消息一行，assistant 消息在 Run 完成时写入；
   - `runs`：每次发送/重试一行，含状态、input/output、错误、token 用量、时间；

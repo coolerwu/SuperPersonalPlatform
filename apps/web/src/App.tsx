@@ -449,6 +449,12 @@ export default function App() {
     setAgents((current) => current.map((item) => (item.id === updated.id ? updated : item)));
   }
 
+  async function saveEnabledTools(names: string[]) {
+    if (!agent) return;
+    const updated = await api.updateAgent(agent.id, { enabled_tools: names });
+    setAgents((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+  }
+
   async function saveProvider(
     providerId: string,
     payload: { name: string; base_url: string; model: string; api_key?: string },
@@ -539,7 +545,11 @@ export default function App() {
           onClose={() => setView("chat")}
         />
       ) : view === "tools" ? (
-        <ToolsPage onClose={() => setView("chat")} />
+        <ToolsPage
+          agent={agent}
+          onSaveEnabled={saveEnabledTools}
+          onClose={() => setView("chat")}
+        />
       ) : view === "settings" ? (
         <SettingsPage
           agents={agents}

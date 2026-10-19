@@ -141,6 +141,13 @@ def test_catalog_and_middleware_agree_on_names(tmp_path: Path) -> None:
     assert loaded == {skill.name for skill in catalog.skills}
 
 
+def test_default_web_fetch_skill_seeded(client) -> None:
+    assert (settings.skills_dir / "web-fetch" / "SKILL.md").is_file()
+    body = client.get("/api/skills").json()
+    skill = next(item for item in body["skills"] if item["name"] == "web-fetch")
+    assert skill["include_tools"] == ["web_fetch"]
+
+
 def test_skills_api_requires_auth() -> None:
     with TestClient(create_app(start_worker=False)) as anonymous:
         assert anonymous.get("/api/skills").status_code == 401

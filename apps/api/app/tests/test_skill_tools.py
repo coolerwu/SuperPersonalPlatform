@@ -8,11 +8,20 @@ from langchain.agents.middleware.types import ModelRequest
 from langchain_core.tools import StructuredTool
 
 from app.services.skill_middleware import AgentSkillsMiddleware
-from app.services.skill_tools import SkillToolRegistry
+from app.services.skill_tools import (
+    SkillToolContext,
+    SkillToolRegistry,
+    normalize_tool_names,
+    tool_endpoint,
+)
 
 
 def _tool(name: str) -> StructuredTool:
     return StructuredTool.from_function(lambda value: value, name=name, description=f"{name} tool")
+
+
+def _context() -> SkillToolContext:
+    return SkillToolContext(api_key="test-key", base_url="https://api.deepseek.com")
 
 
 def _write_skill(root: Path, directory: str, name: str) -> None:
@@ -23,11 +32,12 @@ def _write_skill(root: Path, directory: str, name: str) -> None:
     )
 
 
-def test_registry_resolves_registered_tools() -> None:
+def test_registry_builds_registered_tools() -> None:
     registry = SkillToolRegistry([_tool("alpha")])
-    assert [tool.name for tool in registry.tools()] == ["alpha"]
-    assert [tool.name for tool in registry.resolve("alpha")] == ["alpha"]
-    assert registry.resolve("missing") == []
+    assert [spec.name for spec in registry.specs()] == ["alpha"]
+    assert [tool.name for tool in registry.build(_context())] == ["alpha"]
+    assert [tool.name for tool in registry.resolve_names(["alpha"], _context())] == ["alpha"]
+    assert registry.resolve_names(["missing"], _context()) == []
 
 
 def test_registry_rejects_reserved_duplicate_and_invalid_names() -> None:
@@ -37,6 +47,20 @@ def test_registry_rejects_reserved_duplicate_and_invalid_names() -> None:
         SkillToolRegistry([_tool("alpha"), _tool("alpha")])
     with pytest.raises(ValueError):
         SkillToolRegistry([_tool("bad name")])
+
+
+def test_normalize_tool_names_dedupes_and_validates() -> None:
+    assert normalize_tool_names([" web_fetch ", "web_fetch", "alpha"]) == ["web_fetch", "alpha"]
+    with pytest.raises(ValueError):
+        normalize_tool_names([""])
+    with pytest.raises(ValueError):
+        normalize_tool_names(["bad name"])
+
+
+def test_tool_endpoint_joins_base_url() -> None:
+    assert tool_endpoint("https://api.deepseek.com") == "https://api.deepseek.com/v1/tools/fetch"
+    assert tool_endpoint("https://api.deepseek.com/") == "https://api.deepseek.com/v1/tools/fetch"
+    assert tool_endpoint("https://api.deepseek.com/v1") == "https://api.deepseek.com/v1/tools/fetch"
 
 
 def _middleware(tmp_path: Path, enabled: set[str]) -> AgentSkillsMiddleware:

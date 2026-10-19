@@ -18,7 +18,7 @@
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
 - v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs、集中配置页和长期记忆。
 - v1 暴露工作区内的 filesystem 工具（ls / read_file / write_file / edit_file / delete / glob / grep，由 `FilesystemMiddleware` 提供）；不暴露 shell / browser 工具。memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
-- Skills：全局技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）+ 每个 Agent 的 `enabled_skills` 启用列表。系统提示只列出启用技能；模型用 `read_file` 读取 `/skills/<name>/SKILL.md` 后，技能在 `metadata.include_tools` 中声明的平台内置工具才解锁，读取前不可见也不可调用；文件工具始终可用。技能工具来自代码注册表 `apps/api/app/services/skill_tools.py`（v1 为空），不在技能目录执行 Python；`/skills/**` 对 Agent 禁止写入。
+- Skills/Tools：全局技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）+ 每个 Agent 的 `enabled_skills` / `enabled_tools` 启用列表。系统提示只列出启用技能；模型用 `read_file` 读取 `/skills/<name>/SKILL.md` 后，技能在 `metadata.include_tools` 中声明、且已为该 Agent 启用的平台工具才解锁，读取前不可见也不可调用；文件工具始终可用。技能工具来自代码注册表 `apps/api/app/services/skill_tools.py`（当前提供 `web_fetch`：DeepSeek Fetch API，按成功请求计费），不在技能目录执行 Python；`/skills/**` 对 Agent 禁止写入。首次启动 seed `web-fetch` 技能，已存在不覆盖。
 - 记忆：`memory_items`（scope=user|agent，无 status）+ `run_memories`；user memory 全局、agent memory 按 Agent 隔离；session 工作记忆仍由 checkpoint 负责。
 - 写入：配置页手动 CRUD、对话里“记住……”写 user memory、每个 Agent 的 `auto_memory` 开关在 Run 完成后提取 agent memory；先用 FTS5（trigram）找相关历史记忆，再让模型返回 add/update/delete 做合并，最多 12 个操作、200 条上限。
 - 读取：每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入，标注为数据而非指令；记录本次使用的 memory id。

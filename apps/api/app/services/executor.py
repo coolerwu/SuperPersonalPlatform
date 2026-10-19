@@ -11,7 +11,7 @@ from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from app.config import settings
-from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolRegistry
+from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolContext, SkillToolRegistry
 from app.services.workspace import resolve_workspace_path
 
 
@@ -116,6 +116,7 @@ class DeepAgentExecutor:
         memory_context: str = "",
         workspace_path: str = "",
         enabled_skills: Sequence[str] = (),
+        enabled_tools: Sequence[str] = (),
         skill_tools: SkillToolRegistry | None = None,
         skills_dir: Path | None = None,
     ) -> None:
@@ -125,6 +126,7 @@ class DeepAgentExecutor:
         self.memory_context = memory_context
         self.workspace_path = workspace_path
         self.enabled_skills = tuple(enabled_skills)
+        self.enabled_tools = tuple(enabled_tools)
         self.skill_tools = skill_tools if skill_tools is not None else SKILL_TOOL_REGISTRY
         self.skills_dir = skills_dir
 
@@ -174,7 +176,13 @@ class DeepAgentExecutor:
                     backend=backend,
                     sources=[("/skills/", "Platform")],
                     enabled_skills=self.enabled_skills,
-                    tools=self.skill_tools.resolve,
+                    tools=self.skill_tools.resolve_names(
+                        self.enabled_tools,
+                        SkillToolContext(
+                            api_key=self.provider.api_key,
+                            base_url=self.provider.base_url,
+                        ),
+                    ),
                 )
                 agent = create_deep_agent(
                     model=chat_model,

@@ -75,6 +75,7 @@ async def test_worker_passes_workspace_config(monkeypatch) -> None:
         agent = await db.get(Agent, agent_id)
         assert agent is not None
         agent.enabled_skills = ["demo"]
+        agent.enabled_tools = ["web_fetch"]
         await db.commit()
 
     run, _ = await create_run(session_id, "hi")
@@ -83,6 +84,7 @@ async def test_worker_passes_workspace_config(monkeypatch) -> None:
 
     assert captured["workspace_path"] == agent_id
     assert captured["enabled_skills"] == ["demo"]
+    assert captured["enabled_tools"] == ["web_fetch"]
 
 
 @pytest.mark.asyncio

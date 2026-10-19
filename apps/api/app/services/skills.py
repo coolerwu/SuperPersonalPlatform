@@ -18,6 +18,24 @@ MAX_SKILL_DESCRIPTION_LENGTH = 1024
 
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
+DEFAULT_SKILLS = {
+    "web-fetch": """---
+name: web-fetch
+description: 读取网页、文章或在线文档内容时使用。读取本技能后解锁 web_fetch 工具，可抓取 http/https 链接并返回页面标题与 Markdown 正文；需要最新网页信息、阅读链接内容或引用在线文档时优先使用。
+metadata:
+  include_tools: web_fetch
+---
+
+# Web Fetch
+
+1. 确认用户给出的 URL，或先从上下文/搜索结果中选择要读取的链接。
+2. 调用 `web_fetch`，`url` 必须是完整的 http/https 地址。
+3. 工具返回页面标题和 Markdown 正文；引用内容时保留来源 URL。
+4. 抓取失败时根据返回的 HTTP 错误码说明原因，不要假装已经读取页面。
+5. 每次成功抓取都按 DeepSeek Fetch 计费（每 1000 次 5 元），不要重复抓取同一页面。
+""",
+}
+
 
 @dataclass(frozen=True)
 class SkillInfo:
@@ -180,3 +198,13 @@ def scan_skills(root: Path | None = None) -> SkillCatalog:
 
     skills.sort(key=lambda item: item.name)
     return SkillCatalog(skills=tuple(skills), errors=tuple(errors))
+
+
+def seed_default_skills() -> None:
+    root = settings.skills_dir.expanduser()
+    for name, content in DEFAULT_SKILLS.items():
+        target = root / name / "SKILL.md"
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")

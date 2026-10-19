@@ -27,15 +27,11 @@ async def list_tools() -> ToolsOut:
         for tool_name in skill.include_tools:
             declared.setdefault(tool_name, set()).add(skill.name)
 
-    registered = {tool.name: tool for tool in SKILL_TOOL_REGISTRY.tools()}
+    registered = {spec.name: spec for spec in SKILL_TOOL_REGISTRY.specs()}
     skill_tools = [
         ToolOut(
             name=name,
-            description=(
-                str(getattr(registered[name], "description", "") or "")
-                if name in registered
-                else ""
-            ),
+            description=registered[name].description if name in registered else "",
             registered=name in registered,
             skills=sorted(declared.get(name, ())),
         )

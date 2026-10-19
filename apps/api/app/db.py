@@ -68,20 +68,25 @@ async def _ensure_memory_fts() -> None:
         await conn.exec_driver_sql("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild')")
 
 
-async def _ensure_agent_skills_column(conn) -> None:  # noqa: ANN001
+async def _ensure_agent_column(conn, column: str) -> None:  # noqa: ANN001
     result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
-    if "enabled_skills" in {row[1] for row in result.fetchall()}:
+    if column in {row[1] for row in result.fetchall()}:
         return
     try:
         await conn.exec_driver_sql(
-            "ALTER TABLE agents ADD COLUMN enabled_skills JSON NOT NULL DEFAULT '[]'"
+            f"ALTER TABLE agents ADD COLUMN {column} JSON NOT NULL DEFAULT '[]'"
         )
     except Exception:
         # Another process may have added the column concurrently; only re-raise
         # when it is genuinely still missing.
         result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
-        if "enabled_skills" not in {row[1] for row in result.fetchall()}:
+        if column not in {row[1] for row in result.fetchall()}:
             raise
+
+
+async def _ensure_agent_columns(conn) -> None:  # noqa: ANN001
+    for column in ("enabled_skills", "enabled_tools"):
+        await _ensure_agent_column(conn, column)
 
 
 async def init_db() -> None:
@@ -90,7 +95,7 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if settings.app_database_url.startswith("sqlite"):
-            await _ensure_agent_skills_column(conn)
+            await _ensure_agent_columns(conn)
 
     if settings.app_database_url.startswith("sqlite"):
         try:

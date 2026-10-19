@@ -25,6 +25,7 @@ from app.routers.skills import router as skills_router
 from app.routers.system import router as system_router
 from app.routers.tools import router as tools_router
 from app.services.run_service import seed_default_provider
+from app.services.skills import seed_default_skills
 from app.services.worker import RunWorker
 from app.services.workspace import ensure_agent_workspaces, resolve_workspace_path
 
@@ -78,6 +79,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
         settings.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
         settings.skills_dir.expanduser().mkdir(parents=True, exist_ok=True)
+        seed_default_skills()
         await init_db()
         await seed_default_provider()
         await seed_default_agent()
