@@ -17,14 +17,15 @@
 - 执行核：`AgentExecutor` 端口 + `DeepAgentExecutor`；平台拥有 session/messages/run，deepagents checkpointer 只存 Agent 状态。
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
 - v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs、集中配置页和长期记忆。
-- v1 暴露工作区内的 filesystem 工具（ls / read_file / write_file / edit_file / delete / glob / grep，由 `FilesystemMiddleware` 提供）；不暴露 shell / browser / skills 工具。memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
+- v1 暴露工作区内的 filesystem 工具（ls / read_file / write_file / edit_file / delete / glob / grep，由 `FilesystemMiddleware` 提供）；不暴露 shell / browser 工具。memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
+- Skills：全局技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）+ 每个 Agent 的 `enabled_skills` 启用列表。系统提示只列出启用技能；模型用 `read_file` 读取 `/skills/<name>/SKILL.md` 后，技能在 `metadata.include_tools` 中声明的平台内置工具才解锁，读取前不可见也不可调用；文件工具始终可用。技能工具来自代码注册表 `apps/api/app/services/skill_tools.py`（v1 为空），不在技能目录执行 Python；`/skills/**` 对 Agent 禁止写入。
 - 记忆：`memory_items`（scope=user|agent，无 status）+ `run_memories`；user memory 全局、agent memory 按 Agent 隔离；session 工作记忆仍由 checkpoint 负责。
 - 写入：配置页手动 CRUD、对话里“记住……”写 user memory、每个 Agent 的 `auto_memory` 开关在 Run 完成后提取 agent memory；先用 FTS5（trigram）找相关历史记忆，再让模型返回 add/update/delete 做合并，最多 12 个操作、200 条上限。
 - 读取：每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入，标注为数据而非指令；记录本次使用的 memory id。
 - 记忆页面提供「整理记忆」：分批让模型对现有记忆做 update/delete，只合并不新增。
 - Workspace：每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/`（`APP_WORKSPACES_DIR` 可覆盖），不支持自定义路径；配置页只读展示机器目录，并跟随左上角选中的 Agent。执行器用 `FilesystemBackend(virtual_mode=True)` + 默认 `FilesystemMiddleware` 开放工作区文件工具。
-- 运行时目录统一在 `~/.super-personal-platform/`（`APP_HOME` 可覆盖）：`.env`、`data/app.db`、`data/checkpoints/`、`workspaces/`。
-- 默认 Assistant 使用中文个人助手提示词：先说明自己是个人助手，并列出可做的对话、工作区文件、general-purpose 子 Agent、记忆注入与会话 checkpoint；行为规范参考 Hermes（直接、长度匹配问题、无 filler、反谄媚、深度按需），默认简体中文回复，不宣称 Hermes 身份。新建 Agent 未填写 instructions 时使用同一套默认提示词；运行时不使用任何兜底提示词或兜底 Agent 名称。
+- 运行时目录统一在 `~/.super-personal-platform/`（`APP_HOME` 可覆盖）：`.env`、`data/app.db`、`data/checkpoints/`、`workspaces/`、`skills/`。
+- 默认 Assistant 使用中文个人助手提示词：先说明自己是个人助手，并列出可做的对话、工作区文件、general-purpose 子 Agent、记忆注入、会话 checkpoint 和技能（读取 SKILL.md 后解锁技能工具）；行为规范参考 Hermes（直接、长度匹配问题、无 filler、反谄媚、深度按需），默认简体中文回复，不宣称 Hermes 身份。新建 Agent 未填写 instructions 时使用同一套默认提示词；运行时不使用任何兜底提示词或兜底 Agent 名称。
 - UI 视觉方向：明亮简洁（浅色画布 + 悬浮输入卡片），assistant 消息按 Markdown 渲染；依赖 `react-markdown`、`remark-gfm`、`rehype-highlight`。
 - 消息操作：复制、引用、失败 Run 重试；不做编辑/重新生成/删除单条消息（需要 checkpoint 分支方案）。
 - Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints；有活动 Run 时 409。

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +10,8 @@ from typing import Any
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
+from app.config import settings
+from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolRegistry
 from app.services.workspace import resolve_workspace_path
 
 
@@ -90,11 +92,18 @@ def _split_stream_chunk(chunk: Any) -> tuple[tuple[str, ...], Any]:
     return (), chunk
 
 
-def build_backend(workspace_path: str):
-    from deepagents.backends import FilesystemBackend
+def build_backend(workspace_path: str, *, skills_dir: Path | str | None = None):
+    from deepagents.backends import CompositeBackend, FilesystemBackend
 
     root = resolve_workspace_path(workspace_path, create=True)
-    return FilesystemBackend(root_dir=root, virtual_mode=True)
+    workspace_backend = FilesystemBackend(root_dir=root, virtual_mode=True)
+    if skills_dir is None:
+        return workspace_backend
+    skills_root = Path(skills_dir).expanduser().resolve()
+    return CompositeBackend(
+        default=workspace_backend,
+        routes={"/skills/": FilesystemBackend(root_dir=skills_root, virtual_mode=True)},
+    )
 
 
 class DeepAgentExecutor:
@@ -106,18 +115,26 @@ class DeepAgentExecutor:
         agent_name: str,
         memory_context: str = "",
         workspace_path: str = "",
+        enabled_skills: Sequence[str] = (),
+        skill_tools: SkillToolRegistry | None = None,
+        skills_dir: Path | None = None,
     ) -> None:
         self.provider = provider
         self.checkpoint_dir = checkpoint_dir
         self.agent_name = agent_name
         self.memory_context = memory_context
         self.workspace_path = workspace_path
+        self.enabled_skills = tuple(enabled_skills)
+        self.skill_tools = skill_tools if skill_tools is not None else SKILL_TOOL_REGISTRY
+        self.skills_dir = skills_dir
 
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
         try:
-            from deepagents import create_deep_agent
+            from deepagents import FilesystemPermission, create_deep_agent
             from langchain_openai import ChatOpenAI
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+            from app.services.skill_middleware import AgentSkillsMiddleware
         except Exception as exc:  # pragma: no cover - import guard
             yield ExecutorEvent("run_failed", {"error": {"type": type(exc).__name__, "message": str(exc)}})
             return
@@ -147,7 +164,18 @@ class DeepAgentExecutor:
                 system_prompt = instructions
                 if self.memory_context:
                     system_prompt = f"{system_prompt}\n\n{self.memory_context}"
-                backend = build_backend(self.workspace_path)
+                backend = build_backend(
+                    self.workspace_path,
+                    skills_dir=(
+                        self.skills_dir if self.skills_dir is not None else settings.skills_dir
+                    ),
+                )
+                skills_middleware = AgentSkillsMiddleware(
+                    backend=backend,
+                    sources=[("/skills/", "Platform")],
+                    enabled_skills=self.enabled_skills,
+                    tools=self.skill_tools.resolve,
+                )
                 agent = create_deep_agent(
                     model=chat_model,
                     tools=[],
@@ -155,13 +183,25 @@ class DeepAgentExecutor:
                     checkpointer=checkpointer,
                     backend=backend,
                     name=self.agent_name,
+                    skills=["/skills/"],
+                    middleware=[skills_middleware],
+                    permissions=[
+                        FilesystemPermission(
+                            operations=["write"],
+                            paths=["/skills", "/skills/**"],
+                            mode="deny",
+                        )
+                    ],
                 )
                 config = {
                     "configurable": {"thread_id": session_id},
                     "callbacks": [collector],
                     "recursion_limit": 50,
                 }
-                input_state = {"messages": [HumanMessage(content=content)]}
+                input_state = {
+                    "messages": [HumanMessage(content=content)],
+                    "skills_metadata": None,
+                }
                 async for chunk in agent.astream(
                     input_state,
                     config=config,

@@ -68,11 +68,29 @@ async def _ensure_memory_fts() -> None:
         await conn.exec_driver_sql("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild')")
 
 
+async def _ensure_agent_skills_column(conn) -> None:  # noqa: ANN001
+    result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
+    if "enabled_skills" in {row[1] for row in result.fetchall()}:
+        return
+    try:
+        await conn.exec_driver_sql(
+            "ALTER TABLE agents ADD COLUMN enabled_skills JSON NOT NULL DEFAULT '[]'"
+        )
+    except Exception:
+        # Another process may have added the column concurrently; only re-raise
+        # when it is genuinely still missing.
+        result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
+        if "enabled_skills" not in {row[1] for row in result.fetchall()}:
+            raise
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if settings.app_database_url.startswith("sqlite"):
+            await _ensure_agent_skills_column(conn)
 
     if settings.app_database_url.startswith("sqlite"):
         try:

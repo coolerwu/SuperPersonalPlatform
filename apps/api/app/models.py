@@ -54,6 +54,9 @@ class Agent(Base):
     provider_id: Mapped[str] = mapped_column(String(32), ForeignKey("providers.id"), default="default")
     status: Mapped[str] = mapped_column(String(20), default="active")
     auto_memory: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled_skills: Mapped[list[str]] = mapped_column(
+        JSON, default=list, nullable=False, server_default="[]"
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 

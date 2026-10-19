@@ -7,6 +7,7 @@ export type Agent = {
   model: string;
   status: string;
   auto_memory: boolean;
+  enabled_skills: string[];
   created_at: string;
   updated_at: string;
 };
@@ -16,6 +17,22 @@ export type AgentSavePayload = {
   instructions: string;
   provider_id: string;
   auto_memory: boolean;
+  enabled_skills: string[];
+};
+
+export type SkillInfo = {
+  name: string;
+  description: string;
+  path: string;
+  directory: string;
+  include_tools: string[];
+  can_enable: boolean;
+  warnings: string[];
+};
+
+export type SkillCatalog = {
+  skills: SkillInfo[];
+  errors: string[];
 };
 
 export type Provider = {
@@ -77,6 +94,7 @@ export type SystemInfo = {
   execution_core: string;
   database: string;
   workspace_root: string;
+  skills_root: string;
   run_timeout_seconds: number;
   max_history_messages: number;
   counts: {

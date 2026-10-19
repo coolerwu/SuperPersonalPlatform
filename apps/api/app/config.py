@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     app_database_url: str = f"sqlite+aiosqlite:///{APP_HOME / 'data' / 'app.db'}"
     app_data_dir: Path = APP_HOME / "data"
     app_workspaces_dir: Path | None = None
+    app_skills_dir: Path | None = None
     app_cors_origins: str = "http://localhost:5173"
 
     llm_base_url: str = "https://api.deepseek.com"
@@ -35,6 +36,10 @@ class Settings(BaseSettings):
     @property
     def workspaces_dir(self) -> Path:
         return self.app_workspaces_dir or (APP_HOME / "workspaces")
+
+    @property
+    def skills_dir(self) -> Path:
+        return self.app_skills_dir or (APP_HOME / "skills")
 
     @property
     def cors_origins(self) -> list[str]:

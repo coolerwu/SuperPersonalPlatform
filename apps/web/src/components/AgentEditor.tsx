@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 
-import type { Agent, AgentSavePayload, Provider } from "../types";
+import type { Agent, AgentSavePayload, Provider, SkillInfo } from "../types";
 import { Select } from "./Select";
 
 type AgentEditorProps = {
@@ -8,26 +8,64 @@ type AgentEditorProps = {
   providers: Provider[];
   saving: boolean;
   workspaceRoot?: string;
+  skills?: SkillInfo[];
+  skillsErrors?: string[];
+  skillsRoot?: string;
+  onRefreshSkills?: () => void;
   onSave: (payload: AgentSavePayload) => Promise<void>;
 };
 
-export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }: AgentEditorProps) {
+export function AgentEditor({
+  agent,
+  providers,
+  saving,
+  workspaceRoot,
+  skills,
+  skillsErrors,
+  skillsRoot,
+  onRefreshSkills,
+  onSave,
+}: AgentEditorProps) {
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
   const [providerId, setProviderId] = useState("");
   const [autoMemory, setAutoMemory] = useState(true);
+  const [enabledSkills, setEnabledSkills] = useState<string[]>([]);
   const [error, setError] = useState("");
+
+  const enabledSkillsKey = agent?.enabled_skills?.join("|") ?? "";
 
   useEffect(() => {
     setName(agent?.name ?? "");
     setInstructions(agent?.instructions ?? "");
     setProviderId(agent?.provider_id ?? providers[0]?.id ?? "");
     setAutoMemory(agent?.auto_memory ?? true);
+    setEnabledSkills(agent?.enabled_skills ?? []);
     setError("");
-  }, [agent?.id, agent?.name, agent?.instructions, agent?.provider_id, agent?.auto_memory, providers]);
+  }, [
+    agent?.id,
+    agent?.name,
+    agent?.instructions,
+    agent?.provider_id,
+    agent?.auto_memory,
+    enabledSkillsKey,
+    providers,
+  ]);
 
   if (!agent) {
     return <div className="empty-note">选择一个 Agent 后编辑。</div>;
+  }
+
+  const installed = new Set((skills ?? []).map((skill) => skill.name));
+  const missingSkills = enabledSkills.filter((name) => !installed.has(name));
+
+  function toggleSkill(skillName: string, checked: boolean) {
+    setEnabledSkills((current) => {
+      if (checked) {
+        return current.includes(skillName) ? current : [...current, skillName];
+      }
+      return current.filter((item) => item !== skillName);
+    });
   }
 
   async function submit(event: FormEvent) {
@@ -40,6 +78,7 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
         instructions,
         provider_id: providerId,
         auto_memory: autoMemory,
+        enabled_skills: enabledSkills,
       });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -76,6 +115,70 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
         onChange={(event) => setInstructions(event.target.value)}
         placeholder="你是一个……"
       />
+
+      <div className="field-label">技能</div>
+      <div className="hint skills-toolbar">
+        <span className="workspace-path-preview">
+          技能库：{skillsRoot || "~/.super-personal-platform/skills"}
+        </span>
+        {onRefreshSkills && (
+          <button type="button" className="ghost-button ghost-small" onClick={onRefreshSkills}>
+            刷新
+          </button>
+        )}
+      </div>
+      <div className="hint">
+        只有启用的技能会出现在系统提示词。读取 /skills/&lt;name&gt;/SKILL.md 后，该技能声明的工具才会解锁；
+        文件工具始终可用。
+      </div>
+
+      <div className="skill-list">
+        {(skills ?? []).map((skill) => (
+          <label className="toggle-row" htmlFor={`agent-skill-${skill.name}`} key={skill.name}>
+            <input
+              id={`agent-skill-${skill.name}`}
+              type="checkbox"
+              checked={enabledSkills.includes(skill.name)}
+              disabled={!skill.can_enable}
+              onChange={(event) => toggleSkill(skill.name, event.target.checked)}
+            />
+            <span>
+              <strong>{skill.name}</strong>
+              <small>{skill.description}</small>
+              {skill.include_tools.length > 0 && (
+                <small>提供工具：{skill.include_tools.join(", ")}</small>
+              )}
+              <small className="skill-path">{skill.path}</small>
+              {skill.warnings.map((warning) => (
+                <small className="skill-warning" key={warning}>{warning}</small>
+              ))}
+            </span>
+          </label>
+        ))}
+        {missingSkills.map((skillName) => (
+          <label className="toggle-row" htmlFor={`agent-skill-missing-${skillName}`} key={skillName}>
+            <input
+              id={`agent-skill-missing-${skillName}`}
+              type="checkbox"
+              checked
+              onChange={() => toggleSkill(skillName, false)}
+            />
+            <span>
+              <strong>{skillName}</strong>
+              <small className="skill-warning">技能目录中未找到；取消勾选可移除。</small>
+            </span>
+          </label>
+        ))}
+      </div>
+      {(skills ?? []).length === 0 && missingSkills.length === 0 && (
+        <div className="empty-note">
+          还没有安装技能。把 SKILL.md 放到 {skillsRoot || "~/.super-personal-platform/skills"}/&lt;name&gt;/
+          后点刷新。
+        </div>
+      )}
+      {(skillsErrors ?? []).map((message) => (
+        <div className="hint skill-warning" key={message}>{message}</div>
+      ))}
 
       <label className="toggle-row" htmlFor="agent-auto-memory">
         <input

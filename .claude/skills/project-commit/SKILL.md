@@ -82,8 +82,10 @@ If the user explicitly asks to deploy v1 on the target machine:
 - `apps/web/dist/` **is** committed; include the rebuilt assets.
 - Do not reset or overwrite existing changes unless the user explicitly asks.
 - Do not assume a push synchronized `rc-clone`; it is an independent checkout.
-- v1 exposes no file/shell/browser/skills/memory tools and has no approval flow;
-  do not describe it as having those capabilities.
+- v1 has workspace filesystem tools, long-term memory, and a skills library
+  (per-agent enabled list; skill-provided tools unlock only after the model
+  reads the skill's `SKILL.md`). It has no shell/browser tools and no approval
+  flow; do not describe it as having those capabilities.
 - Production uses systemd + venv + SQLite. Docker deployment is deprecated:
   do not reintroduce Docker Compose, Dockerfiles, nginx, or Postgres.
 - If a commit workflow change is requested, update both `CLAUDE.md` and this

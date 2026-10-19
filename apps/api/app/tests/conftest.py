@@ -6,6 +6,7 @@ os.environ["APP_HOME"] = _TEST_ROOT
 os.environ["APP_DATABASE_URL"] = f"sqlite+aiosqlite:///{_TEST_ROOT}/test.db"
 os.environ["APP_DATA_DIR"] = _TEST_ROOT
 os.environ["APP_WORKSPACES_DIR"] = f"{_TEST_ROOT}/workspaces"
+os.environ["APP_SKILLS_DIR"] = f"{_TEST_ROOT}/skills"
 os.environ["APP_AUTH_TOKEN"] = "test-token"
 os.environ["LLM_API_KEY"] = "test-key"
 os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"

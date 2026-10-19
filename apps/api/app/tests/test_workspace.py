@@ -33,6 +33,29 @@ def test_build_backend_uses_workspace_directory() -> None:
     assert backend.cwd == (settings.workspaces_dir / "backend-proj").resolve()
 
 
+def test_build_backend_composes_skills_route(tmp_path: Path) -> None:
+    from deepagents.backends import CompositeBackend, FilesystemBackend
+
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("---\nname: demo\ndescription: Demo\n---\nbody\n")
+
+    backend = build_backend("skills-proj", skills_dir=skills_dir)
+    assert isinstance(backend, CompositeBackend)
+    assert isinstance(backend.default, FilesystemBackend)
+    assert isinstance(backend.routes["/skills/"], FilesystemBackend)
+
+    skill = backend.download_files(["/skills/demo/SKILL.md"])[0]
+    assert skill.error is None
+    assert skill.content is not None
+    assert b"name: demo" in skill.content
+
+    write = backend.write("/note.txt", "workspace note")
+    assert write.error is None
+    assert (settings.workspaces_dir / "skills-proj" / "note.txt").read_text() == "workspace note"
+
+
 def test_workspace_backend_reads_and_writes_real_files() -> None:
     backend = build_backend("io-project")
     write = backend.write("/note.txt", "hello workspace")
@@ -53,6 +76,7 @@ async def test_executor_invalid_workspace_fails_without_calling_model(tmp_path: 
         checkpoint_dir=tmp_path,
         agent_name="test",
         workspace_path="../escape",
+        enabled_skills=[],
     )
     events = [event async for event in executor.run(instructions="x", session_id="s-1", content="hi")]
     assert events

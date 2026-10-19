@@ -32,6 +32,7 @@ async def system_info(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
         "execution_core": "deepagents",
         "database": database_kind(settings.app_database_url),
         "workspace_root": str(settings.workspaces_dir.expanduser().resolve()),
+        "skills_root": str(settings.skills_dir.expanduser().resolve()),
         "run_timeout_seconds": settings.run_timeout_seconds,
         "max_history_messages": settings.max_history_messages,
         "counts": {
@@ -49,7 +50,7 @@ async def system_info(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
             "filesystem": True,
             "shell": False,
             "browser": False,
-            "skills": False,
+            "skills": True,
             "memory": True,
         },
     }

@@ -10,6 +10,7 @@ import type {
   Run,
   RunEvent,
   Session,
+  SkillInfo,
 } from "./types";
 import { ChatPanel } from "./components/ChatPanel";
 import { Drawer } from "./components/Drawer";
@@ -27,6 +28,8 @@ export default function App() {
   const [auth, setAuth] = useState<boolean | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skillsErrors, setSkillsErrors] = useState<string[]>([]);
   const [agentId, setAgentId] = useState("");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
@@ -99,6 +102,22 @@ export default function App() {
     }
     setAuth(true);
     await loadWorkspace();
+    await loadSkills().catch(() => undefined);
+  }
+
+  async function loadSkills() {
+    try {
+      const catalog = await api.listSkills();
+      setSkills(catalog.skills);
+      setSkillsErrors(catalog.errors);
+    } catch (exc) {
+      setSkillsErrors([errorText(exc)]);
+      throw exc;
+    }
+  }
+
+  function refreshSkills() {
+    void loadSkills().catch(() => undefined);
   }
 
   async function loadWorkspace() {
@@ -449,6 +468,8 @@ export default function App() {
     setAuth(false);
     setAgents([]);
     setProviders([]);
+    setSkills([]);
+    setSkillsErrors([]);
     setSessions([]);
     setMessages([]);
     setAgentId("");
@@ -501,6 +522,9 @@ export default function App() {
           agents={agents}
           agentId={agentId}
           providers={providers}
+          skills={skills}
+          skillsErrors={skillsErrors}
+          onRefreshSkills={refreshSkills}
           onSaveAgent={saveAgent}
           onSaveProvider={saveProvider}
           onCreateProvider={createProvider}
@@ -571,6 +595,9 @@ export default function App() {
           events={events}
           agent={agent}
           providers={providers}
+          skills={skills}
+          skillsErrors={skillsErrors}
+          onRefreshSkills={refreshSkills}
           onSaveAgent={saveAgent}
           onClose={() => setDrawerOpen(false)}
         />

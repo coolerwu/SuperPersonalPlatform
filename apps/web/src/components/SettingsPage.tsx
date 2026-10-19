@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
-import type { Agent, AgentSavePayload, Provider, SystemInfo } from "../types";
+import type { Agent, AgentSavePayload, Provider, SkillInfo, SystemInfo } from "../types";
 import { AgentEditor } from "./AgentEditor";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { ProviderCreateForm } from "./ProviderCreateForm";
@@ -11,6 +11,9 @@ type SettingsPageProps = {
   agents: Agent[];
   agentId: string;
   providers: Provider[];
+  skills: SkillInfo[];
+  skillsErrors: string[];
+  onRefreshSkills: () => void;
   onSaveAgent: (payload: AgentSavePayload) => Promise<void>;
   onSaveProvider: (
     providerId: string,
@@ -275,6 +278,10 @@ export function SettingsPage(props: SettingsPageProps) {
                   providers={props.providers}
                   saving={savingAgent}
                   workspaceRoot={system?.workspace_root}
+                  skills={props.skills}
+                  skillsErrors={props.skillsErrors}
+                  skillsRoot={system?.skills_root}
+                  onRefreshSkills={props.onRefreshSkills}
                   onSave={saveAgent}
                 />
                 <div className="danger-zone">
@@ -320,6 +327,10 @@ export function SettingsPage(props: SettingsPageProps) {
                 <div className="system-counts">
                   {system.counts.providers} providers · {system.counts.agents} agents ·{" "}
                   {system.counts.sessions} sessions · {system.counts.messages} messages
+                </div>
+
+                <div className="system-counts workspace-path-preview">
+                  Skills 目录：{system.skills_root}
                 </div>
 
                 <div className="capability-list">

@@ -1560,6 +1560,38 @@ textarea {
   line-height: 1.5;
 }
 
+.skills-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ghost-small {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.skill-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.skill-list .toggle-row {
+  margin-top: 0;
+}
+
+.skill-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+.skill-warning {
+  color: var(--warn);
+}
+
 .memory-toolbar {
   display: flex;
   align-items: center;

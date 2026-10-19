@@ -17,7 +17,8 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 ├── data/
 │   ├── app.db           # SQLite
 │   └── checkpoints/     # 每个 session 的 LangGraph checkpoint
-└── workspaces/          # Agent 真实工作区根目录
+├── workspaces/          # Agent 真实工作区根目录
+└── skills/              # 全局技能库（每个技能一个目录）
 ```
 
 启动目录下的 `.env` 会覆盖 home 配置，便于本地临时覆盖。
@@ -50,7 +51,8 @@ npm run dev
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
-- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell、浏览器或 skills 工具；
+- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell 或浏览器工具；
+- 技能：配置页可为当前 Agent 启用全局技能库里的技能；模型读取 `/skills/<name>/SKILL.md` 后，该技能声明的专用工具才会解锁；文件工具始终可用；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 
 ## 配置页
@@ -58,12 +60,45 @@ npm run dev
 侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；Provider/Agent 默认只显示列表，点「编辑」或条目再展开表单。**配置页始终编辑左上角侧边栏选中的 Agent，不提供第二套 Agent 选择**；切换 Agent 请使用侧边栏顶部的选择器。切换 Agent 时，Provider tab 会自动选中该 Agent 的 Provider，并清空输入框草稿。集中管理：
 
 - Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
-- Agent：选择并编辑名称、Provider、instructions、工作区，或新建 Agent；新建时未填写 instructions 会使用默认的中文个人助手提示词（能力说明 + 行为规范）；
+- Agent：选择并编辑名称、Provider、instructions、工作区、技能，或新建 Agent；新建时未填写 instructions 会使用默认的中文个人助手提示词（能力说明 + 行为规范）；
 - 工作区：每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/`，不支持自定义路径；配置页只读展示机器目录，并随左上角选中的 Agent 变化。Agent 可以查看和修改工作区内的文件；
+- 技能：配置页列出 `~/.super-personal-platform/skills/` 中扫描到的技能，按 Agent 勾选启用；未启用的技能不会进入系统提示，读取它的 SKILL.md 也不会解锁工具。磁盘上已删除但仍在启用列表里的技能会显示为“未找到”，可取消勾选移除；
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
 - 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
 
 Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流式片段，在右侧抽屉里展开查看。
+
+## Skills
+
+全局技能库存放在 `~/.super-personal-platform/skills/`（`APP_SKILLS_DIR` 可覆盖），每个技能一个目录：
+
+```text
+skills/
+└── <skill-name>/
+    ├── SKILL.md
+    └── 其他辅助文件（可选）
+```
+
+`SKILL.md` 必须有 YAML frontmatter，`name` 与目录名一致，`description` 用于系统提示里的技能列表：
+
+```markdown
+---
+name: example-skill
+description: 什么时候应该使用这个技能
+metadata:
+  include_tools: some_tool another_tool
+---
+
+# 技能正文
+模型读取本文件后会看到这里的完整说明。
+```
+
+- `metadata.include_tools` 必须是**空格分隔的工具名**（不是 YAML 列表、不用逗号）；这些名字对应平台代码注册表 `apps/api/app/services/skill_tools.py` 里的工具。
+- 未读取 `SKILL.md` 前，技能工具不会出现在模型工具列表里，调用会被当作未知工具；读取成功后，在同一会话内只要这段读取还在上下文中，工具就保持可用；上下文被摘要压缩掉后重新锁定。
+- 每次 Run 都会重新扫描技能目录并重新应用 Agent 的启用列表，所以新增/编辑技能或修改启用状态在下一轮对话生效。
+- 文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不受技能开关影响。
+- `/skills/**` 对 Agent 禁止写入，避免模型改写技能定义来绕过解锁。
+- v1 平台注册表为空，因此 `include_tools` 里的名字暂时不会产生可用工具；机制本身由后端测试覆盖。
 
 ## 记忆
 
@@ -81,7 +116,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
 生产数据都在 `~/.super-personal-platform/data/`：
 
 - `app.db`：SQLite（WAL），文件权限 600；
-  - `agents`：Agent 名称、instructions、Provider、workspace 配置；
+  - `agents`：Agent 名称、instructions、Provider、`enabled_skills`（启用的技能名 JSON 列表）；
   - `sessions`：会话，首次发送消息时才创建；标题取第一条用户消息前 24 个字；
   - `messages`：每条用户/assistant 消息一行，assistant 消息在 Run 完成时写入；
   - `runs`：每次发送/重试一行，含状态、input/output、错误、token 用量、时间；
@@ -91,6 +126,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区目录，名称为 Agent id；删除 Agent 不会删除这里的文件。
+- `~/.super-personal-platform/skills/`：全局技能库，由用户/运维维护；删除技能不会自动清理 Agent 的启用列表，运行时忽略不存在的技能。
 
 备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
 
@@ -103,6 +139,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
 | `APP_DATABASE_URL` | SQLAlchemy 数据库 URL | `sqlite+aiosqlite:///$APP_HOME/data/app.db` |
 | `APP_DATA_DIR` | 数据/checkpoint 目录 | `$APP_HOME/data` |
 | `APP_WORKSPACES_DIR` | 真实工作区根目录 | `$APP_HOME/workspaces` |
+| `APP_SKILLS_DIR` | 全局技能库根目录 | `$APP_HOME/skills` |
 | `LLM_BASE_URL` | OpenAI-compatible 端点 | `https://api.deepseek.com` |
 | `LLM_API_KEY` | 模型密钥 | 空 |
 | `LLM_MODEL` | 模型名 | `deepseek-v4-flash` |

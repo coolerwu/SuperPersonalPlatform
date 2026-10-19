@@ -2,7 +2,7 @@
 
 - 状态：现行
 - 最后更新：2026-10-19
-- 编号水位：F6
+- 编号水位：F10
 
 本文件是新项目的需求唯一来源。v1 从 0 到 1 重建，旧代码与旧数据模型已废弃；旧需求不再作为实现依据。
 
@@ -315,3 +315,37 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - 迁移或保留旧 `.super-personal-platform` 历史数据；
 - 多实例 / 多用户目录隔离；
 - 改变 workspace 的虚拟 / 真实目录语义。
+
+### F10 Skill 中间件（技能库 + 每 Agent 启用 + 技能工具解锁）
+
+- 状态：进行中
+- 日期：2026-10-19
+- 来源：用户要求接入 skill middleware，做到“用 skill 才解锁 tool”
+
+#### 功能点
+
+1. 全局技能库：技能放在 `~/.super-personal-platform/skills/<name>/SKILL.md`；`APP_SKILLS_DIR` 可覆盖。技能只通过文件系统维护，不做 CRUD UI。
+2. 每个 Agent 有 `enabled_skills` 启用列表；系统提示只列出当前 Agent 启用的技能。配置页编辑当前侧边栏选中的 Agent，不新增 Agent 选择器。
+3. FileMiddleware 提供的文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不参与解锁。
+4. 技能工具来自平台代码注册表（`apps/api/app/services/skill_tools.py`）；`SKILL.md` 的 `metadata.include_tools` 是空格分隔的工具名，只有注册表里存在的名字才生效。v1 注册表为空。
+5. 模型必须先用 `read_file` 读取 `/skills/<name>/SKILL.md`，该技能声明的工具才会在当次模型调用中披露并允许执行；读取之前工具不可见，调用会失败。
+6. 解锁在会话内保持：读取记录随 checkpoint 保留，只要技能读取还在上下文中就可用；被摘要压缩掉后自动重新锁定。
+7. 每次 Run 重新扫描技能目录并应用最新启用列表。
+8. `/skills/**` 对 Agent 禁止写入；Agent 不能通过改写 SKILL.md 注入 `include_tools`。
+9. `GET /api/skills` 返回扫描到的技能与解析错误；配置页展示技能名称、描述、声明工具、路径和警告。
+
+#### 验收标准
+
+- 配置页能看到全局技能库，并为当前 Agent 勾选/取消技能；保存后下一轮 Run 生效。
+- 未启用的技能不出现在系统提示中，读取它的 SKILL.md 不会解锁工具。
+- 技能工具在读取 SKILL.md 前不可见且不可调用，读取后在同一会话内可用。
+- Agent 无法写入 `/skills/**`。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 技能 CRUD UI/API、技能市场、版本管理、eval；
+- 技能目录内的 Python 插件动态加载；
+- 每 session 的技能启用、工具级细粒度权限；
+- 禁用技能的读取拦截（只做提示过滤与解锁门控）；
+- Shell / 浏览器工具、多用户隔离、技能沙箱。

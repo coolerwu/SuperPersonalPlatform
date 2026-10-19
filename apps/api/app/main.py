@@ -21,6 +21,7 @@ from app.routers.memories import router as memories_router
 from app.routers.providers import router as providers_router
 from app.routers.runs import router as runs_router
 from app.routers.sessions import router as sessions_router
+from app.routers.skills import router as skills_router
 from app.routers.system import router as system_router
 from app.services.run_service import seed_default_provider
 from app.services.worker import RunWorker
@@ -52,6 +53,7 @@ LEGACY_DEFAULT_MARKERS = (
     "当前版本你只支持聊天",
     "你是 Agent Command Center 里的个人助理",
     "你是 Hermes Agent，由 Nous Research 构建",
+    "你没有 Shell、浏览器或 skills 工具；需要这些能力时直接说明，不要假装拥有。",
 )
 
 
@@ -74,6 +76,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
         settings.app_data_dir.mkdir(parents=True, exist_ok=True)
         settings.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
+        settings.skills_dir.expanduser().mkdir(parents=True, exist_ok=True)
         await init_db()
         await seed_default_provider()
         await seed_default_agent()
@@ -104,6 +107,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(chat_router)
     app.include_router(memories_router)
     app.include_router(runs_router)
+    app.include_router(skills_router)
     app.include_router(system_router)
 
     @app.get("/api/health")

@@ -19,6 +19,7 @@ def test_default_agent_and_provider(client) -> None:
     assert "工作区" in payload[0]["instructions"]
     assert "保持直接" in payload[0]["instructions"]
     assert "简体中文" in payload[0]["instructions"]
+    assert "SKILL.md" in payload[0]["instructions"]
 
     providers = client.get("/api/providers").json()
     assert providers[0]["id"] == "default"
@@ -95,8 +96,10 @@ def test_provider_create_and_system_info(client) -> None:
     assert info["version"] == "0.1.0"
     assert info["database"] == "sqlite"
     assert info["capabilities"]["filesystem"] is True
+    assert info["capabilities"]["skills"] is True
     assert info["capabilities"]["chat"] is True
     assert info["capabilities"]["memory"] is True
+    assert info["skills_root"]
     assert info["counts"]["providers"] >= 2
     assert info["counts"]["agents"] >= 1
 
