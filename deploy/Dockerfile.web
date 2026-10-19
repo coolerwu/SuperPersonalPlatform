@@ -3,7 +3,11 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY apps/web/package.json apps/web/package-lock.json ./
-RUN npm ci
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
+
+RUN npm config set fetch-timeout 120000 \
+    && npm config set fetch-retries 5 \
+    && npm ci --no-audit --no-fund
 
 COPY apps/web/ ./
 RUN npm run build
