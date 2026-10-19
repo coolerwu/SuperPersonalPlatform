@@ -15,9 +15,9 @@ def test_default_agent_and_provider(client) -> None:
     assert payload
     assert payload[0]["name"] == "Assistant"
     assert payload[0]["provider_name"] == "DeepSeek"
-    assert "Be direct" in payload[0]["instructions"]
-    assert "chat-only" in payload[0]["instructions"]
-    assert "Simplified Chinese" in payload[0]["instructions"]
+    assert "保持直接" in payload[0]["instructions"]
+    assert "只支持聊天" in payload[0]["instructions"]
+    assert "简体中文" in payload[0]["instructions"]
 
     providers = client.get("/api/providers").json()
     assert providers[0]["id"] == "default"

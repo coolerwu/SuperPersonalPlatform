@@ -19,7 +19,7 @@
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
 - v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs，以及集中配置页。
 - v1 不暴露 filesystem / skills / memory / shell / browser，也没有审批。
-- 默认 Assistant 的 instructions 参考 Hermes Agent 的默认身份 behavior spec：直接、长度匹配问题、无 filler、反谄媚、深度按需；默认简体中文回复，并明确 v1 只有 Chat。
+- 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec：直接、长度匹配问题、无 filler、反谄媚、深度按需；默认简体中文回复，并明确 v1 只有 Chat。
 - UI 视觉方向：明亮简洁（浅色画布 + 悬浮输入卡片），assistant 消息按 Markdown 渲染；依赖 `react-markdown`、`remark-gfm`、`rehype-highlight`。
 - 消息操作：复制、引用、失败 Run 重试；不做编辑/重新生成/删除单条消息（需要 checkpoint 分支方案）。
 - Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints；有活动 Run 时 409。
