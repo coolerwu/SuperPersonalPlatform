@@ -30,10 +30,10 @@ npm run dev
 ## Chat
 
 - 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec；
-- assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
+- 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
-- 空状态提供建议提示词。
+- 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 
 ## 配置页
 

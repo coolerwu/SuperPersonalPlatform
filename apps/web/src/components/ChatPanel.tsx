@@ -107,7 +107,7 @@ export function ChatPanel(props: ChatPanelProps) {
           message.role === "user" ? (
             <div key={message.id} className="message-row user">
               <div className="message-bubble user">
-                <div className="message-content plain">{message.content}</div>
+                <Markdown content={message.content} />
                 <div className="message-meta">你 · {formatTime(message.created_at)}</div>
                 <div className="message-actions">
                   <CopyButton text={message.content} />
@@ -188,7 +188,7 @@ export function ChatPanel(props: ChatPanelProps) {
             <div className="composer-hint">
               {props.activeRun && <span className={`status-dot ${props.activeRun.status}`} />}
               <span>{props.activeRun ? props.activeRun.status : "idle"}</span>
-              <span className="composer-shortcut">Enter 发送 · Shift+Enter 换行</span>
+              <span className="composer-shortcut">Enter 发送 · Shift+Enter 换行 · Markdown</span>
             </div>
             <div className="composer-actions">
               {props.sending ? (

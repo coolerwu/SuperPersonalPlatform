@@ -28,6 +28,35 @@ export function Sidebar(props: SidebarProps) {
         </div>
       </div>
 
+      <div className="sidebar-actions">
+        <button className="sidebar-action" onClick={props.onNewSession}>
+          <span className="sidebar-action-icon">+</span>
+          <span>新对话</span>
+        </button>
+        <button
+          className={`sidebar-action ${props.settingsActive ? "active" : ""}`}
+          onClick={props.onOpenSettings}
+        >
+          <span className="sidebar-action-icon">
+            <svg
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
+              <circle cx="16" cy="7" r="2" />
+              <circle cx="8" cy="17" r="2" />
+            </svg>
+          </span>
+          <span>配置</span>
+        </button>
+      </div>
+
       <div className="sidebar-section">
         <div className="field-label">Agent</div>
         <div className="agent-row">
@@ -48,7 +77,6 @@ export function Sidebar(props: SidebarProps) {
       <div className="sidebar-section sessions-section">
         <div className="section-heading">
           <span>会话</span>
-          <button className="icon-button" title="新建会话" onClick={props.onNewSession}>+</button>
         </div>
         <div className="session-list">
           {props.sessions.length === 0 && <div className="empty-note">还没有会话</div>}
@@ -80,12 +108,6 @@ export function Sidebar(props: SidebarProps) {
       </div>
 
       <div className="sidebar-footer">
-        <button
-          className={`ghost-button ${props.settingsActive ? "active" : ""}`}
-          onClick={props.onOpenSettings}
-        >
-          配置
-        </button>
         <button className="ghost-button" onClick={props.onLogout}>退出登录</button>
       </div>
     </aside>

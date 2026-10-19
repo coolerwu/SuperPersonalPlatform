@@ -274,6 +274,7 @@ textarea {
 }
 
 .app-shell:not(.with-drawer) {
+  --chat-lane: 1040px;
   grid-template-columns: 272px minmax(0, 1fr);
 }
 
@@ -383,6 +384,46 @@ textarea {
   margin-top: 3px;
 }
 
+.sidebar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+
+.sidebar-action:hover {
+  background: rgba(32, 36, 42, 0.04);
+}
+
+.sidebar-action.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.sidebar-action-icon {
+  width: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+.sidebar-action.active .sidebar-action-icon {
+  color: var(--accent);
+}
+
 .sidebar-footer {
   display: flex;
   gap: 8px;
@@ -392,12 +433,7 @@ textarea {
 
 .sidebar-footer .ghost-button {
   flex: 1;
-}
-
-.sidebar-footer .ghost-button.active {
-  color: var(--accent);
-  border-color: rgba(15, 118, 110, 0.3);
-  background: var(--accent-soft);
+  width: 100%;
 }
 
 .chat-column {
@@ -546,7 +582,7 @@ textarea {
 
 .message-bubble.assistant {
   flex: 1;
-  max-width: calc(100% - 44px);
+  max-width: min(820px, calc(100% - 44px));
   padding: 2px 0 0;
   border: 0;
   background: transparent;
