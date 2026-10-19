@@ -97,12 +97,6 @@ def build_backend(workspace_path: str):
     return FilesystemBackend(root_dir=root, virtual_mode=True)
 
 
-def build_filesystem_middleware(backend: Any):
-    from deepagents import FilesystemMiddleware
-
-    return FilesystemMiddleware(backend=backend)
-
-
 class DeepAgentExecutor:
     def __init__(
         self,
@@ -160,7 +154,6 @@ class DeepAgentExecutor:
                     system_prompt=system_prompt,
                     checkpointer=checkpointer,
                     backend=backend,
-                    middleware=[build_filesystem_middleware(backend)],
                     name=self.agent_name or "assistant",
                 )
                 config = {

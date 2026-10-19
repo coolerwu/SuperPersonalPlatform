@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.config import settings
 from app.db import _backfill_agent_workspaces, _ensure_agent_workspace_columns
 from app.main import create_app
-from app.services.executor import DeepAgentExecutor, build_backend, build_filesystem_middleware
+from app.services.executor import DeepAgentExecutor, build_backend
 
 
 def _create_agent(client, name: str) -> dict:
@@ -183,12 +183,6 @@ def test_build_backend_uses_workspace_directory() -> None:
     assert isinstance(backend, FilesystemBackend)
     assert backend.virtual_mode is True
     assert backend.cwd == (settings.workspaces_dir / "backend-proj").resolve()
-
-
-def test_filesystem_middleware_exposes_workspace_tools() -> None:
-    middleware = build_filesystem_middleware(build_backend("middleware-proj"))
-    names = {tool.name for tool in middleware.tools}
-    assert {"ls", "read_file", "write_file", "edit_file", "glob", "grep"} <= names
 
 
 def test_workspace_backend_reads_and_writes_real_files() -> None:
