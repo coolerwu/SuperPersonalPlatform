@@ -93,3 +93,21 @@ def test_provider_create_rejects_blank_fields(client) -> None:
         json={"name": "   ", "base_url": " ", "model": " "},
     )
     assert response.status_code == 400
+
+
+def test_web_dist_and_spa_fallback(client) -> None:
+    root = client.get("/")
+    assert root.status_code == 200
+    assert "Agent Command Center" in root.text
+    assert root.headers["cache-control"] == "no-cache"
+
+    spa = client.get("/chat")
+    assert spa.status_code == 200
+    assert "Agent Command Center" in spa.text
+
+    assert client.get("/api/does-not-exist").status_code == 404
+
+
+def test_timestamps_are_utc(client) -> None:
+    created_at = client.get("/api/providers").json()[0]["created_at"]
+    assert created_at.endswith("Z") or created_at.endswith("+00:00")

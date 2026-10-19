@@ -41,34 +41,34 @@ Use this skill to finish changes in `/Users/wulang/Desktop/AI/SuperPersonalPlatf
 
 ## Deployment (v1)
 
-Production deployment source is **GitHub pull** from `origin`. Do not deploy
-from a developer working tree or a mutable `rc-clone`. The legacy systemd
-service is not used for v1.
+Production runs as a **user-level systemd service** on the host:
+`qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`, Python venv, SQLite,
+port 8888. FastAPI serves `apps/web/dist` directly. Docker Compose, nginx, and
+Postgres containers are not used in production.
 
-Current v1 production: `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`,
-Docker Compose, port 8888. The legacy service is stopped and disabled; its
-unit, checkout, and data have been removed, so there is no legacy rollback.
-Roll back v1 by checking out a previously verified commit and rebuilding.
-
-If the user explicitly asks to deploy v1 on a target machine:
+If the user explicitly asks to deploy v1 on the target machine:
 
 1. Push the target branch to `origin` first and record the pushed SHA.
-2. On the target host, check out/pull the branch into a v1 directory; do not
-   deploy from a developer working tree. Verify `git rev-parse HEAD` equals the
-   pushed SHA and `git status --short` is clean.
-3. Ensure `deploy/.env` exists on the target with `APP_AUTH_TOKEN`, a valid
-   `LLM_API_KEY`, and `POSTGRES_PASSWORD`; never commit that file.
-4. From the target repository root run:
-   `docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`
-5. Verify with:
-   `docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps`
-   and `curl --noproxy '*' http://127.0.0.1:8888/api/health`.
-6. Report pull/HEAD, build, service status, and health separately. Do not claim
-   deployment success if any phase failed.
-7. Direct tarball/image copy is only an explicit emergency fallback. If used,
-   build from a committed SHA, exclude `.env`/`data/`/`.venv/`/`node_modules/`,
-   deploy to a new directory, and record the SHA/hash.
-8. Never put SSH/sudo passwords or API keys in repository files or command text.
+2. On the target host:
+   `cd ~/SuperPersonalPlatform-v1-deploy && git pull --ff-only origin main`
+   Verify `git rev-parse HEAD` equals the pushed SHA and `git status --short` is clean.
+3. If `apps/api/pyproject.toml` changed, run `.venv/bin/pip install -e apps/api`.
+4. If `deploy/agent-command-center.service` changed, copy it to
+   `~/.config/systemd/user/` and run `systemctl --user daemon-reload`.
+5. Restart the service:
+   `systemctl --user restart agent-command-center.service`
+6. Verify separately with:
+   `systemctl --user is-active agent-command-center.service`
+   `curl --noproxy '*' http://127.0.0.1:8888/api/health`
+   Authenticate with `APP_AUTH_TOKEN` from `deploy/.env` without printing it.
+7. Report pull/HEAD, dependency install, service state, and health separately.
+   Do not claim deployment success if any phase failed.
+8. Never put SSH/sudo passwords, API keys, or tokens in repository files or
+   command text.
+9. Do not delete `data/` or `deploy/.env`. Back up `data/app.db` and
+   `data/checkpoints/` before schema changes.
+10. Docker Compose files remain for optional local use only; do not start them
+    in production.
 
 ## Guardrails
 
@@ -81,6 +81,8 @@ If the user explicitly asks to deploy v1 on a target machine:
 - Do not assume a push synchronized `rc-clone`; it is an independent checkout.
 - v1 exposes no file/shell/browser/skills/memory tools and has no approval flow;
   do not describe it as having those capabilities.
+- Production uses systemd + venv + SQLite; do not reintroduce Docker Compose,
+  nginx, or Postgres unless the user explicitly asks.
 - If a commit workflow change is requested, update both `CLAUDE.md` and this
   skill before continuing.
 - Include the exact test/build commands and their outcomes in the final response.

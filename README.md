@@ -4,7 +4,8 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 
 - `apps/api`：FastAPI + deepagents + LangGraph
 - `apps/web`：React + Vite + TypeScript
-- `deploy/`：Docker Compose（Postgres + API + Web）
+- `deploy/`：systemd unit；Docker Compose 仅作为可选本地运行方式
+- 生产：宿主机 systemd + venv + SQLite，单进程监听 8888
 
 ## 本地开发
 
@@ -36,7 +37,9 @@ npm run dev
 
 Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流式片段，在右侧抽屉里展开查看。
 
-## Docker Compose
+## Docker Compose（可选本地运行）
+
+生产不使用 Docker；下面仅用于想在本地一次性起 Postgres + API + Web 的场景。
 
 ```bash
 cp deploy/.env.example deploy/.env
@@ -65,48 +68,48 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
 cd apps/web && npm run build
 ```
 
-生产 Web 镜像只把已提交的 `dist` 复制进 nginx，不在服务器上安装 Node/npm。
+生产不再构建 Web 镜像：FastAPI 直接托管已提交的 `apps/web/dist`（含 SPA fallback），API 和页面在同一个进程里。
 
-## V1 生产部署（GitHub pull）
+## V1 生产部署（宿主机 systemd + SQLite）
 
-v1 部署以 GitHub 的 `main` 分支为准，不从本地工作目录直接复制。
+生产机：`qiuqiu@192.168.1.3`，目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，数据在 `data/app.db` 和 `data/checkpoints`。
 
-```bash
-git push origin main
-```
-
-在目标机新建 v1 目录并拉取：
+首次准备：
 
 ```bash
-git clone --branch main https://github.com/coolerwu/SuperPersonalPlatform.git ~/SuperPersonalPlatform-v1-deploy
-```
-
-```bash
-cd ~/SuperPersonalPlatform-v1-deploy && git rev-parse HEAD && git status --short
-```
-
-确认 HEAD 等于本地刚 push 的 SHA、工作区干净后：
-
-```bash
+cd ~/SuperPersonalPlatform-v1-deploy
+python3.12 -m venv .venv
+.venv/bin/pip install -e apps/api
 cp deploy/.env.example deploy/.env
-# 填 APP_AUTH_TOKEN、LLM_API_KEY、POSTGRES_PASSWORD、WEB_PORT
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+# 填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
+mkdir -p data
+cp deploy/agent-command-center.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now agent-command-center.service
 ```
 
+日常更新：
+
 ```bash
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps
+cd ~/SuperPersonalPlatform-v1-deploy
+git pull --ff-only origin main
+# 只有 pyproject 依赖变化时才需要重新安装
+.venv/bin/pip install -e apps/api
+systemctl --user restart agent-command-center.service
 curl --noproxy '*' http://127.0.0.1:8888/api/health
 ```
 
-旧 8888 服务已停止并禁用；v1 现在监听 8888。旧 unit、旧仓库与 `.super-personal-platform/` 数据已删除，不能回滚到旧 systemd 服务。
+`deploy/agent-command-center.service` 使用 `deploy/.env` 作为 `EnvironmentFile`，并强制 `APP_DATABASE_URL=sqlite+aiosqlite:///./data/app.db`、`APP_DATA_DIR=./data`。用户级服务依赖 linger（`loginctl show-user qiuqiu -p Linger` 应为 `yes`），否则退出登录后进程会被回收。
 
-回滚 v1 版本：在部署目录 checkout 上一个已验证的提交，然后重新构建：
+回滚 v1 版本：checkout 上一个已验证的提交，重新安装依赖（如需要）并重启：
 
 ```bash
-cd ~/SuperPersonalPlatform-v1-deploy && git checkout <commit> && docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+cd ~/SuperPersonalPlatform-v1-deploy && git checkout <commit> && systemctl --user restart agent-command-center.service
 ```
 
-当前生产 v1 部署在 `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，监听 8888。
+备份：停服务后复制 `data/app.db` 和 `data/checkpoints/`；或在服务运行时用 SQLite backup API 导出 `app.db`。`data/` 已被 Git 忽略，不会提交。
+
+当前生产为宿主机 systemd + SQLite，不再使用 Docker Compose、nginx 或 Postgres 容器。
 
 ## 测试
 

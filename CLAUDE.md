@@ -14,8 +14,9 @@
 - `apps/api`：FastAPI + deepagents + LangGraph。
 - `apps/web`：React + Vite + TypeScript。
 - `packages/contracts`：API 契约/共享类型。
-- `deploy/`：Docker Compose（Postgres + API + Web）。
+- `deploy/`：systemd unit（生产）；Docker Compose 仅作为可选本地运行方式。
 - 执行核：`AgentExecutor` 端口 + `DeepAgentExecutor`；平台拥有 session/messages/run，deepagents checkpointer 只存 Agent 状态。
+- 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
 - v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs，以及集中配置页。
 - v1 不暴露 filesystem / skills / memory / shell / browser，也没有审批。
 - 配置页集中管理 Provider（查看/新增/编辑）、Agent 和运行环境；`GET /api/system` 只返回非敏感信息。
@@ -26,6 +27,8 @@
 - 每次用户消息或手动运行创建一个 Run；状态：`queued / running / completed / failed / cancelled`。
 - 同一 session 最多一个活动 Run。
 - Run 事件 append-only，存 `run_events` 表；其中 `assistant_delta` 是每个流式片段一行，SSE/轮询和刷新恢复依赖它。前端默认折叠原始片段，仅保留 Run/工具/子 Agent/用量等可读事件。
+- 生产数据库是 SQLite：`~/SuperPersonalPlatform-v1-deploy/data/app.db`；checkpoint 在同目录 `checkpoints/`。时间列用 `UTCDateTime` 保证 SQLite 读回仍是 UTC。
+- SQLite 开启 WAL 和 `busy_timeout=5000`，API 与 worker 同进程，不另起服务。
 - 每 session 一个 checkpoint thread；刷新/重启后可继续。
 - 不把旧 `.super-personal-platform/` 当作数据源；它只是历史用户数据，保持未提交。
 - 密钥只通过环境变量/secret file 提供，不写入仓库、日志或前端响应。
@@ -51,7 +54,7 @@ cd apps/web && npm run build
 ## 前端构建产物
 
 - `apps/web/dist` 提交到仓库；修改前端后执行 `cd apps/web && npm run build`，把新的 `dist` 一起提交。
-- 生产 Web 镜像只复制已提交的 `dist`，不在生产机安装 Node/npm。
+- 生产由 FastAPI 直接托管 `apps/web/dist`（SPA fallback 到 `index.html`）；不构建 Web 镜像，也不在生产机安装 Node/npm。
 
 ## 提交约定
 
@@ -59,9 +62,9 @@ cd apps/web && npm run build
 - `git status --short` 确认范围；不要提交 `.super-personal-platform/`、`.env`、`data/`。
 - 需要提交时执行 `.claude/skills/project-commit/SKILL.md`；该技能需要随新栈更新。
 - 只 push `origin`（GitHub）。本地的 `rc-clone` 是独立 checkout，push 不会改动它；需要同步时在 `rc-clone` 里单独 `git pull`，不要从当前仓库对它执行 pull/reset。
-- 当前 v1 生产：`qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，Docker Compose，端口 8888；旧服务已 stop + disable，旧 unit、旧仓库与旧数据已删除，不能再回滚到旧 systemd 服务。
-- 生产从 GitHub `main` pull；`deploy/.env` 只存在目标机本地，不提交。`apps/web/dist` 提交到仓库，生产 Web 镜像只复制 dist。
-- 生产部署流程见 `README.md` 和 `.claude/skills/project-commit/SKILL.md`。
+- 当前 v1 生产：`qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，用户级 systemd 服务 `agent-command-center.service`，venv + SQLite，监听 8888。旧 Docker Compose / Postgres / nginx 已停用；旧 unit、旧仓库与旧数据已删除，不能回滚到旧平台。
+- 生产从 GitHub `main` pull；`deploy/.env` 只存在目标机本地，不提交，作为 systemd `EnvironmentFile`。`apps/web/dist` 提交到仓库，由 FastAPI 直接托管。
+- 部署流程见 `README.md` 和 `.claude/skills/project-commit/SKILL.md`。
 
 ## 文档同步
 

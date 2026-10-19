@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from app import APP_VERSION
@@ -78,6 +81,21 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict[str, bool]:
         return {"ok": True}
+
+    web_dist = (Path(__file__).resolve().parents[2] / "web" / "dist").resolve()
+    if (web_dist / "index.html").is_file():
+        assets_dir = web_dist / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        async def serve_web(path: str) -> FileResponse:
+            if path == "api" or path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="not found")
+            candidate = (web_dist / path).resolve()
+            if candidate.is_file() and candidate.is_relative_to(web_dist):
+                return FileResponse(candidate)
+            return FileResponse(web_dist / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
 

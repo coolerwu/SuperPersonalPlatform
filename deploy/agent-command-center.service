@@ -1,0 +1,18 @@
+[Unit]
+Description=Agent Command Center (v1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/SuperPersonalPlatform-v1-deploy
+EnvironmentFile=%h/SuperPersonalPlatform-v1-deploy/deploy/.env
+Environment=APP_DATABASE_URL=sqlite+aiosqlite:///./data/app.db
+Environment=APP_DATA_DIR=./data
+ExecStart=%h/SuperPersonalPlatform-v1-deploy/.venv/bin/uvicorn app.main:app --app-dir apps/api --host 0.0.0.0 --port 8888
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

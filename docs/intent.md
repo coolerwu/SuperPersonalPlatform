@@ -2,7 +2,7 @@
 
 - 状态：现行
 - 最后更新：2026-10-19
-- 编号水位：F2
+- 编号水位：F3
 
 本文件是新项目的需求唯一来源。v1 从 0 到 1 重建，旧代码与旧数据模型已废弃；旧需求不再作为实现依据。
 
@@ -108,3 +108,37 @@
 - Provider 删除、密钥轮换审计；
 - 多用户/RBAC；
 - 事件保留策略与自动清理。
+
+### F3 生产改为宿主机 systemd + SQLite
+
+- 状态：进行中
+- 日期：2026-10-19
+- 来源：F2 部署反馈
+
+#### 背景
+
+v1 生产使用 Docker Compose（Postgres + API + Web）。容器层增加了构建、日志、卷备份和端口映射的运维成本；用户希望回到可直接改代码、直接重启的宿主机运行方式。
+
+#### 功能点
+
+1. 生产改为用户级 systemd 服务 + 仓库内 venv，单进程监听 8888。
+2. 数据库改为 SQLite，文件位于部署目录 `data/app.db`；checkpoint 在 `data/checkpoints/`。
+3. FastAPI 直接托管 `apps/web/dist`，提供 SPA fallback；生产不再使用 nginx。
+4. 时间列使用 UTC-aware 类型，SQLite 读回仍带时区。
+5. SQLite 开启 WAL 与 busy timeout。
+6. 现有 Postgres 数据一次性迁移到 SQLite，保留 Provider、Agent、Session、Message、Run、RunEvent。
+
+#### 验收标准
+
+- 生产只有一个 systemd 服务在 8888 监听，Docker 容器全部停止。
+- 原有数据条数与迁移前一致，前端能正常登录、看会话和 Run。
+- 刷新/重启服务后会话与 Run 可恢复。
+- `/api/health` 200；`/api/system` 返回 sqlite。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 多实例/高可用；
+- Postgres 与 SQLite 双写；
+- 容器回滚路径；
+- Agent 工具能力（文件/Shell/浏览器）。
