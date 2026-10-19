@@ -1288,6 +1288,30 @@ textarea {
   margin: 0 auto;
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  width: max-content;
+}
+
+.settings-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+}
+
+.settings-tabs button.active {
+  background: #fff;
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
 .settings-card {
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -1990,6 +2014,14 @@ textarea {
 
   .memory-toolbar .ghost-button {
     width: 100%;
+  }
+
+  .settings-tabs {
+    width: 100%;
+  }
+
+  .settings-tabs button {
+    flex: 1;
   }
 
   .memory-form-row {

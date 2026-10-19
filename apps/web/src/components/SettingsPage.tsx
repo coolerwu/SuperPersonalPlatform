@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
 import type { Agent, Provider, SystemInfo } from "../types";
@@ -46,6 +46,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
 };
 
 export function SettingsPage(props: SettingsPageProps) {
+  const [tab, setTab] = useState<"provider" | "agent" | "runtime">("provider");
   const [providerId, setProviderId] = useState("");
   const [creatingProvider, setCreatingProvider] = useState(false);
   const [savingProvider, setSavingProvider] = useState(false);
@@ -58,6 +59,11 @@ export function SettingsPage(props: SettingsPageProps) {
 
   const provider = props.providers.find((item) => item.id === providerId) ?? props.providers[0];
   const agent = props.agents.find((item) => item.id === props.agentId);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [tab]);
 
   useEffect(() => {
     if (!props.providers.some((item) => item.id === providerId)) {
@@ -132,8 +138,33 @@ export function SettingsPage(props: SettingsPageProps) {
         <button className="ghost-button" onClick={props.onClose}>返回对话</button>
       </header>
 
-      <div className="settings-scroll">
+      <div className="settings-scroll" ref={scrollRef}>
         <div className="settings-lane">
+          <div className="settings-tabs">
+            <button
+              type="button"
+              className={tab === "provider" ? "active" : ""}
+              onClick={() => setTab("provider")}
+            >
+              Provider
+            </button>
+            <button
+              type="button"
+              className={tab === "agent" ? "active" : ""}
+              onClick={() => setTab("agent")}
+            >
+              Agent
+            </button>
+            <button
+              type="button"
+              className={tab === "runtime" ? "active" : ""}
+              onClick={() => setTab("runtime")}
+            >
+              运行环境
+            </button>
+          </div>
+
+          {tab === "provider" && (
           <section className="settings-card">
             <div className="settings-card-head">
               <div>
@@ -177,7 +208,9 @@ export function SettingsPage(props: SettingsPageProps) {
             <div className="settings-subhead">编辑 {provider?.name ?? "Provider"}</div>
             <ProviderSettings provider={provider} saving={savingProvider} onSave={saveProvider} />
           </section>
+          )}
 
+          {tab === "agent" && (
           <section className="settings-card">
             <div className="settings-card-head">
               <div>
@@ -222,7 +255,9 @@ export function SettingsPage(props: SettingsPageProps) {
               </div>
             )}
           </section>
+          )}
 
+          {tab === "runtime" && (
           <section className="settings-card">
             <div className="settings-card-head">
               <div>
@@ -259,6 +294,7 @@ export function SettingsPage(props: SettingsPageProps) {
               </>
             )}
           </section>
+          )}
         </div>
       </div>
 
