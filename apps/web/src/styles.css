@@ -339,17 +339,6 @@ textarea {
   font-size: 13px;
 }
 
-.workspace-config {
-  flex: 0 0 auto;
-}
-
-.workspace-error {
-  margin: 6px 0 0 29px;
-  color: var(--danger);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
 .sessions-section {
   flex: 1;
   min-height: 0;

@@ -70,11 +70,6 @@ class AgentOut(BaseModel):
     updated_at: datetime
 
 
-class WorkspaceOut(BaseModel):
-    path: str
-    name: str
-
-
 class SessionCreate(BaseModel):
     title: str | None = None
 

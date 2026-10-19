@@ -122,7 +122,7 @@ class RunWorker:
                 memory_context=memory_context,
                 workspace_path=agent.workspace_path or agent.id,
             )
-            instructions = agent.instructions or "You are a helpful assistant."
+            instructions = agent.instructions
             auto_memory = agent.auto_memory
             agent_id = agent.id
             session_id = session.id

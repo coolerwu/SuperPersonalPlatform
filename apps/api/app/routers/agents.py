@@ -10,6 +10,7 @@ from app.auth import require_auth
 from app.config import settings
 from app.db import get_db
 from app.models import Agent, MemoryItem, Message, Provider, Run, RunEvent, RunMemory, Session, new_id
+from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.schemas import AgentCreate, AgentOut, AgentUpdate
 from app.services.workspace import WorkspaceError, prepare_workspace
 
@@ -59,7 +60,7 @@ async def create_agent(payload: AgentCreate, db: AsyncSession = Depends(get_db))
     agent = Agent(
         id=agent_id,
         name=payload.name.strip(),
-        instructions=payload.instructions,
+        instructions=payload.instructions.strip() or DEFAULT_AGENT_INSTRUCTIONS,
         provider_id=provider.id,
         status="active",
         auto_memory=payload.auto_memory,

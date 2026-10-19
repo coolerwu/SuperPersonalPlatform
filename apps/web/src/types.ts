@@ -24,11 +24,6 @@ export type AgentSavePayload = {
   workspace_path: string;
 };
 
-export type WorkspaceOption = {
-  path: string;
-  name: string;
-};
-
 export type Provider = {
   id: string;
   name: string;

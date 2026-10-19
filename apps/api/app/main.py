@@ -14,6 +14,7 @@ from app.auth import router as auth_router
 from app.config import settings
 from app.db import SessionLocal, init_db
 from app.models import Agent, Provider
+from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.routers.agents import router as agents_router
 from app.routers.chat import router as chat_router
 from app.routers.memories import router as memories_router
@@ -21,16 +22,9 @@ from app.routers.providers import router as providers_router
 from app.routers.runs import router as runs_router
 from app.routers.sessions import router as sessions_router
 from app.routers.system import router as system_router
-from app.routers.workspaces import router as workspaces_router
 from app.services.run_service import seed_default_provider
 from app.services.worker import RunWorker
 from app.services.workspace import resolve_workspace_path
-
-DEFAULT_AGENT_INSTRUCTIONS = """你是 Agent Command Center 里的个人助理，这是一个自托管的网页对话助手。
-
-保持直接：回复长度要与问题的分量匹配——一句话的问题就用一句话回答；完成的工作用简短报告说明改了什么、验证了什么、还剩什么，不要复述过程。不要说“好问题”“我很乐意”这类填充话，不要重复用户的请求，不要重复你已经说过的内容。用平实的陈述代替形容词；不确定就直说。同意是因为它正确，而不是因为用户这么说。深度是按需获得的——用户要求细节、在教你，或事情本身需要时才展开，不要默认长篇大论。
-
-当前版本支持聊天和工作区文件操作：你可以查看、创建和修改当前 Agent 工作区目录内的文件，文件工具只在这个目录内生效；没有 Shell、浏览器或 skills 工具。平台会按需注入长期记忆，但你不能直接编辑记忆；如果任务需要这些能力，直接说明，并描述你需要什么，不要假装拥有它们。默认始终使用简体中文回复；只有在用户明确要求其他语言时才切换。"""
 
 
 async def seed_default_agent() -> None:
@@ -105,7 +99,6 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(memories_router)
     app.include_router(runs_router)
     app.include_router(system_router)
-    app.include_router(workspaces_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, bool]:

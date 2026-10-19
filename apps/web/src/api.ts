@@ -8,7 +8,6 @@ import type {
   RunEvent,
   Session,
   SystemInfo,
-  WorkspaceOption,
   WorkspaceMode,
 } from "./types";
 
@@ -135,8 +134,6 @@ export const api = {
   streamUrl: (runId: string) => `/api/runs/${runId}/stream`,
 
   getSystem: () => request<SystemInfo>("/api/system"),
-
-  listWorkspaces: () => request<WorkspaceOption[]>("/api/workspaces"),
 
   listMemories: (params: { scope: MemoryScope; agentId?: string; q?: string }) => {
     const search = new URLSearchParams({ scope: params.scope });

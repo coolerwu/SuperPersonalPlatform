@@ -26,6 +26,14 @@ def test_default_agent_and_provider(client) -> None:
     assert providers[0]["has_api_key"] is True
 
 
+def test_new_agent_defaults_to_hermes_instructions(client) -> None:
+    created = client.post("/api/agents", json={"name": "Default instructions"})
+    assert created.status_code == 201
+    instructions = created.json()["instructions"]
+    assert "保持直接" in instructions
+    assert "简体中文" in instructions
+
+
 def test_agent_and_session_isolation(client) -> None:
     first_agent = client.get("/api/agents").json()[0]["id"]
     created = client.post("/api/agents", json={"name": "Second", "instructions": "Be terse."})

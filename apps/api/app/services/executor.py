@@ -144,7 +144,7 @@ class DeepAgentExecutor:
                 stream_usage=True,
             )
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
-                system_prompt = instructions or "You are a helpful assistant."
+                system_prompt = instructions
                 if self.memory_context:
                     system_prompt = f"{system_prompt}\n\n{self.memory_context}"
                 backend = build_backend(self.workspace_path)
@@ -154,7 +154,7 @@ class DeepAgentExecutor:
                     system_prompt=system_prompt,
                     checkpointer=checkpointer,
                     backend=backend,
-                    name=self.agent_name or "assistant",
+                    name=self.agent_name,
                 )
                 config = {
                     "configurable": {"thread_id": session_id},

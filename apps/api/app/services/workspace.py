@@ -82,17 +82,3 @@ def prepare_workspace(mode: str, raw_path: str, *, agent_id: str) -> tuple[str, 
         raise WorkspaceError("unknown workspace mode")
     resolve_workspace_path(normalized, create=True)
     return mode, normalized
-
-
-def list_workspace_dirs() -> list[dict[str, str]]:
-    root = workspace_root()
-    if not root.is_dir():
-        return []
-    entries: list[dict[str, str]] = []
-    for entry in root.iterdir():
-        if entry.name.startswith("."):
-            continue
-        if entry.is_symlink() or not entry.is_dir():
-            continue
-        entries.append({"path": entry.name, "name": entry.name})
-    return sorted(entries, key=lambda item: item["path"])

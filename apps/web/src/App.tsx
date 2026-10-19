@@ -10,8 +10,6 @@ import type {
   Run,
   RunEvent,
   Session,
-  WorkspaceMode,
-  WorkspaceOption,
 } from "./types";
 import { ChatPanel } from "./components/ChatPanel";
 import { Drawer } from "./components/Drawer";
@@ -29,7 +27,6 @@ export default function App() {
   const [auth, setAuth] = useState<boolean | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
   const [agentId, setAgentId] = useState("");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
@@ -107,20 +104,11 @@ export default function App() {
     const [agentList, providerList] = await Promise.all([api.listAgents(), api.listProviders()]);
     setAgents(agentList);
     setProviders(providerList);
-    await loadWorkspaces();
     if (agentList.length === 0) {
       setNewAgentOpen(true);
       return;
     }
     setAgentId((current) => (current && agentList.some((item) => item.id === current) ? current : agentList[0].id));
-  }
-
-  async function loadWorkspaces() {
-    try {
-      setWorkspaces(await api.listWorkspaces());
-    } catch {
-      // The workspace picker is optional; keep the current list on failure.
-    }
   }
 
   async function loadSessions(forAgent: string) {
@@ -407,19 +395,6 @@ export default function App() {
     if (!agent) return;
     const updated = await api.updateAgent(agent.id, payload);
     setAgents((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-    await loadWorkspaces();
-  }
-
-  async function changeAgentWorkspace(mode: WorkspaceMode, path: string) {
-    if (!agent) return;
-    const updated = await api.updateAgent(agent.id, {
-      workspace_mode: mode,
-      workspace_path: path,
-    });
-    setAgents((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-    if (mode === "directory") {
-      await loadWorkspaces();
-    }
   }
 
   async function saveProvider(
@@ -474,8 +449,6 @@ export default function App() {
         agents={agents}
         agentId={agentId}
         onAgentChange={setAgentId}
-        workspaces={workspaces}
-        onWorkspaceChange={changeAgentWorkspace}
         sessions={sessions}
         sessionId={sessionId}
         onSelectSession={(id) => {

@@ -58,8 +58,8 @@ npm run dev
 侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；Provider/Agent 默认只显示列表，点「编辑」或条目再展开表单。**配置页始终编辑左上角侧边栏选中的 Agent，不提供第二套 Agent 选择**；切换 Agent 请使用侧边栏顶部的选择器。切换 Agent 时，Provider tab 会自动选中该 Agent 的 Provider，并清空输入框草稿。集中管理：
 
 - Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
-- Agent：选择并编辑名称、Provider、instructions、工作区，或新建 Agent；
-- 工作区：每个 Agent 都使用真实目录。「自动目录」为 `~/.super-personal-platform/workspaces/<agent_id>/`，「自定义目录」使用指定的相对路径，保存时自动创建；Agent 可以查看和修改工作区内的文件。侧边栏 Agent 选择器下方也可以直接切换当前 Agent 的工作区；
+- Agent：选择并编辑名称、Provider、instructions、工作区，或新建 Agent；新建时未填写 instructions 会使用默认的中文 Hermes 风格提示词；
+- 工作区：每个 Agent 都使用真实目录。「自动目录」为 `~/.super-personal-platform/workspaces/<agent_id>/`，「自定义目录」使用指定的相对路径，保存时自动创建；Agent 可以查看和修改工作区内的文件。工作区只在配置页的 Agent 编辑区配置，并跟随左上角选中的 Agent；
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
 - 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
 

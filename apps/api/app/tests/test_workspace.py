@@ -4,12 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
 from app.db import _backfill_agent_workspaces, _ensure_agent_workspace_columns
-from app.main import create_app
 from app.services.executor import DeepAgentExecutor, build_backend
 
 
@@ -17,11 +15,6 @@ def _create_agent(client, name: str) -> dict:
     response = client.post("/api/agents", json={"name": name, "instructions": "test"})
     assert response.status_code == 201
     return response.json()
-
-
-def test_workspace_required_auth() -> None:
-    with TestClient(create_app(start_worker=False)) as client:
-        assert client.get("/api/workspaces").status_code == 401
 
 
 def test_agent_workspace_defaults_to_auto_directory(client) -> None:
@@ -126,28 +119,6 @@ def test_agent_workspace_unicode(client) -> None:
     )
     assert response.status_code == 200, response.text
     assert (settings.workspaces_dir / "项目-α").is_dir()
-
-
-def test_list_workspaces_only_returns_top_level_directories(client) -> None:
-    root = settings.workspaces_dir
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "alpha").mkdir(exist_ok=True)
-    (root / "beta").mkdir(exist_ok=True)
-    (root / ".hidden").mkdir(exist_ok=True)
-    (root / "plain.txt").write_text("x")
-    link = root / "link"
-    link.unlink(missing_ok=True)
-    link.symlink_to(root / "alpha")
-
-    response = client.get("/api/workspaces")
-    assert response.status_code == 200
-    paths = [item["path"] for item in response.json()]
-    assert "alpha" in paths
-    assert "beta" in paths
-    assert ".hidden" not in paths
-    assert "plain.txt" not in paths
-    assert "link" not in paths
-    assert paths == sorted(paths)
 
 
 async def test_workspace_columns_migration_and_backfill(tmp_path: Path) -> None:

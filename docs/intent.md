@@ -272,7 +272,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 1. Agent 新增 `workspace_mode`（`virtual` / `directory`）和 `workspace_path`（相对路径）；两种模式都映射到真实目录。
 2. `virtual` 为自动目录：`workspaces/<agent_id>/`；`directory` 为用户指定的相对路径。旧 Agent 启动时自动回填为自动目录。
-3. 侧边栏 Agent 选择器下方新增工作区选择器：切换 Agent 自动显示该 Agent 的工作区；选择「自动目录」或已有目录后立即保存到该 Agent，并影响后续 Run。
+3. 工作区只在配置页 Agent 编辑区配置，跟随左上角选中的 Agent；每个 Agent 只有一个工作区，不在侧边栏提供工作区选择器。
 4. 工作区根目录为 `~/.super-personal-platform/workspaces/`（`APP_WORKSPACES_DIR` 可覆盖）；路径拒绝绝对路径、`..`、反斜杠、控制字符和逃逸符号链接；保存时自动创建。
 5. 执行器使用 `FilesystemBackend(virtual_mode=True)` 作为 backend，并通过 `FilesystemMiddleware` 向 Agent 开放工作区文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）。
 6. 配置页 Agent 编辑器提供工作区模式与相对路径，并显示机器目录。
@@ -280,7 +280,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 #### 验收标准
 
-- 侧边栏可查看并切换当前 Agent 的工作区，切换 Agent 时显示跟随变化，刷新后保持。
+- 配置页显示当前 Agent 的工作区与机器目录，切换左上角 Agent 时跟随变化。
 - 每个 Agent 都有真实机器目录；新建目录成功；非法路径返回 400；指向普通文件或符号链接的路径被拒绝。
 - Agent 能在工作区内列出、读取、创建和修改文件，无法越出工作区根目录。
 - 旧数据库启动时自动补齐 workspace 列并回填自动目录。
