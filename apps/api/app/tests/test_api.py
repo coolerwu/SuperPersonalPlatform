@@ -299,3 +299,16 @@ def test_memory_consolidate_requires_existing_agent(client) -> None:
         json={"scope": "agent", "agent_id": "missing-agent"},
     )
     assert response.status_code == 404
+
+
+def test_parse_extraction_caps_at_12_operations() -> None:
+    import json
+
+    from app.services.memory_service import parse_extraction
+
+    payload = {
+        "memories": [
+            {"action": "add", "content": f"用户偏好 {index}"} for index in range(20)
+        ]
+    }
+    assert len(parse_extraction(json.dumps(payload))) == 12

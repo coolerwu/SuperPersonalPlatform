@@ -331,6 +331,7 @@ export default function App() {
 
   function newSession() {
     if (!agentId) return;
+    setView("chat");
     sessionIdRef.current = "";
     setSessionId("");
     setMessages([]);
@@ -442,7 +443,10 @@ export default function App() {
         onAgentChange={setAgentId}
         sessions={sessions}
         sessionId={sessionId}
-        onSelectSession={setSessionId}
+        onSelectSession={(id) => {
+          setSessionId(id);
+          setView("chat");
+        }}
         onNewSession={newSession}
         newSessionActive={view === "chat" && !sessionId}
         onDeleteSession={(id) => void deleteSession(id)}

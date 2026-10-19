@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 MAX_ITEMS_PER_SCOPE = 200
 MAX_PROMPT_ITEMS = 12
 MAX_PROMPT_CHARS = 1500
+MAX_MEMORY_OPERATIONS = 12
 EXPLICIT_RE = re.compile(r"^(?:请)?记住[:：,，]?\s*(.+)", re.S)
 TOKEN_SPLIT_RE = re.compile(r"[\s,，。！？!?;；:：/\\|()（）\[\]【】]+")
 
@@ -394,7 +395,7 @@ def parse_extraction(text: str) -> list[dict[str, Any]]:
                 "tags": normalize_tags(tags),
             }
         )
-        if len(result) >= 3:
+        if len(result) >= MAX_MEMORY_OPERATIONS:
             break
     return result
 
@@ -434,7 +435,7 @@ def parse_consolidation(text: str) -> list[dict[str, Any]]:
                 "tags": normalize_tags(entry.get("tags", [])),
             }
         )
-        if len(result) >= 20:
+        if len(result) >= MAX_MEMORY_OPERATIONS:
             break
     return result
 
@@ -450,7 +451,7 @@ async def _consolidate_batch(model: Any, batch: list[MemoryItem]) -> list[Memory
         "只允许 update 和 delete，不要新增。合并两条时：选一条保留并 update，另一条 delete。\n"
         "只返回 JSON：{\"memories\":[{\"action\":\"update\",\"id\":\"...\",\"content\":\"...\",\"tags\":[\"...\"]},"
         "{\"action\":\"delete\",\"id\":\"...\"}]}\n"
-        "最多 20 个操作；没有需要整理的就返回 {\"memories\":[]}。\n"
+        "最多 12 个操作；没有需要整理的就返回 {\"memories\":[]}。\n"
         "id 只能来自下面给出的记忆。记忆要写成独立、可复用的简体中文陈述句。\n\n"
         f"记忆列表：\n{lines}"
     )
@@ -583,7 +584,7 @@ async def extract_agent_memories(
         "4. 偏好变化或前后矛盾：用 update 覆盖旧记忆，以当前对话为准。\n"
         "5. 已失效或被明确否定的记忆：用 delete。\n"
         "6. 没有匹配的已有记忆才用 add。\n"
-        "7. update/delete 的 id 只能来自下面给出的已有记忆；最多 3 个操作。\n"
+        "7. update/delete 的 id 只能来自下面给出的已有记忆；最多 12 个操作。\n"
         "8. 每条记忆写成独立、可复用的简体中文陈述句；没有就返回 {\"memories\":[]}。\n\n"
         f"已有记忆：\n{candidate_lines}"
     )
