@@ -47,6 +47,7 @@ export default function App() {
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef("");
+  const messagesRequestRef = useRef(0);
   const finishedRuns = useRef<Set<string>>(new Set());
 
   const agent = agents.find((item) => item.id === agentId);
@@ -139,7 +140,9 @@ export default function App() {
   }
 
   async function loadMessages(id: string, syncRun = true) {
+    const requestId = ++messagesRequestRef.current;
     const list = await api.listMessages(id);
+    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
     setMessages(list);
     if (!syncRun) return;
     setError("");
@@ -264,6 +267,19 @@ export default function App() {
     setStreamText("");
     setEvents([]);
     setActiveRun(null);
+    setDraft("");
+    const optimisticId = `local-${Date.now()}`;
+    setMessages((current) => [
+      ...current,
+      {
+        id: optimisticId,
+        session_id: sessionIdRef.current,
+        role: "user",
+        content,
+        run_id: null,
+        created_at: new Date().toISOString(),
+      },
+    ]);
     let createdSessionId = "";
     let sent = false;
     try {
@@ -274,17 +290,26 @@ export default function App() {
         targetSessionId = created.id;
         sessionIdRef.current = created.id;
         setSessions((current) => [created, ...current]);
-        setSessionId(created.id);
       }
       const response = await api.sendMessage(targetSessionId, content);
       sent = true;
-      setDraft("");
-      await loadMessages(targetSessionId, false);
+      if (createdSessionId) {
+        setSessionId(createdSessionId);
+      }
+      try {
+        await loadMessages(targetSessionId, false);
+      } catch {
+        // Keep the optimistic user message; the run is already created.
+      }
       const run = await api.getRun(response.run_id);
       setActiveRun(run);
       subscribe(response.run_id);
       void refreshSessions();
     } catch (exc) {
+      if (!sent) {
+        setMessages((current) => current.filter((message) => message.id !== optimisticId));
+        setDraft(content);
+      }
       if (createdSessionId && !sent) {
         await api.deleteSession(createdSessionId).catch(() => undefined);
         sessionIdRef.current = "";
