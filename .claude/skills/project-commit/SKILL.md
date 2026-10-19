@@ -45,7 +45,7 @@ Use this skill to finish changes in `/Users/wulang/Desktop/AI/SuperPersonalPlatf
 Production runs as a **user-level systemd service** on the host:
 `qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`, Python venv, SQLite,
 port 8888. FastAPI serves `apps/web/dist` directly. Docker Compose, nginx, and
-Postgres containers are not used in production.
+Postgres are no longer used; their deployment files were removed.
 
 If the user explicitly asks to deploy v1 on the target machine:
 
@@ -68,8 +68,8 @@ If the user explicitly asks to deploy v1 on the target machine:
    command text.
 9. Do not delete `data/` or `deploy/.env`. Back up `data/app.db` and
    `data/checkpoints/` before schema changes.
-10. Docker Compose files remain for optional local use only; do not start them
-    in production.
+10. Docker deployment files have been removed; do not reintroduce Docker
+    Compose, nginx, or Postgres.
 
 ## Guardrails
 
@@ -82,8 +82,8 @@ If the user explicitly asks to deploy v1 on the target machine:
 - Do not assume a push synchronized `rc-clone`; it is an independent checkout.
 - v1 exposes no file/shell/browser/skills/memory tools and has no approval flow;
   do not describe it as having those capabilities.
-- Production uses systemd + venv + SQLite; do not reintroduce Docker Compose,
-  nginx, or Postgres unless the user explicitly asks.
+- Production uses systemd + venv + SQLite. Docker deployment is deprecated:
+  do not reintroduce Docker Compose, Dockerfiles, nginx, or Postgres.
 - If a commit workflow change is requested, update both `CLAUDE.md` and this
   skill before continuing.
 - Include the exact test/build commands and their outcomes in the final response.

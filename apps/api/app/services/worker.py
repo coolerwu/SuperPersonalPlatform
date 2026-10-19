@@ -195,7 +195,7 @@ class RunWorker:
                     .where(Message.run_id == run_id, Message.role == "user")
                     .limit(1)
                 )
-            created = await memory_service.extract_agent_memories(
+            changes = await memory_service.extract_agent_memories(
                 provider=provider,
                 agent_id=agent_id,
                 user_content=content,
@@ -203,15 +203,16 @@ class RunWorker:
                 run_id=run_id,
                 source_message_id=source_message_id,
             )
-            for item in created:
+            for change in changes:
                 await append_event(
                     run_id,
                     "memory_saved",
                     {
                         "source": "auto",
+                        "action": change.action,
                         "scope": "agent",
-                        "memory_id": item.id,
-                        "content": item.content,
+                        "memory_id": change.memory_id,
+                        "content": change.content,
                     },
                 )
         except Exception:

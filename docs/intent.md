@@ -77,7 +77,6 @@
 #### 开放问题
 
 - v2 先加 Skills/Memory 还是文件/Shell？
-- Checkpoint 用 SQLite 还是 Postgres saver 作为默认？
 
 ### F2 配置页与事件可读性
 
@@ -218,7 +217,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 2. user memory 对所有 Agent 生效；agent memory 只对指定 Agent 生效；session 工作记忆继续由 checkpoint 负责。
 3. 配置页独立「记忆」页面：用户/Agent 两个 tab，支持新增、编辑、删除、搜索。
 4. 对话里以“记住……”开头的内容，立即写入 user memory。
-5. 每个 Agent 有「自动学习记忆」开关；Run 完成后提取最多 3 条 Agent 专属长期记忆，直接写入，带来源、去重、200 条上限。
+5. 每个 Agent 有「自动学习记忆」开关；Run 完成后先用 FTS5（trigram）召回相关历史记忆，再让模型返回 add/update/delete，合并或删除旧记忆，最多 3 个操作；带来源、去重、200 条上限。
 6. 每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入系统提示词，标注为数据而非指令；记录 `run_memories` 用量。
 7. 记忆内容不自动修改 Agent instructions。
 
@@ -237,3 +236,27 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - user memory 自动提取；
 - 记忆审核状态、版本历史或自动遗忘；
 - 跨设备同步。
+
+### F7 移除 Docker 部署路径
+
+- 状态：已完成
+- 日期：2026-10-19
+- 来源：用户确认 Docker 部署已废弃
+
+#### 功能点
+
+1. 删除 `deploy/docker-compose.yml`、`deploy/Dockerfile.api`、`deploy/Dockerfile.web`、`deploy/nginx.conf`；`deploy/` 只保留 systemd unit 与 `.env` 模板。
+2. 移除仅为 Postgres 服务的 `asyncpg` 依赖。
+3. 同步 README、CLAUDE.md 与 project-commit 技能：生产只保留 systemd + venv + SQLite。
+
+#### 验收标准
+
+- 仓库内不再有 Docker、nginx 或 Postgres 的部署文件与依赖。
+- 文档不再把 Docker 描述为可选运行方式。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 恢复容器化部署；
+- 改动 SQLite 数据或部署目录结构。
+

@@ -253,4 +253,25 @@ def test_parse_extraction_handles_fenced_json() -> None:
     result = parse_extraction(
         '```json\n{"memories":[{"content":"用户偏好中文","tags":["preference"]}]}\n```'
     )
-    assert result == [{"content": "用户偏好中文", "tags": ["preference"]}]
+    assert result == [
+        {"action": "add", "id": "", "content": "用户偏好中文", "tags": ["preference"]}
+    ]
+
+    operations = parse_extraction(
+        '{"memories":['
+        '{"action":"update","id":"mem_a","content":"用户偏好先给结论","tags":["style"]},'
+        '{"action":"delete","id":"mem_b"}'
+        "]}"
+    )
+    assert operations[0]["action"] == "update"
+    assert operations[0]["id"] == "mem_a"
+    assert operations[1] == {"action": "delete", "id": "mem_b", "content": "", "tags": []}
+
+
+def test_fts_query_builds_or_terms() -> None:
+    from app.services.memory_service import fts_query
+
+    query = fts_query("用户偏好，回答简洁")
+    assert '"用户偏好"' in query
+    assert '"回答简洁"' in query
+    assert " OR " in query

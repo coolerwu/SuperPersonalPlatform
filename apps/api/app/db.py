@@ -1,10 +1,13 @@
 from collections.abc import AsyncIterator
+import logging
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -23,11 +26,59 @@ if settings.app_database_url.startswith("sqlite"):
         cursor.close()
 
 
+async def _ensure_memory_fts() -> None:
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+                content,
+                tags,
+                content='memory_items',
+                content_rowid='rowid',
+                tokenize='trigram'
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON memory_items BEGIN
+                INSERT INTO memory_fts(rowid, content, tags)
+                VALUES (new.rowid, new.content, new.tags);
+            END
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON memory_items BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, content, tags)
+                VALUES ('delete', old.rowid, old.content, old.tags);
+            END
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory_items BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, content, tags)
+                VALUES ('delete', old.rowid, old.content, old.tags);
+                INSERT INTO memory_fts(rowid, content, tags)
+                VALUES (new.rowid, new.content, new.tags);
+            END
+            """
+        )
+        await conn.exec_driver_sql("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild')")
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    if settings.app_database_url.startswith("sqlite"):
+        try:
+            await _ensure_memory_fts()
+        except Exception:
+            logger.exception("memory FTS setup failed; falling back to LIKE")
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

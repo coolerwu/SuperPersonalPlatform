@@ -14,7 +14,7 @@ def utcnow() -> datetime:
 
 
 class UTCDateTime(TypeDecorator):
-    """Keep timestamps UTC across SQLite and Postgres.
+    """Keep timestamps UTC when reading from SQLite.
 
     SQLite drops tzinfo on bind, so values read back would be naive and the
     frontend would treat them as local time. Re-attach UTC on read.

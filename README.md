@@ -4,7 +4,7 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 
 - `apps/api`：FastAPI + deepagents + LangGraph
 - `apps/web`：React + Vite + TypeScript
-- `deploy/`：systemd unit；Docker Compose 仅作为可选本地运行方式
+- `deploy/`：systemd unit 与 `.env` 模板（生产）
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888
 
 ## 本地开发
@@ -55,7 +55,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
 - **用户记忆**：所有 Agent 共享，适合偏好、长期事实；
 - **Agent 记忆**：只对当前 Agent 生效，适合角色和领域知识；
 - 手动新增/编辑/删除/搜索；对话里“记住：……”会立即写入用户记忆；
-- Agent 编辑区有「自动学习记忆」开关：开启后，Run 完成时提取最多 3 条 Agent 专属记忆，去重后直接写入，每个 Agent 上限 200 条；
+- Agent 编辑区有「自动学习记忆」开关：开启后，Run 完成时提取最多 3 条 Agent 专属记忆；先用 FTS5（trigram）找出相关历史记忆，再让模型返回 add/update/delete 做合并，去重后直接写入，每个 Agent 上限 200 条；
 - 每次 Run 最多注入 12 条、约 1500 字相关记忆，作为数据块附加到系统提示词，不会自动修改 Agent instructions。
 
 ## 数据存储
@@ -74,18 +74,6 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
 
 备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
-
-## Docker Compose（可选本地运行）
-
-生产不使用 Docker；下面仅用于想在本地一次性起 Postgres + API + Web 的场景。
-
-```bash
-cp deploy/.env.example deploy/.env
-# 编辑 deploy/.env，填入 APP_AUTH_TOKEN 和 LLM_API_KEY
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
-```
-
-打开 `http://localhost:8080`。
 
 ## 配置
 
@@ -147,7 +135,7 @@ cd ~/SuperPersonalPlatform-v1-deploy && git checkout <commit> && systemctl --use
 
 备份：停服务后复制 `data/app.db` 和 `data/checkpoints/`；或在服务运行时用 SQLite backup API 导出 `app.db`。`data/` 已被 Git 忽略，不会提交。
 
-当前生产为宿主机 systemd + SQLite，不再使用 Docker Compose、nginx 或 Postgres 容器。
+当前生产为宿主机 systemd + SQLite；Docker Compose、Dockerfile、nginx 与 Postgres 的部署配置已从仓库移除。
 
 ## 测试
 

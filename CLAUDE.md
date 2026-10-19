@@ -13,14 +13,13 @@
 - v1 从 0 到 1 重建，旧 `server/`、`web/` 与旧数据模型已删除，不做兼容。
 - `apps/api`：FastAPI + deepagents + LangGraph。
 - `apps/web`：React + Vite + TypeScript。
-- `packages/contracts`：API 契约/共享类型。
-- `deploy/`：systemd unit（生产）；Docker Compose 仅作为可选本地运行方式。
+- `deploy/`：systemd unit 与 `.env` 模板（生产）。
 - 执行核：`AgentExecutor` 端口 + `DeepAgentExecutor`；平台拥有 session/messages/run，deepagents checkpointer 只存 Agent 状态。
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
 - v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs、集中配置页和长期记忆。
 - v1 不暴露 filesystem / shell / browser / skills 工具；memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
 - 记忆：`memory_items`（scope=user|agent，无 status）+ `run_memories`；user memory 全局、agent memory 按 Agent 隔离；session 工作记忆仍由 checkpoint 负责。
-- 写入：配置页手动 CRUD、对话里“记住……”写 user memory、每个 Agent 的 `auto_memory` 开关在 Run 完成后提取 agent memory（最多 3 条、200 条上限、去重）。
+- 写入：配置页手动 CRUD、对话里“记住……”写 user memory、每个 Agent 的 `auto_memory` 开关在 Run 完成后提取 agent memory；先用 FTS5（trigram）找相关历史记忆，再让模型返回 add/update/delete 做合并，最多 3 个操作、200 条上限。
 - 读取：每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入，标注为数据而非指令；记录本次使用的 memory id。
 - 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec：直接、长度匹配问题、无 filler、反谄媚、深度按需；默认简体中文回复，并明确 v1 只有 Chat。
 - UI 视觉方向：明亮简洁（浅色画布 + 悬浮输入卡片），assistant 消息按 Markdown 渲染；依赖 `react-markdown`、`remark-gfm`、`rehype-highlight`。
@@ -69,7 +68,7 @@ cd apps/web && npm run build
 - `git status --short` 确认范围；不要提交 `.super-personal-platform/`、`.env`、`data/`。
 - 需要提交时执行 `.claude/skills/project-commit/SKILL.md`；该技能需要随新栈更新。
 - 只 push `origin`（GitHub）。本地的 `rc-clone` 是独立 checkout，push 不会改动它；需要同步时在 `rc-clone` 里单独 `git pull`，不要从当前仓库对它执行 pull/reset。
-- 当前 v1 生产：`qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，用户级 systemd 服务 `agent-command-center.service`，venv + SQLite，监听 8888。旧 Docker Compose / Postgres / nginx 已停用；旧 unit、旧仓库与旧数据已删除，不能回滚到旧平台。
+- 当前 v1 生产：`qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，用户级 systemd 服务 `agent-command-center.service`，venv + SQLite，监听 8888。Docker / nginx / Postgres 部署路径已废弃并从仓库移除；旧 unit、旧仓库与旧数据已删除，不能回滚到旧平台。
 - 生产从 GitHub `main` pull；`deploy/.env` 只存在目标机本地，不提交，作为 systemd `EnvironmentFile`。`apps/web/dist` 提交到仓库，由 FastAPI 直接托管。
 - 部署流程见 `README.md` 和 `.claude/skills/project-commit/SKILL.md`。
 

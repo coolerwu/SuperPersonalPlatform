@@ -33,8 +33,18 @@ function eventText(event: RunEvent): string {
     }
     case "model_usage":
       return `usage: ${String(payload.input_tokens ?? 0)} in / ${String(payload.output_tokens ?? 0)} out`;
-    case "memory_saved":
-      return `${payload.source === "auto" ? "自动记忆" : "记住了"}：${String(payload.content ?? "")}`;
+    case "memory_saved": {
+      const action = String(payload.action ?? "add");
+      const label =
+        action === "update"
+          ? "更新记忆"
+          : action === "delete"
+            ? "删除记忆"
+            : payload.source === "auto"
+              ? "自动记住"
+              : "记住了";
+      return `${label}：${String(payload.content ?? "")}`;
+    }
     case "run_queued":
       return "run queued";
     case "run_completed":

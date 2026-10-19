@@ -4,9 +4,10 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, text
 
 from app.db import SessionLocal
 from app.models import MemoryItem, RunEvent, RunMemory, utcnow
@@ -18,6 +19,13 @@ MAX_PROMPT_ITEMS = 12
 MAX_PROMPT_CHARS = 1500
 EXPLICIT_RE = re.compile(r"^(?:请)?记住[:：,，]?\s*(.+)", re.S)
 TOKEN_SPLIT_RE = re.compile(r"[\s,，。！？!?;；:：/\\|()（）\[\]【】]+")
+
+
+@dataclass
+class MemoryChange:
+    action: str
+    memory_id: str
+    content: str
 
 
 def normalize_content(text: str) -> str:
@@ -59,6 +67,95 @@ def format_memory_block(items: list[MemoryItem]) -> str:
         label = "用户" if item.scope == "user" else "Agent"
         lines.append(f"- [{label}] {item.content}")
     return "\n".join(lines)
+
+
+def fts_query(value: str) -> str:
+    seen: set[str] = set()
+    parts: list[str] = []
+    for token in TOKEN_SPLIT_RE.split(value):
+        token = token.strip()
+        if len(token) < 2 or token in seen:
+            continue
+        seen.add(token)
+        parts.append('"' + token.replace('"', '""') + '"')
+        if len(parts) >= 8:
+            break
+    return " OR ".join(parts)
+
+
+async def _fts_ids(
+    *,
+    query: str,
+    agent_id: str | None,
+    agent_only: bool,
+    limit: int,
+) -> list[str]:
+    match = fts_query(query)
+    if not match:
+        return []
+    scope_clause = "m.scope = 'agent' AND m.agent_id = :agent_id"
+    params: dict[str, Any] = {"q": match, "limit": limit}
+    if agent_only:
+        if not agent_id:
+            return []
+        params["agent_id"] = agent_id
+    else:
+        scope_clause = "(m.scope = 'user' OR (m.scope = 'agent' AND m.agent_id = :agent_id))"
+        params["agent_id"] = agent_id or ""
+    try:
+        async with SessionLocal() as db:
+            rows = (
+                await db.execute(
+                    text(
+                        f"""
+                        SELECT m.id
+                        FROM memory_fts f
+                        JOIN memory_items m ON m.rowid = f.rowid
+                        WHERE memory_fts MATCH :q AND {scope_clause}
+                        ORDER BY bm25(memory_fts)
+                        LIMIT :limit
+                        """
+                    ),
+                    params,
+                )
+            ).all()
+        return [str(row[0]) for row in rows]
+    except Exception:
+        logger.exception("memory FTS query failed; falling back to recency")
+        return []
+
+
+async def find_merge_candidates(
+    *,
+    agent_id: str,
+    query: str,
+    limit: int = 12,
+) -> list[MemoryItem]:
+    ids = await _fts_ids(query=query, agent_id=agent_id, agent_only=True, limit=limit)
+    async with SessionLocal() as db:
+        items = [await db.get(MemoryItem, memory_id) for memory_id in ids]
+        items = [item for item in items if item is not None]
+        if len(items) < limit:
+            recent = list(
+                (
+                    await db.scalars(
+                        select(MemoryItem)
+                        .where(
+                            MemoryItem.scope == "agent",
+                            MemoryItem.agent_id == agent_id,
+                        )
+                        .order_by(MemoryItem.updated_at.desc())
+                        .limit(limit)
+                    )
+                ).all()
+            )
+            seen = {item.id for item in items}
+            for item in recent:
+                if item.id not in seen:
+                    items.append(item)
+                if len(items) >= limit:
+                    break
+    return items[:limit]
 
 
 async def list_memories(
@@ -148,6 +245,8 @@ async def update_memory(
     *,
     content: str | None = None,
     tags: list[str] | None = None,
+    source_message_id: str | None = None,
+    source_run_id: str | None = None,
 ) -> MemoryItem | None:
     async with SessionLocal() as db:
         item = await db.get(MemoryItem, memory_id)
@@ -159,6 +258,10 @@ async def update_memory(
                 item.content = normalized
         if tags is not None:
             item.tags = normalize_tags(tags)
+        if source_message_id:
+            item.source_message_id = source_message_id
+        if source_run_id:
+            item.source_run_id = source_run_id
         item.updated_at = utcnow()
         await db.commit()
         await db.refresh(item)
@@ -268,16 +371,29 @@ def parse_extraction(text: str) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for entry in memories:
         if isinstance(entry, str):
-            content, tags = entry, []
+            action, memory_id, content, tags = "add", "", entry, []
         elif isinstance(entry, dict):
+            action = str(entry.get("action") or "add").lower()
+            memory_id = str(entry.get("id") or "")
             content = entry.get("content", "")
             tags = entry.get("tags", [])
         else:
             continue
-        content = normalize_content(str(content))
-        if not content or len(content) > 1000:
+        if action not in ("add", "update", "delete"):
             continue
-        result.append({"content": content, "tags": normalize_tags(tags)})
+        if action in ("update", "delete") and not memory_id:
+            continue
+        content = normalize_content(str(content))
+        if action in ("add", "update") and (not content or len(content) > 1000):
+            continue
+        result.append(
+            {
+                "action": action,
+                "id": memory_id,
+                "content": content,
+                "tags": normalize_tags(tags),
+            }
+        )
         if len(result) >= 3:
             break
     return result
@@ -306,7 +422,7 @@ async def extract_agent_memories(
     assistant_output: str,
     run_id: str,
     source_message_id: str | None = None,
-) -> list[MemoryItem]:
+) -> list[MemoryChange]:
     if provider is None or not getattr(provider, "api_key", ""):
         return []
     try:
@@ -315,22 +431,39 @@ async def extract_agent_memories(
     except Exception:
         return []
 
+    candidates = await find_merge_candidates(
+        agent_id=agent_id, query=user_content, limit=12
+    )
+    candidate_lines = "\n".join(
+        f"- id: {item.id} | content: {item.content} | tags: {', '.join(item.tags or [])}"
+        for item in candidates
+    ) or "（无）"
+
     model = ChatOpenAI(
         api_key=provider.api_key,
         base_url=provider.base_url,
         model=provider.model,
         temperature=0,
-        max_tokens=500,
+        max_tokens=600,
     )
     system_prompt = (
-        "你是一个长期记忆提取器。读取一轮对话，只提取值得长期保留的信息。\n"
-        "只返回 JSON：{\"memories\":[{\"content\":\"...\",\"tags\":[\"...\"]}]}\n"
-        "只提取：用户长期偏好、稳定事实、明确决定、长期约定。\n"
-        "不要提取：一次性任务状态、当前对话细节、密码/API key/token、模型猜测。\n"
-        "最多 3 条；没有就返回 {\"memories\":[]}。\n"
-        "每条记忆写成独立、可复用的简体中文陈述句。"
+        "你是一个长期记忆管理器。读取当前这轮对话，并参考已有记忆，决定如何更新记忆。\n"
+        "只返回 JSON：{\"memories\":[{\"action\":\"add|update|delete\",\"id\":\"...\",\"content\":\"...\",\"tags\":[\"...\"]}]}\n"
+        "规则：\n"
+        "1. 只提取用户长期偏好、稳定事实、明确决定、长期约定。\n"
+        "2. 不要提取一次性任务状态、当前对话细节、密码/API key/token、模型猜测。\n"
+        "3. 语义相同或只是措辞变化：用 update 合并到已有记忆，不要新增。\n"
+        "4. 偏好变化或前后矛盾：用 update 覆盖旧记忆，以当前对话为准。\n"
+        "5. 已失效或被明确否定的记忆：用 delete。\n"
+        "6. 没有匹配的已有记忆才用 add。\n"
+        "7. update/delete 的 id 只能来自下面给出的已有记忆；最多 3 个操作。\n"
+        "8. 每条记忆写成独立、可复用的简体中文陈述句；没有就返回 {\"memories\":[]}。\n\n"
+        f"已有记忆：\n{candidate_lines}"
     )
-    human_prompt = f"用户：{user_content}\n\n助手：{assistant_output}"
+    human_prompt = (
+        f"用户：{user_content.strip()[:4000]}\n\n"
+        f"助手：{assistant_output.strip()[:4000]}"
+    )
     try:
         async with asyncio.timeout(30):
             response = await model.ainvoke(
@@ -341,16 +474,38 @@ async def extract_agent_memories(
         logger.exception("memory extraction failed for run %s", run_id)
         return []
 
-    created: list[MemoryItem] = []
+    allowed = {item.id: item for item in candidates}
+    changes: list[MemoryChange] = []
     for entry in entries:
-        item = await create_memory(
-            scope="agent",
-            agent_id=agent_id,
-            content=entry["content"],
-            tags=entry["tags"],
-            source_message_id=source_message_id,
-            source_run_id=run_id,
-        )
-        if item is not None:
-            created.append(item)
-    return created
+        action = entry["action"]
+        if action == "add":
+            item = await create_memory(
+                scope="agent",
+                agent_id=agent_id,
+                content=entry["content"],
+                tags=entry["tags"],
+                source_message_id=source_message_id,
+                source_run_id=run_id,
+            )
+            if item is not None:
+                changes.append(MemoryChange("add", item.id, item.content))
+            continue
+
+        target = allowed.get(entry["id"])
+        if target is None:
+            continue
+        if action == "update":
+            updated = await update_memory(
+                target.id,
+                content=entry["content"],
+                tags=entry["tags"],
+                source_message_id=source_message_id,
+                source_run_id=run_id,
+            )
+            if updated is not None:
+                changes.append(MemoryChange("update", updated.id, updated.content))
+        elif action == "delete":
+            old_content = target.content
+            if await delete_memory(target.id):
+                changes.append(MemoryChange("delete", target.id, old_content))
+    return changes
