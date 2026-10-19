@@ -399,6 +399,133 @@ def parse_extraction(text: str) -> list[dict[str, Any]]:
     return result
 
 
+def parse_consolidation(text: str) -> list[dict[str, Any]]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start < 0 or end <= start:
+        return []
+    try:
+        data = json.loads(cleaned[start : end + 1])
+    except (TypeError, ValueError):
+        return []
+    memories = data.get("memories") if isinstance(data, dict) else None
+    if not isinstance(memories, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for entry in memories:
+        if not isinstance(entry, dict):
+            continue
+        action = str(entry.get("action") or "").lower()
+        memory_id = str(entry.get("id") or "")
+        if action not in ("update", "delete") or not memory_id:
+            continue
+        content = normalize_content(str(entry.get("content") or ""))
+        if action == "update" and (not content or len(content) > 1000):
+            continue
+        result.append(
+            {
+                "action": action,
+                "id": memory_id,
+                "content": content,
+                "tags": normalize_tags(entry.get("tags", [])),
+            }
+        )
+        if len(result) >= 20:
+            break
+    return result
+
+
+async def _consolidate_batch(model: Any, batch: list[MemoryItem]) -> list[MemoryChange]:
+    lines = "\n".join(
+        f"- id: {item.id} | content: {item.content} | tags: {', '.join(item.tags or [])}"
+        for item in batch
+    )
+    system_prompt = (
+        "你是一个记忆整理器。下面是一组长期记忆。\n"
+        "合并语义重复或只是措辞不同的记忆；删除已经失效、互相矛盾或被明确否定的记忆。\n"
+        "只允许 update 和 delete，不要新增。合并两条时：选一条保留并 update，另一条 delete。\n"
+        "只返回 JSON：{\"memories\":[{\"action\":\"update\",\"id\":\"...\",\"content\":\"...\",\"tags\":[\"...\"]},"
+        "{\"action\":\"delete\",\"id\":\"...\"}]}\n"
+        "最多 20 个操作；没有需要整理的就返回 {\"memories\":[]}。\n"
+        "id 只能来自下面给出的记忆。记忆要写成独立、可复用的简体中文陈述句。\n\n"
+        f"记忆列表：\n{lines}"
+    )
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    async with asyncio.timeout(60):
+        response = await model.ainvoke(
+            [SystemMessage(content=system_prompt), HumanMessage(content="请整理这些记忆。")]
+        )
+    entries = parse_consolidation(_message_text(response))
+    allowed = {item.id: item for item in batch}
+    changes: list[MemoryChange] = []
+    for entry in entries:
+        target = allowed.get(entry["id"])
+        if target is None:
+            continue
+        if entry["action"] == "update":
+            updated = await update_memory(target.id, content=entry["content"], tags=entry["tags"])
+            if updated is not None:
+                changes.append(MemoryChange("update", updated.id, updated.content))
+        else:
+            old_content = target.content
+            if await delete_memory(target.id):
+                changes.append(MemoryChange("delete", target.id, old_content))
+    return changes
+
+
+async def consolidate_memories(
+    *,
+    scope: str,
+    agent_id: str,
+    provider: Any,
+    batch_size: int = 50,
+) -> dict[str, int]:
+    if provider is None or not getattr(provider, "api_key", ""):
+        raise ValueError("provider api key is not configured")
+    items = await list_memories(
+        scope=scope,
+        agent_id=agent_id if scope == "agent" else None,
+    )
+    before = len(items)
+    updated = 0
+    deleted = 0
+    if len(items) > 1:
+        from langchain_openai import ChatOpenAI
+
+        model = ChatOpenAI(
+            api_key=provider.api_key,
+            base_url=provider.base_url,
+            model=provider.model,
+            temperature=0,
+            max_tokens=1200,
+        )
+        for start in range(0, len(items), batch_size):
+            batch = items[start : start + batch_size]
+            if len(batch) < 2:
+                continue
+            changes = await _consolidate_batch(model, batch)
+            for change in changes:
+                if change.action == "update":
+                    updated += 1
+                elif change.action == "delete":
+                    deleted += 1
+    remaining = await list_memories(
+        scope=scope,
+        agent_id=agent_id if scope == "agent" else None,
+    )
+    return {
+        "before": before,
+        "after": len(remaining),
+        "updated": updated,
+        "deleted": deleted,
+    }
+
+
 def _message_text(message: Any) -> str:
     content = getattr(message, "content", "")
     if isinstance(content, str):

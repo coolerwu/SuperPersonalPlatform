@@ -28,6 +28,8 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
   const [editContent, setEditContent] = useState("");
   const [editTags, setEditTags] = useState("");
   const [busy, setBusy] = useState(false);
+  const [consolidating, setConsolidating] = useState(false);
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
   const agent = agents.find((item) => item.id === agentId);
@@ -120,6 +122,26 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
     }
   }
 
+  async function consolidate() {
+    if (consolidating || busy || !agentId || items.length < 2) return;
+    const label = scope === "user" ? "所有 Agent 的用户记忆" : `${agent?.name ?? "当前 Agent"} 的 Agent 记忆`;
+    if (!window.confirm(`让模型整理${label}？会合并重复、删除失效记忆，需要一次模型调用。`)) return;
+    setConsolidating(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.consolidateMemories({ scope, agent_id: agentId });
+      setNotice(
+        `整理完成：更新 ${result.updated} 条，删除 ${result.deleted} 条，剩余 ${result.after} 条。`,
+      );
+      await reload();
+    } catch (exc) {
+      setError(errorText(exc));
+    } finally {
+      setConsolidating(false);
+    }
+  }
+
   const filtered = items.filter((item) => {
     const needle = query.trim().toLowerCase();
     if (!needle) return true;
@@ -167,6 +189,14 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="搜索记忆…"
               />
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => void consolidate()}
+                disabled={consolidating || busy || !agentId || items.length < 2}
+              >
+                {consolidating ? "整理中…" : "整理记忆"}
+              </button>
             </div>
 
             <p className="memory-scope-hint">
@@ -176,6 +206,7 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
                   ? `仅对 ${agent.name} 生效；开启自动学习后会在 Run 完成时自动提取。`
                   : "先选择一个 Agent。"}
             </p>
+            {notice && <div className="memory-notice">{notice}</div>}
 
             {!unavailable && (
               <>

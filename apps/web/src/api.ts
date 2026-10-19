@@ -136,4 +136,9 @@ export const api = {
   updateMemory: (id: string, payload: { content?: string; tags?: string[] }) =>
     request<MemoryItem>(`/api/memories/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteMemory: (id: string) => request<{ deleted: boolean }>(`/api/memories/${id}`, { method: "DELETE" }),
+  consolidateMemories: (payload: { scope: MemoryScope; agent_id: string }) =>
+    request<{ before: number; after: number; updated: number; deleted: number }>(
+      "/api/memories/consolidate",
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
 };
