@@ -1,112 +1,78 @@
 ---
 name: project-commit
-description: Standard commit workflow for this repository. Use when Claude is asked to prepare, commit, or push code changes in SuperPersonalPlatform, especially after implementation work that must sync docs/project-architecture.md, CLAUDE.md, and affected skill or operating files before tests, commit, and push.
+description: Commit workflow for the v1 Agent Command Center (FastAPI + deepagents in apps/api, React/Vite in apps/web). Use when asked to prepare, commit, or push changes. Keeps docs/intent.md, CLAUDE.md, README, deploy config, and the API/web checks in sync.
 ---
 
 # Project Commit
 
-Use this skill to finish code changes in `/Users/wulang/Desktop/AI/SuperPersonalPlatform`.
+Use this skill to finish changes in `/Users/wulang/Desktop/AI/SuperPersonalPlatform`.
 
 ## Workflow
 
-1. Read `CLAUDE.md` and `docs/project-architecture.md`.
+1. Read `CLAUDE.md` and `docs/intent.md`.
 2. Run `git status --short` before staging anything.
-3. Inspect the current diff so the final summary can describe what is being committed.
-4. Before committing, synchronize documentation and operating instructions for
-   the current change:
-   - Update `docs/project-architecture.md` when behavior, architecture,
-     commands, dependencies, configuration, public interfaces, or operating
-     assumptions changed.
-   - Update `CLAUDE.md` when agent workflow, commit policy, skill usage,
-     repository-level collaboration rules, or long-term operating expectations
-     changed.
-   - Update any affected `.claude/skills/*/SKILL.md`, README, config template,
-     or other corresponding file when the change modifies that workflow,
-     command, interface, or documented behavior.
-   - Do not proceed to staging until these matching files reflect the actual
-     code and process changes being committed.
+3. Inspect the diff and confirm only the intended files are in scope.
+4. Synchronize documentation when behavior, interfaces, dependencies, commands,
+   or deployment changed:
+   - `docs/intent.md` for requirements/acceptance changes;
+   - `CLAUDE.md` for agent workflow or long-term collaboration changes;
+   - `README.md` for local/dev/deploy commands and configuration;
+   - `deploy/.env.example` for new required environment variables;
+   - this skill when the commit workflow itself changes.
 5. Run the required checks:
-   - `.venv/bin/python -m pytest`
-   - `cd web && npm test`
-   - `cd web && npm run build`
-6. Stage all uncommitted code by running the exact command `git add .`.
+   - `.venv/bin/python -m pytest apps/api/app/tests`
+   - `cd apps/web && npm run build`
+6. Stage all uncommitted code with the exact command `git add .`.
 7. Commit with a concise imperative message.
 8. Push the current branch with `git push origin HEAD`.
-9. After a successful push, restart production on `qiuqiu@192.168.1.3`:
-   - SSH target: `qiuqiu@192.168.1.3`
-   - Remote repo: `SuperPersonalPlatform/`
-   - Before SSH, record the pushed target SHA with `git rev-parse HEAD`.
-   - On the remote host, run from `SuperPersonalPlatform/` and make each phase
-     observable: pull, HEAD check, restart, active/status check.
-   - Pull with `git -c http.version=HTTP/1.1 pull`; retry transient network/TLS
-     failures up to 3 times with a short sleep before declaring pull failed.
-   - After pull, verify remote `git rev-parse HEAD` exactly equals the local
-     target SHA recorded before SSH. Do not restart or claim deployment success
-     if the remote HEAD is different.
-   - After the HEAD check and before restart, synchronize production runtime
-     dependencies because the systemd unit starts `.venv/bin/python -m server`
-     directly and does not run `run.sh` dependency installation on restart:
-     run `.venv/bin/python -m pip install .`.
-   - Ensure Playwright browser binaries are present before restart when browser
-     tooling is in the project. Prefer
-     `PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright} .venv/bin/python -m playwright install chromium`
-     on the production host so CDN issues do not leave `browser_extract` without
-     Chromium.
-   - Restart with `systemctl --user restart super-personal-platform.service`.
-     Check service health with
-     `systemctl --user is-active super-personal-platform.service` and
-     `systemctl --user status super-personal-platform.service --no-pager --lines=12`.
-     The unit lives in the invoking user's user-level systemd directory, so none
-     of these need sudo. If a status check fails after restart, rerun the checks
-     before treating the deployment as failed.
-   - Do not store the SSH/sudo password in repository files. Use an existing
-     authenticated SSH session, ask the user for the password, or read it from a
-     local uncommitted environment variable such as
-     `SUPER_PERSONAL_PROD_SSH_PASSWORD`.
-   - Prefer a non-interactive `expect` wrapper when a password prompt is
-     expected, but never embed a literal password in the command string or saved
-     shell history. Read it from process environment or prompt at runtime. If an
-     `expect`/`ssh` attempt hangs at a password prompt, terminate the stale local
-     process before retrying.
-   - The final response must separately report push outcome, remote pull/HEAD
-     outcome, dependency/browser install outcome, restart outcome, and service
-     active/status outcome. If any phase fails, report that phase and do not
-     claim deployment completed.
+
+## Remotes and rc-clone
+
+- The only configured remote is `origin` → `git@github.com:coolerwu/SuperPersonalPlatform.git`.
+- Push only to `origin`; do not add/remove remotes or rewrite history.
+- A local `rc-clone` is a separate checkout. Pushing to GitHub does not modify it,
+  so there is no write conflict. If it needs the new commit, pull it explicitly
+  inside that checkout; never run `git pull` or `git reset` in `rc-clone` from
+  this repository.
+- If deploying from `rc-clone`, pull it first, verify its HEAD equals the pushed
+  SHA, then run the deployment commands there.
+
+## Deployment (v1)
+
+Production deployment source is **GitHub pull** from `origin`. Do not deploy
+from a developer working tree or a mutable `rc-clone`. The legacy systemd
+service is not used for v1.
+
+If the user explicitly asks to deploy v1 on a target machine:
+
+1. Push the target branch to `origin` first and record the pushed SHA.
+2. On the target host, check out/pull the branch into a v1 directory; do not
+   overwrite the legacy checkout. Verify `git rev-parse HEAD` equals the pushed
+   SHA and `git status --short` is clean.
+3. Ensure `deploy/.env` exists on the target with `APP_AUTH_TOKEN`, a valid
+   `LLM_API_KEY`, and `POSTGRES_PASSWORD`; never commit that file.
+4. From the target repository root run:
+   `docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`
+5. Verify with:
+   `docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps`
+   and `curl --noproxy '*' http://127.0.0.1:${WEB_PORT:-8080}/api/health`.
+6. Report pull/HEAD, build, service status, and health separately. Do not claim
+   deployment success if any phase failed.
+7. Direct tarball/image copy is only an explicit emergency fallback. If used,
+   build from a committed SHA, exclude `.env`/`data/`/`.venv/`/`node_modules/`,
+   deploy to a new directory, and record the SHA/hash.
+8. Never put SSH/sudo passwords or API keys in repository files or command text.
 
 ## Guardrails
 
 - This project intentionally commits all uncommitted code during this workflow.
-- Always use `git add .` for staging in this workflow; do not stage files one by
-  one or use partial staging.
-- Do not revert or overwrite existing changes unless the user explicitly asks.
-- Do not commit `config.yaml`, virtualenvs, caches, or dependency directories.
-- Treat `web/dist` as commit-worthy only when the frontend build output changed
-  as part of the task or deployment path.
-- For one-time cleanup or consolidation of existing workspace data, do not add
-  runtime migration code or migration scripts unless the user explicitly asks;
-  perform a controlled one-time operation on the target machine and verify
-  non-sensitive before/after state instead.
-- If a user asks to adjust this commit workflow, update both `CLAUDE.md` and
-  this skill before continuing the commit.
-- Include the exact test commands, push outcome, and production restart outcome
-  in the final response.
-
-## Agent workspace deployments
-
-- Agent data lives in `agents/{agent_id}/workspace/`; only `agent.json` remains outside that private workspace. Use the shared path/policy module and WorkspaceMiddleware for runtime directory guidance.
-- For a user-authorized layout change, migrate production data directly during a stopped-service window, verify file manifests before/after, and only then start the new version. Do not add runtime legacy-path fallback or migration scripts to the repository. Preserve conflicting or unassigned files in a migration backup.
-- Browser state lives directly in `workspace/browser/`. Code execution keeps scripts in `scratch/` and deliverables in `artifacts/`; temporary mounts are cleaned after execution.
-
-- WebDAV uses a virtual `/webdav/` mount configured per Agent (`enabled`, `directories[]` with `path`, `permission`, `approval_required`, `description`). Preserve directory hierarchy and compile native DeepAgent FilesystemPermission rules with child paths first and unselected paths denied. Global sync has no permission rules and is scheduled by the built-in `context_webdav_sync` task, which must read the current `config.yaml` on every run (root path, credentials, interval) instead of a startup snapshot; verify root and interval edits apply without a restart. When preparing upgrades, reconcile existing config explicitly; do not add symlinks or automatic migrations. Check native file permissions and HITL approval/resume together. WebDAV writes use interrupt rules by default; only directories with `approval_required: false` compile to allow and write through without approval. Private/local shared text writes stay automatic. Remove retired search_context/write_context IDs from existing configs and run snapshots with a backed-up one-time operation.
-
-- `/notes/` is retired; check and back up existing content before removing its directory on target machines. Scratch notes belong in `/scratch/`, persistent memory in `/memories/`, deliverables in `/artifacts/`. Local shared knowledge uses the virtual `/files/` mount without copying data.
-
-- For WeChat attachment delivery changes, verify encrypted upload, image/file payloads, path permissions, frozen snapshots, partial-success retries and rerun isolation with mocked transports. Enable send_attachment only for user-authorized Agents; do not send real test messages without explicit authorization. Report queued versus delivered accurately.
-
-- Checkpoint databases belong to sessions/{session_id}/checkpoints.sqlite or, for sessionless approval runs, runs/{run_id}/checkpoints.sqlite. For the shared-database split, stop writers, back up the original database, preserve every thread namespace/parent/pending write, verify row counts/content/integrity before startup, and retain unknown threads in backup. Never overwrite conflicting destinations or add runtime legacy fallback.
-
-- Explicit file approval leases last 600 seconds and apply only to one exact WebDAV file within one session and Agent. Keep ordinary approve one-shot. Verify persisted expiry without renewal on restart, per-call checks for main/subagents, unchanged filesystem deny rules, and file/Agent/session isolation; mixed pending targets must not receive a single-file grant.
-
-- Frontend development, tests and builds require Node.js 20+ for the Markdown editor dependencies. Check the runtime before npm commands; production still serves committed web/dist and does not need a frontend dependency install.
-
-- For default system prompt changes, verify missing/blank/custom resolution, backend-served preview, frozen single/group Run prompts, and explicit empty-string HITL restore versus missing parameters. Production prompt resets are targeted one-time config edits: preserve other fields and Agents, verify before/after, and use fresh sessions for behavior checks; do not clear user history or memory.
+- Always use `git add .`; do not stage files one by one.
+- Do not commit `.env`, `data/`, `.super-personal-platform/`, `node_modules/`,
+  `apps/web/dist/`, virtualenvs, caches, or dependency directories.
+- Do not reset or overwrite existing changes unless the user explicitly asks.
+- Do not assume a push synchronized `rc-clone`; it is an independent checkout.
+- v1 exposes no file/shell/browser/skills/memory tools and has no approval flow;
+  do not describe it as having those capabilities.
+- If a commit workflow change is requested, update both `CLAUDE.md` and this
+  skill before continuing.
+- Include the exact test/build commands and their outcomes in the final response.

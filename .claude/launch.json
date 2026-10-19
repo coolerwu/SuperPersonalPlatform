@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "acc-web-preview",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-lc", "cd apps/web && npm run dev -- --host 127.0.0.1 --port 5173"],
+      "port": 5173
+    }
+  ]
+}
