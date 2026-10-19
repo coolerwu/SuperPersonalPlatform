@@ -191,19 +191,43 @@ export function ChatPanel(props: ChatPanelProps) {
               <span className="composer-shortcut">Enter 发送 · Shift+Enter 换行</span>
             </div>
             <div className="composer-actions">
-              {props.sending && (
-                <button className="ghost-button" type="button" onClick={props.onCancel}>
-                  停止
+              {props.sending ? (
+                <button
+                  className="composer-icon-button stop"
+                  type="button"
+                  onClick={props.onCancel}
+                  aria-label="停止生成"
+                  title="停止生成"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  className="composer-icon-button primary"
+                  type="button"
+                  onClick={props.onSend}
+                  disabled={!props.canSend || !props.draft.trim()}
+                  aria-label="发送"
+                  title="发送"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M12 19V5" />
+                    <path d="m5 12 7-7 7 7" />
+                  </svg>
                 </button>
               )}
-              <button
-                className="primary send-button"
-                type="button"
-                onClick={props.onSend}
-                disabled={!props.canSend || props.sending || !props.draft.trim()}
-              >
-                发送
-              </button>
             </div>
           </div>
         </div>
