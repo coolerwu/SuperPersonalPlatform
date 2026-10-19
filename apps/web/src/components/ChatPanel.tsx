@@ -132,6 +132,13 @@ export function ChatPanel(props: ChatPanelProps) {
                   <span className="message-time">{formatTime(message.created_at)}</span>
                   <div className="message-actions">
                     <CopyButton text={message.content} />
+                    <button
+                      type="button"
+                      className="message-action"
+                      onClick={() => props.onQuote(message.content)}
+                    >
+                      引用
+                    </button>
                   </div>
                 </div>
                 <Markdown content={message.content} />
