@@ -30,6 +30,7 @@ npm run dev
 ## Chat
 
 - 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec；
+- 新对话采用懒创建：点击「新对话」只清空当前视图，首次发送时才创建 Session；
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
@@ -45,6 +46,21 @@ npm run dev
 - 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
 
 Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流式片段，在右侧抽屉里展开查看。
+
+## 数据存储
+
+生产数据都在 `~/SuperPersonalPlatform-v1-deploy/data/`：
+
+- `app.db`：SQLite（WAL），文件权限 600；
+  - `agents`：Agent 名称、instructions、Provider；
+  - `sessions`：会话，首次发送消息时才创建；标题取第一条用户消息前 24 个字；
+  - `messages`：每条用户/assistant 消息一行，assistant 消息在 Run 完成时写入；
+  - `runs`：每次发送/重试一行，含状态、input/output、错误、token 用量、时间；
+  - `run_events`：append-only，含 `run_queued`、`assistant_delta`（每个流式片段一行）、`model_usage`、`run_completed` 等；
+  - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
+- `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
+
+备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
 
 ## Docker Compose（可选本地运行）
 

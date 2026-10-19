@@ -10,6 +10,7 @@ type SidebarProps = {
   sessionId: string;
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
+  newSessionActive: boolean;
   onDeleteSession: (id: string) => void;
   onOpenSettings: () => void;
   settingsActive: boolean;
@@ -28,7 +29,10 @@ export function Sidebar(props: SidebarProps) {
       </div>
 
       <div className="sidebar-actions">
-        <button className="sidebar-action" onClick={props.onNewSession}>
+        <button
+          className={`sidebar-action ${props.newSessionActive ? "active" : ""}`}
+          onClick={props.onNewSession}
+        >
           <span className="sidebar-action-icon">+</span>
           <span>新对话</span>
         </button>

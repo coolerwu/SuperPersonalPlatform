@@ -101,12 +101,16 @@ export default function App() {
     const list = await api.listSessions(forAgent);
     setSessions(list);
     if (list.length === 0) {
-      const created = await api.createSession(forAgent);
-      setSessions([created]);
-      setSessionId(created.id);
+      sessionIdRef.current = "";
+      setSessionId("");
+      setMessages([]);
+      setActiveRun(null);
+      setEvents([]);
+      setStreamText("");
       return;
     }
     if (!list.some((item) => item.id === sessionIdRef.current)) {
+      sessionIdRef.current = list[0].id;
       setSessionId(list[0].id);
     }
   }
@@ -240,21 +244,39 @@ export default function App() {
 
   async function send() {
     const content = draft.trim();
-    if (!content || !sessionId || sending) return;
+    if (!content || !agentId || sending) return;
     setError("");
     setSending(true);
     setStreamText("");
     setEvents([]);
     setActiveRun(null);
+    let createdSessionId = "";
+    let sent = false;
     try {
-      const response = await api.sendMessage(sessionId, content);
+      let targetSessionId = sessionIdRef.current;
+      if (!targetSessionId) {
+        const created = await api.createSession(agentId);
+        createdSessionId = created.id;
+        targetSessionId = created.id;
+        sessionIdRef.current = created.id;
+        setSessions((current) => [created, ...current]);
+        setSessionId(created.id);
+      }
+      const response = await api.sendMessage(targetSessionId, content);
+      sent = true;
       setDraft("");
-      await loadMessages(sessionId, false);
+      await loadMessages(targetSessionId, false);
       const run = await api.getRun(response.run_id);
       setActiveRun(run);
       subscribe(response.run_id);
       void refreshSessions();
     } catch (exc) {
+      if (createdSessionId && !sent) {
+        await api.deleteSession(createdSessionId).catch(() => undefined);
+        sessionIdRef.current = "";
+        setSessions((current) => current.filter((item) => item.id !== createdSessionId));
+        setSessionId("");
+      }
       setError(errorText(exc));
       setSending(false);
     }
@@ -306,20 +328,16 @@ export default function App() {
     return result;
   }
 
-  async function newSession() {
+  function newSession() {
     if (!agentId) return;
-    try {
-      const created = await api.createSession(agentId);
-      setSessions((current) => [created, ...current]);
-      setSessionId(created.id);
-      setMessages([]);
-      setActiveRun(null);
-      setEvents([]);
-      setStreamText("");
-      setError("");
-    } catch (exc) {
-      setError(errorText(exc));
-    }
+    sessionIdRef.current = "";
+    setSessionId("");
+    setMessages([]);
+    setActiveRun(null);
+    setEvents([]);
+    setStreamText("");
+    setError("");
+    setDraft("");
   }
 
   async function deleteSession(id: string) {
@@ -330,11 +348,15 @@ export default function App() {
       setSessions(list);
       if (id === sessionIdRef.current) {
         if (list.length > 0) {
+          sessionIdRef.current = list[0].id;
           setSessionId(list[0].id);
         } else {
-          const created = await api.createSession(agentId);
-          setSessions([created]);
-          setSessionId(created.id);
+          sessionIdRef.current = "";
+          setSessionId("");
+          setMessages([]);
+          setActiveRun(null);
+          setEvents([]);
+          setStreamText("");
         }
       }
     } catch (exc) {
@@ -415,7 +437,8 @@ export default function App() {
         sessions={sessions}
         sessionId={sessionId}
         onSelectSession={setSessionId}
-        onNewSession={() => void newSession()}
+        onNewSession={newSession}
+        newSessionActive={view === "chat" && !sessionId}
         onDeleteSession={(id) => void deleteSession(id)}
         onOpenSettings={() => setView("settings")}
         settingsActive={view === "settings"}
@@ -477,7 +500,7 @@ export default function App() {
               error={error}
               activeRun={visibleRun}
               draft={draft}
-              canSend={Boolean(sessionId && agentId)}
+              canSend={Boolean(agentId)}
               agentName={agent?.name ?? "Agent"}
               focusSignal={focusSignal}
               onDraftChange={setDraft}

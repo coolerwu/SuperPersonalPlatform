@@ -29,6 +29,7 @@
 ## 运行约定
 
 - 每次用户消息或手动运行创建一个 Run；状态：`queued / running / completed / failed / cancelled`。
+- Session 懒创建：点击「新对话」只清空视图，首次发送时才创建 Session 和 Run；不要为了展示空状态提前落库。
 - 同一 session 最多一个活动 Run。
 - Run 事件 append-only，存 `run_events` 表；其中 `assistant_delta` 是每个流式片段一行，SSE/轮询和刷新恢复依赖它。前端默认折叠原始片段，仅保留 Run/工具/子 Agent/用量等可读事件。
 - 生产数据库是 SQLite：`~/SuperPersonalPlatform-v1-deploy/data/app.db`；checkpoint 在同目录 `checkpoints/`。时间列用 `UTCDateTime` 保证 SQLite 读回仍是 UTC。
