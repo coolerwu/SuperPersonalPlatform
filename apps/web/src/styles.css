@@ -1242,7 +1242,8 @@ textarea {
   margin-top: 0;
 }
 
-.settings-page {
+.settings-page,
+.memory-page {
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -1483,6 +1484,174 @@ textarea {
 .danger-zone strong {
   display: block;
   font-size: 13px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.toggle-row input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.toggle-row strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.toggle-row small {
+  display: block;
+  margin-top: 3px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.memory-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--panel-3);
+}
+
+.memory-tabs button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.memory-tabs button.active {
+  background: #fff;
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.memory-search {
+  width: 240px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.memory-scope-hint {
+  margin: 12px 0 0;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.memory-form {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel-2);
+}
+
+.memory-form textarea {
+  min-height: 56px;
+}
+
+.memory-form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.memory-form-row input {
+  flex: 1;
+}
+
+.memory-form-row .primary {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+}
+
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.memory-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--panel-2);
+}
+
+.memory-item.editing {
+  background: #fff;
+}
+
+.memory-content {
+  font-size: 13.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.memory-tag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.memory-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.memory-actions button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--faint);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.memory-actions button:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: #fff;
 }
 
 .danger-zone p {
@@ -1790,6 +1959,23 @@ textarea {
 
   .system-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .memory-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .memory-search {
+    width: 100%;
+  }
+
+  .memory-form-row {
+    flex-wrap: wrap;
+  }
+
+  .memory-form-row input {
+    flex-basis: 100%;
   }
 
   .danger-zone {

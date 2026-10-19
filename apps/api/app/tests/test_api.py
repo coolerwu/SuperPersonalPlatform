@@ -86,6 +86,7 @@ def test_provider_create_and_system_info(client) -> None:
     assert info["database"] == "sqlite"
     assert info["capabilities"]["filesystem"] is False
     assert info["capabilities"]["chat"] is True
+    assert info["capabilities"]["memory"] is True
     assert info["counts"]["providers"] >= 2
     assert info["counts"]["agents"] >= 1
 
@@ -161,3 +162,95 @@ def test_agent_permanent_delete_removes_checkpoint(client) -> None:
     response = client.delete(f"/api/agents/{agent_id}/permanent")
     assert response.status_code == 200
     assert not checkpoint.exists()
+
+
+def test_memory_crud_and_dedupe(client) -> None:
+    created = client.post(
+        "/api/memories",
+        json={"scope": "user", "content": "回答先给结论", "tags": ["style"]},
+    )
+    assert created.status_code == 201
+    memory_id = created.json()["id"]
+
+    duplicate = client.post(
+        "/api/memories",
+        json={"scope": "user", "content": "回答先给结论", "tags": ["style", "preference"]},
+    )
+    assert duplicate.status_code == 201
+    assert duplicate.json()["id"] == memory_id
+
+    listed = client.get("/api/memories?scope=user").json()
+    assert len([item for item in listed if item["content"] == "回答先给结论"]) == 1
+
+    updated = client.put(
+        f"/api/memories/{memory_id}",
+        json={"content": "回答先给结论，再展开", "tags": ["style", "preference"]},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["content"] == "回答先给结论，再展开"
+
+    deleted = client.delete(f"/api/memories/{memory_id}")
+    assert deleted.status_code == 200
+    assert client.delete(f"/api/memories/{memory_id}").status_code == 404
+
+
+def test_agent_memory_requires_agent(client) -> None:
+    response = client.post(
+        "/api/memories", json={"scope": "agent", "content": "这个 Agent 负责交易分析"}
+    )
+    assert response.status_code == 400
+
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    created = client.post(
+        "/api/memories",
+        json={
+            "scope": "agent",
+            "agent_id": agent_id,
+            "content": "这个 Agent 负责交易分析",
+        },
+    )
+    assert created.status_code == 201
+    listed = client.get(f"/api/memories?scope=agent&agent_id={agent_id}").json()
+    assert any(item["id"] == created.json()["id"] for item in listed)
+
+
+def test_explicit_remember_creates_user_memory(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+    response = client.post(
+        "/api/chat/messages",
+        json={"session_id": session_id, "content": "记住：以后回答先给结论"},
+    )
+    assert response.status_code == 201
+    run_id = response.json()["run_id"]
+
+    memories = client.get("/api/memories?scope=user").json()
+    assert any("以后回答先给结论" in item["content"] for item in memories)
+
+    events = client.get(f"/api/runs/{run_id}/events").json()
+    assert any(
+        event["type"] == "memory_saved"
+        and event["payload"].get("source") == "explicit"
+        for event in events
+    )
+
+
+def test_agent_auto_memory_flag(client) -> None:
+    created = client.post(
+        "/api/agents", json={"name": "NoMemory", "auto_memory": False}
+    ).json()
+    assert created["auto_memory"] is False
+
+    updated = client.put(
+        f"/api/agents/{created['id']}", json={"auto_memory": True}
+    ).json()
+    assert updated["auto_memory"] is True
+
+
+def test_parse_extraction_handles_fenced_json() -> None:
+    from app.services.memory_service import parse_extraction
+
+    result = parse_extraction(
+        '```json\n{"memories":[{"content":"用户偏好中文","tags":["preference"]}]}\n```'
+    )
+    assert result == [{"content": "用户偏好中文", "tags": ["preference"]}]

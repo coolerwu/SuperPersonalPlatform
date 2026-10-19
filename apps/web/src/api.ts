@@ -1,4 +1,14 @@
-import type { Agent, Message, Provider, Run, RunEvent, Session, SystemInfo } from "./types";
+import type {
+  Agent,
+  MemoryItem,
+  MemoryScope,
+  Message,
+  Provider,
+  Run,
+  RunEvent,
+  Session,
+  SystemInfo,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -66,10 +76,16 @@ export const api = {
   logout: () => request<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
 
   listAgents: () => request<Agent[]>("/api/agents"),
-  createAgent: (payload: { name: string; instructions: string; provider_id?: string }) =>
-    request<Agent>("/api/agents", { method: "POST", body: JSON.stringify(payload) }),
-  updateAgent: (id: string, payload: Partial<Pick<Agent, "name" | "instructions" | "provider_id" | "status">>) =>
-    request<Agent>(`/api/agents/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  createAgent: (payload: {
+    name: string;
+    instructions: string;
+    provider_id?: string;
+    auto_memory?: boolean;
+  }) => request<Agent>("/api/agents", { method: "POST", body: JSON.stringify(payload) }),
+  updateAgent: (
+    id: string,
+    payload: Partial<Pick<Agent, "name" | "instructions" | "provider_id" | "status" | "auto_memory">>,
+  ) => request<Agent>(`/api/agents/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   archiveAgent: (id: string) => request<{ archived: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),
   deleteAgentPermanently: (id: string) =>
     request<{ deleted: boolean; sessions: number; runs: number }>(`/api/agents/${id}/permanent`, {
@@ -104,4 +120,20 @@ export const api = {
   streamUrl: (runId: string) => `/api/runs/${runId}/stream`,
 
   getSystem: () => request<SystemInfo>("/api/system"),
+
+  listMemories: (params: { scope: MemoryScope; agentId?: string; q?: string }) => {
+    const search = new URLSearchParams({ scope: params.scope });
+    if (params.agentId) search.set("agent_id", params.agentId);
+    if (params.q) search.set("q", params.q);
+    return request<MemoryItem[]>(`/api/memories?${search.toString()}`);
+  },
+  createMemory: (payload: {
+    scope: MemoryScope;
+    agent_id?: string;
+    content: string;
+    tags?: string[];
+  }) => request<MemoryItem>("/api/memories", { method: "POST", body: JSON.stringify(payload) }),
+  updateMemory: (id: string, payload: { content?: string; tags?: string[] }) =>
+    request<MemoryItem>(`/api/memories/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteMemory: (id: string) => request<{ deleted: boolean }>(`/api/memories/${id}`, { method: "DELETE" }),
 };

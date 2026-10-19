@@ -53,6 +53,7 @@ class Agent(Base):
     instructions: Mapped[str] = mapped_column(Text, default="")
     provider_id: Mapped[str] = mapped_column(String(32), ForeignKey("providers.id"), default="default")
     status: Mapped[str] = mapped_column(String(20), default="active")
+    auto_memory: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -117,4 +118,31 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(120))
     entity: Mapped[str] = mapped_column(String(120))
     entity_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class MemoryItem(Base):
+    __tablename__ = "memory_items"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    scope: Mapped[str] = mapped_column(String(20), index=True)
+    agent_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("agents.id"), nullable=True, index=True
+    )
+    content: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    source_message_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class RunMemory(Base):
+    __tablename__ = "run_memories"
+
+    run_id: Mapped[str] = mapped_column(String(32), ForeignKey("runs.id"), primary_key=True)
+    memory_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("memory_items.id"), primary_key=True
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

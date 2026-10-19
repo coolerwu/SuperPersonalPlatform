@@ -12,7 +12,12 @@ type SettingsPageProps = {
   agentId: string;
   providers: Provider[];
   onSelectAgent: (id: string) => void;
-  onSaveAgent: (payload: { name: string; instructions: string; provider_id: string }) => Promise<void>;
+  onSaveAgent: (payload: {
+    name: string;
+    instructions: string;
+    provider_id: string;
+    auto_memory: boolean;
+  }) => Promise<void>;
   onSaveProvider: (
     providerId: string,
     payload: { name: string; base_url: string; model: string; api_key?: string },
@@ -76,7 +81,12 @@ export function SettingsPage(props: SettingsPageProps) {
     };
   }, []);
 
-  async function saveAgent(payload: { name: string; instructions: string; provider_id: string }) {
+  async function saveAgent(payload: {
+    name: string;
+    instructions: string;
+    provider_id: string;
+    auto_memory: boolean;
+  }) {
     setSavingAgent(true);
     try {
       await props.onSaveAgent(payload);

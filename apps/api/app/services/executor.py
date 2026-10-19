@@ -89,10 +89,18 @@ def _split_stream_chunk(chunk: Any) -> tuple[tuple[str, ...], Any]:
 
 
 class DeepAgentExecutor:
-    def __init__(self, *, provider: Any, checkpoint_dir: Path, agent_name: str) -> None:
+    def __init__(
+        self,
+        *,
+        provider: Any,
+        checkpoint_dir: Path,
+        agent_name: str,
+        memory_context: str = "",
+    ) -> None:
         self.provider = provider
         self.checkpoint_dir = checkpoint_dir
         self.agent_name = agent_name
+        self.memory_context = memory_context
 
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
         try:
@@ -137,10 +145,13 @@ class DeepAgentExecutor:
             for key in ("openai", f"openai:{self.provider.model}"):
                 register_harness_profile(key, profile)
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
+                system_prompt = instructions or "You are a helpful assistant."
+                if self.memory_context:
+                    system_prompt = f"{system_prompt}\n\n{self.memory_context}"
                 agent = create_deep_agent(
                     model=chat_model,
                     tools=[],
-                    system_prompt=instructions or "You are a helpful assistant.",
+                    system_prompt=system_prompt,
                     checkpointer=checkpointer,
                     name=self.agent_name or "assistant",
                 )

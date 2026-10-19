@@ -49,6 +49,6 @@ async def system_info(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
             "shell": False,
             "browser": False,
             "skills": False,
-            "memory": False,
+            "memory": True,
         },
     }

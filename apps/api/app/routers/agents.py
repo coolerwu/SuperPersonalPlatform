@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.config import settings
 from app.db import get_db
-from app.models import Agent, Message, Provider, Run, RunEvent, Session
+from app.models import Agent, MemoryItem, Message, Provider, Run, RunEvent, RunMemory, Session
 from app.schemas import AgentCreate, AgentOut, AgentUpdate
 
 router = APIRouter(prefix="/api/agents", tags=["agents"], dependencies=[Depends(require_auth)])
@@ -24,6 +24,7 @@ def agent_out(agent: Agent, provider: Provider | None) -> AgentOut:
         provider_name=provider.name if provider else "",
         model=provider.model if provider else "",
         status=agent.status,
+        auto_memory=agent.auto_memory,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
@@ -50,6 +51,7 @@ async def create_agent(payload: AgentCreate, db: AsyncSession = Depends(get_db))
         instructions=payload.instructions,
         provider_id=provider.id,
         status="active",
+        auto_memory=payload.auto_memory,
     )
     db.add(agent)
     await db.commit()
@@ -87,6 +89,8 @@ async def update_agent(
         agent.provider_id = provider.id
     if "status" in data and data["status"] in ("active", "paused"):
         agent.status = str(data["status"])
+    if "auto_memory" in data and data["auto_memory"] is not None:
+        agent.auto_memory = bool(data["auto_memory"])
     await db.commit()
     await db.refresh(agent)
     provider = await db.get(Provider, agent.provider_id)
@@ -106,9 +110,24 @@ async def delete_agent_permanently(agent_id: str, db: AsyncSession = Depends(get
 
     session_ids = list((await db.scalars(select(Session.id).where(Session.agent_id == agent_id))).all())
     run_ids = list((await db.scalars(select(Run.id).where(Run.agent_id == agent_id))).all())
+    memory_ids = list(
+        (
+            await db.scalars(
+                select(MemoryItem.id).where(
+                    MemoryItem.scope == "agent", MemoryItem.agent_id == agent_id
+                )
+            )
+        ).all()
+    )
+    if run_ids:
+        await db.execute(delete(RunMemory).where(RunMemory.run_id.in_(run_ids)))
+    if memory_ids:
+        await db.execute(delete(RunMemory).where(RunMemory.memory_id.in_(memory_ids)))
     if run_ids:
         await db.execute(delete(RunEvent).where(RunEvent.run_id.in_(run_ids)))
         await db.execute(delete(Run).where(Run.id.in_(run_ids)))
+    if memory_ids:
+        await db.execute(delete(MemoryItem).where(MemoryItem.id.in_(memory_ids)))
     if session_ids:
         await db.execute(delete(Message).where(Message.session_id.in_(session_ids)))
         await db.execute(delete(Session).where(Session.id.in_(session_ids)))

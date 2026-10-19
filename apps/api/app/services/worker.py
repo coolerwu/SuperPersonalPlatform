@@ -7,7 +7,8 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Agent, Provider, Run, RunEvent, Session, utcnow
+from app.models import Agent, Message, Provider, Run, RunEvent, Session, utcnow
+from app.services import memory_service
 from app.services.executor import DeepAgentExecutor
 from app.services.run_service import (
     append_event,
@@ -107,14 +108,30 @@ class RunWorker:
             if agent is None or session is None or provider is None:
                 await fail_run(run_id, "ConfigurationError", "agent, session, or provider not found")
                 return
+            try:
+                memory_context, memory_ids = await memory_service.retrieve_for_prompt(
+                    agent_id=agent.id, query=run.input
+                )
+            except Exception:
+                logger.exception("memory retrieval failed for run %s", run_id)
+                memory_context, memory_ids = "", []
             executor = DeepAgentExecutor(
                 provider=provider,
                 checkpoint_dir=settings.checkpoint_dir,
                 agent_name=agent.name,
+                memory_context=memory_context,
             )
             instructions = agent.instructions or "You are a helpful assistant."
+            auto_memory = agent.auto_memory
+            agent_id = agent.id
             session_id = session.id
             content = run.input
+
+        if memory_ids:
+            try:
+                await memory_service.record_run_memories(run_id, memory_ids)
+            except Exception:
+                logger.exception("failed to record memory usage for run %s", run_id)
 
         try:
             async with asyncio.timeout(settings.run_timeout_seconds):
@@ -125,13 +142,22 @@ class RunWorker:
                 ):
                     if event.type == "run_completed":
                         payload = event.payload
+                        output = str(payload.get("output") or "")
                         await complete_run(
                             run_id,
-                            output=str(payload.get("output") or ""),
+                            output=output,
                             input_tokens=int(payload.get("input_tokens") or 0),
                             output_tokens=int(payload.get("output_tokens") or 0),
                             total_tokens=int(payload.get("total_tokens") or 0),
                         )
+                        if auto_memory:
+                            await self._extract_memories(
+                                provider=provider,
+                                agent_id=agent_id,
+                                run_id=run_id,
+                                content=content,
+                                output=output,
+                            )
                         return
                     if event.type == "run_failed":
                         error = event.payload.get("error") or {}
@@ -150,6 +176,46 @@ class RunWorker:
         except Exception as exc:
             logger.exception("run %s failed", run_id)
             await fail_run(run_id, type(exc).__name__, str(exc))
+
+    async def _extract_memories(
+        self,
+        *,
+        provider: Provider,
+        agent_id: str,
+        run_id: str,
+        content: str,
+        output: str,
+    ) -> None:
+        try:
+            if await memory_service.has_explicit_memory_event(run_id):
+                return
+            async with SessionLocal() as db:
+                source_message_id = await db.scalar(
+                    select(Message.id)
+                    .where(Message.run_id == run_id, Message.role == "user")
+                    .limit(1)
+                )
+            created = await memory_service.extract_agent_memories(
+                provider=provider,
+                agent_id=agent_id,
+                user_content=content,
+                assistant_output=output,
+                run_id=run_id,
+                source_message_id=source_message_id,
+            )
+            for item in created:
+                await append_event(
+                    run_id,
+                    "memory_saved",
+                    {
+                        "source": "auto",
+                        "scope": "agent",
+                        "memory_id": item.id,
+                        "content": item.content,
+                    },
+                )
+        except Exception:
+            logger.exception("auto memory extraction failed for run %s", run_id)
 
     async def cancel(self, run_id: str) -> bool:
         async with SessionLocal() as db:

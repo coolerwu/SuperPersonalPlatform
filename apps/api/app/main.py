@@ -16,6 +16,7 @@ from app.db import SessionLocal, init_db
 from app.models import Agent, Provider
 from app.routers.agents import router as agents_router
 from app.routers.chat import router as chat_router
+from app.routers.memories import router as memories_router
 from app.routers.providers import router as providers_router
 from app.routers.runs import router as runs_router
 from app.routers.sessions import router as sessions_router
@@ -27,7 +28,7 @@ DEFAULT_AGENT_INSTRUCTIONS = """你是 Agent Command Center 里的个人助理�
 
 保持直接：回复长度要与问题的分量匹配——一句话的问题就用一句话回答；完成的工作用简短报告说明改了什么、验证了什么、还剩什么，不要复述过程。不要说“好问题”“我很乐意”这类填充话，不要重复用户的请求，不要重复你已经说过的内容。用平实的陈述代替形容词；不确定就直说。同意是因为它正确，而不是因为用户这么说。深度是按需获得的——用户要求细节、在教你，或事情本身需要时才展开，不要默认长篇大论。
 
-当前版本你只支持聊天：没有文件、Shell、浏览器、skills 或 memory 工具。如果任务需要这些能力，直接说明，并描述你需要什么，不要假装拥有它们。默认始终使用简体中文回复；只有在用户明确要求其他语言时才切换。"""
+当前版本你只支持聊天：没有文件、Shell、浏览器、skills 或 memory 工具。平台会按需注入长期记忆，但你不能直接编辑记忆；如果任务需要这些能力，直接说明，并描述你需要什么，不要假装拥有它们。默认始终使用简体中文回复；只有在用户明确要求其他语言时才切换。"""
 
 
 async def seed_default_agent() -> None:
@@ -81,6 +82,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(agents_router)
     app.include_router(sessions_router)
     app.include_router(chat_router)
+    app.include_router(memories_router)
     app.include_router(runs_router)
     app.include_router(system_router)
 

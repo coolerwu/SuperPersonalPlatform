@@ -39,6 +39,7 @@ class AgentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     instructions: str = ""
     provider_id: str | None = None
+    auto_memory: bool = True
 
 
 class AgentUpdate(BaseModel):
@@ -46,6 +47,7 @@ class AgentUpdate(BaseModel):
     instructions: str | None = None
     provider_id: str | None = None
     status: str | None = None
+    auto_memory: bool | None = None
 
 
 class AgentOut(BaseModel):
@@ -56,6 +58,7 @@ class AgentOut(BaseModel):
     provider_name: str = ""
     model: str = ""
     status: str
+    auto_memory: bool = True
     created_at: datetime
     updated_at: datetime
 
@@ -124,3 +127,30 @@ class RunEventOut(BaseModel):
     type: str
     payload: dict
     created_at: datetime
+
+
+class MemoryCreate(BaseModel):
+    scope: str = Field(pattern="^(user|agent)$")
+    agent_id: str | None = None
+    content: str = Field(min_length=1, max_length=1000)
+    tags: list[str] = []
+
+
+class MemoryUpdate(BaseModel):
+    content: str | None = Field(default=None, min_length=1, max_length=1000)
+    tags: list[str] | None = None
+
+
+class MemoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    scope: str
+    agent_id: str | None
+    content: str
+    tags: list[str]
+    source_message_id: str | None
+    source_run_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    last_used_at: datetime | None

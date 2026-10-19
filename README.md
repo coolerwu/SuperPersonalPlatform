@@ -31,6 +31,7 @@ npm run dev
 
 - 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec；
 - 新对话采用懒创建：点击「新对话」只清空当前视图，首次发送时才创建 Session；
+- 对话里以“记住：……”开头的内容会写入用户记忆；
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
@@ -47,6 +48,16 @@ npm run dev
 
 Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流式片段，在右侧抽屉里展开查看。
 
+## 记忆
+
+侧栏「记忆」进入独立记忆页面：
+
+- **用户记忆**：所有 Agent 共享，适合偏好、长期事实；
+- **Agent 记忆**：只对当前 Agent 生效，适合角色和领域知识；
+- 手动新增/编辑/删除/搜索；对话里“记住：……”会立即写入用户记忆；
+- Agent 编辑区有「自动学习记忆」开关：开启后，Run 完成时提取最多 3 条 Agent 专属记忆，去重后直接写入，每个 Agent 上限 200 条；
+- 每次 Run 最多注入 12 条、约 1500 字相关记忆，作为数据块附加到系统提示词，不会自动修改 Agent instructions。
+
 ## 数据存储
 
 生产数据都在 `~/SuperPersonalPlatform-v1-deploy/data/`：
@@ -56,7 +67,9 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流�
   - `sessions`：会话，首次发送消息时才创建；标题取第一条用户消息前 24 个字；
   - `messages`：每条用户/assistant 消息一行，assistant 消息在 Run 完成时写入；
   - `runs`：每次发送/重试一行，含状态、input/output、错误、token 用量、时间；
-  - `run_events`：append-only，含 `run_queued`、`assistant_delta`（每个流式片段一行）、`model_usage`、`run_completed` 等；
+  - `run_events`：append-only，含 `run_queued`、`assistant_delta`（每个流式片段一行）、`model_usage`、`run_completed`、`memory_saved` 等；
+  - `memory_items`：长期记忆，`scope=user|agent`，含 content、tags、来源 Run/Message、last_used_at；
+  - `run_memories`：某次 Run 实际注入了哪些记忆；
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
 

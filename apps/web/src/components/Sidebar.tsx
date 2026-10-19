@@ -13,7 +13,9 @@ type SidebarProps = {
   newSessionActive: boolean;
   onDeleteSession: (id: string) => void;
   onOpenSettings: () => void;
+  onOpenMemory: () => void;
   settingsActive: boolean;
+  memoryActive: boolean;
   onLogout: () => void;
 };
 
@@ -35,6 +37,29 @@ export function Sidebar(props: SidebarProps) {
         >
           <span className="sidebar-action-icon">+</span>
           <span>新对话</span>
+        </button>
+        <button
+          className={`sidebar-action ${props.memoryActive ? "active" : ""}`}
+          onClick={props.onOpenMemory}
+        >
+          <span className="sidebar-action-icon">
+            <svg
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <ellipse cx="12" cy="5" rx="8" ry="3" />
+              <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+              <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+            </svg>
+          </span>
+          <span>记忆</span>
         </button>
         <button
           className={`sidebar-action ${props.settingsActive ? "active" : ""}`}

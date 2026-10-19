@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.config import settings
 from app.db import get_db
-from app.models import Agent, Message, Run, RunEvent, Session, utcnow
+from app.models import Agent, Message, Run, RunEvent, RunMemory, Session, utcnow
 from app.schemas import MessageOut, SessionCreate, SessionOut
 
 router = APIRouter(prefix="/api", tags=["sessions"], dependencies=[Depends(require_auth)])
@@ -84,6 +84,7 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)) ->
         raise HTTPException(status_code=409, detail="session has an active run")
     run_ids = list((await db.scalars(select(Run.id).where(Run.session_id == session_id))).all())
     if run_ids:
+        await db.execute(delete(RunMemory).where(RunMemory.run_id.in_(run_ids)))
         await db.execute(delete(RunEvent).where(RunEvent.run_id.in_(run_ids)))
         await db.execute(delete(Run).where(Run.id.in_(run_ids)))
     await db.execute(delete(Message).where(Message.session_id == session_id))

@@ -11,7 +11,12 @@ type DrawerProps = {
   events: RunEvent[];
   agent: Agent | undefined;
   providers: Provider[];
-  onSaveAgent: (payload: { name: string; instructions: string; provider_id: string }) => Promise<void>;
+  onSaveAgent: (payload: {
+    name: string;
+    instructions: string;
+    provider_id: string;
+    auto_memory: boolean;
+  }) => Promise<void>;
   onClose: () => void;
 };
 
@@ -28,6 +33,8 @@ function eventText(event: RunEvent): string {
     }
     case "model_usage":
       return `usage: ${String(payload.input_tokens ?? 0)} in / ${String(payload.output_tokens ?? 0)} out`;
+    case "memory_saved":
+      return `${payload.source === "auto" ? "自动记忆" : "记住了"}：${String(payload.content ?? "")}`;
     case "run_queued":
       return "run queued";
     case "run_completed":
@@ -52,7 +59,12 @@ export function Drawer(props: DrawerProps) {
     ? props.events
     : props.events.filter((event) => event.type !== "assistant_delta");
 
-  async function saveAgent(payload: { name: string; instructions: string; provider_id: string }) {
+  async function saveAgent(payload: {
+    name: string;
+    instructions: string;
+    provider_id: string;
+    auto_memory: boolean;
+  }) {
     setSavingAgent(true);
     try {
       await props.onSaveAgent(payload);

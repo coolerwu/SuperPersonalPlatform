@@ -5,6 +5,7 @@ import type { Agent, DrawerTab, Message, Provider, Run, RunEvent, Session } from
 import { ChatPanel } from "./components/ChatPanel";
 import { Drawer } from "./components/Drawer";
 import { Login } from "./components/Login";
+import { MemoryPage } from "./components/MemoryPage";
 import { NewAgentDialog } from "./components/NewAgentDialog";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
@@ -29,7 +30,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [view, setView] = useState<"chat" | "settings">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "memory">("chat");
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
@@ -376,7 +377,12 @@ export default function App() {
     }
   }
 
-  async function saveAgent(payload: { name: string; instructions: string; provider_id: string }) {
+  async function saveAgent(payload: {
+    name: string;
+    instructions: string;
+    provider_id: string;
+    auto_memory: boolean;
+  }) {
     if (!agent) return;
     const updated = await api.updateAgent(agent.id, payload);
     setAgents((current) => current.map((item) => (item.id === updated.id ? updated : item)));
@@ -441,11 +447,19 @@ export default function App() {
         newSessionActive={view === "chat" && !sessionId}
         onDeleteSession={(id) => void deleteSession(id)}
         onOpenSettings={() => setView("settings")}
+        onOpenMemory={() => setView("memory")}
         settingsActive={view === "settings"}
+        memoryActive={view === "memory"}
         onLogout={() => void logout()}
       />
 
-      {view === "settings" ? (
+      {view === "memory" ? (
+        <MemoryPage
+          agents={agents}
+          agentId={agentId}
+          onClose={() => setView("chat")}
+        />
+      ) : view === "settings" ? (
         <SettingsPage
           agents={agents}
           agentId={agentId}
