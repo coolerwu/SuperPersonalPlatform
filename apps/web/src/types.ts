@@ -74,6 +74,12 @@ export type Message = {
   created_at: string;
 };
 
+export type Attachment = {
+  name: string;
+  path: string;
+  size: number;
+};
+
 export type Run = {
   id: string;
   agent_id: string;

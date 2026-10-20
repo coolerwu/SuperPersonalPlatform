@@ -1098,7 +1098,7 @@ textarea {
   margin: 0 auto;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: "hint input actions";
+  grid-template-areas: "tools input actions";
   align-items: center;
   column-gap: 10px;
   padding: 8px 10px 8px 12px;
@@ -1113,15 +1113,167 @@ textarea {
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     "input input"
-    "hint actions";
+    "tools actions";
   align-items: end;
   row-gap: 2px;
+}
+
+.composer-card.has-files {
+  grid-template-areas:
+    "files files files"
+    "tools input actions";
+}
+
+.composer-card.expanded.has-files {
+  grid-template-areas:
+    "files files"
+    "input input"
+    "tools actions";
 }
 
 .composer-card:focus-within {
   border-color: rgb(var(--accent-rgb) / 0.45);
   box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.08),
     0 12px 34px rgb(var(--ink-rgb) / 0.08);
+}
+
+.composer-tools {
+  grid-area: tools;
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.composer-plus {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--muted);
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.composer-plus:hover,
+.composer-plus.active {
+  color: var(--accent);
+  border-color: rgba(15, 118, 110, 0.3);
+  background: var(--accent-soft);
+}
+
+.composer-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  min-width: 220px;
+  padding: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--shadow-md);
+}
+
+.composer-menu button {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.composer-menu button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.composer-menu-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--muted);
+}
+
+.composer-menu-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-menu-text strong {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.composer-menu-text small {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.composer-files {
+  grid-area: files;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 8px;
+}
+
+.composer-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 4px 5px 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.composer-file-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-file-remove {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--faint);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.composer-file-remove:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.composer-upload-note {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.composer-upload-error {
+  color: var(--danger-ink);
+  font-size: 11px;
 }
 
 .composer textarea {
@@ -1147,42 +1299,6 @@ textarea {
   border: 0;
   outline: none;
   box-shadow: none;
-}
-
-.composer-hint {
-  grid-area: hint;
-  min-width: 0;
-  max-width: 270px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--faint);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.composer-shortcut {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-left: 6px;
-  text-transform: none;
-  letter-spacing: 0;
-  color: #a8b0b8;
-}
-
-.composer-shortcut-full {
-  display: none;
-}
-
-.composer-card.expanded .composer-shortcut-full {
-  display: inline;
-}
-
-.composer-card.expanded .composer-shortcut-mini {
-  display: none;
 }
 
 .status-dot {
@@ -2374,12 +2490,18 @@ textarea {
     padding: 4px 6px;
   }
 
-  .composer-card.expanded .composer-shortcut-full {
-    display: none;
+  .composer-plus {
+    width: 32px;
+    height: 32px;
   }
 
-  .composer-card.expanded .composer-shortcut-mini {
-    display: inline;
+  .composer-menu {
+    min-width: 200px;
+    max-width: calc(100vw - 40px);
+  }
+
+  .composer-file-name {
+    max-width: 160px;
   }
 
   input,

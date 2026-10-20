@@ -4,6 +4,7 @@ import { api, errorText } from "./api";
 import type {
   Agent,
   AgentSavePayload,
+  Attachment,
   DrawerTab,
   Message,
   Provider,
@@ -320,9 +321,15 @@ export default function App() {
     }
   }
 
-  async function send() {
-    const content = draft.trim();
-    if (!content || !agentId || sending) return;
+  async function send(attachments: Attachment[] = []): Promise<boolean> {
+    const text = draft.trim();
+    if ((!text && attachments.length === 0) || !agentId || sending) return false;
+    const attachmentBlock = attachments
+      .map((file) => `- ${file.name}（工作区路径：${file.path}）`)
+      .join("\n");
+    const content = attachmentBlock
+      ? `附件已上传到工作区：\n${attachmentBlock}${text ? `\n\n${text}` : ""}`
+      : text;
     setError("");
     setSending(true);
     setStreamText("");
@@ -366,10 +373,11 @@ export default function App() {
       setActiveRun(run);
       subscribe(response.run_id);
       void refreshSessions();
+      return true;
     } catch (exc) {
       if (!sent) {
         setMessages((current) => current.filter((message) => message.id !== optimisticId));
-        setDraft(content);
+        setDraft(text);
       }
       if (createdSessionId && !sent) {
         await api.deleteSession(createdSessionId).catch(() => undefined);
@@ -379,6 +387,7 @@ export default function App() {
       }
       setError(errorText(exc));
       setSending(false);
+      return false;
     }
   }
 
@@ -700,10 +709,11 @@ export default function App() {
               activeRun={visibleRun}
               draft={draft}
               canSend={Boolean(agentId)}
+              agentId={agentId}
               agentName={agent?.name ?? "Agent"}
               focusSignal={focusSignal}
               onDraftChange={setDraft}
-              onSend={() => void send()}
+              onSend={(attachments) => send(attachments)}
               onCancel={() => void cancel()}
               onQuote={quote}
               onRetry={(runId) => void retry(runId)}

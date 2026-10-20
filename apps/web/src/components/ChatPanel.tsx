@@ -1,6 +1,7 @@
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
 
-import type { Message, Run } from "../types";
+import { api, errorText } from "../api";
+import type { Attachment, Message, Run } from "../types";
 import { formatTime } from "../format";
 import { copyText } from "../clipboard";
 import { Markdown } from "./Markdown";
@@ -13,14 +14,17 @@ type ChatPanelProps = {
   activeRun: Run | null;
   draft: string;
   canSend: boolean;
+  agentId: string;
   agentName: string;
   focusSignal: number;
   onDraftChange: (value: string) => void;
-  onSend: () => void;
+  onSend: (attachments: Attachment[]) => Promise<boolean>;
   onCancel: () => void;
   onQuote: (text: string) => void;
   onRetry: (runId: string) => void;
 };
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 const SUGGESTIONS = [
   "帮我写一个 Python 脚本",
@@ -49,11 +53,33 @@ export function ChatPanel(props: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickRef = useRef(true);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const toolsRef = useRef<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [attachError, setAttachError] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     if (props.focusSignal > 0) textareaRef.current?.focus();
   }, [props.focusSignal]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!toolsRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     const syncHeight = () => {
@@ -81,11 +107,45 @@ export function ChatPanel(props: ChatPanelProps) {
     stickRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
   }
 
+  const canSubmit =
+    props.canSend && !props.sending && (props.draft.trim().length > 0 || attachments.length > 0);
+
+  async function submit() {
+    if (!canSubmit) return;
+    const sent = await props.onSend(attachments);
+    if (sent) {
+      setAttachments([]);
+      setAttachError("");
+    }
+  }
+
+  async function uploadFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setAttachError("");
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          setAttachError(`${file.name} 超过 10 MB，未上传`);
+          continue;
+        }
+        try {
+          const uploaded = await api.uploadAttachment(props.agentId, file);
+          setAttachments((current) => [...current, uploaded]);
+        } catch (exc) {
+          setAttachError(errorText(exc));
+        }
+      }
+    } finally {
+      setUploading(false);
+    }
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || event.shiftKey) return;
     if (event.nativeEvent.isComposing) return;
     event.preventDefault();
-    props.onSend();
+    void submit();
   }
 
   function useSuggestion(text: string) {
@@ -191,14 +251,123 @@ export function ChatPanel(props: ChatPanelProps) {
       </div>
 
       <div className="composer">
-        <div className={`composer-card ${expanded ? "expanded" : ""}`}>
-          <div className="composer-hint" title={props.activeRun ? props.activeRun.status : undefined}>
-            {props.activeRun && <span className={`status-dot ${props.activeRun.status}`} />}
-            <span className="composer-shortcut">
-              <span className="composer-shortcut-mini">Enter 发送</span>
-              <span className="composer-shortcut-full">Enter 发送 · Shift+Enter 换行 · Markdown</span>
-            </span>
+        <div
+          className={`composer-card ${expanded ? "expanded" : ""} ${
+            attachments.length > 0 || uploading || attachError ? "has-files" : ""
+          }`}
+        >
+          <div className="composer-tools" ref={toolsRef}>
+            {props.activeRun && (
+              <span className={`status-dot ${props.activeRun.status}`} title={props.activeRun.status} />
+            )}
+            <button
+              type="button"
+              className={`composer-plus ${menuOpen ? "active" : ""}`}
+              aria-label="添加附件"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              title="添加附件"
+              onClick={() => setMenuOpen((current) => !current)}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+            {menuOpen && (
+              <div className="composer-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    fileInputRef.current?.click();
+                  }}
+                >
+                  <span className="composer-menu-icon" aria-hidden="true">
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="15"
+                      height="15"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M21 11.5 12.5 20a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8" />
+                    </svg>
+                  </span>
+                  <span className="composer-menu-text">
+                    <strong>上传附件</strong>
+                    <small>保存到当前 Agent 工作区</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!props.draft}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    props.onDraftChange("");
+                  }}
+                >
+                  <span className="composer-menu-icon" aria-hidden="true">
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="15"
+                      height="15"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                    >
+                      <path d="M6 6l12 12M18 6 6 18" />
+                    </svg>
+                  </span>
+                  <span className="composer-menu-text">
+                    <strong>清空输入</strong>
+                    <small>保留已上传的文件</small>
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
+          {attachments.length > 0 || uploading || attachError ? (
+            <div className="composer-files">
+              {attachments.map((file) => (
+                <span className="composer-file" key={file.path}>
+                  <span className="composer-file-name" title={`${file.name} · ${file.path}`}>
+                    {file.name}
+                  </span>
+                  <button
+                    type="button"
+                    className="composer-file-remove"
+                    aria-label={`移除 ${file.name}`}
+                    title="移除附件"
+                    onClick={() => {
+                      setAttachError("");
+                      setAttachments((current) =>
+                        current.filter((item) => item.path !== file.path),
+                      );
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              {uploading && <span className="composer-upload-note">上传中…</span>}
+              {attachError && <span className="composer-upload-error">{attachError}</span>}
+            </div>
+          ) : null}
           <textarea
             ref={textareaRef}
             value={props.draft}
@@ -226,8 +395,8 @@ export function ChatPanel(props: ChatPanelProps) {
               <button
                 className="composer-send-button"
                 type="button"
-                onClick={props.onSend}
-                disabled={!props.canSend || !props.draft.trim()}
+                onClick={() => void submit()}
+                disabled={!canSubmit}
                 aria-label="发送"
                 title="发送"
               >
@@ -250,6 +419,16 @@ export function ChatPanel(props: ChatPanelProps) {
             )}
           </div>
         </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(event) => {
+            void uploadFiles(event.target.files);
+            event.target.value = "";
+          }}
+        />
       </div>
     </section>
   );

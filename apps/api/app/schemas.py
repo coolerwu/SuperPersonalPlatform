@@ -141,6 +141,12 @@ class ChatResponse(BaseModel):
     message_id: str
 
 
+class AttachmentOut(BaseModel):
+    name: str
+    path: str
+    size: int
+
+
 class RunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

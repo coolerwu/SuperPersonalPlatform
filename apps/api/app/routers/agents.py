@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import unicodedata
+import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,10 +13,23 @@ from app.config import settings
 from app.db import get_db
 from app.models import Agent, MemoryItem, Message, Provider, Run, RunEvent, RunMemory, Session, new_id
 from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
-from app.schemas import AgentCreate, AgentOut, AgentUpdate
+from app.schemas import AgentCreate, AgentOut, AgentUpdate, AttachmentOut
 from app.services.workspace import resolve_workspace_path
 
 router = APIRouter(prefix="/api/agents", tags=["agents"], dependencies=[Depends(require_auth)])
+
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_ATTACHMENT_NAME_BYTES = 180
+
+
+def _safe_attachment_name(raw: str) -> str:
+    value = unicodedata.normalize("NFC", str(raw or "").replace("\\", "/"))
+    name = Path(value).name.strip()
+    name = "".join(char for char in name if unicodedata.category(char) not in ("Cc", "Cf"))
+    name = name.lstrip(".") or "attachment"
+    while len(name.encode("utf-8")) > MAX_ATTACHMENT_NAME_BYTES:
+        name = name[:-1]
+    return name or "attachment"
 
 
 def agent_out(agent: Agent, provider: Provider | None) -> AgentOut:
@@ -146,6 +161,43 @@ async def delete_agent_permanently(agent_id: str, db: AsyncSession = Depends(get
     for session_id in session_ids:
         _remove_checkpoint(session_id)
     return {"deleted": True, "sessions": len(session_ids), "runs": len(run_ids)}
+
+
+@router.post("/{agent_id}/attachments", response_model=AttachmentOut, status_code=201)
+async def upload_attachment(
+    agent_id: str,
+    request: Request,
+    filename: str = Query(..., min_length=1, max_length=200),
+    db: AsyncSession = Depends(get_db),
+) -> AttachmentOut:
+    agent = await db.get(Agent, agent_id)
+    if agent is None or agent.status == "archived":
+        raise HTTPException(status_code=404, detail="agent not found")
+
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=413, detail="attachment is too large")
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="attachment is empty")
+    if len(body) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=413, detail="attachment is too large")
+
+    uploads = resolve_workspace_path(f"{agent_id}/uploads", create=True)
+    display_name = _safe_attachment_name(filename)
+    stored_name = f"{uuid.uuid4().hex[:10]}-{display_name}"
+    target = uploads / stored_name
+    try:
+        with target.open("xb") as handle:
+            handle.write(body)
+    except FileExistsError:
+        stored_name = f"{uuid.uuid4().hex}-{display_name}"
+        target = uploads / stored_name
+        with target.open("xb") as handle:
+            handle.write(body)
+
+    return AttachmentOut(name=display_name, path=f"/uploads/{stored_name}", size=len(body))
 
 
 @router.delete("/{agent_id}")

@@ -1,5 +1,6 @@
 import type {
   Agent,
+  Attachment,
   MemoryItem,
   MemoryScope,
   Message,
@@ -23,6 +24,19 @@ export class ApiError extends Error {
   }
 }
 
+async function responseError(response: Response): Promise<ApiError> {
+  let detail: unknown = response.statusText;
+  const body = await response.text();
+  if (body) {
+    try {
+      detail = JSON.parse(body);
+    } catch {
+      detail = body;
+    }
+  }
+  return new ApiError(response.status, detail);
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "include",
@@ -33,16 +47,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!response.ok) {
-    let detail: unknown = response.statusText;
-    const body = await response.text();
-    if (body) {
-      try {
-        detail = JSON.parse(body);
-      } catch {
-        detail = body;
-      }
-    }
-    throw new ApiError(response.status, detail);
+    throw await responseError(response);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -96,6 +101,21 @@ export const api = {
     request<{ deleted: boolean; sessions: number; runs: number }>(`/api/agents/${id}/permanent`, {
       method: "DELETE",
     }),
+  uploadAttachment: async (agentId: string, file: File): Promise<Attachment> => {
+    const response = await fetch(
+      `/api/agents/${agentId}/attachments?filename=${encodeURIComponent(file.name)}`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      },
+    );
+    if (!response.ok) {
+      throw await responseError(response);
+    }
+    return (await response.json()) as Attachment;
+  },
 
   listProviders: () => request<Provider[]>("/api/providers"),
   createProvider: (payload: { name: string; base_url: string; model: string; api_key?: string }) =>
