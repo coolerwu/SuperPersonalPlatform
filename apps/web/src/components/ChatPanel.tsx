@@ -15,6 +15,7 @@ type ChatPanelProps = {
   runReasoning: Record<string, string>;
   sending: boolean;
   error: string;
+  notice: string;
   activeRun: Run | null;
   draft: string;
   canSend: boolean;
@@ -372,6 +373,11 @@ export function ChatPanel(props: ChatPanelProps) {
       </div>
 
       <div className="composer">
+        {props.notice && (
+          <div className="composer-notice" role="status">
+            {props.notice}
+          </div>
+        )}
         {props.sendBlocked && (
           <div className="composer-busy-hint" role="status">
             另一个会话的 Run 正在运行，完成后再发送。

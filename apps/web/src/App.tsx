@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { api, errorText } from "./api";
+import { api, ApiError, errorText } from "./api";
 import type {
   Agent,
   AgentSavePayload,
@@ -32,6 +32,14 @@ function terminal(status: string): boolean {
 const MEMORY_SKILL = "memory-organizer";
 const MEMORY_COMMAND =
   "请整理长期记忆：先读取 /skills/memory-organizer/SKILL.md，然后按技能说明合并重复记忆、删除失效记忆，不要新增事实。";
+const POLL_INTERVAL_MS = 800;
+const POLL_MAX_BACKOFF_MS = 5000;
+const MAX_POLL_RETRIES = 120;
+
+function transientPollError(error: unknown): boolean {
+  if (error instanceof ApiError) return error.status >= 500;
+  return true;
+}
 
 export default function App() {
   const [auth, setAuth] = useState<boolean | null>(null);
@@ -52,6 +60,7 @@ export default function App() {
   const [streamReasoning, setStreamReasoning] = useState("");
   const [runReasoning, setRunReasoning] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
+  const [runNotice, setRunNotice] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [view, setView] = useState<"chat" | "settings" | "memory" | "skills" | "tools">("chat");
@@ -63,6 +72,7 @@ export default function App() {
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
+  const pollGenerationRef = useRef(0);
   const sessionIdRef = useRef("");
   const messagesRequestRef = useRef(0);
   const sessionsRequestRef = useRef(0);
@@ -165,6 +175,7 @@ export default function App() {
     setMessages([]);
     setSessions([]);
     setError("");
+    setRunNotice("");
     if (!auth || !agentId) {
       sessionsRequestRef.current += 1;
       return;
@@ -298,6 +309,7 @@ export default function App() {
       setActiveRun(null);
       setEvents([]);
       setStreamReasoning("");
+      setRunNotice("");
       return;
     }
     const [run, runEvents] = await Promise.all([api.getRun(lastRunId), api.getRunEvents(lastRunId)]);
@@ -331,8 +343,9 @@ export default function App() {
   }
 
   function closePoll() {
+    pollGenerationRef.current += 1;
     if (pollTimerRef.current !== null) {
-      window.clearInterval(pollTimerRef.current);
+      window.clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
     }
   }
@@ -365,10 +378,24 @@ export default function App() {
 
   function applyEvent(event: RunEvent) {
     setEvents((current) => (current.some((item) => item.id === event.id) ? current : [...current, event]));
+    if (event.type === "run_queued") {
+      if (event.payload.reason === "service_restart") {
+        // The checkpoint keeps the interrupted attempt; the requeued run will
+        // stream a fresh answer, so drop the previous attempt's live text.
+        setStreamText("");
+        setStreamReasoning("");
+        setRunReasoning((current) => ({ ...current, [event.run_id]: "" }));
+        setRunNotice("服务重启，Run 已重新排队");
+      } else {
+        setRunNotice("");
+      }
+    }
     if (event.type === "assistant_delta") {
+      setRunNotice("");
       setStreamText((current) => current + String(event.payload.delta ?? ""));
     }
     if (event.type === "reasoning_delta") {
+      setRunNotice("");
       const delta = String(event.payload.delta ?? "");
       setStreamReasoning((current) => current + delta);
       setRunReasoning((current) => ({
@@ -386,28 +413,65 @@ export default function App() {
 
   async function pollRun(runId: string, after = 0) {
     closePoll();
+    const generation = pollGenerationRef.current;
     let lastId = after;
+    let failures = 0;
+
+    const alive = () => generation === pollGenerationRef.current;
+
+    const schedule = (delay: number) => {
+      if (!alive()) return;
+      pollTimerRef.current = window.setTimeout(() => {
+        pollTimerRef.current = null;
+        void tick();
+      }, delay);
+    };
+
     const tick = async () => {
+      if (!alive()) return;
       try {
         const newEvents = await api.getRunEvents(runId, lastId);
+        if (!alive()) return;
+        let sawRestart = false;
         for (const event of newEvents) {
           lastId = event.id;
+          if (event.type === "run_queued" && event.payload.reason === "service_restart") {
+            sawRestart = true;
+          }
           applyEvent(event);
         }
         const run = await api.getRun(runId);
+        if (!alive()) return;
         runSessionsRef.current[run.id] = run.session_id;
         setActiveRun(run);
+        if (failures > 0) {
+          failures = 0;
+          if (!sawRestart) setRunNotice("");
+        }
         if (terminal(run.status)) {
           closePoll();
           void finishRun(runId);
+          return;
         }
+        schedule(POLL_INTERVAL_MS);
       } catch (exc) {
+        if (!alive()) return;
+        if (transientPollError(exc) && failures < MAX_POLL_RETRIES) {
+          failures += 1;
+          setRunNotice("服务连接中断，正在重试…");
+          schedule(
+            Math.min(
+              POLL_INTERVAL_MS * 2 ** Math.min(failures, 3),
+              POLL_MAX_BACKOFF_MS,
+            ),
+          );
+          return;
+        }
         closePoll();
         setSessionError(errorText(exc), runSessionsRef.current[runId]);
         setSending(false);
       }
     };
-    pollTimerRef.current = window.setInterval(tick, 800);
     void tick();
   }
 
@@ -416,6 +480,7 @@ export default function App() {
     finishedRuns.current.add(runId);
     closeStream();
     setSending(false);
+    setRunNotice("");
     try {
       const [run, runEvents] = await Promise.all([api.getRun(runId), api.getRunEvents(runId)]);
       runSessionsRef.current[run.id] = run.session_id;
@@ -451,6 +516,7 @@ export default function App() {
       ? `附件已上传到工作区：\n${attachmentBlock}${text ? `\n\n${text}` : ""}`
       : text;
     setError("");
+    setRunNotice("");
     setSending(true);
     setStreamText("");
     setStreamReasoning("");
@@ -559,6 +625,7 @@ export default function App() {
     if (sending) return;
     const retrySessionId = runSessionsRef.current[runId] ?? activeRun?.session_id ?? sessionIdRef.current;
     setError("");
+    setRunNotice("");
     setSending(true);
     setStreamText("");
     setStreamReasoning("");
@@ -606,6 +673,7 @@ export default function App() {
     setStreamReasoning("");
     setRunReasoning({});
     setError("");
+    setRunNotice("");
     setDraft("");
   }
 
@@ -873,6 +941,7 @@ export default function App() {
               runReasoning={runReasoning}
               sending={chatSending}
               error={error}
+              notice={runNotice}
               activeRun={visibleRun}
               draft={draft}
               canSend={Boolean(agentId)}

@@ -37,6 +37,11 @@ STEP_LIMIT_FINAL_PROMPT = (
     "本轮执行步骤已达到上限。请不要再调用工具，基于以上进展直接给出最终答复："
     "已经完成了什么、得到了哪些关键结果、还有哪些没做；不要编造未执行的操作或未得到的结果。"
 )
+RESUME_PROMPT = (
+    "服务重启中断了上一次执行。请继续完成用户上一条消息中的任务："
+    "不要重复已经完成的步骤，也不要重新开始；已经执行过的文件或浏览器操作不要再次执行。"
+)
+INTERRUPTED_TOOL_RESULT = "工具调用因服务重启被中断，结果未知；不要重复执行该操作。"
 MAX_STEP_LIMIT_CONTINUATIONS = 1
 
 
@@ -152,6 +157,71 @@ def _drop_dangling_tool_calls(messages: Sequence[Any]) -> list[Any]:
             continue
         break
     return trimmed
+
+
+def _run_input_message(content: str, run_id: str) -> HumanMessage:
+    """Tag the run's user message so a resumed run can find it in the checkpoint."""
+    if run_id:
+        return HumanMessage(content=content, id=run_id)
+    return HumanMessage(content=content)
+
+
+def _has_run_input(messages: Sequence[Any], run_id: str) -> bool:
+    if not run_id:
+        return False
+    return any(
+        isinstance(message, HumanMessage) and getattr(message, "id", None) == run_id
+        for message in messages
+    )
+
+
+def _resume_input(messages: Sequence[Any], run_id: str) -> dict[str, Any]:
+    """Build input for a run resumed after a restart without repeating its user turn.
+
+    The checkpoint already holds the interrupted attempt: the original user
+    message plus any assistant/tool messages written before the restart. Append
+    a continuation prompt instead of the original content, and close tool calls
+    whose results were never written so the model does not retry side effects.
+    """
+    start = 0
+    for index, message in enumerate(messages):
+        if isinstance(message, HumanMessage) and getattr(message, "id", None) == run_id:
+            start = index
+            break
+    segment = list(messages[start + 1 :])
+    handled = {
+        str(message.tool_call_id)
+        for message in segment
+        if isinstance(message, ToolMessage)
+    }
+    repairs: list[ToolMessage] = []
+    for message in segment:
+        if not isinstance(message, AIMessage):
+            continue
+        for call in getattr(message, "tool_calls", None) or []:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id") or "")
+            if call_id and call_id not in handled:
+                handled.add(call_id)
+                repairs.append(
+                    ToolMessage(
+                        content=INTERRUPTED_TOOL_RESULT,
+                        tool_call_id=call_id,
+                        status="error",
+                    )
+                )
+    return {
+        "messages": [*repairs, HumanMessage(content=RESUME_PROMPT)],
+        "skills_metadata": None,
+    }
+
+
+def _fresh_input(content: str, run_id: str) -> dict[str, Any]:
+    return {
+        "messages": [_run_input_message(content, run_id)],
+        "skills_metadata": None,
+    }
 
 
 def _split_stream_chunk(chunk: Any) -> tuple[tuple[str, ...], Any]:
@@ -400,10 +470,7 @@ class DeepAgentExecutor:
                     "callbacks": [collector],
                     "recursion_limit": settings.run_recursion_limit,
                 }
-                input_state = {
-                    "messages": [HumanMessage(content=content)],
-                    "skills_metadata": None,
-                }
+                input_state = await self._initial_state(agent, config, content)
                 continuations = 0
                 while True:
                     try:
@@ -499,6 +566,31 @@ class DeepAgentExecutor:
                 "total_tokens": usage["total_tokens"],
             },
         )
+
+    async def _initial_state(
+        self, agent: Any, config: dict[str, Any], content: str
+    ) -> dict[str, Any]:
+        """Resume an interrupted run from its checkpoint instead of repeating its input."""
+        messages: list[Any] = []
+        get_state = getattr(agent, "aget_state", None)
+        if get_state is not None:
+            try:
+                state = await get_state(config)
+                messages = list(
+                    (getattr(state, "values", None) or {}).get("messages") or []
+                )
+            except Exception:
+                logger.exception(
+                    "failed to read checkpoint before run=%s session=%s",
+                    self.run_id,
+                    config.get("configurable", {}).get("thread_id"),
+                )
+        if _has_run_input(messages, self.run_id):
+            logger.info(
+                "resuming interrupted run=%s from its checkpoint", self.run_id
+            )
+            return _resume_input(messages, self.run_id)
+        return _fresh_input(content, self.run_id)
 
     async def _stream_events(
         self,

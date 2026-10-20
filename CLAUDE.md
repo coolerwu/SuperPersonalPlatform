@@ -43,7 +43,8 @@
 - Session 懒创建：点击「新对话」只清空视图，首次发送时才创建 Session 和 Run；不要为了展示空状态提前落库。
 - 同一 session 最多一个活动 Run；不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）。Run 并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
 - Run 的 LangGraph 递归上限为 `RUN_RECURSION_LIMIT`（默认 500，主 Agent 与 general-purpose 子 Agent 共用，deepagents 自身默认 9999）。真撞上限时执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍落 `completed`，输出前标注「已达到执行步骤上限」。
-- 服务停止/重启时，正在执行的 Run 重新入队（清空 `started_at`）并在启动后继续；已请求取消的 Run 落 `cancelled`，不会被重启复活。启动时 `requeue_running_runs` 兜底崩溃留下的 `running`。重新入队不是事务回滚：已经完成的文件/浏览器副作用不会撤销。
+- 服务停止/重启时，正在执行的 Run 重新入队（清空 `started_at`，写入 `reason=service_restart` 的 `run_queued`）并在启动后继续；已请求取消的 Run 落 `cancelled`，不会被重启复活。启动时 `requeue_running_runs` 兜底崩溃留下的 `running`。恢复时执行器把 run_id 作为本轮 `HumanMessage` 的稳定 id 定位 checkpoint：如果本轮输入已写入 checkpoint，就保留中断前的 assistant/tool 消息，追加「继续上次任务」的提示，不再重复原始 input；缺失结果的 tool call 补一条「结果未知、不要重复执行」的 error `ToolMessage`。checkpoint 没有本轮输入时按新 Run 处理。重新入队不是事务回滚：中断前已经发生的文件/浏览器副作用仍然保留，只能依赖提示避免再次执行。
+- 前端轮询在服务重启等瞬时连接错误下按指数退避重试（最多约 120 次），不停止 Run；收到 `reason=service_restart` 的 `run_queued` 时清空当前流式文本和思考内容，并显示「服务重启，Run 已重新排队」提示。
 - Run 事件 append-only，存 `run_events` 表；其中 `assistant_delta` / `reasoning_delta` 是每个流式片段一行，SSE/轮询和刷新恢复依赖它。前端默认折叠原始片段，仅保留 Run/工具/子 Agent/用量等可读事件；`reasoning_delta` 在聊天里显示为可折叠的「思考过程」，思考阶段展开、开始输出答案后自动折叠。deepagents 的上下文压缩（summarization）属于内部模型调用，其流式片段（`metadata.lc_source=summarization`）必须过滤，不写入 assistant 输出、思考过程或 Run 事件。
 - 生产数据库是 SQLite：`~/.super-personal-platform/data/app.db`；checkpoint 在同目录 `checkpoints/`。时间列用 `UTCDateTime` 保证 SQLite 读回仍是 UTC。
 - SQLite 开启 WAL 和 `busy_timeout=5000`，API 与 worker 同进程，不另起服务。

@@ -541,3 +541,36 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - 保留旧的后端批量整理接口或兼容入口；
 - 在技能里执行任意 Python 或新增记忆；
 - 改变自动学习记忆（Run 完成后提取）的现有行为。
+
+### F16 重启中断后的 Run 恢复语义与前端重连
+
+- 状态：进行中
+- 日期：2026-10-20
+- 来源：用户指出 requeue 后执行器重复追加原始 input，且前端轮询在服务重启时直接停止
+
+#### 背景
+
+服务重启会把 `running` 的 Run 改回 `queued`，但 checkpoint thread 里已经写入了本轮用户消息和部分 assistant/tool 消息。恢复时执行器再次把同一条 input 作为新的 `HumanMessage` 追加，导致用户消息重复、模型可能重复执行已经发生的副作用。前端轮询遇到重启窗口的连接错误会停止并把 `sending` 置为 false，必须手动刷新；跨过重启窗口时旧的 `assistant_delta` 也不会被重置。
+
+#### 功能点
+
+1. 执行器用 run_id 作为本轮 `HumanMessage` 的稳定 id；恢复前读取 checkpoint，如果本轮输入已存在，则保留中断前的 assistant/tool 消息，追加一条「服务重启中断，继续完成上一条用户消息中的任务，不要重复已完成步骤或副作用」的提示，不再追加原始 input。
+2. 对中断前没有返回结果的 tool call，恢复输入中补一条 `status=error` 的 `ToolMessage`，说明结果未知、不要重复执行。
+3. checkpoint 中没有本轮输入（例如重启发生在首次写入前）时，仍按原始 input 开始执行，行为与普通新 Run 一致。
+4. 前端轮询改为 `setTimeout` 驱动；网络错误和 5xx 按指数退避重试（800ms 起，最多 5s，最多约 120 次），保持 `sending` 状态，恢复后继续追踪；401/404 等不可重试错误仍停止并显示错误。
+5. 前端收到 `payload.reason=service_restart` 的 `run_queued` 时，清空当前 `streamText` 和思考内容，并显示「服务重启，Run 已重新排队」；新的 delta 或 Run 结束后清除提示。
+6. 文档明确恢复不是事务回滚：副作用仍然保留，只能通过恢复提示避免重复执行。
+
+#### 验收标准
+
+- 同一 Run 在 checkpoint 中只保留一条原始用户消息；恢复输入是继续提示而不是重复 input。
+- 中断处未完成的 tool call 在恢复输入中有对应的 error `ToolMessage`。
+- 真实 `AsyncSqliteSaver` 上的恢复测试覆盖「一次用户消息 + 继续提示」的最终状态。
+- 服务重启期间已打开页面会自动恢复轮询并继续显示该 Run，无需刷新；旧流式文本不会与新一次尝试拼接。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 回滚 checkpoint、撤销已经发生的文件/浏览器副作用；
+- 记录每次 Run 的 checkpoint id 或做分支管理；
+- 断线期间离线缓存或 Service Worker。
