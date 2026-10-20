@@ -754,11 +754,19 @@ textarea {
 }
 
 .message-bubble.assistant {
-  flex: 1;
+  flex: 0 1 auto;
+  width: fit-content;
+  min-width: 0;
   max-width: min(820px, calc(100% - 44px));
-  padding: 2px 0 0;
-  border: 0;
-  background: transparent;
+  padding: 12px 15px;
+  border: 1px solid var(--border);
+  border-radius: 4px 16px 16px 16px;
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+
+.message-row.assistant .message-avatar {
+  margin-top: 6px;
 }
 
 .message-bubble.streaming {
