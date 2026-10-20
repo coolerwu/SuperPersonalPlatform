@@ -4,8 +4,10 @@ from types import SimpleNamespace
 import pytest
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.exceptions import ModelAuthenticationError, ModelRateLimitError
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
+from langgraph.errors import GraphRecursionError
 
+from app.config import settings
 from app.services.executor import DeepAgentExecutor, _log_retryable
 
 
@@ -137,3 +139,140 @@ def test_retryable_model_errors_are_logged(caplog) -> None:
         ModelAuthenticationError("401"), agent_name="agent", session_id="session"
     ) is False
     assert "model call failed (retryable)" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_executor_gives_final_answer_when_step_limit_reached(tmp_path, monkeypatch) -> None:
+    captured: dict = {"states": []}
+
+    class FakeChatModel:
+        def __init__(self, **kwargs) -> None:
+            captured["chat"] = kwargs
+
+        async def ainvoke(self, messages, config=None):
+            captured["final_messages"] = messages
+            return AIMessage(content="已完成：读取页面；未完成：提交表单。")
+
+    class FakeAgent:
+        calls = 0
+
+        async def astream(self, state, config=None, *, stream_mode=None, subgraphs=False):
+            FakeAgent.calls += 1
+            captured["config"] = config
+            captured["states"].append(state)
+            yield ((), "messages", (AIMessageChunk(content="working "), {}))
+            raise GraphRecursionError("Recursion limit reached")
+
+        async def aget_state(self, config):
+            return SimpleNamespace(
+                values={
+                    "messages": [
+                        HumanMessage(content="帮我查天气并提交表单"),
+                        ToolMessage(content="sunny", tool_call_id="call-1", name="web_search"),
+                        AIMessage(
+                            content="",
+                            tool_calls=[{"name": "web_fetch", "args": {}, "id": "call-2"}],
+                        ),
+                    ]
+                }
+            )
+
+    monkeypatch.setattr("langchain_openai.ChatOpenAI", FakeChatModel)
+    monkeypatch.setattr("deepagents.create_deep_agent", lambda **_kwargs: FakeAgent())
+
+    provider = SimpleNamespace(
+        api_key="test-key", base_url="https://api.deepseek.com", model="deepseek-v4-flash"
+    )
+    executor = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="test-agent",
+    )
+    events = [
+        event
+        async for event in executor.run(instructions="test", session_id="limit", content="查天气")
+    ]
+
+    assert captured["config"]["recursion_limit"] == settings.run_recursion_limit
+    assert FakeAgent.calls == 2
+    assert "继续完成原任务" in captured["states"][1]["messages"][0].content
+    final_messages = captured["final_messages"]
+    assert isinstance(final_messages[0], SystemMessage)
+    assert any(
+        isinstance(message, HumanMessage) and "帮我查天气并提交表单" in message.content
+        for message in final_messages
+    )
+    assert any(
+        isinstance(message, ToolMessage) and "sunny" in message.content
+        for message in final_messages
+    )
+    assert isinstance(final_messages[-1], HumanMessage)
+    assert "最终答复" in final_messages[-1].content
+    assert not any(
+        isinstance(message, AIMessage) and getattr(message, "tool_calls", None)
+        for message in final_messages
+    )
+    step_events = [event for event in events if event.type == "step_limit"]
+    assert [event.payload["action"] for event in step_events] == ["continue", "summary"]
+    assert not any(event.type == "run_failed" for event in events)
+    completed = [event for event in events if event.type == "run_completed"]
+    assert len(completed) == 1
+    output = completed[0].payload["output"]
+    assert output.startswith("（已达到执行步骤上限")
+    assert "已完成：读取页面" in output
+
+
+@pytest.mark.asyncio
+async def test_executor_continues_after_step_limit(tmp_path, monkeypatch) -> None:
+    captured: dict = {"states": [], "summary_calls": 0}
+
+    class FakeChatModel:
+        def __init__(self, **kwargs) -> None:
+            captured["chat"] = kwargs
+
+        async def ainvoke(self, messages, config=None):
+            captured["summary_calls"] += 1
+            return AIMessage(content="summary")
+
+    class FakeAgent:
+        calls = 0
+
+        async def astream(self, state, config=None, *, stream_mode=None, subgraphs=False):
+            FakeAgent.calls += 1
+            captured["states"].append(state)
+            if FakeAgent.calls == 1:
+                yield ((), "messages", (AIMessageChunk(content="第一步 "), {}))
+                raise GraphRecursionError("Recursion limit reached")
+            yield ((), "messages", (AIMessageChunk(content="完成"), {}))
+
+        async def aget_state(self, config):
+            raise AssertionError("summary must not run when the continuation succeeds")
+
+    monkeypatch.setattr("langchain_openai.ChatOpenAI", FakeChatModel)
+    monkeypatch.setattr("deepagents.create_deep_agent", lambda **_kwargs: FakeAgent())
+
+    provider = SimpleNamespace(
+        api_key="test-key", base_url="https://api.deepseek.com", model="deepseek-v4-flash"
+    )
+    executor = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="test-agent",
+    )
+    events = [
+        event
+        async for event in executor.run(instructions="test", session_id="continue", content="查天气")
+    ]
+
+    assert FakeAgent.calls == 2
+    assert captured["summary_calls"] == 0
+    assert "继续完成原任务" in captured["states"][1]["messages"][0].content
+    assert "skills_metadata" not in captured["states"][1]
+    step_events = [event for event in events if event.type == "step_limit"]
+    assert [event.payload["action"] for event in step_events] == ["continue"]
+    assert not any(event.type == "run_failed" for event in events)
+    completed = [event for event in events if event.type == "run_completed"]
+    assert len(completed) == 1
+    assert completed[0].payload["output"] == "第一步 完成"

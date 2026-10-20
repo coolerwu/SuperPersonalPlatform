@@ -48,6 +48,7 @@
 10. 右侧抽屉：Run 时间线/事件/usage、Agent 配置。
 11. 不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）；同一 session 仍最多一个活动 Run。并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
 12. Provider 模型调用失败时按可重试错误（429/5xx/超时/连接）做最多 3 次指数退避 + jitter；4xx 立即失败。`ChatOpenAI` 的 SDK 自身重试关闭，避免与中间件叠加。可重试失败写入 warning 日志（agent/session/异常类型）。
+13. 单个 Run 的 LangGraph 递归上限由 `RUN_RECURSION_LIMIT` 控制（默认 200；原实现写死 50）。真的撞上上限时，执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍以 `completed` 收尾，输出前标注「已达到执行步骤上限」。
 
 #### 验收标准
 
@@ -57,6 +58,7 @@
 - 每次用户消息创建 Run；Run 详情展示事件、usage/cost。
 - 重启 api/worker 后 queued/running 能恢复：优雅停止和进程崩溃都会把 running 重新排队，启动后继续；用户主动取消的 Run 保持 cancelled，不会被重启复活。仍打开的前端页面刷新后重新接上该 Run。
 - 两个不同 session 的 Run 可同时处于 running；第三个 session 的 Run 排队，直到有空位；同一 session 的第二个 Run 仍被拒绝。
+- 撞上上限时先在原会话上自动续跑一次，仍超限才输出进展总结并记录 `step_limit` 事件，Run 不直接失败。
 - 服务重启时正在运行的 Run 变为 queued 并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的前端页面刷新后重新接上该 Run。
 - 429/5xx/超时/连接错误会退避重试；401/400 等 4xx 立即失败。
 - 取消 Run 能停止并落终态。

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.7
 
     run_timeout_seconds: int = 300
+    run_recursion_limit: int = 200
     max_history_messages: int = 40
 
     # Browser tools are skill-gated; these bound one Run's browser session.

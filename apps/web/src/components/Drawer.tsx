@@ -46,6 +46,12 @@ function eventText(event: RunEvent): string {
     }
     case "run_queued":
       return "run queued";
+    case "step_limit": {
+      const limit = String(payload.limit ?? "");
+      return payload.action === "continue"
+        ? `达到执行步骤上限（${limit}），已自动续跑`
+        : `达到执行步骤上限（${limit}），已生成进展总结`;
+    }
     case "run_completed":
       return `completed: ${truncate(String(payload.output ?? ""), 180)}`;
     case "run_failed": {

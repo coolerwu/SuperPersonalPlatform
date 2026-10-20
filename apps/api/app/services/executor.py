@@ -10,7 +10,14 @@ from typing import Any
 
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.exceptions import ModelError
-from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage, ToolMessageChunk
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+    ToolMessageChunk,
+)
 
 from app.config import settings
 from app.services.browser_tools import BROWSER_TOOL_NAMES, BrowserSession
@@ -19,6 +26,16 @@ from app.services.workspace import resolve_workspace_path
 
 logger = logging.getLogger(__name__)
 _BROWSER_CLEANUP_TASKS: set[asyncio.Task[Any]] = set()
+
+STEP_LIMIT_NOTICE = "（已达到执行步骤上限，以下是当前进展总结）"
+STEP_LIMIT_CONTINUE_PROMPT = (
+    "上一轮因执行步骤达到上限被中断。继续完成原任务，不要重复已经完成的步骤，也不要重新开始。"
+)
+STEP_LIMIT_FINAL_PROMPT = (
+    "本轮执行步骤已达到上限。请不要再调用工具，基于以上进展直接给出最终答复："
+    "已经完成了什么、得到了哪些关键结果、还有哪些没做；不要编造未执行的操作或未得到的结果。"
+)
+MAX_STEP_LIMIT_CONTINUATIONS = 1
 
 
 def _log_retryable(
@@ -89,8 +106,7 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _message_text(message: AIMessageChunk) -> str:
-    content = message.content
+def _content_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -98,12 +114,26 @@ def _message_text(message: AIMessageChunk) -> str:
         for block in content:
             if isinstance(block, str):
                 parts.append(block)
-            elif isinstance(block, dict):
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
         return "".join(parts)
     return ""
+
+
+def _message_text(message: AIMessageChunk) -> str:
+    return _content_text(message.content)
+
+
+def _drop_dangling_tool_calls(messages: Sequence[Any]) -> list[Any]:
+    """Drop trailing assistant tool calls whose tool results were never written."""
+    trimmed = list(messages)
+    while trimmed:
+        last = trimmed[-1]
+        if isinstance(last, AIMessage) and getattr(last, "tool_calls", None):
+            trimmed.pop()
+            continue
+        break
+    return trimmed
 
 
 def _split_stream_chunk(chunk: Any) -> tuple[tuple[str, ...], Any]:
@@ -189,6 +219,7 @@ class DeepAgentExecutor:
             from langchain.agents.middleware import ModelRetryMiddleware
             from langchain_openai import ChatOpenAI
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+            from langgraph.errors import GraphRecursionError
 
             from app.services.skill_middleware import AgentSkillsMiddleware
         except Exception as exc:  # pragma: no cover - import guard
@@ -207,9 +238,8 @@ class DeepAgentExecutor:
         collector = UsageCollector()
         usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         output_parts: list[str] = []
+        step_limit_output: str | None = None
         browser = BrowserSession()
-        seen_tool_results: set[str] = set()
-        tool_names_by_call_id: dict[str, str] = {}
 
         try:
             chat_model = ChatOpenAI(
@@ -268,75 +298,66 @@ class DeepAgentExecutor:
                 config = {
                     "configurable": {"thread_id": session_id},
                     "callbacks": [collector],
-                    "recursion_limit": 50,
+                    "recursion_limit": settings.run_recursion_limit,
                 }
                 input_state = {
                     "messages": [HumanMessage(content=content)],
                     "skills_metadata": None,
                 }
-                async for chunk in agent.astream(
-                    input_state,
-                    config=config,
-                    stream_mode="messages",
-                    subgraphs=True,
-                ):
-                    namespace, data = _split_stream_chunk(chunk)
-                    if not (isinstance(data, tuple) and len(data) >= 2):
-                        continue
-                    message = data[0]
-                    if isinstance(message, ToolMessage) and not isinstance(
-                        message, ToolMessageChunk
-                    ):
-                        call_id = str(getattr(message, "tool_call_id", "") or "")
-                        tool_name = str(getattr(message, "name", "") or "") or (
-                            tool_names_by_call_id.get(call_id, "")
-                        )
-                        dedupe_key = call_id or str(id(message))
-                        if (
-                            tool_name in BROWSER_TOOL_NAMES
-                            and dedupe_key not in seen_tool_results
-                        ):
-                            seen_tool_results.add(dedupe_key)
-                            yield ExecutorEvent(
-                                "browser_action",
-                                browser_action_payload(
-                                    namespace, self.agent_name, tool_name, message
-                                ),
+                continuations = 0
+                while True:
+                    try:
+                        async for event in self._stream_events(agent, input_state, config):
+                            if event.type == "assistant_delta":
+                                output_parts.append(str(event.payload.get("delta") or ""))
+                            yield event
+                        break
+                    except GraphRecursionError as exc:
+                        if continuations < MAX_STEP_LIMIT_CONTINUATIONS:
+                            continuations += 1
+                            logger.warning(
+                                "run hit step limit; continuing on the same thread agent=%s session=%s limit=%s",
+                                self.agent_name,
+                                session_id,
+                                settings.run_recursion_limit,
                             )
-                        continue
-                    if not isinstance(message, AIMessageChunk):
-                        continue
-
-                    for item in getattr(message, "tool_calls", None) or []:
-                        if not isinstance(item, dict):
+                            yield ExecutorEvent(
+                                "step_limit",
+                                {
+                                    "limit": settings.run_recursion_limit,
+                                    "action": "continue",
+                                    "continuation": continuations,
+                                },
+                            )
+                            input_state = {
+                                "messages": [HumanMessage(content=STEP_LIMIT_CONTINUE_PROMPT)]
+                            }
                             continue
-                        call_id = str(item.get("id") or "")
-                        call_name = str(item.get("name") or "")
-                        if call_id and call_name:
-                            tool_names_by_call_id[call_id] = call_name
-
-                    tool_names = [
-                        str(item.get("name"))
-                        for item in (getattr(message, "tool_call_chunks", None) or [])
-                        if isinstance(item, dict) and item.get("name")
-                    ]
-                    if tool_names:
-                        yield ExecutorEvent(
-                            "agent_update",
-                            {"agent": ", ".join(namespace) or self.agent_name, "tool_calls": tool_names},
+                        logger.warning(
+                            "run hit step limit again; summarizing agent=%s session=%s limit=%s",
+                            self.agent_name,
+                            session_id,
+                            settings.run_recursion_limit,
                         )
-
-                    text = _message_text(message)
-                    if not text:
-                        continue
-                    if namespace:
+                        try:
+                            summary = await self._answer_after_step_limit(
+                                agent=agent,
+                                config=config,
+                                chat_model=chat_model,
+                                system_prompt=system_prompt,
+                                collector=collector,
+                            )
+                        except Exception:
+                            logger.exception("step-limit summary failed")
+                            raise exc from None
                         yield ExecutorEvent(
-                            "subagent_response",
-                            {"agent": ", ".join(namespace), "content": text},
+                            "step_limit",
+                            {"limit": settings.run_recursion_limit, "action": "summary"},
                         )
-                    else:
-                        output_parts.append(text)
-                        yield ExecutorEvent("assistant_delta", {"delta": text})
+                        step_limit_output = (
+                            f"{STEP_LIMIT_NOTICE}\n\n{summary}" if summary else STEP_LIMIT_NOTICE
+                        )
+                        break
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -362,7 +383,11 @@ class DeepAgentExecutor:
             usage["total_tokens"] += int(entry.get("total_tokens") or 0)
             yield ExecutorEvent("model_usage", entry)
 
-        output = "".join(output_parts).strip() or "（无回复）"
+        output = (
+            step_limit_output
+            if step_limit_output is not None
+            else ("".join(output_parts).strip() or "（无回复）")
+        )
         yield ExecutorEvent(
             "run_completed",
             {
@@ -372,3 +397,93 @@ class DeepAgentExecutor:
                 "total_tokens": usage["total_tokens"],
             },
         )
+
+    async def _stream_events(
+        self,
+        agent: Any,
+        input_state: dict[str, Any],
+        config: dict[str, Any],
+    ) -> AsyncIterator[ExecutorEvent]:
+        seen_tool_results: set[str] = set()
+        tool_names_by_call_id: dict[str, str] = {}
+        async for chunk in agent.astream(
+            input_state,
+            config=config,
+            stream_mode="messages",
+            subgraphs=True,
+        ):
+            namespace, data = _split_stream_chunk(chunk)
+            if not (isinstance(data, tuple) and len(data) >= 2):
+                continue
+            message = data[0]
+            if isinstance(message, ToolMessage) and not isinstance(message, ToolMessageChunk):
+                call_id = str(getattr(message, "tool_call_id", "") or "")
+                tool_name = str(getattr(message, "name", "") or "") or (
+                    tool_names_by_call_id.get(call_id, "")
+                )
+                dedupe_key = call_id or str(id(message))
+                if tool_name in BROWSER_TOOL_NAMES and dedupe_key not in seen_tool_results:
+                    seen_tool_results.add(dedupe_key)
+                    yield ExecutorEvent(
+                        "browser_action",
+                        browser_action_payload(namespace, self.agent_name, tool_name, message),
+                    )
+                continue
+            if not isinstance(message, AIMessageChunk):
+                continue
+
+            for item in getattr(message, "tool_calls", None) or []:
+                if not isinstance(item, dict):
+                    continue
+                call_id = str(item.get("id") or "")
+                call_name = str(item.get("name") or "")
+                if call_id and call_name:
+                    tool_names_by_call_id[call_id] = call_name
+
+            tool_names = [
+                str(item.get("name"))
+                for item in (getattr(message, "tool_call_chunks", None) or [])
+                if isinstance(item, dict) and item.get("name")
+            ]
+            if tool_names:
+                yield ExecutorEvent(
+                    "agent_update",
+                    {"agent": ", ".join(namespace) or self.agent_name, "tool_calls": tool_names},
+                )
+
+            text = _message_text(message)
+            if not text:
+                continue
+            if namespace:
+                yield ExecutorEvent(
+                    "subagent_response",
+                    {"agent": ", ".join(namespace), "content": text},
+                )
+            else:
+                yield ExecutorEvent("assistant_delta", {"delta": text})
+
+    async def _answer_after_step_limit(
+        self,
+        *,
+        agent: Any,
+        config: dict[str, Any],
+        chat_model: Any,
+        system_prompt: str,
+        collector: UsageCollector,
+    ) -> str:
+        messages: list[Any] = []
+        try:
+            state = await agent.aget_state(config)
+            messages = list((getattr(state, "values", None) or {}).get("messages") or [])
+        except Exception:
+            logger.exception("failed to read checkpoint state after step limit")
+        messages = _drop_dangling_tool_calls(messages)
+        response = await chat_model.ainvoke(
+            [
+                SystemMessage(content=system_prompt),
+                *messages,
+                HumanMessage(content=STEP_LIMIT_FINAL_PROMPT),
+            ],
+            config={"callbacks": [collector]},
+        )
+        return _content_text(getattr(response, "content", "")).strip()
