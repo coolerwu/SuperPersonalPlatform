@@ -43,6 +43,25 @@ TAB_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 REF_PATTERN = re.compile(r"^s[1-9]\d{0,4}e[1-9]\d{0,3}$")
 KEY_PATTERN = re.compile(r"^[A-Za-z0-9+_-]{1,32}$")
 
+VERIFICATION_URL_MARKERS = (
+    "wappass.baidu.com",
+    "/captcha",
+    "/challenge",
+    "challenge-platform",
+    "/cdn-cgi/challenge",
+    "/sorry",
+    "verify.",
+)
+VERIFICATION_TITLE_MARKERS = (
+    "安全验证",
+    "验证码",
+    "captcha",
+    "verify you are human",
+    "just a moment",
+    "attention required",
+    "unusual traffic",
+)
+
 
 class BrowserToolError(Exception):
     """A browser failure whose message is safe and useful to show the model."""
@@ -372,6 +391,36 @@ def _short_error(exc: BaseException) -> str:
     return " ".join(str(exc).split())[:300] or type(exc).__name__
 
 
+def verification_reason(
+    url: str,
+    title: str,
+    *,
+    total_elements: int | None = None,
+    body_text: str = "",
+) -> str | None:
+    """Detect anti-bot verification pages so the model stops instead of looping."""
+    lowered_url = str(url or "").lower()
+    for marker in VERIFICATION_URL_MARKERS:
+        if marker in lowered_url:
+            return f"anti-bot verification page detected at {url}"
+
+    lowered_title = str(title or "").lower()
+    if not any(marker in lowered_title for marker in VERIFICATION_TITLE_MARKERS):
+        return None
+    if total_elements is not None and total_elements > 5:
+        return None
+    if total_elements is not None and len(body_text) > 2_000:
+        return None
+    return f"anti-bot verification page detected ({title!r})"
+
+
+def _verification_error(reason: str) -> BrowserToolError:
+    return BrowserToolError(
+        f"{reason}; stop and tell the user, then try a mobile or lighter search endpoint "
+        "or another source; never attempt to bypass the verification"
+    )
+
+
 @dataclass
 class _Tab:
     name: str
@@ -632,6 +681,14 @@ class BrowserSession:
             except Exception as second:
                 raise BrowserToolError(f"snapshot failed: {_short_error(second)}") from second
         data = parse_snapshot(raw if isinstance(raw, dict) else {})
+        reason = verification_reason(
+            data.url,
+            data.title,
+            total_elements=data.total_elements,
+            body_text=data.body_text,
+        )
+        if reason is not None:
+            raise _verification_error(reason)
         return format_snapshot(
             data,
             max_elements=self.max_elements,
@@ -676,8 +733,21 @@ class BrowserSession:
             except Exception:
                 pass
             await self._settle(tab_state.page)
-            header = f"Opened {tab_state.page.url} in tab {tab_state.name!r}"
+            title = ""
+            try:
+                title = await tab_state.page.title()
+            except Exception:
+                pass
+            reason = verification_reason(str(tab_state.page.url), title)
+            if reason is not None:
+                raise _verification_error(reason)
             status = getattr(response, "status", None) if response is not None else None
+            if status in (403, 429):
+                raise BrowserToolError(
+                    f"request blocked (HTTP {status}); try a mobile or lighter endpoint, "
+                    "or another source"
+                )
+            header = f"Opened {tab_state.page.url} in tab {tab_state.name!r}"
             if status is not None:
                 header += f" (HTTP {status})"
             return await self._action_result(header, tab_state)

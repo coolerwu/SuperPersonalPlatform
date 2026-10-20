@@ -20,6 +20,7 @@ from app.services.browser_tools import (
     validate_browser_url_syntax,
     validate_press_key,
     validate_public_url,
+    verification_reason,
 )
 from app.services.executor import browser_action_payload
 from app.services.skill_tools import SkillToolContext, SkillToolRegistry
@@ -118,6 +119,35 @@ def test_normalize_tab_name_and_press_key() -> None:
     assert validate_press_key("Control+A") == "Control+A"
     with pytest.raises(BrowserToolError):
         validate_press_key("Enter; rm -rf /")
+
+
+def test_verification_reason_detects_captcha_pages() -> None:
+    assert verification_reason(
+        "https://wappass.baidu.com/static/captcha/tuxing.html?ak=1",
+        "百度安全验证",
+    )
+    assert verification_reason(
+        "https://www.google.com/sorry/index?continue=x",
+        "Google",
+    )
+    assert verification_reason(
+        "https://example.com/verify",
+        "Just a moment...",
+        total_elements=3,
+        body_text="Checking your browser",
+    )
+    assert verification_reason(
+        "https://example.com",
+        "Example Domain",
+        total_elements=1,
+        body_text="This domain is for use in examples.",
+    ) is None
+    assert verification_reason(
+        "https://zh.wikipedia.org/wiki/验证码",
+        "验证码 - 维基百科",
+        total_elements=80,
+        body_text="x" * 5_000,
+    ) is None
 
 
 def test_parse_and_format_snapshot() -> None:

@@ -57,6 +57,7 @@ LEGACY_DEFAULT_MARKERS = (
     "你是 Hermes Agent，由 Nous Research 构建",
     "你没有 Shell、浏览器或 skills 工具；需要这些能力时直接说明，不要假装拥有。",
     "你没有 Shell 或浏览器工具；需要这些能力时直接说明，不要假装拥有。",
+    "你没有 Shell 工具；浏览器能力通过 web-browser 技能解锁，只返回页面文字和元素引用（不返回截图），并且只能访问公开的 http/https 地址。需要浏览器时先启用 web-browser 技能并读取 SKILL.md，不要假装拥有。",
     "文件工具始终可用，不受技能限制。\n- 会话：",
 )
 
