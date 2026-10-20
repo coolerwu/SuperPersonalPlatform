@@ -1,13 +1,15 @@
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
-import type { Attachment, Message, Run } from "../types";
+import type { Attachment, Message, Run, ScreenshotInfo } from "../types";
 import { formatTime } from "../format";
 import { copyText } from "../clipboard";
 import { Markdown } from "./Markdown";
 
 type ChatPanelProps = {
   messages: Message[];
+  screenshots: ScreenshotInfo[];
+  sessionId: string;
   streamText: string;
   sending: boolean;
   error: string;
@@ -46,6 +48,29 @@ function CopyButton({ text, label = "复制" }: { text: string; label?: string }
     <button type="button" className="message-action" onClick={() => void copy()}>
       {status === "copied" ? "已复制" : status === "failed" ? "复制失败" : label}
     </button>
+  );
+}
+
+function ScreenshotStrip({ sessionId, items }: { sessionId: string; items: ScreenshotInfo[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="message-screenshots">
+      {items.map((item) => {
+        const url = api.screenshotUrl(sessionId, item.run_id, item.id);
+        return (
+          <a
+            key={item.id}
+            className="message-screenshot"
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            title="打开原图"
+          >
+            <img src={url} alt="页面截图" loading="lazy" />
+          </a>
+        );
+      })}
+    </div>
   );
 }
 
@@ -132,6 +157,27 @@ export function ChatPanel(props: ChatPanelProps) {
     !props.sending &&
     !props.sendBlocked &&
     (props.draft.trim().length > 0 || attachments.length > 0);
+
+  const screenshotsByRun = new Map<string, ScreenshotInfo[]>();
+  for (const shot of props.screenshots) {
+    const list = screenshotsByRun.get(shot.run_id);
+    if (list) {
+      list.push(shot);
+    } else {
+      screenshotsByRun.set(shot.run_id, [shot]);
+    }
+  }
+  const assistantRunIds = new Set(
+    props.messages
+      .filter((message) => message.role === "assistant" && message.run_id)
+      .map((message) => message.run_id as string),
+  );
+  const activeRunShown = Boolean(props.sending || props.streamText) && props.activeRun;
+  const orphanScreenshots = props.screenshots.filter(
+    (shot) =>
+      !assistantRunIds.has(shot.run_id) &&
+      (!activeRunShown || shot.run_id !== props.activeRun?.id),
+  );
 
   async function submit() {
     if (!canSubmit) return;
@@ -234,6 +280,10 @@ export function ChatPanel(props: ChatPanelProps) {
                   </div>
                 </div>
                 <Markdown content={message.content} />
+                <ScreenshotStrip
+                  sessionId={props.sessionId}
+                  items={message.run_id ? screenshotsByRun.get(message.run_id) ?? [] : []}
+                />
               </div>
             </div>
           ),
@@ -253,6 +303,21 @@ export function ChatPanel(props: ChatPanelProps) {
                 <div className="muted">正在生成…</div>
               )}
               <span className="cursor" />
+              {props.activeRun && (
+                <ScreenshotStrip
+                  sessionId={props.sessionId}
+                  items={screenshotsByRun.get(props.activeRun.id) ?? []}
+                />
+              )}
+            </div>
+          </div>
+        )}
+
+        {orphanScreenshots.length > 0 && (
+          <div className="message-row assistant">
+            <div className="message-avatar">ACC</div>
+            <div className="message-bubble assistant">
+              <ScreenshotStrip sessionId={props.sessionId} items={orphanScreenshots} />
             </div>
           </div>
         )}

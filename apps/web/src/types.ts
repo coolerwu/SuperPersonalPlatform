@@ -88,6 +88,12 @@ export type Attachment = {
   size: number;
 };
 
+export type ScreenshotInfo = {
+  id: string;
+  run_id: string;
+  created_at: string;
+};
+
 export type Run = {
   id: string;
   agent_id: string;

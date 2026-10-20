@@ -1,4 +1,6 @@
+import base64
 import logging
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -139,6 +141,76 @@ def test_retryable_model_errors_are_logged(caplog) -> None:
         ModelAuthenticationError("401"), agent_name="agent", session_id="session"
     ) is False
     assert "model call failed (retryable)" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_executor_saves_browser_screenshot(tmp_path, monkeypatch) -> None:
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII="
+    )
+    encoded = base64.b64encode(png).decode()
+
+    class FakeAgent:
+        async def astream(self, _state, config=None, *, stream_mode=None, subgraphs=False):
+            yield (
+                ("tools",),
+                "messages",
+                (
+                    ToolMessage(
+                        content=[
+                            {
+                                "type": "text",
+                                "text": "Screenshot of tab 'main' at https://example.com",
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                            },
+                        ],
+                        tool_call_id="call-shot",
+                        name="browser_screenshot",
+                    ),
+                    {},
+                ),
+            )
+            yield ((), "messages", (AIMessageChunk(content="done"), {}))
+
+    monkeypatch.setattr("deepagents.create_deep_agent", lambda **_kwargs: FakeAgent())
+    provider = SimpleNamespace(
+        api_key="test-key", base_url="https://api.deepseek.com", model="deepseek-v4-flash"
+    )
+    session_id = "a" * 32
+    run_id = "b" * 32
+    executor = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="screenshot-agent",
+        run_id=run_id,
+    )
+
+    events = [
+        event
+        async for event in executor.run(instructions="test", session_id=session_id, content="hi")
+    ]
+
+    shots = [
+        event
+        for event in events
+        if event.type == "browser_action" and event.payload.get("tool") == "browser_screenshot"
+    ]
+    assert len(shots) == 1
+    screenshot_id = shots[0].payload["screenshot_id"]
+    path = (
+        settings.workspaces_dir
+        / "screenshot-agent"
+        / "screenshots"
+        / session_id
+        / run_id
+        / f"{screenshot_id}.png"
+    )
+    assert path.read_bytes() == png
+    shutil.rmtree(settings.workspaces_dir / "screenshot-agent", ignore_errors=True)
 
 
 @pytest.mark.asyncio

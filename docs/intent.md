@@ -48,7 +48,7 @@
 10. 右侧抽屉：Run 时间线/事件/usage、Agent 配置。
 11. 不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）；同一 session 仍最多一个活动 Run。并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
 12. Provider 模型调用失败时按可重试错误（429/5xx/超时/连接）做最多 3 次指数退避 + jitter；4xx 立即失败。`ChatOpenAI` 的 SDK 自身重试关闭，避免与中间件叠加。可重试失败写入 warning 日志（agent/session/异常类型）。
-13. 单个 Run 的 LangGraph 递归上限由 `RUN_RECURSION_LIMIT` 控制（默认 200；原实现写死 50）。真的撞上上限时，执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍以 `completed` 收尾，输出前标注「已达到执行步骤上限」。
+13. 单个 Run 的 LangGraph 递归上限由 `RUN_RECURSION_LIMIT` 控制（默认 500，主 Agent 与 general-purpose 子 Agent 共用；原实现写死 50）。真的撞上上限时，执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍以 `completed` 收尾，输出前标注「已达到执行步骤上限」。
 
 #### 验收标准
 
@@ -384,10 +384,10 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 2. 每次 Run 懒启动一个无头 Chromium 和一个浏览器 context；同一 Run 最多 `BROWSER_CONCURRENCY=2` 个标签页，工具用 `tab` 参数区分，默认 `main`；Run 结束、失败、超时或取消时自动关闭。
 3. 默认只返回页面文字：标题、URL、可见正文和可交互元素 ref；ref 只对最近一次快照有效，动作后返回新快照。
 4. 支持打开网页、读取快照、点击、填写（含 select）、按键和关闭标签页。
-5. `browser_screenshot` 按需返回当前页面的 PNG 图片（可整页），仅在用户明确要求查看截图/外观/布局时调用；Provider 模型必须支持图片输入，图片大小受 `BROWSER_SCREENSHOT_MAX_BYTES` 限制。
+5. `browser_screenshot` 按需返回当前页面的 PNG 图片（可整页），仅在用户明确要求查看截图/外观/布局时调用；Provider 模型必须支持图片输入，图片大小受 `BROWSER_SCREENSHOT_MAX_BYTES` 限制。PNG 同时保存到 `workspaces/<agent_id>/screenshots/<session_id>/<run_id>/`，前端在对应 assistant 消息下方展示；Agent 文件工具可访问。
 6. 安全边界：只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地/保留地址、带凭据 URL、`file://` 和下载；导航请求进入页面前做 DNS 校验。
 7. Playwright 或 Chromium 不可用时，工具向模型返回可读错误并提示安装命令，不中断 Run。
-8. Run 事件新增 `browser_action`（工具名 + 紧凑摘要），前端抽屉可读展示；截图内容不写入事件。
+8. Run 事件新增 `browser_action`（工具名 + 紧凑摘要，截图事件带 `screenshot_id`）；截图文件保存到 Agent 工作区，前端在对应 assistant 消息下方展示。
 9. `BROWSER_*` 配置控制标签页上限、导航/动作超时、快照元素与文字上限、截图大小上限，以及 Chromium sandbox 逃生开关。
 10. 搜索类浏览优先尝试移动版/轻量入口；遇到验证码、安全验证、HTTP 403/429 或其他拦截页时，工具返回明确错误并提示换入口或交给用户，不尝试绕过验证。
 
@@ -395,7 +395,8 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 - 「技能」页面能启用 `web-browser`；未读取 SKILL.md 前工具不可见且不可调用。
 - Agent 能打开 example.com，读取标题与正文，点击链接后拿到新快照，并用 `browser_close` 释放标签页。
-- 用户明确要求截图时，`browser_screenshot` 返回 PNG 图片内容块；未要求时不自动截图。
+- 用户明确要求截图时，`browser_screenshot` 返回 PNG 图片内容块；截图出现在对应 assistant 消息下方，文件位于 Agent 工作区 `screenshots/<session>/<run>/`；未要求时不自动截图。
+- 删除会话时清理该会话的截图目录；删除 Agent 时清理其所有会话的截图目录，保留工作区其他文件。
 - 同一 Run 打开第 3 个标签页返回上限错误，不阻塞其他工具调用。
 - `http://127.0.0.1`、`http://localhost`、`http://169.254.169.254`、`file:///etc/passwd`、带凭据 URL 均返回 `Error:` 且不发生导航。
 - 遇到验证码、安全验证或 HTTP 403/429 时返回明确错误并提示换入口，不自动尝试绕过。

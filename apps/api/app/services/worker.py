@@ -153,6 +153,7 @@ class RunWorker:
                 memory_context=memory_context,
                 workspace_path=agent.id,
                 enabled_skills=list(agent.enabled_skills or []),
+                run_id=run_id,
             )
             instructions = agent.instructions
             auto_memory = agent.auto_memory

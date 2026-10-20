@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import unicodedata
 import uuid
 from pathlib import Path
@@ -14,7 +15,7 @@ from app.db import get_db
 from app.models import Agent, MemoryItem, Message, Provider, Run, RunEvent, RunMemory, Session, new_id
 from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.schemas import AgentCreate, AgentOut, AgentUpdate, AttachmentOut
-from app.services.workspace import resolve_workspace_path
+from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 router = APIRouter(prefix="/api/agents", tags=["agents"], dependencies=[Depends(require_auth)])
 
@@ -159,7 +160,7 @@ async def delete_agent_permanently(agent_id: str, db: AsyncSession = Depends(get
     await db.commit()
 
     for session_id in session_ids:
-        _remove_checkpoint(session_id)
+        _remove_checkpoint(agent_id, session_id)
     return {"deleted": True, "sessions": len(session_ids), "runs": len(run_ids)}
 
 
@@ -215,7 +216,14 @@ async def archive_agent(agent_id: str, db: AsyncSession = Depends(get_db)) -> di
     return {"archived": True}
 
 
-def _remove_checkpoint(session_id: str) -> None:
+def _remove_checkpoint(agent_id: str, session_id: str) -> None:
     base = settings.checkpoint_dir / f"{session_id}.sqlite"
     for path in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
         path.unlink(missing_ok=True)
+    try:
+        workspace = resolve_workspace_path(agent_id, create=False)
+    except WorkspaceError:
+        return
+    screenshots = workspace / "screenshots" / session_id
+    if screenshots.exists():
+        shutil.rmtree(screenshots, ignore_errors=True)

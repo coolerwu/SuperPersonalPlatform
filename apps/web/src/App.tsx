@@ -10,6 +10,7 @@ import type {
   Provider,
   Run,
   RunEvent,
+  ScreenshotInfo,
   Session,
   SkillInfo,
 } from "./types";
@@ -37,6 +38,7 @@ export default function App() {
   const [agentId, setAgentId] = useState("");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionId, setSessionId] = useState("");
+  const [screenshots, setScreenshots] = useState<ScreenshotInfo[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -174,6 +176,23 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  useEffect(() => {
+    if (!sessionId) {
+      setScreenshots([]);
+      return;
+    }
+    let active = true;
+    void api
+      .listScreenshots(sessionId)
+      .then((list) => {
+        if (active && sessionId === sessionIdRef.current) setScreenshots(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [sessionId]);
+
   async function bootstrap() {
     const me = await api.me();
     if (!me.authenticated) {
@@ -242,6 +261,17 @@ export default function App() {
       const list = await api.listSessions(forAgent);
       if (forAgent !== agentIdRef.current) return;
       setSessions(list);
+    } catch {
+      // Keep the current list on a transient refresh failure.
+    }
+  }
+
+  async function refreshScreenshots() {
+    const forSession = sessionIdRef.current;
+    if (!forSession) return;
+    try {
+      const list = await api.listScreenshots(forSession);
+      if (forSession === sessionIdRef.current) setScreenshots(list);
     } catch {
       // Keep the current list on a transient refresh failure.
     }
@@ -322,6 +352,9 @@ export default function App() {
     if (event.type === "assistant_delta") {
       setStreamText((current) => current + String(event.payload.delta ?? ""));
     }
+    if (event.type === "browser_action" && event.payload.screenshot_id) {
+      void refreshScreenshots();
+    }
     if (event.type === "run_completed" || event.type === "run_failed" || event.type === "run_cancelled") {
       void finishRun(event.run_id);
     }
@@ -372,6 +405,7 @@ export default function App() {
         setSessionError(run.error || "Run failed", run.session_id);
       }
       await refreshSessions();
+      void refreshScreenshots();
     } catch (exc) {
       setSessionError(errorText(exc), runSessionsRef.current[runId]);
     }
@@ -780,6 +814,8 @@ export default function App() {
             <ChatPanel
               key={sessionId}
               messages={messages}
+              screenshots={screenshots}
+              sessionId={sessionId}
               streamText={visibleStream}
               sending={chatSending}
               error={error}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,7 @@ from app.config import settings
 from app.db import get_db
 from app.models import Agent, Message, Run, RunEvent, RunMemory, Session, utcnow
 from app.schemas import MessageOut, SessionCreate, SessionOut
+from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 router = APIRouter(prefix="/api", tags=["sessions"], dependencies=[Depends(require_auth)])
 
@@ -77,6 +79,7 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)) ->
     session = await db.get(Session, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    agent_id = session.agent_id
     active = await db.scalar(
         select(Run).where(Run.session_id == session_id, Run.status.in_(("queued", "running"))).limit(1)
     )
@@ -94,4 +97,12 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)) ->
     checkpoint: Path = settings.checkpoint_dir / f"{session_id}.sqlite"
     if checkpoint.exists():
         checkpoint.unlink(missing_ok=True)
+    try:
+        workspace = resolve_workspace_path(agent_id, create=False)
+    except WorkspaceError:
+        workspace = None
+    if workspace is not None:
+        screenshots = workspace / "screenshots" / session_id
+        if screenshots.exists():
+            shutil.rmtree(screenshots, ignore_errors=True)
     return {"deleted": True}

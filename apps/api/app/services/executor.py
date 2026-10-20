@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -22,7 +23,7 @@ from langchain_core.messages import (
 from app.config import settings
 from app.services.browser_tools import BROWSER_TOOL_NAMES, BrowserSession
 from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolContext, SkillToolRegistry
-from app.services.workspace import resolve_workspace_path
+from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 logger = logging.getLogger(__name__)
 _BROWSER_CLEANUP_TASKS: set[asyncio.Task[Any]] = set()
@@ -165,16 +166,66 @@ def browser_action_payload(
     agent_name: str,
     tool_name: str,
     message: ToolMessage,
+    *,
+    screenshot_id: str | None = None,
 ) -> dict[str, Any]:
     content = _tool_output_text(message)
     stripped = content.strip()
     first_line = stripped.splitlines()[0] if stripped else ""
-    return {
+    payload = {
         "agent": ", ".join(namespace) or agent_name,
         "tool": tool_name,
         "summary": " ".join(first_line.split())[:240],
         "ok": not content.lstrip().startswith("Error"),
     }
+    if screenshot_id:
+        payload["screenshot_id"] = screenshot_id
+    return payload
+
+
+def _save_screenshot(
+    message: ToolMessage, *, workspace_path: str, session_id: str, run_id: str
+) -> str | None:
+    if not workspace_path or not session_id or not run_id:
+        return None
+    content = message.content
+    if not isinstance(content, list):
+        return None
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "image_url":
+            continue
+        image_url = block.get("image_url")
+        url = image_url.get("url") if isinstance(image_url, dict) else image_url
+        if not isinstance(url, str) or not url.startswith("data:image/png;base64,"):
+            continue
+        try:
+            data = base64.b64decode(url.split(",", 1)[1], validate=True)
+        except Exception:
+            logger.warning("invalid screenshot payload session=%s run=%s", session_id, run_id)
+            return None
+        if len(data) > settings.browser_screenshot_max_bytes:
+            logger.warning(
+                "screenshot too large session=%s run=%s bytes=%s",
+                session_id,
+                run_id,
+                len(data),
+            )
+            return None
+        try:
+            root = resolve_workspace_path(workspace_path, create=True)
+        except WorkspaceError:
+            logger.exception("cannot resolve workspace for screenshot session=%s", session_id)
+            return None
+        screenshot_id = uuid.uuid4().hex
+        target = root / "screenshots" / session_id / run_id / f"{screenshot_id}.png"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        except OSError:
+            logger.exception("failed to save screenshot session=%s run=%s", session_id, run_id)
+            return None
+        return screenshot_id
+    return None
 
 
 def build_backend(workspace_path: str, *, skills_dir: Path | str | None = None):
@@ -203,6 +254,7 @@ class DeepAgentExecutor:
         enabled_skills: Sequence[str] = (),
         skill_tools: SkillToolRegistry | None = None,
         skills_dir: Path | None = None,
+        run_id: str = "",
     ) -> None:
         self.provider = provider
         self.checkpoint_dir = checkpoint_dir
@@ -212,6 +264,7 @@ class DeepAgentExecutor:
         self.enabled_skills = tuple(enabled_skills)
         self.skill_tools = skill_tools if skill_tools is not None else SKILL_TOOL_REGISTRY
         self.skills_dir = skills_dir
+        self.run_id = run_id
 
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
         try:
@@ -307,7 +360,9 @@ class DeepAgentExecutor:
                 continuations = 0
                 while True:
                     try:
-                        async for event in self._stream_events(agent, input_state, config):
+                        async for event in self._stream_events(
+                            agent, input_state, config, session_id=session_id
+                        ):
                             if event.type == "assistant_delta":
                                 output_parts.append(str(event.payload.get("delta") or ""))
                             yield event
@@ -403,6 +458,8 @@ class DeepAgentExecutor:
         agent: Any,
         input_state: dict[str, Any],
         config: dict[str, Any],
+        *,
+        session_id: str,
     ) -> AsyncIterator[ExecutorEvent]:
         seen_tool_results: set[str] = set()
         tool_names_by_call_id: dict[str, str] = {}
@@ -424,9 +481,25 @@ class DeepAgentExecutor:
                 dedupe_key = call_id or str(id(message))
                 if tool_name in BROWSER_TOOL_NAMES and dedupe_key not in seen_tool_results:
                     seen_tool_results.add(dedupe_key)
+                    screenshot_id = (
+                        _save_screenshot(
+                            message,
+                            workspace_path=self.workspace_path,
+                            session_id=session_id,
+                            run_id=self.run_id,
+                        )
+                        if tool_name == "browser_screenshot"
+                        else None
+                    )
                     yield ExecutorEvent(
                         "browser_action",
-                        browser_action_payload(namespace, self.agent_name, tool_name, message),
+                        browser_action_payload(
+                            namespace,
+                            self.agent_name,
+                            tool_name,
+                            message,
+                            screenshot_id=screenshot_id,
+                        ),
                     )
                 continue
             if not isinstance(message, AIMessageChunk):

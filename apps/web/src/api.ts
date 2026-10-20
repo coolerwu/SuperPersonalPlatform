@@ -7,6 +7,7 @@ import type {
   Provider,
   Run,
   RunEvent,
+  ScreenshotInfo,
   Session,
   SkillCatalog,
   SkillDetail,
@@ -132,6 +133,10 @@ export const api = {
   deleteSession: (sessionId: string) =>
     request<{ deleted: boolean }>(`/api/sessions/${sessionId}`, { method: "DELETE" }),
   listMessages: (sessionId: string) => request<Message[]>(`/api/sessions/${sessionId}/messages`),
+  listScreenshots: (sessionId: string) =>
+    request<ScreenshotInfo[]>(`/api/sessions/${sessionId}/screenshots`),
+  screenshotUrl: (sessionId: string, runId: string, screenshotId: string) =>
+    `/api/sessions/${sessionId}/screenshots/${runId}/${screenshotId}.png`,
 
   sendMessage: (sessionId: string, content: string) =>
     request<{ run_id: string; session_id: string; message_id: string }>("/api/chat/messages", {

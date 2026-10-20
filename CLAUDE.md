@@ -21,6 +21,7 @@
 - v1 暴露工作区内的 filesystem 工具（ls / read_file / write_file / edit_file / delete / glob / grep，由 `FilesystemMiddleware` 提供）；不暴露 shell 工具；浏览器工具通过 `web-browser` 技能门控解锁（Playwright 无头 Chromium，默认文本快照，最多 2 个标签页，可按需返回截图）。memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
 - Skills/Tools：全局技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）+ 每个 Agent 的 `enabled_skills` 启用列表。系统提示只列出启用技能；模型用 `read_file` 读取 `/skills/<name>/SKILL.md` 后，技能在 `metadata.include_tools` 中声明的已注册工具才解锁，读取前不可见也不可调用；文件工具始终可用。技能工具来自代码注册表 `apps/api/app/services/skill_tools.py`（`web_search` / `web_fetch`，DeepSeek Search/Fetch API，按成功请求计费）和 `apps/api/app/services/browser_tools.py`（`browser_open` / `browser_snapshot` / `browser_click` / `browser_fill` / `browser_press` / `browser_screenshot` / `browser_close`），不在技能目录执行 Python。Agent 可以在对话中直接用文件工具创建或修改 `/skills/**` 下的技能，不需要表单；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具；技能声明本身不是安全边界。首次启动 seed `web-search`、`web-fetch` 和 `web-browser` 技能；内置技能的写入哈希记录在 `~/.super-personal-platform/skills/.seed_state.json`，启动时只有内容与记录一致（用户未修改）的内置技能才会随版本更新，用户改过的保持不动；无记录的文件不动，直到其内容与内置默认一致后开始跟踪。「技能」页面可以打开现有 SKILL.md 查看并直接编辑保存（原子写入，保存前校验 frontmatter）；新建技能仍通过对话完成。
 - Browser：每次 Run 懒启动一个 Chromium + context，`BROWSER_CONCURRENCY`（默认 2）限制标签页；执行器在 `finally` 关闭（含失败、超时、取消）；只允许公开 http/https，拒绝 localhost、私网、`file://` 和下载；默认返回文字和元素 ref，只有用户明确要求时才用 `browser_screenshot` 返回 PNG 图片（需要 Provider 支持图片输入）；搜索优先尝试移动/轻量入口，遇到验证码或 HTTP 403/429 返回明确错误并提示换入口，不尝试绕过；相关配置为 `BROWSER_*`。
+- Browser 截图：`browser_screenshot` 返回给模型的 PNG 同时保存到 `workspaces/<agent_id>/screenshots/<session_id>/<run_id>/`，前端在对应 assistant 消息下方展示缩略图，Agent 文件工具可访问；删除会话或彻底删除 Agent 时清理对应目录。
 - 记忆：`memory_items`（scope=user|agent，无 status）+ `run_memories`；user memory 全局、agent memory 按 Agent 隔离；session 工作记忆仍由 checkpoint 负责。
 - 写入：配置页手动 CRUD、对话里“记住……”写 user memory、每个 Agent 的 `auto_memory` 开关在 Run 完成后提取 agent memory；先用 FTS5（trigram）找相关历史记忆，再让模型返回 add/update/delete 做合并，最多 12 个操作、200 条上限。提取在 Run 落 completed 后作为后台任务执行，不占用 Run 并发槽；同一 Agent 的提取在进程内串行（单进程部署），后一次能看到前一次刚写入的记忆，避免并发写入语义重复的条目。
 - 读取：每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入，标注为数据而非指令；记录本次使用的 memory id。
@@ -41,7 +42,7 @@
 - 每次用户消息或手动运行创建一个 Run；状态：`queued / running / completed / failed / cancelled`。
 - Session 懒创建：点击「新对话」只清空视图，首次发送时才创建 Session 和 Run；不要为了展示空状态提前落库。
 - 同一 session 最多一个活动 Run；不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）。Run 并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
-- Run 的 LangGraph 递归上限为 `RUN_RECURSION_LIMIT`（默认 200，deepagents 自身默认 9999）。真撞上限时执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍落 `completed`，输出前标注「已达到执行步骤上限」。
+- Run 的 LangGraph 递归上限为 `RUN_RECURSION_LIMIT`（默认 500，主 Agent 与 general-purpose 子 Agent 共用，deepagents 自身默认 9999）。真撞上限时执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍落 `completed`，输出前标注「已达到执行步骤上限」。
 - 服务停止/重启时，正在执行的 Run 重新入队（清空 `started_at`）并在启动后继续；已请求取消的 Run 落 `cancelled`，不会被重启复活。启动时 `requeue_running_runs` 兜底崩溃留下的 `running`。重新入队不是事务回滚：已经完成的文件/浏览器副作用不会撤销。
 - Run 事件 append-only，存 `run_events` 表；其中 `assistant_delta` 是每个流式片段一行，SSE/轮询和刷新恢复依赖它。前端默认折叠原始片段，仅保留 Run/工具/子 Agent/用量等可读事件。
 - 生产数据库是 SQLite：`~/.super-personal-platform/data/app.db`；checkpoint 在同目录 `checkpoints/`。时间列用 `UTCDateTime` 保证 SQLite 读回仍是 UTC。
