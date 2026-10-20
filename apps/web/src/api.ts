@@ -9,6 +9,7 @@ import type {
   RunEvent,
   Session,
   SkillCatalog,
+  SkillDetail,
   SystemInfo,
   ToolsCatalog,
 } from "./types";
@@ -146,6 +147,13 @@ export const api = {
 
   getSystem: () => request<SystemInfo>("/api/system"),
   listSkills: () => request<SkillCatalog>("/api/skills"),
+  getSkill: (directory: string) =>
+    request<SkillDetail>(`/api/skills/${encodeURIComponent(directory)}`),
+  updateSkill: (directory: string, content: string) =>
+    request<SkillDetail>(`/api/skills/${encodeURIComponent(directory)}`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    }),
   listTools: () => request<ToolsCatalog>("/api/tools"),
 
   listMemories: (params: { scope: MemoryScope; agentId?: string; q?: string }) => {

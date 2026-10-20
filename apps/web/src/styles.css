@@ -1899,6 +1899,58 @@ textarea {
   color: var(--warn);
 }
 
+.skill-row > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-open {
+  flex: 0 0 auto;
+  margin-left: 10px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 11px;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.skill-open:hover {
+  color: var(--accent);
+  border-color: rgba(15, 118, 110, 0.3);
+  background: var(--accent-soft);
+}
+
+.skill-editor {
+  width: min(760px, 100%);
+}
+
+.skill-editor-path {
+  margin-top: 4px;
+  color: var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.skill-editor-hint {
+  margin: 8px 0 0;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.skill-editor-text {
+  width: 100%;
+  min-height: min(48vh, 430px);
+  margin-top: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
 .tool-list {
   display: grid;
   gap: 8px;

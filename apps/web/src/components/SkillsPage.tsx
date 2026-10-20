@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 
 import { errorText } from "../api";
 import type { Agent, SkillInfo } from "../types";
+import { SkillEditorDialog } from "./SkillEditorDialog";
 
 type SkillsPageProps = {
   agent: Agent | undefined;
   skills: SkillInfo[];
   skillsErrors: string[];
-  onRefresh: () => void;
+  onRefresh: () => Promise<void>;
   onSaveEnabled: (names: string[]) => Promise<void>;
   onClose: () => void;
 };
@@ -23,6 +24,7 @@ export function SkillsPage({
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [editorSkill, setEditorSkill] = useState<SkillInfo | null>(null);
 
   const enabled = agent?.enabled_skills ?? [];
   const installed = new Set(skills.map((skill) => skill.name));
@@ -49,6 +51,12 @@ export function SkillsPage({
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSaved(name: string) {
+    setError("");
+    setNotice(`已保存 ${name}`);
+    await onRefresh();
   }
 
   return (
@@ -79,13 +87,17 @@ export function SkillsPage({
             {agent && (
               <>
                 <div className="hint">
-                  技能库：~/.super-personal-platform/skills。直接让 Agent 在对话里创建或修改技能即可；
-                  新技能需要在这里为当前 Agent 启用。启用技能即允许它声明的工具，读取 SKILL.md 后解锁。
-                  文件工具始终可用。
+                  技能库：~/.super-personal-platform/skills。点击技能右侧「查看」可以直接打开并编辑
+                  SKILL.md；新建技能仍然在对话里让 Agent 完成。新技能需要在这里为当前 Agent 启用，
+                  启用技能即允许它声明的工具，读取 SKILL.md 后解锁。文件工具始终可用。
                 </div>
                 <div className="skill-list">
                   {skills.map((skill) => (
-                    <label className="toggle-row" htmlFor={`skills-page-${skill.name}`} key={skill.name}>
+                    <label
+                      className="toggle-row skill-row"
+                      htmlFor={`skills-page-${skill.name}`}
+                      key={skill.name}
+                    >
                       <input
                         id={`skills-page-${skill.name}`}
                         type="checkbox"
@@ -104,6 +116,17 @@ export function SkillsPage({
                           <small className="skill-warning" key={warning}>{warning}</small>
                         ))}
                       </span>
+                      <button
+                        type="button"
+                        className="skill-open"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setEditorSkill(skill);
+                        }}
+                      >
+                        查看
+                      </button>
                     </label>
                   ))}
                   {missing.map((skillName) => (
@@ -138,6 +161,12 @@ export function SkillsPage({
           </section>
         </div>
       </div>
+
+      <SkillEditorDialog
+        skill={editorSkill}
+        onClose={() => setEditorSkill(null)}
+        onSaved={handleSaved}
+      />
     </main>
   );
 }

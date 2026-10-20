@@ -34,6 +34,14 @@ export type SkillCatalog = {
   errors: string[];
 };
 
+export type SkillDetail = {
+  name: string;
+  directory: string;
+  path: string;
+  content: string;
+  warnings: string[];
+};
+
 export type ToolInfo = {
   name: string;
   description: string;

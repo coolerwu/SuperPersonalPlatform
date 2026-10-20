@@ -160,7 +160,7 @@ export default function App() {
   }
 
   function refreshSkills() {
-    void loadSkills().catch(() => undefined);
+    return loadSkills().catch(() => undefined);
   }
 
   async function loadWorkspace() {

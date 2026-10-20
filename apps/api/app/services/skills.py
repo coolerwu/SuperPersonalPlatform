@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,14 @@ MAX_SKILL_FILE_SIZE = 10 * 1024 * 1024
 MAX_SKILL_NAME_LENGTH = 64
 MAX_SKILL_DESCRIPTION_LENGTH = 1024
 SEED_STATE_FILENAME = ".seed_state.json"
+
+
+class SkillNotFoundError(ValueError):
+    """The skill directory or its SKILL.md does not exist."""
+
+
+class SkillValidationError(ValueError):
+    """The skill file cannot be read or saved safely."""
 
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -91,6 +100,15 @@ class SkillInfo:
 class SkillCatalog:
     skills: tuple[SkillInfo, ...] = ()
     errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkillDocument:
+    name: str
+    directory: str
+    path: str
+    content: str
+    warnings: tuple[str, ...] = ()
 
 
 def is_valid_skill_name(name: str) -> bool:
@@ -237,6 +255,122 @@ def scan_skills(root: Path | None = None) -> SkillCatalog:
 
     skills.sort(key=lambda item: item.name)
     return SkillCatalog(skills=tuple(skills), errors=tuple(errors))
+
+
+def _skills_root() -> Path:
+    try:
+        return settings.skills_dir.expanduser().resolve()
+    except OSError as exc:
+        raise SkillValidationError(f"cannot resolve skills directory: {exc}") from exc
+
+
+def _resolve_skill_directory(directory: str) -> Path:
+    raw = str(directory or "").strip()
+    if not raw or raw in (".", "..") or raw.startswith(".") or "/" in raw or "\\" in raw:
+        raise SkillNotFoundError("skill not found")
+    base = _skills_root()
+    candidate = base / raw
+    if candidate.is_symlink():
+        raise SkillNotFoundError("skill not found")
+    try:
+        resolved = candidate.resolve(strict=False)
+        resolved.relative_to(base)
+    except (OSError, ValueError) as exc:
+        raise SkillNotFoundError("skill not found") from exc
+    if resolved.parent != base or not resolved.is_dir():
+        raise SkillNotFoundError("skill not found")
+    return resolved
+
+
+def _read_skill_text(directory: str) -> tuple[Path, str]:
+    folder = _resolve_skill_directory(directory)
+    target = folder / "SKILL.md"
+    if target.is_symlink() or not target.is_file():
+        raise SkillNotFoundError("skill not found")
+    try:
+        if target.stat().st_size > MAX_SKILL_FILE_SIZE:
+            raise SkillValidationError("SKILL.md is too large")
+        return target, target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SkillValidationError(f"cannot read SKILL.md: {exc}") from exc
+
+
+def _warnings_for(name: str, description: str, directory: str) -> tuple[str, ...]:
+    warnings: list[str] = []
+    if name != directory:
+        warnings.append(f"name '{name}' does not match directory '{directory}'")
+    if not is_valid_skill_name(name):
+        warnings.append("name does not follow the Agent Skills specification; it cannot be enabled")
+    if len(description) > MAX_SKILL_DESCRIPTION_LENGTH:
+        warnings.append(
+            f"description exceeds {MAX_SKILL_DESCRIPTION_LENGTH} characters and will be truncated"
+        )
+    return tuple(warnings)
+
+
+def _validate_skill_content(directory: str, content: str) -> tuple[str, str]:
+    if not content.strip():
+        raise SkillValidationError("SKILL.md is empty")
+    if len(content.encode("utf-8")) > MAX_SKILL_FILE_SIZE:
+        raise SkillValidationError("SKILL.md is too large")
+    match = _FRONTMATTER_PATTERN.match(content)
+    if match is None:
+        raise SkillValidationError("SKILL.md must start with YAML frontmatter")
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError as exc:
+        raise SkillValidationError(f"invalid YAML frontmatter: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SkillValidationError("frontmatter must be a mapping")
+    name = data.get("name")
+    description = data.get("description")
+    if not isinstance(name, str) or not name.strip():
+        raise SkillValidationError("frontmatter is missing 'name'")
+    if not isinstance(description, str) or not description.strip():
+        raise SkillValidationError("frontmatter is missing 'description'")
+    name = name.strip()
+    description = description.strip()
+    _warnings_for(name, description, directory)
+    return name, description
+
+
+def read_skill(directory: str) -> SkillDocument:
+    folder = _resolve_skill_directory(directory)
+    _, content = _read_skill_text(directory)
+    info, error = _parse_skill(folder, _skills_root())
+    if info is None:
+        raise SkillValidationError(error or "SKILL.md is invalid")
+    return SkillDocument(
+        name=info.name,
+        directory=directory,
+        path=info.path,
+        content=content,
+        warnings=info.warnings,
+    )
+
+
+def update_skill(directory: str, content: str) -> SkillDocument:
+    folder = _resolve_skill_directory(directory)
+    target = folder / "SKILL.md"
+    if target.is_symlink() or not target.is_file():
+        raise SkillNotFoundError("skill not found")
+
+    name, description = _validate_skill_content(directory, content)
+    temp = folder / f".SKILL.md.{uuid.uuid4().hex}.tmp"
+    try:
+        temp.write_text(content, encoding="utf-8")
+        os.replace(temp, target)
+    except OSError as exc:
+        temp.unlink(missing_ok=True)
+        raise SkillValidationError(f"cannot save SKILL.md: {exc}") from exc
+
+    return SkillDocument(
+        name=name,
+        directory=directory,
+        path=f"/skills/{directory}/SKILL.md",
+        content=content,
+        warnings=_warnings_for(name, description, directory),
+    )
 
 
 def seed_default_skills(root: Path | None = None) -> None:

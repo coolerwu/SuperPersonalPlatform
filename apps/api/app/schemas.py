@@ -93,6 +93,18 @@ class SkillCatalogOut(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class SkillDetailOut(BaseModel):
+    name: str
+    directory: str
+    path: str
+    content: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SkillUpdate(BaseModel):
+    content: str = Field(min_length=1)
+
+
 class ToolOut(BaseModel):
     name: str
     description: str = ""
