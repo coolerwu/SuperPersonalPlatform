@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
@@ -159,13 +160,31 @@ async def cancel_run_record(run_id: str) -> None:
         await db.commit()
 
 
+def _requeue_or_cancel(db: AsyncSession, run: Run) -> None:
+    if run.cancel_requested:
+        run.status = "cancelled"
+        run.finished_at = utcnow()
+        db.add(RunEvent(run_id=run.id, type="run_cancelled", payload={"message": "run cancelled"}))
+        return
+    run.status = "queued"
+    run.started_at = None
+    db.add(RunEvent(run_id=run.id, type="run_queued", payload={"reason": "service_restart"}))
+
+
+async def requeue_run(run_id: str) -> None:
+    async with SessionLocal() as db:
+        run = await db.get(Run, run_id)
+        if run is None or run.status != "running":
+            return
+        _requeue_or_cancel(db, run)
+        await db.commit()
+
+
 async def requeue_running_runs() -> None:
     async with SessionLocal() as db:
         runs = (await db.scalars(select(Run).where(Run.status == "running"))).all()
         for run in runs:
-            run.status = "queued"
-            run.started_at = None
-            run.cancel_requested = False
+            _requeue_or_cancel(db, run)
         await db.commit()
 
 

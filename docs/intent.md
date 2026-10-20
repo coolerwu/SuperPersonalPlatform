@@ -54,8 +54,9 @@
 - Chat 流式输出；刷新后会话历史与 Run 状态可恢复。
 - 主 Agent 能把任务派给 general-purpose 子 Agent；trace 可见。
 - 每次用户消息创建 Run；Run 详情展示事件、usage/cost。
-- 重启 api/worker 后 queued/running 能恢复；同一 session 可继续。
+- 重启 api/worker 后 queued/running 能恢复：优雅停止和进程崩溃都会把 running 重新排队，启动后继续；用户主动取消的 Run 保持 cancelled，不会被重启复活。仍打开的前端页面刷新后重新接上该 Run。
 - 两个不同 session 的 Run 可同时处于 running；第三个 session 的 Run 排队，直到有空位；同一 session 的第二个 Run 仍被拒绝。
+- 服务重启时正在运行的 Run 变为 queued 并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的前端页面刷新后重新接上该 Run。
 - 取消 Run 能停止并落终态。
 - 不暴露文件、Shell、浏览器、skills、memory 工具。
 - 后端测试与前端构建通过。

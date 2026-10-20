@@ -143,7 +143,7 @@ export const api = {
   getRunEvents: (runId: string, after = 0) => request<RunEvent[]>(`/api/runs/${runId}/events?after=${after}`),
   cancelRun: (runId: string) => request<{ cancelled: boolean }>(`/api/runs/${runId}/cancel`, { method: "POST" }),
   retryRun: (runId: string) => request<{ run_id: string }>(`/api/runs/${runId}/retry`, { method: "POST" }),
-  streamUrl: (runId: string) => `/api/runs/${runId}/stream`,
+  streamUrl: (runId: string, after = 0) => `/api/runs/${runId}/stream?after=${after}`,
 
   getSystem: () => request<SystemInfo>("/api/system"),
   listSkills: () => request<SkillCatalog>("/api/skills"),

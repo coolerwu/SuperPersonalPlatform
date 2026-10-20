@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import Agent, Message, Run, Session, utcnow
+from app.models import Agent, Message, Run, RunEvent, Session, utcnow
 from app.services.executor import ExecutorEvent
 from app.services.run_service import create_run, requeue_running_runs
 from app.services.worker import RunWorker
@@ -329,3 +329,79 @@ async def test_worker_cancels_running_task(monkeypatch) -> None:
         assert stored.status == "cancelled"
     finally:
         await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_requeues_running_run(monkeypatch) -> None:
+    started = asyncio.Event()
+
+    class HangingExecutor:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+        async def run(self, *, instructions: str, session_id: str, content: str):
+            started.set()
+            yield ExecutorEvent("assistant_delta", {"delta": "working"})
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr("app.services.worker.DeepAgentExecutor", HangingExecutor)
+    await _cancel_queued_runs()
+    session_id = await _new_session()
+    run, _ = await create_run(session_id, "hi")
+
+    worker = RunWorker()
+    await worker.start()
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await worker.stop()
+
+    async with SessionLocal() as db:
+        stored = await db.get(Run, run.id)
+        assert stored is not None
+        assert stored.status == "queued"
+        assert stored.started_at is None
+        events = (
+            await db.scalars(
+                select(RunEvent).where(RunEvent.run_id == run.id).order_by(RunEvent.id)
+            )
+        ).all()
+        assert any(
+            event.type == "run_queued" and event.payload.get("reason") == "service_restart"
+            for event in events
+        )
+
+    monkeypatch.setattr("app.services.worker.DeepAgentExecutor", FakeExecutor)
+    recovered = RunWorker()
+    await recovered.start()
+    try:
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            async with SessionLocal() as db:
+                stored = await db.get(Run, run.id)
+            if stored is not None and stored.status == "completed":
+                break
+            await asyncio.sleep(0.02)
+        assert stored is not None
+        assert stored.status == "completed"
+    finally:
+        await recovered.stop()
+
+
+@pytest.mark.asyncio
+async def test_requeue_running_runs_respects_cancel_request() -> None:
+    await _cancel_queued_runs()
+    session_id = await _new_session()
+    run, _ = await create_run(session_id, "hi")
+
+    async with SessionLocal() as db:
+        stored = await db.get(Run, run.id)
+        assert stored is not None
+        stored.status = "running"
+        stored.cancel_requested = True
+        await db.commit()
+
+    await requeue_running_runs()
+
+    async with SessionLocal() as db:
+        stored = await db.get(Run, run.id)
+        assert stored is not None
+        assert stored.status == "cancelled"

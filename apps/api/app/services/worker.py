@@ -16,6 +16,7 @@ from app.services.run_service import (
     cancel_run_record,
     complete_run,
     fail_run,
+    requeue_run,
     requeue_running_runs,
 )
 
@@ -28,11 +29,13 @@ class RunWorker:
         self._wake = asyncio.Event()
         self._loop_task: asyncio.Task | None = None
         self._tasks: dict[str, asyncio.Task] = {}
+        self._shutting_down = False
 
     async def start(self) -> None:
         self._loop_task = asyncio.create_task(self._run_loop(), name="run-worker")
 
     async def stop(self) -> None:
+        self._shutting_down = True
         self._stop.set()
         self._wake.set()
         if self._loop_task is not None:
@@ -195,7 +198,10 @@ class RunWorker:
                             return
                         await append_event(run_id, event.type, event.payload)
         except asyncio.CancelledError:
-            await cancel_run_record(run_id)
+            if self._shutting_down:
+                await requeue_run(run_id)
+            else:
+                await cancel_run_record(run_id)
             raise
         except TimeoutError:
             await fail_run(run_id, "RunTimeoutError", "run exceeded the execution timeout")

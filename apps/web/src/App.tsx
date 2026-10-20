@@ -270,13 +270,17 @@ export default function App() {
     }
     if ((run.status === "queued" || run.status === "running") && !finishedRuns.current.has(run.id)) {
       setSending(true);
+      const lastQueuedId = runEvents.reduce(
+        (latest, event) => (event.type === "run_queued" ? event.id : latest),
+        0,
+      );
       setStreamText(
         runEvents
-          .filter((event) => event.type === "assistant_delta")
+          .filter((event) => event.type === "assistant_delta" && event.id > lastQueuedId)
           .map((event) => String(event.payload.delta ?? ""))
           .join(""),
       );
-      subscribe(run.id);
+      subscribe(run.id, runEvents.at(-1)?.id ?? 0);
     }
   }
 
@@ -293,20 +297,23 @@ export default function App() {
     closePoll();
   }
 
-  function subscribe(runId: string) {
+  function subscribe(runId: string, after = 0) {
     closeStream();
-    const source = new EventSource(api.streamUrl(runId));
+    let lastId = after;
+    const source = new EventSource(api.streamUrl(runId, after));
     eventSourceRef.current = source;
     source.onmessage = (message) => {
       try {
-        applyEvent(JSON.parse(message.data) as RunEvent);
+        const event = JSON.parse(message.data) as RunEvent;
+        lastId = Math.max(lastId, event.id);
+        applyEvent(event);
       } catch {
         // Ignore malformed frames.
       }
     };
     source.onerror = () => {
       closeStream();
-      void pollRun(runId);
+      void pollRun(runId, lastId);
     };
   }
 
@@ -320,9 +327,9 @@ export default function App() {
     }
   }
 
-  async function pollRun(runId: string) {
+  async function pollRun(runId: string, after = 0) {
     closePoll();
-    let lastId = 0;
+    let lastId = after;
     const tick = async () => {
       try {
         const newEvents = await api.getRunEvents(runId, lastId);
