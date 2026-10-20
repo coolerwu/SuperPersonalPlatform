@@ -49,8 +49,8 @@ function CopyButton({ text, label = "复制" }: { text: string; label?: string }
 }
 
 export function ChatPanel(props: ChatPanelProps) {
-  const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -95,11 +95,30 @@ export function ChatPanel(props: ChatPanelProps) {
     return () => window.removeEventListener("resize", syncHeight);
   }, [props.draft]);
 
+  function scrollToBottom() {
+    const element = scrollRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+  }
+
   useEffect(() => {
-    if (stickRef.current) {
-      endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
+    if (!stickRef.current) return;
+    scrollToBottom();
+    const frame = window.requestAnimationFrame(scrollToBottom);
+    return () => window.cancelAnimationFrame(frame);
   }, [props.messages, props.streamText, props.sending]);
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (stickRef.current) scrollToBottom();
+    });
+    observer.observe(content);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   function handleScroll() {
     const element = scrollRef.current;
@@ -156,6 +175,7 @@ export function ChatPanel(props: ChatPanelProps) {
   return (
     <section className="chat-panel">
       <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
+        <div className="message-flow" ref={contentRef}>
         {props.messages.length === 0 && !props.sending && (
           <div className="chat-empty">
             <div className="chat-empty-mark">ACC</div>
@@ -247,7 +267,7 @@ export function ChatPanel(props: ChatPanelProps) {
             )}
           </div>
         )}
-        <div ref={endRef} />
+        </div>
       </div>
 
       <div className="composer">

@@ -694,7 +694,10 @@ textarea {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 26px max(clamp(18px, 4vw, 42px), calc((100% - var(--chat-lane)) / 2)) 18px;
-  scroll-behavior: smooth;
+}
+
+.message-flow {
+  display: flow-root;
 }
 
 .message-row {
