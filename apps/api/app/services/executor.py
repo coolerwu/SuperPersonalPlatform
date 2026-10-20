@@ -162,6 +162,13 @@ def _split_stream_chunk(chunk: Any) -> tuple[tuple[str, ...], Any]:
     return (), chunk
 
 
+def _is_internal_summarization(metadata: dict[str, Any]) -> bool:
+    """Context-compaction calls share the model node but are not assistant output."""
+    if metadata.get("lc_source") == "summarization":
+        return True
+    return str(metadata.get("langgraph_node") or "").startswith("SummarizationMiddleware")
+
+
 def _tool_output_text(message: ToolMessage) -> str:
     content = message.content
     if isinstance(content, str):
@@ -509,6 +516,9 @@ class DeepAgentExecutor:
             if not (isinstance(data, tuple) and len(data) >= 2):
                 continue
             message = data[0]
+            metadata = data[1] if len(data) > 1 and isinstance(data[1], dict) else {}
+            if _is_internal_summarization(metadata):
+                continue
             if isinstance(message, ToolMessage) and not isinstance(message, ToolMessageChunk):
                 call_id = str(getattr(message, "tool_call_id", "") or "")
                 tool_name = str(getattr(message, "name", "") or "") or (

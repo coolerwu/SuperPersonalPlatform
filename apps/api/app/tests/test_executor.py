@@ -390,3 +390,47 @@ async def test_executor_continues_after_step_limit(tmp_path, monkeypatch) -> Non
     completed = [event for event in events if event.type == "run_completed"]
     assert len(completed) == 1
     assert completed[0].payload["output"] == "第一步 完成"
+
+
+@pytest.mark.asyncio
+async def test_executor_hides_summarization_chunks(tmp_path, monkeypatch) -> None:
+    class FakeAgent:
+        async def astream(self, _state, config=None, *, stream_mode=None, subgraphs=False):
+            yield (
+                (),
+                "messages",
+                (
+                    AIMessageChunk(content="## SESSION INTENT\ninternal summary"),
+                    {"lc_source": "summarization", "langgraph_node": "model"},
+                ),
+            )
+            yield (
+                (),
+                "messages",
+                (
+                    AIMessageChunk(content="visible answer"),
+                    {"langgraph_node": "model"},
+                ),
+            )
+
+    monkeypatch.setattr("deepagents.create_deep_agent", lambda **_kwargs: FakeAgent())
+
+    provider = SimpleNamespace(
+        api_key="test-key", base_url="https://api.deepseek.com", model="deepseek-v4-flash"
+    )
+    executor = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="test-agent",
+    )
+    events = [
+        event
+        async for event in executor.run(instructions="test", session_id="summary", content="hi")
+    ]
+
+    deltas = [event.payload["delta"] for event in events if event.type == "assistant_delta"]
+    assert deltas == ["visible answer"]
+    completed = [event for event in events if event.type == "run_completed"]
+    assert len(completed) == 1
+    assert completed[0].payload["output"] == "visible answer"

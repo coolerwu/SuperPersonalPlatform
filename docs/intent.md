@@ -49,6 +49,7 @@
 11. 不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）；同一 session 仍最多一个活动 Run。并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
 12. Provider 模型调用失败时按可重试错误（429/5xx/超时/连接）做最多 3 次指数退避 + jitter；4xx 立即失败。`ChatOpenAI` 的 SDK 自身重试关闭，避免与中间件叠加。可重试失败写入 warning 日志（agent/session/异常类型）。
 13. 单个 Run 的 LangGraph 递归上限由 `RUN_RECURSION_LIMIT` 控制（默认 500，主 Agent 与 general-purpose 子 Agent 共用；原实现写死 50）。真的撞上上限时，执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍以 `completed` 收尾，输出前标注「已达到执行步骤上限」。
+14. deepagents 的上下文压缩（summarization）是内部模型调用，其流式片段（`metadata.lc_source=summarization`）必须过滤，不进入 assistant 输出、思考过程或 Run 事件。
 
 #### 验收标准
 
@@ -350,7 +351,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
    - `web_fetch`：调用 DeepSeek Fetch API（`POST {base_url}/v1/tools/fetch`），请求 `{url}`，返回 `{title, content}`（Markdown）。
    两者均使用 Agent Provider 的 key，按成功请求计费，受 DeepSeek QPS 限制。
 6. 模型必须先用 `read_file` 读取 `/skills/<name>/SKILL.md`，该技能声明的已启用工具才会在当次模型调用中披露并允许执行；读取之前工具不可见，调用会失败。
-7. 解锁在会话内保持：读取记录随 checkpoint 保留，只要技能读取还在上下文中就可用；被摘要压缩掉后自动重新锁定。
+7. 解锁在会话内保持：读取记录随 checkpoint 保留；上下文被摘要压缩后，启用且声明了 `include_tools` 的技能会以 `pinned_skill` 消息自动重新注入正文，技能内容与工具解锁不会因压缩丢失。
 8. 每次 Run 重新扫描技能目录并应用最新的技能启用列表。
 9. Agent 可以在对话中通过文件工具创建/修改 `/skills/<name>/SKILL.md`，不需要表单；技能声明不是安全边界，工具是否可用由每 Agent 启用的技能控制。
 10. `GET /api/skills` 返回扫描到的技能与解析错误；「技能」页面展示并启停技能。
@@ -361,7 +362,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - 左侧「技能」页面能看到全局技能库，并为当前 Agent 勾选/取消技能；保存后下一轮 Run 生效。
 - 左侧「工具」页面能看到文件工具与技能工具的注册/声明情况；工具不单独启停。
 - 未启用的技能不出现在系统提示中，读取它的 SKILL.md 不会解锁工具。
-- 技能工具在读取 SKILL.md 前不可见且不可调用，读取后在同一会话内可用。
+- 技能工具在读取 SKILL.md 前不可见且不可调用，读取后在同一会话内可用；上下文压缩后仍保持解锁。
 - `web_search` 和 `web_fetch` 能按 DeepSeek Search/Fetch 协议返回结构化结果与页面正文；错误码能回传给模型。
 - 用户可以让 Agent 在对话中创建/修改技能；创建后能在「技能」页面为当前 Agent 启用。
 - Agent 无法绕过技能启用限制：只有已启用技能声明的已注册工具才可能解锁。
