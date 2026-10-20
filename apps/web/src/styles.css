@@ -1263,6 +1263,11 @@ textarea {
   background: var(--accent-soft);
 }
 
+.composer-menu button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .composer-menu-icon {
   flex: 0 0 auto;
   margin-top: 1px;
@@ -2066,23 +2071,6 @@ textarea {
   flex-wrap: wrap;
 }
 
-.memory-toolbar .ghost-button {
-  flex: 0 0 auto;
-  padding: 8px 12px;
-  font-size: 12px;
-}
-
-.memory-notice {
-  margin-top: 10px;
-  padding: 8px 10px;
-  border: 1px solid rgba(21, 128, 61, 0.24);
-  border-radius: 8px;
-  background: var(--ok-soft);
-  color: var(--ok-ink);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .memory-search {
   width: 240px;
   padding: 8px 10px;
@@ -2701,10 +2689,6 @@ textarea {
   }
 
   .memory-search {
-    width: 100%;
-  }
-
-  .memory-toolbar .ghost-button {
     width: 100%;
   }
 

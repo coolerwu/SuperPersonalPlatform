@@ -150,6 +150,7 @@ class RunWorker:
                 provider=provider,
                 checkpoint_dir=settings.checkpoint_dir,
                 agent_name=agent.name,
+                agent_id=agent.id,
                 memory_context=memory_context,
                 workspace_path=agent.id,
                 enabled_skills=list(agent.enabled_skills or []),

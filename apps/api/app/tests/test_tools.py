@@ -37,6 +37,9 @@ def test_tools_api_includes_builtin_web_tools(client) -> None:
     ):
         assert tools[name]["registered"] is True
         assert tools[name]["skills"] == ["web-browser"]
+    for name in ("memory_list", "memory_update", "memory_delete"):
+        assert tools[name]["registered"] is True
+        assert tools[name]["skills"] == ["memory-organizer"]
 
 
 def test_tools_api_reports_filesystem_and_skill_tools(client, monkeypatch) -> None:

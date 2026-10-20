@@ -49,12 +49,13 @@ def normalize_tool_names(names: Iterable[str]) -> list[str]:
 
 @dataclass
 class SkillToolContext:
-    """Per-run credentials and transport a skill tool is built with."""
+    """Per-run credentials, agent scope, and transport a skill tool is built with."""
 
     api_key: str
     base_url: str
     http_client: httpx.AsyncClient | None = None
     browser: BrowserSession | None = None
+    agent_id: str = ""
 
 
 @dataclass(frozen=True)

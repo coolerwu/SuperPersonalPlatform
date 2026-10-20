@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.db import get_db
-from app.models import Agent, Provider
-from app.schemas import MemoryConsolidate, MemoryCreate, MemoryOut, MemoryUpdate
+from app.models import Agent
+from app.schemas import MemoryCreate, MemoryOut, MemoryUpdate
 from app.services import memory_service
 
 router = APIRouter(prefix="/api/memories", tags=["memories"], dependencies=[Depends(require_auth)])
@@ -40,29 +40,6 @@ async def create_memory(
     if item is None:
         raise HTTPException(status_code=400, detail="memory content is empty or limit reached")
     return MemoryOut.model_validate(item)
-
-
-@router.post("/consolidate")
-async def consolidate_memories(
-    payload: MemoryConsolidate,
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, int]:
-    agent = await db.get(Agent, payload.agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="agent not found")
-    provider = await db.get(Provider, agent.provider_id)
-    if provider is None or not provider.api_key:
-        raise HTTPException(status_code=400, detail="configure a provider with an API key first")
-    try:
-        return await memory_service.consolidate_memories(
-            scope=payload.scope,
-            agent_id=payload.agent_id,
-            provider=provider,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"memory consolidation failed: {exc}") from exc
 
 
 @router.put("/{memory_id}", response_model=MemoryOut)

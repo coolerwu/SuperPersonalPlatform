@@ -29,12 +29,8 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
   const [editContent, setEditContent] = useState("");
   const [editTags, setEditTags] = useState("");
   const [busy, setBusy] = useState(false);
-  const [consolidating, setConsolidating] = useState(false);
-  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
-  const [confirm, setConfirm] = useState<
-    { kind: "delete"; id: string } | { kind: "consolidate" } | null
-  >(null);
+  const [confirmId, setConfirmId] = useState("");
 
   const agent = agents.find((item) => item.id === agentId);
 
@@ -125,24 +121,6 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
     }
   }
 
-  async function consolidate() {
-    if (consolidating || busy || !agentId || items.length < 2) return;
-    setConsolidating(true);
-    setError("");
-    setNotice("");
-    try {
-      const result = await api.consolidateMemories({ scope, agent_id: agentId });
-      setNotice(
-        `整理完成：更新 ${result.updated} 条，删除 ${result.deleted} 条，剩余 ${result.after} 条。`,
-      );
-      await reload();
-    } catch (exc) {
-      setError(errorText(exc));
-    } finally {
-      setConsolidating(false);
-    }
-  }
-
   const filtered = items.filter((item) => {
     const needle = query.trim().toLowerCase();
     if (!needle) return true;
@@ -152,8 +130,6 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
     );
   });
   const unavailable = scope === "agent" && !agentId;
-  const consolidateLabel =
-    scope === "user" ? "所有 Agent 的用户记忆" : `${agent?.name ?? "当前 Agent"} 的 Agent 记忆`;
 
   return (
     <main className="memory-page">
@@ -192,14 +168,6 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="搜索记忆…"
               />
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={() => setConfirm({ kind: "consolidate" })}
-                disabled={consolidating || busy || !agentId || items.length < 2}
-              >
-                {consolidating ? "整理中…" : "整理记忆"}
-              </button>
             </div>
 
             <p className="memory-scope-hint">
@@ -209,7 +177,6 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
                   ? `仅对 ${agent.name} 生效；开启自动学习后会在 Run 完成时自动提取。`
                   : "先选择一个 Agent。"}
             </p>
-            {notice && <div className="memory-notice">{notice}</div>}
 
             {!unavailable && (
               <>
@@ -285,7 +252,7 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
                           <button type="button" onClick={() => startEdit(item)}>编辑</button>
                           <button
                             type="button"
-                            onClick={() => setConfirm({ kind: "delete", id: item.id })}
+                            onClick={() => setConfirmId(item.id)}
                           >
                             删除
                           </button>
@@ -301,25 +268,16 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
       </div>
 
       <ConfirmDialog
-        open={confirm !== null}
-        title={confirm?.kind === "delete" ? "删除这条记忆？" : "整理记忆"}
-        description={
-          confirm?.kind === "delete"
-            ? "删除后无法恢复，仅删除这一条记忆。"
-            : `让模型整理${consolidateLabel}？会合并重复、删除失效记忆，需要一次模型调用。`
-        }
-        confirmLabel={confirm?.kind === "delete" ? "删除" : "开始整理"}
-        danger={confirm?.kind === "delete"}
-        onClose={() => setConfirm(null)}
+        open={confirmId !== ""}
+        title="删除这条记忆？"
+        description="删除后无法恢复，仅删除这一条记忆。"
+        confirmLabel="删除"
+        danger
+        onClose={() => setConfirmId("")}
         onConfirm={() => {
-          const action = confirm;
-          setConfirm(null);
-          if (!action) return;
-          if (action.kind === "delete") {
-            void remove(action.id);
-          } else {
-            void consolidate();
-          }
+          const target = confirmId;
+          setConfirmId("");
+          if (target) void remove(target);
         }}
       />
     </main>

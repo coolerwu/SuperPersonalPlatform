@@ -201,11 +201,6 @@ class MemoryUpdate(BaseModel):
     tags: list[str] | None = None
 
 
-class MemoryConsolidate(BaseModel):
-    scope: str = Field(pattern="^(user|agent)$")
-    agent_id: str
-
-
 class MemoryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

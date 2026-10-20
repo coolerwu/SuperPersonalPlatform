@@ -62,7 +62,7 @@ npm run dev
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 - 顶部轻量栏显示当前 Agent 和会话标题，并作为详情抽屉开关。
 - 响应式：桌面为侧栏 + 对话 + 详情三栏；窄屏（≤860px）用顶部栏和汉堡菜单打开侧栏抽屉，详情变为全屏面板，输入区跟随软键盘与底部安全区。
-- 输入卡片左侧「＋」菜单可上传附件：文件保存到当前 Agent 的 `uploads/` 工作区目录（单文件 10 MB），发送后消息里带上文件名和工作区路径，Agent 可用文件工具读取；也可以清空输入。
+- 输入卡片左侧「＋」菜单提供上传附件、整理记忆和清空输入：文件保存到当前 Agent 的 `uploads/` 工作区目录（单文件 10 MB），发送后消息里带上文件名和工作区路径，Agent 可用文件工具读取；「整理记忆」直接发起一个 Run 并触发 `memory-organizer` 技能；也可以清空输入。
 
 ## 配置页
 
@@ -115,11 +115,11 @@ metadata:
 - 文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不受技能开关影响。
 - 技能创建：直接让 Agent 在对话里创建或修改 `/skills/<name>/SKILL.md`，不需要表单；也可以在主机上编辑文件。Agent 写入的技能同样需要为当前 Agent 启用。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
-- 内置技能会在技能库中 seed：`web-fetch`、`web-search` 和 `web-browser`，分别声明 `include_tools: web_fetch` / `web_search` / 七个 `browser_*` 工具。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
+- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser` 和 `memory-organizer`，分别声明 `include_tools: web_fetch` / `web_search` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete`。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
 
-平台注册表当前提供以下联网工具：
+平台注册表当前提供以下技能工具：
 
 - **`web_search`**：调用 DeepSeek Search API（`POST {provider.base_url}/v1/tools/search`），请求 `query`（1-128 字）、`count`（1-50，默认 10）、`need_content`，返回标题、链接、摘要、来源、日期、权威性评分。支持 `site:`、`-`、引号、`lang:`、`after:`、`before:` 等搜索语法。
 - **`web_fetch`**：调用 DeepSeek Fetch API（`POST {provider.base_url}/v1/tools/fetch`），请求 `{url}`，返回 `{title, content}`（Markdown）。`url` 必须是完整 http/https 地址，不能带用户名/密码。
@@ -137,7 +137,8 @@ metadata:
 
 `web_search` 和 `web_fetch` 使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：在「技能」页面启用声明它的技能（`web-search` / `web-fetch` / `web-browser`），对话中读取该 SKILL.md 后解锁。
 
-工具实现分别在 `apps/api/app/services/skill_tools.py`（Search/Fetch）和 `apps/api/app/services/browser_tools.py`（浏览器）；新增工具时注册一个 factory，按运行时 Provider/会话构建 LangChain `BaseTool`。
+- **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
+工具实现分别在 `apps/api/app/services/skill_tools.py`（Search/Fetch）、`apps/api/app/services/browser_tools.py`（浏览器）和 `apps/api/app/services/memory_tools.py`（记忆）；新增工具时注册一个 factory，按运行时 Provider/会话构建 LangChain `BaseTool`。
 
 ## 记忆
 
@@ -147,7 +148,7 @@ metadata:
 - **Agent 记忆**：只对当前 Agent 生效，适合角色和领域知识；
 - 手动新增/编辑/删除/搜索；对话里“记住：……”会立即写入用户记忆；
 - Agent 编辑区有「自动学习记忆」开关：开启后，Run 完成时最多返回 12 个记忆操作；先用 FTS5（trigram）找出相关历史记忆，再让模型返回 add/update/delete 做合并，去重后直接写入，每个 Agent 上限 200 条；提取在 Run 完成后以后台任务执行，不占用 Run 并发槽，同一 Agent 的提取串行执行，避免并发写入重复记忆；
-- **整理记忆**：把当前 tab 的记忆分批交给模型，只做 update/delete，合并重复、删除失效项，不新增事实；
+- **整理记忆**：聊天输入区「＋」菜单的「整理记忆」指令会直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` 合并重复、删除失效项，只更新/删除、不新增事实；范围是 user memory 和当前 Agent 的 agent memory。首次使用时会自动为当前 Agent 启用该技能；
 - 每次 Run 最多注入 12 条、约 1500 字相关记忆，作为数据块附加到系统提示词，不会自动修改 Agent instructions。
 
 ## 数据存储

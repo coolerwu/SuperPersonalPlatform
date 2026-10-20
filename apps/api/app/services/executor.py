@@ -21,6 +21,7 @@ from langchain_core.messages import (
 )
 
 from app.config import settings
+from app.services import memory_tools  # noqa: F401 - registers memory tools
 from app.services.browser_tools import BROWSER_TOOL_NAMES, BrowserSession
 from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolContext, SkillToolRegistry
 from app.services.workspace import WorkspaceError, resolve_workspace_path
@@ -272,6 +273,7 @@ class DeepAgentExecutor:
         provider: Any,
         checkpoint_dir: Path,
         agent_name: str,
+        agent_id: str = "",
         memory_context: str = "",
         workspace_path: str = "",
         enabled_skills: Sequence[str] = (),
@@ -282,6 +284,7 @@ class DeepAgentExecutor:
         self.provider = provider
         self.checkpoint_dir = checkpoint_dir
         self.agent_name = agent_name
+        self.agent_id = agent_id
         self.memory_context = memory_context
         self.workspace_path = workspace_path
         self.enabled_skills = tuple(enabled_skills)
@@ -365,6 +368,7 @@ class DeepAgentExecutor:
                             api_key=self.provider.api_key,
                             base_url=self.provider.base_url,
                             browser=browser,
+                            agent_id=self.agent_id,
                         ),
                     ),
                 )

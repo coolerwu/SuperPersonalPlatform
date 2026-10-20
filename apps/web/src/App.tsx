@@ -29,6 +29,10 @@ function terminal(status: string): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
+const MEMORY_SKILL = "memory-organizer";
+const MEMORY_COMMAND =
+  "请整理长期记忆：先读取 /skills/memory-organizer/SKILL.md，然后按技能说明合并重复记忆、删除失效记忆，不要新增事实。";
+
 export default function App() {
   const [auth, setAuth] = useState<boolean | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -432,8 +436,12 @@ export default function App() {
     }
   }
 
-  async function send(attachments: Attachment[] = []): Promise<boolean> {
-    const text = draft.trim();
+  async function send(
+    attachments: Attachment[] = [],
+    overrideText?: string,
+    sessionTitle?: string,
+  ): Promise<boolean> {
+    const text = (overrideText ?? draft).trim();
     if ((!text && attachments.length === 0) || !agentId || sending) return false;
     const sendAgentId = agentId;
     const attachmentBlock = attachments
@@ -448,7 +456,7 @@ export default function App() {
     setStreamReasoning("");
     setEvents([]);
     setActiveRun(null);
-    setDraft("");
+    if (overrideText === undefined) setDraft("");
     const optimisticId = `local-${Date.now()}`;
     setMessages((current) => [
       ...current,
@@ -466,7 +474,7 @@ export default function App() {
     try {
       let targetSessionId = sessionIdRef.current;
       if (!targetSessionId) {
-        const created = await api.createSession(sendAgentId);
+        const created = await api.createSession(sendAgentId, sessionTitle ?? "新会话");
         createdSessionId = created.id;
         targetSessionId = created.id;
         if (sendAgentId === agentIdRef.current) {
@@ -494,8 +502,8 @@ export default function App() {
       if (!sent) {
         if (sendAgentId === agentIdRef.current) {
           setMessages((current) => current.filter((message) => message.id !== optimisticId));
-          setDraft(text);
-        } else {
+          if (overrideText === undefined) setDraft(text);
+        } else if (overrideText === undefined) {
           draftByAgentRef.current[sendAgentId] = text;
         }
       }
@@ -511,6 +519,25 @@ export default function App() {
       setSending(false);
       return false;
     }
+  }
+
+  async function organizeMemory(): Promise<boolean> {
+    const target = agents.find((item) => item.id === agentIdRef.current);
+    if (!target || sending) return false;
+    if (!target.enabled_skills.includes(MEMORY_SKILL)) {
+      try {
+        const updated = await api.updateAgent(target.id, {
+          enabled_skills: [...target.enabled_skills, MEMORY_SKILL],
+        });
+        setAgents((current) =>
+          current.map((item) => (item.id === updated.id ? updated : item)),
+        );
+      } catch (exc) {
+        setAgentError(errorText(exc), target.id);
+        return false;
+      }
+    }
+    return send([], MEMORY_COMMAND, "整理记忆");
   }
 
   async function cancel() {
@@ -852,9 +879,11 @@ export default function App() {
               sendBlocked={busyElsewhere}
               agentId={agentId}
               agentName={agent?.name ?? "Agent"}
+              memorySkillEnabled={agent?.enabled_skills.includes(MEMORY_SKILL) ?? false}
               focusSignal={focusSignal}
               onDraftChange={setDraft}
               onSend={(attachments) => send(attachments)}
+              onOrganizeMemory={organizeMemory}
               onCancel={() => void cancel()}
               onQuote={quote}
               onRetry={(runId) => void retry(runId)}

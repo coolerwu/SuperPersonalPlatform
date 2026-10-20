@@ -291,30 +291,6 @@ def test_fts_query_builds_or_terms() -> None:
     assert " OR " in query
 
 
-def test_parse_consolidation_keeps_only_update_delete() -> None:
-    from app.services.memory_service import parse_consolidation
-
-    result = parse_consolidation(
-        '{"memories":['
-        '{"action":"update","id":"m1","content":"合并后","tags":["style"]},'
-        '{"action":"delete","id":"m2"},'
-        '{"action":"add","content":"不应新增"}'
-        "]}"
-    )
-    assert [(item["action"], item["id"]) for item in result] == [
-        ("update", "m1"),
-        ("delete", "m2"),
-    ]
-
-
-def test_memory_consolidate_requires_existing_agent(client) -> None:
-    response = client.post(
-        "/api/memories/consolidate",
-        json={"scope": "agent", "agent_id": "missing-agent"},
-    )
-    assert response.status_code == 404
-
-
 def test_parse_extraction_caps_at_12_operations() -> None:
     import json
 

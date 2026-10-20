@@ -34,10 +34,14 @@ def _write_skill(root: Path, directory: str, name: str) -> None:
 
 def test_builtin_registry_has_web_tools() -> None:
     import app.services.browser_tools  # noqa: F401 - registers browser tools
+    import app.services.memory_tools  # noqa: F401 - registers memory tools
     from app.services.browser_tools import BROWSER_TOOL_NAMES
     from app.services.skill_tools import SKILL_TOOL_REGISTRY
 
     assert {"web_fetch", "web_search"} | BROWSER_TOOL_NAMES <= {
+        spec.name for spec in SKILL_TOOL_REGISTRY.specs()
+    }
+    assert {"memory_list", "memory_update", "memory_delete"} <= {
         spec.name for spec in SKILL_TOOL_REGISTRY.specs()
     }
 
