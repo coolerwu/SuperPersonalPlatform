@@ -44,7 +44,7 @@
 - 同一 session 最多一个活动 Run；不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）。Run 并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
 - Run 的 LangGraph 递归上限为 `RUN_RECURSION_LIMIT`（默认 500，主 Agent 与 general-purpose 子 Agent 共用，deepagents 自身默认 9999）。真撞上限时执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍落 `completed`，输出前标注「已达到执行步骤上限」。
 - 服务停止/重启时，正在执行的 Run 重新入队（清空 `started_at`）并在启动后继续；已请求取消的 Run 落 `cancelled`，不会被重启复活。启动时 `requeue_running_runs` 兜底崩溃留下的 `running`。重新入队不是事务回滚：已经完成的文件/浏览器副作用不会撤销。
-- Run 事件 append-only，存 `run_events` 表；其中 `assistant_delta` 是每个流式片段一行，SSE/轮询和刷新恢复依赖它。前端默认折叠原始片段，仅保留 Run/工具/子 Agent/用量等可读事件。
+- Run 事件 append-only，存 `run_events` 表；其中 `assistant_delta` / `reasoning_delta` 是每个流式片段一行，SSE/轮询和刷新恢复依赖它。前端默认折叠原始片段，仅保留 Run/工具/子 Agent/用量等可读事件；`reasoning_delta` 在聊天里显示为可折叠的「思考过程」，思考阶段展开、开始输出答案后自动折叠。
 - 生产数据库是 SQLite：`~/.super-personal-platform/data/app.db`；checkpoint 在同目录 `checkpoints/`。时间列用 `UTCDateTime` 保证 SQLite 读回仍是 UTC。
 - SQLite 开启 WAL 和 `busy_timeout=5000`，API 与 worker 同进程，不另起服务。
 - 每 session 一个 checkpoint thread；刷新/重启后可继续。

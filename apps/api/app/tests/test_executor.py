@@ -144,6 +144,48 @@ def test_retryable_model_errors_are_logged(caplog) -> None:
 
 
 @pytest.mark.asyncio
+async def test_executor_emits_reasoning_deltas(tmp_path, monkeypatch) -> None:
+    class FakeAgent:
+        async def astream(self, _state, config=None, *, stream_mode=None, subgraphs=False):
+            yield (
+                (),
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="answer",
+                        additional_kwargs={"reasoning_content": "thinking"},
+                    ),
+                    {},
+                ),
+            )
+
+    monkeypatch.setattr("deepagents.create_deep_agent", lambda **_kwargs: FakeAgent())
+    provider = SimpleNamespace(
+        api_key="test-key", base_url="https://api.deepseek.com", model="deepseek-v4-flash"
+    )
+    executor = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="reasoning-agent",
+    )
+
+    events = [
+        event
+        async for event in executor.run(instructions="test", session_id="e" * 32, content="hi")
+    ]
+
+    assert [
+        event.payload["delta"] for event in events if event.type == "reasoning_delta"
+    ] == ["thinking"]
+    assert any(
+        event.type == "assistant_delta" and event.payload["delta"] == "answer"
+        for event in events
+    )
+    shutil.rmtree(settings.workspaces_dir / "reasoning-agent", ignore_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_executor_saves_browser_screenshot(tmp_path, monkeypatch) -> None:
     png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII="

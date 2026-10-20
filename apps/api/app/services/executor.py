@@ -125,6 +125,22 @@ def _message_text(message: AIMessageChunk) -> str:
     return _content_text(message.content)
 
 
+def _reasoning_text(message: AIMessageChunk) -> str:
+    reasoning = message.additional_kwargs.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        return reasoning
+    content = message.content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in ("reasoning", "reasoning_content"):
+                text = block.get("reasoning") or block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
+
+
 def _drop_dangling_tool_calls(messages: Sequence[Any]) -> list[Any]:
     """Drop trailing assistant tool calls whose tool results were never written."""
     trimmed = list(messages)
@@ -275,6 +291,26 @@ class DeepAgentExecutor:
             from langgraph.errors import GraphRecursionError
 
             from app.services.skill_middleware import AgentSkillsMiddleware
+
+            class ReasoningChatOpenAI(ChatOpenAI):
+                # ChatOpenAI drops provider-specific reasoning_content fields.
+                # Preserve DeepSeek's streamed reasoning so the executor can
+                # emit it as a separate trace event instead of answer text.
+                def _convert_chunk_to_generation_chunk(
+                    self, chunk, default_chunk_class, base_generation_info
+                ):
+                    result = super()._convert_chunk_to_generation_chunk(
+                        chunk, default_chunk_class, base_generation_info
+                    )
+                    if result is None:
+                        return None
+                    choices = chunk.get("choices") or []
+                    if choices:
+                        delta = choices[0].get("delta") or {}
+                        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                        if isinstance(reasoning, str) and reasoning:
+                            result.message.additional_kwargs["reasoning_content"] = reasoning
+                    return result
         except Exception as exc:  # pragma: no cover - import guard
             yield ExecutorEvent("run_failed", {"error": {"type": type(exc).__name__, "message": str(exc)}})
             return
@@ -295,7 +331,7 @@ class DeepAgentExecutor:
         browser = BrowserSession()
 
         try:
-            chat_model = ChatOpenAI(
+            chat_model = ReasoningChatOpenAI(
                 api_key=self.provider.api_key,
                 base_url=self.provider.base_url,
                 model=self.provider.model,
@@ -504,6 +540,10 @@ class DeepAgentExecutor:
                 continue
             if not isinstance(message, AIMessageChunk):
                 continue
+
+            reasoning = _reasoning_text(message)
+            if reasoning:
+                yield ExecutorEvent("reasoning_delta", {"delta": reasoning})
 
             for item in getattr(message, "tool_calls", None) or []:
                 if not isinstance(item, dict):

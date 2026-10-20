@@ -20,6 +20,8 @@ function eventText(event: RunEvent): string {
   switch (event.type) {
     case "assistant_delta":
       return String(payload.delta ?? "");
+    case "reasoning_delta":
+      return String(payload.delta ?? "");
     case "subagent_response":
       return `${String(payload.agent ?? "subagent")}: ${String(payload.content ?? "")}`;
     case "agent_update": {
@@ -69,10 +71,14 @@ export function Drawer(props: DrawerProps) {
   const [savingAgent, setSavingAgent] = useState(false);
   const [showRawEvents, setShowRawEvents] = useState(false);
 
-  const deltaCount = props.events.filter((event) => event.type === "assistant_delta").length;
+  const deltaCount = props.events.filter(
+    (event) => event.type === "assistant_delta" || event.type === "reasoning_delta"
+  ).length;
   const visibleEvents = showRawEvents
     ? props.events
-    : props.events.filter((event) => event.type !== "assistant_delta");
+    : props.events.filter(
+        (event) => event.type !== "assistant_delta" && event.type !== "reasoning_delta"
+      );
 
   async function saveAgent(payload: AgentSavePayload) {
     setSavingAgent(true);

@@ -45,6 +45,8 @@ export default function App() {
   const [activeRun, setActiveRun] = useState<Run | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [streamText, setStreamText] = useState("");
+  const [streamReasoning, setStreamReasoning] = useState("");
+  const [runReasoning, setRunReasoning] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -168,6 +170,8 @@ export default function App() {
   }, [auth, agentId]);
 
   useEffect(() => {
+    setStreamReasoning("");
+    setRunReasoning({});
     if (!sessionId) {
       setMessages([]);
       return;
@@ -289,21 +293,29 @@ export default function App() {
     if (!lastRunId) {
       setActiveRun(null);
       setEvents([]);
+      setStreamReasoning("");
       return;
     }
     const [run, runEvents] = await Promise.all([api.getRun(lastRunId), api.getRunEvents(lastRunId)]);
     runSessionsRef.current[run.id] = run.session_id;
     setActiveRun(run);
     setEvents(runEvents);
+    const lastQueuedId = runEvents.reduce(
+      (latest, event) => (event.type === "run_queued" ? event.id : latest),
+      0,
+    );
+    const reasoning = runEvents
+      .filter((event) => event.type === "reasoning_delta" && event.id > lastQueuedId)
+      .map((event) => String(event.payload.delta ?? ""))
+      .join("");
+    setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
+    setStreamReasoning("");
     if (run.status === "failed") {
       setSessionError(run.error || "Run failed", run.session_id);
     }
     if ((run.status === "queued" || run.status === "running") && !finishedRuns.current.has(run.id)) {
       setSending(true);
-      const lastQueuedId = runEvents.reduce(
-        (latest, event) => (event.type === "run_queued" ? event.id : latest),
-        0,
-      );
+      setStreamReasoning(reasoning);
       setStreamText(
         runEvents
           .filter((event) => event.type === "assistant_delta" && event.id > lastQueuedId)
@@ -352,6 +364,14 @@ export default function App() {
     if (event.type === "assistant_delta") {
       setStreamText((current) => current + String(event.payload.delta ?? ""));
     }
+    if (event.type === "reasoning_delta") {
+      const delta = String(event.payload.delta ?? "");
+      setStreamReasoning((current) => current + delta);
+      setRunReasoning((current) => ({
+        ...current,
+        [event.run_id]: (current[event.run_id] ?? "") + delta,
+      }));
+    }
     if (event.type === "browser_action" && event.payload.screenshot_id) {
       void refreshScreenshots();
     }
@@ -398,6 +418,7 @@ export default function App() {
       setActiveRun(run);
       setEvents(runEvents);
       setStreamText("");
+      setStreamReasoning("");
       if (run.session_id === sessionIdRef.current) {
         await loadMessages(run.session_id, false);
       }
@@ -424,6 +445,7 @@ export default function App() {
     setError("");
     setSending(true);
     setStreamText("");
+    setStreamReasoning("");
     setEvents([]);
     setActiveRun(null);
     setDraft("");
@@ -512,6 +534,7 @@ export default function App() {
     setError("");
     setSending(true);
     setStreamText("");
+    setStreamReasoning("");
     setEvents([]);
     try {
       const response = await api.retryRun(runId);
@@ -553,6 +576,8 @@ export default function App() {
       setEvents([]);
       setStreamText("");
     }
+    setStreamReasoning("");
+    setRunReasoning({});
     setError("");
     setDraft("");
   }
@@ -817,6 +842,8 @@ export default function App() {
               screenshots={screenshots}
               sessionId={sessionId}
               streamText={visibleStream}
+              streamReasoning={streamReasoning}
+              runReasoning={runReasoning}
               sending={chatSending}
               error={error}
               activeRun={visibleRun}

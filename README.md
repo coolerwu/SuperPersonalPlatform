@@ -51,7 +51,7 @@ npm run dev
 - 对话里以“记住：……”开头的内容会写入用户记忆；
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
-- 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
+- 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；模型返回 `reasoning_content` 时，聊天中显示可折叠的「思考过程」：思考阶段展开，开始输出答案后自动折叠，完成后保留可展开；
 - 同一时间只跟踪一个 Run：另一个会话的 Run 运行中时，当前会话禁用发送并提示，输入框仍可编辑；异步错误只显示在所属 Agent/会话，切回后失败 Run 的错误和重试会恢复；
 - 后端同一 session 仍只有一个活动 Run；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 2），超出的 Run 保持 `queued`；
 - 服务停止/重启时正在运行的 Run 会重新排队并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的页面刷新后重新接上该 Run。重新入队不会回滚已经发生的文件/浏览器副作用；
@@ -75,7 +75,7 @@ npm run dev
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
 - 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
 
-Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` 流式片段，在右侧抽屉里展开查看。
+Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `reasoning_delta` 流式片段，在右侧抽屉里展开查看。
 
 ## 技能与工具页面
 
@@ -159,7 +159,7 @@ metadata:
   - `sessions`：会话，首次发送消息时才创建；标题取第一条用户消息前 24 个字；
   - `messages`：每条用户/assistant 消息一行，assistant 消息在 Run 完成时写入；
   - `runs`：每次发送/重试一行，含状态、input/output、错误、token 用量、时间；
-  - `run_events`：append-only，含 `run_queued`、`assistant_delta`（每个流式片段一行）、`model_usage`、`run_completed`、`memory_saved` 等；
+  - `run_events`：append-only，含 `run_queued`、`assistant_delta`（每个流式片段一行）、`reasoning_delta`（思考片段）、`model_usage`、`run_completed`、`memory_saved` 等；
   - `memory_items`：长期记忆，`scope=user|agent`，含 content、tags、来源 Run/Message、last_used_at；
   - `run_memories`：某次 Run 实际注入了哪些记忆；
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。

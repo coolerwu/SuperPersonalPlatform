@@ -11,6 +11,8 @@ type ChatPanelProps = {
   screenshots: ScreenshotInfo[];
   sessionId: string;
   streamText: string;
+  streamReasoning: string;
+  runReasoning: Record<string, string>;
   sending: boolean;
   error: string;
   activeRun: Run | null;
@@ -71,6 +73,26 @@ function ScreenshotStrip({ sessionId, items }: { sessionId: string; items: Scree
         );
       })}
     </div>
+  );
+}
+
+function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }) {
+  const [open, setOpen] = useState(streaming);
+  useEffect(() => {
+    if (!streaming) setOpen(false);
+  }, [streaming]);
+  if (!text.trim()) return null;
+  return (
+    <details
+      className="message-thinking"
+      open={open}
+      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary>思考过程</summary>
+      <div className="message-thinking-body">
+        <Markdown content={text} />
+      </div>
+    </details>
   );
 }
 
@@ -279,6 +301,10 @@ export function ChatPanel(props: ChatPanelProps) {
                     </button>
                   </div>
                 </div>
+                <ThinkingBlock
+                  text={message.run_id ? props.runReasoning[message.run_id] ?? "" : ""}
+                  streaming={false}
+                />
                 <Markdown content={message.content} />
                 <ScreenshotStrip
                   sessionId={props.sessionId}
@@ -297,6 +323,10 @@ export function ChatPanel(props: ChatPanelProps) {
                 <span className="message-author">{props.agentName || "Agent"}</span>
                 <span className="streaming-label">{props.activeRun?.status ?? "running"}</span>
               </div>
+              <ThinkingBlock
+                text={props.streamReasoning}
+                streaming={!props.streamText}
+              />
               {props.streamText ? (
                 <Markdown content={props.streamText} />
               ) : (

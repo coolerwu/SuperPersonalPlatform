@@ -776,6 +776,34 @@ textarea {
   min-height: 44px;
 }
 
+.message-thinking {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.message-thinking summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+}
+
+.message-thinking summary:hover {
+  color: var(--text);
+}
+
+.message-thinking-body {
+  margin-top: 6px;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
 .message-screenshots {
   display: flex;
   flex-wrap: wrap;
