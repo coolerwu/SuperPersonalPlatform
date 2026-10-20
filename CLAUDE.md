@@ -32,7 +32,7 @@
 - 消息操作：复制、引用、失败 Run 重试；不做编辑/重新生成/删除单条消息（需要 checkpoint 分支方案）。
 - Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints；有活动 Run 时 409。
 - 配置页集中管理 Provider（查看/新增/编辑）、Agent 和运行环境；另有独立的「记忆」页面管理 user/agent 记忆。`GET /api/system` 只返回非敏感信息。
-- 所有 per-agent 配置都以左上角侧边栏的 Agent 选择器为唯一入口；配置页只编辑当前 Agent，不提供第二套 Agent 选择。新增 per-agent 配置时必须沿用这一规则。侧边栏左上角另有独立的「技能」「工具」页面：技能启停按当前 Agent 立即保存；工具页只展示文件工具与技能工具的注册/声明情况，不单独启停工具。
+- 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent tab 列出全部 Agent 摘要（Provider/model、启用技能数、自动记忆、状态），点击行即切换这个全局选中的 Agent，侧边栏同步；下方编辑区只编辑当前 Agent，不持有第二套选择状态。新增 per-agent 配置时必须沿用这一规则。侧边栏左上角另有独立的「技能」「工具」页面：技能启停按当前 Agent 立即保存；工具页只展示文件工具与技能工具的注册/声明情况，不单独启停工具。
 - Chat 内容列统一宽度：header、消息流、composer 都以 `--chat-lane` 对齐。
 
 ## 运行约定

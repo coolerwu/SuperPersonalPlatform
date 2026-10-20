@@ -52,6 +52,7 @@ npm run dev
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
+- 同一时间只跟踪一个 Run：另一个会话的 Run 运行中时，当前会话禁用发送并提示，输入框仍可编辑；异步错误只显示在所属 Agent/会话，切回后失败 Run 的错误和重试会恢复；
 - Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell 工具；浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，默认返回文字和元素引用；用户明确要求时可返回页面截图）；
 - 技能与工具：左侧「技能」页面为当前 Agent 启用技能；模型读取 `/skills/<name>/SKILL.md` 后，技能声明的工具才会解锁；文件工具始终可用；「工具」页面只展示注册与声明情况；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
@@ -61,10 +62,10 @@ npm run dev
 
 ## 配置页
 
-侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；Provider/Agent 默认只显示列表，点「编辑」或条目再展开表单。**配置页始终编辑左上角侧边栏选中的 Agent，不提供第二套 Agent 选择**；切换 Agent 请使用侧边栏顶部的选择器。切换 Agent 时，Provider tab 会自动选中该 Agent 的 Provider，并清空输入框草稿。集中管理：
+侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；Provider 默认只显示列表，点条目展开表单；Agent 列表点击行切换当前 Agent，点「编辑」展开表单。**配置页始终编辑当前 Agent（与侧边栏共用一个选择状态）**；Agent tab 列出全部 Agent 的摘要，点击任意一行即可切换当前 Agent，侧边栏选择器同步变化；编辑区只编辑当前 Agent。切换 Agent 时，Provider tab 会自动选中该 Agent 的 Provider；输入草稿按 Agent 分别保留（当前页面内），切换时旧 Agent 的会话和消息不会短暂显示在新 Agent 下。集中管理：
 
 - Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
-- Agent：选择并编辑名称、Provider、instructions、工作区，或新建 Agent；新建时未填写 instructions 会使用默认的中文个人助手提示词（能力说明 + 行为规范）；
+- Agent：列表展示全部 Agent 的 Provider/model、启用技能数、自动记忆和状态，点击行切换当前 Agent；下方编辑名称、Provider、instructions、工作区，或新建 Agent；新建时未填写 instructions 会使用默认的中文个人助手提示词（能力说明 + 行为规范）；
 - 工作区：每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/`，不支持自定义路径；配置页只读展示机器目录，并随左上角选中的 Agent 变化。Agent 可以查看和修改工作区内的文件；
 - 技能：在侧边栏左上角的「技能」页面按当前 Agent 勾选启用；未启用的技能不会进入系统提示，读取它的 SKILL.md 也不会解锁工具。磁盘上已删除但仍在启用列表里的技能会显示为“未找到”，可取消勾选移除；
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；

@@ -57,10 +57,17 @@ export default function App() {
   const pollTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef("");
   const messagesRequestRef = useRef(0);
+  const sessionsRequestRef = useRef(0);
+  const agentIdRef = useRef("");
+  const draftByAgentRef = useRef<Record<string, string>>({});
+  const draftAgentRef = useRef("");
+  const draftRef = useRef("");
+  const runSessionsRef = useRef<Record<string, string>>({});
   const finishedRuns = useRef<Set<string>>(new Set());
 
   const agent = agents.find((item) => item.id === agentId);
   const chatSending = sending && (!activeRun || activeRun.session_id === sessionId);
+  const busyElsewhere = sending && !chatSending;
   const visibleRun = activeRun && activeRun.session_id === sessionId ? activeRun : null;
   const visibleStream = chatSending ? streamText : "";
   const sessionTitle = sessions.find((item) => item.id === sessionId)?.title || "新对话";
@@ -75,12 +82,32 @@ export default function App() {
             ? "工具"
             : (agent?.name ?? "Agent");
 
+  function setAgentError(message: string, forAgent: string) {
+    if (forAgent !== agentIdRef.current) return;
+    setError(message);
+  }
+
+  function setSessionError(message: string, forSession: string | null | undefined) {
+    if (forSession && forSession !== sessionIdRef.current) return;
+    setError(message);
+  }
+
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
   useEffect(() => {
-    setDraft("");
+    draftRef.current = draft;
+  }, [draft]);
+
+  useEffect(() => {
+    // Drafts are per-agent and survive switching while this page stays open.
+    const previousAgent = draftAgentRef.current;
+    if (previousAgent && previousAgent !== agentId) {
+      draftByAgentRef.current[previousAgent] = draftRef.current;
+    }
+    draftAgentRef.current = agentId;
+    setDraft(draftByAgentRef.current[agentId] ?? "");
   }, [agentId]);
 
   useEffect(() => {
@@ -121,12 +148,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    agentIdRef.current = agentId;
+    // Drop the previous agent's session before its view can appear under the
+    // new agent. activeRun is kept on purpose: it keeps chatSending false for
+    // the new agent while the previous agent's run is still streaming.
+    sessionIdRef.current = "";
+    setSessionId("");
+    setMessages([]);
+    setSessions([]);
+    setError("");
     if (!auth || !agentId) {
-      setSessions([]);
-      setSessionId("");
+      sessionsRequestRef.current += 1;
       return;
     }
-    void loadSessions(agentId).catch((exc) => setError(errorText(exc)));
+    void loadSessions(agentId).catch((exc) => setAgentError(errorText(exc), agentId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth, agentId]);
 
@@ -135,7 +170,7 @@ export default function App() {
       setMessages([]);
       return;
     }
-    void loadMessages(sessionId).catch((exc) => setError(errorText(exc)));
+    void loadMessages(sessionId).catch((exc) => setSessionError(errorText(exc), sessionId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -177,15 +212,21 @@ export default function App() {
   }
 
   async function loadSessions(forAgent: string) {
+    const requestId = ++sessionsRequestRef.current;
     const list = await api.listSessions(forAgent);
+    if (requestId !== sessionsRequestRef.current || forAgent !== agentIdRef.current) return;
     setSessions(list);
     if (list.length === 0) {
       sessionIdRef.current = "";
       setSessionId("");
       setMessages([]);
-      setActiveRun(null);
-      setEvents([]);
-      setStreamText("");
+      // A run can still be streaming for another agent; keep it tracked so
+      // this empty view is not mistaken for the sending session.
+      if (!sending) {
+        setActiveRun(null);
+        setEvents([]);
+        setStreamText("");
+      }
       return;
     }
     if (!list.some((item) => item.id === sessionIdRef.current)) {
@@ -196,8 +237,11 @@ export default function App() {
 
   async function refreshSessions() {
     if (!agentId) return;
+    const forAgent = agentId;
     try {
-      setSessions(await api.listSessions(agentId));
+      const list = await api.listSessions(forAgent);
+      if (forAgent !== agentIdRef.current) return;
+      setSessions(list);
     } catch {
       // Keep the current list on a transient refresh failure.
     }
@@ -218,10 +262,11 @@ export default function App() {
       return;
     }
     const [run, runEvents] = await Promise.all([api.getRun(lastRunId), api.getRunEvents(lastRunId)]);
+    runSessionsRef.current[run.id] = run.session_id;
     setActiveRun(run);
     setEvents(runEvents);
     if (run.status === "failed") {
-      setError(run.error || "Run failed");
+      setSessionError(run.error || "Run failed", run.session_id);
     }
     if ((run.status === "queued" || run.status === "running") && !finishedRuns.current.has(run.id)) {
       setSending(true);
@@ -286,6 +331,7 @@ export default function App() {
           applyEvent(event);
         }
         const run = await api.getRun(runId);
+        runSessionsRef.current[run.id] = run.session_id;
         setActiveRun(run);
         if (terminal(run.status)) {
           closePoll();
@@ -293,7 +339,7 @@ export default function App() {
         }
       } catch (exc) {
         closePoll();
-        setError(errorText(exc));
+        setSessionError(errorText(exc), runSessionsRef.current[runId]);
         setSending(false);
       }
     };
@@ -308,6 +354,7 @@ export default function App() {
     setSending(false);
     try {
       const [run, runEvents] = await Promise.all([api.getRun(runId), api.getRunEvents(runId)]);
+      runSessionsRef.current[run.id] = run.session_id;
       setActiveRun(run);
       setEvents(runEvents);
       setStreamText("");
@@ -315,17 +362,18 @@ export default function App() {
         await loadMessages(run.session_id, false);
       }
       if (run.status === "failed") {
-        setError(run.error || "Run failed");
+        setSessionError(run.error || "Run failed", run.session_id);
       }
       await refreshSessions();
     } catch (exc) {
-      setError(errorText(exc));
+      setSessionError(errorText(exc), runSessionsRef.current[runId]);
     }
   }
 
   async function send(attachments: Attachment[] = []): Promise<boolean> {
     const text = draft.trim();
     if ((!text && attachments.length === 0) || !agentId || sending) return false;
+    const sendAgentId = agentId;
     const attachmentBlock = attachments
       .map((file) => `- ${file.name}（工作区路径：${file.path}）`)
       .join("\n");
@@ -355,15 +403,17 @@ export default function App() {
     try {
       let targetSessionId = sessionIdRef.current;
       if (!targetSessionId) {
-        const created = await api.createSession(agentId);
+        const created = await api.createSession(sendAgentId);
         createdSessionId = created.id;
         targetSessionId = created.id;
-        sessionIdRef.current = created.id;
-        setSessions((current) => [created, ...current]);
+        if (sendAgentId === agentIdRef.current) {
+          sessionIdRef.current = created.id;
+          setSessions((current) => [created, ...current]);
+        }
       }
       const response = await api.sendMessage(targetSessionId, content);
       sent = true;
-      if (createdSessionId) {
+      if (createdSessionId && sendAgentId === agentIdRef.current) {
         setSessionId(createdSessionId);
       }
       try {
@@ -372,22 +422,29 @@ export default function App() {
         // Keep the optimistic user message; the run is already created.
       }
       const run = await api.getRun(response.run_id);
+      runSessionsRef.current[run.id] = run.session_id;
       setActiveRun(run);
       subscribe(response.run_id);
       void refreshSessions();
       return true;
     } catch (exc) {
       if (!sent) {
-        setMessages((current) => current.filter((message) => message.id !== optimisticId));
-        setDraft(text);
+        if (sendAgentId === agentIdRef.current) {
+          setMessages((current) => current.filter((message) => message.id !== optimisticId));
+          setDraft(text);
+        } else {
+          draftByAgentRef.current[sendAgentId] = text;
+        }
       }
       if (createdSessionId && !sent) {
         await api.deleteSession(createdSessionId).catch(() => undefined);
-        sessionIdRef.current = "";
-        setSessions((current) => current.filter((item) => item.id !== createdSessionId));
-        setSessionId("");
+        if (sendAgentId === agentIdRef.current) {
+          sessionIdRef.current = "";
+          setSessions((current) => current.filter((item) => item.id !== createdSessionId));
+          setSessionId("");
+        }
       }
-      setError(errorText(exc));
+      setAgentError(errorText(exc), sendAgentId);
       setSending(false);
       return false;
     }
@@ -398,7 +455,7 @@ export default function App() {
     try {
       await api.cancelRun(activeRun.id);
     } catch (exc) {
-      setError(errorText(exc));
+      setSessionError(errorText(exc), activeRun.session_id);
     }
   }
 
@@ -410,6 +467,7 @@ export default function App() {
 
   async function retry(runId: string) {
     if (sending) return;
+    const retrySessionId = runSessionsRef.current[runId] ?? activeRun?.session_id ?? sessionIdRef.current;
     setError("");
     setSending(true);
     setStreamText("");
@@ -417,11 +475,12 @@ export default function App() {
     try {
       const response = await api.retryRun(runId);
       const run = await api.getRun(response.run_id);
+      runSessionsRef.current[run.id] = run.session_id;
       setActiveRun(run);
       subscribe(response.run_id);
       void refreshSessions();
     } catch (exc) {
-      setError(errorText(exc));
+      setSessionError(errorText(exc), retrySessionId);
       setSending(false);
     }
   }
@@ -446,17 +505,24 @@ export default function App() {
     sessionIdRef.current = "";
     setSessionId("");
     setMessages([]);
-    setActiveRun(null);
-    setEvents([]);
-    setStreamText("");
+    // Keep the tracked run while one is still streaming so the composer does
+    // not mistake this fresh view for the running session.
+    if (!sending) {
+      setActiveRun(null);
+      setEvents([]);
+      setStreamText("");
+    }
     setError("");
     setDraft("");
   }
 
   async function deleteSession(id: string) {
+    const forAgent = agentId;
     try {
       await api.deleteSession(id);
-      const list = await api.listSessions(agentId);
+      if (forAgent !== agentIdRef.current) return;
+      const list = await api.listSessions(forAgent);
+      if (forAgent !== agentIdRef.current) return;
       setSessions(list);
       if (id === sessionIdRef.current) {
         if (list.length > 0) {
@@ -472,7 +538,7 @@ export default function App() {
         }
       }
     } catch (exc) {
-      setError(errorText(exc));
+      setAgentError(errorText(exc), forAgent);
     }
   }
 
@@ -659,6 +725,7 @@ export default function App() {
           onSaveAgent={saveAgent}
           onSaveProvider={saveProvider}
           onCreateProvider={createProvider}
+          onSelectAgent={setAgentId}
           onNewAgent={() => setNewAgentOpen(true)}
           onDeleteAgent={deleteAgentPermanently}
           onClose={() => setView("chat")}
@@ -712,6 +779,7 @@ export default function App() {
               activeRun={visibleRun}
               draft={draft}
               canSend={Boolean(agentId)}
+              sendBlocked={busyElsewhere}
               agentId={agentId}
               agentName={agent?.name ?? "Agent"}
               focusSignal={focusSignal}

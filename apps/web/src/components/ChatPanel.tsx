@@ -14,6 +14,7 @@ type ChatPanelProps = {
   activeRun: Run | null;
   draft: string;
   canSend: boolean;
+  sendBlocked: boolean;
   agentId: string;
   agentName: string;
   focusSignal: number;
@@ -127,7 +128,10 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   const canSubmit =
-    props.canSend && !props.sending && (props.draft.trim().length > 0 || attachments.length > 0);
+    props.canSend &&
+    !props.sending &&
+    !props.sendBlocked &&
+    (props.draft.trim().length > 0 || attachments.length > 0);
 
   async function submit() {
     if (!canSubmit) return;
@@ -271,6 +275,11 @@ export function ChatPanel(props: ChatPanelProps) {
       </div>
 
       <div className="composer">
+        {props.sendBlocked && (
+          <div className="composer-busy-hint" role="status">
+            另一个会话的 Run 正在运行，完成后再发送。
+          </div>
+        )}
         <div
           className={`composer-card ${expanded ? "expanded" : ""} ${
             attachments.length > 0 || uploading || attachError ? "has-files" : ""
@@ -414,8 +423,8 @@ export function ChatPanel(props: ChatPanelProps) {
                 type="button"
                 onClick={() => void submit()}
                 disabled={!canSubmit}
-                aria-label="发送"
-                title="发送"
+                aria-label={props.sendBlocked ? "另一个会话的 Run 正在运行" : "发送"}
+                title={props.sendBlocked ? "另一个会话的 Run 正在运行，完成后再发送" : "发送"}
               >
                 <svg
                   viewBox="0 0 24 24"

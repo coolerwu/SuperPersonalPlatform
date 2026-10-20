@@ -1096,6 +1096,14 @@ textarea {
   background: linear-gradient(180deg, rgba(246, 244, 239, 0), var(--bg) 34%);
 }
 
+.composer-busy-hint {
+  max-width: var(--chat-lane);
+  margin: 0 auto 6px;
+  padding: 0 6px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
 .composer-card {
   max-width: var(--chat-lane);
   margin: 0 auto;
@@ -1714,8 +1722,12 @@ textarea {
   background: var(--accent-soft);
 }
 
-.settings-agent-row.static:hover {
-  border-color: var(--border);
+.agent-row-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .workspace-path-preview {

@@ -22,6 +22,7 @@ type SettingsPageProps = {
     model: string;
     api_key?: string;
   }) => Promise<Provider>;
+  onSelectAgent: (id: string) => void;
   onNewAgent: () => void;
   onDeleteAgent: (id: string) => Promise<{ deleted: boolean; sessions: number; runs: number }>;
   onClose: () => void;
@@ -251,20 +252,34 @@ export function SettingsPage(props: SettingsPageProps) {
             </div>
 
             <div className="settings-agent-list">
-              {agent ? (
-                <div className="settings-agent-row selected static">
-                  <span className="settings-provider-name">{agent.name}</span>
-                  <span className="settings-provider-meta">
-                    {agent.provider_name} · {agent.model}
-                  </span>
-                  <span className="agent-status">{agent.status}</span>
-                </div>
-              ) : (
-                <div className="empty-note">还没有 Agent。</div>
-              )}
+              {props.agents.length === 0 && <div className="empty-note">还没有 Agent。</div>}
+              {props.agents.map((item) => {
+                const selected = item.id === props.agentId;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`settings-agent-row ${selected ? "selected" : ""}`}
+                    aria-pressed={selected}
+                    title={selected ? "当前 Agent" : `切换到 ${item.name}`}
+                    onClick={() => {
+                      if (!selected) props.onSelectAgent(item.id);
+                    }}
+                  >
+                    <span className="settings-provider-name">{item.name}</span>
+                    <span className="settings-provider-meta">
+                      {item.provider_name} · {item.model} · 技能 {item.enabled_skills.length}
+                    </span>
+                    <span className="agent-row-badges">
+                      <span className="agent-status">记忆 {item.auto_memory ? "开" : "关"}</span>
+                      <span className="agent-status">{item.status}</span>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
             <div className="hint">
-              当前编辑左上角选中的 Agent；要切换 Agent，请使用侧边栏顶部的选择器。
+              点击列表切换当前 Agent（与侧边栏选择器同步）；下方只编辑当前 Agent，切换时未保存的修改会丢弃。
             </div>
 
             {agentEditing && agent && (
