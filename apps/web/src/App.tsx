@@ -48,6 +48,7 @@ export default function App() {
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
@@ -59,6 +60,17 @@ export default function App() {
   const chatSending = sending && (!activeRun || activeRun.session_id === sessionId);
   const visibleRun = activeRun && activeRun.session_id === sessionId ? activeRun : null;
   const visibleStream = chatSending ? streamText : "";
+  const sessionTitle = sessions.find((item) => item.id === sessionId)?.title || "新对话";
+  const viewTitle =
+    view === "settings"
+      ? "配置"
+      : view === "memory"
+        ? "记忆"
+        : view === "skills"
+          ? "技能"
+          : view === "tools"
+            ? "工具"
+            : (agent?.name ?? "Agent");
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -67,6 +79,34 @@ export default function App() {
   useEffect(() => {
     setDraft("");
   }, [agentId]);
+
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const syncHeight = () => {
+      document.documentElement.style.setProperty("--app-height", `${viewport.height}px`);
+    };
+    syncHeight();
+    viewport.addEventListener("resize", syncHeight);
+    return () => {
+      viewport.removeEventListener("resize", syncHeight);
+      document.documentElement.style.removeProperty("--app-height");
+    };
+  }, []);
+
+  function openView(next: "chat" | "settings" | "memory" | "skills" | "tools") {
+    setView(next);
+    setSidebarOpen(false);
+  }
 
   useEffect(() => {
     void bootstrap().catch((exc) => {
@@ -391,6 +431,7 @@ export default function App() {
   function newSession() {
     if (!agentId) return;
     setView("chat");
+    setSidebarOpen(false);
     sessionIdRef.current = "";
     setSessionId("");
     setMessages([]);
@@ -486,6 +527,7 @@ export default function App() {
     setEvents([]);
     setStreamText("");
     setDraft("");
+    setSidebarOpen(false);
     setView("chat");
   }
 
@@ -499,7 +541,64 @@ export default function App() {
 
   return (
     <div className={`app-shell ${view === "chat" && drawerOpen ? "with-drawer" : ""}`}>
+      <header className="mobile-bar">
+        <button
+          type="button"
+          className="mobile-bar-button"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="打开菜单"
+          aria-expanded={sidebarOpen}
+          aria-controls="app-sidebar"
+          title="打开菜单"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            aria-hidden="true"
+          >
+            <path d="M4 7h16M4 12h16M4 17h16" />
+          </svg>
+        </button>
+        <div className="mobile-bar-title">
+          <span className="mobile-bar-name">{viewTitle}</span>
+          {view === "chat" && <span className="mobile-bar-sub">{sessionTitle}</span>}
+        </div>
+        {view === "chat" ? (
+          <button
+            type="button"
+            className={`mobile-bar-button ${drawerOpen ? "active" : ""}`}
+            onClick={() => setDrawerOpen((current) => !current)}
+            aria-label={drawerOpen ? "收起详情" : "打开详情"}
+            title={drawerOpen ? "收起详情" : "打开详情"}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M15 4v16" />
+            </svg>
+          </button>
+        ) : (
+          <span className="mobile-bar-spacer" />
+        )}
+      </header>
+
       <Sidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
         agents={agents}
         agentId={agentId}
         onAgentChange={setAgentId}
@@ -507,15 +606,15 @@ export default function App() {
         sessionId={sessionId}
         onSelectSession={(id) => {
           setSessionId(id);
-          setView("chat");
+          openView("chat");
         }}
         onNewSession={newSession}
         newSessionActive={view === "chat" && !sessionId}
         onDeleteSession={(id) => void deleteSession(id)}
-        onOpenSettings={() => setView("settings")}
-        onOpenMemory={() => setView("memory")}
-        onOpenSkills={() => setView("skills")}
-        onOpenTools={() => setView("tools")}
+        onOpenSettings={() => openView("settings")}
+        onOpenMemory={() => openView("memory")}
+        onOpenSkills={() => openView("skills")}
+        onOpenTools={() => openView("tools")}
         settingsActive={view === "settings"}
         memoryActive={view === "memory"}
         skillsActive={view === "skills"}
@@ -554,18 +653,23 @@ export default function App() {
         />
       ) : (
         <main className="chat-column">
-          {!drawerOpen && (
+          <header className="chat-topbar">
+            <div className="chat-topbar-main">
+              <span className="chat-topbar-title">{agent?.name ?? "Agent"}</span>
+              <span className="chat-topbar-sub">{sessionTitle}</span>
+            </div>
             <button
-              className="drawer-fab"
               type="button"
-              title="打开详情"
-              aria-label="打开详情"
-              onClick={() => setDrawerOpen(true)}
+              className={`topbar-button ${drawerOpen ? "active" : ""}`}
+              title={drawerOpen ? "收起详情" : "打开详情"}
+              aria-label={drawerOpen ? "收起详情" : "打开详情"}
+              aria-pressed={drawerOpen}
+              onClick={() => setDrawerOpen((current) => !current)}
             >
               <svg
                 viewBox="0 0 24 24"
-                width="16"
-                height="16"
+                width="15"
+                height="15"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="1.8"
@@ -576,8 +680,9 @@ export default function App() {
                 <rect x="3" y="4" width="18" height="16" rx="2" />
                 <path d="M15 4v16" />
               </svg>
+              <span>{drawerOpen ? "收起详情" : "详情"}</span>
             </button>
-          )}
+          </header>
           {agents.length === 0 ? (
             <div className="chat-empty full">
               <div className="chat-empty-mark">ACC</div>
