@@ -153,6 +153,7 @@ def test_default_web_skills_seeded(client) -> None:
             "browser_click",
             "browser_fill",
             "browser_press",
+            "browser_screenshot",
             "browser_close",
         ],
     }

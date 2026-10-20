@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib.util
 import ipaddress
 import json
@@ -25,6 +26,7 @@ BROWSER_TOOL_NAMES = frozenset(
         "browser_click",
         "browser_fill",
         "browser_press",
+        "browser_screenshot",
         "browser_close",
     }
 )
@@ -391,6 +393,7 @@ class BrowserSession:
         max_elements: int | None = None,
         max_text_chars: int | None = None,
         max_snapshot_chars: int | None = None,
+        screenshot_max_bytes: int | None = None,
         no_sandbox: bool | None = None,
         resolver: HostResolver | None = None,
         start_playwright: Callable[[], Awaitable[Any]] | None = None,
@@ -430,6 +433,14 @@ class BrowserSession:
                 max_snapshot_chars
                 if max_snapshot_chars is not None
                 else settings.browser_max_snapshot_chars
+            ),
+        )
+        self.max_screenshot_bytes = max(
+            100_000,
+            int(
+                screenshot_max_bytes
+                if screenshot_max_bytes is not None
+                else settings.browser_screenshot_max_bytes
             ),
         )
         self.no_sandbox = bool(
@@ -749,6 +760,36 @@ class BrowserSession:
                 f"Pressed {pressed} in tab {tab_state.name!r}", tab_state
             )
 
+    async def screenshot(
+        self, tab: str = DEFAULT_TAB, *, full_page: bool = False
+    ) -> list[dict[str, Any]]:
+        tab_state = await self._get_or_create_tab(tab, create=False)
+        async with tab_state.lock:
+            try:
+                image = await tab_state.page.screenshot(
+                    type="png",
+                    full_page=full_page,
+                    timeout=self.action_timeout_ms,
+                )
+            except Exception as exc:
+                raise BrowserToolError(f"screenshot failed: {_short_error(exc)}") from exc
+            url = str(tab_state.page.url)
+        if not isinstance(image, (bytes, bytearray)):
+            raise BrowserToolError("screenshot returned no image data")
+        if len(image) > self.max_screenshot_bytes:
+            raise BrowserToolError(
+                f"screenshot is {len(image)} bytes, over the "
+                f"{self.max_screenshot_bytes}-byte limit; try full_page=false"
+            )
+        encoded = base64.b64encode(bytes(image)).decode("ascii")
+        return [
+            {"type": "text", "text": f"Screenshot of tab {tab_state.name!r} at {url}"},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{encoded}"},
+            },
+        ]
+
     async def close_tab(self, tab: str = DEFAULT_TAB) -> str:
         key = normalize_tab_name(tab)
         async with self._tabs_lock:
@@ -797,7 +838,10 @@ def _session_for(context: SkillToolContext) -> BrowserSession:
     return session
 
 
-async def _call(context: SkillToolContext, operation: Callable[[BrowserSession], Awaitable[str]]) -> str:
+async def _call(
+    context: SkillToolContext,
+    operation: Callable[[BrowserSession], Awaitable[str | list[dict[str, Any]]]],
+) -> str | list[dict[str, Any]]:
     try:
         return await operation(_session_for(context))
     except BrowserToolError as exc:
@@ -818,7 +862,7 @@ def _make_browser_open_tool(context: SkillToolContext) -> BaseTool:
         name="browser_open",
         description=(
             "用无头浏览器打开 http/https 网页（仅公开地址），返回标题、正文和可交互元素 ref。"
-            "适合 JS 渲染页面、点击、填写和登录；只返回文字，不返回截图。"
+            "适合 JS 渲染页面、点击、填写和登录；默认只返回文字，用户明确要求截图时再调用 browser_screenshot。"
             "tab 默认 main，同一 Run 最多 2 个标签页。"
         ),
         coroutine=browser_open,
@@ -884,6 +928,23 @@ def _make_browser_press_tool(context: SkillToolContext) -> BaseTool:
     )
 
 
+def _make_browser_screenshot_tool(context: SkillToolContext) -> BaseTool:
+    async def browser_screenshot(tab: str = DEFAULT_TAB, full_page: bool = False):
+        """截取当前标签页并返回 PNG 图片。"""
+        return await _call(
+            context, lambda session: session.screenshot(tab, full_page=full_page)
+        )
+
+    return StructuredTool.from_function(
+        name="browser_screenshot",
+        description=(
+            "截取当前标签页并返回 PNG 图片。仅在用户明确要求查看截图、页面外观或布局时调用；"
+            "Provider 模型必须支持图片输入。full_page=true 截取整页。"
+        ),
+        coroutine=browser_screenshot,
+    )
+
+
 def _make_browser_close_tool(context: SkillToolContext) -> BaseTool:
     async def browser_close(tab: str = DEFAULT_TAB) -> str:
         """关闭标签页并释放并发槽位。"""
@@ -903,6 +964,7 @@ def register_browser_tools(registry: SkillToolRegistry = SKILL_TOOL_REGISTRY) ->
         ("browser_click", _make_browser_click_tool, "点击快照中的元素"),
         ("browser_fill", _make_browser_fill_tool, "向输入框填写文本"),
         ("browser_press", _make_browser_press_tool, "按下键盘按键"),
+        ("browser_screenshot", _make_browser_screenshot_tool, "按需截取当前标签页图片"),
         ("browser_close", _make_browser_close_tool, "关闭标签页"),
     )
     for name, factory, description in specs:

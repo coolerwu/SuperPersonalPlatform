@@ -324,7 +324,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 #### 功能点
 
-1. 全局技能库：技能放在 `~/.super-personal-platform/skills/<name>/SKILL.md`；`APP_SKILLS_DIR` 可覆盖。技能通过文件系统维护，不做 CRUD 表单；用户可以让 Agent 在对话中创建/编辑。首次启动 seed `web-search` 和 `web-fetch` 技能，已存在则不覆盖。
+1. 全局技能库：技能放在 `~/.super-personal-platform/skills/<name>/SKILL.md`；`APP_SKILLS_DIR` 可覆盖。技能通过文件系统维护，不做 CRUD 表单；用户可以让 Agent 在对话中创建/编辑。内置技能在启动时 seed（`web-search`、`web-fetch`、`web-browser`），并在技能库根目录的 `.seed_state.json` 记录写入内容的哈希：内容未被用户修改的内置技能随版本更新，用户改过的保持不动。
 2. 每个 Agent 有 `enabled_skills` 启用列表；侧边栏左上角的「技能」页面按当前 Agent 勾选启用并立即保存，系统提示只列出当前 Agent 启用的技能。不新增 Agent 选择器。「工具」页面只展示注册/声明情况，不单独启停工具。
 3. FileMiddleware 提供的文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不参与解锁，也不需要启用。
 4. 技能工具来自平台代码注册表（`apps/api/app/services/skill_tools.py`）；`SKILL.md` 的 `metadata.include_tools` 是空格分隔的工具名。工具必须同时满足：注册表存在、被已启用技能声明、SKILL.md 已读取。
@@ -362,23 +362,25 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 - 状态：进行中
 - 日期：2026-10-20
-- 来源：用户确认浏览器并发数 2、纯文本感知、保留 web_fetch/web_search
+- 来源：用户确认浏览器并发数 2、保留 web_fetch/web_search；截图仅在用户明确要求时返回
 
 #### 功能点
 
-1. 新增 seed 技能 `web-browser`，声明并解锁 6 个浏览器工具：`browser_open`、`browser_snapshot`、`browser_click`、`browser_fill`、`browser_press`、`browser_close`；沿用 F10 的「已注册 + 被已启用技能声明 + SKILL.md 已读取」三条件。
+1. 新增 seed 技能 `web-browser`，声明并解锁 7 个浏览器工具：`browser_open`、`browser_snapshot`、`browser_click`、`browser_fill`、`browser_press`、`browser_screenshot`、`browser_close`；沿用 F10 的「已注册 + 被已启用技能声明 + SKILL.md 已读取」三条件。
 2. 每次 Run 懒启动一个无头 Chromium 和一个浏览器 context；同一 Run 最多 `BROWSER_CONCURRENCY=2` 个标签页，工具用 `tab` 参数区分，默认 `main`；Run 结束、失败、超时或取消时自动关闭。
-3. 工具只返回页面文字：标题、URL、可见正文和可交互元素 ref；不返回截图，不依赖视觉模型。ref 只对最近一次快照有效，动作后返回新快照。
+3. 默认只返回页面文字：标题、URL、可见正文和可交互元素 ref；ref 只对最近一次快照有效，动作后返回新快照。
 4. 支持打开网页、读取快照、点击、填写（含 select）、按键和关闭标签页。
-5. 安全边界：只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地/保留地址、带凭据 URL、`file://` 和下载；导航请求进入页面前做 DNS 校验。
-6. Playwright 或 Chromium 不可用时，工具向模型返回可读错误并提示安装命令，不中断 Run。
-7. Run 事件新增 `browser_action`（工具名 + 紧凑摘要），前端抽屉可读展示。
-8. `BROWSER_*` 配置控制标签页上限、导航/动作超时、快照元素与文字上限，以及 Chromium sandbox 逃生开关。
+5. `browser_screenshot` 按需返回当前页面的 PNG 图片（可整页），仅在用户明确要求查看截图/外观/布局时调用；Provider 模型必须支持图片输入，图片大小受 `BROWSER_SCREENSHOT_MAX_BYTES` 限制。
+6. 安全边界：只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地/保留地址、带凭据 URL、`file://` 和下载；导航请求进入页面前做 DNS 校验。
+7. Playwright 或 Chromium 不可用时，工具向模型返回可读错误并提示安装命令，不中断 Run。
+8. Run 事件新增 `browser_action`（工具名 + 紧凑摘要），前端抽屉可读展示；截图内容不写入事件。
+9. `BROWSER_*` 配置控制标签页上限、导航/动作超时、快照元素与文字上限、截图大小上限，以及 Chromium sandbox 逃生开关。
 
 #### 验收标准
 
 - 「技能」页面能启用 `web-browser`；未读取 SKILL.md 前工具不可见且不可调用。
 - Agent 能打开 example.com，读取标题与正文，点击链接后拿到新快照，并用 `browser_close` 释放标签页。
+- 用户明确要求截图时，`browser_screenshot` 返回 PNG 图片内容块；未要求时不自动截图。
 - 同一 Run 打开第 3 个标签页返回上限错误，不阻塞其他工具调用。
 - `http://127.0.0.1`、`http://localhost`、`http://169.254.169.254`、`file:///etc/passwd`、带凭据 URL 均返回 `Error:` 且不发生导航。
 - Run 完成、失败或取消后没有残留 Chromium 进程。
@@ -386,7 +388,8 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 #### 非目标
 
-- 截图/视觉、iframe/shadow DOM 穿透、弹窗接管；
+- 自动截图或持续视觉输入（截图只由用户明确要求触发）；
+- iframe/shadow DOM 穿透、弹窗接管；
 - 持久登录态、Cookie/Profile 管理、下载/上传、任意 JS 执行；
 - 反检测/stealth、代理配置、用浏览器替代 web_search；
 - 多用户隔离、每 session 的浏览器状态。
@@ -409,7 +412,6 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 4. 输入区适配软键盘与安全区：跟随 `visualViewport` 收缩，底部使用 safe-area；移动端输入字号不小于 16px。
 5. 配置、记忆、技能、工具页面在移动端改为单列卡片，标签页等宽，弹窗改为底部面板；表格和代码块在自身容器内横向滚动。
 6. 支持 `prefers-reduced-motion`。
-7. assistant 消息使用左侧气泡卡片，与右侧 user 气泡形成左右对话；窄屏下气泡不超过内容列。
 
 #### 验收标准
 

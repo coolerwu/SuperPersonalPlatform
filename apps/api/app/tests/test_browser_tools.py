@@ -225,12 +225,16 @@ async def test_missing_playwright_reports_install_hint() -> None:
 class FakePage:
     def __init__(self) -> None:
         self.closed = False
+        self.url = "https://example.com/"
 
     async def close(self) -> None:
         self.closed = True
 
     async def wait_for_timeout(self, _ms: int) -> None:
         return None
+
+    async def screenshot(self, **_kwargs: Any) -> bytes:
+        return b"\x89PNG\r\n\x1a\n" + b"screenshot-bytes"
 
 
 class FakeContext:
@@ -287,6 +291,33 @@ async def test_tab_limit_is_enforced_and_released() -> None:
     assert "Closed tab 'a'" in result
     await session._get_or_create_tab("c", create=True)
     await session.aclose()
+
+
+async def test_screenshot_returns_image_content_block() -> None:
+    import base64
+
+    async def start() -> FakePlaywright:
+        return FakePlaywright()
+
+    session = BrowserSession(concurrency=1, start_playwright=start)
+    registry = SkillToolRegistry()
+    register_browser_tools(registry)
+    try:
+        await session._get_or_create_tab("main", create=True)
+        tool = registry.resolve_names(
+            ["browser_screenshot"],
+            SkillToolContext(api_key="", base_url="", browser=session),
+        )[0]
+        blocks = await tool.ainvoke({"tab": "main"})
+    finally:
+        await session.aclose()
+
+    assert blocks[0]["type"] == "text"
+    assert "Screenshot of tab 'main'" in blocks[0]["text"]
+    assert blocks[1]["type"] == "image_url"
+    url = blocks[1]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    assert base64.b64decode(url.split(",", 1)[1]).startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_browser_action_payload_is_compact() -> None:

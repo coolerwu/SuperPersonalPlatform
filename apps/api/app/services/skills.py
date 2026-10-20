@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -15,6 +18,7 @@ logger = logging.getLogger(__name__)
 MAX_SKILL_FILE_SIZE = 10 * 1024 * 1024
 MAX_SKILL_NAME_LENGTH = 64
 MAX_SKILL_DESCRIPTION_LENGTH = 1024
+SEED_STATE_FILENAME = ".seed_state.json"
 
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -51,9 +55,9 @@ metadata:
 """,
     "web-browser": """---
 name: web-browser
-description: 需要在真实网页上点击、填写表单、登录或读取 JS 渲染内容时使用。读取本技能后解锁浏览器工具，返回页面文字和可交互元素引用；不返回截图，只访问公开 http/https 地址。
+description: 需要在真实网页上点击、填写表单、登录或读取 JS 渲染内容时使用。读取本技能后解锁浏览器工具，默认返回页面文字和可交互元素引用；用户明确要求截图时可返回页面图片。只访问公开 http/https 地址。
 metadata:
-  include_tools: browser_open browser_snapshot browser_click browser_fill browser_press browser_close
+  include_tools: browser_open browser_snapshot browser_click browser_fill browser_press browser_screenshot browser_close
 ---
 
 # Web Browser
@@ -65,6 +69,7 @@ metadata:
 5. 不要输入密码、密钥或支付信息，也不要提交购买、删除等不可逆操作，除非用户在对话中明确要求。
 6. 只支持公开 http/https 地址；localhost、内网 IP、file:// 会被拒绝。只处理主 frame，不接管弹窗，不支持下载。
 7. 用完调用 `browser_close` 释放标签页；浏览器进程会在 Run 结束时自动关闭。
+8. 只有用户明确要求“看截图/页面长什么样/检查布局”时才调用 `browser_screenshot`，用 `full_page=true` 截整页；截图会把可见页面内容发送给模型 Provider，调用前确认页面没有敏感信息；Provider 模型必须支持图片输入，否则不要调用。
 """,
 }
 
@@ -232,11 +237,86 @@ def scan_skills(root: Path | None = None) -> SkillCatalog:
     return SkillCatalog(skills=tuple(skills), errors=tuple(errors))
 
 
-def seed_default_skills() -> None:
-    root = settings.skills_dir.expanduser()
+def seed_default_skills(root: Path | None = None) -> None:
+    """Create missing built-in skills and update ones the user has not edited.
+
+    `.seed_state.json` records the hash of the content last written by the
+    platform. A file is only overwritten when its current hash still matches
+    that record, so user edits are preserved. Files without a record are left
+    alone until they match a built-in default (for example after a manual
+    refresh), then they start tracking normally.
+    """
+    base = (root or settings.skills_dir).expanduser()
+    base.mkdir(parents=True, exist_ok=True)
+    state = _load_seed_state(base)
+    changed = False
+
     for name, content in DEFAULT_SKILLS.items():
-        target = root / name / "SKILL.md"
-        if target.exists():
+        target = base / name / "SKILL.md"
+        default_hash = _content_hash(content)
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            state[name] = default_hash
+            changed = True
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+
+        try:
+            current = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.warning("cannot read skill %s: %s", target, exc)
+            continue
+
+        current_hash = _content_hash(current)
+        recorded = state.get(name)
+        if recorded is None:
+            if current_hash == default_hash:
+                state[name] = default_hash
+                changed = True
+            continue
+        if recorded != current_hash:
+            logger.info("skill %s has user edits; leaving it untouched", name)
+            continue
+        if current_hash != default_hash:
+            target.write_text(content, encoding="utf-8")
+            state[name] = default_hash
+            changed = True
+            logger.info("updated built-in skill %s", name)
+        elif state.get(name) != default_hash:
+            state[name] = default_hash
+            changed = True
+
+    if changed:
+        _write_seed_state(base, state)
+
+
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _load_seed_state(root: Path) -> dict[str, str]:
+    path = root / SEED_STATE_FILENAME
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    skills = data.get("skills") if isinstance(data, dict) else None
+    if not isinstance(skills, dict):
+        return {}
+    return {
+        str(name): str(value)
+        for name, value in skills.items()
+        if isinstance(name, str) and isinstance(value, str)
+    }
+
+
+def _write_seed_state(root: Path, skills: dict[str, str]) -> None:
+    path = root / SEED_STATE_FILENAME
+    temp = root / f"{SEED_STATE_FILENAME}.tmp"
+    payload = json.dumps(
+        {"version": 1, "skills": dict(sorted(skills.items()))},
+        ensure_ascii=False,
+        indent=2,
+    )
+    temp.write_text(payload + "\n", encoding="utf-8")
+    os.replace(temp, path)

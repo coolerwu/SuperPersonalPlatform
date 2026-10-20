@@ -18,7 +18,7 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 │   ├── app.db           # SQLite
 │   └── checkpoints/     # 每个 session 的 LangGraph checkpoint
 ├── workspaces/          # Agent 真实工作区根目录
-└── skills/              # 全局技能库（每个技能一个目录）
+└── skills/              # 全局技能库（每个技能一个目录；.seed_state.json 记录内置技能哈希）
 ```
 
 启动目录下的 `.env` 会覆盖 home 配置，便于本地临时覆盖。
@@ -52,7 +52,7 @@ npm run dev
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
-- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell 工具；浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，只返回文字和元素引用，不返回截图）；
+- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell 工具；浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，默认返回文字和元素引用；用户明确要求时可返回页面截图）；
 - 技能与工具：左侧「技能」页面为当前 Agent 启用技能；模型读取 `/skills/<name>/SKILL.md` 后，技能声明的工具才会解锁；文件工具始终可用；「工具」页面只展示注册与声明情况；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 - 顶部轻量栏显示当前 Agent 和会话标题，并作为详情抽屉开关。
@@ -109,7 +109,7 @@ metadata:
 - 文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不受技能开关影响。
 - 技能创建：直接让 Agent 在对话里创建或修改 `/skills/<name>/SKILL.md`，不需要表单；也可以在主机上编辑文件。Agent 写入的技能同样需要为当前 Agent 启用。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
-- 首次启动会在技能库中 seed `web-fetch`、`web-search` 和 `web-browser` 三个技能（已存在则不覆盖），分别声明 `include_tools: web_fetch` / `web_search` / 六个 `browser_*` 工具。
+- 内置技能会在技能库中 seed：`web-fetch`、`web-search` 和 `web-browser`，分别声明 `include_tools: web_fetch` / `web_search` / 七个 `browser_*` 工具。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
 
@@ -123,6 +123,7 @@ metadata:
   - `browser_click(ref, tab)`：点击快照中的元素；
   - `browser_fill(ref, text, tab, submit=false)`：填写输入框或 select；
   - `browser_press(key, tab)`：按下按键；
+  - `browser_screenshot(tab, full_page=false)`：按需截取当前页面，返回 PNG 图片；只在用户明确要求查看截图/外观/布局时调用，Provider 模型需要支持图片输入；
   - `browser_close(tab)`：关闭标签页并释放并发槽位。
   - 每次 Run 懒启动一个浏览器进程和一个 context，最多 `BROWSER_CONCURRENCY=2` 个标签页；Run 结束、失败、超时或取消时自动关闭。ref 只对最近一次快照有效，动作后会返回新快照。
   - 只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地地址、带凭据 URL、`file://` 和下载；只处理主 frame，不接管弹窗。
@@ -177,6 +178,7 @@ metadata:
 | `BROWSER_MAX_ELEMENTS` | 每次快照的交互元素上限 | `120` |
 | `BROWSER_MAX_TEXT_CHARS` | 每次快照回传的正文上限 | `4000` |
 | `BROWSER_MAX_SNAPSHOT_CHARS` | 单次快照总字符上限 | `12000` |
+| `BROWSER_SCREENSHOT_MAX_BYTES` | 单张截图大小上限 | `4000000` |
 | `BROWSER_NO_SANDBOX` | Chromium 启动失败时的逃生开关 | `false` |
 | `LLM_BASE_URL` | OpenAI-compatible 端点 | `https://api.deepseek.com` |
 | `LLM_API_KEY` | 模型密钥 | 空 |

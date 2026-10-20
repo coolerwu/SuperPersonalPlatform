@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     browser_max_elements: int = 120
     browser_max_text_chars: int = 4_000
     browser_max_snapshot_chars: int = 12_000
+    browser_screenshot_max_bytes: int = 4_000_000
     browser_no_sandbox: bool = False
 
     @property

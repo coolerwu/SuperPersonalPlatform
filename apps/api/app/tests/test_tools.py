@@ -32,6 +32,7 @@ def test_tools_api_includes_builtin_web_tools(client) -> None:
         "browser_click",
         "browser_fill",
         "browser_press",
+        "browser_screenshot",
         "browser_close",
     ):
         assert tools[name]["registered"] is True
