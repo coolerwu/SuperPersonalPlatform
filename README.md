@@ -128,7 +128,7 @@ metadata:
   - `browser_close(tab)`：关闭标签页并释放并发槽位。
   - 每次 Run 懒启动一个浏览器进程和一个 context，最多 `BROWSER_CONCURRENCY=2` 个标签页；Run 结束、失败、超时或取消时自动关闭。ref 只对最近一次快照有效，动作后会返回新快照。
   - 只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地地址、带凭据 URL、`file://` 和下载；只处理主 frame，不接管弹窗。
-  - 搜索类页面优先尝试移动版/轻量入口（`m.baidu.com`、`html.duckduckgo.com`、`cn.bing.com`、维基百科）；遇到验证码、安全验证或 HTTP 403/429 时返回明确错误并提示换入口，不会尝试绕过验证。
+  - 搜索类页面优先尝试移动版/轻量入口（`m.baidu.com`、`www.google.com/search?q=`、`html.duckduckgo.com`、`cn.bing.com`、维基百科）；Google 需要主机网络能直连，当前网络被 DNS 污染时会被地址校验拒绝；遇到验证码、安全验证或 HTTP 403/429 时返回明确错误并提示换入口，不会尝试绕过验证。
 
 `web_search` 和 `web_fetch` 使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：在「技能」页面启用声明它的技能（`web-search` / `web-fetch` / `web-browser`），对话中读取该 SKILL.md 后解锁。
 

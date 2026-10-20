@@ -79,7 +79,7 @@ metadata:
 6. 只支持公开 http/https 地址；localhost、内网 IP、file:// 会被拒绝。只处理主 frame，不接管弹窗，不支持下载。
 7. 用完调用 `browser_close` 释放标签页；浏览器进程会在 Run 结束时自动关闭。
 8. 只有用户明确要求“看截图/页面长什么样/检查布局”时才调用 `browser_screenshot`，用 `full_page=true` 截整页；截图会把可见页面内容发送给模型 Provider，调用前确认页面没有敏感信息；Provider 模型必须支持图片输入，否则不要调用。
-9. 搜索时优先尝试移动版或轻量入口，例如百度 `https://m.baidu.com/s?wd=<query>`、DuckDuckGo `https://html.duckduckgo.com/html/?q=<query>`、必应 `https://cn.bing.com/search?q=<query>`、维基百科 `https://zh.wikipedia.org/w/index.php?search=<query>`；桌面版被拦截时换一个入口。返回 HTTP 403/429、跳回首页或出现验证页时视为被拦截，换下一个入口。
+9. 搜索时优先尝试移动版或轻量入口，例如百度 `https://m.baidu.com/s?wd=<query>`、Google `https://www.google.com/search?q=<query>`（可加 `&gbv=1` 用基础版，需要主机网络能直连 Google）、DuckDuckGo `https://html.duckduckgo.com/html/?q=<query>`、必应 `https://cn.bing.com/search?q=<query>`、维基百科 `https://zh.wikipedia.org/w/index.php?search=<query>`；桌面版被拦截时换一个入口。返回 HTTP 403/429、跳回首页或出现验证页时视为被拦截，换下一个入口。
 10. 遇到验证码、安全验证、滑块或“verify you are human”页面时立即停止，告知用户并尝试其他入口或来源；绝不尝试绕过或自动化验证。
 """,
 }
