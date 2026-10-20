@@ -15,7 +15,7 @@
 - `apps/web`：React + Vite + TypeScript。
 - `deploy/`：systemd unit 与 `.env` 模板（生产）。
 - 执行核：`AgentExecutor` 端口 + `DeepAgentExecutor`；平台拥有 session/messages/run，deepagents checkpointer 只存 Agent 状态。
-- Provider 模型调用使用 langchain `ModelRetryMiddleware`：429/5xx/超时/连接错误最多重试 3 次（指数退避 + jitter），默认按 `ModelError.is_retryable` 判定，4xx 不重试；`ChatOpenAI` 的 SDK 自身重试关闭，避免叠加。
+- Provider 模型调用使用 langchain `ModelRetryMiddleware`：429/5xx/超时/连接错误最多重试 3 次（指数退避 + jitter），默认按 `ModelError.is_retryable` 判定，4xx 不重试；`ChatOpenAI` 的 SDK 自身重试关闭，避免叠加。可重试失败会记录 warning 日志（agent/session/异常类型）。
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
 - v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs、集中配置页和长期记忆。
 - v1 暴露工作区内的 filesystem 工具（ls / read_file / write_file / edit_file / delete / glob / grep，由 `FilesystemMiddleware` 提供）；不暴露 shell 工具；浏览器工具通过 `web-browser` 技能门控解锁（Playwright 无头 Chromium，默认文本快照，最多 2 个标签页，可按需返回截图）。memory 由平台管理和注入，不允许 Agent 自主修改 instructions。

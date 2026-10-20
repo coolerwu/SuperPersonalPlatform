@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.callbacks import AsyncCallbackHandler
+from langchain_core.exceptions import ModelError
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage, ToolMessageChunk
 
 from app.config import settings
@@ -18,6 +19,23 @@ from app.services.workspace import resolve_workspace_path
 
 logger = logging.getLogger(__name__)
 _BROWSER_CLEANUP_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _log_retryable(
+    exc: BaseException, *, agent_name: str, session_id: str
+) -> bool:
+    if not isinstance(exc, Exception):
+        return False
+    retryable = exc.is_retryable if isinstance(exc, ModelError) else True
+    if retryable:
+        logger.warning(
+            "model call failed (retryable) agent=%s session=%s error=%s: %s",
+            agent_name,
+            session_id,
+            type(exc).__name__,
+            exc,
+        )
+    return retryable
 
 
 @dataclass(frozen=True)
@@ -229,6 +247,9 @@ class DeepAgentExecutor:
                 # ModelError.is_retryable (429/5xx/timeouts yes, 4xx no).
                 retry_middleware = ModelRetryMiddleware(
                     max_retries=3,
+                    retry_on=lambda exc: _log_retryable(
+                        exc, agent_name=self.agent_name, session_id=session_id
+                    ),
                     on_failure="error",
                     initial_delay=1.0,
                     backoff_factor=2.0,

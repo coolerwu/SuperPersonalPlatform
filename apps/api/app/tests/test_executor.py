@@ -1,10 +1,12 @@
+import logging
 from types import SimpleNamespace
 
 import pytest
 from langchain.agents.middleware import ModelRetryMiddleware
+from langchain_core.exceptions import ModelAuthenticationError, ModelRateLimitError
 from langchain_core.messages import AIMessageChunk, ToolMessage
 
-from app.services.executor import DeepAgentExecutor
+from app.services.executor import DeepAgentExecutor, _log_retryable
 
 
 @pytest.mark.asyncio
@@ -119,3 +121,19 @@ async def test_executor_configures_single_retry_layer(tmp_path, monkeypatch) -> 
     assert retries[0].max_retries == 3
     assert retries[0].on_failure == "error"
     assert any(event.type == "run_completed" for event in events)
+
+
+def test_retryable_model_errors_are_logged(caplog) -> None:
+    caplog.set_level(logging.WARNING)
+
+    assert _log_retryable(
+        ModelRateLimitError("429"), agent_name="agent", session_id="session"
+    ) is True
+    assert "model call failed (retryable)" in caplog.text
+    assert "ModelRateLimitError" in caplog.text
+
+    caplog.clear()
+    assert _log_retryable(
+        ModelAuthenticationError("401"), agent_name="agent", session_id="session"
+    ) is False
+    assert "model call failed (retryable)" not in caplog.text

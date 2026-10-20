@@ -47,7 +47,7 @@
 9. 取消 Run：queued/running 都能取消并落终态。
 10. 右侧抽屉：Run 时间线/事件/usage、Agent 配置。
 11. 不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）；同一 session 仍最多一个活动 Run。并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
-12. Provider 模型调用失败时按可重试错误（429/5xx/超时/连接）做最多 3 次指数退避 + jitter；4xx 立即失败。`ChatOpenAI` 的 SDK 自身重试关闭，避免与中间件叠加。
+12. Provider 模型调用失败时按可重试错误（429/5xx/超时/连接）做最多 3 次指数退避 + jitter；4xx 立即失败。`ChatOpenAI` 的 SDK 自身重试关闭，避免与中间件叠加。可重试失败写入 warning 日志（agent/session/异常类型）。
 
 #### 验收标准
 
