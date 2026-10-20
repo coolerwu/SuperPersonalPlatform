@@ -4,13 +4,13 @@ import shutil
 from types import SimpleNamespace
 
 import pytest
-from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.exceptions import ModelAuthenticationError, ModelRateLimitError
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 
 from app.config import settings
-from app.services.executor import DeepAgentExecutor, _log_retryable
+from app.services.executor import DeepAgentExecutor
+from app.services.model_retry import log_retryable as _log_retryable
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,7 @@ async def test_executor_emits_browser_action_for_browser_tool_results(
 
 
 @pytest.mark.asyncio
-async def test_executor_configures_single_retry_layer(tmp_path, monkeypatch) -> None:
+async def test_executor_retries_on_the_model_for_subagents(tmp_path, monkeypatch) -> None:
     captured: dict = {}
 
     class FakeChatModel:
@@ -98,6 +98,7 @@ async def test_executor_configures_single_retry_layer(tmp_path, monkeypatch) -> 
 
     def fake_create(**kwargs):
         captured["middleware"] = kwargs["middleware"]
+        captured["model"] = kwargs["model"]
         return FakeAgent()
 
     monkeypatch.setattr("langchain_openai.ChatOpenAI", FakeChatModel)
@@ -118,12 +119,10 @@ async def test_executor_configures_single_retry_layer(tmp_path, monkeypatch) -> 
     ]
 
     assert captured["chat"]["max_retries"] == 0
-    retries = [
-        item for item in captured["middleware"] if isinstance(item, ModelRetryMiddleware)
-    ]
-    assert len(retries) == 1
-    assert retries[0].max_retries == 3
-    assert retries[0].on_failure == "error"
+    assert captured["model"].retry_max_attempts == 3
+    assert captured["model"].retry_agent_name == "test"
+    assert captured["model"].retry_session_id == "retry"
+    assert all(item.name != "ModelRetryMiddleware" for item in captured["middleware"])
     assert any(event.type == "run_completed" for event in events)
 
 

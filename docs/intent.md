@@ -47,7 +47,7 @@
 9. 取消 Run：queued/running 都能取消并落终态。
 10. 右侧抽屉：Run 时间线/事件/usage、Agent 配置。
 11. 不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）；同一 session 仍最多一个活动 Run。并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
-12. Provider 模型调用失败时按可重试错误（429/5xx/超时/连接）做最多 3 次指数退避 + jitter；4xx 立即失败。`ChatOpenAI` 的 SDK 自身重试关闭，避免与中间件叠加。可重试失败写入 warning 日志（agent/session/异常类型）。
+12. Provider 模型调用失败时按可重试错误（429/5xx/超时/连接）做最多 3 次指数退避 + jitter；4xx 立即失败。`ChatOpenAI` 的 SDK 自身重试关闭，避免与中间件叠加。可重试失败写入 warning 日志（agent/session/异常类型）。（F17 起改为模型层重试，并补充子 Agent 与流式语义。）
 13. 单个 Run 的 LangGraph 递归上限由 `RUN_RECURSION_LIMIT` 控制（默认 500，主 Agent 与 general-purpose 子 Agent 共用；原实现写死 50）。真的撞上上限时，执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍以 `completed` 收尾，输出前标注「已达到执行步骤上限」。
 14. deepagents 的上下文压缩（summarization）是内部模型调用，其流式片段（`metadata.lc_source=summarization`）必须过滤，不进入 assistant 输出、思考过程或 Run 事件。
 
@@ -574,3 +574,36 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - 回滚 checkpoint、撤销已经发生的文件/浏览器副作用；
 - 记录每次 Run 的 checkpoint id 或做分支管理；
 - 断线期间离线缓存或 Service Worker。
+
+### F17 模型重试下沉到模型层（覆盖子 Agent 与流式）
+
+- 状态：进行中
+- 日期：2026-10-20
+- 来源：用户指出子 Agent 不继承 `ModelRetryMiddleware`、流式重试会重复文本、step-limit 总结绕过重试
+
+#### 背景
+
+`ModelRetryMiddleware` 只挂在主 Agent 的 middleware 列表里。deepagents 0.7.28 给默认 general-purpose 子 Agent 只传递与默认槽位同名的中间件（Filesystem / Summarization / PatchToolCalls / Skills），重试中间件不会进入子 Agent。同时，如果重试包装的是整个流式模型调用，失败前已经流出的 `assistant_delta` / `reasoning_delta` 会在重试时再流一遍，前端会拼接出重复文本；`_answer_after_step_limit` 直接调用 `chat_model.ainvoke`，也不经过中间件。
+
+#### 功能点
+
+1. 新增 `apps/api/app/services/model_retry.py` 的 `ModelRetryMixin`，把重试放到模型类上；`ReasoningChatOpenAI` 同时继承该 mixin 和 `ChatOpenAI`。
+2. `create_deep_agent(model=...)` 传入同一个模型实例，因此主 Agent、general-purpose 子 Agent 和 summarization 都使用同一套重试；移除 `ModelRetryMiddleware`，SDK 重试继续保持关闭，只有一层重试。
+3. `_agenerate` 对非流式调用整体重试；`_astream` 只在本次尝试还没有输出任何 chunk 时重试，已经输出片段后失败立即抛出，避免重复文本。
+4. step-limit 的最终总结仍复用同一个 `chat_model`，因此 `ainvoke` 也获得重试。
+5. 可重试失败继续记录 warning 日志（agent/session/异常类型）；流式已输出后不重试时额外记录原因。
+6. 测试覆盖：无输出时流式重试、部分输出后不重试、4xx 不重试、`_agenerate` 重试与重试上限、执行器把重试配置放在模型上而不是 middleware。
+
+#### 验收标准
+
+- general-purpose 子 Agent 的模型实例带 `ModelRetryMixin`（同一模型对象传入 deepagents）。
+- 流式调用在输出前缀后失败不会重试，前端不会出现重复文本。
+- 非流式调用（包括 step-limit 总结）遇到可重试错误仍会退避重试。
+- 401/400 等 4xx 不重试。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 流式断流后的“本次尝试重置”事件或自动续写；
+- 在 checkpoint 层重试整个 Run；
+- 修改 Provider 或模型 SDK 自身的重试策略。

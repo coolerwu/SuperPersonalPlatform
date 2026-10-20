@@ -7,10 +7,9 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from langchain_core.callbacks import AsyncCallbackHandler
-from langchain_core.exceptions import ModelError
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -23,6 +22,7 @@ from langchain_core.messages import (
 from app.config import settings
 from app.services import memory_tools  # noqa: F401 - registers memory tools
 from app.services.browser_tools import BROWSER_TOOL_NAMES, BrowserSession
+from app.services.model_retry import ModelRetryMixin
 from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolContext, SkillToolRegistry
 from app.services.workspace import WorkspaceError, resolve_workspace_path
 
@@ -43,23 +43,6 @@ RESUME_PROMPT = (
 )
 INTERRUPTED_TOOL_RESULT = "工具调用因服务重启被中断，结果未知；不要重复执行该操作。"
 MAX_STEP_LIMIT_CONTINUATIONS = 1
-
-
-def _log_retryable(
-    exc: BaseException, *, agent_name: str, session_id: str
-) -> bool:
-    if not isinstance(exc, Exception):
-        return False
-    retryable = exc.is_retryable if isinstance(exc, ModelError) else True
-    if retryable:
-        logger.warning(
-            "model call failed (retryable) agent=%s session=%s error=%s: %s",
-            agent_name,
-            session_id,
-            type(exc).__name__,
-            exc,
-        )
-    return retryable
 
 
 @dataclass(frozen=True)
@@ -365,14 +348,19 @@ class DeepAgentExecutor:
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
         try:
             from deepagents import create_deep_agent
-            from langchain.agents.middleware import ModelRetryMiddleware
             from langchain_openai import ChatOpenAI
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             from langgraph.errors import GraphRecursionError
 
             from app.services.skill_middleware import AgentSkillsMiddleware
 
-            class ReasoningChatOpenAI(ChatOpenAI):
+            class ReasoningChatOpenAI(ModelRetryMixin, ChatOpenAI):
+                # Retry on the model class, not middleware: deepagents only
+                # passes same-named default middleware to the general-purpose
+                # subagent, so ModelRetryMiddleware never reaches it.
+                retry_agent_name: ClassVar[str] = self.agent_name
+                retry_session_id: ClassVar[str] = session_id
+
                 # ChatOpenAI drops provider-specific reasoning_content fields.
                 # Preserve DeepSeek's streamed reasoning so the executor can
                 # emit it as a separate trace event instead of answer text.
@@ -442,19 +430,9 @@ class DeepAgentExecutor:
                         ),
                     ),
                 )
-                # One retry layer only: ChatOpenAI retries are disabled so this
-                # middleware owns backoff. The default retry_on follows
-                # ModelError.is_retryable (429/5xx/timeouts yes, 4xx no).
-                retry_middleware = ModelRetryMiddleware(
-                    max_retries=3,
-                    retry_on=lambda exc: _log_retryable(
-                        exc, agent_name=self.agent_name, session_id=session_id
-                    ),
-                    on_failure="error",
-                    initial_delay=1.0,
-                    backoff_factor=2.0,
-                    max_delay=30.0,
-                )
+                # The model class owns retries (including subagents and the
+                # step-limit summary); ChatOpenAI SDK retries stay disabled so
+                # there is exactly one retry layer.
                 agent = create_deep_agent(
                     model=chat_model,
                     tools=[],
@@ -463,7 +441,7 @@ class DeepAgentExecutor:
                     backend=backend,
                     name=self.agent_name,
                     skills=["/skills/"],
-                    middleware=[skills_middleware, retry_middleware],
+                    middleware=[skills_middleware],
                 )
                 config = {
                     "configurable": {"thread_id": session_id},
