@@ -53,6 +53,7 @@ npm run dev
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；
 - 同一时间只跟踪一个 Run：另一个会话的 Run 运行中时，当前会话禁用发送并提示，输入框仍可编辑；异步错误只显示在所属 Agent/会话，切回后失败 Run 的错误和重试会恢复；
+- 后端同一 session 仍只有一个活动 Run；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 2），超出的 Run 保持 `queued`；
 - Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell 工具；浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，默认返回文字和元素引用；用户明确要求时可返回页面截图）；
 - 技能与工具：左侧「技能」页面为当前 Agent 启用技能；模型读取 `/skills/<name>/SKILL.md` 后，技能声明的工具才会解锁；文件工具始终可用；「工具」页面只展示注册与声明情况；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
@@ -175,7 +176,7 @@ metadata:
 | `APP_DATA_DIR` | 数据/checkpoint 目录 | `$APP_HOME/data` |
 | `APP_WORKSPACES_DIR` | 真实工作区根目录 | `$APP_HOME/workspaces` |
 | `APP_SKILLS_DIR` | 全局技能库根目录 | `$APP_HOME/skills` |
-| `BROWSER_CONCURRENCY` | 每个 Run 的浏览器标签页上限 | `2` |
+| `BROWSER_CONCURRENCY` | 每个 Run 的浏览器标签页上限，同时决定不同 session 的 Run 并发数 | `2` |
 | `BROWSER_NAVIGATION_TIMEOUT_MS` | 页面导航超时 | `30000` |
 | `BROWSER_ACTION_TIMEOUT_MS` | 点击/填写动作超时 | `10000` |
 | `BROWSER_MAX_ELEMENTS` | 每次快照的交互元素上限 | `120` |

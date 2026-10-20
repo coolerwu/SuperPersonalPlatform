@@ -46,6 +46,7 @@
 8. Checkpoint：每个 session 一个 thread；刷新/重启后可继续同一会话。
 9. 取消 Run：queued/running 都能取消并落终态。
 10. 右侧抽屉：Run 时间线/事件/usage、Agent 配置。
+11. 不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）；同一 session 仍最多一个活动 Run。并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
 
 #### 验收标准
 
@@ -54,6 +55,7 @@
 - 主 Agent 能把任务派给 general-purpose 子 Agent；trace 可见。
 - 每次用户消息创建 Run；Run 详情展示事件、usage/cost。
 - 重启 api/worker 后 queued/running 能恢复；同一 session 可继续。
+- 两个不同 session 的 Run 可同时处于 running；第三个 session 的 Run 排队，直到有空位；同一 session 的第二个 Run 仍被拒绝。
 - 取消 Run 能停止并落终态。
 - 不暴露文件、Shell、浏览器、skills、memory 工具。
 - 后端测试与前端构建通过。

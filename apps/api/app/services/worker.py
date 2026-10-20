@@ -27,8 +27,7 @@ class RunWorker:
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
         self._loop_task: asyncio.Task | None = None
-        self._current_run_id: str | None = None
-        self._current_task: asyncio.Task | None = None
+        self._tasks: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
         self._loop_task = asyncio.create_task(self._run_loop(), name="run-worker")
@@ -36,64 +35,85 @@ class RunWorker:
     async def stop(self) -> None:
         self._stop.set()
         self._wake.set()
-        if self._current_task is not None:
-            self._current_task.cancel()
         if self._loop_task is not None:
             self._loop_task.cancel()
             try:
                 await self._loop_task
             except asyncio.CancelledError:
                 pass
+        for task in self._tasks.values():
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+            self._tasks.clear()
 
     def wake(self) -> None:
         self._wake.set()
 
     async def _run_loop(self) -> None:
         await requeue_running_runs()
+        limit = max(1, settings.run_concurrency)
         while not self._stop.is_set():
-            try:
-                run_id = await self._claim_next()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("failed to claim next run")
-                await asyncio.sleep(1)
-                continue
-            if run_id is None:
+            while len(self._tasks) < limit:
+                try:
+                    run_id = await self._claim_next()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("failed to claim next run")
+                    await asyncio.sleep(1)
+                    break
+                if run_id is None:
+                    break
+                self._tasks[run_id] = asyncio.create_task(
+                    self.execute_run(run_id), name=f"run-{run_id}"
+                )
+
+            if not self._tasks:
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=1.0)
                 except asyncio.TimeoutError:
                     pass
                 self._wake.clear()
                 continue
-            self._current_run_id = run_id
-            self._current_task = asyncio.create_task(self.execute_run(run_id), name=f"run-{run_id}")
-            try:
-                await self._current_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                logger.exception("run worker task failed for %s", run_id)
-            finally:
-                self._current_run_id = None
-                self._current_task = None
+
+            await asyncio.wait(
+                self._tasks.values(),
+                timeout=1.0,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for run_id, task in list(self._tasks.items()):
+                if not task.done():
+                    continue
+                self._tasks.pop(run_id, None)
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception("run worker task failed for %s", run_id)
 
     async def _claim_next(self) -> str | None:
         async with SessionLocal() as db:
-            run = await db.scalar(
-                select(Run).where(Run.status == "queued").order_by(Run.created_at).limit(1)
-            )
-            if run is None:
-                return None
-            if run.cancel_requested:
-                run.status = "cancelled"
-                run.finished_at = utcnow()
+            running_sessions = select(Run.session_id).where(Run.status == "running")
+            while True:
+                run = await db.scalar(
+                    select(Run)
+                    .where(Run.status == "queued", Run.session_id.notin_(running_sessions))
+                    .order_by(Run.created_at)
+                    .limit(1)
+                )
+                if run is None:
+                    return None
+                if run.cancel_requested:
+                    run.status = "cancelled"
+                    run.finished_at = utcnow()
+                    await db.commit()
+                    continue
+                run.status = "running"
+                run.started_at = utcnow()
                 await db.commit()
-                return None
-            run.status = "running"
-            run.started_at = utcnow()
-            await db.commit()
-            return run.id
+                return run.id
 
     async def execute_run(self, run_id: str) -> None:
         async with SessionLocal() as db:
@@ -239,6 +259,7 @@ class RunWorker:
                 await db.commit()
                 return True
             await db.commit()
-        if self._current_run_id == run_id and self._current_task is not None:
-            self._current_task.cancel()
+        task = self._tasks.get(run_id)
+        if task is not None:
+            task.cancel()
         return True

@@ -56,5 +56,12 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [item.strip() for item in self.app_cors_origins.split(",") if item.strip()]
 
+    @property
+    def run_concurrency(self) -> int:
+        # A session still has at most one active Run; different sessions may run
+        # in parallel. The pool follows the browser tab limit so browser Runs
+        # cannot multiply Chromium instances beyond that bound.
+        return max(1, self.browser_concurrency)
+
 
 settings = Settings()
