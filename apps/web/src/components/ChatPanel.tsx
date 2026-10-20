@@ -49,16 +49,24 @@ export function ChatPanel(props: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickRef = useRef(true);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     if (props.focusSignal > 0) textareaRef.current?.focus();
   }, [props.focusSignal]);
 
   useEffect(() => {
-    const element = textareaRef.current;
-    if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
+    const syncHeight = () => {
+      const element = textareaRef.current;
+      if (!element) return;
+      element.style.height = "auto";
+      const nextHeight = Math.min(element.scrollHeight, 220);
+      element.style.height = `${nextHeight}px`;
+      setExpanded(element.scrollHeight > 50);
+    };
+    syncHeight();
+    window.addEventListener("resize", syncHeight);
+    return () => window.removeEventListener("resize", syncHeight);
   }, [props.draft]);
 
   useEffect(() => {
@@ -183,7 +191,14 @@ export function ChatPanel(props: ChatPanelProps) {
       </div>
 
       <div className="composer">
-        <div className="composer-card">
+        <div className={`composer-card ${expanded ? "expanded" : ""}`}>
+          <div className="composer-hint" title={props.activeRun ? props.activeRun.status : undefined}>
+            {props.activeRun && <span className={`status-dot ${props.activeRun.status}`} />}
+            <span className="composer-shortcut">
+              <span className="composer-shortcut-mini">Enter 发送</span>
+              <span className="composer-shortcut-full">Enter 发送 · Shift+Enter 换行 · Markdown</span>
+            </span>
+          </div>
           <textarea
             ref={textareaRef}
             value={props.draft}
@@ -193,52 +208,46 @@ export function ChatPanel(props: ChatPanelProps) {
             rows={1}
             disabled={!props.canSend}
           />
-          <div className="composer-bar">
-            <div className="composer-hint" title={props.activeRun ? props.activeRun.status : undefined}>
-              {props.activeRun && <span className={`status-dot ${props.activeRun.status}`} />}
-              <span className="composer-shortcut">Enter 发送 · Shift+Enter 换行 · Markdown</span>
-            </div>
-            <div className="composer-actions">
-              {props.sending ? (
-                <button
-                  className="composer-send-button stop"
-                  type="button"
-                  onClick={props.onCancel}
-                  aria-label="停止生成"
-                  title="停止生成"
+          <div className="composer-actions">
+            {props.sending ? (
+              <button
+                className="composer-send-button stop"
+                type="button"
+                onClick={props.onCancel}
+                aria-label="停止生成"
+                title="停止生成"
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+                <span>停止</span>
+              </button>
+            ) : (
+              <button
+                className="composer-send-button"
+                type="button"
+                onClick={props.onSend}
+                disabled={!props.canSend || !props.draft.trim()}
+                aria-label="发送"
+                title="发送"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="15"
+                  height="15"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
                 >
-                  <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
-                    <rect x="6" y="6" width="12" height="12" rx="2" />
-                  </svg>
-                  <span>停止</span>
-                </button>
-              ) : (
-                <button
-                  className="composer-send-button"
-                  type="button"
-                  onClick={props.onSend}
-                  disabled={!props.canSend || !props.draft.trim()}
-                  aria-label="发送"
-                  title="发送"
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    width="15"
-                    height="15"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.9"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M22 2 11 13" />
-                    <path d="M22 2 15 22l-4-9-9-4Z" />
-                  </svg>
-                  <span>发送</span>
-                </button>
-              )}
-            </div>
+                  <path d="M22 2 11 13" />
+                  <path d="M22 2 15 22l-4-9-9-4Z" />
+                </svg>
+                <span>发送</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
