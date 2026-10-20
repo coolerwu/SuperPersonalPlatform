@@ -14,6 +14,7 @@ import type {
   SkillInfo,
 } from "./types";
 import { ChatPanel } from "./components/ChatPanel";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Drawer } from "./components/Drawer";
 import { Login } from "./components/Login";
 import { MemoryPage } from "./components/MemoryPage";
@@ -50,6 +51,7 @@ export default function App() {
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<number | null>(null);
@@ -452,7 +454,6 @@ export default function App() {
   }
 
   async function deleteSession(id: string) {
-    if (!window.confirm("删除这个会话？")) return;
     try {
       await api.deleteSession(id);
       const list = await api.listSessions(agentId);
@@ -619,7 +620,9 @@ export default function App() {
         }}
         onNewSession={newSession}
         newSessionActive={view === "chat" && !sessionId}
-        onDeleteSession={(id) => void deleteSession(id)}
+        onDeleteSession={(id) => {
+          setSessionToDelete(sessions.find((item) => item.id === id) ?? null);
+        }}
         onOpenSettings={() => openView("settings")}
         onOpenMemory={() => openView("memory")}
         onOpenSkills={() => openView("skills")}
@@ -734,6 +737,20 @@ export default function App() {
           onClose={() => setDrawerOpen(false)}
         />
       )}
+
+      <ConfirmDialog
+        open={sessionToDelete !== null}
+        title="删除这个会话？"
+        description={`「${sessionToDelete?.title || "新会话"}」的消息、Run 和 checkpoint 会一起删除，无法恢复。`}
+        confirmLabel="删除"
+        danger
+        onClose={() => setSessionToDelete(null)}
+        onConfirm={() => {
+          const target = sessionToDelete;
+          setSessionToDelete(null);
+          if (target) void deleteSession(target.id);
+        }}
+      />
 
       <NewAgentDialog
         open={newAgentOpen}

@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, errorText } from "../api";
 import type { Agent, MemoryItem, MemoryScope } from "../types";
 import { formatTime } from "../format";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 type MemoryPageProps = {
   agents: Agent[];
@@ -31,6 +32,9 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
   const [consolidating, setConsolidating] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState<
+    { kind: "delete"; id: string } | { kind: "consolidate" } | null
+  >(null);
 
   const agent = agents.find((item) => item.id === agentId);
 
@@ -111,7 +115,6 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
   }
 
   async function remove(id: string) {
-    if (!window.confirm("删除这条记忆？")) return;
     setError("");
     try {
       await api.deleteMemory(id);
@@ -124,8 +127,6 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
 
   async function consolidate() {
     if (consolidating || busy || !agentId || items.length < 2) return;
-    const label = scope === "user" ? "所有 Agent 的用户记忆" : `${agent?.name ?? "当前 Agent"} 的 Agent 记忆`;
-    if (!window.confirm(`让模型整理${label}？会合并重复、删除失效记忆，需要一次模型调用。`)) return;
     setConsolidating(true);
     setError("");
     setNotice("");
@@ -151,6 +152,8 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
     );
   });
   const unavailable = scope === "agent" && !agentId;
+  const consolidateLabel =
+    scope === "user" ? "所有 Agent 的用户记忆" : `${agent?.name ?? "当前 Agent"} 的 Agent 记忆`;
 
   return (
     <main className="memory-page">
@@ -192,7 +195,7 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
               <button
                 className="ghost-button"
                 type="button"
-                onClick={() => void consolidate()}
+                onClick={() => setConfirm({ kind: "consolidate" })}
                 disabled={consolidating || busy || !agentId || items.length < 2}
               >
                 {consolidating ? "整理中…" : "整理记忆"}
@@ -280,7 +283,12 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
                         </div>
                         <div className="memory-actions">
                           <button type="button" onClick={() => startEdit(item)}>编辑</button>
-                          <button type="button" onClick={() => void remove(item.id)}>删除</button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirm({ kind: "delete", id: item.id })}
+                          >
+                            删除
+                          </button>
                         </div>
                       </div>
                     ),
@@ -291,6 +299,29 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
           </section>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.kind === "delete" ? "删除这条记忆？" : "整理记忆"}
+        description={
+          confirm?.kind === "delete"
+            ? "删除后无法恢复，仅删除这一条记忆。"
+            : `让模型整理${consolidateLabel}？会合并重复、删除失效记忆，需要一次模型调用。`
+        }
+        confirmLabel={confirm?.kind === "delete" ? "删除" : "开始整理"}
+        danger={confirm?.kind === "delete"}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => {
+          const action = confirm;
+          setConfirm(null);
+          if (!action) return;
+          if (action.kind === "delete") {
+            void remove(action.id);
+          } else {
+            void consolidate();
+          }
+        }}
+      />
     </main>
   );
 }

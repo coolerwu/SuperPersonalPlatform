@@ -2317,6 +2317,25 @@ textarea {
   margin-top: 18px;
 }
 
+.confirm-dialog {
+  width: min(440px, 100%);
+}
+
+.confirm-dialog .modal-heading h2 {
+  font-size: 16px;
+}
+
+.confirm-copy {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.confirm-dialog .modal-actions {
+  margin-top: 20px;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
