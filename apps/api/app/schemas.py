@@ -126,8 +126,47 @@ class SessionOut(BaseModel):
     agent_id: str
     title: str
     message_count: int = 0
+    active_run_id: str | None = None
+    active_run_status: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ChannelCreate(BaseModel):
+    agent_id: str = Field(min_length=1, max_length=32)
+    name: str = Field(min_length=1, max_length=120)
+
+
+class ChannelUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    status: str | None = Field(default=None, pattern="^(active|paused)$")
+
+
+class ChannelOut(BaseModel):
+    id: str
+    agent_id: str
+    type: str
+    name: str
+    status: str
+    account_id: str = ""
+    has_credentials: bool = False
+    conversation_count: int = 0
+    last_seen_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChannelLoginOut(BaseModel):
+    qrcode: str
+    scan_url: str
+    qr_svg: str
+    expires_in: int
+
+
+class ChannelLoginStatusOut(BaseModel):
+    status: str
+    account_id: str = ""
 
 
 class MessageOut(BaseModel):

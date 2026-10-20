@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import aclosing
+from typing import Any
 
 from sqlalchemy import select
 
@@ -24,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 class RunWorker:
-    def __init__(self) -> None:
+    def __init__(self, *, weixin_runtime: Any = None) -> None:
+        self.weixin_runtime = weixin_runtime
         self._stop = asyncio.Event()
         self._wake = asyncio.Event()
         self._loop_task: asyncio.Task | None = None
@@ -138,6 +140,7 @@ class RunWorker:
             provider = await db.get(Provider, agent.provider_id) if agent is not None else None
             if agent is None or session is None or provider is None:
                 await fail_run(run_id, "ConfigurationError", "agent, session, or provider not found")
+                await self._deliver_channel_reply(run_id)
                 return
             try:
                 memory_context, memory_ids = await memory_service.retrieve_for_prompt(
@@ -196,6 +199,7 @@ class RunWorker:
                                     content=content,
                                     output=output,
                                 )
+                            await self._deliver_channel_reply(run_id)
                             return
                         if event.type == "run_failed":
                             error = event.payload.get("error") or {}
@@ -204,6 +208,7 @@ class RunWorker:
                                 str(error.get("type") or "RunError"),
                                 str(error.get("message") or "run failed"),
                             )
+                            await self._deliver_channel_reply(run_id)
                             return
                         await append_event(run_id, event.type, event.payload)
         except asyncio.CancelledError:
@@ -214,9 +219,20 @@ class RunWorker:
             raise
         except TimeoutError:
             await fail_run(run_id, "RunTimeoutError", "run exceeded the execution timeout")
+            await self._deliver_channel_reply(run_id)
         except Exception as exc:
             logger.exception("run %s failed", run_id)
             await fail_run(run_id, type(exc).__name__, str(exc))
+            await self._deliver_channel_reply(run_id)
+
+    async def _deliver_channel_reply(self, run_id: str) -> None:
+        """Send the final answer immediately; never fail the Run on send errors."""
+        if self.weixin_runtime is None:
+            return
+        try:
+            await self.weixin_runtime.deliver_run(run_id)
+        except Exception:
+            logger.exception("channel delivery failed for run %s", run_id)
 
     def _schedule_memory_extraction(
         self,

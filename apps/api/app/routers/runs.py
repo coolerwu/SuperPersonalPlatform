@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.db import SessionLocal, get_db
-from app.models import Run, RunEvent, Session, utcnow
+from app.models import ChannelRunLink, Run, RunEvent, Session, utcnow
 from app.schemas import RunEventOut, RunOut
 from app.services.run_service import get_run_events, serialize_event
 
@@ -86,6 +86,16 @@ async def retry_run(run_id: str, request: Request, db: AsyncSession = Depends(ge
     )
     db.add(retry)
     await db.flush()
+    link = await db.get(ChannelRunLink, original.id)
+    if link is not None:
+        # A retried WeChat Run still owns a reply back to that conversation.
+        db.add(
+            ChannelRunLink(
+                run_id=retry.id,
+                channel_id=link.channel_id,
+                conversation_id=link.conversation_id,
+            )
+        )
     db.add(
         RunEvent(
             run_id=retry.id,

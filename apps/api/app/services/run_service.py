@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -49,39 +49,74 @@ async def seed_default_provider() -> None:
         await db.commit()
 
 
-async def create_run(session_id: str, content: str) -> tuple[Run, Message]:
+async def _create_run_in_db(
+    db: AsyncSession,
+    session: Session,
+    content: str,
+    *,
+    source: str = "manual",
+) -> tuple[Run, Message]:
+    """Create the user Message + queued Run in the caller's transaction."""
+    message = Message(session_id=session.id, role="user", content=content)
+    db.add(message)
+    await db.flush()
+
+    run = Run(
+        agent_id=session.agent_id,
+        session_id=session.id,
+        source=source,
+        input=content,
+        status="queued",
+    )
+    db.add(run)
+    await db.flush()
+    message.run_id = run.id
+
+    if not session.title or session.title == "新会话":
+        session.title = content.strip()[:24] or "新会话"
+    session.updated_at = utcnow()
+    db.add(RunEvent(run_id=run.id, type="run_queued", payload={"content": content}))
+    return run, message
+
+
+async def create_run(
+    session_id: str,
+    content: str,
+    *,
+    source: str = "manual",
+    allow_queue: bool = False,
+) -> tuple[Run, Message]:
     async with SessionLocal() as db:
         session = await db.get(Session, session_id)
         if session is None:
             raise LookupError("session not found")
-        active = await db.scalar(
-            select(Run)
-            .where(Run.session_id == session_id, Run.status.in_(ACTIVE_RUN_STATUSES))
-            .order_by(Run.created_at.desc())
-        )
-        if active is not None:
-            raise ActiveRunConflict(active.id, active.status)
+        if not allow_queue:
+            active = await db.scalar(
+                select(Run)
+                .where(Run.session_id == session_id, Run.status.in_(ACTIVE_RUN_STATUSES))
+                .order_by(Run.created_at.desc())
+            )
+            if active is not None:
+                raise ActiveRunConflict(active.id, active.status)
         agent = await db.get(Agent, session.agent_id)
         if agent is None:
             raise LookupError("agent not found")
 
-        message = Message(session_id=session_id, role="user", content=content)
-        db.add(message)
-        await db.flush()
-
-        run = Run(agent_id=session.agent_id, session_id=session_id, input=content, status="queued")
-        db.add(run)
-        await db.flush()
-        message.run_id = run.id
-
-        if not session.title or session.title == "新会话":
-            session.title = content.strip()[:24] or "新会话"
-        session.updated_at = utcnow()
-        db.add(RunEvent(run_id=run.id, type="run_queued", payload={"content": content}))
+        run, message = await _create_run_in_db(db, session, content, source=source)
         await db.commit()
         await db.refresh(run)
         await db.refresh(message)
         return run, message
+
+
+async def active_run_for_session(db: AsyncSession, session_id: str) -> Run | None:
+    """Return the Run the UI should track: the running one, else the oldest queued."""
+    return await db.scalar(
+        select(Run)
+        .where(Run.session_id == session_id, Run.status.in_(ACTIVE_RUN_STATUSES))
+        .order_by(case((Run.status == "running", 0), else_=1), Run.created_at)
+        .limit(1)
+    )
 
 
 async def append_event(run_id: str, event_type: str, payload: dict[str, Any]) -> RunEvent:
@@ -116,6 +151,9 @@ async def complete_run(
             session = await db.get(Session, run.session_id)
             if session is not None:
                 session.updated_at = utcnow()
+        from app.services import channel_service
+
+        await channel_service.record_delivery(db, run, output)
         db.add(
             RunEvent(
                 run_id=run.id,
@@ -139,6 +177,9 @@ async def fail_run(run_id: str, error_type: str, message: str) -> None:
         run.status = "failed"
         run.error = f"{error_type}: {message}"
         run.finished_at = utcnow()
+        from app.services import channel_service
+
+        await channel_service.record_delivery(db, run, channel_service.DELIVERY_FAILURE_TEXT)
         db.add(
             RunEvent(
                 run_id=run.id,

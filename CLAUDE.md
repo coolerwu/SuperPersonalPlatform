@@ -17,7 +17,7 @@
 - 执行核：`AgentExecutor` 端口 + `DeepAgentExecutor`；平台拥有 session/messages/run，deepagents checkpointer 只存 Agent 状态。
 - Provider 模型调用在模型类上重试（`apps/api/app/services/model_retry.py` 的 `ModelRetryMixin`）：429/5xx/超时/连接错误最多重试 3 次（指数退避 + jitter），按 `ModelError.is_retryable` 判定，4xx 不重试；`ChatOpenAI` 的 SDK 自身重试关闭，避免叠加。重试挂在模型实例上，因此主 Agent、general-purpose 子 Agent、summarization 和 step-limit 总结调用都会覆盖。流式调用只有在本次尝试尚未输出任何 token 时才重试；已输出片段后失败直接报错，避免前端把两次尝试的文本拼起来。可重试失败记录 warning 日志（agent/session/异常类型）。
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`，没有 nginx/Postgres 容器。
-- v1 只做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs、集中配置页和长期记忆。
+- v1 做 Chat、多 Agent、默认 general-purpose Subagent、Checkpoint/Runs、集中配置页、长期记忆和多渠道（首发微信个人号）。
 - v1 暴露工作区内的 filesystem 工具（ls / read_file / write_file / edit_file / delete / glob / grep，由 `FilesystemMiddleware` 提供）；不暴露 shell 工具；浏览器工具通过 `web-browser` 技能门控解锁（Playwright 无头 Chromium，默认文本快照，最多 2 个标签页，可按需返回截图）。memory 由平台管理和注入，不允许 Agent 自主修改 instructions。
 - Skills/Tools：全局技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）+ 每个 Agent 的 `enabled_skills` 启用列表。系统提示只列出启用技能；模型用 `read_file` 读取 `/skills/<name>/SKILL.md` 后，技能在 `metadata.include_tools` 中声明的已注册工具才解锁，读取前不可见也不可调用；文件工具始终可用。上下文被摘要压缩后，启用且声明了 `include_tools` 的技能会以 `pinned_skill` 消息自动重新注入正文，技能内容与工具解锁不会因压缩丢失。技能工具来自代码注册表 `apps/api/app/services/skill_tools.py`（`web_search` / `web_fetch`，DeepSeek Search/Fetch API，按成功请求计费）、`apps/api/app/services/browser_tools.py`（`browser_open` / `browser_snapshot` / `browser_click` / `browser_fill` / `browser_press` / `browser_screenshot` / `browser_close`）和 `apps/api/app/services/memory_tools.py`（`memory_list` / `memory_update` / `memory_delete`，按 `user` + 当前 Agent scope 授权），不在技能目录执行 Python。Agent 可以在对话中直接用文件工具创建或修改 `/skills/**` 下的技能，不需要表单；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具；技能声明本身不是安全边界。首次启动 seed `web-search`、`web-fetch`、`web-browser` 和 `memory-organizer` 技能；内置技能的写入哈希记录在 `~/.super-personal-platform/skills/.seed_state.json`，启动时只有内容与记录一致（用户未修改）的内置技能才会随版本更新，用户改过的保持不动；无记录的文件不动，直到其内容与内置默认一致后开始跟踪。「技能」页面可以打开现有 SKILL.md 查看并直接编辑保存（原子写入，保存前校验 frontmatter）；新建技能仍通过对话完成。
 - Browser：每次 Run 懒启动一个 Chromium + context，`BROWSER_CONCURRENCY`（默认 2）限制标签页；执行器在 `finally` 关闭（含失败、超时、取消）；只允许公开 http/https，拒绝 localhost、私网、`file://` 和下载；默认返回文字和元素 ref，只有用户明确要求时才用 `browser_screenshot` 返回 PNG 图片（需要 Provider 支持图片输入）；搜索优先尝试移动/轻量入口，遇到验证码或 HTTP 403/429 返回明确错误并提示换入口，不尝试绕过；相关配置为 `BROWSER_*`。
@@ -27,21 +27,22 @@
 - 读取：每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入，标注为数据而非指令；记录本次使用的 memory id。
 - 整理记忆：聊天输入区「＋」菜单的「整理记忆」指令直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` 合并重复、删除失效项，只更新/删除、不新增事实；范围限 user memory 与当前 Agent memory。首次点击会为当前 Agent 自动启用该技能。原记忆页面的「整理记忆」按钮和 `POST /api/memories/consolidate` 已移除。
 - Workspace：每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/`（`APP_WORKSPACES_DIR` 可覆盖），不支持自定义路径；配置页只读展示机器目录，并跟随左上角选中的 Agent。执行器用 `FilesystemBackend(virtual_mode=True)` + 默认 `FilesystemMiddleware` 开放工作区文件工具。
+- Channels：每个 Agent 可绑定多个渠道，当前只有 `wechat`。个人微信通过腾讯 iLink Bot API 接入（扫码登录、`getupdates` 长轮询、`sendmessage` + 每条回复带回联系人最新的 `context_token`），`WeixinRuntime` 在 API 进程内为每个 active 渠道跑一个轮询任务；不需要公网回调、Webhook、Node 或第三方 puppet。每个外部 1:1 联系人映射一个独立 Session（标题 `微信 · <联系人>`），网页端可见并继续；群聊、非文本消息忽略。入站按 `external_message_id` 幂等；同一 Session 允许排队多个 queued Run（渠道入站），worker 按 Session 串行执行。Run 终态时在同一事务写入 `channel_deliveries`，worker 立即发送最终答复（按 1800 字在段落/代码围栏边界切块），没有发送轮询循环；进程崩溃后启动时补发 pending/attempting（attempting 加「可能重复」标记）。`bot_token` 只存 `app.db`，不返回前端、不写日志。表：`channels` / `channel_conversations` / `channel_inbounds` / `channel_run_links` / `channel_deliveries`。删除渠道保留 Session/Message/Run；删除 Session 解绑 conversation；永久删除 Agent 级联渠道。
 - 运行时目录统一在 `~/.super-personal-platform/`（`APP_HOME` 可覆盖）：`.env`、`data/app.db`、`data/checkpoints/`、`workspaces/`、`skills/`。
 - 默认 Assistant 使用中文个人助手提示词：先说明自己是个人助手，并列出可做的对话、工作区文件、general-purpose 子 Agent、记忆注入、会话 checkpoint 和技能（读取 SKILL.md 后解锁技能工具）；行为规范参考 Hermes（直接、长度匹配问题、无 filler、反谄媚、深度按需），默认简体中文回复，不宣称 Hermes 身份。新建 Agent 未填写 instructions 时使用同一套默认提示词；运行时不使用任何兜底提示词或兜底 Agent 名称。
 - UI 视觉方向：明亮简洁（浅色画布 + 悬浮输入卡片），assistant 消息按 Markdown 渲染；依赖 `react-markdown`、`remark-gfm`、`rehype-highlight`。Chat 顶部有轻量栏（Agent/会话标题 + 详情开关）；≤860px 使用顶部栏 + 汉堡菜单，侧栏变为抽屉、详情变为全屏面板，输入区跟随 `visualViewport` 与安全区收缩。
 - 输入区：左侧「＋」菜单提供「上传附件」「整理记忆」和「清空输入」。「整理记忆」见上一节。附件保存到 `workspaces/<agent_id>/uploads/`，单文件上限 10 MB；发送时把文件名与工作区路径写入用户消息，Agent 用文件工具读取，附件不写入数据库。
 - 消息操作：复制、引用、失败 Run 重试；不做编辑/重新生成/删除单条消息（需要 checkpoint 分支方案）。
-- Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints；有活动 Run 时 409。
+- Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints/channels；有活动 Run 时 409。
 - 配置页集中管理 Provider（查看/新增/编辑）、Agent 和运行环境；另有独立的「记忆」页面管理 user/agent 记忆。`GET /api/system` 只返回非敏感信息。
-- 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent tab 列出全部 Agent 摘要（Provider/model、启用技能数、自动记忆、状态），点击行即切换这个全局选中的 Agent，侧边栏同步；下方编辑区只编辑当前 Agent，不持有第二套选择状态。新增 per-agent 配置时必须沿用这一规则。侧边栏左上角另有独立的「技能」「工具」页面：技能启停按当前 Agent 立即保存；工具页只展示文件工具与技能工具的注册/声明情况，不单独启停工具。
+- 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent tab 列出全部 Agent 摘要（Provider/model、启用技能数、自动记忆、状态），点击行即切换这个全局选中的 Agent，侧边栏同步；下方编辑区只编辑当前 Agent，不持有第二套选择状态。新增 per-agent 配置时必须沿用这一规则。侧边栏左上角另有独立的「技能」「工具」「渠道」页面：技能启停按当前 Agent 立即保存；工具页只展示文件工具与技能工具的注册/声明情况，不单独启停工具；渠道页按当前 Agent 管理微信渠道与扫码登录。
 - Chat 内容列统一宽度：header、消息流、composer 都以 `--chat-lane` 对齐。
 
 ## 运行约定
 
-- 每次用户消息或手动运行创建一个 Run；状态：`queued / running / completed / failed / cancelled`。
+- 每次用户消息、渠道入站消息或手动运行创建一个 Run；状态：`queued / running / completed / failed / cancelled`。渠道 Run 的 `source=wechat`。
 - Session 懒创建：点击「新对话」只清空视图，首次发送时才创建 Session 和 Run；不要为了展示空状态提前落库。
-- 同一 session 最多一个活动 Run；不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）。Run 并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
+- 同一 session 最多一个 running Run，`queued` Run 可以排队；网页 Chat 与 retry 创建时若已有活动 Run 返回 409，渠道入站允许继续排队并按 Session 串行执行。不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）。Run 并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
 - Run 的 LangGraph 递归上限为 `RUN_RECURSION_LIMIT`（默认 500，主 Agent 与 general-purpose 子 Agent 共用，deepagents 自身默认 9999）。真撞上限时执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍落 `completed`，输出前标注「已达到执行步骤上限」。
 - 服务停止/重启时，正在执行的 Run 重新入队（清空 `started_at`，写入 `reason=service_restart` 的 `run_queued`）并在启动后继续；已请求取消的 Run 落 `cancelled`，不会被重启复活。启动时 `requeue_running_runs` 兜底崩溃留下的 `running`。恢复时执行器把 run_id 作为本轮 `HumanMessage` 的稳定 id 定位 checkpoint：如果本轮输入已写入 checkpoint，就保留中断前的 assistant/tool 消息，追加「继续上次任务」的提示，不再重复原始 input；缺失结果的 tool call 补一条「结果未知、不要重复执行」的 error `ToolMessage`。checkpoint 没有本轮输入时按新 Run 处理。重新入队不是事务回滚：中断前已经发生的文件/浏览器副作用仍然保留，只能依赖提示避免再次执行。
 - 前端轮询在服务重启等瞬时连接错误下按指数退避重试（最多约 120 次），不停止 Run；收到 `reason=service_restart` 的 `run_queued` 时清空当前流式文本和思考内容，并显示「服务重启，Run 已重新排队」提示。

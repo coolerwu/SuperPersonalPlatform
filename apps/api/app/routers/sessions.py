@@ -11,7 +11,9 @@ from app.auth import require_auth
 from app.config import settings
 from app.db import get_db
 from app.models import Agent, Message, Run, RunEvent, RunMemory, Session, utcnow
-from app.schemas import MessageOut, SessionCreate, SessionOut
+from app.schemas import MessageOut, RunOut, SessionCreate, SessionOut
+from app.services import channel_service
+from app.services.run_service import active_run_for_session
 from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 router = APIRouter(prefix="/api", tags=["sessions"], dependencies=[Depends(require_auth)])
@@ -22,11 +24,14 @@ async def _message_count(db: AsyncSession, session_id: str) -> int:
 
 
 async def _session_out(db: AsyncSession, session: Session) -> SessionOut:
+    active = await active_run_for_session(db, session.id)
     return SessionOut(
         id=session.id,
         agent_id=session.agent_id,
         title=session.title,
         message_count=await _message_count(db, session.id),
+        active_run_id=active.id if active is not None else None,
+        active_run_status=active.status if active is not None else None,
         created_at=session.created_at,
         updated_at=session.updated_at,
     )
@@ -74,6 +79,17 @@ async def list_messages(session_id: str, db: AsyncSession = Depends(get_db)) -> 
     return [MessageOut.model_validate(message) for message in messages]
 
 
+@router.get("/sessions/{session_id}/active-run", response_model=RunOut | None)
+async def get_active_run(
+    session_id: str, db: AsyncSession = Depends(get_db)
+) -> RunOut | None:
+    session = await db.get(Session, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    active = await active_run_for_session(db, session_id)
+    return RunOut.model_validate(active) if active is not None else None
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
     session = await db.get(Session, session_id)
@@ -85,6 +101,7 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)) ->
     )
     if active is not None:
         raise HTTPException(status_code=409, detail="session has an active run")
+    await channel_service.unlink_session(db, session_id)
     run_ids = list((await db.scalars(select(Run.id).where(Run.session_id == session_id))).all())
     if run_ids:
         await db.execute(delete(RunMemory).where(RunMemory.run_id.in_(run_ids)))

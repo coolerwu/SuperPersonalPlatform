@@ -83,6 +83,11 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
         文件工具始终可用。
       </div>
 
+      <div className="field-label">渠道</div>
+      <div className="hint">
+        在左侧「渠道」页面为当前 Agent 绑定微信个人号；每个微信联系人对应一个独立会话。
+      </div>
+
       <label className="toggle-row" htmlFor="agent-auto-memory">
         <input
           id="agent-auto-memory"

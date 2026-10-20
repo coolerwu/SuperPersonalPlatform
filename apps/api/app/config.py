@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     browser_screenshot_max_bytes: int = 4_000_000
     browser_no_sandbox: bool = False
 
+    # WeChat personal-account channels (iLink Bot API). The runtime runs
+    # inside the API process; these bound inbound text, reply chunking, and
+    # delivery retries.
+    channel_reply_max_chars: int = 1800
+    channel_delivery_max_attempts: int = 3
+    channel_inbound_max_chars: int = 8000
+    weixin_long_poll_timeout_ms: int = 35_000
+    weixin_api_timeout_ms: int = 15_000
+    weixin_qr_timeout_ms: int = 35_000
+
     @property
     def checkpoint_dir(self) -> Path:
         return self.app_data_dir / "checkpoints"

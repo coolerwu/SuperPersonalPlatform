@@ -1,6 +1,6 @@
 # Agent Command Center
 
-v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置页），浅色界面，assistant 消息支持 Markdown。
+v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置页）与多渠道（微信个人号），浅色界面，assistant 消息支持 Markdown。
 
 - `apps/api`：FastAPI + deepagents + LangGraph
 - `apps/web`：React + Vite + TypeScript
@@ -53,7 +53,7 @@ npm run dev
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；模型返回 `reasoning_content` 时，聊天中显示可折叠的「思考过程」：思考阶段展开，开始输出答案后自动折叠，完成后保留可展开；
 - 同一时间只跟踪一个 Run：另一个会话的 Run 运行中时，当前会话禁用发送并提示，输入框仍可编辑；异步错误只显示在所属 Agent/会话，切回后失败 Run 的错误和重试会恢复；
-- 后端同一 session 仍只有一个活动 Run；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 2），超出的 Run 保持 `queued`；
+- 后端同一 session 最多一个 running Run，queued Run 可以排队；网页 Chat 与 retry 在已有活动 Run 时返回 409，渠道入站消息允许继续排队并由 worker 串行执行；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 2），超出的 Run 保持 `queued`；
 - 服务停止/重启时正在运行的 Run 会重新排队并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的页面会自动重连（瞬时连接错误按退避重试）；收到 `reason=service_restart` 的 `run_queued` 时清空上一次尝试的流式文本，并显示「服务重启，Run 已重新排队」。恢复时保留中断前的 checkpoint 消息并追加「继续上次任务」提示，不重复原始用户输入；未返回结果的工具调用会补一条结果未知的 error 消息。重新入队不会回滚已经发生的文件/浏览器副作用，恢复提示会要求 Agent 不要重复执行；
 - 模型调用遇到 429/5xx/超时/连接错误时最多重试 3 次（指数退避 + jitter）；401/400 等 4xx 不重试；重试在模型层实现，主 Agent、general-purpose 子 Agent 和 step-limit 总结都会覆盖；流式调用已输出 token 后不重试，避免重复文本；可重试失败会记录 warning 日志；
 - 单个 Run 的步骤上限默认 500（`RUN_RECURSION_LIMIT`，主 Agent 与子 Agent 共用）；真的达到上限时先在原会话上自动续跑一次，仍超限才用同一模型带上完整对话生成最终答复，Run 仍以 completed 收尾并标注被截断；
@@ -151,6 +151,22 @@ metadata:
 - **整理记忆**：聊天输入区「＋」菜单的「整理记忆」指令会直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` 合并重复、删除失效项，只更新/删除、不新增事实；范围是 user memory 和当前 Agent 的 agent memory。首次使用时会自动为当前 Agent 启用该技能；
 - 每次 Run 最多注入 12 条、约 1500 字相关记忆，作为数据块附加到系统提示词，不会自动修改 Agent instructions。
 
+## 渠道（微信个人号）
+
+侧栏「渠道」按当前 Agent 管理渠道；一个 Agent 可以绑定多个微信渠道。
+
+- 新建渠道后立即显示 iLink 二维码；用微信扫码并在手机上确认，状态变为「已连接」。
+- 登录成功后，平台在 API 进程内为该渠道启动一个 `getupdates` 长轮询任务；不需要公网入口、Webhook、Node 或第三方网关。
+- 每个与 bot 私聊的联系人映射为一个独立 Session（`微信 · <联系人>`），在网页会话列表里可见并可继续对话；群聊和图片/语音/文件消息忽略。
+- 同一微信会话连续发消息会排队创建多个 Run，worker 按 Session 串行执行；Run 完成后**立即**把最终答复发回微信，不做发送轮询。
+- 发送记录与 Run 终态在同一事务写入；服务崩溃后启动时补发未完成的回复；`attempting` 记录补发时会加「可能重复」提示。失败 Run 回固定错误文案，取消不回信。
+- 网页里在这个渠道会话中手动发消息不会推回微信；对失败 Run 点重试会复制渠道关联，重试结果仍会回信。
+- 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；点「重新扫码」重新登录，未发送的回复在恢复后补发。
+- 渠道暂停后停止收发；删除渠道会删除登录凭据和渠道绑定，已产生的会话/消息/API 记录保留。
+- `bot_token` 与 Provider API Key 一样只存在 `app.db`，接口不返回明文；请保护 `data/app.db` 权限。
+- iLink 扫码连接的是 iLink bot 身份，普通微信群事件通常不会下发；v1 只支持单聊文本，不支持主动推送。
+- iLink 协议实现参考 Nous Research 的 [hermes-agent](https://github.com/NousResearch/hermes-agent) Weixin 适配器（MIT），许可声明见 `THIRD_PARTY_NOTICES.md`。
+
 ## 数据存储
 
 生产数据都在 `~/.super-personal-platform/data/`：
@@ -164,6 +180,7 @@ metadata:
   - `memory_items`：长期记忆，`scope=user|agent`，含 content、tags、来源 Run/Message、last_used_at；
   - `run_memories`：某次 Run 实际注入了哪些记忆；
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
+  - `channels`：渠道及其 iLink 登录凭据（`bot_token` 不返回前端、不写日志）；`channel_conversations`：外部联系人与 Session 的映射（含最新 `context_token`）；`channel_inbounds`：入站消息幂等键；`channel_run_links`：哪些 Run 需要回信；`channel_deliveries`：Run 终态的发送记录，用于崩溃恢复。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区目录，名称为 Agent id；删除 Agent 不会删除这里的文件。`screenshots/<session_id>/<run_id>/` 保存该 Agent 的浏览器截图，删除会话时清理对应目录。
 - `~/.super-personal-platform/skills/`：全局技能库，由用户/运维维护；删除技能不会自动清理 Agent 的启用列表，运行时忽略不存在的技能。
@@ -191,6 +208,12 @@ metadata:
 | `LLM_BASE_URL` | OpenAI-compatible 端点 | `https://api.deepseek.com` |
 | `LLM_API_KEY` | 模型密钥 | 空 |
 | `LLM_MODEL` | 模型名 | `deepseek-v4-flash` |
+| `CHANNEL_REPLY_MAX_CHARS` | 微信回复单块字符上限（在段落/代码围栏边界切块） | `1800` |
+| `CHANNEL_DELIVERY_MAX_ATTEMPTS` | 单次 Run 发送与补发的尝试上限 | `3` |
+| `CHANNEL_INBOUND_MAX_CHARS` | 单条微信入站文本上限 | `8000` |
+| `WEIXIN_LONG_POLL_TIMEOUT_MS` | iLink `getupdates` 长轮询窗口 | `35000` |
+| `WEIXIN_API_TIMEOUT_MS` | iLink `sendmessage` 请求超时 | `15000` |
+| `WEIXIN_QR_TIMEOUT_MS` | iLink 二维码请求/状态轮询超时 | `35000` |
 
 ## 前端构建产物
 

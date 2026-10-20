@@ -3,7 +3,18 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, TypeDecorator
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    TypeDecorator,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -149,3 +160,109 @@ class RunMemory(Base):
         String(32), ForeignKey("memory_items.id"), primary_key=True
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class Channel(Base):
+    """One external messaging identity bound to one Agent.
+
+    ``type`` is currently always ``wechat``; the iLink bot credentials are
+    written after QR login and never returned to the web client.
+    """
+
+    __tablename__ = "channels"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    agent_id: Mapped[str] = mapped_column(String(32), ForeignKey("agents.id"), index=True)
+    type: Mapped[str] = mapped_column(String(20), default="wechat")
+    name: Mapped[str] = mapped_column(String(120), default="")
+    status: Mapped[str] = mapped_column(String(20), default="pairing", index=True)
+    account_id: Mapped[str] = mapped_column(String(200), default="")
+    bot_token: Mapped[str] = mapped_column(Text, default="")
+    base_url: Mapped[str] = mapped_column(String(500), default="")
+    ilink_user_id: Mapped[str] = mapped_column(String(200), default="")
+    sync_buf: Mapped[str] = mapped_column(Text, default="")
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class ChannelConversation(Base):
+    """External WeChat contact <-> platform Session mapping (one per Session)."""
+
+    __tablename__ = "channel_conversations"
+    __table_args__ = (
+        UniqueConstraint("channel_id", "external_id", name="uq_channel_conversation"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    channel_id: Mapped[str] = mapped_column(String(32), ForeignKey("channels.id"), index=True)
+    external_id: Mapped[str] = mapped_column(String(200), default="")
+    display_name: Mapped[str] = mapped_column(String(200), default="")
+    session_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("sessions.id"), unique=True, index=True
+    )
+    context_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_token_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class ChannelInbound(Base):
+    """Idempotency record for an inbound WeChat message id."""
+
+    __tablename__ = "channel_inbounds"
+    __table_args__ = (
+        UniqueConstraint("channel_id", "external_message_id", name="uq_channel_inbound"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel_id: Mapped[str] = mapped_column(String(32), ForeignKey("channels.id"), index=True)
+    external_message_id: Mapped[str] = mapped_column(String(200))
+    conversation_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    message_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class ChannelRunLink(Base):
+    """Marks a Run as channel-originated so its final answer is sent back.
+
+    Web messages sent inside a channel Session do not get a link, so they are
+    not pushed to WeChat. Retries of channel Runs copy the link.
+    """
+
+    __tablename__ = "channel_run_links"
+
+    run_id: Mapped[str] = mapped_column(String(32), ForeignKey("runs.id"), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(32), ForeignKey("channels.id"), index=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("channel_conversations.id"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class ChannelDelivery(Base):
+    """Durable delivery obligation for a channel Run's final answer.
+
+    The row is written in the same transaction as the Run's terminal status;
+    the worker sends immediately afterwards. Pending/attempting rows are swept
+    once on startup (and when a channel becomes active) -- there is no polling
+    send loop.
+    """
+
+    __tablename__ = "channel_deliveries"
+
+    run_id: Mapped[str] = mapped_column(String(32), ForeignKey("runs.id"), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(32), ForeignKey("channels.id"), index=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("channel_conversations.id"), index=True
+    )
+    content: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

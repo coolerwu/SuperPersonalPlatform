@@ -12,9 +12,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.config import settings
 from app.db import get_db
-from app.models import Agent, MemoryItem, Message, Provider, Run, RunEvent, RunMemory, Session, new_id
+from app.models import (
+    Agent,
+    Channel,
+    MemoryItem,
+    Message,
+    Provider,
+    Run,
+    RunEvent,
+    RunMemory,
+    Session,
+    new_id,
+)
 from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.schemas import AgentCreate, AgentOut, AgentUpdate, AttachmentOut
+from app.services import channel_service
 from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 router = APIRouter(prefix="/api/agents", tags=["agents"], dependencies=[Depends(require_auth)])
@@ -123,7 +135,9 @@ async def update_agent(
 
 
 @router.delete("/{agent_id}/permanent")
-async def delete_agent_permanently(agent_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+async def delete_agent_permanently(
+    agent_id: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict[str, object]:
     agent = await db.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
@@ -132,6 +146,16 @@ async def delete_agent_permanently(agent_id: str, db: AsyncSession = Depends(get
     )
     if active is not None:
         raise HTTPException(status_code=409, detail="agent has an active run")
+
+    channel_ids = list(
+        (await db.scalars(select(Channel.id).where(Channel.agent_id == agent_id))).all()
+    )
+    runtime = getattr(request.app.state, "weixin", None)
+    if runtime is not None:
+        for channel_id in channel_ids:
+            await runtime.stop_channel(channel_id)
+            runtime.clear_login(channel_id)
+    await channel_service.delete_channels(db, channel_ids)
 
     session_ids = list((await db.scalars(select(Session.id).where(Session.agent_id == agent_id))).all())
     run_ids = list((await db.scalars(select(Run.id).where(Run.agent_id == agent_id))).all())

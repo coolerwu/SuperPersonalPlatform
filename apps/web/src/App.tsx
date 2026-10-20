@@ -15,6 +15,7 @@ import type {
   SkillInfo,
 } from "./types";
 import { ChatPanel } from "./components/ChatPanel";
+import { ChannelsPage } from "./components/ChannelsPage";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Drawer } from "./components/Drawer";
 import { Login } from "./components/Login";
@@ -63,7 +64,7 @@ export default function App() {
   const [runNotice, setRunNotice] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [view, setView] = useState<"chat" | "settings" | "memory" | "skills" | "tools">("chat");
+  const [view, setView] = useState<"chat" | "settings" | "memory" | "skills" | "tools" | "channels">("chat");
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
@@ -98,7 +99,9 @@ export default function App() {
           ? "技能"
           : view === "tools"
             ? "工具"
-            : (agent?.name ?? "Agent");
+            : view === "channels"
+              ? "渠道"
+              : (agent?.name ?? "Agent");
 
   function setAgentError(message: string, forAgent: string) {
     if (forAgent !== agentIdRef.current) return;
@@ -151,7 +154,7 @@ export default function App() {
     };
   }, []);
 
-  function openView(next: "chat" | "settings" | "memory" | "skills" | "tools") {
+  function openView(next: "chat" | "settings" | "memory" | "skills" | "tools" | "channels") {
     setView(next);
     setSidebarOpen(false);
   }
@@ -304,7 +307,12 @@ export default function App() {
     if (!syncRun) return;
     setError("");
 
-    const lastRunId = [...list].reverse().find((message) => message.run_id)?.run_id;
+    // Channel sessions can have several queued Runs; the active one is not
+    // necessarily the newest message's Run.
+    const active = await api.getSessionActiveRun(id);
+    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
+    const lastRunId =
+      active?.id ?? [...list].reverse().find((message) => message.run_id)?.run_id;
     if (!lastRunId) {
       setActiveRun(null);
       setEvents([]);
@@ -489,7 +497,7 @@ export default function App() {
       setStreamText("");
       setStreamReasoning("");
       if (run.session_id === sessionIdRef.current) {
-        await loadMessages(run.session_id, false);
+        await loadMessages(run.session_id, true);
       }
       if (run.status === "failed") {
         setSessionError(run.error || "Run failed", run.session_id);
@@ -854,10 +862,12 @@ export default function App() {
         onOpenMemory={() => openView("memory")}
         onOpenSkills={() => openView("skills")}
         onOpenTools={() => openView("tools")}
+        onOpenChannels={() => openView("channels")}
         settingsActive={view === "settings"}
         memoryActive={view === "memory"}
         skillsActive={view === "skills"}
         toolsActive={view === "tools"}
+        channelsActive={view === "channels"}
         onLogout={() => void logout()}
       />
 
@@ -878,6 +888,8 @@ export default function App() {
         />
       ) : view === "tools" ? (
         <ToolsPage onClose={() => setView("chat")} />
+      ) : view === "channels" ? (
+        <ChannelsPage agent={agent} agentId={agentId} onClose={() => setView("chat")} />
       ) : view === "settings" ? (
         <SettingsPage
           agents={agents}

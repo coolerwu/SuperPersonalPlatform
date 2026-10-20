@@ -18,10 +18,12 @@ type SidebarProps = {
   onOpenMemory: () => void;
   onOpenSkills: () => void;
   onOpenTools: () => void;
+  onOpenChannels: () => void;
   settingsActive: boolean;
   memoryActive: boolean;
   skillsActive: boolean;
   toolsActive: boolean;
+  channelsActive: boolean;
   onLogout: () => void;
 };
 
@@ -127,6 +129,28 @@ export function Sidebar(props: SidebarProps) {
             </span>
             <span>工具</span>
           </button>
+          <button
+            className={`sidebar-action ${props.channelsActive ? "active" : ""}`}
+            onClick={props.onOpenChannels}
+          >
+            <span className="sidebar-action-icon">
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1" />
+                <path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1" />
+              </svg>
+            </span>
+            <span>渠道</span>
+          </button>
         </div>
 
         <div className="sidebar-actions">
@@ -199,6 +223,12 @@ export function Sidebar(props: SidebarProps) {
                 <div className="session-main">
                   <div className="session-title">{session.title || "新会话"}</div>
                   <div className="session-meta">
+                    {session.active_run_status === "running" && (
+                      <span className="session-activity running">运行中</span>
+                    )}
+                    {session.active_run_status === "queued" && (
+                      <span className="session-activity queued">排队</span>
+                    )}
                     {session.message_count} 条 · {formatTime(session.updated_at)}
                   </div>
                 </div>

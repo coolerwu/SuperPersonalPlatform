@@ -69,8 +69,39 @@ export type Session = {
   agent_id: string;
   title: string;
   message_count: number;
+  active_run_id: string | null;
+  active_run_status: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ChannelStatus = "pairing" | "active" | "paused" | "expired";
+
+export type Channel = {
+  id: string;
+  agent_id: string;
+  type: string;
+  name: string;
+  status: ChannelStatus | string;
+  account_id: string;
+  has_credentials: boolean;
+  conversation_count: number;
+  last_seen_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChannelLogin = {
+  qrcode: string;
+  scan_url: string;
+  qr_svg: string;
+  expires_in: number;
+};
+
+export type ChannelLoginStatus = {
+  status: string;
+  account_id: string;
 };
 
 export type Message = {

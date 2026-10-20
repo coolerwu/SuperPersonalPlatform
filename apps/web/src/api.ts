@@ -1,6 +1,9 @@
 import type {
   Agent,
   Attachment,
+  Channel,
+  ChannelLogin,
+  ChannelLoginStatus,
   MemoryItem,
   MemoryScope,
   Message,
@@ -130,6 +133,8 @@ export const api = {
   listSessions: (agentId: string) => request<Session[]>(`/api/agents/${agentId}/sessions`),
   createSession: (agentId: string, title = "新会话") =>
     request<Session>(`/api/agents/${agentId}/sessions`, { method: "POST", body: JSON.stringify({ title }) }),
+  getSessionActiveRun: (sessionId: string) =>
+    request<Run | null>(`/api/sessions/${sessionId}/active-run`),
   deleteSession: (sessionId: string) =>
     request<{ deleted: boolean }>(`/api/sessions/${sessionId}`, { method: "DELETE" }),
   listMessages: (sessionId: string) => request<Message[]>(`/api/sessions/${sessionId}/messages`),
@@ -137,6 +142,29 @@ export const api = {
     request<ScreenshotInfo[]>(`/api/sessions/${sessionId}/screenshots`),
   screenshotUrl: (sessionId: string, runId: string, screenshotId: string) =>
     `/api/sessions/${sessionId}/screenshots/${runId}/${screenshotId}.png`,
+
+  listChannels: (agentId: string) =>
+    request<Channel[]>(`/api/channels?agent_id=${encodeURIComponent(agentId)}`),
+  createChannel: (agentId: string, name: string) =>
+    request<Channel>("/api/channels", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId, name }),
+    }),
+  updateChannel: (channelId: string, payload: { name?: string; status?: "active" | "paused" }) =>
+    request<Channel>(`/api/channels/${channelId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteChannel: (channelId: string) =>
+    request<{ deleted: boolean }>(`/api/channels/${channelId}`, { method: "DELETE" }),
+  startWechatLogin: (channelId: string) =>
+    request<ChannelLogin>(`/api/channels/${channelId}/wechat/login`, { method: "POST" }),
+  getWechatLoginStatus: (channelId: string, qrcode: string) =>
+    request<ChannelLoginStatus>(
+      `/api/channels/${channelId}/wechat/login/status?qrcode=${encodeURIComponent(qrcode)}`,
+    ),
+  reloginWechat: (channelId: string) =>
+    request<Channel>(`/api/channels/${channelId}/wechat/relogin`, { method: "POST" }),
 
   sendMessage: (sessionId: string, content: string) =>
     request<{ run_id: string; session_id: string; message_id: string }>("/api/chat/messages", {

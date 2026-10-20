@@ -16,6 +16,7 @@ from app.db import SessionLocal, init_db
 from app.models import Agent, Provider
 from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.routers.agents import router as agents_router
+from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
 from app.routers.memories import router as memories_router
 from app.routers.providers import router as providers_router
@@ -27,6 +28,7 @@ from app.routers.system import router as system_router
 from app.routers.tools import router as tools_router
 from app.services.run_service import seed_default_provider
 from app.services.skills import seed_default_skills
+from app.services.weixin_runtime import WeixinRuntime
 from app.services.worker import RunWorker
 from app.services.workspace import ensure_agent_workspaces, resolve_workspace_path
 
@@ -89,12 +91,17 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
         await seed_default_agent()
         await sync_default_agent_instructions()
         await ensure_agent_workspaces()
+        weixin = WeixinRuntime()
+        app.state.weixin = weixin
         if start_worker:
-            worker = RunWorker()
+            worker = RunWorker(weixin_runtime=weixin)
             app.state.worker = worker
+            weixin.worker = worker
             await worker.start()
+            await weixin.start()
         yield
         if start_worker:
+            await weixin.stop()
             worker = getattr(app.state, "worker", None)
             if worker is not None:
                 await worker.stop()
@@ -110,6 +117,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(providers_router)
     app.include_router(agents_router)
+    app.include_router(channels_router)
     app.include_router(sessions_router)
     app.include_router(chat_router)
     app.include_router(memories_router)
