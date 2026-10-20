@@ -1301,27 +1301,6 @@ textarea {
   box-shadow: none;
 }
 
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--faint);
-}
-
-.status-dot.running,
-.status-dot.queued {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
-}
-
-.status-dot.completed {
-  background: var(--ok);
-}
-
-.status-dot.failed {
-  background: var(--danger);
-}
-
 .composer-actions {
   grid-area: actions;
   justify-self: end;

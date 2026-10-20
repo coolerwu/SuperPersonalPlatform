@@ -257,9 +257,6 @@ export function ChatPanel(props: ChatPanelProps) {
           }`}
         >
           <div className="composer-tools" ref={toolsRef}>
-            {props.activeRun && (
-              <span className={`status-dot ${props.activeRun.status}`} title={props.activeRun.status} />
-            )}
             <button
               type="button"
               className={`composer-plus ${menuOpen ? "active" : ""}`}
