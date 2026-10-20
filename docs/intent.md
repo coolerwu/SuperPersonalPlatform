@@ -47,6 +47,7 @@
 9. 取消 Run：queued/running 都能取消并落终态。
 10. 右侧抽屉：Run 时间线/事件/usage、Agent 配置。
 11. 不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 2）；同一 session 仍最多一个活动 Run。并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
+12. Provider 模型调用失败时按可重试错误（429/5xx/超时/连接）做最多 3 次指数退避 + jitter；4xx 立即失败。`ChatOpenAI` 的 SDK 自身重试关闭，避免与中间件叠加。
 
 #### 验收标准
 
@@ -57,6 +58,7 @@
 - 重启 api/worker 后 queued/running 能恢复：优雅停止和进程崩溃都会把 running 重新排队，启动后继续；用户主动取消的 Run 保持 cancelled，不会被重启复活。仍打开的前端页面刷新后重新接上该 Run。
 - 两个不同 session 的 Run 可同时处于 running；第三个 session 的 Run 排队，直到有空位；同一 session 的第二个 Run 仍被拒绝。
 - 服务重启时正在运行的 Run 变为 queued 并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的前端页面刷新后重新接上该 Run。
+- 429/5xx/超时/连接错误会退避重试；401/400 等 4xx 立即失败。
 - 取消 Run 能停止并落终态。
 - 不暴露文件、Shell、浏览器、skills、memory 工具。
 - 后端测试与前端构建通过。
@@ -227,7 +229,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 2. user memory 对所有 Agent 生效；agent memory 只对指定 Agent 生效；session 工作记忆继续由 checkpoint 负责。
 3. 配置页独立「记忆」页面：用户/Agent 两个 tab，支持新增、编辑、删除、搜索。
 4. 对话里以“记住……”开头的内容，立即写入 user memory。
-5. 每个 Agent 有「自动学习记忆」开关；Run 完成后先用 FTS5（trigram）召回相关历史记忆，再让模型返回 add/update/delete，合并或删除旧记忆，最多 12 个操作；带来源、去重、200 条上限。
+5. 每个 Agent 有「自动学习记忆」开关；Run 完成后先用 FTS5（trigram）召回相关历史记忆，再让模型返回 add/update/delete，合并或删除旧记忆，最多 12 个操作；带来源、去重、200 条上限。提取在 Run 落 completed 之后作为后台任务执行，不占用 Run 并发槽；同一 Agent 的提取在进程内串行，后一次能看到前一次刚写入的记忆，避免并发写入语义重复但措辞不同的记忆。
 6. 每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入系统提示词，标注为数据而非指令；记录 `run_memories` 用量。
 7. 记忆内容不自动修改 Agent instructions。
 8. 记忆页面提供「整理记忆」按钮：对当前 scope 的记忆分批交给模型，只允许 update/delete，合并重复、删除失效项，不新增事实。

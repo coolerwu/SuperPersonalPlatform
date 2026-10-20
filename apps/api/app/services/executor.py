@@ -168,6 +168,7 @@ class DeepAgentExecutor:
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
         try:
             from deepagents import create_deep_agent
+            from langchain.agents.middleware import ModelRetryMiddleware
             from langchain_openai import ChatOpenAI
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -199,6 +200,7 @@ class DeepAgentExecutor:
                 model=self.provider.model,
                 temperature=0.7,
                 stream_usage=True,
+                max_retries=0,
             )
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
                 system_prompt = instructions
@@ -222,6 +224,16 @@ class DeepAgentExecutor:
                         ),
                     ),
                 )
+                # One retry layer only: ChatOpenAI retries are disabled so this
+                # middleware owns backoff. The default retry_on follows
+                # ModelError.is_retryable (429/5xx/timeouts yes, 4xx no).
+                retry_middleware = ModelRetryMiddleware(
+                    max_retries=3,
+                    on_failure="error",
+                    initial_delay=1.0,
+                    backoff_factor=2.0,
+                    max_delay=30.0,
+                )
                 agent = create_deep_agent(
                     model=chat_model,
                     tools=[],
@@ -230,7 +242,7 @@ class DeepAgentExecutor:
                     backend=backend,
                     name=self.agent_name,
                     skills=["/skills/"],
-                    middleware=[skills_middleware],
+                    middleware=[skills_middleware, retry_middleware],
                 )
                 config = {
                     "configurable": {"thread_id": session_id},

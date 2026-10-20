@@ -29,6 +29,8 @@ class RunWorker:
         self._wake = asyncio.Event()
         self._loop_task: asyncio.Task | None = None
         self._tasks: dict[str, asyncio.Task] = {}
+        self._background: set[asyncio.Task] = set()
+        self._memory_locks: dict[str, asyncio.Lock] = {}
         self._shutting_down = False
 
     async def start(self) -> None:
@@ -49,6 +51,11 @@ class RunWorker:
         if self._tasks:
             await asyncio.gather(*self._tasks.values(), return_exceptions=True)
             self._tasks.clear()
+        for task in list(self._background):
+            task.cancel()
+        if self._background:
+            await asyncio.gather(*self._background, return_exceptions=True)
+            self._background.clear()
 
     def wake(self) -> None:
         self._wake.set()
@@ -180,7 +187,7 @@ class RunWorker:
                                 total_tokens=int(payload.get("total_tokens") or 0),
                             )
                             if auto_memory:
-                                await self._extract_memories(
+                                self._schedule_memory_extraction(
                                     provider=provider,
                                     agent_id=agent_id,
                                     run_id=run_id,
@@ -209,6 +216,40 @@ class RunWorker:
             logger.exception("run %s failed", run_id)
             await fail_run(run_id, type(exc).__name__, str(exc))
 
+    def _schedule_memory_extraction(
+        self,
+        *,
+        provider: Provider,
+        agent_id: str,
+        run_id: str,
+        content: str,
+        output: str,
+    ) -> None:
+        # Memory extraction is best-effort post-processing; it must not hold the
+        # run's concurrency slot while waiting on the model.
+        task = asyncio.create_task(
+            self._extract_memories(
+                provider=provider,
+                agent_id=agent_id,
+                run_id=run_id,
+                content=content,
+                output=output,
+            ),
+            name=f"memory-{run_id}",
+        )
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    def _memory_lock(self, agent_id: str) -> asyncio.Lock:
+        # Runs from different sessions of the same Agent can finish together.
+        # Serialize their extraction so the second one sees the first one's adds
+        # as merge candidates instead of writing a near-duplicate memory.
+        lock = self._memory_locks.get(agent_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._memory_locks[agent_id] = lock
+        return lock
+
     async def _extract_memories(
         self,
         *,
@@ -227,14 +268,15 @@ class RunWorker:
                     .where(Message.run_id == run_id, Message.role == "user")
                     .limit(1)
                 )
-            changes = await memory_service.extract_agent_memories(
-                provider=provider,
-                agent_id=agent_id,
-                user_content=content,
-                assistant_output=output,
-                run_id=run_id,
-                source_message_id=source_message_id,
-            )
+            async with self._memory_lock(agent_id):
+                changes = await memory_service.extract_agent_memories(
+                    provider=provider,
+                    agent_id=agent_id,
+                    user_content=content,
+                    assistant_output=output,
+                    run_id=run_id,
+                    source_message_id=source_message_id,
+                )
             for change in changes:
                 await append_event(
                     run_id,
