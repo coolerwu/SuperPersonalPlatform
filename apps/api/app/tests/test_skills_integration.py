@@ -151,6 +151,20 @@ def test_host_shell_tool_stays_hidden_until_skill_is_read() -> None:
     ) == ["execute"]
 
 
+def test_host_shell_gate_stays_active_when_skill_is_disabled() -> None:
+    from deepagents.backends import StateBackend
+
+    middleware = AgentSkillsMiddleware(
+        backend=StateBackend(),
+        sources=[("/skills/", "Test")],
+        enabled_skills=set(),
+        tools=[],
+        gated_tools={"execute": "local-shell"},
+    )
+    assert middleware._gated_tools == {"execute": "local-shell"}
+    assert _visible_gated_tools(middleware, [HumanMessage(content="hi")], []) == []
+
+
 def test_host_shell_call_is_denied_until_skill_is_read() -> None:
     middleware = _gated_middleware()
     metadata = [_skill("local-shell", "execute")]

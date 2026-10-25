@@ -177,7 +177,7 @@ async def test_executor_enables_execution_tools_only_for_enabled_skills(
     ]
     assert any(event.type == "run_completed" for event in events)
 
-    from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend
+    from deepagents.backends import CompositeBackend, LocalShellBackend
 
     assert isinstance(captured["backend"], CompositeBackend)
     assert isinstance(captured["backend"].default, LocalShellBackend)
@@ -201,12 +201,12 @@ async def test_executor_enables_execution_tools_only_for_enabled_skills(
         )
     ]
     assert any(event.type == "run_completed" for event in events)
-    assert isinstance(captured["backend"].default, FilesystemBackend)
+    assert isinstance(captured["backend"].default, LocalShellBackend)
     assert "CodeInterpreterMiddleware" not in [
         type(item).__name__ for item in captured["middleware"]
     ]
     skills = next(item for item in captured["middleware"] if item.name == "SkillsMiddleware")
-    assert skills._gated_tools == {}
+    assert skills._gated_tools == {"execute": "local-shell"}
 
 
 @pytest.mark.asyncio

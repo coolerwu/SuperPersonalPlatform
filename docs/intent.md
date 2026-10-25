@@ -707,8 +707,8 @@ F18 让一个会话可能出现多个 queued Run，网页端也可能同时有�
 
 #### 功能点
 
-1. 内置技能 `local-shell`：`metadata.include_tools: execute`。当前 Agent 启用该技能时，执行核把默认 backend 换成 `LocalShellBackend`（`virtual_mode=True`，工作目录为 Agent 工作区）；未启用时保持 `FilesystemBackend`，系统中不存在 `execute` 工具。
-2. 内置技能 `code-interpreter`：`metadata.include_tools: eval`。启用时挂载 `langchain-quickjs` 的 `CodeInterpreterMiddleware`（QuickJS、`mode=thread`、无文件与网络、PTC 只暴露文件工具、`subagents=False`）；未启用时不挂载。
+1. 内置技能 `local-shell`：`metadata.include_tools: execute`。执行核的默认 backend 固定为 `LocalShellBackend`（`virtual_mode=True`，工作目录为 Agent 工作区），`execute` 工具始终注册但受门控；当前 Agent 启用该技能并读取 SKILL.md 后才对模型可见、可调用，未启用或未读取时保持锁定。
+2. 内置技能 `code-interpreter`：`metadata.include_tools: eval`。启用时挂载 `langchain-quickjs` 的 `CodeInterpreterMiddleware`（QuickJS、`mode=thread`、无文件与网络、PTC 只暴露文件工具、`subagents=True`）；未启用时不挂载。
 3. `AgentSkillsMiddleware` 新增门控：`execute` / `eval` 在读取对应 `SKILL.md` 之前不出现在模型工具列表里；直接调用返回 `status=error` 的 ToolMessage。门控挂在 `SkillsMiddleware` 槽位，同时作用于主 Agent 和默认 general-purpose 子 Agent；上下文压缩后仍按读取记录或 pinned 消息判定。
 4. shell 子进程只注入 `PATH`、`HOME`、`LANG`，不继承 `LLM_API_KEY`、`APP_AUTH_TOKEN` 等 systemd 环境。
 5. 默认提示词说明两类能力及风险；既有默认 Agent 通过 LEGACY 标记一次性更新。
@@ -716,9 +716,9 @@ F18 让一个会话可能出现多个 queued Run，网页端也可能同时有�
 
 #### 验收标准
 
-- 未启用技能时不存在 `execute` / `eval`；启用但未读取 SKILL.md 时工具不可见，调用返回 locked 错误。
+- 未启用技能时 `execute` / `eval` 对模型不可见，直接调用返回 locked 错误；启用但未读取 SKILL.md 时同样不可见、不可调用。
 - 读取 `/skills/local-shell/SKILL.md` 后 `execute` 可用，命令工作目录为 Agent 工作区，但可以访问服务账号可见的宿主机路径。
-- 读取 `/skills/code-interpreter/SKILL.md` 后 `eval` 可用，可执行 JavaScript 并通过 PTC 调用文件工具；不能直接访问文件系统或网络。
+- 读取 `/skills/code-interpreter/SKILL.md` 后 `eval` 可用，可执行 JavaScript 并通过 PTC 调用文件工具，也可以用 `task(...)` 调度子 Agent；不能直接访问文件系统或网络。
 - general-purpose 子 Agent 同样受门控，不能绕过。
 - 后端测试与前端构建通过。
 
@@ -732,4 +732,5 @@ F18 让一个会话可能出现多个 queued Run，网页端也可能同时有�
 #### 风险与边界
 
 - `LocalShellBackend` 明确不做沙箱：命令以服务账号权限运行，`virtual_mode` 不约束 shell；微信入站和网页内容都是外部输入，启用该技能的 Agent 必须被信任。
+- backend 始终是 `LocalShellBackend`，`execute` 工具在运行时注册；安全边界完全依赖 `AgentSkillsMiddleware` 门控，任何绕过门控的中间件或工具变更都会直接暴露宿主机权限。
 - 平台没有审批链路；门控只保证「先读技能再调用」，不能限制读取之后执行哪些命令。

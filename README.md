@@ -57,7 +57,7 @@ npm run dev
 - 服务停止/重启时正在运行的 Run 会重新排队并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的页面会自动重连（瞬时连接错误按退避重试）；收到 `reason=service_restart` 的 `run_queued` 时清空上一次尝试的流式文本，并显示「服务重启，Run 已重新排队」。恢复时保留中断前的 checkpoint 消息并追加「继续上次任务」提示，不重复原始用户输入；未返回结果的工具调用会补一条结果未知的 error 消息。重新入队不会回滚已经发生的文件/浏览器副作用，恢复提示会要求 Agent 不要重复执行；
 - 模型调用遇到 429/5xx/超时/连接错误时最多重试 3 次（指数退避 + jitter）；401/400 等 4xx 不重试；重试在模型层实现，主 Agent、general-purpose 子 Agent 和 step-limit 总结都会覆盖；流式调用已输出 token 后不重试，避免重复文本；可重试失败会记录 warning 日志；
 - 单个 Run 的步骤上限默认 500（`RUN_RECURSION_LIMIT`，主 Agent 与子 Agent 共用）；真的达到上限时先在原会话上自动续跑一次，仍超限才用同一模型带上完整对话生成最终答复，Run 仍以 completed 收尾并标注被截断；
-- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；宿主机 shell 与代码解释器分别由 `local-shell` / `code-interpreter` 技能门控：启用技能并读取对应 SKILL.md 后，`execute`（LocalShellBackend，以服务账号权限在宿主机执行命令，没有沙箱）或 `eval`（QuickJS 沙箱，无文件与网络，PTC 只开放文件工具）才会出现；未启用的 Agent 不注册这些工具。浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，默认返回文字和元素引用；用户明确要求时可返回页面截图，截图保存到 Agent 工作区并显示在对应回复下方）；
+- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；宿主机 shell 与代码解释器分别由 `local-shell` / `code-interpreter` 技能门控：启用技能并读取对应 SKILL.md 后，`execute`（LocalShellBackend，以服务账号权限在宿主机执行命令，没有沙箱）或 `eval`（QuickJS 沙箱，无文件与网络，PTC 只开放文件工具）才会出现；未启用的 Agent 看不到也调不动这些工具。浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，默认返回文字和元素引用；用户明确要求时可返回页面截图，截图保存到 Agent 工作区并显示在对应回复下方）；
 - 技能与工具：左侧「技能」页面为当前 Agent 启用技能；模型读取 `/skills/<name>/SKILL.md` 后，技能声明的工具才会解锁；上下文压缩后会自动重新注入已启用技能的正文，保持解锁；文件工具始终可用；「工具」页面只展示注册与声明情况；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 - 顶部轻量栏显示当前 Agent 和会话标题，并作为详情抽屉开关。
@@ -138,8 +138,8 @@ metadata:
 `web_search` 和 `web_fetch` 使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：在「技能」页面启用声明它的技能（`web-search` / `web-fetch` / `web-browser`），对话中读取该 SKILL.md 后解锁。
 
 - **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
-- **`execute`**（`local-shell` 技能，不在代码注册表）：启用该技能会把 Agent 的默认 backend 换成 `LocalShellBackend`，读取 SKILL.md 后出现 `execute` 工具。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。启用该技能的 Agent 等于被授权操作这台机器。
-- **`eval`**（`code-interpreter` 技能，不在代码注册表）：启用该技能会挂载 `CodeInterpreterMiddleware`，读取 SKILL.md 后出现 `eval` 工具，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用已解锁的文件工具。PTC 只开放文件工具，不开放 `execute`；子 Agent 调度默认关闭。
+- **`execute`**（`local-shell` 技能，不在代码注册表）：执行核的默认 backend 始终是 `LocalShellBackend`，但 `execute` 只有在启用该技能并读取 SKILL.md 后才对模型可见、可调用；未启用或未读取时调用返回 locked 错误。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。启用该技能的 Agent 等于被授权操作这台机器。
+- **`eval`**（`code-interpreter` 技能，不在代码注册表）：启用该技能会挂载 `CodeInterpreterMiddleware`，读取 SKILL.md 后出现 `eval` 工具，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用已解锁的文件工具。PTC 只开放文件工具，不开放 `execute`；`subagents=True`，可在 REPL 里用 `task(...)` 调度子 Agent（每次独立会话，不走父级审批）。
 
 `execute` 与 `eval` 都以「当前 Agent 启用技能 + 会话内读取过该 SKILL.md」为条件，读取前不出现在工具列表，直接调用会返回 locked 错误；门控在 `SkillsMiddleware` 槽位实现，主 Agent 与 general-purpose 子 Agent 一致，上下文压缩后仍按读取记录恢复。
 

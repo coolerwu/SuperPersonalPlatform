@@ -108,10 +108,11 @@ class AgentSkillsMiddleware(SkillsMiddleware):
             tools=tools,
         )
         self._enabled_skills = frozenset(enabled_skills)
+        # Keep every gate: a gated tool whose skill is not enabled must stay
+        # locked, not lose its gate and become visible.
         self._gated_tools = {
             str(tool_name): str(skill_name)
             for tool_name, skill_name in (gated_tools or {}).items()
-            if str(skill_name) in self._enabled_skills
         }
 
     def _skill_unlocked(self, state: Any, skill_name: str) -> bool:

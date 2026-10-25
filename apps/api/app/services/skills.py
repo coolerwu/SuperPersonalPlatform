@@ -131,7 +131,8 @@ metadata:
 2. 环境没有文件系统、网络、`require`、`process`、`fetch`。需要文件时通过 `await tools.readFile(...)` / `await tools.writeFile(...)` 调用已注册的文件工具；工具名在 REPL 里转换为 camelCase（`read_file` → `tools.readFile`）。
 3. 每次执行默认 5 秒超时、64 MiB 内存、最多 256 次工具调用；超出会返回 `<error type="...">`，把长任务拆成多次 eval。
 4. 用 `console.log` 输出中间结果，用 `return` 返回最终值；结果和 stdout 各自最多 4000 字符。
-5. 适合批量文本处理、JSON/表格转换、数学计算、过滤和汇总多个工具结果；不适合运行 Python、调用系统命令或访问网络。
+5. 需要子 Agent 时可以用顶层 `task({ description, subagentType })`；每个 dispatch 是独立会话，只拿到 description，不会继承主会话上下文，要写成自包含的任务。
+6. 适合批量文本处理、JSON/表格转换、数学计算、过滤和汇总多个工具结果；不适合运行 Python、调用系统命令或访问网络。
 """,
 }
 

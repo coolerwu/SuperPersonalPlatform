@@ -316,12 +316,7 @@ def _shell_env() -> dict[str, str]:
     }
 
 
-def build_backend(
-    workspace_path: str,
-    *,
-    skills_dir: Path | str | None = None,
-    enable_shell: bool = False,
-):
+def build_backend(workspace_path: str, *, skills_dir: Path | str | None = None):
     from deepagents.backends import (
         CompositeBackend,
         FilesystemBackend,
@@ -329,11 +324,7 @@ def build_backend(
     )
 
     root = resolve_workspace_path(workspace_path, create=True)
-    workspace_backend = (
-        LocalShellBackend(root_dir=root, virtual_mode=True, env=_shell_env())
-        if enable_shell
-        else FilesystemBackend(root_dir=root, virtual_mode=True)
-    )
+    workspace_backend = LocalShellBackend(root_dir=root, virtual_mode=True, env=_shell_env())
     if skills_dir is None:
         return workspace_backend
     skills_root = Path(skills_dir).expanduser().resolve()
@@ -370,7 +361,6 @@ class DeepAgentExecutor:
         self.run_id = run_id
 
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
-        shell_enabled = "local-shell" in self.enabled_skills
         interpreter_enabled = "code-interpreter" in self.enabled_skills
         try:
             from deepagents import create_deep_agent
@@ -445,11 +435,8 @@ class DeepAgentExecutor:
                     skills_dir=(
                         self.skills_dir if self.skills_dir is not None else settings.skills_dir
                     ),
-                    enable_shell=shell_enabled,
                 )
-                gated_tools: dict[str, str] = {}
-                if shell_enabled:
-                    gated_tools["execute"] = "local-shell"
+                gated_tools: dict[str, str] = {"execute": "local-shell"}
                 if interpreter_enabled:
                     gated_tools["eval"] = "code-interpreter"
                 skills_middleware = AgentSkillsMiddleware(
@@ -472,7 +459,7 @@ class DeepAgentExecutor:
                     # file tools the platform already allows, after skill gating.
                     middleware.append(
                         CodeInterpreterMiddleware(
-                            subagents=False,
+                            subagents=True,
                             ptc=["ls", "read_file", "write_file", "edit_file", "glob", "grep"],
                         )
                     )

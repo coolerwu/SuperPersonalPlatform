@@ -25,21 +25,12 @@ def test_agent_out_does_not_expose_workspace_fields(client) -> None:
 
 
 def test_build_backend_uses_workspace_directory() -> None:
-    from deepagents.backends import FilesystemBackend
-
-    backend = build_backend("backend-proj")
-    assert isinstance(backend, FilesystemBackend)
-    assert backend.virtual_mode is True
-    assert backend.cwd == (settings.workspaces_dir / "backend-proj").resolve()
-
-
-def test_build_backend_adds_host_shell_only_when_requested() -> None:
     from deepagents.backends import LocalShellBackend
 
-    backend = build_backend("shell-proj", enable_shell=True)
+    backend = build_backend("backend-proj")
     assert isinstance(backend, LocalShellBackend)
     assert backend.virtual_mode is True
-    assert backend.cwd == (settings.workspaces_dir / "shell-proj").resolve()
+    assert backend.cwd == (settings.workspaces_dir / "backend-proj").resolve()
 
     result = backend.execute("printf shell-ok")
     assert result.exit_code == 0
