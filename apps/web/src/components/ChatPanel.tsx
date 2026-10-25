@@ -4,16 +4,27 @@ import { api, errorText } from "../api";
 import type { Attachment, Message, Run, ScreenshotInfo } from "../types";
 import { formatTime } from "../format";
 import { copyText } from "../clipboard";
+import { formatBytes, parseUserContent, userMessageText } from "../messageContent";
+import { formatDuration } from "../runActivity";
 import { Markdown } from "./Markdown";
+
+type TerminalRun = {
+  run: Run;
+  text: string;
+  reasoning: string;
+};
 
 type ChatPanelProps = {
   messages: Message[];
+  loading: boolean;
   screenshots: ScreenshotInfo[];
   sessionId: string;
   streamText: string;
   streamReasoning: string;
   runReasoning: Record<string, string>;
   sending: boolean;
+  activity: string;
+  terminalRun: TerminalRun | null;
   error: string;
   notice: string;
   activeRun: Run | null;
@@ -32,6 +43,13 @@ type ChatPanelProps = {
   onRetry: (runId: string) => void;
 };
 
+type UploadItem = {
+  id: string;
+  name: string;
+  size: number;
+  percent: number;
+};
+
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 const SUGGESTIONS = [
@@ -39,6 +57,14 @@ const SUGGESTIONS = [
   "总结这段内容的要点",
   "解释一个技术概念",
 ];
+
+function elapsedSeconds(from: string | null | undefined, toMs?: number): number {
+  if (!from) return 0;
+  const start = Date.parse(from);
+  const end = toMs ?? Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.max(0, Math.floor((end - start) / 1000));
+}
 
 function CopyButton({ text, label = "复制" }: { text: string; label?: string }) {
   const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
@@ -53,6 +79,25 @@ function CopyButton({ text, label = "复制" }: { text: string; label?: string }
     <button type="button" className="message-action" onClick={() => void copy()}>
       {status === "copied" ? "已复制" : status === "failed" ? "复制失败" : label}
     </button>
+  );
+}
+
+function FileIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 3v5h5" />
+    </svg>
   );
 }
 
@@ -99,6 +144,23 @@ function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }
   );
 }
 
+function MessageSkeleton() {
+  return (
+    <div className="message-skeleton" role="status" aria-label="正在加载消息">
+      {[0, 1, 2].map((index) => (
+        <div key={index} className={`message-skeleton-row ${index % 2 === 1 ? "user" : "assistant"}`}>
+          {index % 2 === 0 && <span className="skeleton-avatar" aria-hidden="true" />}
+          <span className="skeleton-bubble" aria-hidden="true">
+            <span className="skeleton-line w-80" />
+            <span className="skeleton-line w-55" />
+            <span className="skeleton-line w-35" />
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ChatPanel(props: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -106,11 +168,16 @@ export function ChatPanel(props: ChatPanelProps) {
   const stickRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const toolsRef = useRef<HTMLDivElement | null>(null);
+  const uploadSeqRef = useRef(0);
   const [expanded, setExpanded] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [uploading, setUploading] = useState(false);
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [attachError, setAttachError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [atBottom, setAtBottom] = useState(true);
+  const [now, setNow] = useState(() => Date.now());
+
+  const uploading = uploads.length > 0;
 
   useEffect(() => {
     if (props.focusSignal > 0) textareaRef.current?.focus();
@@ -146,6 +213,13 @@ export function ChatPanel(props: ChatPanelProps) {
     return () => window.removeEventListener("resize", syncHeight);
   }, [props.draft]);
 
+  useEffect(() => {
+    if (!props.sending) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [props.sending]);
+
   function scrollToBottom() {
     const element = scrollRef.current;
     if (!element) return;
@@ -174,7 +248,15 @@ export function ChatPanel(props: ChatPanelProps) {
   function handleScroll() {
     const element = scrollRef.current;
     if (!element) return;
-    stickRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+    stickRef.current = nearBottom;
+    setAtBottom((current) => (current === nearBottom ? current : nearBottom));
+  }
+
+  function jumpToBottom() {
+    stickRef.current = true;
+    setAtBottom(true);
+    scrollToBottom();
   }
 
   const canSubmit =
@@ -197,15 +279,47 @@ export function ChatPanel(props: ChatPanelProps) {
       .filter((message) => message.role === "assistant" && message.run_id)
       .map((message) => message.run_id as string),
   );
-  const activeRunShown = Boolean(props.sending || props.streamText) && props.activeRun;
+  const activeRunShown = Boolean(
+    props.activeRun && (props.sending || props.streamText || props.terminalRun),
+  );
   const orphanScreenshots = props.screenshots.filter(
     (shot) =>
       !assistantRunIds.has(shot.run_id) &&
       (!activeRunShown || shot.run_id !== props.activeRun?.id),
   );
 
+  const queued = props.activeRun?.status === "queued";
+  const liveElapsed = elapsedSeconds(
+    props.activeRun?.started_at ?? props.activeRun?.created_at,
+    now,
+  );
+  const elapsedLabel =
+    props.sending && liveElapsed >= 10 ? `已用 ${formatDuration(liveElapsed)}` : "";
+  const activityText = queued ? "排队中，等待其他会话完成" : props.activity;
+  const showActivity = props.sending && Boolean(activityText || elapsedLabel);
+  const terminalSeconds = props.terminalRun
+    ? elapsedSeconds(
+        props.terminalRun.run.started_at ?? props.terminalRun.run.created_at,
+        props.terminalRun.run.finished_at
+          ? Date.parse(props.terminalRun.run.finished_at)
+          : undefined,
+      )
+    : 0;
+  const terminalDuration =
+    terminalSeconds >= 10 ? `用时 ${formatDuration(terminalSeconds)}` : "";
+  const showStreaming = !props.terminalRun && (props.sending || Boolean(props.streamText));
+  // Once the persisted assistant message arrives, drop the live bubble even if
+  // a state update is still in flight (prevents a duplicate or flicker).
+  const streamingSuperseded = Boolean(
+    props.activeRun && assistantRunIds.has(props.activeRun.id),
+  );
+
   async function submit() {
     if (!canSubmit) return;
+    // Sending always follows the newest message, even if the user had scrolled up.
+    stickRef.current = true;
+    setAtBottom(true);
+    scrollToBottom();
     const sent = await props.onSend(attachments);
     if (sent) {
       setAttachments([]);
@@ -216,22 +330,25 @@ export function ChatPanel(props: ChatPanelProps) {
   async function uploadFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setAttachError("");
-    setUploading(true);
-    try {
-      for (const file of Array.from(files)) {
-        if (file.size > MAX_ATTACHMENT_BYTES) {
-          setAttachError(`${file.name} 超过 10 MB，未上传`);
-          continue;
-        }
-        try {
-          const uploaded = await api.uploadAttachment(props.agentId, file);
-          setAttachments((current) => [...current, uploaded]);
-        } catch (exc) {
-          setAttachError(errorText(exc));
-        }
+    for (const file of Array.from(files)) {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setAttachError(`${file.name} 超过 10 MB，未上传`);
+        continue;
       }
-    } finally {
-      setUploading(false);
+      const id = `upload-${(uploadSeqRef.current += 1)}`;
+      setUploads((current) => [...current, { id, name: file.name, size: file.size, percent: 0 }]);
+      try {
+        const uploaded = await api.uploadAttachment(props.agentId, file, (percent) => {
+          setUploads((current) =>
+            current.map((item) => (item.id === id ? { ...item, percent } : item)),
+          );
+        });
+        setAttachments((current) => [...current, uploaded]);
+      } catch (exc) {
+        setAttachError(errorText(exc));
+      } finally {
+        setUploads((current) => current.filter((item) => item.id !== id));
+      }
     }
   }
 
@@ -251,7 +368,9 @@ export function ChatPanel(props: ChatPanelProps) {
     <section className="chat-panel">
       <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
         <div className="message-flow" ref={contentRef}>
-        {props.messages.length === 0 && !props.sending && (
+        {props.loading && props.messages.length === 0 && <MessageSkeleton />}
+
+        {!props.loading && props.messages.length === 0 && !props.sending && (
           <div className="chat-empty">
             <div className="chat-empty-mark">ACC</div>
             <h2>和 {props.agentName || "Agent"} 开始对话</h2>
@@ -266,27 +385,69 @@ export function ChatPanel(props: ChatPanelProps) {
           </div>
         )}
 
-        {props.messages.map((message) =>
-          message.role === "user" ? (
-            <div key={message.id} className="message-row user">
-              <div className="message-bubble user">
-                <Markdown content={message.content} />
-                <div className="message-meta">
-                  <span>你 · {formatTime(message.created_at)}</span>
-                  <div className="message-actions">
-                    <CopyButton text={message.content} />
-                    <button
-                      type="button"
-                      className="message-action"
-                      onClick={() => props.onQuote(message.content)}
-                    >
-                      引用
-                    </button>
+        {props.messages.map((message) => {
+          if (message.role === "user") {
+            const parsed = parseUserContent(message.content);
+            const copyContent = userMessageText(message.content);
+            return (
+              <div key={message.id} className="message-row user">
+                <div className="message-bubble user">
+                  {parsed.kind === "attachments" ? (
+                    <>
+                      <div className="message-files">
+                        {parsed.files.map((file, index) => (
+                          <span
+                            className="message-file"
+                            key={`${file.path}-${index}`}
+                            title={file.path}
+                          >
+                            <FileIcon />
+                            <span className="message-file-name">{file.name}</span>
+                            {file.size !== null && (
+                              <span className="message-file-size">{formatBytes(file.size)}</span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                      {parsed.text && <Markdown content={parsed.text} />}
+                    </>
+                  ) : parsed.kind === "memory-command" ? (
+                    <>
+                      <div className="message-command">
+                        <span className="message-command-mark" aria-hidden="true">
+                          ✦
+                        </span>
+                        <span className="message-command-text">
+                          <strong>整理记忆</strong>
+                          <small>合并重复与失效的长期记忆</small>
+                        </span>
+                      </div>
+                      <details className="message-command-raw">
+                        <summary>查看指令</summary>
+                        <pre>{message.content}</pre>
+                      </details>
+                    </>
+                  ) : (
+                    <Markdown content={message.content} />
+                  )}
+                  <div className="message-meta">
+                    <span>你 · {formatTime(message.created_at)}</span>
+                    <div className="message-actions">
+                      <CopyButton text={copyContent} />
+                      <button
+                        type="button"
+                        className="message-action"
+                        onClick={() => props.onQuote(copyContent)}
+                      >
+                        引用
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ) : (
+            );
+          }
+          return (
             <div key={message.id} className="message-row assistant">
               <div className="message-avatar">ACC</div>
               <div className="message-bubble assistant">
@@ -315,17 +476,28 @@ export function ChatPanel(props: ChatPanelProps) {
                 />
               </div>
             </div>
-          ),
-        )}
+          );
+        })}
 
-        {(props.sending || props.streamText) && (
+        {showStreaming && !streamingSuperseded && (
           <div className="message-row assistant">
             <div className="message-avatar">ACC</div>
             <div className="message-bubble assistant streaming">
               <div className="message-head">
                 <span className="message-author">{props.agentName || "Agent"}</span>
-                <span className="streaming-label">{props.activeRun?.status ?? "running"}</span>
               </div>
+              {showActivity && (
+                <div className="run-activity" role="status">
+                  {!queued && <span className="run-activity-dot" aria-hidden="true" />}
+                  {activityText && <span className="run-activity-text">{activityText}</span>}
+                  {activityText && elapsedLabel && (
+                    <span className="run-activity-sep" aria-hidden="true">
+                      ·
+                    </span>
+                  )}
+                  {elapsedLabel && <span className="run-activity-elapsed">{elapsedLabel}</span>}
+                </div>
+              )}
               <ThinkingBlock
                 text={props.streamReasoning}
                 streaming={!props.streamText}
@@ -333,15 +505,63 @@ export function ChatPanel(props: ChatPanelProps) {
               {props.streamText ? (
                 <Markdown content={props.streamText} />
               ) : (
-                <div className="muted">正在生成…</div>
+                <div className="muted">{queued ? "排队中…" : "正在生成…"}</div>
               )}
-              <span className="cursor" />
+              {!queued && <span className="cursor" />}
               {props.activeRun && (
                 <ScreenshotStrip
                   sessionId={props.sessionId}
                   items={screenshotsByRun.get(props.activeRun.id) ?? []}
                 />
               )}
+            </div>
+          </div>
+        )}
+
+        {props.terminalRun && (
+          <div className="message-row assistant">
+            <div className="message-avatar">ACC</div>
+            <div
+              className={`message-bubble assistant terminal ${
+                props.terminalRun.run.status === "cancelled" ? "cancelled" : "failed"
+              }`}
+            >
+              <div className="message-head">
+                <span className="message-author">{props.agentName || "Agent"}</span>
+                <span
+                  className={`run-status-pill ${
+                    props.terminalRun.run.status === "cancelled" ? "cancelled" : "failed"
+                  }`}
+                >
+                  {props.terminalRun.run.status === "cancelled" ? "已停止" : "失败"}
+                </span>
+                {terminalDuration && <span className="message-time">{terminalDuration}</span>}
+              </div>
+              <ThinkingBlock text={props.terminalRun.reasoning} streaming={false} />
+              {props.terminalRun.text ? (
+                <Markdown content={props.terminalRun.text} />
+              ) : (
+                <div className="muted">这个 Run 没有产生回复。</div>
+              )}
+              <div className="run-terminal-footer">
+                <span className="run-terminal-reason">
+                  {props.terminalRun.run.status === "cancelled"
+                    ? "已停止生成，上面的内容保留到停止时。"
+                    : props.terminalRun.run.error || "Run 执行失败。"}
+                </span>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  disabled={props.sendBlocked}
+                  onClick={() => props.onRetry(props.terminalRun!.run.id)}
+                >
+                  重试
+                </button>
+              </div>
+              <ScreenshotStrip
+                sessionId={props.sessionId}
+                items={screenshotsByRun.get(props.terminalRun.run.id) ?? []}
+              />
             </div>
           </div>
         )}
@@ -358,21 +578,24 @@ export function ChatPanel(props: ChatPanelProps) {
         {props.error && (
           <div className="error-banner in-chat">
             <span>{props.error}</span>
-            {props.activeRun?.status === "failed" && (
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={() => props.onRetry(props.activeRun!.id)}
-              >
-                重试这个 Run
-              </button>
-            )}
           </div>
         )}
         </div>
       </div>
 
       <div className="composer">
+        {!atBottom && (props.sending || props.streamText) && (
+          <button
+            type="button"
+            className="scroll-bottom-button"
+            onClick={jumpToBottom}
+            aria-label="回到最新消息"
+            title="回到最新消息"
+          >
+            <span aria-hidden="true">↓</span>
+            <span>回到最新</span>
+          </button>
+        )}
         {props.notice && (
           <div className="composer-notice" role="status">
             {props.notice}
@@ -505,11 +728,21 @@ export function ChatPanel(props: ChatPanelProps) {
           </div>
           {attachments.length > 0 || uploading || attachError ? (
             <div className="composer-files">
+              {uploads.map((item) => (
+                <span className="composer-file uploading" key={item.id}>
+                  <span className="composer-file-name" title={item.name}>
+                    {item.name}
+                  </span>
+                  <span className="composer-file-size">{formatBytes(item.size)}</span>
+                  <span className="composer-file-progress">{item.percent}%</span>
+                </span>
+              ))}
               {attachments.map((file) => (
                 <span className="composer-file" key={file.path}>
                   <span className="composer-file-name" title={`${file.name} · ${file.path}`}>
                     {file.name}
                   </span>
+                  <span className="composer-file-size">{formatBytes(file.size)}</span>
                   <button
                     type="button"
                     className="composer-file-remove"
@@ -526,7 +759,6 @@ export function ChatPanel(props: ChatPanelProps) {
                   </button>
                 </span>
               ))}
-              {uploading && <span className="composer-upload-note">上传中…</span>}
               {attachError && <span className="composer-upload-error">{attachError}</span>}
             </div>
           ) : null}

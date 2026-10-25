@@ -14,6 +14,8 @@ import type {
   Session,
   SkillInfo,
 } from "./types";
+import { activityFromEvents, attemptText, describeToolCall } from "./runActivity";
+import { MEMORY_COMMAND } from "./messageContent";
 import { ChatPanel } from "./components/ChatPanel";
 import { ChannelsPage } from "./components/ChannelsPage";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -30,16 +32,60 @@ function terminal(status: string): boolean {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
+function active(status: string): boolean {
+  return status === "queued" || status === "running";
+}
+
+function isActiveRun(run: Run | null | undefined): boolean {
+  return Boolean(run && active(run.status));
+}
+
+/** Live run state is kept per session so switching away never drops it. */
+type SessionLive = {
+  activeRun: Run | null;
+  events: RunEvent[];
+  streamText: string;
+  streamReasoning: string;
+  activity: string;
+  notice: string;
+  tracking: boolean;
+};
+
+const EMPTY_LIVE: SessionLive = {
+  activeRun: null,
+  events: [],
+  streamText: "",
+  streamReasoning: "",
+  activity: "",
+  notice: "",
+  tracking: false,
+};
+
+type RunSubscription = {
+  source: EventSource | null;
+  timer: number | null;
+};
+
 const MEMORY_SKILL = "memory-organizer";
-const MEMORY_COMMAND =
-  "请整理长期记忆：先读取 /skills/memory-organizer/SKILL.md，然后按技能说明合并重复记忆、删除失效记忆，不要新增事实。";
 const POLL_INTERVAL_MS = 800;
 const POLL_MAX_BACKOFF_MS = 5000;
 const MAX_POLL_RETRIES = 120;
+const RECONNECT_NOTICE = "服务连接中断，正在重试…";
+const RESTART_NOTICE = "服务重启，Run 已重新排队";
+const ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时进度；刚才的消息没有发送。";
+const RETRY_ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时进度。";
 
 function transientPollError(error: unknown): boolean {
   if (error instanceof ApiError) return error.status >= 500;
   return true;
+}
+
+/** A 409 from chat/retry carries the Run the UI should attach to instead. */
+function conflictRunId(error: unknown): string | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  const detail = error.detail as { detail?: { active_run_id?: unknown } } | undefined;
+  const runId = detail?.detail?.active_run_id;
+  return typeof runId === "string" && runId ? runId : null;
 }
 
 export default function App() {
@@ -53,15 +99,12 @@ export default function App() {
   const [sessionId, setSessionId] = useState("");
   const [screenshots, setScreenshots] = useState<ScreenshotInfo[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
-  const [activeRun, setActiveRun] = useState<Run | null>(null);
-  const [events, setEvents] = useState<RunEvent[]>([]);
-  const [streamText, setStreamText] = useState("");
-  const [streamReasoning, setStreamReasoning] = useState("");
+  const [pendingSession, setPendingSession] = useState<string | null>(null);
+  const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
   const [runReasoning, setRunReasoning] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
-  const [runNotice, setRunNotice] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [view, setView] = useState<"chat" | "settings" | "memory" | "skills" | "tools" | "channels">("chat");
@@ -71,9 +114,11 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
 
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const pollTimerRef = useRef<number | null>(null);
-  const pollGenerationRef = useRef(0);
+  const subscriptionsRef = useRef<Map<string, RunSubscription>>(new Map());
+  const appliedEventsRef = useRef<Map<string, number>>(new Map());
+  const finishingRunsRef = useRef<Set<string>>(new Set());
+  const finishedRunsRef = useRef<Set<string>>(new Set());
+  const suppressSessionResetRef = useRef<string | null>(null);
   const sessionIdRef = useRef("");
   const messagesRequestRef = useRef(0);
   const sessionsRequestRef = useRef(0);
@@ -82,13 +127,25 @@ export default function App() {
   const draftAgentRef = useRef("");
   const draftRef = useRef("");
   const runSessionsRef = useRef<Record<string, string>>({});
-  const finishedRuns = useRef<Set<string>>(new Set());
 
   const agent = agents.find((item) => item.id === agentId);
-  const chatSending = sending && (!activeRun || activeRun.session_id === sessionId);
+  const live = liveBySession[sessionId] ?? EMPTY_LIVE;
+  const pendingHere = pendingSession !== null && pendingSession === sessionId;
+  const chatSending = pendingHere || (live.tracking && isActiveRun(live.activeRun));
+  const sending =
+    pendingSession !== null ||
+    Object.values(liveBySession).some((item) => item.tracking && isActiveRun(item.activeRun));
   const busyElsewhere = sending && !chatSending;
-  const visibleRun = activeRun && activeRun.session_id === sessionId ? activeRun : null;
-  const visibleStream = chatSending ? streamText : "";
+  const visibleRun = live.activeRun;
+  const visibleStream = live.streamText;
+  const visibleReasoning = live.streamReasoning;
+  const visibleEvents = live.events;
+  const visibleActivity = live.activity;
+  const visibleNotice = live.notice;
+  const terminalRun =
+    visibleRun && (visibleRun.status === "failed" || visibleRun.status === "cancelled")
+      ? { run: visibleRun, text: visibleStream, reasoning: visibleReasoning }
+      : null;
   const sessionTitle = sessions.find((item) => item.id === sessionId)?.title || "新对话";
   const viewTitle =
     view === "settings"
@@ -113,9 +170,33 @@ export default function App() {
     setError(message);
   }
 
-  useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
+  function updateLive(id: string, patch: (current: SessionLive) => SessionLive) {
+    if (!id) return;
+    setLiveBySession((current) => ({ ...current, [id]: patch(current[id] ?? EMPTY_LIVE) }));
+  }
+
+  function clearLiveNotice(id: string) {
+    if (!id) return;
+    setLiveBySession((current) => {
+      const session = current[id];
+      if (!session?.notice) return current;
+      return { ...current, [id]: { ...session, notice: "" } };
+    });
+  }
+
+  function rememberEvents(events: RunEvent[]) {
+    for (const event of events) {
+      const known = appliedEventsRef.current.get(event.run_id) ?? 0;
+      if (event.id > known) appliedEventsRef.current.set(event.run_id, event.id);
+    }
+  }
+
+  function acceptEvent(event: RunEvent): boolean {
+    const known = appliedEventsRef.current.get(event.run_id) ?? 0;
+    if (event.id <= known) return false;
+    appliedEventsRef.current.set(event.run_id, event.id);
+    return true;
+  }
 
   useEffect(() => {
     draftRef.current = draft;
@@ -164,21 +245,20 @@ export default function App() {
       setError(errorText(exc));
       setAuth(false);
     });
-    return () => closeStream();
+    return () => closeAllSubscriptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     agentIdRef.current = agentId;
     // Drop the previous agent's session before its view can appear under the
-    // new agent. activeRun is kept on purpose: it keeps chatSending false for
-    // the new agent while the previous agent's run is still streaming.
+    // new agent. Live runs of other sessions keep streaming in the background.
     sessionIdRef.current = "";
     setSessionId("");
     setMessages([]);
+    setMessagesLoading(false);
     setSessions([]);
     setError("");
-    setRunNotice("");
     if (!auth || !agentId) {
       sessionsRequestRef.current += 1;
       return;
@@ -188,13 +268,27 @@ export default function App() {
   }, [auth, agentId]);
 
   useEffect(() => {
-    setStreamReasoning("");
-    setRunReasoning({});
-    if (!sessionId) {
+    sessionIdRef.current = sessionId;
+    const keepMessages = suppressSessionResetRef.current === sessionId;
+    suppressSessionResetRef.current = null;
+    if (!keepMessages) {
+      // Never show the previous session's messages under the new one while its
+      // own messages are still loading.
+      messagesRequestRef.current += 1;
       setMessages([]);
+      setMessagesLoading(Boolean(sessionId));
+    }
+    setError("");
+    setScreenshots([]);
+    if (!sessionId) {
+      setMessagesLoading(false);
       return;
     }
-    void loadMessages(sessionId).catch((exc) => setSessionError(errorText(exc), sessionId));
+    void loadMessages(sessionId).catch((exc) => {
+      if (sessionId !== sessionIdRef.current) return;
+      setMessagesLoading(false);
+      setSessionError(errorText(exc), sessionId);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -203,15 +297,15 @@ export default function App() {
       setScreenshots([]);
       return;
     }
-    let active = true;
+    let mounted = true;
     void api
       .listScreenshots(sessionId)
       .then((list) => {
-        if (active && sessionId === sessionIdRef.current) setScreenshots(list);
+        if (mounted && sessionId === sessionIdRef.current) setScreenshots(list);
       })
       .catch(() => undefined);
     return () => {
-      active = false;
+      mounted = false;
     };
   }, [sessionId]);
 
@@ -261,13 +355,7 @@ export default function App() {
       sessionIdRef.current = "";
       setSessionId("");
       setMessages([]);
-      // A run can still be streaming for another agent; keep it tracked so
-      // this empty view is not mistaken for the sending session.
-      if (!sending) {
-        setActiveRun(null);
-        setEvents([]);
-        setStreamText("");
-      }
+      setMessagesLoading(false);
       return;
     }
     if (!list.some((item) => item.id === sessionIdRef.current)) {
@@ -299,138 +387,102 @@ export default function App() {
     }
   }
 
-  async function loadMessages(id: string, syncRun = true) {
-    const requestId = ++messagesRequestRef.current;
-    const list = await api.listMessages(id);
-    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
-    setMessages(list);
-    if (!syncRun) return;
-    setError("");
-
-    // Channel sessions can have several queued Runs; the active one is not
-    // necessarily the newest message's Run.
-    const active = await api.getSessionActiveRun(id);
-    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
-    const lastRunId =
-      active?.id ?? [...list].reverse().find((message) => message.run_id)?.run_id;
-    if (!lastRunId) {
-      setActiveRun(null);
-      setEvents([]);
-      setStreamReasoning("");
-      setRunNotice("");
-      return;
-    }
-    const [run, runEvents] = await Promise.all([api.getRun(lastRunId), api.getRunEvents(lastRunId)]);
-    runSessionsRef.current[run.id] = run.session_id;
-    setActiveRun(run);
-    setEvents(runEvents);
-    const lastQueuedId = runEvents.reduce(
-      (latest, event) => (event.type === "run_queued" ? event.id : latest),
-      0,
-    );
-    const reasoning = runEvents
-      .filter((event) => event.type === "reasoning_delta" && event.id > lastQueuedId)
-      .map((event) => String(event.payload.delta ?? ""))
-      .join("");
-    setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
-    setStreamReasoning("");
-    if (run.status === "failed") {
-      setSessionError(run.error || "Run failed", run.session_id);
-    }
-    if ((run.status === "queued" || run.status === "running") && !finishedRuns.current.has(run.id)) {
-      setSending(true);
-      setStreamReasoning(reasoning);
-      setStreamText(
-        runEvents
-          .filter((event) => event.type === "assistant_delta" && event.id > lastQueuedId)
-          .map((event) => String(event.payload.delta ?? ""))
-          .join(""),
-      );
-      subscribe(run.id, runEvents.at(-1)?.id ?? 0);
-    }
+  function closeSubscription(id: string) {
+    const subscription = subscriptionsRef.current.get(id);
+    if (!subscription) return;
+    subscriptionsRef.current.delete(id);
+    subscription.source?.close();
+    if (subscription.timer !== null) window.clearTimeout(subscription.timer);
   }
 
-  function closePoll() {
-    pollGenerationRef.current += 1;
-    if (pollTimerRef.current !== null) {
-      window.clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
+  function closeAllSubscriptions() {
+    for (const id of Array.from(subscriptionsRef.current.keys())) closeSubscription(id);
   }
 
-  function closeStream() {
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
-    closePoll();
-  }
-
-  function subscribe(runId: string, after = 0) {
-    closeStream();
+  function subscribe(id: string, runId: string, after = 0) {
+    closeSubscription(id);
+    const subscription: RunSubscription = { source: null, timer: null };
+    subscriptionsRef.current.set(id, subscription);
     let lastId = after;
     const source = new EventSource(api.streamUrl(runId, after));
-    eventSourceRef.current = source;
+    subscription.source = source;
     source.onmessage = (message) => {
       try {
         const event = JSON.parse(message.data) as RunEvent;
         lastId = Math.max(lastId, event.id);
-        applyEvent(event);
+        applyEvent(id, event);
       } catch {
         // Ignore malformed frames.
       }
     };
     source.onerror = () => {
-      closeStream();
-      void pollRun(runId, lastId);
+      if (subscriptionsRef.current.get(id) !== subscription) return;
+      source.close();
+      subscription.source = null;
+      void pollRun(id, runId, lastId);
     };
   }
 
-  function applyEvent(event: RunEvent) {
-    setEvents((current) => (current.some((item) => item.id === event.id) ? current : [...current, event]));
-    if (event.type === "run_queued") {
-      if (event.payload.reason === "service_restart") {
-        // The checkpoint keeps the interrupted attempt; the requeued run will
-        // stream a fresh answer, so drop the previous attempt's live text.
-        setStreamText("");
-        setStreamReasoning("");
-        setRunReasoning((current) => ({ ...current, [event.run_id]: "" }));
-        setRunNotice("服务重启，Run 已重新排队");
-      } else {
-        setRunNotice("");
-      }
-    }
-    if (event.type === "assistant_delta") {
-      setRunNotice("");
-      setStreamText((current) => current + String(event.payload.delta ?? ""));
-    }
+  function applyEvent(id: string, event: RunEvent) {
+    if (!acceptEvent(event)) return;
     if (event.type === "reasoning_delta") {
-      setRunNotice("");
       const delta = String(event.payload.delta ?? "");
-      setStreamReasoning((current) => current + delta);
       setRunReasoning((current) => ({
         ...current,
         [event.run_id]: (current[event.run_id] ?? "") + delta,
       }));
     }
-    if (event.type === "browser_action" && event.payload.screenshot_id) {
+    setLiveBySession((current) => {
+      const session = current[id] ?? EMPTY_LIVE;
+      const next: SessionLive = { ...session, events: [...session.events, event] };
+      if (event.type === "run_queued") {
+        if (event.payload.reason === "service_restart") {
+          // The checkpoint keeps the interrupted attempt; the requeued run will
+          // stream a fresh answer, so drop the previous attempt's live text.
+          next.streamText = "";
+          next.streamReasoning = "";
+          next.activity = "";
+          next.notice = RESTART_NOTICE;
+        } else {
+          next.notice = "";
+        }
+      } else if (event.type === "assistant_delta") {
+        next.streamText = session.streamText + String(event.payload.delta ?? "");
+        next.activity = "";
+        if (session.notice === RECONNECT_NOTICE) next.notice = "";
+      } else if (event.type === "reasoning_delta") {
+        next.streamReasoning = session.streamReasoning + String(event.payload.delta ?? "");
+        next.activity = "";
+        if (session.notice === RECONNECT_NOTICE) next.notice = "";
+      } else if (event.type === "tool_call") {
+        next.activity = describeToolCall(event.payload);
+      } else if (event.type === "browser_action") {
+        // The tool finished; the next model step decides the next activity.
+        next.activity = "";
+      }
+      return { ...current, [id]: next };
+    });
+    if (event.type === "browser_action" && event.payload.screenshot_id && id === sessionIdRef.current) {
       void refreshScreenshots();
     }
     if (event.type === "run_completed" || event.type === "run_failed" || event.type === "run_cancelled") {
-      void finishRun(event.run_id);
+      void finishRun(id, event.run_id);
     }
   }
 
-  async function pollRun(runId: string, after = 0) {
-    closePoll();
-    const generation = pollGenerationRef.current;
+  async function pollRun(id: string, runId: string, after = 0) {
+    closeSubscription(id);
+    const subscription: RunSubscription = { source: null, timer: null };
+    subscriptionsRef.current.set(id, subscription);
     let lastId = after;
     let failures = 0;
 
-    const alive = () => generation === pollGenerationRef.current;
+    const alive = () => subscriptionsRef.current.get(id) === subscription;
 
     const schedule = (delay: number) => {
       if (!alive()) return;
-      pollTimerRef.current = window.setTimeout(() => {
-        pollTimerRef.current = null;
+      subscription.timer = window.setTimeout(() => {
+        subscription.timer = null;
         void tick();
       }, delay);
     };
@@ -446,19 +498,27 @@ export default function App() {
           if (event.type === "run_queued" && event.payload.reason === "service_restart") {
             sawRestart = true;
           }
-          applyEvent(event);
+          applyEvent(id, event);
         }
         const run = await api.getRun(runId);
         if (!alive()) return;
         runSessionsRef.current[run.id] = run.session_id;
-        setActiveRun(run);
+        updateLive(id, (session) => ({
+          ...session,
+          activeRun: run,
+          tracking: !terminal(run.status),
+        }));
         if (failures > 0) {
           failures = 0;
-          if (!sawRestart) setRunNotice("");
+          if (!sawRestart) {
+            updateLive(id, (session) =>
+              session.notice === RECONNECT_NOTICE ? { ...session, notice: "" } : session,
+            );
+          }
         }
         if (terminal(run.status)) {
-          closePoll();
-          void finishRun(runId);
+          closeSubscription(id);
+          void finishRun(id, runId);
           return;
         }
         schedule(POLL_INTERVAL_MS);
@@ -466,7 +526,7 @@ export default function App() {
         if (!alive()) return;
         if (transientPollError(exc) && failures < MAX_POLL_RETRIES) {
           failures += 1;
-          setRunNotice("服务连接中断，正在重试…");
+          updateLive(id, (session) => ({ ...session, notice: RECONNECT_NOTICE }));
           schedule(
             Math.min(
               POLL_INTERVAL_MS * 2 ** Math.min(failures, 3),
@@ -475,37 +535,168 @@ export default function App() {
           );
           return;
         }
-        closePoll();
-        setSessionError(errorText(exc), runSessionsRef.current[runId]);
-        setSending(false);
+        closeSubscription(id);
+        updateLive(id, (session) => ({ ...session, tracking: false, notice: "" }));
+        setSessionError(errorText(exc), id);
       }
     };
     void tick();
   }
 
-  async function finishRun(runId: string) {
-    if (finishedRuns.current.has(runId)) return;
-    finishedRuns.current.add(runId);
-    closeStream();
-    setSending(false);
-    setRunNotice("");
+  async function finishRun(id: string, runId: string) {
+    if (finishedRunsRef.current.has(runId) || finishingRunsRef.current.has(runId)) return;
+    finishingRunsRef.current.add(runId);
+    closeSubscription(id);
     try {
       const [run, runEvents] = await Promise.all([api.getRun(runId), api.getRunEvents(runId)]);
+      rememberEvents(runEvents);
       runSessionsRef.current[run.id] = run.session_id;
-      setActiveRun(run);
-      setEvents(runEvents);
-      setStreamText("");
-      setStreamReasoning("");
+      const reasoning = attemptText(runEvents, "reasoning_delta");
+      const text = attemptText(runEvents, "assistant_delta");
+      if (run.session_id === sessionIdRef.current && run.status === "completed") {
+        // Persist the final assistant message before dropping the stream text,
+        // so the completed answer never blinks out of the transcript.
+        await loadMessages(run.session_id, false).catch(() => undefined);
+      }
+      setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
+      // Keep the streamed text as a fallback until the persisted assistant
+      // message is in the transcript (ChatPanel hides the live bubble then).
+      // Background completed Runs do not need the fallback when reopening them.
+      const keepText = run.status !== "completed" || run.session_id === sessionIdRef.current;
+      updateLive(id, (session) => ({
+        ...session,
+        activeRun: run,
+        events: runEvents,
+        streamText: keepText ? text : "",
+        streamReasoning: keepText ? reasoning : "",
+        activity: "",
+        notice: "",
+        tracking: false,
+      }));
+      // Channel sessions can queue several Runs; pick up the next one.
+      const next = await api.getSessionActiveRun(id).catch(() => null);
+      if (next && isActiveRun(next)) {
+        const nextEvents = await api.getRunEvents(next.id).catch(() => [] as RunEvent[]);
+        rememberEvents(nextEvents);
+        runSessionsRef.current[next.id] = next.session_id;
+        updateLive(id, (session) => ({
+          ...session,
+          activeRun: next,
+          events: nextEvents,
+          streamText: attemptText(nextEvents, "assistant_delta"),
+          streamReasoning: attemptText(nextEvents, "reasoning_delta"),
+          activity: activityFromEvents(nextEvents),
+          notice: "",
+          tracking: true,
+        }));
+        subscribe(id, next.id, nextEvents.at(-1)?.id ?? 0);
+      }
       if (run.session_id === sessionIdRef.current) {
-        await loadMessages(run.session_id, true);
+        void refreshScreenshots();
       }
-      if (run.status === "failed") {
-        setSessionError(run.error || "Run failed", run.session_id);
-      }
-      await refreshSessions();
-      void refreshScreenshots();
+      finishedRunsRef.current.add(runId);
+      void refreshSessions();
     } catch (exc) {
-      setSessionError(errorText(exc), runSessionsRef.current[runId]);
+      setSessionError(errorText(exc), id);
+    } finally {
+      finishingRunsRef.current.delete(runId);
+    }
+  }
+
+  async function loadMessages(id: string, syncRun = true) {
+    const requestId = ++messagesRequestRef.current;
+    const list = await api.listMessages(id);
+    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
+    setMessages(list);
+    setMessagesLoading(false);
+    if (!syncRun) return;
+    setError("");
+    if (subscriptionsRef.current.has(id)) {
+      // This session's Run is already streaming in the background; reusing its
+      // live state avoids rewinding text to whatever the DB had at load time.
+      return;
+    }
+
+    // Channel sessions can have several queued Runs; the active one is not
+    // necessarily the newest message's Run.
+    const activeRun = await api.getSessionActiveRun(id);
+    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
+    const lastRunId =
+      activeRun?.id ?? [...list].reverse().find((message) => message.run_id)?.run_id;
+    if (!lastRunId) {
+      setLiveBySession((current) => {
+        if (current[id]?.tracking) return current;
+        return { ...current, [id]: { ...EMPTY_LIVE } };
+      });
+      return;
+    }
+    const [run, runEvents] = await Promise.all([api.getRun(lastRunId), api.getRunEvents(lastRunId)]);
+    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
+    runSessionsRef.current[run.id] = run.session_id;
+    rememberEvents(runEvents);
+    const reasoning = attemptText(runEvents, "reasoning_delta");
+    const text = attemptText(runEvents, "assistant_delta");
+    const running = isActiveRun(run);
+    const streamText = run.status === "completed" ? "" : text;
+    const streamReasoning = run.status === "completed" ? "" : reasoning;
+    setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
+    setLiveBySession((current) => {
+      const existing = current[id];
+      if (existing && existing.activeRun?.id === run.id) {
+        const known = appliedEventsRef.current.get(run.id) ?? 0;
+        if (known > (runEvents.at(-1)?.id ?? 0)) {
+          return current;
+        }
+      }
+      if (existing?.tracking && existing.activeRun && existing.activeRun.id !== run.id) {
+        return current;
+      }
+      return {
+        ...current,
+        [id]: {
+          activeRun: run,
+          events: runEvents,
+          streamText,
+          streamReasoning,
+          activity: running ? activityFromEvents(runEvents) : "",
+          notice: "",
+          tracking: running,
+        },
+      };
+    });
+    if (running && !subscriptionsRef.current.has(id)) {
+      subscribe(id, run.id, runEvents.at(-1)?.id ?? 0);
+    }
+  }
+
+  async function attachRun(id: string, runId: string, notice: string) {
+    try {
+      const [run, runEvents] = await Promise.all([api.getRun(runId), api.getRunEvents(runId)]);
+      if (run.session_id !== id) return;
+      runSessionsRef.current[run.id] = run.session_id;
+      rememberEvents(runEvents);
+      const reasoning = attemptText(runEvents, "reasoning_delta");
+      const text = attemptText(runEvents, "assistant_delta");
+      const running = isActiveRun(run);
+      setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
+      updateLive(id, () => ({
+        activeRun: run,
+        events: runEvents,
+        streamText: run.status === "completed" ? "" : text,
+        streamReasoning: run.status === "completed" ? "" : reasoning,
+        activity: running ? activityFromEvents(runEvents) : "",
+        notice,
+        tracking: running,
+      }));
+      if (running && !subscriptionsRef.current.has(id)) {
+        subscribe(id, run.id, runEvents.at(-1)?.id ?? 0);
+      } else if (!running && run.session_id === sessionIdRef.current) {
+        await loadMessages(id, false).catch(() => undefined);
+      }
+    } catch (exc) {
+      setSessionError(errorText(exc), id);
+    } finally {
+      setPendingSession(null);
     }
   }
 
@@ -518,18 +709,14 @@ export default function App() {
     if ((!text && attachments.length === 0) || !agentId || sending) return false;
     const sendAgentId = agentId;
     const attachmentBlock = attachments
-      .map((file) => `- ${file.name}（工作区路径：${file.path}）`)
+      .map((file) => `- ${file.name}（工作区路径：${file.path}，大小：${file.size} 字节）`)
       .join("\n");
     const content = attachmentBlock
       ? `附件已上传到工作区：\n${attachmentBlock}${text ? `\n\n${text}` : ""}`
       : text;
     setError("");
-    setRunNotice("");
-    setSending(true);
-    setStreamText("");
-    setStreamReasoning("");
-    setEvents([]);
-    setActiveRun(null);
+    clearLiveNotice(sessionIdRef.current);
+    setPendingSession(sessionIdRef.current);
     if (overrideText === undefined) setDraft("");
     const optimisticId = `local-${Date.now()}`;
     setMessages((current) => [
@@ -545,31 +732,29 @@ export default function App() {
     ]);
     let createdSessionId = "";
     let sent = false;
+    let targetSessionId = sessionIdRef.current;
     try {
-      let targetSessionId = sessionIdRef.current;
       if (!targetSessionId) {
         const created = await api.createSession(sendAgentId, sessionTitle ?? "新会话");
         createdSessionId = created.id;
         targetSessionId = created.id;
         if (sendAgentId === agentIdRef.current) {
           sessionIdRef.current = created.id;
+          suppressSessionResetRef.current = created.id;
           setSessions((current) => [created, ...current]);
+          setSessionId(created.id);
+          setPendingSession(created.id);
+          setMessagesLoading(false);
         }
       }
       const response = await api.sendMessage(targetSessionId, content);
       sent = true;
-      if (createdSessionId && sendAgentId === agentIdRef.current) {
-        setSessionId(createdSessionId);
-      }
       try {
         await loadMessages(targetSessionId, false);
       } catch {
         // Keep the optimistic user message; the run is already created.
       }
-      const run = await api.getRun(response.run_id);
-      runSessionsRef.current[run.id] = run.session_id;
-      setActiveRun(run);
-      subscribe(response.run_id);
+      await attachRun(targetSessionId, response.run_id, "");
       void refreshSessions();
       return true;
     } catch (exc) {
@@ -581,6 +766,23 @@ export default function App() {
           draftByAgentRef.current[sendAgentId] = text;
         }
       }
+      const conflict = conflictRunId(exc);
+      if (conflict) {
+        // Another tab or a channel Run owns this session. Show it instead of
+        // making the user guess what the 409 means; the message was not sent.
+        if (createdSessionId && !sent) {
+          await api.deleteSession(createdSessionId).catch(() => undefined);
+          if (sendAgentId === agentIdRef.current) {
+            sessionIdRef.current = "";
+            setSessions((current) => current.filter((item) => item.id !== createdSessionId));
+            setSessionId("");
+          }
+        }
+        setPendingSession(null);
+        await attachRun(targetSessionId, conflict, ATTACH_NOTICE);
+        void refreshSessions();
+        return false;
+      }
       if (createdSessionId && !sent) {
         await api.deleteSession(createdSessionId).catch(() => undefined);
         if (sendAgentId === agentIdRef.current) {
@@ -590,7 +792,7 @@ export default function App() {
         }
       }
       setAgentError(errorText(exc), sendAgentId);
-      setSending(false);
+      setPendingSession(null);
       return false;
     }
   }
@@ -615,11 +817,11 @@ export default function App() {
   }
 
   async function cancel() {
-    if (!activeRun) return;
+    if (!visibleRun || !active(visibleRun.status)) return;
     try {
-      await api.cancelRun(activeRun.id);
+      await api.cancelRun(visibleRun.id);
     } catch (exc) {
-      setSessionError(errorText(exc), activeRun.session_id);
+      setSessionError(errorText(exc), visibleRun.session_id);
     }
   }
 
@@ -631,23 +833,26 @@ export default function App() {
 
   async function retry(runId: string) {
     if (sending) return;
-    const retrySessionId = runSessionsRef.current[runId] ?? activeRun?.session_id ?? sessionIdRef.current;
+    const retrySessionId =
+      runSessionsRef.current[runId] ?? visibleRun?.session_id ?? sessionIdRef.current;
+    if (!retrySessionId) return;
     setError("");
-    setRunNotice("");
-    setSending(true);
-    setStreamText("");
-    setStreamReasoning("");
-    setEvents([]);
+    clearLiveNotice(retrySessionId);
+    setPendingSession(retrySessionId);
     try {
       const response = await api.retryRun(runId);
-      const run = await api.getRun(response.run_id);
-      runSessionsRef.current[run.id] = run.session_id;
-      setActiveRun(run);
-      subscribe(response.run_id);
+      await attachRun(retrySessionId, response.run_id, "");
       void refreshSessions();
     } catch (exc) {
+      const conflict = conflictRunId(exc);
+      if (conflict) {
+        setPendingSession(null);
+        await attachRun(retrySessionId, conflict, RETRY_ATTACH_NOTICE);
+        void refreshSessions();
+        return;
+      }
       setSessionError(errorText(exc), retrySessionId);
-      setSending(false);
+      setPendingSession(null);
     }
   }
 
@@ -655,11 +860,11 @@ export default function App() {
     const result = await api.deleteAgentPermanently(id);
     await loadWorkspace();
     if (id === agentId) {
+      closeAllSubscriptions();
+      setLiveBySession({});
+      setPendingSession(null);
       setSessionId("");
       setMessages([]);
-      setActiveRun(null);
-      setEvents([]);
-      setStreamText("");
     }
     return result;
   }
@@ -671,17 +876,8 @@ export default function App() {
     sessionIdRef.current = "";
     setSessionId("");
     setMessages([]);
-    // Keep the tracked run while one is still streaming so the composer does
-    // not mistake this fresh view for the running session.
-    if (!sending) {
-      setActiveRun(null);
-      setEvents([]);
-      setStreamText("");
-    }
-    setStreamReasoning("");
-    setRunReasoning({});
+    setMessagesLoading(false);
     setError("");
-    setRunNotice("");
     setDraft("");
   }
 
@@ -689,6 +885,13 @@ export default function App() {
     const forAgent = agentId;
     try {
       await api.deleteSession(id);
+      closeSubscription(id);
+      setLiveBySession((current) => {
+        if (!current[id]) return current;
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
       if (forAgent !== agentIdRef.current) return;
       const list = await api.listSessions(forAgent);
       if (forAgent !== agentIdRef.current) return;
@@ -701,9 +904,7 @@ export default function App() {
           sessionIdRef.current = "";
           setSessionId("");
           setMessages([]);
-          setActiveRun(null);
-          setEvents([]);
-          setStreamText("");
+          setMessagesLoading(false);
         }
       }
     } catch (exc) {
@@ -757,7 +958,7 @@ export default function App() {
   }
 
   async function logout() {
-    closeStream();
+    closeAllSubscriptions();
     await api.logout().catch(() => undefined);
     setAuth(false);
     setAgents([]);
@@ -766,11 +967,11 @@ export default function App() {
     setSkillsErrors([]);
     setSessions([]);
     setMessages([]);
+    setMessagesLoading(false);
+    setLiveBySession({});
+    setPendingSession(null);
     setAgentId("");
     setSessionId("");
-    setActiveRun(null);
-    setEvents([]);
-    setStreamText("");
     setDraft("");
     setSidebarOpen(false);
     setView("chat");
@@ -946,14 +1147,17 @@ export default function App() {
             <ChatPanel
               key={sessionId}
               messages={messages}
+              loading={messagesLoading}
               screenshots={screenshots}
               sessionId={sessionId}
               streamText={visibleStream}
-              streamReasoning={streamReasoning}
+              streamReasoning={visibleReasoning}
               runReasoning={runReasoning}
               sending={chatSending}
+              activity={visibleActivity}
+              terminalRun={terminalRun}
               error={error}
-              notice={runNotice}
+              notice={visibleNotice}
               activeRun={visibleRun}
               draft={draft}
               canSend={Boolean(agentId)}
@@ -978,7 +1182,7 @@ export default function App() {
           tab={drawerTab}
           onTab={setDrawerTab}
           run={visibleRun}
-          events={events}
+          events={visibleEvents}
           agent={agent}
           providers={providers}
           onSaveAgent={saveAgent}

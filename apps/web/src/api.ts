@@ -106,20 +106,42 @@ export const api = {
     request<{ deleted: boolean; sessions: number; runs: number }>(`/api/agents/${id}/permanent`, {
       method: "DELETE",
     }),
-  uploadAttachment: async (agentId: string, file: File): Promise<Attachment> => {
-    const response = await fetch(
-      `/api/agents/${agentId}/attachments?filename=${encodeURIComponent(file.name)}`,
-      {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-        body: file,
-      },
-    );
-    if (!response.ok) {
-      throw await responseError(response);
-    }
-    return (await response.json()) as Attachment;
+  uploadAttachment: (
+    agentId: string,
+    file: File,
+    onProgress?: (percent: number) => void,
+  ): Promise<Attachment> => {
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open(
+        "POST",
+        `/api/agents/${agentId}/attachments?filename=${encodeURIComponent(file.name)}`,
+      );
+      request.withCredentials = true;
+      request.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      request.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress?.(Math.round((event.loaded / event.total) * 100));
+        }
+      };
+      request.onload = () => {
+        let detail: unknown = request.statusText;
+        if (request.responseText) {
+          try {
+            detail = JSON.parse(request.responseText);
+          } catch {
+            detail = request.responseText;
+          }
+        }
+        if (request.status >= 200 && request.status < 300) {
+          resolve(detail as Attachment);
+        } else {
+          reject(new ApiError(request.status, detail));
+        }
+      };
+      request.onerror = () => reject(new ApiError(0, "上传失败"));
+      request.send(file);
+    });
   },
 
   listProviders: () => request<Provider[]>("/api/providers"),
