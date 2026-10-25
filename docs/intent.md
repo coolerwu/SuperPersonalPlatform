@@ -695,42 +695,43 @@ F18 让一个会话可能出现多个 queued Run，网页端也可能同时有�
 - 多标签页之间同步读数/未读状态；
 - 回溯显示更早失败 Run 的部分输出（只恢复当前会话最后跟踪的 Run）。
 
-### F20 宿主机 Shell 与代码解释器（技能门控）
+### F20 宿主机 Shell 与代码解释器
 
 - 状态：进行中
 - 日期：2026-10-25
-- 来源：用户要求在现有技能体系内同时接入 `LocalShellBackend` 与 `CodeInterpreterMiddleware`
+- 来源：用户要求直接接入 `LocalShellBackend` 与 `CodeInterpreterMiddleware`
 
 #### 背景与目标
 
-平台此前不暴露 shell。用户希望在需要时让 Agent 在宿主机执行命令，并在隔离环境里做计算。两种能力都必须沿用「按 Agent 启用技能、读取 SKILL.md 后解锁工具」的既有门控，不能默认对所有 Agent 和微信入站开放。
+平台此前不暴露 shell。用户希望所有 Agent 直接具备宿主机命令执行和隔离计算能力，不再用技能做开关或补充描述；工具本身的 schema 与库自带提示词负责用法说明。
 
 #### 功能点
 
-1. 内置技能 `local-shell`：`metadata.include_tools: execute`。执行核的默认 backend 固定为 `LocalShellBackend`（`virtual_mode=True`，工作目录为 Agent 工作区），`execute` 工具始终注册但受门控；当前 Agent 启用该技能并读取 SKILL.md 后才对模型可见、可调用，未启用或未读取时保持锁定。
-2. 内置技能 `code-interpreter`：`metadata.include_tools: eval`。启用时挂载 `langchain-quickjs` 的 `CodeInterpreterMiddleware`（QuickJS、`mode=thread`、无文件与网络、PTC 只暴露文件工具、`subagents=True`）；未启用时不挂载。
-3. `AgentSkillsMiddleware` 新增门控：`execute` / `eval` 在读取对应 `SKILL.md` 之前不出现在模型工具列表里；直接调用返回 `status=error` 的 ToolMessage。门控挂在 `SkillsMiddleware` 槽位，同时作用于主 Agent 和默认 general-purpose 子 Agent；上下文压缩后仍按读取记录或 pinned 消息判定。
+1. 执行核的默认 backend 固定为 `LocalShellBackend`（`virtual_mode=True`，工作目录为 Agent 工作区），不再按技能切换 backend。
+2. 每次 Run 都挂载 `CodeInterpreterMiddleware`（QuickJS、`mode=thread`、无文件与网络、PTC 只暴露文件工具、`subagents=True`）。
+3. 不新增 `local-shell` / `code-interpreter` 技能，也不做读取门控：`execute` / `eval` 对所有 Agent 直接可见、可调用。general-purpose 子 Agent 使用同一 backend，因此也有 `execute`；`eval` 中间件不继承到子 Agent，子 Agent 可由 REPL 里的 `task(...)` 调度。
 4. shell 子进程只注入 `PATH`、`HOME`、`LANG`，不继承 `LLM_API_KEY`、`APP_AUTH_TOKEN` 等 systemd 环境。
-5. 默认提示词说明两类能力及风险；既有默认 Agent 通过 LEGACY 标记一次性更新。
-6. README、CLAUDE.md 明确：shell 以服务账号权限运行、没有沙箱，启用技能即代表信任该 Agent。
+5. 默认提示词直接说明 execute（宿主机命令、无沙箱）与 eval（QuickJS、无文件网络、PTC 文件工具）的可用性和约束；既有默认 Agent 通过 LEGACY 标记一次性更新。
+6. README、CLAUDE.md 明确安全边界：以服务账号权限运行、没有沙箱、没有审批。
 
 #### 验收标准
 
-- 未启用技能时 `execute` / `eval` 对模型不可见，直接调用返回 locked 错误；启用但未读取 SKILL.md 时同样不可见、不可调用。
-- 读取 `/skills/local-shell/SKILL.md` 后 `execute` 可用，命令工作目录为 Agent 工作区，但可以访问服务账号可见的宿主机路径。
-- 读取 `/skills/code-interpreter/SKILL.md` 后 `eval` 可用，可执行 JavaScript 并通过 PTC 调用文件工具，也可以用 `task(...)` 调度子 Agent；不能直接访问文件系统或网络。
-- general-purpose 子 Agent 同样受门控，不能绕过。
+- 任意 Agent 不需要启用任何技能就能看到并调用 `execute` 和 `eval`。
+- `execute` 的工作目录是 Agent 工作区，但可以访问服务账号可见的宿主机路径。
+- `eval` 可执行 JavaScript，能通过 PTC 调用文件工具，并可用 `task(...)` 调度子 Agent；不能直接访问文件系统或网络。
+- 不存在 locked 错误或技能门控分支。
 - 后端测试与前端构建通过。
 
 #### 非目标
 
 - 命令审批 / HITL、命令白名单或容器隔离；
-- 默认对所有 Agent 开启 shell；
+- 每 Agent 的 shell / 解释器开关；
 - 让 shell 或解释器直接读取平台密钥、数据库或 systemd 配置；
 - 在技能目录内执行任意 Python。
 
 #### 风险与边界
 
-- `LocalShellBackend` 明确不做沙箱：命令以服务账号权限运行，`virtual_mode` 不约束 shell；微信入站和网页内容都是外部输入，启用该技能的 Agent 必须被信任。
-- backend 始终是 `LocalShellBackend`，`execute` 工具在运行时注册；安全边界完全依赖 `AgentSkillsMiddleware` 门控，任何绕过门控的中间件或工具变更都会直接暴露宿主机权限。
-- 平台没有审批链路；门控只保证「先读技能再调用」，不能限制读取之后执行哪些命令。
+- `LocalShellBackend` 明确不做沙箱：命令以服务账号权限运行，`virtual_mode` 不约束 shell；所有 Agent（包括微信入站会话）都能执行宿主机命令。
+- 微信入站和网页内容都是外部输入，提示注入可以直接转化为宿主机操作；该能力默认对所有渠道生效。
+- 平台没有审批链路，门控已移除；模型在用户请求或注入内容驱动下可以读取 `.env`、`app.db` 等敏感文件。
+- 安全边界只剩操作系统账号权限与 systemd 沙箱配置。

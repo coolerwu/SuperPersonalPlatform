@@ -144,7 +144,7 @@ async def test_executor_announces_tool_calls_with_parsed_arguments(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_executor_enables_execution_tools_only_for_enabled_skills(
+async def test_executor_always_mounts_host_shell_and_interpreter(
     tmp_path, monkeypatch
 ) -> None:
     captured: dict = {}
@@ -167,7 +167,7 @@ async def test_executor_enables_execution_tools_only_for_enabled_skills(
         checkpoint_dir=tmp_path,
         agent_name="test",
         workspace_path="execution-agent",
-        enabled_skills=("local-shell", "code-interpreter"),
+        enabled_skills=(),
     )
     events = [
         event
@@ -183,30 +183,6 @@ async def test_executor_enables_execution_tools_only_for_enabled_skills(
     assert isinstance(captured["backend"].default, LocalShellBackend)
     middleware_names = [type(item).__name__ for item in captured["middleware"]]
     assert "CodeInterpreterMiddleware" in middleware_names
-    skills = next(item for item in captured["middleware"] if item.name == "SkillsMiddleware")
-    assert skills._gated_tools == {"execute": "local-shell", "eval": "code-interpreter"}
-
-    captured.clear()
-    plain = DeepAgentExecutor(
-        provider=provider,
-        checkpoint_dir=tmp_path,
-        agent_name="test",
-        workspace_path="execution-agent",
-        enabled_skills=(),
-    )
-    events = [
-        event
-        async for event in plain.run(
-            instructions="test", session_id="exec-stack-plain", content="hi"
-        )
-    ]
-    assert any(event.type == "run_completed" for event in events)
-    assert isinstance(captured["backend"].default, LocalShellBackend)
-    assert "CodeInterpreterMiddleware" not in [
-        type(item).__name__ for item in captured["middleware"]
-    ]
-    skills = next(item for item in captured["middleware"] if item.name == "SkillsMiddleware")
-    assert skills._gated_tools == {"execute": "local-shell"}
 
 
 @pytest.mark.asyncio

@@ -361,15 +361,12 @@ class DeepAgentExecutor:
         self.run_id = run_id
 
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
-        interpreter_enabled = "code-interpreter" in self.enabled_skills
         try:
             from deepagents import create_deep_agent
             from langchain_openai import ChatOpenAI
+            from langchain_quickjs import CodeInterpreterMiddleware
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             from langgraph.errors import GraphRecursionError
-
-            if interpreter_enabled:
-                from langchain_quickjs import CodeInterpreterMiddleware
 
             from app.services.skill_middleware import AgentSkillsMiddleware
 
@@ -436,9 +433,6 @@ class DeepAgentExecutor:
                         self.skills_dir if self.skills_dir is not None else settings.skills_dir
                     ),
                 )
-                gated_tools: dict[str, str] = {"execute": "local-shell"}
-                if interpreter_enabled:
-                    gated_tools["eval"] = "code-interpreter"
                 skills_middleware = AgentSkillsMiddleware(
                     backend=backend,
                     sources=[("/skills/", "Platform")],
@@ -451,18 +445,16 @@ class DeepAgentExecutor:
                             agent_id=self.agent_id,
                         ),
                     ),
-                    gated_tools=gated_tools,
                 )
-                middleware: list[Any] = [skills_middleware]
-                if interpreter_enabled:
+                middleware: list[Any] = [
+                    skills_middleware,
                     # QuickJS has no filesystem or network; PTC exposes only the
-                    # file tools the platform already allows, after skill gating.
-                    middleware.append(
-                        CodeInterpreterMiddleware(
-                            subagents=True,
-                            ptc=["ls", "read_file", "write_file", "edit_file", "glob", "grep"],
-                        )
-                    )
+                    # file tools the platform already allows.
+                    CodeInterpreterMiddleware(
+                        subagents=True,
+                        ptc=["ls", "read_file", "write_file", "edit_file", "glob", "grep"],
+                    ),
+                ]
                 # The model class owns retries (including subagents and the
                 # step-limit summary); ChatOpenAI SDK retries stay disabled so
                 # there is exactly one retry layer.
