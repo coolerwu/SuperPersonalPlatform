@@ -221,7 +221,14 @@ export function Sidebar(props: SidebarProps) {
                 onClick={() => props.onSelectSession(session.id)}
               >
                 <div className="session-main">
-                  <div className="session-title">{session.title || "新会话"}</div>
+                  <div className="session-title">
+                    {session.channel_type === "wechat" && (
+                      <span className="session-channel" title={session.channel_name ?? "微信"}>
+                        微信
+                      </span>
+                    )}
+                    {session.title || "新会话"}
+                  </div>
                   <div className="session-meta">
                     {session.active_run_status === "running" && (
                       <span className="session-activity running">运行中</span>

@@ -128,6 +128,8 @@ class SessionOut(BaseModel):
     message_count: int = 0
     active_run_id: str | None = None
     active_run_status: str | None = None
+    channel_type: str | None = None
+    channel_name: str | None = None
     created_at: datetime
     updated_at: datetime
 

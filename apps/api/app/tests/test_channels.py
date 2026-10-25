@@ -16,6 +16,7 @@ from app.models import (
     utcnow,
 )
 from app.services.channel_service import ChannelUnavailable, ingest_inbound
+from app.routers.sessions import _session_out
 
 
 @pytest.fixture(autouse=True)
@@ -393,3 +394,17 @@ def test_wechat_qr_login_saves_credentials_and_hides_token(client) -> None:
     )
     listed = client.get("/api/channels", params={"agent_id": "default"})
     assert "confirmed-token" not in listed.text
+
+
+@pytest.mark.asyncio
+async def test_session_summary_exposes_wechat_channel(client) -> None:  # noqa: ARG001
+    channel_id = await _create_active_channel("default")
+    result = await _ingest(channel_id, "session-channel-msg")
+    assert result.session_id is not None
+    async with SessionLocal() as db:
+        session = await db.get(Session, result.session_id)
+        assert session is not None
+        summary = await _session_out(db, session)
+    assert summary.channel_type == "wechat"
+    assert summary.channel_name is not None
+    assert summary.channel_name.startswith("test-wechat-")

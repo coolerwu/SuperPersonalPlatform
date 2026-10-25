@@ -508,6 +508,18 @@ textarea {
   white-space: nowrap;
 }
 
+.session-channel {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 10px;
+  line-height: 1.6;
+  vertical-align: 1px;
+}
+
 .session-meta {
   color: var(--faint);
   font-size: 11px;
@@ -1192,6 +1204,15 @@ textarea {
   color: var(--accent-strong);
   font-size: 12px;
   line-height: 1.45;
+  text-align: center;
+}
+
+.composer-channel-hint {
+  max-width: var(--chat-lane);
+  margin: 0 auto 6px;
+  padding: 0 6px;
+  color: var(--faint);
+  font-size: 11px;
   text-align: center;
 }
 

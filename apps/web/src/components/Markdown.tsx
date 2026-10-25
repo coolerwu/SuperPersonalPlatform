@@ -1,4 +1,4 @@
-import { Children, isValidElement, ReactNode, useState } from "react";
+import { Children, isValidElement, memo, ReactNode, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkBreaks from "remark-breaks";
@@ -55,7 +55,7 @@ const components: Components = {
   },
 };
 
-export function Markdown({ content }: { content: string }) {
+export const Markdown = memo(function Markdown({ content }: { content: string }) {
   return (
     <div className="markdown">
       <ReactMarkdown
@@ -67,4 +67,4 @@ export function Markdown({ content }: { content: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { api, ApiError, errorText } from "./api";
+import { api, ApiError } from "./api";
 import type {
   Agent,
   AgentSavePayload,
@@ -16,6 +16,7 @@ import type {
 } from "./types";
 import { activityFromEvents, attemptText, describeToolCall } from "./runActivity";
 import { MEMORY_COMMAND } from "./messageContent";
+import { describeApiError } from "./errors";
 import { ChatPanel } from "./components/ChatPanel";
 import { ChannelsPage } from "./components/ChannelsPage";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -74,6 +75,12 @@ const RECONNECT_NOTICE = "服务连接中断，正在重试…";
 const RESTART_NOTICE = "服务重启，Run 已重新排队";
 const ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时进度；刚才的消息没有发送。";
 const RETRY_ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时进度。";
+const NEW_SESSION_KEY = "__new__";
+
+/** Drafts and attachments belong to one conversation (or one pending new one). */
+function sessionKey(agentId: string, sessionId: string): string {
+  return `${agentId}:${sessionId || NEW_SESSION_KEY}`;
+}
 
 function transientPollError(error: unknown): boolean {
   if (error instanceof ApiError) return error.status >= 500;
@@ -101,6 +108,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [draft, setDraft] = useState("");
+  const [attachmentsByKey, setAttachmentsByKey] = useState<Record<string, Attachment[]>>({});
   const [pendingSession, setPendingSession] = useState<string | null>(null);
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
   const [runReasoning, setRunReasoning] = useState<Record<string, string>>({});
@@ -123,11 +131,15 @@ export default function App() {
   const messagesRequestRef = useRef(0);
   const sessionsRequestRef = useRef(0);
   const agentIdRef = useRef("");
-  const draftByAgentRef = useRef<Record<string, string>>({});
-  const draftAgentRef = useRef("");
-  const draftRef = useRef("");
+  const draftsRef = useRef<Record<string, string>>({});
+  const draftKeyRef = useRef("");
+  const pendingSessionRef = useRef<string | null>(null);
+  const sessionCountsRef = useRef<Record<string, number>>({});
   const runSessionsRef = useRef<Record<string, string>>({});
 
+  const activeKey = sessionKey(agentId, sessionId);
+  const attachments = attachmentsByKey[activeKey] ?? [];
+  const currentSession = sessions.find((item) => item.id === sessionId) ?? null;
   const agent = agents.find((item) => item.id === agentId);
   const live = liveBySession[sessionId] ?? EMPTY_LIVE;
   const pendingHere = pendingSession !== null && pendingSession === sessionId;
@@ -198,19 +210,61 @@ export default function App() {
     return true;
   }
 
-  useEffect(() => {
-    draftRef.current = draft;
-  }, [draft]);
+  function changeDraft(value: string | ((current: string) => string)) {
+    const key = draftKeyRef.current;
+    setDraft((current) => {
+      const next = typeof value === "function" ? value(current) : value;
+      draftsRef.current[key] = next;
+      return next;
+    });
+  }
+
+  function setDraftFor(key: string, value: string) {
+    draftsRef.current[key] = value;
+    if (draftKeyRef.current === key) setDraft(value);
+  }
+
+  function updatePending(value: string | null) {
+    pendingSessionRef.current = value;
+    setPendingSession(value);
+  }
+
+  function addAttachmentFor(key: string, file: Attachment) {
+    setAttachmentsByKey((current) => {
+      const list = current[key] ?? [];
+      if (list.some((item) => item.path === file.path)) return current;
+      return { ...current, [key]: [...list, file] };
+    });
+  }
+
+  function removeAttachmentFor(key: string, path: string) {
+    setAttachmentsByKey((current) => {
+      const list = current[key];
+      if (!list) return current;
+      return { ...current, [key]: list.filter((item) => item.path !== path) };
+    });
+  }
+
+  function clearAttachmentsFor(key: string) {
+    setAttachmentsByKey((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function rememberSessionCounts(list: Session[]) {
+    const next = { ...sessionCountsRef.current };
+    for (const session of list) next[session.id] = session.message_count;
+    sessionCountsRef.current = next;
+  }
 
   useEffect(() => {
-    // Drafts are per-agent and survive switching while this page stays open.
-    const previousAgent = draftAgentRef.current;
-    if (previousAgent && previousAgent !== agentId) {
-      draftByAgentRef.current[previousAgent] = draftRef.current;
-    }
-    draftAgentRef.current = agentId;
-    setDraft(draftByAgentRef.current[agentId] ?? "");
-  }, [agentId]);
+    const key = sessionKey(agentId, sessionId);
+    draftKeyRef.current = key;
+    setDraft(draftsRef.current[key] ?? "");
+  }, [agentId, sessionId]);
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -242,7 +296,7 @@ export default function App() {
 
   useEffect(() => {
     void bootstrap().catch((exc) => {
-      setError(errorText(exc));
+      setError(describeApiError(exc));
       setAuth(false);
     });
     return () => closeAllSubscriptions();
@@ -263,7 +317,7 @@ export default function App() {
       sessionsRequestRef.current += 1;
       return;
     }
-    void loadSessions(agentId).catch((exc) => setAgentError(errorText(exc), agentId));
+    void loadSessions(agentId).catch((exc) => setAgentError(describeApiError(exc), agentId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth, agentId]);
 
@@ -287,7 +341,7 @@ export default function App() {
     void loadMessages(sessionId).catch((exc) => {
       if (sessionId !== sessionIdRef.current) return;
       setMessagesLoading(false);
-      setSessionError(errorText(exc), sessionId);
+      setSessionError(describeApiError(exc), sessionId);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
@@ -326,7 +380,7 @@ export default function App() {
       setSkills(catalog.skills);
       setSkillsErrors(catalog.errors);
     } catch (exc) {
-      setSkillsErrors([errorText(exc)]);
+      setSkillsErrors([describeApiError(exc)]);
       throw exc;
     }
   }
@@ -350,6 +404,7 @@ export default function App() {
     const requestId = ++sessionsRequestRef.current;
     const list = await api.listSessions(forAgent);
     if (requestId !== sessionsRequestRef.current || forAgent !== agentIdRef.current) return;
+    rememberSessionCounts(list);
     setSessions(list);
     if (list.length === 0) {
       sessionIdRef.current = "";
@@ -370,11 +425,59 @@ export default function App() {
     try {
       const list = await api.listSessions(forAgent);
       if (forAgent !== agentIdRef.current) return;
+      rememberSessionCounts(list);
       setSessions(list);
     } catch {
       // Keep the current list on a transient refresh failure.
     }
   }
+
+  useEffect(() => {
+    if (!auth || !agentId) return;
+    let cancelled = false;
+    let inFlight = false;
+
+    const tick = async () => {
+      if (cancelled || inFlight || document.visibilityState === "hidden") return;
+      const forAgent = agentIdRef.current;
+      if (!forAgent) return;
+      inFlight = true;
+      try {
+        const list = await api.listSessions(forAgent);
+        if (cancelled || forAgent !== agentIdRef.current) return;
+        const current = sessionIdRef.current;
+        const currentItem = list.find((item) => item.id === current);
+        const previousCount = current ? sessionCountsRef.current[current] : undefined;
+        rememberSessionCounts(list);
+        setSessions(list);
+        if (!current || !currentItem) return;
+        if (subscriptionsRef.current.has(current) || pendingSessionRef.current === current) return;
+        if (currentItem.active_run_id) {
+          await loadMessages(current, true);
+          return;
+        }
+        if (previousCount !== undefined && currentItem.message_count > previousCount) {
+          await loadMessages(current, true);
+        }
+      } catch {
+        // A transient failure keeps the existing sidebar and live view.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const timer = window.setInterval(() => void tick(), 5000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth, agentId]);
 
   async function refreshScreenshots() {
     const forSession = sessionIdRef.current;
@@ -537,7 +640,7 @@ export default function App() {
         }
         closeSubscription(id);
         updateLive(id, (session) => ({ ...session, tracking: false, notice: "" }));
-        setSessionError(errorText(exc), id);
+        setSessionError(describeApiError(exc), id);
       }
     };
     void tick();
@@ -597,7 +700,7 @@ export default function App() {
       finishedRunsRef.current.add(runId);
       void refreshSessions();
     } catch (exc) {
-      setSessionError(errorText(exc), id);
+      setSessionError(describeApiError(exc), id);
     } finally {
       finishingRunsRef.current.delete(runId);
     }
@@ -608,6 +711,7 @@ export default function App() {
     const list = await api.listMessages(id);
     if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
     setMessages(list);
+    sessionCountsRef.current[id] = list.length;
     setMessagesLoading(false);
     if (!syncRun) return;
     setError("");
@@ -694,9 +798,9 @@ export default function App() {
         await loadMessages(id, false).catch(() => undefined);
       }
     } catch (exc) {
-      setSessionError(errorText(exc), id);
+      setSessionError(describeApiError(exc), id);
     } finally {
-      setPendingSession(null);
+      updatePending(null);
     }
   }
 
@@ -708,6 +812,7 @@ export default function App() {
     const text = (overrideText ?? draft).trim();
     if ((!text && attachments.length === 0) || !agentId || sending) return false;
     const sendAgentId = agentId;
+    const sendKey = sessionKey(sendAgentId, sessionIdRef.current);
     const attachmentBlock = attachments
       .map((file) => `- ${file.name}（工作区路径：${file.path}，大小：${file.size} 字节）`)
       .join("\n");
@@ -716,8 +821,8 @@ export default function App() {
       : text;
     setError("");
     clearLiveNotice(sessionIdRef.current);
-    setPendingSession(sessionIdRef.current);
-    if (overrideText === undefined) setDraft("");
+    updatePending(sessionIdRef.current);
+    if (overrideText === undefined) setDraftFor(sendKey, "");
     const optimisticId = `local-${Date.now()}`;
     setMessages((current) => [
       ...current,
@@ -743,12 +848,36 @@ export default function App() {
           suppressSessionResetRef.current = created.id;
           setSessions((current) => [created, ...current]);
           setSessionId(created.id);
-          setPendingSession(created.id);
+          updatePending(created.id);
           setMessagesLoading(false);
         }
       }
       const response = await api.sendMessage(targetSessionId, content);
       sent = true;
+      if (overrideText === undefined) {
+        clearAttachmentsFor(sendKey);
+      }
+      if (overrideText !== undefined && createdSessionId) {
+        // A command (整理记忆) consumes neither the draft nor the attachments,
+        // so carry them from the pending new session to the created one.
+        const toKey = sessionKey(sendAgentId, createdSessionId);
+        if (toKey !== sendKey) {
+          const carriedDraft = draftsRef.current[sendKey] ?? "";
+          if (carriedDraft) {
+            draftsRef.current[toKey] = carriedDraft;
+            delete draftsRef.current[sendKey];
+            setDraftFor(toKey, carriedDraft);
+          }
+          setAttachmentsByKey((current) => {
+            const carried = current[sendKey];
+            if (!carried?.length) return current;
+            const next = { ...current };
+            delete next[sendKey];
+            next[toKey] = carried;
+            return next;
+          });
+        }
+      }
       try {
         await loadMessages(targetSessionId, false);
       } catch {
@@ -761,10 +890,8 @@ export default function App() {
       if (!sent) {
         if (sendAgentId === agentIdRef.current) {
           setMessages((current) => current.filter((message) => message.id !== optimisticId));
-          if (overrideText === undefined) setDraft(text);
-        } else if (overrideText === undefined) {
-          draftByAgentRef.current[sendAgentId] = text;
         }
+        if (overrideText === undefined) setDraftFor(sendKey, text);
       }
       const conflict = conflictRunId(exc);
       if (conflict) {
@@ -778,7 +905,7 @@ export default function App() {
             setSessionId("");
           }
         }
-        setPendingSession(null);
+        updatePending(null);
         await attachRun(targetSessionId, conflict, ATTACH_NOTICE);
         void refreshSessions();
         return false;
@@ -791,8 +918,8 @@ export default function App() {
           setSessionId("");
         }
       }
-      setAgentError(errorText(exc), sendAgentId);
-      setPendingSession(null);
+      setAgentError(describeApiError(exc), sendAgentId);
+      updatePending(null);
       return false;
     }
   }
@@ -809,7 +936,7 @@ export default function App() {
           current.map((item) => (item.id === updated.id ? updated : item)),
         );
       } catch (exc) {
-        setAgentError(errorText(exc), target.id);
+        setAgentError(describeApiError(exc), target.id);
         return false;
       }
     }
@@ -821,13 +948,13 @@ export default function App() {
     try {
       await api.cancelRun(visibleRun.id);
     } catch (exc) {
-      setSessionError(errorText(exc), visibleRun.session_id);
+      setSessionError(describeApiError(exc), visibleRun.session_id);
     }
   }
 
   function quote(text: string) {
     const quoted = text.split("\n").map((line) => `> ${line}`).join("\n");
-    setDraft((current) => (current.trim() ? `${quoted}\n\n${current}` : `${quoted}\n\n`));
+    changeDraft((current) => (current.trim() ? `${quoted}\n\n${current}` : `${quoted}\n\n`));
     setFocusSignal((current) => current + 1);
   }
 
@@ -838,7 +965,7 @@ export default function App() {
     if (!retrySessionId) return;
     setError("");
     clearLiveNotice(retrySessionId);
-    setPendingSession(retrySessionId);
+    updatePending(retrySessionId);
     try {
       const response = await api.retryRun(runId);
       await attachRun(retrySessionId, response.run_id, "");
@@ -846,23 +973,33 @@ export default function App() {
     } catch (exc) {
       const conflict = conflictRunId(exc);
       if (conflict) {
-        setPendingSession(null);
+        updatePending(null);
         await attachRun(retrySessionId, conflict, RETRY_ATTACH_NOTICE);
         void refreshSessions();
         return;
       }
-      setSessionError(errorText(exc), retrySessionId);
-      setPendingSession(null);
+      setSessionError(describeApiError(exc), retrySessionId);
+      updatePending(null);
     }
   }
 
   async function deleteAgentPermanently(id: string) {
     const result = await api.deleteAgentPermanently(id);
+    for (const key of Object.keys(draftsRef.current)) {
+      if (key.startsWith(`${id}:`)) delete draftsRef.current[key];
+    }
+    setAttachmentsByKey((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(next)) {
+        if (key.startsWith(`${id}:`)) delete next[key];
+      }
+      return next;
+    });
     await loadWorkspace();
     if (id === agentId) {
       closeAllSubscriptions();
       setLiveBySession({});
-      setPendingSession(null);
+      updatePending(null);
       setSessionId("");
       setMessages([]);
     }
@@ -878,14 +1015,22 @@ export default function App() {
     setMessages([]);
     setMessagesLoading(false);
     setError("");
-    setDraft("");
   }
 
   async function deleteSession(id: string) {
     const forAgent = agentId;
+    const key = sessionKey(forAgent, id);
     try {
       await api.deleteSession(id);
       closeSubscription(id);
+      delete draftsRef.current[key];
+      delete sessionCountsRef.current[id];
+      setAttachmentsByKey((current) => {
+        if (!current[key]) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
       setLiveBySession((current) => {
         if (!current[id]) return current;
         const next = { ...current };
@@ -895,6 +1040,7 @@ export default function App() {
       if (forAgent !== agentIdRef.current) return;
       const list = await api.listSessions(forAgent);
       if (forAgent !== agentIdRef.current) return;
+      rememberSessionCounts(list);
       setSessions(list);
       if (id === sessionIdRef.current) {
         if (list.length > 0) {
@@ -908,7 +1054,7 @@ export default function App() {
         }
       }
     } catch (exc) {
-      setAgentError(errorText(exc), forAgent);
+      setAgentError(describeApiError(exc), forAgent);
     }
   }
 
@@ -969,7 +1115,10 @@ export default function App() {
     setMessages([]);
     setMessagesLoading(false);
     setLiveBySession({});
-    setPendingSession(null);
+    updatePending(null);
+    draftsRef.current = {};
+    sessionCountsRef.current = {};
+    setAttachmentsByKey({});
     setAgentId("");
     setSessionId("");
     setDraft("");
@@ -1160,13 +1309,18 @@ export default function App() {
               notice={visibleNotice}
               activeRun={visibleRun}
               draft={draft}
+              attachments={attachments}
               canSend={Boolean(agentId)}
               sendBlocked={busyElsewhere}
               agentId={agentId}
               agentName={agent?.name ?? "Agent"}
+              channelType={currentSession?.channel_type ?? ""}
+              channelName={currentSession?.channel_name ?? ""}
               memorySkillEnabled={agent?.enabled_skills.includes(MEMORY_SKILL) ?? false}
               focusSignal={focusSignal}
-              onDraftChange={setDraft}
+              onDraftChange={changeDraft}
+              onAddAttachment={(file) => addAttachmentFor(activeKey, file)}
+              onRemoveAttachment={(path) => removeAttachmentFor(activeKey, path)}
               onSend={(attachments) => send(attachments)}
               onOrganizeMemory={organizeMemory}
               onCancel={() => void cancel()}

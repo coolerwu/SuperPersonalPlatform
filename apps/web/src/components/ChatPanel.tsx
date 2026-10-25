@@ -1,11 +1,13 @@
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
 
-import { api, errorText } from "../api";
+import { api } from "../api";
 import type { Attachment, Message, Run, ScreenshotInfo } from "../types";
 import { formatTime } from "../format";
 import { copyText } from "../clipboard";
 import { formatBytes, parseUserContent, userMessageText } from "../messageContent";
 import { formatDuration } from "../runActivity";
+import { describeApiError, describeRunError } from "../errors";
+import { useThrottledText } from "../useThrottledText";
 import { Markdown } from "./Markdown";
 
 type TerminalRun = {
@@ -29,13 +31,18 @@ type ChatPanelProps = {
   notice: string;
   activeRun: Run | null;
   draft: string;
+  attachments: Attachment[];
   canSend: boolean;
   sendBlocked: boolean;
   agentId: string;
   agentName: string;
+  channelType: string;
+  channelName: string;
   memorySkillEnabled: boolean;
   focusSignal: number;
   onDraftChange: (value: string) => void;
+  onAddAttachment: (file: Attachment) => void;
+  onRemoveAttachment: (path: string) => void;
   onSend: (attachments: Attachment[]) => Promise<boolean>;
   onOrganizeMemory: () => Promise<boolean>;
   onCancel: () => void;
@@ -170,12 +177,13 @@ export function ChatPanel(props: ChatPanelProps) {
   const toolsRef = useRef<HTMLDivElement | null>(null);
   const uploadSeqRef = useRef(0);
   const [expanded, setExpanded] = useState(false);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [attachError, setAttachError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [now, setNow] = useState(() => Date.now());
+  const throttledStreamText = useThrottledText(props.streamText);
+  const throttledStreamReasoning = useThrottledText(props.streamReasoning);
 
   const uploading = uploads.length > 0;
 
@@ -263,7 +271,7 @@ export function ChatPanel(props: ChatPanelProps) {
     props.canSend &&
     !props.sending &&
     !props.sendBlocked &&
-    (props.draft.trim().length > 0 || attachments.length > 0);
+    (props.draft.trim().length > 0 || props.attachments.length > 0);
 
   const screenshotsByRun = new Map<string, ScreenshotInfo[]>();
   for (const shot of props.screenshots) {
@@ -320,9 +328,8 @@ export function ChatPanel(props: ChatPanelProps) {
     stickRef.current = true;
     setAtBottom(true);
     scrollToBottom();
-    const sent = await props.onSend(attachments);
+    const sent = await props.onSend(props.attachments);
     if (sent) {
-      setAttachments([]);
       setAttachError("");
     }
   }
@@ -343,9 +350,9 @@ export function ChatPanel(props: ChatPanelProps) {
             current.map((item) => (item.id === id ? { ...item, percent } : item)),
           );
         });
-        setAttachments((current) => [...current, uploaded]);
+        props.onAddAttachment(uploaded);
       } catch (exc) {
-        setAttachError(errorText(exc));
+        setAttachError(describeApiError(exc));
       } finally {
         setUploads((current) => current.filter((item) => item.id !== id));
       }
@@ -499,11 +506,11 @@ export function ChatPanel(props: ChatPanelProps) {
                 </div>
               )}
               <ThinkingBlock
-                text={props.streamReasoning}
+                text={throttledStreamReasoning}
                 streaming={!props.streamText}
               />
               {props.streamText ? (
-                <Markdown content={props.streamText} />
+                <Markdown content={throttledStreamText} />
               ) : (
                 <div className="muted">{queued ? "排队中…" : "正在生成…"}</div>
               )}
@@ -544,10 +551,13 @@ export function ChatPanel(props: ChatPanelProps) {
                 <div className="muted">这个 Run 没有产生回复。</div>
               )}
               <div className="run-terminal-footer">
-                <span className="run-terminal-reason">
+                <span
+                  className="run-terminal-reason"
+                  title={props.terminalRun.run.error ?? undefined}
+                >
                   {props.terminalRun.run.status === "cancelled"
                     ? "已停止生成，上面的内容保留到停止时。"
-                    : props.terminalRun.run.error || "Run 执行失败。"}
+                    : describeRunError(props.terminalRun.run.error)}
                 </span>
                 <button
                   type="button"
@@ -601,6 +611,11 @@ export function ChatPanel(props: ChatPanelProps) {
             {props.notice}
           </div>
         )}
+        {props.channelType === "wechat" && (
+          <div className="composer-channel-hint" role="note" title={props.channelName}>
+            微信会话 · 网页里发送的消息不会发回微信
+          </div>
+        )}
         {props.sendBlocked && (
           <div className="composer-busy-hint" role="status">
             另一个会话的 Run 正在运行，完成后再发送。
@@ -608,7 +623,7 @@ export function ChatPanel(props: ChatPanelProps) {
         )}
         <div
           className={`composer-card ${expanded ? "expanded" : ""} ${
-            attachments.length > 0 || uploading || attachError ? "has-files" : ""
+            props.attachments.length > 0 || uploading || attachError ? "has-files" : ""
           }`}
         >
           <div className="composer-tools" ref={toolsRef}>
@@ -726,7 +741,7 @@ export function ChatPanel(props: ChatPanelProps) {
               </div>
             )}
           </div>
-          {attachments.length > 0 || uploading || attachError ? (
+          {props.attachments.length > 0 || uploading || attachError ? (
             <div className="composer-files">
               {uploads.map((item) => (
                 <span className="composer-file uploading" key={item.id}>
@@ -737,7 +752,7 @@ export function ChatPanel(props: ChatPanelProps) {
                   <span className="composer-file-progress">{item.percent}%</span>
                 </span>
               ))}
-              {attachments.map((file) => (
+              {props.attachments.map((file) => (
                 <span className="composer-file" key={file.path}>
                   <span className="composer-file-name" title={`${file.name} · ${file.path}`}>
                     {file.name}
@@ -750,9 +765,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     title="移除附件"
                     onClick={() => {
                       setAttachError("");
-                      setAttachments((current) =>
-                        current.filter((item) => item.path !== file.path),
-                      );
+                      props.onRemoveAttachment(file.path);
                     }}
                   >
                     ×

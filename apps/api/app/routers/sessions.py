@@ -10,7 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.config import settings
 from app.db import get_db
-from app.models import Agent, Message, Run, RunEvent, RunMemory, Session, utcnow
+from app.models import (
+    Agent,
+    Channel,
+    ChannelConversation,
+    Message,
+    Run,
+    RunEvent,
+    RunMemory,
+    Session,
+    utcnow,
+)
 from app.schemas import MessageOut, RunOut, SessionCreate, SessionOut
 from app.services import channel_service
 from app.services.run_service import active_run_for_session
@@ -23,8 +33,28 @@ async def _message_count(db: AsyncSession, session_id: str) -> int:
     return int(await db.scalar(select(func.count(Message.id)).where(Message.session_id == session_id)) or 0)
 
 
-async def _session_out(db: AsyncSession, session: Session) -> SessionOut:
+async def _channel_labels(
+    db: AsyncSession, session_id: str
+) -> tuple[str | None, str | None]:
+    row = (
+        await db.execute(
+            select(Channel.type, Channel.name)
+            .join(ChannelConversation, ChannelConversation.channel_id == Channel.id)
+            .where(ChannelConversation.session_id == session_id)
+        )
+    ).first()
+    return (row[0], row[1]) if row is not None else (None, None)
+
+
+async def _session_out(
+    db: AsyncSession,
+    session: Session,
+    channel: tuple[str | None, str | None] | None = None,
+) -> SessionOut:
     active = await active_run_for_session(db, session.id)
+    if channel is None:
+        channel = await _channel_labels(db, session.id)
+    channel_type, channel_name = channel
     return SessionOut(
         id=session.id,
         agent_id=session.agent_id,
@@ -32,6 +62,8 @@ async def _session_out(db: AsyncSession, session: Session) -> SessionOut:
         message_count=await _message_count(db, session.id),
         active_run_id=active.id if active is not None else None,
         active_run_status=active.status if active is not None else None,
+        channel_type=channel_type,
+        channel_name=channel_name,
         created_at=session.created_at,
         updated_at=session.updated_at,
     )
@@ -47,7 +79,24 @@ async def list_sessions(agent_id: str, db: AsyncSession = Depends(get_db)) -> li
             select(Session).where(Session.agent_id == agent_id).order_by(Session.updated_at.desc())
         )
     ).all()
-    return [await _session_out(db, session) for session in sessions]
+    channel_by_session: dict[str, tuple[str | None, str | None]] = {}
+    if sessions:
+        rows = (
+            await db.execute(
+                select(ChannelConversation.session_id, Channel.type, Channel.name)
+                .join(Channel, Channel.id == ChannelConversation.channel_id)
+                .where(
+                    ChannelConversation.session_id.in_([session.id for session in sessions])
+                )
+            )
+        ).all()
+        channel_by_session = {
+            str(row[0]): (str(row[1]), str(row[2])) for row in rows
+        }
+    return [
+        await _session_out(db, session, channel_by_session.get(session.id, (None, None)))
+        for session in sessions
+    ]
 
 
 @router.post("/agents/{agent_id}/sessions", response_model=SessionOut, status_code=201)

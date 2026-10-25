@@ -71,6 +71,8 @@ export type Session = {
   message_count: number;
   active_run_id: string | null;
   active_run_status: string | null;
+  channel_type: string | null;
+  channel_name: string | null;
   created_at: string;
   updated_at: string;
 };
