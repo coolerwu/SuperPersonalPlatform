@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -180,3 +181,49 @@ def test_host_shell_call_is_denied_until_skill_is_read() -> None:
     called, result = call(_read_messages("/skills/local-shell/SKILL.md"))
     assert called is True
     assert result.content == "ran"
+
+
+@pytest.mark.asyncio
+async def test_host_shell_gate_applies_to_async_model_and_tool_calls() -> None:
+    middleware = _gated_middleware()
+    metadata = [_skill("local-shell", "execute")]
+    tool = StructuredTool.from_function(lambda command: command, name="execute", description="exec")
+    seen: list[str] = []
+
+    async def model_handler(request: ModelRequest) -> AIMessage:
+        seen.extend(str(getattr(item, "name", item)) for item in request.tools)
+        return AIMessage(content="ok")
+
+    async def run_model(messages: list) -> None:
+        await middleware.awrap_model_call(
+            ModelRequest(
+                model=SimpleNamespace(),
+                messages=messages,
+                tools=[tool],
+                state={"skills_metadata": metadata, "messages": messages},
+            ),
+            model_handler,
+        )
+
+    await run_model([HumanMessage(content="hi")])
+    assert seen == []
+    await run_model(_read_messages("/skills/local-shell/SKILL.md"))
+    assert seen == ["execute"]
+
+    async def tool_handler(_request) -> ToolMessage:
+        return ToolMessage(content="ran", tool_call_id="call-exec")
+
+    async def run_tool(messages: list) -> ToolMessage:
+        return await middleware.awrap_tool_call(
+            SimpleNamespace(
+                tool_call={"name": "execute", "args": {"command": "pwd"}, "id": "call-exec"},
+                tool=None,
+                state={"skills_metadata": metadata, "messages": messages},
+            ),
+            tool_handler,
+        )
+
+    denied = await run_tool([HumanMessage(content="hi")])
+    assert denied.status == "error"
+    allowed = await run_tool(_read_messages("/skills/local-shell/SKILL.md"))
+    assert allowed.content == "ran"

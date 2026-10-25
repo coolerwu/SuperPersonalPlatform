@@ -139,7 +139,7 @@ metadata:
 
 - **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
 - **`execute`**（`local-shell` 技能，不在代码注册表）：启用该技能会把 Agent 的默认 backend 换成 `LocalShellBackend`，读取 SKILL.md 后出现 `execute` 工具。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。启用该技能的 Agent 等于被授权操作这台机器。
-- **`eval`**（`code-interpreter` 技能，不在代码注册表）：启用该技能会挂载 `CodeInterpreterMiddleware`，读取 SKILL.md 后出现 `eval` 工具，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用已解锁的文件工具。PTC 不支持 `execute`，子 Agent 调度默认关闭。
+- **`eval`**（`code-interpreter` 技能，不在代码注册表）：启用该技能会挂载 `CodeInterpreterMiddleware`，读取 SKILL.md 后出现 `eval` 工具，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用已解锁的文件工具。PTC 只开放文件工具，不开放 `execute`；子 Agent 调度默认关闭。
 
 `execute` 与 `eval` 都以「当前 Agent 启用技能 + 会话内读取过该 SKILL.md」为条件，读取前不出现在工具列表，直接调用会返回 locked 错误；门控在 `SkillsMiddleware` 槽位实现，主 Agent 与 general-purpose 子 Agent 一致，上下文压缩后仍按读取记录恢复。
 
