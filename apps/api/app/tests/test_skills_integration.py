@@ -106,3 +106,77 @@ def test_browser_skill_unlocks_all_browser_tools() -> None:
         middleware, _read_messages("/skills/web-browser/SKILL.md"), metadata
     )
     assert set(visible) == BROWSER_TOOL_NAMES
+
+
+def _gated_middleware() -> AgentSkillsMiddleware:
+    from deepagents.backends import StateBackend
+
+    return AgentSkillsMiddleware(
+        backend=StateBackend(),
+        sources=[("/skills/", "Test")],
+        enabled_skills={"local-shell"},
+        tools=[],
+        gated_tools={"execute": "local-shell"},
+    )
+
+
+def _visible_gated_tools(middleware: AgentSkillsMiddleware, messages: list, metadata: list[dict]) -> list[str]:
+    seen: list[str] = []
+
+    def handler(request: ModelRequest) -> AIMessage:
+        seen.extend(str(getattr(tool, "name", tool)) for tool in request.tools)
+        return AIMessage(content="ok")
+
+    tool = StructuredTool.from_function(lambda command: command, name="execute", description="exec")
+    middleware.wrap_model_call(
+        ModelRequest(
+            model=SimpleNamespace(),
+            messages=messages,
+            tools=[tool],
+            state={"skills_metadata": metadata, "messages": messages},
+        ),
+        handler,
+    )
+    return seen
+
+
+def test_host_shell_tool_stays_hidden_until_skill_is_read() -> None:
+    middleware = _gated_middleware()
+    metadata = [_skill("local-shell", "execute")]
+
+    assert _visible_gated_tools(middleware, [HumanMessage(content="hi")], metadata) == []
+    assert _visible_gated_tools(
+        middleware, _read_messages("/skills/local-shell/SKILL.md"), metadata
+    ) == ["execute"]
+
+
+def test_host_shell_call_is_denied_until_skill_is_read() -> None:
+    middleware = _gated_middleware()
+    metadata = [_skill("local-shell", "execute")]
+
+    def call(messages: list) -> tuple[bool, ToolMessage]:
+        called = False
+
+        def handler(_request) -> ToolMessage:
+            nonlocal called
+            called = True
+            return ToolMessage(content="ran", tool_call_id="call-exec")
+
+        result = middleware.wrap_tool_call(
+            SimpleNamespace(
+                tool_call={"name": "execute", "args": {"command": "pwd"}, "id": "call-exec"},
+                tool=None,
+                state={"skills_metadata": metadata, "messages": messages},
+            ),
+            handler,
+        )
+        return called, result
+
+    called, result = call([HumanMessage(content="hi")])
+    assert called is False
+    assert result.status == "error"
+    assert "locked" in result.content
+
+    called, result = call(_read_messages("/skills/local-shell/SKILL.md"))
+    assert called is True
+    assert result.content == "ran"

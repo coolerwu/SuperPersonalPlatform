@@ -51,18 +51,18 @@ npm run dev
 - 对话里以“记住：……”开头的内容会写入用户记忆；
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
-- 流式输出、停止生成、自动增高输入框、靠近底部才自动滚动；模型返回 `reasoning_content` 时，聊天中显示可折叠的「思考过程」：思考阶段展开，开始输出答案后自动折叠，完成后保留可展开；
-- 同一时间只跟踪一个 Run：另一个会话的 Run 运行中时，当前会话禁用发送并提示，输入框仍可编辑；异步错误只显示在所属 Agent/会话，切回后失败 Run 的错误和重试会恢复；
-- 后端同一 session 最多一个 running Run，queued Run 可以排队；网页 Chat 与 retry 在已有活动 Run 时返回 409，渠道入站消息允许继续排队并由 worker 串行执行；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 2），超出的 Run 保持 `queued`；
+- 流式输出、停止生成、自动增高输入框；运行状态按会话保存，切走再切回会继续显示该会话的流式文本、思考过程和截图；发送时强制滚到底部，输出期间上滑后显示浮动的「回到最新」按钮；模型返回 `reasoning_content` 时，聊天中显示可折叠的「思考过程」：思考阶段展开，开始输出答案后自动折叠，完成后保留可展开；
+- 多个会话可以各自跟踪自己的 Run：切走 A 去加载 B 时先清空旧消息并显示骨架，B 不会出现 A 的文本；另一个会话的 Run 运行中时当前会话禁用发送并提示，输入框仍可编辑；异步错误只显示在所属 Agent/会话。失败或取消的 Run 会保留已流出的内容，显示「失败」/「已停止」气泡、错误摘要与重试按钮，刷新后从 `run_events` 恢复；
+- 后端同一 session 最多一个 running Run，queued Run 可以排队；网页 Chat 与 retry 在已有活动 Run 时返回 409（带 `active_run_id`），前端直接接入该 Run 并提示刚才的消息没有发送、恢复草稿；渠道入站消息允许继续排队并由 worker 串行执行；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 2），超出的 Run 保持 `queued`；
 - 服务停止/重启时正在运行的 Run 会重新排队并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的页面会自动重连（瞬时连接错误按退避重试）；收到 `reason=service_restart` 的 `run_queued` 时清空上一次尝试的流式文本，并显示「服务重启，Run 已重新排队」。恢复时保留中断前的 checkpoint 消息并追加「继续上次任务」提示，不重复原始用户输入；未返回结果的工具调用会补一条结果未知的 error 消息。重新入队不会回滚已经发生的文件/浏览器副作用，恢复提示会要求 Agent 不要重复执行；
 - 模型调用遇到 429/5xx/超时/连接错误时最多重试 3 次（指数退避 + jitter）；401/400 等 4xx 不重试；重试在模型层实现，主 Agent、general-purpose 子 Agent 和 step-limit 总结都会覆盖；流式调用已输出 token 后不重试，避免重复文本；可重试失败会记录 warning 日志；
 - 单个 Run 的步骤上限默认 500（`RUN_RECURSION_LIMIT`，主 Agent 与子 Agent 共用）；真的达到上限时先在原会话上自动续跑一次，仍超限才用同一模型带上完整对话生成最终答复，Run 仍以 completed 收尾并标注被截断；
-- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；没有 Shell 工具；浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，默认返回文字和元素引用；用户明确要求时可返回页面截图，截图保存到 Agent 工作区并显示在对应回复下方）；
+- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；宿主机 shell 与代码解释器分别由 `local-shell` / `code-interpreter` 技能门控：启用技能并读取对应 SKILL.md 后，`execute`（LocalShellBackend，以服务账号权限在宿主机执行命令，没有沙箱）或 `eval`（QuickJS 沙箱，无文件与网络，PTC 只开放文件工具）才会出现；未启用的 Agent 不注册这些工具。浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，默认返回文字和元素引用；用户明确要求时可返回页面截图，截图保存到 Agent 工作区并显示在对应回复下方）；
 - 技能与工具：左侧「技能」页面为当前 Agent 启用技能；模型读取 `/skills/<name>/SKILL.md` 后，技能声明的工具才会解锁；上下文压缩后会自动重新注入已启用技能的正文，保持解锁；文件工具始终可用；「工具」页面只展示注册与声明情况；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 - 顶部轻量栏显示当前 Agent 和会话标题，并作为详情抽屉开关。
 - 响应式：桌面为侧栏 + 对话 + 详情三栏；窄屏（≤860px）用顶部栏和汉堡菜单打开侧栏抽屉，详情变为全屏面板，输入区跟随软键盘与底部安全区。
-- 输入卡片左侧「＋」菜单提供上传附件、整理记忆和清空输入：文件保存到当前 Agent 的 `uploads/` 工作区目录（单文件 10 MB），发送后消息里带上文件名和工作区路径，Agent 可用文件工具读取；「整理记忆」直接发起一个 Run 并触发 `memory-organizer` 技能；也可以清空输入。
+- 输入卡片左侧「＋」菜单提供上传附件、整理记忆和清空输入：文件保存到当前 Agent 的 `uploads/` 工作区目录（单文件 10 MB，上传时显示单文件进度和大小），发送后消息里带上文件名、工作区路径和字节数，Agent 可用文件工具读取；聊天里附件显示为文件 chip，「整理记忆」显示为命令卡片（原始指令可展开），不再把内部文本直接铺开；「整理记忆」直接发起一个 Run 并触发 `memory-organizer` 技能；也可以清空输入。
 
 ## 配置页
 
@@ -75,7 +75,7 @@ npm run dev
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
 - 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
 
-Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `reasoning_delta` 流式片段，在右侧抽屉里展开查看。
+Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `reasoning_delta` 流式片段，在右侧抽屉里展开查看。`tool_call` 事件记录工具名与解析后的参数，聊天中的活动行据此显示「正在读取 …」「正在浏览 …」，运行超过 10 秒后附上已用时间。
 
 ## 技能与工具页面
 
@@ -115,7 +115,7 @@ metadata:
 - 文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不受技能开关影响。
 - 技能创建：直接让 Agent 在对话里创建或修改 `/skills/<name>/SKILL.md`，不需要表单；也可以在主机上编辑文件。Agent 写入的技能同样需要为当前 Agent 启用。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
-- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser` 和 `memory-organizer`，分别声明 `include_tools: web_fetch` / `web_search` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete`。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
+- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`local-shell` 和 `code-interpreter`，分别声明 `include_tools: web_fetch` / `web_search` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete` / `execute` / `eval`。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
 
@@ -138,7 +138,12 @@ metadata:
 `web_search` 和 `web_fetch` 使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：在「技能」页面启用声明它的技能（`web-search` / `web-fetch` / `web-browser`），对话中读取该 SKILL.md 后解锁。
 
 - **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
-工具实现分别在 `apps/api/app/services/skill_tools.py`（Search/Fetch）、`apps/api/app/services/browser_tools.py`（浏览器）和 `apps/api/app/services/memory_tools.py`（记忆）；新增工具时注册一个 factory，按运行时 Provider/会话构建 LangChain `BaseTool`。
+- **`execute`**（`local-shell` 技能，不在代码注册表）：启用该技能会把 Agent 的默认 backend 换成 `LocalShellBackend`，读取 SKILL.md 后出现 `execute` 工具。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。启用该技能的 Agent 等于被授权操作这台机器。
+- **`eval`**（`code-interpreter` 技能，不在代码注册表）：启用该技能会挂载 `CodeInterpreterMiddleware`，读取 SKILL.md 后出现 `eval` 工具，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用已解锁的文件工具。PTC 不支持 `execute`，子 Agent 调度默认关闭。
+
+`execute` 与 `eval` 都以「当前 Agent 启用技能 + 会话内读取过该 SKILL.md」为条件，读取前不出现在工具列表，直接调用会返回 locked 错误；门控在 `SkillsMiddleware` 槽位实现，主 Agent 与 general-purpose 子 Agent 一致，上下文压缩后仍按读取记录恢复。
+
+工具实现分别在 `apps/api/app/services/skill_tools.py`（Search/Fetch）、`apps/api/app/services/browser_tools.py`（浏览器）和 `apps/api/app/services/memory_tools.py`（记忆）；`execute` 由 `deepagents` 的 `LocalShellBackend` 提供，`eval` 由 `langchain-quickjs` 提供。新增注册表工具时注册一个 factory，按运行时 Provider/会话构建 LangChain `BaseTool`。
 
 ## 记忆
 

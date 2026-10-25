@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
@@ -305,11 +307,33 @@ def _save_screenshot(
     return None
 
 
-def build_backend(workspace_path: str, *, skills_dir: Path | str | None = None):
-    from deepagents.backends import CompositeBackend, FilesystemBackend
+def _shell_env() -> dict[str, str]:
+    """Minimal environment for host commands; service secrets stay out of it."""
+    return {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": str(Path.home()),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+
+
+def build_backend(
+    workspace_path: str,
+    *,
+    skills_dir: Path | str | None = None,
+    enable_shell: bool = False,
+):
+    from deepagents.backends import (
+        CompositeBackend,
+        FilesystemBackend,
+        LocalShellBackend,
+    )
 
     root = resolve_workspace_path(workspace_path, create=True)
-    workspace_backend = FilesystemBackend(root_dir=root, virtual_mode=True)
+    workspace_backend = (
+        LocalShellBackend(root_dir=root, virtual_mode=True, env=_shell_env())
+        if enable_shell
+        else FilesystemBackend(root_dir=root, virtual_mode=True)
+    )
     if skills_dir is None:
         return workspace_backend
     skills_root = Path(skills_dir).expanduser().resolve()
@@ -346,11 +370,16 @@ class DeepAgentExecutor:
         self.run_id = run_id
 
     async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
+        shell_enabled = "local-shell" in self.enabled_skills
+        interpreter_enabled = "code-interpreter" in self.enabled_skills
         try:
             from deepagents import create_deep_agent
             from langchain_openai import ChatOpenAI
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             from langgraph.errors import GraphRecursionError
+
+            if interpreter_enabled:
+                from langchain_quickjs import CodeInterpreterMiddleware
 
             from app.services.skill_middleware import AgentSkillsMiddleware
 
@@ -416,7 +445,13 @@ class DeepAgentExecutor:
                     skills_dir=(
                         self.skills_dir if self.skills_dir is not None else settings.skills_dir
                     ),
+                    enable_shell=shell_enabled,
                 )
+                gated_tools: dict[str, str] = {}
+                if shell_enabled:
+                    gated_tools["execute"] = "local-shell"
+                if interpreter_enabled:
+                    gated_tools["eval"] = "code-interpreter"
                 skills_middleware = AgentSkillsMiddleware(
                     backend=backend,
                     sources=[("/skills/", "Platform")],
@@ -429,7 +464,18 @@ class DeepAgentExecutor:
                             agent_id=self.agent_id,
                         ),
                     ),
+                    gated_tools=gated_tools,
                 )
+                middleware: list[Any] = [skills_middleware]
+                if interpreter_enabled:
+                    # QuickJS has no filesystem or network; PTC exposes only the
+                    # file tools the platform already allows, after skill gating.
+                    middleware.append(
+                        CodeInterpreterMiddleware(
+                            subagents=False,
+                            ptc=["ls", "read_file", "write_file", "edit_file", "glob", "grep"],
+                        )
+                    )
                 # The model class owns retries (including subagents and the
                 # step-limit summary); ChatOpenAI SDK retries stay disabled so
                 # there is exactly one retry layer.
@@ -441,7 +487,7 @@ class DeepAgentExecutor:
                     backend=backend,
                     name=self.agent_name,
                     skills=["/skills/"],
-                    middleware=[skills_middleware],
+                    middleware=middleware,
                 )
                 config = {
                     "configurable": {"thread_id": session_id},
@@ -580,6 +626,9 @@ class DeepAgentExecutor:
     ) -> AsyncIterator[ExecutorEvent]:
         seen_tool_results: set[str] = set()
         tool_names_by_call_id: dict[str, str] = {}
+        pending_tool_calls: dict[str, dict[str, str]] = {}
+        announced_tool_calls: set[str] = set()
+        tool_call_id_by_index: dict[Any, str] = {}
         async for chunk in agent.astream(
             input_state,
             config=config,
@@ -636,6 +685,50 @@ class DeepAgentExecutor:
                 call_name = str(item.get("name") or "")
                 if call_id and call_name:
                     tool_names_by_call_id[call_id] = call_name
+
+            # Tool arguments stream in fragments; announce a call once its JSON
+            # is complete so the UI can show what the agent is doing.
+            for item in getattr(message, "tool_call_chunks", None) or []:
+                if not isinstance(item, dict):
+                    continue
+                index = item.get("index")
+                key = str(item.get("id") or "")
+                if key:
+                    if index is not None:
+                        tool_call_id_by_index[index] = key
+                elif index is not None:
+                    key = tool_call_id_by_index.get(index) or f"index-{index}"
+                if not key:
+                    continue
+                state = pending_tool_calls.setdefault(key, {"name": "", "args": ""})
+                if item.get("name"):
+                    state["name"] = str(item["name"])
+                fragment = item.get("args")
+                if isinstance(fragment, str):
+                    state["args"] += fragment
+                elif isinstance(fragment, dict):
+                    state["args"] = json.dumps(fragment, ensure_ascii=False)
+                if key in announced_tool_calls:
+                    continue
+                tool_name = state["name"] or tool_names_by_call_id.get(key, "")
+                if not tool_name:
+                    continue
+                try:
+                    tool_args = json.loads(state["args"] or "{}")
+                except ValueError:
+                    continue
+                if not isinstance(tool_args, dict):
+                    continue
+                announced_tool_calls.add(key)
+                tool_names_by_call_id[key] = tool_name
+                yield ExecutorEvent(
+                    "tool_call",
+                    {
+                        "agent": ", ".join(namespace) or self.agent_name,
+                        "tool": tool_name,
+                        "args": tool_args,
+                    },
+                )
 
             tool_names = [
                 str(item.get("name"))

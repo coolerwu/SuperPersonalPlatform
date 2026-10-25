@@ -33,6 +33,19 @@ def test_build_backend_uses_workspace_directory() -> None:
     assert backend.cwd == (settings.workspaces_dir / "backend-proj").resolve()
 
 
+def test_build_backend_adds_host_shell_only_when_requested() -> None:
+    from deepagents.backends import LocalShellBackend
+
+    backend = build_backend("shell-proj", enable_shell=True)
+    assert isinstance(backend, LocalShellBackend)
+    assert backend.virtual_mode is True
+    assert backend.cwd == (settings.workspaces_dir / "shell-proj").resolve()
+
+    result = backend.execute("printf shell-ok")
+    assert result.exit_code == 0
+    assert "shell-ok" in result.output
+
+
 def test_build_backend_composes_skills_route(tmp_path: Path) -> None:
     from deepagents.backends import CompositeBackend, FilesystemBackend
 

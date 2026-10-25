@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from deepagents.backends.protocol import BackendProtocol
@@ -11,12 +11,17 @@ from deepagents.middleware.skills import (
     SkillsStateUpdate,
     _pin_update,
 )
-from langchain.agents.middleware.types import ModelRequest
+from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 
 def _normalized_path(path: Any) -> str:
     return str(path or "").strip().lstrip("/")
+
+
+def _tool_name(tool: Any) -> str:
+    name = getattr(tool, "name", None)
+    return str(name) if name else ""
 
 
 def _last_summary_index(messages: Sequence[Any]) -> int | None:
@@ -94,6 +99,7 @@ class AgentSkillsMiddleware(SkillsMiddleware):
         enabled_skills: Iterable[str],
         system_prompt: str | None = SKILLS_SYSTEM_PROMPT,
         tools: Any = None,
+        gated_tools: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(
             backend=backend,
@@ -102,6 +108,86 @@ class AgentSkillsMiddleware(SkillsMiddleware):
             tools=tools,
         )
         self._enabled_skills = frozenset(enabled_skills)
+        self._gated_tools = {
+            str(tool_name): str(skill_name)
+            for tool_name, skill_name in (gated_tools or {}).items()
+            if str(skill_name) in self._enabled_skills
+        }
+
+    def _skill_unlocked(self, state: Any, skill_name: str) -> bool:
+        """Whether this session already read the gating skill's SKILL.md."""
+        skills = state.get("skills_metadata") or []
+        path = next(
+            (str(skill.get("path") or "") for skill in skills if skill.get("name") == skill_name),
+            "",
+        )
+        if not path:
+            return False
+        return _skill_available_after(state.get("messages") or [], -1, path)
+
+    def _gate_request(self, request: ModelRequest) -> ModelRequest:
+        if not self._gated_tools:
+            return request
+        hidden = {
+            tool_name
+            for tool_name, skill_name in self._gated_tools.items()
+            if not self._skill_unlocked(request.state, skill_name)
+        }
+        if not hidden:
+            return request
+        return request.override(
+            tools=[tool for tool in request.tools or [] if _tool_name(tool) not in hidden]
+        )
+
+    def _gate_denial(self, request: ToolCallRequest) -> ToolMessage | None:
+        tool_call = request.tool_call or {}
+        tool_name = str(tool_call.get("name") or "")
+        skill_name = self._gated_tools.get(tool_name)
+        if not skill_name or self._skill_unlocked(request.state, skill_name):
+            return None
+        return ToolMessage(
+            content=(
+                f"Error: {tool_name} is locked. Read /skills/{skill_name}/SKILL.md "
+                "with read_file before calling it."
+            ),
+            tool_call_id=str(tool_call.get("id") or ""),
+            name=tool_name,
+            status="error",
+        )
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Any],
+    ) -> Any:
+        return super().wrap_model_call(self._gate_request(request), handler)
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[Any]],
+    ) -> Any:
+        return await super().awrap_model_call(self._gate_request(request), handler)
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Any],
+    ) -> Any:
+        denial = self._gate_denial(request)
+        if denial is not None:
+            return denial
+        return super().wrap_tool_call(request, handler)
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[Any]],
+    ) -> Any:
+        denial = self._gate_denial(request)
+        if denial is not None:
+            return denial
+        return await super().awrap_tool_call(request, handler)
 
     def modify_request(self, request: ModelRequest) -> ModelRequest:
         if not request.state.get("skills_metadata"):

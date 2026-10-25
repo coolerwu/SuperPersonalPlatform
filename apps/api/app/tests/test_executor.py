@@ -85,6 +85,131 @@ async def test_executor_emits_browser_action_for_browser_tool_results(
 
 
 @pytest.mark.asyncio
+async def test_executor_announces_tool_calls_with_parsed_arguments(tmp_path, monkeypatch) -> None:
+    class FakeAgent:
+        async def astream(self, _state, config=None, *, stream_mode=None, subgraphs=False):
+            yield (
+                (),
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[
+                            {
+                                "name": "read_file",
+                                "args": '{"file_path": "upl',
+                                "id": "call-read",
+                                "index": 0,
+                            }
+                        ],
+                    ),
+                    {},
+                ),
+            )
+            yield (
+                (),
+                "messages",
+                (
+                    AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[
+                            {"name": None, "args": 'oads/a.pdf"}', "id": "call-read", "index": 0}
+                        ],
+                    ),
+                    {},
+                ),
+            )
+            yield ((), "messages", (AIMessageChunk(content="done"), {}))
+
+    monkeypatch.setattr("deepagents.create_deep_agent", lambda **_kwargs: FakeAgent())
+    provider = SimpleNamespace(
+        api_key="test-key", base_url="https://api.deepseek.com", model="deepseek-v4-flash"
+    )
+    executor = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="test-agent",
+    )
+    events = [
+        event
+        async for event in executor.run(instructions="test", session_id="tool-call", content="hi")
+    ]
+
+    tool_calls = [event for event in events if event.type == "tool_call"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0].payload["tool"] == "read_file"
+    assert tool_calls[0].payload["args"] == {"file_path": "uploads/a.pdf"}
+    assert tool_calls[0].payload["agent"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_executor_enables_execution_tools_only_for_enabled_skills(
+    tmp_path, monkeypatch
+) -> None:
+    captured: dict = {}
+
+    class FakeAgent:
+        async def astream(self, _state, config=None, *, stream_mode=None, subgraphs=False):
+            yield ((), "messages", (AIMessageChunk(content="done"), {}))
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return FakeAgent()
+
+    monkeypatch.setattr("deepagents.create_deep_agent", fake_create)
+    provider = SimpleNamespace(
+        api_key="test-key", base_url="https://api.deepseek.com", model="deepseek-v4-flash"
+    )
+
+    executor = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="execution-agent",
+        enabled_skills=("local-shell", "code-interpreter"),
+    )
+    events = [
+        event
+        async for event in executor.run(
+            instructions="test", session_id="exec-stack", content="hi"
+        )
+    ]
+    assert any(event.type == "run_completed" for event in events)
+
+    from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend
+
+    assert isinstance(captured["backend"], CompositeBackend)
+    assert isinstance(captured["backend"].default, LocalShellBackend)
+    middleware_names = [type(item).__name__ for item in captured["middleware"]]
+    assert "CodeInterpreterMiddleware" in middleware_names
+    skills = next(item for item in captured["middleware"] if item.name == "SkillsMiddleware")
+    assert skills._gated_tools == {"execute": "local-shell", "eval": "code-interpreter"}
+
+    captured.clear()
+    plain = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="execution-agent",
+        enabled_skills=(),
+    )
+    events = [
+        event
+        async for event in plain.run(
+            instructions="test", session_id="exec-stack-plain", content="hi"
+        )
+    ]
+    assert any(event.type == "run_completed" for event in events)
+    assert isinstance(captured["backend"].default, FilesystemBackend)
+    assert "CodeInterpreterMiddleware" not in [
+        type(item).__name__ for item in captured["middleware"]
+    ]
+    skills = next(item for item in captured["middleware"] if item.name == "SkillsMiddleware")
+    assert skills._gated_tools == {}
+
+
+@pytest.mark.asyncio
 async def test_executor_retries_on_the_model_for_subagents(tmp_path, monkeypatch) -> None:
     captured: dict = {}
 

@@ -1,8 +1,8 @@
 # Intent
 
 - 状态：现行
-- 最后更新：2026-10-20
-- 编号水位：F18
+- 最后更新：2026-10-25
+- 编号水位：F20
 
 本文件是新项目的需求唯一来源。v1 从 0 到 1 重建，旧代码与旧数据模型已废弃；旧需求不再作为实现依据。
 
@@ -654,3 +654,82 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 - iLink Bot API 是腾讯侧接口，可能变更或受限；扫码连接的是 iLink bot 身份，不是可完全脚本化的普通个人号。
 - 发送为至少一次：崩溃发生在发送中途时，启动补发可能重复整条回复，并带有明确标记。
 - 长轮询连接长期占用；连续失败会退避并重建客户端。
+
+### F19 会话切换、Run 展示与消息降噪
+
+- 状态：进行中
+- 日期：2026-10-20
+- 来源：用户指出切换会话时流式文本会串到另一个会话、失败/取消后已流出的内容消失、409 只显示错误、失败气泡缺少状态与重试、附件和「整理记忆」在用户气泡里显示内部文本
+
+#### 背景
+
+F18 让一个会话可能出现多个 queued Run，网页端也可能同时有多个会话在跑。此前前端只有一套全局 `activeRun / streamText / events`：切走 A 再去加载 B 时，A 的流式状态可能被 B 覆盖；加载 B 的瞬间仍会渲染 A 的旧消息；失败或取消的 Run 没有 assistant message，`finishRun` 清空流式文本后只剩一条 error banner；网页发送撞上其他标签页/微信入站的 Run 时，409 只显示错误信息，用户不知道发生了什么。
+
+#### 功能点
+
+1. 前端按 session 保存 `{activeRun, events, streamText, streamReasoning, activity, notice, tracking}`，SSE/轮询订阅也按 session 管理。切走时保留该会话的跟踪，切回时立即恢复文本、思考、附件截图与 Run 状态；任何会话的文本都不会渲染到另一个会话。
+2. 切换会话时同步清空旧消息并可立即显示骨架屏，等该会话的消息加载完成后再渲染；由发送新会话触发的切换不闪烁。
+3. Run 失败或被取消时，用 `run_events` 重建最后一次尝试（最后一个 `run_queued` 之后）已流出的 `assistant_delta` / `reasoning_delta`，渲染为带「失败」/「已停止」状态的气泡，附错误摘要、耗时（≥10 秒）和重试按钮；刷新页面后同样恢复。失败不再只依赖 error banner。
+4. 网页发送或重试返回 409 时读取 `detail.active_run_id`，直接接入该 Run 的实时进度并提示「刚才的消息没有发送」，同时恢复草稿；不再把 409 当成普通错误。
+5. `finishRun` 先等持久化的 assistant message 进入消息列表，再清除流式文本；消息列表里已有该 Run 的 assistant message 时隐藏流式气泡，避免完成瞬间文本消失或重复。
+6. 流式气泡显示活动状态：后端新增 `tool_call` 事件（工具名 + 解析后的参数），前端映射为「正在读取 uploads/a.pdf」「正在浏览 example.com」等；运行超过 10 秒显示「已用 X」；queued 显示「排队中，等待其他会话完成」，不显示英文 `running` / `queued`。
+7. 发送时强制滚到底部；用户上滑离开底部且 Run 仍在输出时，显示浮动的「回到最新」按钮。
+8. 用户消息仍以纯文本保存（模型继续看到完整路径和指令），前端识别附件块与「整理记忆」指令：附件渲染为文件名/大小 chip，「整理记忆」渲染为命令卡片，原始指令收进可展开区域。附件上传显示单文件进度和大小；消息里的附件块增加字节数。
+
+#### 验收标准
+
+- A 会话流式中切到 B：B 不出现 A 的任何文本；新会话显示空状态与「另一个会话正在运行」提示；切回 A 时已有文本、思考、截图和停止按钮都在，并继续追加。
+- 切换会话时旧消息立即消失并显示骨架，加载完成后只出现目标会话的消息。
+- 失败和取消的 Run 在聊天里显示状态气泡、保留已流出文本、给出错误/停止说明和重试；刷新后仍存在；取消的 Run 也能重试。
+- 网页发送撞上活动 Run 时不显示红色错误，而是接入该 Run、恢复草稿并给出提示。
+- 完成瞬间不出现答案消失后重现，也不出现流式与持久化消息同时显示。
+- 工具执行时能看到中文活动行；运行 10 秒后能看到已用时间；queued 不再显示英文状态。
+- 发送后视图滚到最新；上滑后出现「回到最新」按钮并可回到底部。
+- 带附件的用户消息显示文件 chip 与大小；「整理记忆」显示命令卡片；模型消息内容不变。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 为 Message 增加结构化 metadata 字段或数据迁移（当前由前端解析固定文本格式）；
+- 为每个 session 缓存完整消息列表或做离线缓存；
+- 多标签页之间同步读数/未读状态；
+- 回溯显示更早失败 Run 的部分输出（只恢复当前会话最后跟踪的 Run）。
+
+### F20 宿主机 Shell 与代码解释器（技能门控）
+
+- 状态：进行中
+- 日期：2026-10-25
+- 来源：用户要求在现有技能体系内同时接入 `LocalShellBackend` 与 `CodeInterpreterMiddleware`
+
+#### 背景与目标
+
+平台此前不暴露 shell。用户希望在需要时让 Agent 在宿主机执行命令，并在隔离环境里做计算。两种能力都必须沿用「按 Agent 启用技能、读取 SKILL.md 后解锁工具」的既有门控，不能默认对所有 Agent 和微信入站开放。
+
+#### 功能点
+
+1. 内置技能 `local-shell`：`metadata.include_tools: execute`。当前 Agent 启用该技能时，执行核把默认 backend 换成 `LocalShellBackend`（`virtual_mode=True`，工作目录为 Agent 工作区）；未启用时保持 `FilesystemBackend`，系统中不存在 `execute` 工具。
+2. 内置技能 `code-interpreter`：`metadata.include_tools: eval`。启用时挂载 `langchain-quickjs` 的 `CodeInterpreterMiddleware`（QuickJS、`mode=thread`、无文件与网络、PTC 只暴露文件工具、`subagents=False`）；未启用时不挂载。
+3. `AgentSkillsMiddleware` 新增门控：`execute` / `eval` 在读取对应 `SKILL.md` 之前不出现在模型工具列表里；直接调用返回 `status=error` 的 ToolMessage。门控挂在 `SkillsMiddleware` 槽位，同时作用于主 Agent 和默认 general-purpose 子 Agent；上下文压缩后仍按读取记录或 pinned 消息判定。
+4. shell 子进程只注入 `PATH`、`HOME`、`LANG`，不继承 `LLM_API_KEY`、`APP_AUTH_TOKEN` 等 systemd 环境。
+5. 默认提示词说明两类能力及风险；既有默认 Agent 通过 LEGACY 标记一次性更新。
+6. README、CLAUDE.md 明确：shell 以服务账号权限运行、没有沙箱，启用技能即代表信任该 Agent。
+
+#### 验收标准
+
+- 未启用技能时不存在 `execute` / `eval`；启用但未读取 SKILL.md 时工具不可见，调用返回 locked 错误。
+- 读取 `/skills/local-shell/SKILL.md` 后 `execute` 可用，命令工作目录为 Agent 工作区，但可以访问服务账号可见的宿主机路径。
+- 读取 `/skills/code-interpreter/SKILL.md` 后 `eval` 可用，可执行 JavaScript 并通过 PTC 调用文件工具；不能直接访问文件系统或网络。
+- general-purpose 子 Agent 同样受门控，不能绕过。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 命令审批 / HITL、命令白名单或容器隔离；
+- 默认对所有 Agent 开启 shell；
+- 让 shell 或解释器直接读取平台密钥、数据库或 systemd 配置；
+- 在技能目录内执行任意 Python。
+
+#### 风险与边界
+
+- `LocalShellBackend` 明确不做沙箱：命令以服务账号权限运行，`virtual_mode` 不约束 shell；微信入站和网页内容都是外部输入，启用该技能的 Agent 必须被信任。
+- 平台没有审批链路；门控只保证「先读技能再调用」，不能限制读取之后执行哪些命令。
