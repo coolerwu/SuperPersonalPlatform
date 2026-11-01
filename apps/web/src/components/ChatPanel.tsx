@@ -5,7 +5,7 @@ import type { Attachment, Message, Run, ScreenshotInfo } from "../types";
 import { formatTime } from "../format";
 import { copyText } from "../clipboard";
 import { formatBytes, parseUserContent, userMessageText } from "../messageContent";
-import { formatDuration } from "../runActivity";
+import { formatDuration, type RunTraceStep } from "../runActivity";
 import { describeApiError, describeRunError } from "../errors";
 import { useThrottledText } from "../useThrottledText";
 import { Markdown } from "./Markdown";
@@ -23,7 +23,9 @@ type ChatPanelProps = {
   sessionId: string;
   streamText: string;
   streamReasoning: string;
+  trace: RunTraceStep[];
   runReasoning: Record<string, string>;
+  runTraces: Record<string, RunTraceStep[]>;
   sending: boolean;
   activity: string;
   terminalRun: TerminalRun | null;
@@ -148,6 +150,75 @@ function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }
       <summary>思考过程</summary>
       <div className="message-thinking-body">
         <Markdown content={text} />
+      </div>
+    </details>
+  );
+}
+
+function RunTrace({
+  steps,
+  fallback,
+  streaming,
+  agentName,
+}: {
+  steps: RunTraceStep[];
+  fallback: string;
+  streaming: boolean;
+  agentName: string;
+}) {
+  const [open, setOpen] = useState(streaming);
+  useEffect(() => {
+    setOpen(streaming);
+  }, [streaming]);
+  const lastStep = steps[steps.length - 1];
+  const lastReasoningText =
+    lastStep?.kind === "reasoning" ? lastStep.text : "";
+  const throttledLastReasoning = useThrottledText(lastReasoningText);
+
+  if (steps.length === 0) {
+    return <ThinkingBlock text={fallback} streaming={streaming} />;
+  }
+
+  const toolCount = steps.filter((step) => step.kind === "tool").length;
+  return (
+    <details
+      className="message-thinking run-trace"
+      open={open}
+      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary>
+        <span>执行过程</span>
+        <span className="run-trace-count">
+          {steps.length} 步{toolCount > 0 ? ` · ${toolCount} 个工具` : ""}
+        </span>
+      </summary>
+      <div className="run-trace-steps">
+        {steps.map((step) => {
+          if (step.kind === "reasoning") {
+            const text =
+              streaming && step === lastStep ? throttledLastReasoning : step.text;
+            return (
+              <div className="run-trace-reasoning" key={`reasoning-${step.id}`}>
+                <div className="run-trace-step-label">思考</div>
+                <div className="message-thinking-body">
+                  <Markdown content={text} />
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div className="run-trace-tool" key={`tool-${step.id}`}>
+              <span className="run-trace-tool-dot" aria-hidden="true" />
+              <span className="run-trace-tool-label">
+                {step.label || step.tool || "工具调用"}
+              </span>
+              {step.agent && step.agent !== agentName && (
+                <span className="run-trace-tool-agent">{step.agent}</span>
+              )}
+              {step.tool && <span className="run-trace-tool-name">{step.tool}</span>}
+            </div>
+          );
+        })}
       </div>
     </details>
   );
@@ -335,7 +406,11 @@ export function ChatPanel(props: ChatPanelProps) {
   );
   const elapsedLabel =
     props.sending && liveElapsed >= 10 ? `已用 ${formatDuration(liveElapsed)}` : "";
-  const activityText = queued ? "排队中，等待其他会话完成" : props.activity;
+  const activityText = queued
+    ? "排队中，等待其他会话完成"
+    : props.trace.some((step) => step.kind === "tool")
+      ? ""
+      : props.activity;
   const showActivity = props.sending && Boolean(activityText || elapsedLabel);
   const terminalSeconds = props.terminalRun
     ? elapsedSeconds(
@@ -512,9 +587,13 @@ export function ChatPanel(props: ChatPanelProps) {
                     </button>
                   </div>
                 </div>
-                <ThinkingBlock
-                  text={message.run_id ? props.runReasoning[message.run_id] ?? "" : ""}
+                <RunTrace
+                  steps={message.run_id ? props.runTraces[message.run_id] ?? [] : []}
+                  fallback={
+                    message.run_id ? props.runReasoning[message.run_id] ?? "" : ""
+                  }
                   streaming={false}
+                  agentName={props.agentName}
                 />
                 <Markdown content={message.content} />
                 <ScreenshotStrip
@@ -545,9 +624,11 @@ export function ChatPanel(props: ChatPanelProps) {
                   {elapsedLabel && <span className="run-activity-elapsed">{elapsedLabel}</span>}
                 </div>
               )}
-              <ThinkingBlock
-                text={throttledStreamReasoning}
+              <RunTrace
+                steps={props.trace}
+                fallback={throttledStreamReasoning}
                 streaming={!props.streamText}
+                agentName={props.agentName}
               />
               {props.streamText ? (
                 <Markdown content={throttledStreamText} />
@@ -584,7 +665,12 @@ export function ChatPanel(props: ChatPanelProps) {
                 </span>
                 {terminalDuration && <span className="message-time">{terminalDuration}</span>}
               </div>
-              <ThinkingBlock text={props.terminalRun.reasoning} streaming={false} />
+              <RunTrace
+                steps={props.trace}
+                fallback={props.terminalRun.reasoning}
+                streaming={false}
+                agentName={props.agentName}
+              />
               {props.terminalRun.text ? (
                 <Markdown content={props.terminalRun.text} />
               ) : (

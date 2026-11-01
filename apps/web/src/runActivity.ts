@@ -20,6 +20,51 @@ export function attemptText(
   return text;
 }
 
+export type RunTraceStep =
+  | { kind: "reasoning"; id: number; text: string }
+  | { kind: "tool"; id: number; tool: string; agent: string; label: string };
+
+export function appendReasoningStep(
+  trace: RunTraceStep[],
+  id: number,
+  delta: string,
+): RunTraceStep[] {
+  if (!delta) return trace;
+  const last = trace[trace.length - 1];
+  if (last?.kind === "reasoning") {
+    return [...trace.slice(0, -1), { ...last, text: last.text + delta }];
+  }
+  return [...trace, { kind: "reasoning", id, text: delta }];
+}
+
+export function toolTraceStep(event: RunEvent): RunTraceStep {
+  const payload = event.payload;
+  return {
+    kind: "tool",
+    id: event.id,
+    tool: String(payload.tool ?? ""),
+    agent: String(payload.agent ?? ""),
+    label: describeToolStep(payload),
+  };
+}
+
+/** Reasoning and tool calls in the order they were emitted for one attempt. */
+export function buildRunTrace(events: RunEvent[]): RunTraceStep[] {
+  let trace: RunTraceStep[] = [];
+  for (const event of attemptEvents(events)) {
+    if (event.type === "reasoning_delta") {
+      trace = appendReasoningStep(
+        trace,
+        event.id,
+        String(event.payload.delta ?? ""),
+      );
+    } else if (event.type === "tool_call") {
+      trace = [...trace, toolTraceStep(event)];
+    }
+  }
+  return trace;
+}
+
 function textArg(args: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {
     const value = args[key];
@@ -98,6 +143,11 @@ export function describeToolCall(payload: Record<string, unknown>): string {
     default:
       return tool ? `正在调用 ${tool}` : "";
   }
+}
+
+/** A neutral label for a completed trace step; activity uses the present tense. */
+export function describeToolStep(payload: Record<string, unknown>): string {
+  return describeToolCall(payload).replace(/^正在/, "");
 }
 
 /** Latest tool activity in the current attempt; cleared when the model speaks. */

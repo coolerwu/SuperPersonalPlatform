@@ -934,6 +934,80 @@ textarea {
   line-height: 1.65;
 }
 
+.run-trace summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.run-trace-count {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.run-trace-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.run-trace-reasoning {
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.run-trace-step-label {
+  margin-bottom: 2px;
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.run-trace-tool {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.run-trace-tool-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.run-trace-tool-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-trace-tool-agent {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.run-trace-tool-name {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
 .message-screenshots {
   display: flex;
   flex-wrap: wrap;

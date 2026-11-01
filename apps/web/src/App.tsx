@@ -15,7 +15,15 @@ import type {
   SessionSearchHit,
   SkillInfo,
 } from "./types";
-import { activityFromEvents, attemptText, describeToolCall } from "./runActivity";
+import {
+  activityFromEvents,
+  appendReasoningStep,
+  attemptText,
+  buildRunTrace,
+  describeToolCall,
+  toolTraceStep,
+  type RunTraceStep,
+} from "./runActivity";
 import { MEMORY_COMMAND } from "./messageContent";
 import { describeApiError } from "./errors";
 import { ChatPanel } from "./components/ChatPanel";
@@ -48,6 +56,7 @@ type SessionLive = {
   events: RunEvent[];
   streamText: string;
   streamReasoning: string;
+  trace: RunTraceStep[];
   activity: string;
   notice: string;
   tracking: boolean;
@@ -58,6 +67,7 @@ const EMPTY_LIVE: SessionLive = {
   events: [],
   streamText: "",
   streamReasoning: "",
+  trace: [],
   activity: "",
   notice: "",
   tracking: false,
@@ -113,6 +123,7 @@ export default function App() {
   const [pendingSession, setPendingSession] = useState<string | null>(null);
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
   const [runReasoning, setRunReasoning] = useState<Record<string, string>>({});
+  const [runTraces, setRunTraces] = useState<Record<string, RunTraceStep[]>>({});
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -157,6 +168,7 @@ export default function App() {
   const visibleRun = live.activeRun;
   const visibleStream = live.streamText;
   const visibleReasoning = live.streamReasoning;
+  const visibleTrace = live.trace;
   const visibleEvents = live.events;
   const visibleActivity = live.activity;
   const visibleNotice = live.notice;
@@ -582,6 +594,7 @@ export default function App() {
           // stream a fresh answer, so drop the previous attempt's live text.
           next.streamText = "";
           next.streamReasoning = "";
+          next.trace = [];
           next.activity = "";
           next.notice = RESTART_NOTICE;
         } else {
@@ -592,10 +605,13 @@ export default function App() {
         next.activity = "";
         if (session.notice === RECONNECT_NOTICE) next.notice = "";
       } else if (event.type === "reasoning_delta") {
-        next.streamReasoning = session.streamReasoning + String(event.payload.delta ?? "");
+        const delta = String(event.payload.delta ?? "");
+        next.streamReasoning = session.streamReasoning + delta;
+        next.trace = appendReasoningStep(session.trace, event.id, delta);
         next.activity = "";
         if (session.notice === RECONNECT_NOTICE) next.notice = "";
       } else if (event.type === "tool_call") {
+        next.trace = [...session.trace, toolTraceStep(event)];
         next.activity = describeToolCall(event.payload);
       } else if (event.type === "browser_action") {
         // The tool finished; the next model step decides the next activity.
@@ -694,12 +710,14 @@ export default function App() {
       runSessionsRef.current[run.id] = run.session_id;
       const reasoning = attemptText(runEvents, "reasoning_delta");
       const text = attemptText(runEvents, "assistant_delta");
+      const trace = buildRunTrace(runEvents);
       if (run.session_id === sessionIdRef.current && run.status === "completed") {
         // Persist the final assistant message before dropping the stream text,
         // so the completed answer never blinks out of the transcript.
         await loadMessages(run.session_id, false).catch(() => undefined);
       }
       setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
+      setRunTraces((current) => ({ ...current, [run.id]: trace }));
       // Keep the streamed text as a fallback until the persisted assistant
       // message is in the transcript (ChatPanel hides the live bubble then).
       // Background completed Runs do not need the fallback when reopening them.
@@ -710,6 +728,7 @@ export default function App() {
         events: runEvents,
         streamText: keepText ? text : "",
         streamReasoning: keepText ? reasoning : "",
+        trace,
         activity: "",
         notice: "",
         tracking: false,
@@ -720,12 +739,15 @@ export default function App() {
         const nextEvents = await api.getRunEvents(next.id).catch(() => [] as RunEvent[]);
         rememberEvents(nextEvents);
         runSessionsRef.current[next.id] = next.session_id;
+        const nextTrace = buildRunTrace(nextEvents);
+        setRunTraces((current) => ({ ...current, [next.id]: nextTrace }));
         updateLive(id, (session) => ({
           ...session,
           activeRun: next,
           events: nextEvents,
           streamText: attemptText(nextEvents, "assistant_delta"),
           streamReasoning: attemptText(nextEvents, "reasoning_delta"),
+          trace: nextTrace,
           activity: activityFromEvents(nextEvents),
           notice: "",
           tracking: true,
@@ -778,10 +800,12 @@ export default function App() {
     rememberEvents(runEvents);
     const reasoning = attemptText(runEvents, "reasoning_delta");
     const text = attemptText(runEvents, "assistant_delta");
+    const trace = buildRunTrace(runEvents);
     const running = isActiveRun(run);
     const streamText = run.status === "completed" ? "" : text;
     const streamReasoning = run.status === "completed" ? "" : reasoning;
     setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
+    setRunTraces((current) => ({ ...current, [run.id]: trace }));
     setLiveBySession((current) => {
       const existing = current[id];
       if (existing && existing.activeRun?.id === run.id) {
@@ -800,6 +824,7 @@ export default function App() {
           events: runEvents,
           streamText,
           streamReasoning,
+          trace,
           activity: running ? activityFromEvents(runEvents) : "",
           notice: "",
           tracking: running,
@@ -819,13 +844,16 @@ export default function App() {
       rememberEvents(runEvents);
       const reasoning = attemptText(runEvents, "reasoning_delta");
       const text = attemptText(runEvents, "assistant_delta");
+      const trace = buildRunTrace(runEvents);
       const running = isActiveRun(run);
       setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
+      setRunTraces((current) => ({ ...current, [run.id]: trace }));
       updateLive(id, () => ({
         activeRun: run,
         events: runEvents,
         streamText: run.status === "completed" ? "" : text,
         streamReasoning: run.status === "completed" ? "" : reasoning,
+        trace,
         activity: running ? activityFromEvents(runEvents) : "",
         notice,
         tracking: running,
@@ -1341,7 +1369,9 @@ export default function App() {
               sessionId={sessionId}
               streamText={visibleStream}
               streamReasoning={visibleReasoning}
+              trace={visibleTrace}
               runReasoning={runReasoning}
+              runTraces={runTraces}
               sending={chatSending}
               activity={visibleActivity}
               terminalRun={terminalRun}
