@@ -4179,19 +4179,50 @@ body:has(.app-shell.pearl) .select-empty {
   flex-wrap: wrap;
   gap: 7px;
   margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 16px;
+  background: linear-gradient(
+    135deg,
+    rgba(15, 181, 166, 0.06),
+    rgba(122, 108, 255, 0.08) 55%,
+    rgba(255, 170, 120, 0.05)
+  );
 }
 
 .pearl .run-trace-reasoning {
+  position: relative;
   width: 100%;
-  padding: 0 2px;
+  padding: 0 0 0 12px;
   border-left: 0;
-  color: #6f7987;
+  color: #5f6a78;
   font-size: 12.5px;
   line-height: 1.7;
 }
 
+.pearl .run-trace-reasoning::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 6px;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #0fb5a6, #7a6cff);
+  opacity: 0.55;
+}
+
 .pearl .run-trace-step-label {
-  display: none;
+  display: inline-flex;
+  width: fit-content;
+  margin-bottom: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(122, 108, 255, 0.1);
+  color: #5b4bf0;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  text-transform: none;
 }
 
 .pearl .run-trace-reasoning .message-thinking-body {
@@ -4200,6 +4231,31 @@ body:has(.app-shell.pearl) .select-empty {
   color: inherit;
   font-size: inherit;
   line-height: inherit;
+}
+
+.pearl .run-trace-reasoning .markdown {
+  color: inherit;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.pearl .run-trace-reasoning .markdown p {
+  margin: 0 0 6px;
+}
+
+.pearl .run-trace-reasoning .markdown ul,
+.pearl .run-trace-reasoning .markdown ol {
+  margin: 4px 0 6px;
+  padding-left: 18px;
+}
+
+.pearl .run-trace-reasoning .markdown li {
+  margin: 2px 0;
+}
+
+.pearl .run-trace-reasoning .markdown strong {
+  color: #3f4854;
+  font-weight: 600;
 }
 
 .pearl .run-trace-tool {
@@ -4542,6 +4598,10 @@ body:has(.app-shell.pearl) .select-empty {
 
   .pearl .run-trace-tool-label {
     max-width: 220px;
+  }
+
+  .pearl .run-trace-steps {
+    padding: 10px 12px;
   }
 
   .pearl .drawer {
