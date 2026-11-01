@@ -74,6 +74,21 @@ export function errorText(error: unknown): string {
     if (detail && typeof detail === "object") {
       if (typeof detail.message === "string") return detail.message;
       if (typeof detail.detail === "string") return detail.detail;
+      if (Array.isArray(detail.detail)) {
+        const messages = detail.detail
+          .map((item) => {
+            if (
+              item &&
+              typeof item === "object" &&
+              typeof (item as { msg?: unknown }).msg === "string"
+            ) {
+              return (item as { msg: string }).msg;
+            }
+            return "";
+          })
+          .filter(Boolean);
+        if (messages.length) return messages.join("；");
+      }
       const nested = detail.detail as { message?: unknown } | undefined;
       if (nested && typeof nested === "object" && typeof nested.message === "string") {
         return nested.message;

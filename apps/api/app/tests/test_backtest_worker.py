@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 import app.services.backtest_worker as backtest_worker_module
-from app.db import SessionLocal
+from app.db import SessionLocal, init_db
 from app.models import Backtest, utcnow
 from app.schemas import BacktestCreate
 from app.services.backtest_service import (
@@ -41,6 +41,7 @@ def _payload(**overrides: object) -> BacktestCreate:
 
 @pytest.fixture(autouse=True)
 async def _clean_backtests() -> None:
+    await init_db()
     await delete_all_backtests()
     yield
     await delete_all_backtests()

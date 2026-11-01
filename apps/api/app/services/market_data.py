@@ -312,7 +312,8 @@ class MarketDataService:
         validate_granularity(granularity)
         start = floor_open_ms(start_ms, granularity)
         now = now_ms()
-        end_open = min(ceil_open_ms(end_ms, granularity), floor_open_ms(now, granularity))
+        requested_end_open = ceil_open_ms(end_ms, granularity)
+        end_open = min(requested_end_open, floor_open_ms(now, granularity))
         if end_open <= start:
             raise MarketDataError("所选区间内没有已经完成的 K 线", category="data")
         wanted = count_bars(start, end_open, granularity)
@@ -341,8 +342,11 @@ class MarketDataService:
                 await progress(fetched)
 
             if cached_min > start:
+                # If the cache sits entirely after the requested window, start
+                # from the window's top instead of pulling everything above it.
+                backward_from = min(cached_min, end_open)
                 from_history, exhausted = await self._fetch_backward(
-                    client, symbol, granularity, cached_min, start, progress, base=fetched
+                    client, symbol, granularity, backward_from, start, progress, base=fetched
                 )
                 fetched += from_history
                 if exhausted is not None:
@@ -351,7 +355,13 @@ class MarketDataService:
             cached_min, cached_max = await self._cached_range(symbol, granularity)
             last_wanted = _last_open_before(end_open, granularity)
             if cached_max is None or cached_max < last_wanted:
-                cursor = cached_max if cached_max is not None else start
+                # If the cache is entirely before the requested window, start at
+                # the window instead of filling a potentially huge gap.
+                cursor = (
+                    cached_max
+                    if cached_max is not None and cached_max >= start
+                    else start
+                )
                 fetched += await self._fetch_forward(
                     client, symbol, granularity, cursor, end_open, progress, base=fetched
                 )
@@ -375,6 +385,8 @@ class MarketDataService:
         data_start = max(start, cached_min) if cached_min is not None else None
         data_end = cached_max
         warnings: list[str] = []
+        if requested_end_open > end_open:
+            warnings.append("结束时间超过当前时间，已截断到最近一根完整 K 线")
         if data_start is None or data_start > start:
             warnings.append("Bitget 只提供从该时间开始的行情，实际回测区间已缩短")
         if data_end is None or data_end < last_wanted:

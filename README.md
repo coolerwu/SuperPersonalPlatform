@@ -185,6 +185,17 @@ metadata:
 - iLink 扫码连接的是 iLink bot 身份，普通微信群事件通常不会下发；v1 只支持单聊文本，不支持主动推送。
 - iLink 协议实现参考 Nous Research 的 [hermes-agent](https://github.com/NousResearch/hermes-agent) Weixin 适配器（MIT），许可声明见 `THIRD_PARTY_NOTICES.md`。
 
+## 量化回测
+
+侧边栏「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
+
+- 行情：Bitget 公共 REST（无需 API Key），按需抓取并增量缓存到 `data/market.db`。周期支持 `1min/3min/5min/15min/30min/1h/4h/6h/12h/1day/1week/1M`；日/周/月使用 Bitget 的 UTC 变体（`1Dutc/1Wutc/1Mutc`）对齐，回测只使用已完成的 K 线。同一交易对和周期第二次回测只抓取缺失的首尾区间。
+- 网络：`api.bitget.com` 在部分网络无法直连，需要在 `~/.super-personal-platform/.env` 设置 `MARKET_HTTP_PROXY`（生产机为 `http://192.168.1.2:7893`）。页面「测试连接」或 `GET /api/market/probe` 可诊断代理与交易对。
+- 策略：在页面内编写 Python，接口为 `def strategy(df) -> pd.Series`。`df` 是 UTC `DatetimeIndex`，列为 `open/high/low/close/volume`；返回每根 K 线的目标仓位 `[-1, 1]`（负数为模拟做空）。策略写入临时文件后在独立子进程中执行，默认超时 120 秒、内存上限 2 GB；这是崩溃隔离，不是安全沙箱。
+- 结果：总收益、年化、最大回撤、Sharpe、Sortino、胜率、交易次数、盈亏比、基准买入持有；价格 K 线与买卖点、净值、回撤、交易明细。净值/回撤/价格曲线下采样到约 2000 点，交易明细最多保存 5000 笔。结果持久化在 `backtests` 表，可在历史列表回看。
+- 任务：`queued/fetching/running/completed/failed/cancelled`；服务重启后未完成任务重新排队；同时只执行一个回测，其余排队。
+- 限制：单次回测最多 `BACKTEST_MAX_BARS`（默认 200000）根 K 线；只做首尾增量，不自动修复中间缺口，缺失数据会在结果里告警；模拟做空不含借币成本、资金费率与强平。
+
 ## 数据存储
 
 生产数据都在 `~/.super-personal-platform/data/`：
@@ -199,12 +210,14 @@ metadata:
   - `run_memories`：某次 Run 实际注入了哪些记忆；
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
   - `channels`：渠道及其 iLink 登录凭据（`bot_token` 不返回前端、不写日志）；`channel_conversations`：外部联系人与 Session 的映射（含最新 `context_token`）；`channel_inbounds`：入站消息幂等键；`channel_run_links`：哪些 Run 需要回信；`channel_deliveries`：Run 终态的发送记录，用于崩溃恢复。
+  - `backtests`：回测任务与结果，含状态、策略代码、指标、下采样净值/回撤/价格、交易明细和告警；大数组按上限截断。
+- `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles`（按 `symbol + granularity + open_time_ms` 唯一）和 `market_sync_state`（已同步范围与上次错误）。可以独立删除，下次回测会重新抓取。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
 - `messages_fts`：`messages.content` 的 FTS5 trigram 索引（external content，触发器同步）；用于 Agent 的 `session_search` / `session_read` 和侧栏搜索，首次创建或索引为空时自动 `rebuild` 回填。FTS 不可用时降级 `LIKE`。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区目录，名称为 Agent id；删除 Agent 不会删除这里的文件。`screenshots/<session_id>/<run_id>/` 保存该 Agent 的浏览器截图，删除会话时清理对应目录。
 - `~/.super-personal-platform/skills/`：全局技能库，由用户/运维维护；删除技能不会自动清理 Agent 的启用列表，运行时忽略不存在的技能。
 
-备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
+备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；`data/market.db` 是可按需重建的行情缓存，建议一并备份以免重新抓取。删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
 
 ## 配置
 
@@ -233,6 +246,18 @@ metadata:
 | `WEIXIN_LONG_POLL_TIMEOUT_MS` | iLink `getupdates` 长轮询窗口 | `35000` |
 | `WEIXIN_API_TIMEOUT_MS` | iLink `sendmessage` 请求超时 | `15000` |
 | `WEIXIN_QR_TIMEOUT_MS` | iLink 二维码请求/状态轮询超时 | `35000` |
+| `BITGET_BASE_URL` | Bitget 公共 REST 地址 | `https://api.bitget.com` |
+| `MARKET_HTTP_PROXY` | 抓取 Bitget 时使用的 HTTP 代理；为空时回退读 `HTTPS_PROXY/ALL_PROXY` | 空 |
+| `MARKET_HTTP_TIMEOUT_SECONDS` | 单次行情请求超时 | `15` |
+| `MARKET_RATE_LIMIT_PER_SECOND` | 行情请求限速（次/秒） | `5` |
+| `MARKET_MAX_RETRIES` | 429/5xx/网络错误重试次数 | `3` |
+| `BACKTEST_CONCURRENCY` | 同时执行的回测数 | `1` |
+| `BACKTEST_TIMEOUT_SECONDS` | 策略子进程超时 | `120` |
+| `BACKTEST_FETCH_TIMEOUT_SECONDS` | 单次回测抓取行情的总超时 | `600` |
+| `BACKTEST_MEMORY_LIMIT_MB` | 策略子进程内存上限（POSIX best-effort） | `2048` |
+| `BACKTEST_MAX_BARS` | 单次回测的 K 线上限 | `200000` |
+| `BACKTEST_MAX_TRADES` | 结果中保留的交易明细上限 | `5000` |
+| `BACKTEST_EQUITY_POINTS` | 净值/回撤/价格曲线下采样点数 | `2000` |
 
 ## 前端构建产物
 
@@ -258,6 +283,7 @@ python3.12 -m venv .venv
 mkdir -p ~/.super-personal-platform/data
 cp deploy/.env.example ~/.super-personal-platform/.env
 # 编辑 ~/.super-personal-platform/.env，填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
+# 量化回测还需要设置 MARKET_HTTP_PROXY（生产机可用 http://192.168.1.2:7893）
 cp deploy/agent-command-center.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now agent-command-center.service

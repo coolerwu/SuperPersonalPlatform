@@ -1209,11 +1209,7 @@ export default function App() {
 
   return (
     <div
-      className={[
-        "app-shell",
-        view === "chat" ? "pearl-chat" : "",
-        view === "chat" && drawerOpen ? "with-drawer" : "",
-      ]
+      className={["app-shell", "pearl", view === "chat" && drawerOpen ? "with-drawer" : ""]
         .filter(Boolean)
         .join(" ")}
     >

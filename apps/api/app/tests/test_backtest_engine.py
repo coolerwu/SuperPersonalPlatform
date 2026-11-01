@@ -95,6 +95,14 @@ def test_trades_split_by_side_and_open_trade_marked() -> None:
     assert result["trades_total"] == 3
 
 
+def test_fractional_position_scales_trade_return() -> None:
+    frame = make_frame([100.0, 100.0, 200.0])
+    signals = pd.Series([0.5, 0.5, 0.5], index=frame.index)
+    result = run(frame, signals)
+    assert result["trades"][0]["return"] == pytest.approx(0.5)
+    assert result["metrics"]["total_return"] == pytest.approx(0.5)
+
+
 def test_nan_and_out_of_range_positions_are_warned_and_clipped() -> None:
     frame = make_frame([100.0, 101.0, 102.0, 103.0])
     signals = pd.Series([np.nan, 2.0, -3.0, 0.5], index=frame.index)

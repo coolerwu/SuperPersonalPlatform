@@ -187,9 +187,7 @@ def compute_metrics(
         frame.index[-1] - frame.index[0]
     ).total_seconds() + _bar_seconds(granularity)
     years = elapsed_seconds / (365.25 * 24 * 3600)
-    annual_return = None
-    if years > 0 and total_return > -1:
-        annual_return = (1.0 + total_return) ** (1.0 / years) - 1.0
+    annual_return = _annualize(total_return, years)
     per_year = periods_per_year(granularity)
     std = float(net_return.std(ddof=1)) if len(net_return) > 1 else 0.0
     sharpe = float(net_return.mean()) / std * math.sqrt(per_year) if std > 0 else None
@@ -204,9 +202,7 @@ def compute_metrics(
     )
     close = frame["close"]
     benchmark_return = float(close.iloc[-1] / close.iloc[0] - 1.0)
-    benchmark_annual = None
-    if years > 0 and benchmark_return > -1:
-        benchmark_annual = (1.0 + benchmark_return) ** (1.0 / years) - 1.0
+    benchmark_annual = _annualize(benchmark_return, years)
     trade_returns = [trade["return"] for trade in trades["items"] if trade["return"] is not None]
     wins = [value for value in trade_returns if value > 0]
     losses = [value for value in trade_returns if value < 0]
@@ -315,7 +311,15 @@ def _close_trade(
     else:
         exit_price = float(close[-1])
         exit_time = times[-1]
-    gross = side * (exit_price / entry_price - 1.0) if entry_price > 0 else 0.0
+    gross_price = (
+        side * (exit_price / entry_price - 1.0) if entry_price > 0 else 0.0
+    )
+    if exit_index > entry_index:
+        window = positions[entry_index:exit_index]
+        exposure = float(np.mean(np.abs(window))) if len(window) else 0.0
+    else:
+        exposure = abs(float(positions[entry_index]))
+    gross = gross_price * exposure
     entry_cost = cost_rate * abs(float(positions[entry_index]))
     exit_cost = (
         cost_rate * abs(float(positions[max(exit_index - 1, entry_index)]))
@@ -408,6 +412,17 @@ def json_safe(value: object) -> object:
         number = float(value)
         return number if math.isfinite(number) else None
     return value
+
+
+def _annualize(total_return: float, years: float) -> float | None:
+    """Annualise a return without overflowing on very short samples."""
+    if years <= 0 or total_return <= -1:
+        return None
+    try:
+        value = (1.0 + total_return) ** (1.0 / years) - 1.0
+    except OverflowError:
+        return None
+    return value if math.isfinite(value) else None
 
 
 def _bar_seconds(granularity: str) -> float:

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { api, errorText } from "../api";
+import { api, ApiError, errorText } from "../api";
 import {
   dateInputToUtcMs,
   defaultDateRange,
@@ -80,6 +80,8 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState("");
   const [cacheNonce, setCacheNonce] = useState(0);
+  const [pollTick, setPollTick] = useState(0);
+  const [pollDelay, setPollDelay] = useState(1200);
 
   const refreshHistory = useCallback(async () => {
     try {
@@ -144,6 +146,10 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
   }, [form.symbol, form.granularity, cacheNonce]);
 
   useEffect(() => {
+    setProbe(null);
+  }, [form.symbol, form.granularity]);
+
+  useEffect(() => {
     if (!current || !ACTIVE_STATUSES.includes(current.status)) return;
     let active = true;
     const timer = window.setTimeout(() => {
@@ -151,6 +157,8 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
         try {
           const detail = await api.getBacktest(current.id);
           if (!active) return;
+          setError("");
+          setPollDelay(1200);
           setCurrent(detail);
           if (detail.status === "completed") {
             const data = await api.getBacktestResult(detail.id);
@@ -162,15 +170,19 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
             await refreshHistory();
           }
         } catch (exc) {
-          if (active) setError(errorText(exc));
+          if (!active) return;
+          setError(errorText(exc));
+          if (exc instanceof ApiError && exc.status === 404) return;
+          setPollDelay((value) => Math.min(Math.round(value * 1.5), 10000));
+          setPollTick((value) => value + 1);
         }
       })();
-    }, 1200);
+    }, pollDelay);
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [current, refreshHistory]);
+  }, [current, refreshHistory, pollTick, pollDelay]);
 
   const active = current !== null && ACTIVE_STATUSES.includes(current.status);
   const granularities = meta?.granularities?.length
@@ -257,6 +269,7 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
   async function cancelBacktest() {
     if (!current) return;
     setCancelling(true);
+    setError("");
     try {
       await api.cancelBacktest(current.id);
       setCurrent(await api.getBacktest(current.id));
@@ -271,6 +284,7 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
   async function testConnection() {
     setProbing(true);
     setProbe(null);
+    setError("");
     try {
       setProbe(
         await api.probeMarket(form.symbol.trim().toUpperCase(), form.granularity),

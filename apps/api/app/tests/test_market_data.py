@@ -6,7 +6,8 @@ import httpx
 import pytest
 
 from app.config import settings
-from app.market_db import init_market_db
+from app.market_db import MarketSessionLocal, init_market_db
+from app.market_models import MarketCandle
 from app.services.market_data import (
     BitgetCandleClient,
     MarketDataError,
@@ -194,6 +195,40 @@ async def test_max_bars_limit_rejects_before_fetching(
             await service.ensure_data("LIMITUSDT", "1h", START, START + 48 * HOUR_MS)
         assert "超过上限" in str(excinfo.value)
         assert fake.requests == []
+    finally:
+        await http.aclose()
+
+
+async def test_stale_cache_before_window_does_not_fill_gap(rate_limit: None) -> None:
+    symbol = "STALEUSDT"
+    stale = START - 10_000 * HOUR_MS
+    async with MarketSessionLocal() as db:
+        db.add(
+            MarketCandle(
+                symbol=symbol,
+                granularity="1h",
+                open_time_ms=stale,
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                base_volume=1.0,
+                quote_volume=1.0,
+            )
+        )
+        await db.commit()
+    fake = FakeBitget(make_bars(START, 24))
+    service, http = await _service(fake)
+    try:
+        result = await service.ensure_data(
+            symbol, "1h", START, START + 24 * HOUR_MS
+        )
+        assert result.data_start_ms == START
+        candle_requests = [
+            request for request in fake.requests if request["path"].endswith("/candles")
+        ]
+        assert candle_requests
+        assert all(int(request["startTime"]) >= START for request in candle_requests)
     finally:
         await http.aclose()
 
