@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,9 +21,16 @@ from app.models import (
     Session,
     utcnow,
 )
-from app.schemas import MessageOut, RunOut, SessionCreate, SessionOut
+from app.schemas import (
+    MessageOut,
+    MessageSearchHitOut,
+    RunOut,
+    SessionCreate,
+    SessionOut,
+)
 from app.services import channel_service
 from app.services.run_service import active_run_for_session
+from app.services.session_search import search_messages
 from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 router = APIRouter(prefix="/api", tags=["sessions"], dependencies=[Depends(require_auth)])
@@ -113,6 +120,30 @@ async def create_session(
     await db.commit()
     await db.refresh(session)
     return await _session_out(db, session)
+
+
+@router.get("/sessions/search", response_model=list[MessageSearchHitOut])
+async def search_session_messages(
+    agent_id: str,
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(8, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+) -> list[MessageSearchHitOut]:
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    hits = await search_messages(agent_id=agent_id, query=q, limit=limit)
+    return [
+        MessageSearchHitOut(
+            message_id=hit.message_id,
+            session_id=hit.session_id,
+            session_title=hit.session_title,
+            role=hit.role,
+            snippet=hit.snippet,
+            created_at=hit.created_at,
+        )
+        for hit in hits
+    ]
 
 
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageOut])

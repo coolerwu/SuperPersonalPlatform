@@ -68,6 +68,65 @@ async def _ensure_memory_fts() -> None:
         await conn.exec_driver_sql("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild')")
 
 
+async def _ensure_message_fts() -> None:
+    async with engine.begin() as conn:
+        existing = await conn.exec_driver_sql(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+        )
+        created = existing.first() is None
+        await conn.exec_driver_sql(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                content,
+                content='messages',
+                content_rowid='rowid',
+                tokenize='trigram'
+            )
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, content)
+                VALUES (new.rowid, new.content);
+            END
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content)
+                VALUES ('delete', old.rowid, old.content);
+            END
+            """
+        )
+        await conn.exec_driver_sql(
+            """
+            CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content)
+                VALUES ('delete', old.rowid, old.content);
+                INSERT INTO messages_fts(rowid, content)
+                VALUES (new.rowid, new.content);
+            END
+            """
+        )
+        if created:
+            await conn.exec_driver_sql(
+                "INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')"
+            )
+            return
+        fts_count = int(
+            (await conn.exec_driver_sql("SELECT count(*) FROM messages_fts")).scalar() or 0
+        )
+        message_count = int(
+            (await conn.exec_driver_sql("SELECT count(*) FROM messages")).scalar() or 0
+        )
+        if fts_count == 0 and message_count > 0:
+            await conn.exec_driver_sql(
+                "INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')"
+            )
+
+
 async def _ensure_agent_column(conn, column: str) -> None:  # noqa: ANN001
     result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
     if column in {row[1] for row in result.fetchall()}:
@@ -102,6 +161,10 @@ async def init_db() -> None:
             await _ensure_memory_fts()
         except Exception:
             logger.exception("memory FTS setup failed; falling back to LIKE")
+        try:
+            await _ensure_message_fts()
+        except Exception:
+            logger.exception("message FTS setup failed; falling back to LIKE")
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

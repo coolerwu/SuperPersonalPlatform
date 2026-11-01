@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -19,7 +20,12 @@ logger = logging.getLogger(__name__)
 MAX_SKILL_FILE_SIZE = 10 * 1024 * 1024
 MAX_SKILL_NAME_LENGTH = 64
 MAX_SKILL_DESCRIPTION_LENGTH = 1024
+MAX_SKILL_TOOL_NAME_LENGTH = 64
 SEED_STATE_FILENAME = ".seed_state.json"
+
+SKILL_SOURCE_BUILTIN = "builtin"
+SKILL_SOURCE_AI = "ai"
+SKILL_SOURCE_MANUAL = "manual"
 
 
 class SkillNotFoundError(ValueError):
@@ -113,6 +119,7 @@ class SkillInfo:
     include_tools: tuple[str, ...] = ()
     can_enable: bool = True
     warnings: tuple[str, ...] = ()
+    source: str = SKILL_SOURCE_MANUAL
 
 
 @dataclass(frozen=True)
@@ -128,6 +135,7 @@ class SkillDocument:
     path: str
     content: str
     warnings: tuple[str, ...] = ()
+    source: str = SKILL_SOURCE_MANUAL
 
 
 def is_valid_skill_name(name: str) -> bool:
@@ -155,7 +163,9 @@ def normalize_skill_names(names: Iterable[str]) -> list[str]:
     return normalized
 
 
-def _parse_skill(directory: Path, root: Path) -> tuple[SkillInfo | None, str | None]:
+def _parse_skill(
+    directory: Path, root: Path, seed_names: frozenset[str] = frozenset()
+) -> tuple[SkillInfo | None, str | None]:
     skill_md = directory / "SKILL.md"
     if not skill_md.is_file():
         return None, None
@@ -205,11 +215,15 @@ def _parse_skill(directory: Path, root: Path) -> tuple[SkillInfo | None, str | N
         )
 
     include_tools: tuple[str, ...] = ()
+    metadata_source = ""
     metadata = data.get("metadata")
     if metadata:
         if not isinstance(metadata, dict):
             warnings.append("metadata is not a mapping and was ignored")
         else:
+            raw_source = metadata.get("source")
+            if isinstance(raw_source, str):
+                metadata_source = raw_source.strip().lower()
             raw_tools = metadata.get("include_tools")
             if isinstance(raw_tools, list):
                 warnings.append(
@@ -227,6 +241,13 @@ def _parse_skill(directory: Path, root: Path) -> tuple[SkillInfo | None, str | N
             elif raw_tools is not None:
                 warnings.append("metadata.include_tools must be a space-separated string of tool names")
 
+    if directory.name in seed_names:
+        source = SKILL_SOURCE_BUILTIN
+    elif metadata_source == SKILL_SOURCE_AI:
+        source = SKILL_SOURCE_AI
+    else:
+        source = SKILL_SOURCE_MANUAL
+
     return (
         SkillInfo(
             name=name,
@@ -236,6 +257,7 @@ def _parse_skill(directory: Path, root: Path) -> tuple[SkillInfo | None, str | N
             include_tools=include_tools,
             can_enable=can_enable,
             warnings=tuple(warnings),
+            source=source,
         ),
         None,
     )
@@ -250,6 +272,7 @@ def scan_skills(root: Path | None = None) -> SkillCatalog:
     if not base.is_dir():
         return SkillCatalog()
 
+    seed_names = frozenset(_load_seed_state(base))
     try:
         entries = sorted(base.iterdir(), key=lambda item: item.name)
     except OSError as exc:
@@ -265,7 +288,7 @@ def scan_skills(root: Path | None = None) -> SkillCatalog:
                 continue
         except OSError:
             continue
-        info, error = _parse_skill(entry, base)
+        info, error = _parse_skill(entry, base, seed_names)
         if error is not None:
             logger.warning("%s", error)
             errors.append(error)
@@ -283,20 +306,20 @@ def _skills_root() -> Path:
         raise SkillValidationError(f"cannot resolve skills directory: {exc}") from exc
 
 
-def _resolve_skill_directory(directory: str) -> Path:
+def _resolve_skill_directory(directory: str, base: Path | None = None) -> Path:
     raw = str(directory or "").strip()
     if not raw or raw in (".", "..") or raw.startswith(".") or "/" in raw or "\\" in raw:
         raise SkillNotFoundError("skill not found")
-    base = _skills_root()
-    candidate = base / raw
+    root = _skills_root() if base is None else base.expanduser().resolve()
+    candidate = root / raw
     if candidate.is_symlink():
         raise SkillNotFoundError("skill not found")
     try:
         resolved = candidate.resolve(strict=False)
-        resolved.relative_to(base)
+        resolved.relative_to(root)
     except (OSError, ValueError) as exc:
         raise SkillNotFoundError("skill not found") from exc
-    if resolved.parent != base or not resolved.is_dir():
+    if resolved.parent != root or not resolved.is_dir():
         raise SkillNotFoundError("skill not found")
     return resolved
 
@@ -356,7 +379,8 @@ def _validate_skill_content(directory: str, content: str) -> tuple[str, str]:
 def read_skill(directory: str) -> SkillDocument:
     folder = _resolve_skill_directory(directory)
     _, content = _read_skill_text(directory)
-    info, error = _parse_skill(folder, _skills_root())
+    root = _skills_root()
+    info, error = _parse_skill(folder, root, frozenset(_load_seed_state(root)))
     if info is None:
         raise SkillValidationError(error or "SKILL.md is invalid")
     return SkillDocument(
@@ -365,6 +389,7 @@ def read_skill(directory: str) -> SkillDocument:
         path=info.path,
         content=content,
         warnings=info.warnings,
+        source=info.source,
     )
 
 
@@ -383,13 +408,131 @@ def update_skill(directory: str, content: str) -> SkillDocument:
         temp.unlink(missing_ok=True)
         raise SkillValidationError(f"cannot save SKILL.md: {exc}") from exc
 
+    root = _skills_root()
+    info, error = _parse_skill(folder, root, frozenset(_load_seed_state(root)))
+    if info is None:
+        raise SkillValidationError(error or "SKILL.md is invalid")
     return SkillDocument(
         name=name,
         directory=directory,
         path=f"/skills/{directory}/SKILL.md",
         content=content,
         warnings=_warnings_for(name, description, directory),
+        source=info.source,
     )
+
+
+def create_skill(
+    name: str,
+    description: str,
+    instructions: str,
+    *,
+    include_tools: str | Iterable[str] = (),
+    source: str = SKILL_SOURCE_AI,
+    root: Path | None = None,
+) -> SkillDocument:
+    """Create a new skill file; never overwrites an existing directory."""
+    skill_name = str(name or "").strip()
+    if not is_valid_skill_name(skill_name):
+        raise SkillValidationError(
+            "invalid skill name: use lowercase letters, digits and hyphens, "
+            f"at most {MAX_SKILL_NAME_LENGTH} characters"
+        )
+    skill_description = str(description or "").strip()
+    if not skill_description:
+        raise SkillValidationError("description is required")
+    if len(skill_description) > MAX_SKILL_DESCRIPTION_LENGTH:
+        raise SkillValidationError(
+            f"description exceeds {MAX_SKILL_DESCRIPTION_LENGTH} characters"
+        )
+    body = str(instructions or "").strip()
+    if not body:
+        raise SkillValidationError("instructions are required")
+
+    if isinstance(include_tools, str):
+        raw_tools = include_tools.split()
+    else:
+        raw_tools = list(include_tools)
+    tool_names: list[str] = []
+    for raw in raw_tools:
+        tool = str(raw).strip()
+        if (
+            not tool
+            or len(tool) > MAX_SKILL_TOOL_NAME_LENGTH
+            or any(char.isspace() or not char.isprintable() for char in tool)
+        ):
+            raise SkillValidationError(f"invalid tool name: {raw!r}")
+        if tool not in tool_names:
+            tool_names.append(tool)
+
+    base = (root or settings.skills_dir).expanduser()
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        base = base.resolve()
+    except OSError as exc:
+        raise SkillValidationError(f"cannot create skills directory: {exc}") from exc
+
+    folder = base / skill_name
+    if folder.is_symlink() or folder.exists():
+        raise SkillValidationError(f"skill {skill_name} already exists")
+
+    metadata: dict[str, str] = {"source": source}
+    if tool_names:
+        metadata["include_tools"] = " ".join(tool_names)
+    frontmatter = {
+        "name": skill_name,
+        "description": skill_description,
+        "metadata": metadata,
+    }
+    content = (
+        f"---\n{yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False).strip()}\n"
+        f"---\n\n{body}\n"
+    )
+    if len(content.encode("utf-8")) > MAX_SKILL_FILE_SIZE:
+        raise SkillValidationError("SKILL.md is too large")
+    _validate_skill_content(skill_name, content)
+
+    try:
+        folder.mkdir(parents=True, exist_ok=False)
+    except OSError as exc:
+        raise SkillValidationError(f"cannot create skill directory: {exc}") from exc
+
+    target = folder / "SKILL.md"
+    temp = folder / f".SKILL.md.{uuid.uuid4().hex}.tmp"
+    try:
+        temp.write_text(content, encoding="utf-8")
+        os.replace(temp, target)
+    except OSError as exc:
+        temp.unlink(missing_ok=True)
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+        raise SkillValidationError(f"cannot save SKILL.md: {exc}") from exc
+
+    return SkillDocument(
+        name=skill_name,
+        directory=skill_name,
+        path=f"/skills/{skill_name}/SKILL.md",
+        content=content,
+        warnings=_warnings_for(skill_name, skill_description, skill_name),
+        source=source,
+    )
+
+
+def delete_skill(directory: str, root: Path | None = None) -> str:
+    """Delete a non-built-in skill directory and return its declared name."""
+    base = _skills_root() if root is None else root.expanduser().resolve()
+    folder = _resolve_skill_directory(directory, base)
+    if folder.name in _load_seed_state(base):
+        raise SkillValidationError("cannot delete a built-in skill")
+    info, _ = _parse_skill(folder, base, frozenset(_load_seed_state(base)))
+    declared_name = info.name if info is not None else directory
+    try:
+        shutil.rmtree(folder)
+    except OSError as exc:
+        raise SkillValidationError(f"cannot delete skill: {exc}") from exc
+    return declared_name
 
 
 def seed_default_skills(root: Path | None = None) -> None:

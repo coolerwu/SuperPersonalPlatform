@@ -1,20 +1,57 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import weakref
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 import httpx
 from langchain_core.tools import BaseTool, StructuredTool
 
+from app.services.skills import SkillValidationError, create_skill
+
 if TYPE_CHECKING:
     from app.services.browser_tools import BrowserSession
+
+logger = logging.getLogger(__name__)
+
+# Auto-enable is a read-modify-write on the agent's JSON list. Two sessions of
+# the same agent can run concurrently, so serialize the update per event loop.
+_ENABLE_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _enable_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _ENABLE_LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ENABLE_LOCKS[loop] = lock
+    return lock
+
 
 # These tools are always exposed by deepagents; a skill tool with the same name
 # would be treated as already visible and never gated.
 RESERVED_TOOL_NAMES = frozenset(
-    {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute", "task"}
+    {
+        "ls",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "delete",
+        "glob",
+        "grep",
+        "execute",
+        "task",
+        "skill_save",
+        "session_search",
+        "session_read",
+    }
 )
 
 FETCH_ENDPOINT_PATH = "/v1/tools/fetch"
@@ -26,6 +63,7 @@ MAX_SEARCH_COUNT = 50
 DEFAULT_SEARCH_COUNT = 10
 MAX_TOOL_RESULT_CHARS = 200_000
 TOOL_TIMEOUT_SECONDS = 30.0
+MAX_SKILLS_CREATED_PER_RUN = 3
 
 
 def is_valid_tool_name(name: str) -> bool:
@@ -56,6 +94,9 @@ class SkillToolContext:
     http_client: httpx.AsyncClient | None = None
     browser: BrowserSession | None = None
     agent_id: str = ""
+    session_id: str = ""
+    skills_dir: Path | None = None
+    created_skills: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -253,6 +294,88 @@ def _make_search_tool(context: SkillToolContext) -> BaseTool:
             "需要正文时把 need_content 设为 true，或再用 web_fetch 抓取具体链接。"
         ),
         coroutine=web_search,
+    )
+
+
+async def _enable_skill_for_agent(agent_id: str, skill_name: str) -> bool:
+    """Append a newly created skill to the agent's enabled list.
+
+    Each Run reloads the Agent row, so the change takes effect on the next
+    turn of the same session.
+    """
+    if not agent_id or not skill_name:
+        return False
+    try:
+        from app.db import SessionLocal
+        from app.models import Agent
+
+        async with _enable_lock():
+            async with SessionLocal() as db:
+                agent = await db.get(Agent, agent_id)
+                if agent is None:
+                    return False
+                current = list(agent.enabled_skills or [])
+                if skill_name in current:
+                    return True
+                agent.enabled_skills = [*current, skill_name]
+                await db.commit()
+                return True
+    except Exception:
+        logger.exception(
+            "failed to enable skill %s for agent %s", skill_name, agent_id
+        )
+        return False
+
+
+def build_skill_save_tool(context: SkillToolContext) -> BaseTool:
+    """Always-available tool that lets the agent author a skill file."""
+
+    async def skill_save(
+        name: str,
+        description: str,
+        instructions: str,
+        include_tools: str = "",
+    ) -> str:
+        """把一段可复用的流程保存为技能（SKILL.md）。"""
+        if len(context.created_skills) >= MAX_SKILLS_CREATED_PER_RUN:
+            return (
+                f"Error: 本次 Run 最多创建 {MAX_SKILLS_CREATED_PER_RUN} 个技能，"
+                "不要再创建新技能。"
+            )
+        try:
+            document = create_skill(
+                name,
+                description,
+                instructions,
+                include_tools=include_tools,
+                root=context.skills_dir,
+            )
+        except SkillValidationError as exc:
+            return f"Error: {exc}"
+        context.created_skills.append(document.directory)
+        enabled = await _enable_skill_for_agent(context.agent_id, document.name)
+        if enabled:
+            return (
+                f"已创建技能 {document.name}（{document.path}），"
+                "并已加入当前 Agent 的启用列表；下一次对话生效。"
+            )
+        return (
+            f"已创建技能 {document.name}（{document.path}）。"
+            "未找到当前 Agent，未能自动启用，请在技能页手动启用。"
+        )
+
+    return StructuredTool.from_function(
+        coroutine=skill_save,
+        name="skill_save",
+        description=(
+            "把一段可复用的工作流程保存为技能（SKILL.md）。"
+            "当你在对话中完成了一个以后还会再用到的多步骤流程，"
+            "或用户明确要求创建技能时调用。name 只用小写字母、数字和连字符；"
+            "description 说明什么时候使用；instructions 写清步骤和注意事项；"
+            "include_tools 用空格分隔要解锁的已注册工具名（可留空）。"
+            "不会覆盖已有技能；创建后自动加入当前 Agent 的启用列表，"
+            "下一次对话生效（当前这一轮还不会加载）。不要为一次性细节创建技能。"
+        ),
     )
 
 

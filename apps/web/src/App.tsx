@@ -12,6 +12,7 @@ import type {
   RunEvent,
   ScreenshotInfo,
   Session,
+  SessionSearchHit,
   SkillInfo,
 } from "./types";
 import { activityFromEvents, attemptText, describeToolCall } from "./runActivity";
@@ -121,6 +122,11 @@ export default function App() {
   const [creatingAgent, setCreatingAgent] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
+  const [searchFocus, setSearchFocus] = useState<{
+    sessionId: string;
+    messageId: string;
+    nonce: number;
+  } | null>(null);
 
   const subscriptionsRef = useRef<Map<string, RunSubscription>>(new Map());
   const appliedEventsRef = useRef<Map<string, number>>(new Map());
@@ -294,6 +300,34 @@ export default function App() {
     setSidebarOpen(false);
   }
 
+  function openSearchHit(hit: SessionSearchHit) {
+    setSearchFocus({
+      sessionId: hit.session_id,
+      messageId: hit.message_id,
+      nonce: Date.now(),
+    });
+    setSessions((current) => {
+      if (current.some((item) => item.id === hit.session_id)) return current;
+      return [
+        {
+          id: hit.session_id,
+          agent_id: agentId,
+          title: hit.session_title || "新会话",
+          message_count: 0,
+          active_run_id: null,
+          active_run_status: null,
+          channel_type: null,
+          channel_name: null,
+          created_at: hit.created_at,
+          updated_at: hit.created_at,
+        },
+        ...current,
+      ];
+    });
+    setSessionId(hit.session_id);
+    openView("chat");
+  }
+
   useEffect(() => {
     void bootstrap().catch((exc) => {
       setError(describeApiError(exc));
@@ -313,6 +347,7 @@ export default function App() {
     setMessagesLoading(false);
     setSessions([]);
     setError("");
+    setSearchFocus(null);
     if (!auth || !agentId) {
       sessionsRequestRef.current += 1;
       return;
@@ -386,7 +421,10 @@ export default function App() {
   }
 
   function refreshSkills() {
-    return loadSkills().catch(() => undefined);
+    return Promise.all([
+      loadSkills().catch(() => undefined),
+      loadWorkspace().catch(() => undefined),
+    ]).then(() => undefined);
   }
 
   async function loadWorkspace() {
@@ -1200,9 +1238,11 @@ export default function App() {
         sessions={sessions}
         sessionId={sessionId}
         onSelectSession={(id) => {
+          setSearchFocus(null);
           setSessionId(id);
           openView("chat");
         }}
+        onSelectSearchHit={openSearchHit}
         onNewSession={newSession}
         newSessionActive={view === "chat" && !sessionId}
         onDeleteSession={(id) => {
@@ -1318,6 +1358,10 @@ export default function App() {
               channelName={currentSession?.channel_name ?? ""}
               memorySkillEnabled={agent?.enabled_skills.includes(MEMORY_SKILL) ?? false}
               focusSignal={focusSignal}
+              focusMessageId={
+                searchFocus?.sessionId === sessionId ? searchFocus.messageId : ""
+              }
+              focusMessageNonce={searchFocus?.nonce ?? 0}
               onDraftChange={changeDraft}
               onAddAttachment={(file) => addAttachmentFor(activeKey, file)}
               onRemoveAttachment={(path) => removeAttachmentFor(activeKey, path)}

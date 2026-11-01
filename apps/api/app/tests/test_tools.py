@@ -42,6 +42,15 @@ def test_tools_api_includes_builtin_web_tools(client) -> None:
         assert tools[name]["skills"] == ["memory-organizer"]
 
 
+def test_tools_api_includes_platform_tools(client) -> None:
+    body = client.get("/api/tools").json()
+    tools = {tool["name"]: tool for tool in body["platform_tools"]}
+    assert tools["skill_save"]["registered"] is True
+    assert tools["skill_save"]["description"]
+    assert tools["session_search"]["registered"] is True
+    assert tools["session_read"]["registered"] is True
+
+
 def test_tools_api_reports_filesystem_and_skill_tools(client, monkeypatch) -> None:
     import app.routers.tools as tools_router
 

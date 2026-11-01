@@ -40,6 +40,8 @@ type ChatPanelProps = {
   channelName: string;
   memorySkillEnabled: boolean;
   focusSignal: number;
+  focusMessageId: string;
+  focusMessageNonce: number;
   onDraftChange: (value: string) => void;
   onAddAttachment: (file: Attachment) => void;
   onRemoveAttachment: (path: string) => void;
@@ -182,6 +184,9 @@ export function ChatPanel(props: ChatPanelProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [now, setNow] = useState(() => Date.now());
+  const [highlightId, setHighlightId] = useState("");
+  const focusAppliedRef = useRef(0);
+  const highlightTimerRef = useRef<number | null>(null);
   const throttledStreamText = useThrottledText(props.streamText);
   const throttledStreamReasoning = useThrottledText(props.streamReasoning);
 
@@ -190,6 +195,33 @@ export function ChatPanel(props: ChatPanelProps) {
   useEffect(() => {
     if (props.focusSignal > 0) textareaRef.current?.focus();
   }, [props.focusSignal]);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!props.focusMessageId) return;
+    const element = document.getElementById(`message-${props.focusMessageId}`);
+    if (!element) return;
+    if (focusAppliedRef.current === props.focusMessageNonce) return;
+    focusAppliedRef.current = props.focusMessageNonce;
+    stickRef.current = false;
+    setAtBottom(false);
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightId(props.focusMessageId);
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightId("");
+      highlightTimerRef.current = null;
+    }, 2400);
+  }, [props.focusMessageId, props.focusMessageNonce, props.messages]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -397,7 +429,11 @@ export function ChatPanel(props: ChatPanelProps) {
             const parsed = parseUserContent(message.content);
             const copyContent = userMessageText(message.content);
             return (
-              <div key={message.id} className="message-row user">
+              <div
+                key={message.id}
+                id={`message-${message.id}`}
+                className={`message-row user ${highlightId === message.id ? "message-focus" : ""}`}
+              >
                 <div className="message-bubble user">
                   {parsed.kind === "attachments" ? (
                     <>
@@ -455,7 +491,11 @@ export function ChatPanel(props: ChatPanelProps) {
             );
           }
           return (
-            <div key={message.id} className="message-row assistant">
+            <div
+              key={message.id}
+              id={`message-${message.id}`}
+              className={`message-row assistant ${highlightId === message.id ? "message-focus" : ""}`}
+            >
               <div className="message-avatar">ACC</div>
               <div className="message-bubble assistant">
                 <div className="message-head">

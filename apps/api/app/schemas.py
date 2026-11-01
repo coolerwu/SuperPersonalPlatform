@@ -86,6 +86,7 @@ class SkillOut(BaseModel):
     include_tools: list[str] = Field(default_factory=list)
     can_enable: bool = True
     warnings: list[str] = Field(default_factory=list)
+    source: str = "manual"
 
 
 class SkillCatalogOut(BaseModel):
@@ -99,6 +100,7 @@ class SkillDetailOut(BaseModel):
     path: str
     content: str
     warnings: list[str] = Field(default_factory=list)
+    source: str = "manual"
 
 
 class SkillUpdate(BaseModel):
@@ -113,6 +115,7 @@ class ToolOut(BaseModel):
 
 
 class ToolsOut(BaseModel):
+    platform_tools: list[ToolOut] = Field(default_factory=list)
     filesystem_tools: list[ToolOut] = Field(default_factory=list)
     skill_tools: list[ToolOut] = Field(default_factory=list)
 
@@ -179,6 +182,15 @@ class MessageOut(BaseModel):
     role: str
     content: str
     run_id: str | None
+    created_at: datetime
+
+
+class MessageSearchHitOut(BaseModel):
+    message_id: str
+    session_id: str
+    session_title: str
+    role: str
+    snippet: str
     created_at: datetime
 
 

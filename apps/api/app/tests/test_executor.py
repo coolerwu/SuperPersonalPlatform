@@ -183,6 +183,11 @@ async def test_executor_always_mounts_host_shell_and_interpreter(
     assert isinstance(captured["backend"].default, LocalShellBackend)
     middleware_names = [type(item).__name__ for item in captured["middleware"]]
     assert "CodeInterpreterMiddleware" in middleware_names
+    assert [tool.name for tool in captured["tools"]] == [
+        "skill_save",
+        "session_search",
+        "session_read",
+    ]
 
 
 @pytest.mark.asyncio

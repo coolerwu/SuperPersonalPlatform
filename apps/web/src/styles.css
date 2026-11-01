@@ -476,6 +476,90 @@ textarea {
   padding-right: 2px;
 }
 
+.session-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 0 8px;
+}
+
+.session-search input {
+  width: 100%;
+  padding: 8px 30px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.session-search input:focus {
+  border-color: rgba(15, 118, 110, 0.35);
+  background: var(--panel);
+}
+
+.session-search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  transform: translateY(-50%);
+}
+
+.session-search-results {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 2px;
+}
+
+.search-result {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-result:hover {
+  border-color: rgba(15, 118, 110, 0.3);
+  background: var(--accent-soft);
+}
+
+.search-result-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.search-result-meta {
+  margin-top: 3px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
 .session-item {
   display: flex;
   align-items: center;
@@ -806,6 +890,20 @@ textarea {
 
 .message-bubble.streaming {
   min-height: 44px;
+}
+
+.message-row.message-focus .message-bubble {
+  animation: message-focus 2.4s ease-out;
+}
+
+@keyframes message-focus {
+  0%,
+  20% {
+    box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 2px rgba(15, 118, 110, 0);
+  }
 }
 
 .message-thinking {
@@ -2021,6 +2119,79 @@ textarea {
 
 .skill-list .toggle-row {
   margin-top: 0;
+}
+
+.skill-group {
+  margin-top: 16px;
+}
+
+.skill-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  margin-bottom: 2px;
+}
+
+.skill-group-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.skill-group-head small {
+  color: var(--faint);
+  font-size: 11px;
+  text-align: right;
+}
+
+.skill-source {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.skill-source.builtin {
+  border-color: rgba(15, 118, 110, 0.2);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.skill-source.ai {
+  border-color: #fde68a;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.skill-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+}
+
+.skill-actions .skill-open {
+  margin-left: 0;
+}
+
+.skill-delete {
+  color: var(--danger-ink);
+}
+
+.skill-delete:hover {
+  color: var(--danger-ink);
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
 }
 
 .skill-path {

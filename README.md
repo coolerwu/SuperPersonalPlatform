@@ -55,12 +55,13 @@ npm run dev
 - 多个会话可以各自跟踪自己的 Run：切走 A 去加载 B 时先清空旧消息并显示骨架，B 不会出现 A 的文本；另一个会话的 Run 运行中时当前会话禁用发送并提示，输入框仍可编辑；异步错误只显示在所属 Agent/会话。失败或取消的 Run 会保留已流出的内容，显示「失败」/「已停止」气泡、错误摘要与重试按钮，刷新后从 `run_events` 恢复；失败和 API 错误按认证、限流、上下文超限、超时、连接、配置缺失等类别显示中文提示，原始错误仍可在气泡标题或抽屉中查看；
 - 草稿和附件按会话隔离：切换会话会恢复各自的草稿和附件，发送失败时写回发起发送的会话；「新对话」使用独立的未发送草稿；「整理记忆」不会消费草稿，新建会话时会把草稿和附件带过去；
 - 页面可见时每 5 秒刷新当前 Agent 的会话列表：微信入站产生的新会话、消息数和运行中 Run 会更新侧栏徽标；当前会话有活动 Run 时会自动接上它的实时进度；微信会话在侧栏和输入区都有提示；
+- 侧栏搜索：会话列表上方的搜索框按关键词检索当前 Agent 的历史消息（至少 2 个字符，300ms 防抖）；结果显示会话标题、片段、角色和时间，点击后切换到该会话并滚动到命中消息、短暂高亮；
 - 后端同一 session 最多一个 running Run，queued Run 可以排队；网页 Chat 与 retry 在已有活动 Run 时返回 409（带 `active_run_id`），前端直接接入该 Run 并提示刚才的消息没有发送、恢复草稿；渠道入站消息允许继续排队并由 worker 串行执行；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 2），超出的 Run 保持 `queued`；
 - 服务停止/重启时正在运行的 Run 会重新排队并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的页面会自动重连（瞬时连接错误按退避重试）；收到 `reason=service_restart` 的 `run_queued` 时清空上一次尝试的流式文本，并显示「服务重启，Run 已重新排队」。恢复时保留中断前的 checkpoint 消息并追加「继续上次任务」提示，不重复原始用户输入；未返回结果的工具调用会补一条结果未知的 error 消息。重新入队不会回滚已经发生的文件/浏览器副作用，恢复提示会要求 Agent 不要重复执行；
 - 模型调用遇到 429/5xx/超时/连接错误时最多重试 3 次（指数退避 + jitter）；401/400 等 4xx 不重试；重试在模型层实现，主 Agent、general-purpose 子 Agent 和 step-limit 总结都会覆盖；流式调用已输出 token 后不重试，避免重复文本；可重试失败会记录 warning 日志；
 - 单个 Run 的步骤上限默认 500（`RUN_RECURSION_LIMIT`，主 Agent 与子 Agent 共用）；真的达到上限时先在原会话上自动续跑一次，仍超限才用同一模型带上完整对话生成最终答复，Run 仍以 completed 收尾并标注被截断；
 - Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；所有 Agent 都可以用 `execute` 在宿主机执行命令（LocalShellBackend，以服务账号权限运行，没有沙箱），用 `eval` 在隔离的 QuickJS 环境里执行 JavaScript（无文件与网络，PTC 只开放文件工具）；两者无需启用技能或读取授权。浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，默认返回文字和元素引用；用户明确要求时可返回页面截图，截图保存到 Agent 工作区并显示在对应回复下方）；
-- 技能与工具：左侧「技能」页面为当前 Agent 启用技能；模型读取 `/skills/<name>/SKILL.md` 后，技能声明的工具才会解锁；上下文压缩后会自动重新注入已启用技能的正文，保持解锁；文件工具始终可用；「工具」页面只展示注册与声明情况；
+- 技能与工具：左侧「技能」页面为当前 Agent 启用技能；模型读取 `/skills/<name>/SKILL.md` 后，技能声明的工具才会解锁；上下文压缩后会自动重新注入已启用技能的正文，保持解锁；文件工具始终可用；「工具」页面展示平台工具、文件工具与技能工具的注册与声明情况；平台工具 `skill_save` 始终可用，Agent 可以在对话中主动把可复用流程创建成技能，AI 创建的技能会自动加入当前 Agent 的启用列表，下一次对话生效；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 - 顶部轻量栏显示当前 Agent 和会话标题，并作为详情抽屉开关。
 - 响应式：桌面为侧栏 + 对话 + 详情三栏；窄屏（≤860px）用顶部栏和汉堡菜单打开侧栏抽屉，详情变为全屏面板，输入区跟随软键盘与底部安全区。
@@ -83,8 +84,8 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `r
 
 侧边栏左上角（Agent 选择器下方）提供两个独立页面：
 
-- **技能**：列出全局技能库，按当前 Agent 勾选/取消启用，立即保存、下一轮 Run 生效；展示 description、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 全文并直接编辑保存。新建技能仍然在对话里让 Agent 完成。
-- **工具**：展示文件工具（始终可用）和技能工具；技能工具显示是否已在平台注册、由哪些技能声明。启用声明它的技能并在对话中读取 SKILL.md 后解锁，没有单独的工具开关。
+- **技能**：列出全局技能库，按「系统技能」和「交互创建」分组，按当前 Agent 勾选/取消启用，立即保存、下一轮 Run 生效；展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 全文并直接编辑保存；非系统技能可删除（会删除技能目录并从所有 Agent 的启用列表移除）。新建技能可以让 Agent 在对话里用 `skill_save` 主动沉淀，也可以按你的要求创建；AI 创建的技能会自动加入当前 Agent 的启用列表。
+- **工具**：展示平台工具（`skill_save`、`session_search`、`session_read`，始终可用）、文件工具（始终可用）和技能工具；技能工具显示是否已在平台注册、由哪些技能声明。启用声明它的技能并在对话中读取 SKILL.md 后解锁，没有单独的工具开关。
 
 ## Skills
 
@@ -115,11 +116,20 @@ metadata:
 - 未读取 `SKILL.md` 前，技能工具不会出现在模型工具列表里，调用会被当作未知工具；读取成功后，在同一会话内只要这段读取还在上下文中，工具就保持可用；上下文被摘要压缩掉后重新锁定。
 - 每次 Run 都会重新扫描技能目录并重新应用 Agent 的启用列表，所以新增/编辑技能或修改启用状态在下一轮对话生效。
 - 文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不受技能开关影响。
-- 技能创建：直接让 Agent 在对话里创建或修改 `/skills/<name>/SKILL.md`，不需要表单；也可以在主机上编辑文件。Agent 写入的技能同样需要为当前 Agent 启用。
+- 技能来源：`.seed_state.json` 跟踪的系统内置技能标记为 `builtin`；Agent 用 `skill_save` 创建、frontmatter 带 `metadata.source: ai` 的技能标记为 `ai`；其他文件标记为 `manual`。技能页按「系统技能」和「交互创建」分组展示，AI 创建显示对应徽标。
+- 技能创建：Agent 可以在对话里主动调用平台工具 `skill_save` 把可复用流程保存成新技能（通过 `skill_save` 每次 Run 最多 3 个，不会覆盖已有技能）；也可以按用户要求创建。也可以在主机上编辑文件。
+- 技能启用：AI 创建的技能会自动加入当前 Agent 的启用列表，同一会话的下一次对话生效；手动创建/放入的技能仍需在这里启用。读取 SKILL.md 后，技能声明的工具才会解锁。
+- 删除：非系统技能可以在技能页删除，删除整个技能目录并从所有 Agent 的启用列表移除；系统技能不能删除。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
 - 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser` 和 `memory-organizer`，分别声明 `include_tools: web_fetch` / `web_search` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete`。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
+
+平台工具（始终可用，不参与技能门控）：
+
+- **`skill_save`**：把可复用的工作流程保存成技能。参数 `name`（小写字母/数字/连字符）、`description`、`instructions`、`include_tools`（空格分隔的已注册工具名，可空）；写入 `/skills/<name>/SKILL.md` 并标记 `metadata.source: ai`；通过 `skill_save` 每次 Run 最多创建 3 个，不能覆盖已有技能。创建后自动加入当前 Agent 的启用列表，下一次对话生效。
+- **`session_search`**：按关键词搜索当前 Agent 的历史会话消息，返回命中片段的 session_id、message_id、会话标题、角色和时间。关键词不要传整句问题。
+- **`session_read`**：先用 `session_search` 拿到 session_id 和 message_id，再读取命中消息前后各 `before` / `after` 条；不传 message_id 时返回该会话最近的消息。只允许当前 Agent 的会话。
 
 平台注册表当前提供以下技能工具：
 
@@ -190,6 +200,7 @@ metadata:
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
   - `channels`：渠道及其 iLink 登录凭据（`bot_token` 不返回前端、不写日志）；`channel_conversations`：外部联系人与 Session 的映射（含最新 `context_token`）；`channel_inbounds`：入站消息幂等键；`channel_run_links`：哪些 Run 需要回信；`channel_deliveries`：Run 终态的发送记录，用于崩溃恢复。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
+- `messages_fts`：`messages.content` 的 FTS5 trigram 索引（external content，触发器同步）；用于 Agent 的 `session_search` / `session_read` 和侧栏搜索，首次创建或索引为空时自动 `rebuild` 回填。FTS 不可用时降级 `LIKE`。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区目录，名称为 Agent id；删除 Agent 不会删除这里的文件。`screenshots/<session_id>/<run_id>/` 保存该 Agent 的浏览器截图，删除会话时清理对应目录。
 - `~/.super-personal-platform/skills/`：全局技能库，由用户/运维维护；删除技能不会自动清理 Agent 的启用列表，运行时忽略不存在的技能。
 

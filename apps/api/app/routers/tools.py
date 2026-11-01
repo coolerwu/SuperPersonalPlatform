@@ -21,6 +21,22 @@ FILESYSTEM_TOOLS = (
     ("grep", "在工作区搜索文本"),
 )
 
+PLATFORM_TOOLS = (
+    (
+        "skill_save",
+        "把可复用的流程保存为技能；创建后自动加入当前 Agent 的启用列表，"
+        "下一次对话生效。",
+    ),
+    (
+        "session_search",
+        "按关键词搜索当前 Agent 的历史会话消息，返回命中片段与会话/消息 id。",
+    ),
+    (
+        "session_read",
+        "读取某个历史会话中命中消息前后的上下文；只允许当前 Agent 的会话。",
+    ),
+)
+
 
 @router.get("", response_model=ToolsOut)
 async def list_tools() -> ToolsOut:
@@ -40,6 +56,10 @@ async def list_tools() -> ToolsOut:
         for name in sorted(set(registered) | set(declared))
     ]
     return ToolsOut(
+        platform_tools=[
+            ToolOut(name=name, description=description, registered=True)
+            for name, description in PLATFORM_TOOLS
+        ],
         filesystem_tools=[
             ToolOut(name=name, description=description, registered=True)
             for name, description in FILESYSTEM_TOOLS

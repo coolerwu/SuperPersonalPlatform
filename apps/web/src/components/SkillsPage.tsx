@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
-import { errorText } from "../api";
+import { api, errorText } from "../api";
 import type { Agent, SkillInfo } from "../types";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { SkillEditorDialog } from "./SkillEditorDialog";
 
 type SkillsPageProps = {
@@ -12,6 +13,16 @@ type SkillsPageProps = {
   onSaveEnabled: (names: string[]) => Promise<void>;
   onClose: () => void;
 };
+
+const SOURCE_LABELS: Record<string, string> = {
+  builtin: "系统",
+  ai: "AI 创建",
+  manual: "手动创建",
+};
+
+function sourceLabel(source: string): string {
+  return SOURCE_LABELS[source] ?? SOURCE_LABELS.manual;
+}
 
 export function SkillsPage({
   agent,
@@ -25,14 +36,23 @@ export function SkillsPage({
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [editorSkill, setEditorSkill] = useState<SkillInfo | null>(null);
+  const [deleting, setDeleting] = useState<SkillInfo | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const enabled = agent?.enabled_skills ?? [];
   const installed = new Set(skills.map((skill) => skill.name));
   const missing = enabled.filter((name) => !installed.has(name));
+  const builtinSkills = skills.filter((skill) => skill.source === "builtin");
+  const createdSkills = skills.filter((skill) => skill.source !== "builtin");
 
   useEffect(() => {
     setNotice("");
     setError("");
+  }, [agent?.id]);
+
+  useEffect(() => {
+    void onRefresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent?.id]);
 
   async function toggle(name: string, checked: boolean) {
@@ -57,6 +77,82 @@ export function SkillsPage({
     setError("");
     setNotice(`已保存 ${name}`);
     await onRefresh();
+  }
+
+  async function confirmDelete() {
+    if (!deleting || deleteBusy) return;
+    setDeleteBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api.deleteSkill(deleting.directory);
+      setNotice(`已删除 ${deleting.name}`);
+      setDeleting(null);
+      await onRefresh();
+    } catch (exc) {
+      setDeleting(null);
+      setError(errorText(exc));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  function renderSkill(skill: SkillInfo) {
+    return (
+      <label
+        className="toggle-row skill-row"
+        htmlFor={`skills-page-${skill.directory}`}
+        key={skill.directory}
+      >
+        <input
+          id={`skills-page-${skill.directory}`}
+          type="checkbox"
+          checked={enabled.includes(skill.name)}
+          disabled={saving || !skill.can_enable}
+          onChange={(event) => void toggle(skill.name, event.target.checked)}
+        />
+        <span>
+          <strong>
+            {skill.name}
+            <span className={`skill-source ${skill.source}`}>{sourceLabel(skill.source)}</span>
+          </strong>
+          <small>{skill.description}</small>
+          {skill.include_tools.length > 0 && (
+            <small>提供工具：{skill.include_tools.join(", ")}</small>
+          )}
+          <small className="skill-path">{skill.path}</small>
+          {skill.warnings.map((warning) => (
+            <small className="skill-warning" key={warning}>{warning}</small>
+          ))}
+        </span>
+        <span className="skill-actions">
+          <button
+            type="button"
+            className="skill-open"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setEditorSkill(skill);
+            }}
+          >
+            查看
+          </button>
+          {skill.source !== "builtin" && (
+            <button
+              type="button"
+              className="skill-open skill-delete"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setDeleting(skill);
+              }}
+            >
+              删除
+            </button>
+          )}
+        </span>
+      </label>
+    );
   }
 
   return (
@@ -87,68 +183,61 @@ export function SkillsPage({
             {agent && (
               <>
                 <div className="hint">
-                  技能库：~/.super-personal-platform/skills。点击技能右侧「查看」可以直接打开并编辑
-                  SKILL.md；新建技能仍然在对话里让 Agent 完成。新技能需要在这里为当前 Agent 启用，
-                  启用技能即允许它声明的工具，读取 SKILL.md 后解锁。文件工具始终可用。
+                  技能库：~/.super-personal-platform/skills。Agent 在对话里可以用 skill_save
+                  主动沉淀可复用的流程，也可以按你的要求创建技能；AI 创建的技能会自动加入当前
+                  Agent 的启用列表，下一次对话生效。启用技能即允许它声明的工具，读取 SKILL.md
+                  后解锁。文件工具始终可用。
                 </div>
-                <div className="skill-list">
-                  {skills.map((skill) => (
-                    <label
-                      className="toggle-row skill-row"
-                      htmlFor={`skills-page-${skill.name}`}
-                      key={skill.name}
-                    >
-                      <input
-                        id={`skills-page-${skill.name}`}
-                        type="checkbox"
-                        checked={enabled.includes(skill.name)}
-                        disabled={saving || !skill.can_enable}
-                        onChange={(event) => void toggle(skill.name, event.target.checked)}
-                      />
-                      <span>
-                        <strong>{skill.name}</strong>
-                        <small>{skill.description}</small>
-                        {skill.include_tools.length > 0 && (
-                          <small>提供工具：{skill.include_tools.join(", ")}</small>
-                        )}
-                        <small className="skill-path">{skill.path}</small>
-                        {skill.warnings.map((warning) => (
-                          <small className="skill-warning" key={warning}>{warning}</small>
-                        ))}
-                      </span>
-                      <button
-                        type="button"
-                        className="skill-open"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          setEditorSkill(skill);
-                        }}
-                      >
-                        查看
-                      </button>
-                    </label>
-                  ))}
-                  {missing.map((skillName) => (
-                    <label className="toggle-row" htmlFor={`skills-page-missing-${skillName}`} key={skillName}>
-                      <input
-                        id={`skills-page-missing-${skillName}`}
-                        type="checkbox"
-                        checked
-                        disabled={saving}
-                        onChange={() => void toggle(skillName, false)}
-                      />
-                      <span>
-                        <strong>{skillName}</strong>
-                        <small className="skill-warning">技能目录中未找到；取消勾选可移除。</small>
-                      </span>
-                    </label>
-                  ))}
+
+                <div className="skill-group">
+                  <div className="skill-group-head">
+                    <h3>系统技能</h3>
+                    <small>平台内置，随版本更新；不可删除。</small>
+                  </div>
+                  {builtinSkills.length > 0 ? (
+                    <div className="skill-list">{builtinSkills.map(renderSkill)}</div>
+                  ) : (
+                    <div className="empty-note">还没有系统技能。</div>
+                  )}
                 </div>
-                {skills.length === 0 && missing.length === 0 && (
-                  <div className="empty-note">
-                    还没有安装技能。把 SKILL.md 放到 ~/.super-personal-platform/skills/&lt;name&gt;/
-                    后点「刷新技能库」。
+
+                <div className="skill-group">
+                  <div className="skill-group-head">
+                    <h3>交互创建</h3>
+                    <small>AI 创建会自动启用；手动创建需在这里启用。</small>
+                  </div>
+                  {createdSkills.length > 0 ? (
+                    <div className="skill-list">{createdSkills.map(renderSkill)}</div>
+                  ) : (
+                    <div className="empty-note">
+                      还没有交互创建的技能。完成可复用的流程后，可以让 Agent 把它保存成技能。
+                    </div>
+                  )}
+                </div>
+
+                {missing.length > 0 && (
+                  <div className="skill-group">
+                    <div className="skill-group-head">
+                      <h3>已丢失</h3>
+                      <small>启用列表里有、但技能目录中已不存在的技能。</small>
+                    </div>
+                    <div className="skill-list">
+                      {missing.map((skillName) => (
+                        <label className="toggle-row" htmlFor={`skills-page-missing-${skillName}`} key={skillName}>
+                          <input
+                            id={`skills-page-missing-${skillName}`}
+                            type="checkbox"
+                            checked
+                            disabled={saving}
+                            onChange={() => void toggle(skillName, false)}
+                          />
+                          <span>
+                            <strong>{skillName}</strong>
+                            <small className="skill-warning">技能目录中未找到；取消勾选可移除。</small>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {skillsErrors.map((message) => (
@@ -166,6 +255,19 @@ export function SkillsPage({
         skill={editorSkill}
         onClose={() => setEditorSkill(null)}
         onSaved={handleSaved}
+      />
+
+      <ConfirmDialog
+        open={deleting !== null}
+        title={deleting ? `删除技能 ${deleting.name}？` : ""}
+        description="会删除整个技能目录，并从所有 Agent 的启用列表中移除；系统技能不能删除。"
+        confirmLabel={deleteBusy ? "删除中…" : "删除"}
+        cancelLabel="取消"
+        danger
+        onConfirm={() => void confirmDelete()}
+        onClose={() => {
+          if (!deleteBusy) setDeleting(null);
+        }}
       />
     </main>
   );

@@ -35,13 +35,33 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
         <div>
           <div className="eyebrow">TOOLS</div>
           <h1>工具</h1>
-          <p>文件工具始终可用；技能工具由技能启用状态控制，读取 SKILL.md 后解锁。</p>
+          <p>平台工具和文件工具始终可用；技能工具由技能启用状态控制，读取 SKILL.md 后解锁。</p>
         </div>
         <button className="ghost-button" onClick={onClose}>返回对话</button>
       </header>
 
       <div className="settings-scroll">
         <div className="settings-lane">
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <div>
+                <h2>平台工具</h2>
+                <p>由平台直接提供，所有 Agent 始终可用，不需要技能解锁。</p>
+              </div>
+            </div>
+            <div className="tool-list">
+              {(data?.platform_tools ?? []).map((tool) => (
+                <div className="tool-row" key={tool.name}>
+                  <div className="tool-main">
+                    <strong>{tool.name}</strong>
+                    <small>{tool.description}</small>
+                  </div>
+                  <span className="capability on">始终可用</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
           <section className="settings-card">
             <div className="settings-card-head">
               <div>

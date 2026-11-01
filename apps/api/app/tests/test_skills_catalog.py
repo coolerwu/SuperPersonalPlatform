@@ -36,6 +36,7 @@ def test_scan_skills_parses_frontmatter(tmp_path: Path) -> None:
     assert skill.include_tools == ("alpha", "beta")
     assert skill.can_enable is True
     assert skill.warnings == ()
+    assert skill.source == "manual"
 
 
 def test_scan_skills_missing_root_returns_empty(tmp_path: Path) -> None:
@@ -160,6 +161,7 @@ def test_default_web_skills_seeded(client) -> None:
     for name, tool_names in expected.items():
         assert (settings.skills_dir / name / "SKILL.md").is_file()
         assert skills[name]["include_tools"] == tool_names
+        assert skills[name]["source"] == "builtin"
 
 
 def test_skills_api_requires_auth() -> None:

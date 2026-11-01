@@ -1,4 +1,7 @@
-import type { Agent, Session } from "../types";
+import { useEffect, useState } from "react";
+
+import { api, errorText } from "../api";
+import type { Agent, Session, SessionSearchHit } from "../types";
 import { formatTime } from "../format";
 import { Select } from "./Select";
 
@@ -11,6 +14,7 @@ type SidebarProps = {
   sessions: Session[];
   sessionId: string;
   onSelectSession: (id: string) => void;
+  onSelectSearchHit: (hit: SessionSearchHit) => void;
   onNewSession: () => void;
   newSessionActive: boolean;
   onDeleteSession: (id: string) => void;
@@ -28,6 +32,52 @@ type SidebarProps = {
 };
 
 export function Sidebar(props: SidebarProps) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SessionSearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const searchActive = searchQuery.trim().length > 0;
+
+  useEffect(() => {
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearchError("");
+    setSearching(false);
+  }, [props.agentId]);
+
+  useEffect(() => {
+    const value = searchQuery.trim();
+    if (value.length < 2 || !props.agentId) {
+      setSearchResults([]);
+      setSearchError("");
+      setSearching(false);
+      return;
+    }
+    let active = true;
+    setSearching(true);
+    setSearchError("");
+    const timer = window.setTimeout(() => {
+      api
+        .searchMessages(props.agentId, value, 20)
+        .then((hits) => {
+          if (active) setSearchResults(hits);
+        })
+        .catch((exc) => {
+          if (active) {
+            setSearchResults([]);
+            setSearchError(errorText(exc));
+          }
+        })
+        .finally(() => {
+          if (active) setSearching(false);
+        });
+    }, 300);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery, props.agentId]);
+
   return (
     <>
       <div
@@ -212,46 +262,101 @@ export function Sidebar(props: SidebarProps) {
           <div className="section-heading">
             <span>会话</span>
           </div>
-          <div className="session-list">
-            {props.sessions.length === 0 && <div className="empty-note">还没有会话</div>}
-            {props.sessions.map((session) => (
-              <div
-                key={session.id}
-                className={`session-item ${session.id === props.sessionId ? "selected" : ""}`}
-                onClick={() => props.onSelectSession(session.id)}
+          <div className="session-search">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="搜索历史消息"
+              aria-label="搜索历史消息"
+              autoComplete="off"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="icon-button subtle session-search-clear"
+                onClick={() => setSearchQuery("")}
+                aria-label="清空搜索"
               >
-                <div className="session-main">
-                  <div className="session-title">
-                    {session.channel_type === "wechat" && (
-                      <span className="session-channel" title={session.channel_name ?? "微信"}>
-                        微信
-                      </span>
-                    )}
-                    {session.title || "新会话"}
-                  </div>
-                  <div className="session-meta">
-                    {session.active_run_status === "running" && (
-                      <span className="session-activity running">运行中</span>
-                    )}
-                    {session.active_run_status === "queued" && (
-                      <span className="session-activity queued">排队</span>
-                    )}
-                    {session.message_count} 条 · {formatTime(session.updated_at)}
-                  </div>
-                </div>
+                ×
+              </button>
+            )}
+          </div>
+          {searchActive ? (
+            <div className="session-search-results">
+              {searchQuery.trim().length < 2 && (
+                <div className="empty-note">至少输入 2 个字符</div>
+              )}
+              {searching && <div className="empty-note">搜索中…</div>}
+              {searchError && <div className="error-banner">{searchError}</div>}
+              {!searching &&
+                !searchError &&
+                searchQuery.trim().length >= 2 &&
+                searchResults.length === 0 && (
+                  <div className="empty-note">没有匹配的历史消息</div>
+                )}
+              {searchResults.map((hit) => (
                 <button
-                  className="icon-button subtle"
-                  title="删除会话"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    props.onDeleteSession(session.id);
+                  type="button"
+                  className="search-result"
+                  key={hit.message_id}
+                  onClick={() => {
+                    props.onSelectSearchHit(hit);
+                    props.onClose();
                   }}
                 >
-                  ×
+                  <div className="search-result-title">
+                    {hit.session_title || "新会话"}
+                  </div>
+                  <div className="search-result-snippet">{hit.snippet}</div>
+                  <div className="search-result-meta">
+                    {hit.role === "user" ? "你" : "Agent"} · {formatTime(hit.created_at)}
+                  </div>
                 </button>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="session-list">
+              {props.sessions.length === 0 && <div className="empty-note">还没有会话</div>}
+              {props.sessions.map((session) => (
+                <div
+                  key={session.id}
+                  className={`session-item ${session.id === props.sessionId ? "selected" : ""}`}
+                  onClick={() => props.onSelectSession(session.id)}
+                >
+                  <div className="session-main">
+                    <div className="session-title">
+                      {session.channel_type === "wechat" && (
+                        <span className="session-channel" title={session.channel_name ?? "微信"}>
+                          微信
+                        </span>
+                      )}
+                      {session.title || "新会话"}
+                    </div>
+                    <div className="session-meta">
+                      {session.active_run_status === "running" && (
+                        <span className="session-activity running">运行中</span>
+                      )}
+                      {session.active_run_status === "queued" && (
+                        <span className="session-activity queued">排队</span>
+                      )}
+                      {session.message_count} 条 · {formatTime(session.updated_at)}
+                    </div>
+                  </div>
+                  <button
+                    className="icon-button subtle"
+                    title="删除会话"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      props.onDeleteSession(session.id);
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="sidebar-footer">

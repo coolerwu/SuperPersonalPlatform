@@ -25,7 +25,16 @@ from app.config import settings
 from app.services import memory_tools  # noqa: F401 - registers memory tools
 from app.services.browser_tools import BROWSER_TOOL_NAMES, BrowserSession
 from app.services.model_retry import ModelRetryMixin
-from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolContext, SkillToolRegistry
+from app.services.session_tools import (
+    build_session_read_tool,
+    build_session_search_tool,
+)
+from app.services.skill_tools import (
+    SKILL_TOOL_REGISTRY,
+    SkillToolContext,
+    SkillToolRegistry,
+    build_skill_save_tool,
+)
 from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 logger = logging.getLogger(__name__)
@@ -427,24 +436,23 @@ class DeepAgentExecutor:
                 system_prompt = instructions
                 if self.memory_context:
                     system_prompt = f"{system_prompt}\n\n{self.memory_context}"
-                backend = build_backend(
-                    self.workspace_path,
-                    skills_dir=(
-                        self.skills_dir if self.skills_dir is not None else settings.skills_dir
-                    ),
+                skills_dir = (
+                    self.skills_dir if self.skills_dir is not None else settings.skills_dir
+                )
+                backend = build_backend(self.workspace_path, skills_dir=skills_dir)
+                skill_context = SkillToolContext(
+                    api_key=self.provider.api_key,
+                    base_url=self.provider.base_url,
+                    browser=browser,
+                    agent_id=self.agent_id,
+                    session_id=session_id,
+                    skills_dir=skills_dir,
                 )
                 skills_middleware = AgentSkillsMiddleware(
                     backend=backend,
                     sources=[("/skills/", "Platform")],
                     enabled_skills=self.enabled_skills,
-                    tools=self.skill_tools.build(
-                        SkillToolContext(
-                            api_key=self.provider.api_key,
-                            base_url=self.provider.base_url,
-                            browser=browser,
-                            agent_id=self.agent_id,
-                        ),
-                    ),
+                    tools=self.skill_tools.build(skill_context),
                 )
                 middleware: list[Any] = [
                     skills_middleware,
@@ -460,7 +468,11 @@ class DeepAgentExecutor:
                 # there is exactly one retry layer.
                 agent = create_deep_agent(
                     model=chat_model,
-                    tools=[],
+                    tools=[
+                        build_skill_save_tool(skill_context),
+                        build_session_search_tool(skill_context),
+                        build_session_read_tool(skill_context),
+                    ],
                     system_prompt=system_prompt,
                     checkpointer=checkpointer,
                     backend=backend,

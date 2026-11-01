@@ -27,6 +27,7 @@ export type SkillInfo = {
   include_tools: string[];
   can_enable: boolean;
   warnings: string[];
+  source: "builtin" | "ai" | "manual" | string;
 };
 
 export type SkillCatalog = {
@@ -40,6 +41,7 @@ export type SkillDetail = {
   path: string;
   content: string;
   warnings: string[];
+  source: "builtin" | "ai" | "manual" | string;
 };
 
 export type ToolInfo = {
@@ -50,6 +52,7 @@ export type ToolInfo = {
 };
 
 export type ToolsCatalog = {
+  platform_tools: ToolInfo[];
   filesystem_tools: ToolInfo[];
   skill_tools: ToolInfo[];
 };
@@ -112,6 +115,15 @@ export type Message = {
   role: "user" | "assistant" | string;
   content: string;
   run_id: string | null;
+  created_at: string;
+};
+
+export type SessionSearchHit = {
+  message_id: string;
+  session_id: string;
+  session_title: string;
+  role: "user" | "assistant" | string;
+  snippet: string;
   created_at: string;
 };
 

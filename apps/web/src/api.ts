@@ -12,6 +12,7 @@ import type {
   RunEvent,
   ScreenshotInfo,
   Session,
+  SessionSearchHit,
   SkillCatalog,
   SkillDetail,
   SystemInfo,
@@ -209,7 +210,19 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
+  deleteSkill: (directory: string) =>
+    request<{ deleted: boolean }>(`/api/skills/${encodeURIComponent(directory)}`, {
+      method: "DELETE",
+    }),
   listTools: () => request<ToolsCatalog>("/api/tools"),
+  searchMessages: (agentId: string, q: string, limit = 20) => {
+    const search = new URLSearchParams({
+      agent_id: agentId,
+      q,
+      limit: String(limit),
+    });
+    return request<SessionSearchHit[]>(`/api/sessions/search?${search.toString()}`);
+  },
 
   listMemories: (params: { scope: MemoryScope; agentId?: string; q?: string }) => {
     const search = new URLSearchParams({ scope: params.scope });
