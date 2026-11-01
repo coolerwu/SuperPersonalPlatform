@@ -468,7 +468,7 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
                   {probe.ok
                     ? `Bitget 连接正常${probe.latency_ms !== null ? `（${probe.latency_ms} ms）` : ""}`
                     : `Bitget 连接失败：${probe.error ?? "未知错误"}`}
-                  {probe.proxy_configured ? "" : "（未配置 MARKET_HTTP_PROXY）"}
+                  {probe.proxy_configured ? "" : "（未配置 HTTP_PROXY/HTTPS_PROXY）"}
                 </span>
               )}
             </div>

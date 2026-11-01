@@ -190,7 +190,7 @@ metadata:
 侧边栏「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
 
 - 行情：Bitget 公共 REST（无需 API Key），按需抓取并增量缓存到 `data/market.db`。周期支持 `1min/3min/5min/15min/30min/1h/4h/6h/12h/1day/1week/1M`；日/周/月使用 Bitget 的 UTC 变体（`1Dutc/1Wutc/1Mutc`）对齐，回测只使用已完成的 K 线。同一交易对和周期第二次回测只抓取缺失的首尾区间。
-- 网络：`api.bitget.com` 在部分网络无法直连，需要在 `~/.super-personal-platform/.env` 设置 `MARKET_HTTP_PROXY`（生产机为 `http://192.168.1.2:7893`）。页面「测试连接」或 `GET /api/market/probe` 可诊断代理与交易对。
+- 网络：`api.bitget.com` 在部分网络无法直连，需要在 `~/.super-personal-platform/.env` 设置统一的 `HTTP_PROXY`/`HTTPS_PROXY`（生产机为 `http://192.168.1.2:7893`）。这些变量会作用于所有出站 HTTP 调用（模型、搜索、微信、行情）。页面「测试连接」或 `GET /api/market/probe` 可诊断代理与交易对。
 - 策略：在页面内编写 Python，接口为 `def strategy(df) -> pd.Series`。`df` 是 UTC `DatetimeIndex`，列为 `open/high/low/close/volume`；返回每根 K 线的目标仓位 `[-1, 1]`（负数为模拟做空）。策略写入临时文件后在独立子进程中执行，默认超时 120 秒、内存上限 2 GB；这是崩溃隔离，不是安全沙箱。
 - 结果：总收益、年化、最大回撤、Sharpe、Sortino、胜率、交易次数、盈亏比、基准买入持有；价格 K 线与买卖点、净值、回撤、交易明细。净值/回撤/价格曲线下采样到约 2000 点，交易明细最多保存 5000 笔。结果持久化在 `backtests` 表，可在历史列表回看。
 - 任务：`queued/fetching/running/completed/failed/cancelled`；服务重启后未完成任务重新排队；同时只执行一个回测，其余排队。
@@ -247,7 +247,8 @@ metadata:
 | `WEIXIN_API_TIMEOUT_MS` | iLink `sendmessage` 请求超时 | `15000` |
 | `WEIXIN_QR_TIMEOUT_MS` | iLink 二维码请求/状态轮询超时 | `35000` |
 | `BITGET_BASE_URL` | Bitget 公共 REST 地址 | `https://api.bitget.com` |
-| `MARKET_HTTP_PROXY` | 抓取 Bitget 时使用的 HTTP 代理；为空时回退读 `HTTPS_PROXY/ALL_PROXY` | 空 |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 统一出站 HTTP 代理，LLM、搜索、微信和行情共用；由 `settings` 导出到进程环境 | 空 |
+| `NO_PROXY` | 不走代理的主机列表 | 空 |
 | `MARKET_HTTP_TIMEOUT_SECONDS` | 单次行情请求超时 | `15` |
 | `MARKET_RATE_LIMIT_PER_SECOND` | 行情请求限速（次/秒） | `5` |
 | `MARKET_MAX_RETRIES` | 429/5xx/网络错误重试次数 | `3` |
@@ -283,7 +284,7 @@ python3.12 -m venv .venv
 mkdir -p ~/.super-personal-platform/data
 cp deploy/.env.example ~/.super-personal-platform/.env
 # 编辑 ~/.super-personal-platform/.env，填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
-# 量化回测还需要设置 MARKET_HTTP_PROXY（生产机可用 http://192.168.1.2:7893）
+# 量化回测/外网访问需要代理时，设置 HTTP_PROXY 和 HTTPS_PROXY（生产机可用 http://192.168.1.2:7893）
 cp deploy/agent-command-center.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now agent-command-center.service

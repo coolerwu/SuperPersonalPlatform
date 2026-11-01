@@ -103,7 +103,7 @@ class BitgetCandleClient:
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = (base_url or settings.bitget_base_url).rstrip("/")
-        self.proxy = proxy if proxy is not None else settings.market_http_proxy
+        self.proxy = proxy
         self.timeout = timeout or settings.market_http_timeout_seconds
         self._client = http_client
         self._owns_client = http_client is None
@@ -143,7 +143,7 @@ class BitgetCandleClient:
                 response = await client.get(f"{self.base_url}{path}", params=params)
             except httpx.ProxyError as exc:
                 raise MarketDataError(
-                    "行情代理不可用，请检查 MARKET_HTTP_PROXY 或服务器网络",
+                    "行情代理不可用，请检查 HTTP_PROXY/HTTPS_PROXY 或服务器网络",
                     category="proxy",
                 ) from exc
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
@@ -151,7 +151,7 @@ class BitgetCandleClient:
                     await asyncio.sleep(0.5 * (2**attempt))
                     continue
                 raise MarketDataError(
-                    "无法连接 Bitget，请检查服务器网络或 MARKET_HTTP_PROXY",
+                    "无法连接 Bitget，请检查服务器网络或 HTTP_PROXY/HTTPS_PROXY",
                     category="network",
                 ) from exc
             except httpx.TimeoutException as exc:

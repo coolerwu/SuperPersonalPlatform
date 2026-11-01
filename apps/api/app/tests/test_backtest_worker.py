@@ -129,7 +129,7 @@ async def test_worker_marks_strategy_failure(monkeypatch: pytest.MonkeyPatch) ->
 
 async def test_worker_marks_market_error(monkeypatch: pytest.MonkeyPatch) -> None:
     async def failing_ensure(*args, **kwargs):
-        raise MarketDataError("行情代理不可用，请检查 MARKET_HTTP_PROXY")
+        raise MarketDataError("行情代理不可用，请检查 HTTP_PROXY")
 
     monkeypatch.setattr(
         backtest_worker_module.market_service, "ensure_data", failing_ensure

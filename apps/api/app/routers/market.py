@@ -16,8 +16,11 @@ router = APIRouter(
 
 def _proxy_configured() -> bool:
     return bool(
-        settings.market_http_proxy
+        settings.http_proxy
+        or settings.https_proxy
+        or os.environ.get("HTTP_PROXY")
         or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("http_proxy")
         or os.environ.get("https_proxy")
         or os.environ.get("ALL_PROXY")
         or os.environ.get("all_proxy")

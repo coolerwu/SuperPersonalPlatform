@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     app_skills_dir: Path | None = None
     app_cors_origins: str = "http://localhost:5173"
 
+    # Standard outbound proxy settings. One proxy applies to every HTTP client
+    # (LLM SDKs, web tools, WeChat, market data). The values are also exported
+    # to the process environment below so third-party SDKs see them.
+    http_proxy: str | None = None
+    https_proxy: str | None = None
+    no_proxy: str | None = None
+
     llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""
     llm_model: str = "deepseek-v4-flash"
@@ -54,7 +61,6 @@ class Settings(BaseSettings):
     # Crypto market data (Bitget public REST) and backtesting. Bitget is not
     # reachable directly from every network, so the proxy can be set explicitly.
     bitget_base_url: str = "https://api.bitget.com"
-    market_http_proxy: str | None = None
     market_http_timeout_seconds: int = 15
     market_rate_limit_per_second: float = 5.0
     market_max_retries: int = 3
@@ -99,3 +105,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# pydantic reads `$APP_HOME/.env`, but httpx/OpenAI SDKs read os.environ.
+# Export the configured proxy once so every outbound client uses it, including
+# when the service is started without shell proxy exports.
+for _proxy_name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+    _proxy_value = getattr(settings, _proxy_name.lower(), None)
+    if _proxy_value:
+        os.environ.setdefault(_proxy_name, _proxy_value)
+        os.environ.setdefault(_proxy_name.lower(), _proxy_value)
