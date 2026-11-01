@@ -24,7 +24,7 @@ def test_tools_api_includes_builtin_web_tools(client) -> None:
     tools = {tool["name"]: tool for tool in body["skill_tools"]}
     assert tools["web_fetch"]["registered"] is True
     assert tools["web_search"]["registered"] is True
-    assert tools["web_fetch"]["skills"] == ["web-fetch"]
+    assert tools["web_fetch"]["skills"] == ["web-fetch", "web-search"]
     assert tools["web_search"]["skills"] == ["web-search"]
     for name in (
         "browser_open",

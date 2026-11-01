@@ -147,7 +147,7 @@ def test_default_web_skills_seeded(client) -> None:
     skills = {item["name"]: item for item in body["skills"]}
     expected = {
         "web-fetch": ["web_fetch"],
-        "web-search": ["web_search"],
+        "web-search": ["web_search", "web_fetch"],
         "web-browser": [
             "browser_open",
             "browser_snapshot",

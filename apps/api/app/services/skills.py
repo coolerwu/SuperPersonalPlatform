@@ -55,18 +55,19 @@ metadata:
 """,
     "web-search": """---
 name: web-search
-description: 需要查最新信息、新闻、事实核验或寻找资料时使用。读取本技能后解锁 web_search 工具，可按关键词搜索网页并返回标题、链接、摘要、来源和权威性评分；需要正文时再配合 web-fetch 或把 need_content 设为 true。
+description: 需要查最新信息、新闻、事实核验或寻找资料时使用。读取本技能后解锁 web_search 和 web_fetch 工具，可按关键词搜索网页并返回标题、链接、摘要、来源和权威性评分；需要正文时再调用 web_fetch 抓取具体链接。
 metadata:
-  include_tools: web_search
+  include_tools: web_search web_fetch
 ---
 
 # Web Search
 
 1. 把用户问题改写成 1-128 字的关键词；可使用 site:、-、引号、lang:、after:、before: 等搜索语法。
-2. 调用 `web_search`，`count` 取 1-50（默认 10）；需要正文时把 `need_content` 设为 true。
-3. 优先参考 rerank 分高、authority 高、date 新的结果；摘要不足以回答时，用 web-fetch 抓取具体链接。
+2. 调用 `web_search`，`count` 取 1-50（默认 10）；需要正文时把 `need_content` 设为 true，或改用 `web_fetch` 抓取具体链接。
+3. 优先参考 rerank 分高、authority 高、date 新的结果；摘要不足以回答时，用 `web_fetch` 抓取具体链接（本技能已同时解锁该工具）。
 4. 引用时保留标题和 URL，不要把摘要当成全文。
-5. 每次成功搜索都按 DeepSeek Search 计费（每 1000 次 5 元），不要重复搜索同一问题。
+5. 每次成功搜索都按 DeepSeek Search 计费（每 1000 次 5 元），不要重复搜索同一问题；web_fetch 按 Fetch 请求另计费。
+6. 只需要抓取网页、不需要搜索时，也可以启用独立的 `web-fetch` 技能。
 """,
     "web-browser": """---
 name: web-browser
