@@ -121,7 +121,7 @@ metadata:
 - 技能启用：AI 创建的技能会自动加入当前 Agent 的启用列表，同一会话的下一次对话生效；手动创建/放入的技能仍需在这里启用。读取 SKILL.md 后，技能声明的工具才会解锁。
 - 删除：非系统技能可以在技能页删除，删除整个技能目录并从所有 Agent 的启用列表移除；系统技能不能删除。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
-- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser` 和 `memory-organizer`，分别声明 `include_tools: web_fetch` / `web_search web_fetch` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete`。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
+- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer` 和 `quant-backtest`，分别声明 `include_tools: web_fetch` / `web_search web_fetch` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete` / `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status`。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
 
@@ -150,12 +150,13 @@ metadata:
 `web_search` 和 `web_fetch` 使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：启用 `web-search` 并读取其 SKILL.md 后，会同时解锁 `web_search` 和 `web_fetch`；只抓取网页时也可以启用独立的 `web-fetch` 技能。`web-browser` 同样需要启用并读取其 SKILL.md。
 
 - **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
+- **`backtest_run` / `backtest_status` / `backtest_result` / `backtest_cancel` / `market_probe` / `market_cache_status`**：加密货币回测工具（`quant-backtest` 技能声明）。`backtest_run` 创建 Bitget 现货单标的回测并最多等待 90 秒，完成返回指标摘要，未完成返回任务 id；`backtest_status` 查状态/进度；`backtest_result` 返回指标、告警和最近交易；`backtest_cancel` 取消排队或执行中的任务；`market_probe` / `market_cache_status` 检查 Bitget 连接和本地行情缓存。
 - **`execute`**（`LocalShellBackend`，不在代码注册表）：所有 Agent 始终可用。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。任何 Agent（包括微信入站会话）都能操作这台机器。
 - **`eval`**（`CodeInterpreterMiddleware`，不在代码注册表）：每次 Run 都挂载，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用文件工具。PTC 只开放文件工具，不开放 `execute`；`subagents=True`，可在 REPL 里用 `task(...)` 调度子 Agent（每次独立会话，不走父级审批）。general-purpose 子 Agent 不继承 `eval`，但可以使用 `execute`。
 
 `execute` 与 `eval` 不参与技能启用列表，也没有读取门控；工具 schema 和库自带提示词负责用法说明，默认 Agent 的提示词会说明两者的存在与安全约束。
 
-工具实现分别在 `apps/api/app/services/skill_tools.py`（Search/Fetch）、`apps/api/app/services/browser_tools.py`（浏览器）和 `apps/api/app/services/memory_tools.py`（记忆）；`execute` 由 `deepagents` 的 `LocalShellBackend` 提供，`eval` 由 `langchain-quickjs` 提供。新增注册表工具时注册一个 factory，按运行时 Provider/会话构建 LangChain `BaseTool`。
+工具实现分别在 `apps/api/app/services/skill_tools.py`（Search/Fetch）、`apps/api/app/services/browser_tools.py`（浏览器）、`apps/api/app/services/memory_tools.py`（记忆）和 `apps/api/app/services/backtest_tools.py`（回测/行情）；`execute` 由 `deepagents` 的 `LocalShellBackend` 提供，`eval` 由 `langchain-quickjs` 提供。新增注册表工具时注册一个 factory，按运行时 Provider/会话构建 LangChain `BaseTool`。
 
 ## 记忆
 
@@ -195,6 +196,7 @@ metadata:
 - 结果：总收益、年化、最大回撤、Sharpe、Sortino、胜率、交易次数、盈亏比、基准买入持有；价格 K 线与买卖点、净值、回撤、交易明细。净值/回撤/价格曲线下采样到约 2000 点，交易明细最多保存 5000 笔。结果持久化在 `backtests` 表，可在历史列表回看。
 - 任务：`queued/fetching/running/completed/failed/cancelled`；服务重启后未完成任务重新排队；同时只执行一个回测，其余排队。
 - 限制：单次回测最多 `BACKTEST_MAX_BARS`（默认 200000）根 K 线；只做首尾增量，不自动修复中间缺口，缺失数据会在结果里告警；模拟做空不含借币成本、资金费率与强平。
+- Agent 使用：在「技能」页为当前 Agent 启用 `quant-backtest`，然后在对话里让它读取技能并跑回测，例如“用 20/60 日均线策略回测 BTCUSDT 最近 90 天的 1h 数据”。Agent 会使用 `backtest_run` 创建任务（最多等待 90 秒）、`backtest_status` 查询进度、`backtest_result` 查看指标和交易；网页和 Agent 共用同一套任务与行情缓存。
 
 ## 数据存储
 
@@ -255,6 +257,7 @@ metadata:
 | `BACKTEST_CONCURRENCY` | 同时执行的回测数 | `1` |
 | `BACKTEST_TIMEOUT_SECONDS` | 策略子进程超时 | `120` |
 | `BACKTEST_FETCH_TIMEOUT_SECONDS` | 单次回测抓取行情的总超时 | `600` |
+| `BACKTEST_TOOL_WAIT_SECONDS` | Agent 的 `backtest_run` 工具最多等待秒数 | `90` |
 | `BACKTEST_MEMORY_LIMIT_MB` | 策略子进程内存上限（POSIX best-effort） | `2048` |
 | `BACKTEST_MAX_BARS` | 单次回测的 K 线上限 | `200000` |
 | `BACKTEST_MAX_TRADES` | 结果中保留的交易明细上限 | `5000` |

@@ -40,6 +40,16 @@ def test_tools_api_includes_builtin_web_tools(client) -> None:
     for name in ("memory_list", "memory_update", "memory_delete"):
         assert tools[name]["registered"] is True
         assert tools[name]["skills"] == ["memory-organizer"]
+    for name in (
+        "backtest_run",
+        "backtest_status",
+        "backtest_result",
+        "backtest_cancel",
+        "market_probe",
+        "market_cache_status",
+    ):
+        assert tools[name]["registered"] is True
+        assert tools[name]["skills"] == ["quant-backtest"]
 
 
 def test_tools_api_includes_platform_tools(client) -> None:

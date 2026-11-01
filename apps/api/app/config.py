@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     backtest_concurrency: int = 1
     backtest_timeout_seconds: int = 120
     backtest_fetch_timeout_seconds: int = 600
+    backtest_tool_wait_seconds: int = 90
     backtest_memory_limit_mb: int = 2048
     backtest_max_bars: int = 200_000
     backtest_max_trades: int = 5_000

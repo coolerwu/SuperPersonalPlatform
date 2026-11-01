@@ -21,6 +21,18 @@ logger = logging.getLogger(__name__)
 RUNNER_PATH = Path(__file__).resolve().parents[1] / "backtest_runner.py"
 MAX_RESULT_BYTES = 50 * 1024 * 1024
 
+_active_worker: "BacktestWorker | None" = None
+
+
+def set_active_worker(worker: "BacktestWorker | None") -> None:
+    """Expose the in-process worker to Agent tools without app.state plumbing."""
+    global _active_worker
+    _active_worker = worker
+
+
+def get_active_worker() -> "BacktestWorker | None":
+    return _active_worker
+
 
 class BacktestWorker:
     def __init__(self) -> None:

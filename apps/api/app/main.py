@@ -31,7 +31,8 @@ from app.routers.system import router as system_router
 from app.routers.tools import router as tools_router
 from app.services.run_service import seed_default_provider
 from app.services.market_data import market_service
-from app.services.backtest_worker import BacktestWorker
+from app.services.backtest_worker import BacktestWorker, set_active_worker
+from app.services import backtest_tools  # noqa: F401 - registers Agent backtest tools
 from app.services.skills import seed_default_skills
 from app.services.weixin_runtime import WeixinRuntime
 from app.services.worker import RunWorker
@@ -112,12 +113,14 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             await weixin.start()
             backtest_worker = BacktestWorker()
             app.state.backtest_worker = backtest_worker
+            set_active_worker(backtest_worker)
             await backtest_worker.start()
         yield
         if start_worker:
             backtest_worker = getattr(app.state, "backtest_worker", None)
             if backtest_worker is not None:
                 await backtest_worker.stop()
+            set_active_worker(None)
             await weixin.stop()
             worker = getattr(app.state, "worker", None)
             if worker is not None:
