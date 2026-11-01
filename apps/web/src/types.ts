@@ -199,3 +199,127 @@ export type MemoryItem = {
 };
 
 export type DrawerTab = "run" | "agent";
+
+export type BacktestStatus =
+  | "queued"
+  | "fetching"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | string;
+
+export type BacktestMetrics = {
+  bars: number;
+  start_ms: number;
+  end_ms: number;
+  years: number;
+  initial_capital: number;
+  final_equity: number;
+  total_return: number;
+  annual_return: number | null;
+  max_drawdown: number;
+  sharpe: number | null;
+  sortino: number | null;
+  volatility: number | null;
+  win_rate: number | null;
+  trades: number;
+  profit_factor: number | null;
+  benchmark_return: number;
+  benchmark_annual_return: number | null;
+  avg_exposure: number;
+  total_cost: number;
+  avg_trade_return: number | null;
+};
+
+export type BacktestSummary = {
+  id: string;
+  symbol: string;
+  granularity: string;
+  start_ms: number;
+  end_ms: number;
+  initial_capital: number;
+  fee_rate: number;
+  slippage_rate: number;
+  status: BacktestStatus;
+  error: string | null;
+  metrics: BacktestMetrics | null;
+  warnings: string[];
+  bar_count: number;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type BacktestProgress = {
+  stage?: string;
+  fetched_bars?: number;
+  reason?: string;
+};
+
+export type BacktestDetail = BacktestSummary & {
+  strategy_code: string;
+  cancel_requested: boolean;
+  error_detail: string | null;
+  progress: BacktestProgress;
+  data_start_ms: number | null;
+  data_end_ms: number | null;
+  trades_total: number;
+  trades_truncated: boolean;
+};
+
+export type BacktestTrade = {
+  entry_ts: number;
+  exit_ts: number;
+  side: "long" | "short" | string;
+  entry_price: number;
+  exit_price: number;
+  bars: number;
+  return: number;
+  pnl: number;
+  closed: boolean;
+};
+
+export type BacktestResult = {
+  id: string;
+  status: BacktestStatus;
+  metrics: BacktestMetrics | null;
+  equity: [number, number][];
+  drawdown: [number, number][];
+  candles: [number, number, number, number, number, number][];
+  trades: BacktestTrade[];
+  warnings: string[];
+  trades_total: number;
+  trades_truncated: boolean;
+  data_start_ms: number | null;
+  data_end_ms: number | null;
+  bar_count: number;
+};
+
+export type BacktestMeta = {
+  granularities: { value: string; label: string }[];
+  max_bars: number;
+  max_trades: number;
+  worker_running: boolean;
+  proxy_configured: boolean;
+  bitget_base_url: string;
+};
+
+export type MarketStatus = {
+  symbol: string;
+  granularity: string;
+  rows: number;
+  first_ms: number | null;
+  last_ms: number | null;
+  oldest_available_ms: number | null;
+  last_synced_at: string | null;
+  last_error: string | null;
+};
+
+export type MarketProbe = {
+  ok: boolean;
+  latency_ms: number | null;
+  error: string | null;
+  base_url: string;
+  proxy_configured: boolean;
+};

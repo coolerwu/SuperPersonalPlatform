@@ -27,6 +27,7 @@ import {
 import { MEMORY_COMMAND } from "./messageContent";
 import { describeApiError } from "./errors";
 import { ChatPanel } from "./components/ChatPanel";
+import { BacktestPage } from "./components/BacktestPage";
 import { ChannelsPage } from "./components/ChannelsPage";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Drawer } from "./components/Drawer";
@@ -127,7 +128,9 @@ export default function App() {
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [view, setView] = useState<"chat" | "settings" | "memory" | "skills" | "tools" | "channels">("chat");
+  const [view, setView] = useState<
+    "chat" | "settings" | "memory" | "skills" | "tools" | "channels" | "backtest"
+  >("chat");
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
@@ -188,7 +191,9 @@ export default function App() {
             ? "工具"
             : view === "channels"
               ? "渠道"
-              : (agent?.name ?? "Agent");
+              : view === "backtest"
+                ? "回测"
+                : (agent?.name ?? "Agent");
 
   function setAgentError(message: string, forAgent: string) {
     if (forAgent !== agentIdRef.current) return;
@@ -307,7 +312,9 @@ export default function App() {
     };
   }, []);
 
-  function openView(next: "chat" | "settings" | "memory" | "skills" | "tools" | "channels") {
+  function openView(
+    next: "chat" | "settings" | "memory" | "skills" | "tools" | "channels" | "backtest",
+  ) {
     setView(next);
     setSidebarOpen(false);
   }
@@ -1201,7 +1208,15 @@ export default function App() {
   }
 
   return (
-    <div className={`app-shell ${view === "chat" && drawerOpen ? "with-drawer" : ""}`}>
+    <div
+      className={[
+        "app-shell",
+        view === "chat" ? "pearl-chat" : "",
+        view === "chat" && drawerOpen ? "with-drawer" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <header className="mobile-bar">
         <button
           type="button"
@@ -1281,11 +1296,13 @@ export default function App() {
         onOpenSkills={() => openView("skills")}
         onOpenTools={() => openView("tools")}
         onOpenChannels={() => openView("channels")}
+        onOpenBacktest={() => openView("backtest")}
         settingsActive={view === "settings"}
         memoryActive={view === "memory"}
         skillsActive={view === "skills"}
         toolsActive={view === "tools"}
         channelsActive={view === "channels"}
+        backtestActive={view === "backtest"}
         onLogout={() => void logout()}
       />
 
@@ -1308,6 +1325,8 @@ export default function App() {
         <ToolsPage onClose={() => setView("chat")} />
       ) : view === "channels" ? (
         <ChannelsPage agent={agent} agentId={agentId} onClose={() => setView("chat")} />
+      ) : view === "backtest" ? (
+        <BacktestPage onClose={() => setView("chat")} />
       ) : view === "settings" ? (
         <SettingsPage
           agents={agents}

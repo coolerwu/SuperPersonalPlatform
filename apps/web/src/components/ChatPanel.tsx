@@ -571,7 +571,6 @@ export function ChatPanel(props: ChatPanelProps) {
               id={`message-${message.id}`}
               className={`message-row assistant ${highlightId === message.id ? "message-focus" : ""}`}
             >
-              <div className="message-avatar">ACC</div>
               <div className="message-bubble assistant">
                 <div className="message-head">
                   <span className="message-author">{props.agentName || "Agent"}</span>
@@ -607,7 +606,6 @@ export function ChatPanel(props: ChatPanelProps) {
 
         {showStreaming && !streamingSuperseded && (
           <div className="message-row assistant">
-            <div className="message-avatar">ACC</div>
             <div className="message-bubble assistant streaming">
               <div className="message-head">
                 <span className="message-author">{props.agentName || "Agent"}</span>
@@ -648,7 +646,6 @@ export function ChatPanel(props: ChatPanelProps) {
 
         {props.terminalRun && (
           <div className="message-row assistant">
-            <div className="message-avatar">ACC</div>
             <div
               className={`message-bubble assistant terminal ${
                 props.terminalRun.run.status === "cancelled" ? "cancelled" : "failed"
@@ -704,7 +701,6 @@ export function ChatPanel(props: ChatPanelProps) {
 
         {orphanScreenshots.length > 0 && (
           <div className="message-row assistant">
-            <div className="message-avatar">ACC</div>
             <div className="message-bubble assistant">
               <ScreenshotStrip sessionId={props.sessionId} items={orphanScreenshots} />
             </div>
@@ -922,7 +918,6 @@ export function ChatPanel(props: ChatPanelProps) {
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
                   <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
-                <span>停止</span>
               </button>
             ) : (
               <button
@@ -947,7 +942,6 @@ export function ChatPanel(props: ChatPanelProps) {
                   <path d="M22 2 11 13" />
                   <path d="M22 2 15 22l-4-9-9-4Z" />
                 </svg>
-                <span>发送</span>
               </button>
             )}
           </div>

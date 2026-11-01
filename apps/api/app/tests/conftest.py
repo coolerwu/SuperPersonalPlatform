@@ -11,6 +11,8 @@ os.environ["APP_AUTH_TOKEN"] = "test-token"
 os.environ["LLM_API_KEY"] = "test-key"
 os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
 os.environ["LLM_MODEL"] = "deepseek-v4-flash"
+os.environ["MARKET_HTTP_PROXY"] = ""
+os.environ["BITGET_BASE_URL"] = "https://api.bitget.com"
 
 import pytest
 from fastapi.testclient import TestClient

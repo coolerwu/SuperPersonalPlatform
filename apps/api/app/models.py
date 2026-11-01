@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -266,3 +267,41 @@ class ChannelDelivery(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
     delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class Backtest(Base):
+    """One user-submitted crypto backtest and its bounded result payload."""
+
+    __tablename__ = "backtests"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    symbol: Mapped[str] = mapped_column(String(30), index=True)
+    granularity: Mapped[str] = mapped_column(String(10))
+    start_ms: Mapped[int] = mapped_column(BigInteger)
+    end_ms: Mapped[int] = mapped_column(BigInteger)
+    initial_capital: Mapped[float] = mapped_column(Float, default=10_000.0)
+    fee_rate: Mapped[float] = mapped_column(Float, default=0.001)
+    slippage_rate: Mapped[float] = mapped_column(Float, default=0.0005)
+    strategy_code: Mapped[str] = mapped_column(Text, default="")
+
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    progress: Mapped[dict] = mapped_column("progress_json", JSON, default=dict)
+
+    metrics: Mapped[dict | None] = mapped_column("metrics_json", JSON, nullable=True)
+    equity: Mapped[list | None] = mapped_column("equity_json", JSON, nullable=True)
+    drawdown: Mapped[list | None] = mapped_column("drawdown_json", JSON, nullable=True)
+    candles: Mapped[list | None] = mapped_column("candles_json", JSON, nullable=True)
+    trades: Mapped[list | None] = mapped_column("trades_json", JSON, nullable=True)
+    warnings: Mapped[list] = mapped_column("warnings_json", JSON, default=list)
+    data_start_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    data_end_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    bar_count: Mapped[int] = mapped_column(Integer, default=0)
+    trades_total: Mapped[int] = mapped_column(Integer, default=0)
+    trades_truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

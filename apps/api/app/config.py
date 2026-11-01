@@ -51,6 +51,21 @@ class Settings(BaseSettings):
     weixin_api_timeout_ms: int = 15_000
     weixin_qr_timeout_ms: int = 35_000
 
+    # Crypto market data (Bitget public REST) and backtesting. Bitget is not
+    # reachable directly from every network, so the proxy can be set explicitly.
+    bitget_base_url: str = "https://api.bitget.com"
+    market_http_proxy: str | None = None
+    market_http_timeout_seconds: int = 15
+    market_rate_limit_per_second: float = 5.0
+    market_max_retries: int = 3
+    backtest_concurrency: int = 1
+    backtest_timeout_seconds: int = 120
+    backtest_fetch_timeout_seconds: int = 600
+    backtest_memory_limit_mb: int = 2048
+    backtest_max_bars: int = 200_000
+    backtest_max_trades: int = 5_000
+    backtest_equity_points: int = 2_000
+
     @property
     def checkpoint_dir(self) -> Path:
         return self.app_data_dir / "checkpoints"
@@ -62,6 +77,14 @@ class Settings(BaseSettings):
     @property
     def skills_dir(self) -> Path:
         return self.app_skills_dir or (APP_HOME / "skills")
+
+    @property
+    def market_db_path(self) -> Path:
+        return self.app_data_dir / "market.db"
+
+    @property
+    def backtests_dir(self) -> Path:
+        return self.app_data_dir / "backtests"
 
     @property
     def cors_origins(self) -> list[str]:

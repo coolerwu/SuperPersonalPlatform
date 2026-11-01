@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.services.skills import normalize_skill_names
+from app.services.timeframes import validate_granularity
+
+_SYMBOL_RE = re.compile(r"^[A-Z0-9]{3,30}$")
 
 
 class LoginRequest(BaseModel):
@@ -267,3 +271,114 @@ class MemoryOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_used_at: datetime | None
+
+
+class BacktestCreate(BaseModel):
+    symbol: str = Field(min_length=3, max_length=30)
+    granularity: str = Field(min_length=2, max_length=10)
+    start_ms: int = Field(gt=0)
+    end_ms: int = Field(gt=0)
+    initial_capital: float = Field(default=10_000.0, gt=0, le=1e12)
+    fee_rate: float = Field(default=0.001, ge=0, le=0.1)
+    slippage_rate: float = Field(default=0.0005, ge=0, le=0.1)
+    strategy_code: str = Field(min_length=1, max_length=200_000)
+
+    @field_validator("symbol")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        symbol = value.strip().upper()
+        if not _SYMBOL_RE.match(symbol):
+            raise ValueError("交易对只能包含大写字母和数字，例如 BTCUSDT")
+        return symbol
+
+    @field_validator("granularity")
+    @classmethod
+    def _validate_granularity(cls, value: str) -> str:
+        return validate_granularity(value)
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> "BacktestCreate":
+        if self.end_ms <= self.start_ms:
+            raise ValueError("结束时间必须晚于开始时间")
+        return self
+
+
+class BacktestSummaryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    symbol: str
+    granularity: str
+    start_ms: int
+    end_ms: int
+    initial_capital: float
+    fee_rate: float
+    slippage_rate: float
+    status: str
+    error: str | None
+    metrics: dict | None = None
+    warnings: list = Field(default_factory=list)
+    bar_count: int = 0
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class BacktestDetailOut(BacktestSummaryOut):
+    strategy_code: str
+    cancel_requested: bool = False
+    error_detail: str | None = None
+    progress: dict = Field(default_factory=dict)
+    data_start_ms: int | None = None
+    data_end_ms: int | None = None
+    trades_total: int = 0
+    trades_truncated: bool = False
+
+
+class BacktestResultOut(BaseModel):
+    id: str
+    status: str
+    metrics: dict | None = None
+    equity: list = Field(default_factory=list)
+    drawdown: list = Field(default_factory=list)
+    candles: list = Field(default_factory=list)
+    trades: list = Field(default_factory=list)
+    warnings: list = Field(default_factory=list)
+    trades_total: int = 0
+    trades_truncated: bool = False
+    data_start_ms: int | None = None
+    data_end_ms: int | None = None
+    bar_count: int = 0
+
+
+class BacktestGranularityOut(BaseModel):
+    value: str
+    label: str
+
+
+class BacktestMetaOut(BaseModel):
+    granularities: list[BacktestGranularityOut] = Field(default_factory=list)
+    max_bars: int
+    max_trades: int
+    worker_running: bool = False
+    proxy_configured: bool = False
+    bitget_base_url: str
+
+
+class MarketStatusOut(BaseModel):
+    symbol: str
+    granularity: str
+    rows: int = 0
+    first_ms: int | None = None
+    last_ms: int | None = None
+    oldest_available_ms: int | None = None
+    last_synced_at: datetime | None = None
+    last_error: str | None = None
+
+
+class MarketProbeOut(BaseModel):
+    ok: bool
+    latency_ms: int | None = None
+    error: str | None = None
+    base_url: str
+    proxy_configured: bool = False

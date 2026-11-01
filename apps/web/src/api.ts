@@ -1,9 +1,15 @@
 import type {
   Agent,
   Attachment,
+  BacktestDetail,
+  BacktestMeta,
+  BacktestResult,
+  BacktestSummary,
   Channel,
   ChannelLogin,
   ChannelLoginStatus,
+  MarketProbe,
+  MarketStatus,
   MemoryItem,
   MemoryScope,
   Message,
@@ -239,4 +245,36 @@ export const api = {
   updateMemory: (id: string, payload: { content?: string; tags?: string[] }) =>
     request<MemoryItem>(`/api/memories/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteMemory: (id: string) => request<{ deleted: boolean }>(`/api/memories/${id}`, { method: "DELETE" }),
+
+  listBacktests: (limit = 50) => request<BacktestSummary[]>(`/api/backtests?limit=${limit}`),
+  getBacktestMeta: () => request<BacktestMeta>("/api/backtests/meta"),
+  getBacktest: (id: string) => request<BacktestDetail>(`/api/backtests/${encodeURIComponent(id)}`),
+  getBacktestResult: (id: string) =>
+    request<BacktestResult>(`/api/backtests/${encodeURIComponent(id)}/result`),
+  createBacktest: (payload: {
+    symbol: string;
+    granularity: string;
+    start_ms: number;
+    end_ms: number;
+    initial_capital: number;
+    fee_rate: number;
+    slippage_rate: number;
+    strategy_code: string;
+  }) =>
+    request<BacktestDetail>("/api/backtests", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  cancelBacktest: (id: string) =>
+    request<{ cancelled: boolean }>(`/api/backtests/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+    }),
+  getMarketStatus: (symbol: string, granularity: string) => {
+    const search = new URLSearchParams({ symbol, granularity });
+    return request<MarketStatus>(`/api/market/candles/status?${search.toString()}`);
+  },
+  probeMarket: (symbol: string, granularity: string) => {
+    const search = new URLSearchParams({ symbol, granularity });
+    return request<MarketProbe>(`/api/market/probe?${search.toString()}`);
+  },
 };

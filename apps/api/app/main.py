@@ -13,12 +13,15 @@ from app import APP_VERSION
 from app.auth import router as auth_router
 from app.config import settings
 from app.db import SessionLocal, init_db
+from app.market_db import init_market_db
 from app.models import Agent, Provider
 from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.routers.agents import router as agents_router
+from app.routers.backtests import router as backtests_router
 from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
 from app.routers.memories import router as memories_router
+from app.routers.market import router as market_router
 from app.routers.providers import router as providers_router
 from app.routers.runs import router as runs_router
 from app.routers.screenshots import router as screenshots_router
@@ -27,6 +30,8 @@ from app.routers.skills import router as skills_router
 from app.routers.system import router as system_router
 from app.routers.tools import router as tools_router
 from app.services.run_service import seed_default_provider
+from app.services.market_data import market_service
+from app.services.backtest_worker import BacktestWorker
 from app.services.skills import seed_default_skills
 from app.services.weixin_runtime import WeixinRuntime
 from app.services.worker import RunWorker
@@ -89,8 +94,10 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
         settings.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
         settings.skills_dir.expanduser().mkdir(parents=True, exist_ok=True)
+        settings.backtests_dir.mkdir(parents=True, exist_ok=True)
         seed_default_skills()
         await init_db()
+        await init_market_db()
         await seed_default_provider()
         await seed_default_agent()
         await sync_default_agent_instructions()
@@ -103,12 +110,19 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             weixin.worker = worker
             await worker.start()
             await weixin.start()
+            backtest_worker = BacktestWorker()
+            app.state.backtest_worker = backtest_worker
+            await backtest_worker.start()
         yield
         if start_worker:
+            backtest_worker = getattr(app.state, "backtest_worker", None)
+            if backtest_worker is not None:
+                await backtest_worker.stop()
             await weixin.stop()
             worker = getattr(app.state, "worker", None)
             if worker is not None:
                 await worker.stop()
+        await market_service.close()
 
     app = FastAPI(title="Agent Command Center", version=APP_VERSION, lifespan=lifespan)
     app.add_middleware(
@@ -130,6 +144,8 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(skills_router)
     app.include_router(tools_router)
     app.include_router(system_router)
+    app.include_router(market_router)
+    app.include_router(backtests_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, bool]:

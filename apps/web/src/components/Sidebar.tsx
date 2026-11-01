@@ -23,11 +23,13 @@ type SidebarProps = {
   onOpenSkills: () => void;
   onOpenTools: () => void;
   onOpenChannels: () => void;
+  onOpenBacktest: () => void;
   settingsActive: boolean;
   memoryActive: boolean;
   skillsActive: boolean;
   toolsActive: boolean;
   channelsActive: boolean;
+  backtestActive: boolean;
   onLogout: () => void;
 };
 
@@ -201,11 +203,36 @@ export function Sidebar(props: SidebarProps) {
             </span>
             <span>渠道</span>
           </button>
+          <button
+            className={`sidebar-action ${props.backtestActive ? "active" : ""}`}
+            onClick={props.onOpenBacktest}
+          >
+            <span className="sidebar-action-icon">
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M4 20h16" />
+                <path d="M7 17V9M12 15V5M17 18v-7" />
+                <rect x="5" y="10" width="4" height="5" rx="1" />
+                <rect x="10" y="6" width="4" height="6" rx="1" />
+                <rect x="15" y="12" width="4" height="4" rx="1" />
+              </svg>
+            </span>
+            <span>回测</span>
+          </button>
         </div>
 
         <div className="sidebar-actions">
           <button
-            className={`sidebar-action ${props.newSessionActive ? "active" : ""}`}
+            className={`sidebar-action new-session ${props.newSessionActive ? "active" : ""}`}
             onClick={props.onNewSession}
           >
             <span className="sidebar-action-icon">+</span>
