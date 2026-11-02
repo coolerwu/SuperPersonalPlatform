@@ -37,7 +37,7 @@
 - 消息操作：复制、引用、失败/已停止 Run 重试；不做编辑/重新生成/删除单条消息（需要 checkpoint 分支方案）。
 - Agent 支持彻底删除 `DELETE /api/agents/{id}/permanent`，级联 sessions/messages/runs/run_events/checkpoints/channels；有活动 Run 时 409。
 - 配置页集中管理 Provider（查看/新增/编辑）、Agent 和运行环境；另有独立的「记忆」页面管理 user/agent 记忆。`GET /api/system` 只返回非敏感信息。
-- 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent tab 列出全部 Agent 摘要（Provider/model、启用技能数、自动记忆、状态），点击行即切换这个全局选中的 Agent，侧边栏同步；下方编辑区只编辑当前 Agent，不持有第二套选择状态。新增 per-agent 配置时必须沿用这一规则。侧边栏按「Agent 工作台 / Agent 能力 / 独立工具 / 平台」分组：Agent 工作台放 Agent 选择器、新对话与会话列表；「Agent 能力」组提供「技能」「工具」「渠道」「记忆」页面；「独立工具」组的「回测」不绑定 Agent，入口标注且页面标题旁显示「独立工具」；「平台」组放配置与退出。技能启停按当前 Agent 立即保存；工具页只展示平台工具、文件工具与技能工具的注册/声明情况，不单独启停工具；渠道页按当前 Agent 管理微信渠道与扫码登录。
+- 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent tab 列出全部 Agent 摘要（Provider/model、启用技能数、自动记忆、状态），点击行即切换这个全局选中的 Agent，侧边栏同步；下方编辑区只编辑当前 Agent，不持有第二套选择状态。新增 per-agent 配置时必须沿用这一规则。侧栏顶部是「Agent / 量化」两个工作区 tab（默认 Agent）：Agent 工作区按「Agent 工作台 / Agent 能力 / 独立工具 / 平台」分组，Agent 工作台放 Agent 选择器、新对话与会话列表，「Agent 能力」组提供「技能」「工具」「渠道」「记忆」页面，「独立工具」组的「回测」不绑定 Agent，「平台」组放配置与退出；量化工作区只显示回测，不显示 Agent 选择器与会话。技能启停按当前 Agent 立即保存；工具页只展示平台工具、文件工具与技能工具的注册/声明情况，不单独启停工具；渠道页按当前 Agent 管理微信渠道与扫码登录。
 - Chat 内容列统一宽度：header、消息流、composer 都以 `--chat-lane` 对齐。
 
 ## 运行约定

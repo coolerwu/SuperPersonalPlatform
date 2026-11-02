@@ -8,6 +8,8 @@ import { Select } from "./Select";
 type SidebarProps = {
   open: boolean;
   onClose: () => void;
+  workspace: "agent" | "quant";
+  onWorkspaceChange: (workspace: "agent" | "quant") => void;
   agents: Agent[];
   agentId: string;
   onAgentChange: (id: string) => void;
@@ -90,9 +92,25 @@ export function Sidebar(props: SidebarProps) {
       <aside id="app-sidebar" className={`sidebar ${props.open ? "open" : ""}`}>
         <div className="brand">
           <div className="brand-mark">ACC</div>
-          <div className="brand-text">
-            <div className="brand-title">Agent Command</div>
-            <div className="brand-subtitle">web chat · v1</div>
+          <div className="workspace-tabs" role="tablist" aria-label="工作区">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={props.workspace === "agent"}
+              className={`workspace-tab ${props.workspace === "agent" ? "active" : ""}`}
+              onClick={() => props.onWorkspaceChange("agent")}
+            >
+              Agent
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={props.workspace === "quant"}
+              className={`workspace-tab ${props.workspace === "quant" ? "active" : ""}`}
+              onClick={() => props.onWorkspaceChange("quant")}
+            >
+              量化
+            </button>
           </div>
           <button
             type="button"
@@ -105,6 +123,8 @@ export function Sidebar(props: SidebarProps) {
           </button>
         </div>
 
+        {props.workspace === "agent" ? (
+          <>
         <div className="sidebar-section">
           <div className="agent-row">
             <span className="agent-row-icon" aria-hidden="true">
@@ -354,6 +374,46 @@ export function Sidebar(props: SidebarProps) {
               </button>
             </div>
         </div>
+          </>
+        ) : (
+          <>
+            <div className="sidebar-group sidebar-quant">
+              <div className="sidebar-group-head">
+                <span className="sidebar-group-label">独立工具</span>
+              </div>
+              <button
+                className="sidebar-action sidebar-standalone active"
+                onClick={props.onOpenBacktest}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 20h16" />
+                    <path d="M7 17V9M12 15V5M17 18v-7" />
+                    <rect x="5" y="10" width="4" height="5" rx="1" />
+                    <rect x="10" y="6" width="4" height="6" rx="1" />
+                    <rect x="15" y="12" width="4" height="4" rx="1" />
+                  </svg>
+                </span>
+                <span>回测</span>
+                <span className="sidebar-badge">不绑定 Agent</span>
+              </button>
+              <p className="sidebar-quant-hint">Bitget 公共行情 · 本地缓存 · 历史回测</p>
+            </div>
+
+            <div className="sidebar-group sidebar-group-platform">
+              <button className="sidebar-action" onClick={props.onLogout}>
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <path d="m16 17 5-5-5-5" />
+                    <path d="M21 12H9" />
+                  </svg>
+                </span>
+                <span>退出登录</span>
+              </button>
+            </div>
+          </>
+        )}
       </aside>
     </>
   );
