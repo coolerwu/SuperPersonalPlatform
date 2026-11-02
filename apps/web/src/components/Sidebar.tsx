@@ -322,28 +322,6 @@ export function Sidebar(props: SidebarProps) {
             </div>
           </div>
 
-          <div className="sidebar-group">
-            <div className="sidebar-group-head">
-              <span className="sidebar-group-label">独立工具</span>
-            </div>
-            <button
-              className={`sidebar-action sidebar-standalone ${props.backtestActive ? "active" : ""}`}
-              onClick={props.onOpenBacktest}
-            >
-              <span className="sidebar-action-icon">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M4 20h16" />
-                  <path d="M7 17V9M12 15V5M17 18v-7" />
-                  <rect x="5" y="10" width="4" height="5" rx="1" />
-                  <rect x="10" y="6" width="4" height="6" rx="1" />
-                  <rect x="15" y="12" width="4" height="4" rx="1" />
-                </svg>
-              </span>
-              <span>回测</span>
-              <span className="sidebar-badge">不绑定 Agent</span>
-            </button>
-          </div>
-
           <div className="sidebar-group sidebar-group-platform">
             <div className="sidebar-group-head">
               <span className="sidebar-group-label">平台</span>
@@ -382,7 +360,7 @@ export function Sidebar(props: SidebarProps) {
                 <span className="sidebar-group-label">独立工具</span>
               </div>
               <button
-                className="sidebar-action sidebar-standalone active"
+                className={`sidebar-action sidebar-standalone ${props.backtestActive ? "active" : ""}`}
                 onClick={props.onOpenBacktest}
               >
                 <span className="sidebar-action-icon">
