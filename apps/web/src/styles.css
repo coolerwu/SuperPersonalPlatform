@@ -3656,7 +3656,7 @@ textarea {
 /* Pearl chat surface — scoped to the chat view so the settings pages keep the warm theme. */
 
 .app-shell.pearl {
-  --chat-lane: 760px;
+  --chat-lane: clamp(760px, 68vw, 1080px);
   position: relative;
   isolation: isolate;
   gap: 12px;
