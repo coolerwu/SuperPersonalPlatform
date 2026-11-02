@@ -150,7 +150,7 @@ metadata:
 `web_search` 和 `web_fetch` 使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：启用 `web-search` 并读取其 SKILL.md 后，会同时解锁 `web_search` 和 `web_fetch`；只抓取网页时也可以启用独立的 `web-fetch` 技能。`web-browser` 同样需要启用并读取其 SKILL.md。
 
 - **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
-- **`backtest_run` / `backtest_status` / `backtest_result` / `backtest_cancel` / `market_probe` / `market_cache_status`**：加密货币回测工具（`quant-backtest` 技能声明）。`backtest_run` 创建 Bitget 现货单标的回测并最多等待 90 秒，完成返回指标摘要，未完成返回任务 id；`backtest_status` 查状态/进度；`backtest_result` 返回指标、告警和最近交易；`backtest_cancel` 取消排队或执行中的任务；`market_probe` / `market_cache_status` 检查 Bitget 连接和本地行情缓存。
+- **`backtest_run` / `backtest_status` / `backtest_result` / `backtest_cancel` / `market_probe` / `market_cache_status`**：加密货币回测工具（`quant-backtest` 技能声明）。`backtest_run` 创建 Bitget 现货单标的回测（可指定 `warmup_bars`，默认 200）并最多等待 90 秒，完成返回指标摘要，未完成返回任务 id；`backtest_status` 查状态/进度；`backtest_result` 返回指标、告警和最近交易；`backtest_cancel` 取消排队或执行中的任务；`market_probe` / `market_cache_status` 检查 Bitget 连接和本地行情缓存。
 - **`execute`**（`LocalShellBackend`，不在代码注册表）：所有 Agent 始终可用。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。任何 Agent（包括微信入站会话）都能操作这台机器。
 - **`eval`**（`CodeInterpreterMiddleware`，不在代码注册表）：每次 Run 都挂载，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用文件工具。PTC 只开放文件工具，不开放 `execute`；`subagents=True`，可在 REPL 里用 `task(...)` 调度子 Agent（每次独立会话，不走父级审批）。general-purpose 子 Agent 不继承 `eval`，但可以使用 `execute`。
 
@@ -207,12 +207,13 @@ metadata:
 
 顶部「量化」tab 的「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
 
-- 行情：Bitget 公共 REST（无需 API Key），按需抓取并增量缓存到 `data/market.db`。周期支持 `1min/3min/5min/15min/30min/1h/4h/6h/12h/1day/1week/1M`；日/周/月使用 Bitget 的 UTC 变体（`1Dutc/1Wutc/1Mutc`）对齐，回测只使用已完成的 K 线。同一交易对和周期第二次回测只抓取缺失的首尾区间。
+- 行情：Bitget 公共 REST（无需 API Key），按需抓取并增量缓存到 `data/market.db`。周期支持 `1min/3min/5min/15min/30min/1h/4h/6h/12h/1day/1week/1M`；日/周/月使用 Bitget 的 UTC 变体（`1Dutc/1Wutc/1Mutc`）对齐，回测只使用已完成的 K 线。同一交易对和周期第二次回测只抓取缺失的首尾区间；每次回测还会扫描区间内的中间缺口并尝试补齐（`MARKET_GAP_REPAIR_BARS` 默认 50000 根、`MARKET_GAP_REPAIR_RANGES` 默认 50 段）。
 - 网络：`api.bitget.com` 在部分网络无法直连，需要在 `~/.super-personal-platform/.env` 设置统一的 `HTTP_PROXY`/`HTTPS_PROXY`（生产机为 `http://192.168.1.2:7893`）。这些变量会作用于所有出站 HTTP 调用（模型、搜索、微信、行情）。页面「测试连接」或 `GET /api/market/probe` 可诊断代理与交易对。
 - 策略：在页面内编写 Python，接口为 `def strategy(df) -> pd.Series`。`df` 是 UTC `DatetimeIndex`，列为 `open/high/low/close/volume`；返回每根 K 线的目标仓位 `[-1, 1]`（负数为模拟做空）。策略写入临时文件后在独立子进程中执行，默认超时 120 秒、内存上限 2 GB；这是崩溃隔离，不是安全沙箱。
+- 数据完整性：页面「预热 K 线」默认 200 根（0–5000），会在评估区间之前额外加载，策略可在预热段建立初始仓位，指标只从开始日期计算。补不齐的缺口会以 NaN 行保留在策略输入中，缺口期间强制空仓、跨缺口收益不计入。平台还会把策略在截断前缀上重跑并比较重叠信号，发现「疑似使用未来数据」时在结果里告警；该检测会让策略代码再执行一次，策略应保持无副作用。可用 `BACKTEST_FUTURE_CHECK=false` 关闭该检测。
 - 结果：总收益、年化、最大回撤、Sharpe、Sortino、胜率、交易次数、盈亏比、基准买入持有；价格 K 线与买卖点、净值、回撤、交易明细。净值/回撤/价格曲线下采样到约 2000 点，交易明细最多保存 5000 笔。结果持久化在 `backtests` 表，可在历史列表回看。
 - 任务：`queued/fetching/running/completed/failed/cancelled`；服务重启后未完成任务重新排队；同时只执行一个回测，其余排队。
-- 限制：单次回测最多 `BACKTEST_MAX_BARS`（默认 200000）根 K 线；只做首尾增量，不自动修复中间缺口，缺失数据会在结果里告警；模拟做空不含借币成本、资金费率与强平。
+- 限制：单次回测最多 `BACKTEST_MAX_BARS`（默认 200000）根 K 线；缺口超过修复预算时保留为空仓，并在结果里告警；模拟做空不含借币成本、资金费率与强平。
 - Agent 使用：在「技能」页为当前 Agent 启用 `quant-backtest`，然后在对话里让它读取技能并跑回测，例如“用 20/60 日均线策略回测 BTCUSDT 最近 90 天的 1h 数据”。Agent 会使用 `backtest_run` 创建任务（最多等待 90 秒）、`backtest_status` 查询进度、`backtest_result` 查看指标和交易；网页和 Agent 共用同一套任务与行情缓存。
 
 ## 数据存储
@@ -274,6 +275,8 @@ metadata:
 | `MARKET_HTTP_TIMEOUT_SECONDS` | 单次行情请求超时 | `15` |
 | `MARKET_RATE_LIMIT_PER_SECOND` | 行情请求限速（次/秒） | `5` |
 | `MARKET_MAX_RETRIES` | 429/5xx/网络错误重试次数 | `3` |
+| `MARKET_GAP_REPAIR_BARS` | 单次回测最多补齐的中间缺口 K 线数 | `50000` |
+| `MARKET_GAP_REPAIR_RANGES` | 单次回测最多处理的缺口段数 | `50` |
 | `BACKTEST_CONCURRENCY` | 同时执行的回测数 | `1` |
 | `BACKTEST_TIMEOUT_SECONDS` | 策略子进程超时 | `120` |
 | `BACKTEST_FETCH_TIMEOUT_SECONDS` | 单次回测抓取行情的总超时 | `600` |
@@ -282,6 +285,7 @@ metadata:
 | `BACKTEST_MAX_BARS` | 单次回测的 K 线上限 | `200000` |
 | `BACKTEST_MAX_TRADES` | 结果中保留的交易明细上限 | `5000` |
 | `BACKTEST_EQUITY_POINTS` | 净值/回撤/价格曲线下采样点数 | `2000` |
+| `BACKTEST_FUTURE_CHECK` | 是否在截断前缀上重跑策略并检测未来函数 | `true` |
 
 ## 前端构建产物
 

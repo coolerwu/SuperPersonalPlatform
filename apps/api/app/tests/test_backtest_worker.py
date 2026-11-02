@@ -47,7 +47,15 @@ async def _clean_backtests() -> None:
     await delete_all_backtests()
 
 
-async def _fake_ensure(symbol: str, granularity: str, start_ms: int, end_ms: int, *, progress=None):
+async def _fake_ensure(
+    symbol: str,
+    granularity: str,
+    start_ms: int,
+    end_ms: int,
+    *,
+    warmup_bars: int = 0,
+    progress=None,
+):
     return EnsureResult(
         symbol=symbol,
         granularity=granularity,
@@ -103,6 +111,65 @@ async def test_worker_completes_backtest(monkeypatch: pytest.MonkeyPatch) -> Non
         assert stored.equity == [[START, 10000], [END - HOUR_MS, 11000]]
         assert stored.warnings == ["策略提示"]
         assert stored.bar_count == 48
+    finally:
+        await worker.stop()
+
+
+async def test_worker_passes_warmup_to_ensure_and_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, int] = {}
+
+    async def capture_ensure(
+        symbol: str,
+        granularity: str,
+        start_ms: int,
+        end_ms: int,
+        *,
+        warmup_bars: int = 0,
+        progress=None,
+    ):
+        seen["warmup"] = warmup_bars
+        return EnsureResult(
+            symbol=symbol,
+            granularity=granularity,
+            data_start_ms=start_ms - warmup_bars * HOUR_MS,
+            data_end_ms=end_ms - HOUR_MS,
+            end_open_ms=end_ms,
+            rows=48,
+            warnings=[],
+        )
+
+    async def capture_run(**kwargs):
+        seen["run_warmup"] = kwargs["warmup_bars"]
+        seen["eval_start"] = kwargs["eval_start_ms"]
+        seen["data_start"] = kwargs["start_ms"]
+        return 0, {
+            "metrics": {"bars": 48, "start_ms": kwargs["eval_start_ms"]},
+            "equity": [],
+            "drawdown": [],
+            "candles": [],
+            "trades": [],
+            "trades_total": 0,
+            "trades_truncated": False,
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(backtest_worker_module.market_service, "ensure_data", capture_ensure)
+    monkeypatch.setattr(backtest_worker_module, "run_backtest_subprocess", capture_run)
+    row = await create_backtest(_payload(warmup_bars=37))
+    worker = BacktestWorker()
+    await worker.start()
+    try:
+        worker.wake()
+        stored = await _wait_status(row.id, ("completed",))
+        assert stored is not None
+        assert seen == {
+            "warmup": 37,
+            "run_warmup": 37,
+            "eval_start": START,
+            "data_start": START - 37 * HOUR_MS,
+        }
     finally:
         await worker.stop()
 
@@ -196,6 +263,7 @@ async def test_requeue_running_backtests() -> None:
     assert stored is not None
     assert stored.status == "queued"
     assert stored.started_at is None
+    assert stored.progress.get("config") == {"warmup_bars": 200}
 
     async with SessionLocal() as db:
         stored = await db.get(Backtest, row.id)

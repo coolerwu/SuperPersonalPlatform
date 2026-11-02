@@ -51,6 +51,7 @@ type FormState = {
   capital: string;
   feePct: string;
   slippagePct: string;
+  warmup: string;
   code: string;
 };
 
@@ -62,6 +63,7 @@ function initialForm(): FormState {
     capital: "10000",
     feePct: "0.1",
     slippagePct: "0.05",
+    warmup: "200",
     code: DEFAULT_STRATEGY,
   };
 }
@@ -272,6 +274,16 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
       setError("手续费率和滑点必须是非负数");
       return;
     }
+    const warmupBars = Number(form.warmup);
+    if (
+      !form.warmup.trim() ||
+      !Number.isInteger(warmupBars) ||
+      warmupBars < 0 ||
+      warmupBars > 5000
+    ) {
+      setError("预热 K 线必须是 0 到 5000 之间的整数");
+      return;
+    }
     if (!form.code.trim()) {
       setError("策略代码不能为空");
       return;
@@ -287,6 +299,7 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
         initial_capital: capital,
         fee_rate: feeRate,
         slippage_rate: slippageRate,
+        warmup_bars: warmupBars,
         strategy_code: form.code,
       });
       setCurrent(detail);
@@ -499,6 +512,23 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
                   onChange={(event) => update("slippagePct", event.target.value)}
                 />
               </label>
+              <label className="backtest-field">
+                <span>预热 K 线</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="5000"
+                  step="10"
+                  title="评估区间之前额外加载的 K 线数，用于指标预热；0 表示不预热"
+                  value={form.warmup}
+                  onChange={(event) => update("warmup", event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="hint">
+              预热 K 线会加载到策略输入中用于指标计算，但指标从开始日期算起；0 表示不预热。
+              缓存缺口会按空仓处理，跨缺口收益不计入。
             </div>
 
             <label className="field-label" htmlFor="backtest-strategy">

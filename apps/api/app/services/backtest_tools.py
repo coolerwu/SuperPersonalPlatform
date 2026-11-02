@@ -102,6 +102,18 @@ def _metric_lines(row) -> list[str]:
         f"盈亏比：{_format_number(metrics.get('profit_factor'))}；"
         f"平均暴露：{_format_pct(metrics.get('avg_exposure'))}",
     ]
+    warmup = metrics.get("warmup_bars")
+    if warmup:
+        lines.append(f"预热 K 线：{warmup} 根（评估区间之前）")
+    missing = metrics.get("missing_bars")
+    if missing:
+        gaps = metrics.get("gap_count")
+        suffix = f"（{gaps} 段缺口）" if gaps else ""
+        lines.append(f"缺失 K 线：{missing} 根{suffix}，缺口期间按空仓处理")
+    if metrics.get("future_check_ok") is False:
+        lines.append(
+            f"未来函数检测未通过：{metrics.get('future_check_mismatches')} 根信号不一致，结果不可信"
+        )
     return lines
 
 
@@ -161,6 +173,7 @@ async def _run_backtest(
     initial_capital: float,
     fee_pct: float,
     slippage_pct: float,
+    warmup_bars: int,
 ) -> str:
     del context
     try:
@@ -174,6 +187,7 @@ async def _run_backtest(
             initial_capital=initial_capital,
             fee_rate=max(float(fee_pct), 0.0) / 100.0,
             slippage_rate=max(float(slippage_pct), 0.0) / 100.0,
+            warmup_bars=warmup_bars,
             strategy_code=strategy_code,
         )
     except (ValidationError, ValueError, TypeError) as exc:
@@ -273,6 +287,7 @@ def _make_run_tool(context: SkillToolContext) -> BaseTool:
         initial_capital: float = 10_000.0,
         fee_pct: float = 0.1,
         slippage_pct: float = 0.05,
+        warmup_bars: int = 200,
     ) -> str:
         """创建一次加密货币回测，并最多等待一段时间取回结果。"""
         return await _run_backtest(
@@ -285,6 +300,7 @@ def _make_run_tool(context: SkillToolContext) -> BaseTool:
             initial_capital,
             fee_pct,
             slippage_pct,
+            warmup_bars,
         )
 
     return StructuredTool.from_function(
@@ -295,6 +311,8 @@ def _make_run_tool(context: SkillToolContext) -> BaseTool:
             "end 不含。strategy_code 必须定义 def strategy(df) 并返回 [-1,1] "
             "目标仓位（UTC DatetimeIndex，列 open/high/low/close/volume）。"
             "fee_pct/slippage_pct 是百分比，默认 0.1 和 0.05。"
+            "warmup_bars 是评估区间之前额外加载的预热 K 线数（默认 200），"
+            "策略会在包含预热的完整数据上运行，指标只从 start 开始计算。"
             "最多等待一段时间；完成返回指标摘要，仍在执行时返回任务 id，"
             "之后用 backtest_status 查询。"
         ),

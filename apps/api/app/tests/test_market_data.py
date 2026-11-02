@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import httpx
 import pytest
+from sqlalchemy import delete, select
 
 from app.config import settings
 from app.market_db import MarketSessionLocal, init_market_db
@@ -229,6 +230,90 @@ async def test_stale_cache_before_window_does_not_fill_gap(rate_limit: None) -> 
         ]
         assert candle_requests
         assert all(int(request["startTime"]) >= START for request in candle_requests)
+    finally:
+        await http.aclose()
+
+
+async def test_ensure_data_fetches_warmup_before_start(rate_limit: None) -> None:
+    symbol = "WARMUPUSDT"
+    bars = make_bars(START - 48 * HOUR_MS, 96)
+    fake = FakeBitget(bars)
+    service, http = await _service(fake)
+    try:
+        end = START + 48 * HOUR_MS
+        result = await service.ensure_data(
+            symbol, "1h", START, end, warmup_bars=24
+        )
+        assert result.data_start_ms == START - 24 * HOUR_MS
+        assert result.data_end_ms == end - HOUR_MS
+    finally:
+        await http.aclose()
+
+
+async def test_ensure_data_repairs_internal_gap(rate_limit: None) -> None:
+    symbol = "GAPUSDT"
+    bars = make_bars(START, 48)
+    fake = FakeBitget(bars)
+    service, http = await _service(fake)
+    end = START + 48 * HOUR_MS
+    try:
+        await service.ensure_data(symbol, "1h", START, end)
+        missing_open = START + 20 * HOUR_MS
+        async with MarketSessionLocal() as db:
+            await db.execute(
+                delete(MarketCandle).where(
+                    MarketCandle.symbol == symbol,
+                    MarketCandle.granularity == "1h",
+                    MarketCandle.open_time_ms == missing_open,
+                )
+            )
+            await db.commit()
+
+        repaired = await service.ensure_data(symbol, "1h", START, end)
+        assert repaired.rows >= 1
+        status = await service.status(symbol, "1h")
+        assert status.rows == 48
+        async with MarketSessionLocal() as db:
+            rows = (
+                await db.scalars(
+                    select(MarketCandle).where(
+                        MarketCandle.symbol == symbol,
+                        MarketCandle.granularity == "1h",
+                        MarketCandle.open_time_ms == missing_open,
+                    )
+                )
+            ).all()
+        assert len(rows) == 1
+    finally:
+        await http.aclose()
+
+
+async def test_gap_repair_failure_keeps_cached_window(rate_limit: None) -> None:
+    symbol = "REPAIRFAILUSDT"
+    bars = make_bars(START, 48)
+    service, http = await _service(FakeBitget(bars))
+    end = START + 48 * HOUR_MS
+    try:
+        await service.ensure_data(symbol, "1h", START, end)
+    finally:
+        await http.aclose()
+    missing_open = START + 20 * HOUR_MS
+    async with MarketSessionLocal() as db:
+        await db.execute(
+            delete(MarketCandle).where(
+                MarketCandle.symbol == symbol,
+                MarketCandle.granularity == "1h",
+                MarketCandle.open_time_ms == missing_open,
+            )
+        )
+        await db.commit()
+
+    failing, http = await _service(FakeBitget(bars, error="40004"))
+    try:
+        result = await failing.ensure_data(symbol, "1h", START, end)
+        assert any("缺口补齐失败" in warning for warning in result.warnings)
+        status = await failing.status(symbol, "1h")
+        assert status.rows == 47
     finally:
         await http.aclose()
 

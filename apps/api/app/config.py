@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     market_http_timeout_seconds: int = 15
     market_rate_limit_per_second: float = 5.0
     market_max_retries: int = 3
+    market_gap_repair_bars: int = 50_000
+    market_gap_repair_ranges: int = 50
     backtest_concurrency: int = 1
     backtest_timeout_seconds: int = 120
     backtest_fetch_timeout_seconds: int = 600
@@ -77,6 +79,7 @@ class Settings(BaseSettings):
     backtest_max_bars: int = 200_000
     backtest_max_trades: int = 5_000
     backtest_equity_points: int = 2_000
+    backtest_future_check: bool = True
 
     @property
     def checkpoint_dir(self) -> Path:

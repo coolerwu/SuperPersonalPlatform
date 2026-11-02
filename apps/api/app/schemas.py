@@ -322,6 +322,7 @@ class BacktestCreate(BaseModel):
     initial_capital: float = Field(default=10_000.0, gt=0, le=1e12)
     fee_rate: float = Field(default=0.001, ge=0, le=0.1)
     slippage_rate: float = Field(default=0.0005, ge=0, le=0.1)
+    warmup_bars: int = Field(default=200, ge=0, le=5_000)
     strategy_code: str = Field(min_length=1, max_length=200_000)
 
     @field_validator("symbol")

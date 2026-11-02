@@ -17,6 +17,13 @@ TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 STATUSES = ("queued", "fetching", "running", "completed", "failed", "cancelled")
 
 
+def _config(progress: object) -> dict:
+    if not isinstance(progress, dict):
+        return {}
+    config = progress.get("config")
+    return {"config": config} if isinstance(config, dict) else {}
+
+
 async def create_backtest(payload: BacktestCreate) -> Backtest:
     async with SessionLocal() as db:
         row = Backtest(
@@ -29,7 +36,10 @@ async def create_backtest(payload: BacktestCreate) -> Backtest:
             slippage_rate=payload.slippage_rate,
             strategy_code=payload.strategy_code,
             status="queued",
-            progress={"stage": "queued"},
+            progress={
+                "stage": "queued",
+                "config": {"warmup_bars": payload.warmup_bars},
+            },
         )
         db.add(row)
         await db.commit()
@@ -79,7 +89,11 @@ async def claim_next_backtest() -> str | None:
                 continue
             row.status = "fetching"
             row.started_at = utcnow()
-            row.progress = {"stage": "fetching", "fetched_bars": 0}
+            row.progress = {
+                "stage": "fetching",
+                "fetched_bars": 0,
+                **_config(row.progress),
+            }
             await db.commit()
             return row.id
 
@@ -89,7 +103,7 @@ async def mark_running(backtest_id: str) -> None:
         row = await db.get(Backtest, backtest_id)
         if row is not None and row.status == "fetching" and not row.cancel_requested:
             row.status = "running"
-            row.progress = {"stage": "running"}
+            row.progress = {"stage": "running", **_config(row.progress)}
             await db.commit()
 
 
@@ -199,7 +213,11 @@ async def requeue_backtest(backtest_id: str) -> None:
             return
         row.status = "queued"
         row.started_at = None
-        row.progress = {"stage": "queued", "reason": "service_restart"}
+        row.progress = {
+            "stage": "queued",
+            "reason": "service_restart",
+            **_config(row.progress),
+        }
         await db.commit()
 
 
@@ -220,7 +238,11 @@ async def requeue_backtests() -> None:
             else:
                 row.status = "queued"
                 row.started_at = None
-                row.progress = {"stage": "queued", "reason": "service_restart"}
+                row.progress = {
+                    "stage": "queued",
+                    "reason": "service_restart",
+                    **_config(row.progress),
+                }
         await db.commit()
 
 

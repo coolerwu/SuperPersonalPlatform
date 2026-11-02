@@ -7,6 +7,7 @@ import pytest
 from app.services.timeframes import (
     BITGET_GRANULARITY,
     GRANULARITIES,
+    build_grid_ms,
     ceil_open_ms,
     count_bars,
     floor_open_ms,
@@ -14,6 +15,8 @@ from app.services.timeframes import (
     is_complete_bar,
     next_open_ms,
     periods_per_year,
+    previous_open_ms,
+    shift_open_ms,
 )
 
 
@@ -66,6 +69,25 @@ def test_count_bars_and_complete_bar() -> None:
     assert count_bars(month_start, month_end, "1M") == 12
     assert is_complete_bar(start, "1day", end) is True
     assert is_complete_bar(start, "1day", start + 60_000) is False
+
+
+def test_shift_and_grid_helpers() -> None:
+    open_ms = _ms("2026-11-01T00:00:00")
+    assert previous_open_ms(open_ms, "1h") == _ms("2026-10-31T23:00:00")
+    assert previous_open_ms(open_ms, "1M") == _ms("2026-10-01T00:00:00")
+    assert shift_open_ms(open_ms, "1h", -3) == _ms("2026-10-31T21:00:00")
+    assert shift_open_ms(open_ms, "1M", -1) == _ms("2026-10-01T00:00:00")
+    grid = build_grid_ms(open_ms, _ms("2026-11-01T03:00:00"), "1h")
+    assert grid == [
+        _ms("2026-11-01T00:00:00"),
+        _ms("2026-11-01T01:00:00"),
+        _ms("2026-11-01T02:00:00"),
+    ]
+    monthly = build_grid_ms(
+        _ms("2026-11-01T00:00:00"), _ms("2027-02-01T00:00:00"), "1M"
+    )
+    assert len(monthly) == 3
+    assert monthly[-1] == _ms("2027-01-01T00:00:00")
 
 
 def test_unknown_granularity_rejected() -> None:

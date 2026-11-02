@@ -34,6 +34,18 @@ def get_active_worker() -> "BacktestWorker | None":
     return _active_worker
 
 
+def _requested_warmup(progress: object) -> int:
+    if not isinstance(progress, dict):
+        return 0
+    config = progress.get("config")
+    if not isinstance(config, dict):
+        return 0
+    try:
+        return max(0, min(int(config.get("warmup_bars") or 0), 5_000))
+    except (TypeError, ValueError):
+        return 0
+
+
 class BacktestWorker:
     def __init__(self) -> None:
         self._stop = asyncio.Event()
@@ -127,21 +139,30 @@ class BacktestWorker:
             fee_rate = row.fee_rate
             slippage_rate = row.slippage_rate
             strategy_code = row.strategy_code
+            warmup_bars = _requested_warmup(row.progress)
 
         job_dir = settings.backtests_dir / backtest_id
         try:
             ensure = await self._ensure_data(
-                backtest_id, symbol, granularity, start_ms, end_ms
+                backtest_id, symbol, granularity, start_ms, end_ms, warmup_bars
             )
             if ensure is None:
                 return
             await backtest_service.mark_running(backtest_id)
+            data_start_ms = (
+                ensure.data_start_ms
+                if ensure.data_start_ms is not None
+                else start_ms
+            )
             exit_code, payload = await run_backtest_subprocess(
                 job_id=backtest_id,
                 symbol=symbol,
                 granularity=granularity,
-                start_ms=ensure.data_start_ms or start_ms,
+                start_ms=data_start_ms,
+                eval_start_ms=start_ms,
                 end_open_ms=ensure.end_open_ms,
+                warmup_bars=warmup_bars,
+                future_check=settings.backtest_future_check,
                 strategy_code=strategy_code,
                 initial_capital=initial_capital,
                 fee_rate=fee_rate,
@@ -182,7 +203,13 @@ class BacktestWorker:
             shutil.rmtree(job_dir, ignore_errors=True)
 
     async def _ensure_data(
-        self, backtest_id: str, symbol: str, granularity: str, start_ms: int, end_ms: int
+        self,
+        backtest_id: str,
+        symbol: str,
+        granularity: str,
+        start_ms: int,
+        end_ms: int,
+        warmup_bars: int,
     ):
         last_update = 0.0
 
@@ -194,12 +221,21 @@ class BacktestWorker:
             last_update = now
             await backtest_service.update_progress(
                 backtest_id,
-                {"stage": "fetching", "fetched_bars": fetched},
+                {
+                    "stage": "fetching",
+                    "fetched_bars": fetched,
+                    "config": {"warmup_bars": warmup_bars},
+                },
             )
 
         async with asyncio.timeout(settings.backtest_fetch_timeout_seconds):
             return await market_service.ensure_data(
-                symbol, granularity, start_ms, end_ms, progress=progress
+                symbol,
+                granularity,
+                start_ms,
+                end_ms,
+                warmup_bars=warmup_bars,
+                progress=progress,
             )
 
     async def cancel(self, backtest_id: str) -> bool:
@@ -219,7 +255,10 @@ async def run_backtest_subprocess(
     symbol: str,
     granularity: str,
     start_ms: int,
+    eval_start_ms: int,
     end_open_ms: int,
+    warmup_bars: int,
+    future_check: bool,
     strategy_code: str,
     initial_capital: float,
     fee_rate: float,
@@ -255,8 +294,12 @@ async def run_backtest_subprocess(
         granularity,
         "--start-ms",
         str(start_ms),
+        "--eval-start-ms",
+        str(eval_start_ms),
         "--end-open-ms",
         str(end_open_ms),
+        "--warmup-bars",
+        str(warmup_bars),
         "--strategy",
         str(strategy_path),
         "--output",
@@ -276,6 +319,8 @@ async def run_backtest_subprocess(
         "--timeout",
         str(settings.backtest_timeout_seconds),
     ]
+    if not future_check:
+        command.append("--no-future-check")
     process = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,

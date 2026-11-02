@@ -15,11 +15,14 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import argparse
 import json
+import re
 import signal
 import sys
 import tempfile
 import traceback
 from pathlib import Path
+
+import pandas as pd
 
 
 def _add_api_root() -> None:
@@ -32,7 +35,10 @@ _add_api_root()
 
 from app.services.backtest_engine import (  # noqa: E402
     BacktestError,
+    coerce_signal_values,
+    compare_signal_prefix,
     load_candles,
+    prepare_frame,
     run_backtest,
 )
 from app.services.timeframes import count_bars, floor_open_ms  # noqa: E402
@@ -44,7 +50,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--granularity", required=True)
     parser.add_argument("--start-ms", type=int, required=True)
+    parser.add_argument("--eval-start-ms", type=int, default=None)
     parser.add_argument("--end-open-ms", type=int, required=True)
+    parser.add_argument("--warmup-bars", type=int, default=0)
+    parser.add_argument("--future-check", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--strategy", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--initial-capital", type=float, default=10_000.0)
@@ -92,6 +101,68 @@ def _write_json(path: Path, payload: dict) -> None:
             os.unlink(temp_name)
 
 
+def _future_check(
+    frame: pd.DataFrame,
+    strategy_path: Path,
+    full_signals: object,
+    eval_start_ms: int,
+    *,
+    enabled: bool,
+) -> tuple[dict, list[str]]:
+    """Re-run the strategy on a prefix and compare the overlapping signals.
+
+    A causal strategy must return identical signals for the same leading bars.
+    Any mismatch means a later bar changed an earlier decision.
+    """
+    metrics = {
+        "future_check_bars": 0,
+        "future_check_mismatches": None,
+        "future_check_ok": None,
+    }
+    warnings: list[str] = []
+    try:
+        source = strategy_path.read_text(encoding="utf-8")
+    except OSError:
+        source = ""
+    if re.search(r"\.shift\(\s*(?:periods\s*=\s*)?-\s*\d", source):
+        warnings.append("策略代码包含负向 shift，可能引用未来数据")
+    if not enabled:
+        return metrics, warnings
+    total = len(frame)
+    if total < 400:
+        warnings.append("样本少于 400 根，未做未来函数检测")
+        return metrics, warnings
+    eval_offset = int(
+        (frame.index < pd.Timestamp(eval_start_ms, unit="ms", tz="UTC")).sum()
+    )
+    # Bound the second run: a 20k-bar prefix is enough to expose full-sample
+    # statistics while keeping the check cheap on 200k-bar backtests.
+    check_len = min(
+        total - 1,
+        max(200, min(total // 2, 20_000), eval_offset + 200),
+    )
+    if check_len < 120 or check_len >= total:
+        return metrics, warnings
+    metrics["future_check_bars"] = check_len
+    try:
+        prefix_strategy = _load_strategy(strategy_path)
+        prefix_signals = prefix_strategy(frame.iloc[:check_len].copy())
+        full_values = coerce_signal_values(full_signals, total)
+        prefix_values = coerce_signal_values(prefix_signals, check_len)
+        mismatches = compare_signal_prefix(full_values, prefix_values)
+    except Exception as exc:  # noqa: BLE001 - warning, not a failed backtest
+        warnings.append(f"未能完成未来函数检测：{exc}")
+        return metrics, warnings
+    metrics["future_check_mismatches"] = mismatches
+    metrics["future_check_ok"] = mismatches == 0
+    if mismatches:
+        warnings.append(
+            f"疑似使用未来数据：用前 {check_len} 根 K 线单独运行时，"
+            f"有 {mismatches} 根信号与完整区间不一致，结果不可信"
+        )
+    return metrics, warnings
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     _limit_resources(args.memory_limit_mb)
@@ -99,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
         signal.alarm(int(args.timeout) + 15)
     output = Path(args.output)
     try:
+        eval_start_ms = floor_open_ms(
+            args.eval_start_ms if args.eval_start_ms is not None else args.start_ms,
+            args.granularity,
+        )
         frame = load_candles(
             args.db,
             args.symbol,
@@ -108,13 +183,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         if len(frame) < 2:
             raise BacktestError("所选区间没有足够的完整 K 线")
+        frame = prepare_frame(frame, args.granularity)
         strategy = _load_strategy(Path(args.strategy))
         signals = strategy(frame.copy())
-        expected = count_bars(
-            floor_open_ms(args.start_ms, args.granularity),
-            args.end_open_ms,
-            args.granularity,
-        )
+        expected = count_bars(eval_start_ms, args.end_open_ms, args.granularity)
         result = run_backtest(
             frame,
             signals,
@@ -125,7 +197,19 @@ def main(argv: list[str] | None = None) -> int:
             max_trades=max(args.max_trades, 1),
             max_points=max(args.equity_points, 3),
             expected_bars=expected,
+            eval_start_ms=eval_start_ms,
+            warmup_bars=max(args.warmup_bars, 0),
         )
+        future_metrics, future_warnings = _future_check(
+            frame,
+            Path(args.strategy),
+            signals,
+            eval_start_ms,
+            enabled=args.future_check,
+        )
+        if result.get("metrics") is not None:
+            result["metrics"].update(future_metrics)
+        result["warnings"] = future_warnings + list(result.get("warnings") or [])
         result["symbol"] = args.symbol
         result["granularity"] = args.granularity
         _write_json(output, result)

@@ -8,6 +8,7 @@ import pytest
 
 from app.services.backtest_engine import (
     BacktestError,
+    compare_signal_prefix,
     downsample_lttb,
     downsample_ohlc,
     json_safe,
@@ -153,6 +154,61 @@ def test_monthly_backtest_does_not_crash() -> None:
     )
     assert result["metrics"]["bars"] == 8
     assert result["metrics"]["annual_return"] is not None
+
+
+def test_internal_gap_is_flat_and_not_bridged() -> None:
+    prices = [100.0, 100.0, 100.0, 150.0, 150.0, 150.0]
+    frame = make_frame(prices)
+    # Drop the fourth bar (index 3) so there is a hole between 100 and 150.
+    frame = frame.drop(frame.index[3])
+    signals = pd.Series([1.0] * 6, index=make_frame(prices).index)
+    result = run(frame, signals)
+    # The 50% jump happens across the missing bar and must not become a
+    # single-bar return for a held position.
+    assert result["metrics"]["total_return"] == pytest.approx(0.0)
+    assert result["metrics"]["missing_bars"] == 1
+    assert result["metrics"]["gap_count"] == 1
+    assert any("缺少 1 根" in warning for warning in result["warnings"])
+
+
+def test_warmup_signal_sets_initial_position_and_is_trimmed() -> None:
+    prices = [100.0] * 5 + [110.0] * 5
+    frame = make_frame(prices)
+    signals = pd.Series([0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    result = run(
+        frame,
+        signals,
+        eval_start_ms=START + 5 * HOUR_MS,
+        warmup_bars=5,
+    )
+    assert result["metrics"]["bars"] == 5
+    assert result["metrics"]["warmup_bars"] == 5
+    assert result["metrics"]["start_ms"] == START + 5 * HOUR_MS
+    # The position decided on the last warm-up bar is held into the first
+    # evaluated bar, so the 100 -> 110 move is captured.
+    assert result["metrics"]["total_return"] == pytest.approx(0.10)
+    assert result["trades"][0]["entry_price"] == pytest.approx(100.0)
+    assert result["trades"][0]["exit_price"] == pytest.approx(110.0)
+
+
+def test_warmup_shortage_is_warned() -> None:
+    frame = make_frame([100.0] * 6)
+    result = run(
+        frame,
+        pd.Series([1.0] * 6),
+        eval_start_ms=START,
+        warmup_bars=20,
+    )
+    assert result["metrics"]["warmup_bars"] == 0
+    assert any("预热数据不足" in warning for warning in result["warnings"])
+
+
+def test_prefix_comparison_finds_future_dependent_signals() -> None:
+    full = pd.Series([0.0, 1.0, 0.0, 1.0])
+    causal_prefix = pd.Series([0.0, 1.0])
+    future_prefix = pd.Series([1.0, 1.0])
+    assert compare_signal_prefix(full, causal_prefix) == 0
+    assert compare_signal_prefix(full, future_prefix) == 1
 
 
 def test_downsampling_keeps_endpoints_and_limits_points() -> None:

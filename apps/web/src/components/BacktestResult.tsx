@@ -67,7 +67,14 @@ export function BacktestResultPanel({
             <h2>回测结果</h2>
             <p>
               {formatUtc(metrics.start_ms, true)} → {formatUtc(metrics.end_ms, true)} UTC ·{" "}
-              {metrics.bars} 根 K 线 · 初始 {formatAmount(metrics.initial_capital)} → 最终{" "}
+              {metrics.bars} 根 K 线
+              {metrics.warmup_bars ? ` · 预热 ${metrics.warmup_bars} 根` : ""}
+              {metrics.missing_bars
+                ? ` · 缺失 ${metrics.missing_bars} 根${
+                    metrics.gap_count ? `（${metrics.gap_count} 段缺口）` : ""
+                  }`
+                : ""} · 初始{" "}
+              {formatAmount(metrics.initial_capital)} → 最终{" "}
               {formatAmount(metrics.final_equity)} USDT
             </p>
           </div>
@@ -86,6 +93,11 @@ export function BacktestResultPanel({
               <li key={`${warning}-${index}`}>{warning}</li>
             ))}
           </ul>
+        )}
+        {metrics.future_check_ok === true && (
+          <div className="hint">
+            未来函数检测通过：策略在截断前缀上的信号与完整区间一致。
+          </div>
         )}
         {result.trades_truncated && (
           <div className="hint">

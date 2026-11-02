@@ -134,6 +134,12 @@ def _add_month(value: datetime) -> datetime:
     return value.replace(month=value.month + 1)
 
 
+def _sub_month(value: datetime) -> datetime:
+    if value.month == 1:
+        return value.replace(year=value.year - 1, month=12)
+    return value.replace(month=value.month - 1)
+
+
 def floor_open_ms(ms: int, granularity: str) -> int:
     """Round a timestamp down to the open time of its bar."""
     validate_granularity(granularity)
@@ -157,6 +163,45 @@ def next_open_ms(open_ms: int, granularity: str) -> int:
     step = INTERVAL_MS[granularity]
     assert step is not None
     return open_ms + step
+
+
+def previous_open_ms(open_ms: int, granularity: str) -> int:
+    """Open time of the bar immediately before the one starting at ``open_ms``."""
+    validate_granularity(granularity)
+    if granularity == "1M":
+        return _to_ms(_sub_month(_to_datetime(open_ms)))
+    step = INTERVAL_MS[granularity]
+    assert step is not None
+    return open_ms - step
+
+
+def shift_open_ms(open_ms: int, granularity: str, bars: int) -> int:
+    """Move an aligned open time by a signed number of bars."""
+    cursor = open_ms
+    if bars >= 0:
+        for _ in range(bars):
+            cursor = next_open_ms(cursor, granularity)
+    else:
+        for _ in range(-bars):
+            cursor = previous_open_ms(cursor, granularity)
+    return cursor
+
+
+def build_grid_ms(start_ms: int, end_open_ms: int, granularity: str) -> list[int]:
+    """Aligned bar open times in ``[start_ms, end_open_ms)``."""
+    if end_open_ms <= start_ms:
+        return []
+    validate_granularity(granularity)
+    if granularity == "1M":
+        grid: list[int] = []
+        cursor = start_ms
+        while cursor < end_open_ms:
+            grid.append(cursor)
+            cursor = next_open_ms(cursor, granularity)
+        return grid
+    step = INTERVAL_MS[granularity]
+    assert step is not None
+    return list(range(start_ms, end_open_ms, step))
 
 
 def ceil_open_ms(ms: int, granularity: str) -> int:

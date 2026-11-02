@@ -230,6 +230,12 @@ export type BacktestStatus =
 
 export type BacktestMetrics = {
   bars: number;
+  expected_bars?: number;
+  missing_bars?: number;
+  gap_count?: number;
+  warmup_bars?: number;
+  requested_warmup_bars?: number;
+  eval_start_ms?: number;
   start_ms: number;
   end_ms: number;
   years: number;
@@ -249,6 +255,9 @@ export type BacktestMetrics = {
   avg_exposure: number;
   total_cost: number;
   avg_trade_return: number | null;
+  future_check_bars?: number;
+  future_check_mismatches?: number | null;
+  future_check_ok?: boolean | null;
 };
 
 export type BacktestSummary = {
@@ -274,6 +283,7 @@ export type BacktestProgress = {
   stage?: string;
   fetched_bars?: number;
   reason?: string;
+  config?: { warmup_bars?: number };
 };
 
 export type BacktestDetail = BacktestSummary & {

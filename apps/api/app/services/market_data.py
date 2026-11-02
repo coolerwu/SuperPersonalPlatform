@@ -23,6 +23,7 @@ from app.services.timeframes import (
     floor_open_ms,
     next_open_ms,
     now_ms,
+    shift_open_ms,
     validate_granularity,
 )
 
@@ -306,17 +307,18 @@ class MarketDataService:
         start_ms: int,
         end_ms: int,
         *,
+        warmup_bars: int = 0,
         progress: ProgressCallback | None = None,
     ) -> EnsureResult:
         symbol = symbol.strip().upper()
         validate_granularity(granularity)
-        start = floor_open_ms(start_ms, granularity)
+        eval_start = floor_open_ms(start_ms, granularity)
         now = now_ms()
         requested_end_open = ceil_open_ms(end_ms, granularity)
         end_open = min(requested_end_open, floor_open_ms(now, granularity))
-        if end_open <= start:
+        if end_open <= eval_start:
             raise MarketDataError("所选区间内没有已经完成的 K 线", category="data")
-        wanted = count_bars(start, end_open, granularity)
+        wanted = count_bars(eval_start, end_open, granularity)
         if wanted < 2:
             raise MarketDataError("所选区间内 K 线不足 2 根", category="data")
         if wanted > settings.backtest_max_bars:
@@ -325,10 +327,13 @@ class MarketDataService:
                 "请缩短区间或换更大的周期",
                 category="data",
             )
+        warmup_bars = max(0, int(warmup_bars))
+        start = max(0, shift_open_ms(eval_start, granularity, -warmup_bars))
 
         client = self._get_client()
         fetched = 0
         oldest_available: int | None = None
+        repair_warning: str | None = None
         try:
             cached_min, cached_max = await self._cached_range(symbol, granularity)
             if cached_min is None:
@@ -365,6 +370,15 @@ class MarketDataService:
                 fetched += await self._fetch_forward(
                     client, symbol, granularity, cursor, end_open, progress, base=fetched
                 )
+
+            try:
+                fetched += await self._repair_gaps(
+                    client, symbol, granularity, start, end_open, progress, base=fetched
+                )
+            except MarketDataError as exc:
+                # Gap repair is best-effort; the main window is already cached,
+                # so a repair failure must not discard a usable backtest.
+                repair_warning = f"中间缺口补齐失败：{exc}"
         except MarketDataError as exc:
             await self._record_state(symbol, granularity, error=str(exc))
             raise
@@ -385,9 +399,11 @@ class MarketDataService:
         data_start = max(start, cached_min) if cached_min is not None else None
         data_end = cached_max
         warnings: list[str] = []
+        if repair_warning:
+            warnings.append(repair_warning)
         if requested_end_open > end_open:
             warnings.append("结束时间超过当前时间，已截断到最近一根完整 K 线")
-        if data_start is None or data_start > start:
+        if data_start is None or data_start > eval_start:
             warnings.append("Bitget 只提供从该时间开始的行情，实际回测区间已缩短")
         if data_end is None or data_end < last_wanted:
             warnings.append("缓存只覆盖到该时间，实际回测区间已缩短")
@@ -503,6 +519,95 @@ class MarketDataService:
             if progress is not None:
                 await progress(base + fetched)
         return fetched, None
+
+    async def _find_gaps(
+        self,
+        symbol: str,
+        granularity: str,
+        start: int,
+        end_open: int,
+        *,
+        limit: int,
+    ) -> list[tuple[int, int]]:
+        """Contiguous missing ranges inside an otherwise cached window."""
+        async with MarketSessionLocal() as db:
+            rows = (
+                await db.scalars(
+                    select(MarketCandle.open_time_ms)
+                    .where(
+                        MarketCandle.symbol == symbol,
+                        MarketCandle.granularity == granularity,
+                        MarketCandle.open_time_ms >= start,
+                        MarketCandle.open_time_ms < end_open,
+                    )
+                    .order_by(MarketCandle.open_time_ms)
+                )
+            ).all()
+        gaps: list[tuple[int, int]] = []
+        cursor = start
+        for open_ms in rows:
+            open_ms = int(open_ms)
+            if open_ms > cursor:
+                gaps.append((cursor, open_ms))
+                if len(gaps) >= limit:
+                    return gaps
+            cursor = max(cursor, next_open_ms(open_ms, granularity))
+            if cursor >= end_open:
+                break
+        if cursor < end_open and len(gaps) < limit:
+            gaps.append((cursor, end_open))
+        return gaps
+
+    async def _repair_gaps(
+        self,
+        client: BitgetCandleClient,
+        symbol: str,
+        granularity: str,
+        start: int,
+        end_open: int,
+        progress: ProgressCallback | None,
+        *,
+        base: int,
+    ) -> int:
+        """Backfill internal holes; holes larger than the budget stay missing."""
+        budget = max(0, int(settings.market_gap_repair_bars))
+        if budget == 0:
+            return 0
+        gaps = await self._find_gaps(
+            symbol,
+            granularity,
+            start,
+            end_open,
+            limit=max(1, int(settings.market_gap_repair_ranges)),
+        )
+        fetched = 0
+        for gap_start, gap_end in gaps:
+            if fetched >= budget:
+                break
+            missing = count_bars(gap_start, gap_end, granularity)
+            if missing > budget - fetched:
+                continue
+            got = await self._fetch_forward(
+                client,
+                symbol,
+                granularity,
+                gap_start,
+                gap_end,
+                progress,
+                base=base + fetched,
+            )
+            if got == 0:
+                got, _ = await self._fetch_backward(
+                    client,
+                    symbol,
+                    granularity,
+                    gap_end,
+                    gap_start,
+                    progress,
+                    base=base + fetched,
+                )
+            fetched += got
+        return fetched
 
     async def _save(self, symbol: str, granularity: str, rows: list[dict]) -> None:
         payload = [

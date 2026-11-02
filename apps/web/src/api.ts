@@ -300,6 +300,7 @@ export const api = {
     initial_capital: number;
     fee_rate: number;
     slippage_rate: number;
+    warmup_bars?: number;
     strategy_code: string;
   }) =>
     request<BacktestDetail>("/api/backtests", {
