@@ -1,4 +1,4 @@
-import { KeyboardEvent, useEffect, useRef, useState } from "react";
+import { KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { api } from "../api";
 import type { Attachment, Message, Run, ScreenshotInfo } from "../types";
@@ -19,6 +19,10 @@ type TerminalRun = {
 type ChatPanelProps = {
   messages: Message[];
   loading: boolean;
+  hasMore: boolean;
+  loadingOlder: boolean;
+  loadOlderError: string;
+  onLoadOlder: () => Promise<boolean>;
   screenshots: ScreenshotInfo[];
   sessionId: string;
   streamText: string;
@@ -243,6 +247,7 @@ function MessageSkeleton() {
 export function ChatPanel(props: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const olderAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -343,6 +348,25 @@ export function ChatPanel(props: ChatPanelProps) {
     return () => window.cancelAnimationFrame(frame);
   }, [props.messages, props.streamText, props.sending]);
 
+  useLayoutEffect(() => {
+    const anchor = olderAnchorRef.current;
+    const element = scrollRef.current;
+    if (!anchor || !element) return;
+    const added = element.scrollHeight - anchor.height;
+    if (added > 0) element.scrollTop = anchor.top + added;
+    olderAnchorRef.current = null;
+  }, [props.messages]);
+
+  async function requestOlder() {
+    if (!props.hasMore || props.loadingOlder || olderAnchorRef.current) return;
+    const element = scrollRef.current;
+    if (!element) return;
+    const anchor = { height: element.scrollHeight, top: element.scrollTop };
+    olderAnchorRef.current = anchor;
+    const loaded = await props.onLoadOlder();
+    if (!loaded && olderAnchorRef.current === anchor) olderAnchorRef.current = null;
+  }
+
   useEffect(() => {
     const container = scrollRef.current;
     const content = contentRef.current;
@@ -361,6 +385,11 @@ export function ChatPanel(props: ChatPanelProps) {
     const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
     stickRef.current = nearBottom;
     setAtBottom((current) => (current === nearBottom ? current : nearBottom));
+    const nearTop =
+      element.scrollHeight > element.clientHeight + 160 && element.scrollTop < 80;
+    if (nearTop && props.hasMore && !props.loadingOlder) {
+      void requestOlder();
+    }
   }
 
   function jumpToBottom() {
@@ -480,6 +509,23 @@ export function ChatPanel(props: ChatPanelProps) {
     <section className="chat-panel">
       <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
         <div className="message-flow" ref={contentRef}>
+        {props.hasMore && (
+          <div className="message-history" role="status">
+            {props.loadOlderError ? (
+              <button
+                type="button"
+                className="message-history-retry"
+                onClick={() => void requestOlder()}
+              >
+                加载更早消息失败，点击重试
+              </button>
+            ) : props.loadingOlder ? (
+              <span>正在加载更早的消息…</span>
+            ) : (
+              <span>上滑加载更早的消息</span>
+            )}
+          </div>
+        )}
         {props.loading && props.messages.length === 0 && <MessageSkeleton />}
 
         {!props.loading && props.messages.length === 0 && !props.sending && (

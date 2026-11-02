@@ -16,6 +16,7 @@ import type {
   MemoryItem,
   MemoryScope,
   Message,
+  MessagePage,
   Provider,
   Run,
   RunEvent,
@@ -185,6 +186,18 @@ export const api = {
   deleteSession: (sessionId: string) =>
     request<{ deleted: boolean }>(`/api/sessions/${sessionId}`, { method: "DELETE" }),
   listMessages: (sessionId: string) => request<Message[]>(`/api/sessions/${sessionId}/messages`),
+  listMessagePage: (
+    sessionId: string,
+    params: { limit?: number; before?: string | null } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (params.limit) search.set("limit", String(params.limit));
+    if (params.before) search.set("before", params.before);
+    const query = search.toString();
+    return request<MessagePage>(
+      `/api/sessions/${sessionId}/messages/page${query ? `?${query}` : ""}`,
+    );
+  },
   listScreenshots: (sessionId: string) =>
     request<ScreenshotInfo[]>(`/api/sessions/${sessionId}/screenshots`),
   screenshotUrl: (sessionId: string, runId: string, screenshotId: string) =>

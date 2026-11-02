@@ -230,6 +230,12 @@ class MessageOut(BaseModel):
     created_at: datetime
 
 
+class MessagePageOut(BaseModel):
+    items: list[MessageOut]
+    has_more: bool
+    next_before: str | None = None
+
+
 class MessageSearchHitOut(BaseModel):
     message_id: str
     session_id: str

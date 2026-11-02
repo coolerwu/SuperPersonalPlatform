@@ -137,6 +137,12 @@ export type Message = {
   created_at: string;
 };
 
+export type MessagePage = {
+  items: Message[];
+  has_more: boolean;
+  next_before: string | null;
+};
+
 export type SessionSearchHit = {
   message_id: string;
   session_id: string;

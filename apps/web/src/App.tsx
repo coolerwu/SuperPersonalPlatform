@@ -52,6 +52,18 @@ function isActiveRun(run: Run | null | undefined): boolean {
   return Boolean(run && active(run.status));
 }
 
+const MESSAGE_PAGE_SIZE = 50;
+const MAX_FOCUS_PAGES = 20;
+
+function mergeMessages(current: Message[], incoming: Message[]): Message[] {
+  if (incoming.length === 0) return current;
+  const byId = new Map(current.map((message) => [message.id, message]));
+  for (const message of incoming) byId.set(message.id, message);
+  return [...byId.values()].sort(
+    (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
+  );
+}
+
 /** Live run state is kept per session so switching away never drops it. */
 type SessionLive = {
   activeRun: Run | null;
@@ -120,6 +132,10 @@ export default function App() {
   const [screenshots, setScreenshots] = useState<ScreenshotInfo[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesHasMore, setMessagesHasMore] = useState(false);
+  const [messagesNextBefore, setMessagesNextBefore] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState("");
   const [draft, setDraft] = useState("");
   const [attachmentsByKey, setAttachmentsByKey] = useState<Record<string, Attachment[]>>({});
   const [pendingSessions, setPendingSessions] = useState<Record<string, true>>({});
@@ -150,6 +166,9 @@ export default function App() {
   const suppressSessionResetRef = useRef<string | null>(null);
   const sessionIdRef = useRef("");
   const messagesRequestRef = useRef(0);
+  const messagesSessionRef = useRef("");
+  const olderRequestRef = useRef(0);
+  const loadingOlderRef = useRef(false);
   const sessionsRequestRef = useRef(0);
   const agentIdRef = useRef("");
   const draftsRef = useRef<Record<string, string>>({});
@@ -365,6 +384,11 @@ export default function App() {
     });
     setSessionId(hit.session_id);
     openView("chat");
+    if (hit.session_id === sessionIdRef.current) {
+      void loadMessages(hit.session_id, false, hit.message_id).catch((exc) => {
+        setSessionError(describeApiError(exc), hit.session_id);
+      });
+    }
   }
 
   useEffect(() => {
@@ -384,6 +408,13 @@ export default function App() {
     setSessionId("");
     setMessages([]);
     setMessagesLoading(false);
+    messagesSessionRef.current = "";
+    olderRequestRef.current += 1;
+    loadingOlderRef.current = false;
+    setMessagesHasMore(false);
+    setMessagesNextBefore(null);
+    setLoadingOlder(false);
+    setOlderError("");
     setSessions([]);
     setError("");
     setSearchFocus(null);
@@ -399,6 +430,13 @@ export default function App() {
     sessionIdRef.current = sessionId;
     const keepMessages = suppressSessionResetRef.current === sessionId;
     suppressSessionResetRef.current = null;
+    messagesSessionRef.current = "";
+    olderRequestRef.current += 1;
+    loadingOlderRef.current = false;
+    setMessagesHasMore(false);
+    setMessagesNextBefore(null);
+    setLoadingOlder(false);
+    setOlderError("");
     if (!keepMessages) {
       // Never show the previous session's messages under the new one while its
       // own messages are still loading.
@@ -412,7 +450,9 @@ export default function App() {
       setMessagesLoading(false);
       return;
     }
-    void loadMessages(sessionId).catch((exc) => {
+    const focusId =
+      searchFocus?.sessionId === sessionId ? searchFocus.messageId : undefined;
+    void loadMessages(sessionId, true, focusId).catch((exc) => {
       if (sessionId !== sessionIdRef.current) return;
       setMessagesLoading(false);
       setSessionError(describeApiError(exc), sessionId);
@@ -488,6 +528,13 @@ export default function App() {
       setSessionId("");
       setMessages([]);
       setMessagesLoading(false);
+      messagesSessionRef.current = "";
+      olderRequestRef.current += 1;
+      loadingOlderRef.current = false;
+      setMessagesHasMore(false);
+      setMessagesNextBefore(null);
+      setLoadingOlder(false);
+      setOlderError("");
       return;
     }
     if (!list.some((item) => item.id === sessionIdRef.current)) {
@@ -793,13 +840,48 @@ export default function App() {
     }
   }
 
-  async function loadMessages(id: string, syncRun = true) {
+  async function fetchMessageWindow(id: string, focusId?: string) {
+    const latest = await api.listMessagePage(id, { limit: MESSAGE_PAGE_SIZE });
+    let items = latest.items;
+    let hasMore = latest.has_more;
+    let nextBefore = latest.next_before;
+    if (focusId && !items.some((message) => message.id === focusId)) {
+      let pages = 0;
+      while (hasMore && nextBefore && pages < MAX_FOCUS_PAGES) {
+        const older = await api.listMessagePage(id, {
+          limit: MESSAGE_PAGE_SIZE,
+          before: nextBefore,
+        });
+        items = [...older.items, ...items];
+        hasMore = older.has_more;
+        nextBefore = older.next_before;
+        pages += 1;
+        if (items.some((message) => message.id === focusId)) break;
+      }
+      if (!items.some((message) => message.id === focusId)) {
+        items = await api.listMessages(id);
+        hasMore = false;
+        nextBefore = null;
+      }
+    }
+    return { items, hasMore, nextBefore };
+  }
+
+  async function loadMessages(id: string, syncRun = true, focusId?: string) {
     const requestId = ++messagesRequestRef.current;
-    const list = await api.listMessages(id);
+    const result = await fetchMessageWindow(id, focusId);
     if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
-    setMessages(list);
-    sessionCountsRef.current[id] = list.length;
+    const isRefresh = !focusId && messagesSessionRef.current === id;
+    setMessages((current) =>
+      isRefresh ? mergeMessages(current, result.items) : result.items,
+    );
+    messagesSessionRef.current = id;
+    if (!isRefresh) {
+      setMessagesHasMore(result.hasMore);
+      setMessagesNextBefore(result.nextBefore);
+    }
     setMessagesLoading(false);
+    setOlderError("");
     if (!syncRun) return;
     setError("");
     if (subscriptionsRef.current.has(id)) {
@@ -813,7 +895,7 @@ export default function App() {
     const activeRun = await api.getSessionActiveRun(id);
     if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
     const lastRunId =
-      activeRun?.id ?? [...list].reverse().find((message) => message.run_id)?.run_id;
+      activeRun?.id ?? [...result.items].reverse().find((message) => message.run_id)?.run_id;
     if (!lastRunId) {
       setLiveBySession((current) => {
         if (current[id]?.tracking) return current;
@@ -860,6 +942,39 @@ export default function App() {
     });
     if (running && !subscriptionsRef.current.has(id)) {
       subscribe(id, run.id, runEvents.at(-1)?.id ?? 0);
+    }
+  }
+
+  async function loadOlder(): Promise<boolean> {
+    const id = sessionIdRef.current;
+    if (!id || !messagesHasMore || !messagesNextBefore || loadingOlderRef.current) {
+      return false;
+    }
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    setOlderError("");
+    const requestId = ++olderRequestRef.current;
+    try {
+      const page = await api.listMessagePage(id, {
+        limit: MESSAGE_PAGE_SIZE,
+        before: messagesNextBefore,
+      });
+      if (requestId !== olderRequestRef.current || id !== sessionIdRef.current) return false;
+      setMessages((current) => mergeMessages(current, page.items));
+      messagesSessionRef.current = id;
+      setMessagesHasMore(page.has_more);
+      setMessagesNextBefore(page.next_before);
+      return page.items.length > 0;
+    } catch (exc) {
+      if (requestId === olderRequestRef.current && id === sessionIdRef.current) {
+        setOlderError(describeApiError(exc));
+      }
+      return false;
+    } finally {
+      if (requestId === olderRequestRef.current) {
+        loadingOlderRef.current = false;
+        setLoadingOlder(false);
+      }
     }
   }
 
@@ -981,6 +1096,9 @@ export default function App() {
       }
       try {
         await loadMessages(targetSessionId, false);
+        setMessages((current) =>
+          current.filter((message) => message.id !== optimisticId),
+        );
       } catch {
         // Keep the optimistic user message; the run is already created.
       }
@@ -1421,6 +1539,10 @@ export default function App() {
               key={sessionId}
               messages={messages}
               loading={messagesLoading}
+              hasMore={messagesHasMore}
+              loadingOlder={loadingOlder}
+              loadOlderError={olderError}
+              onLoadOlder={loadOlder}
               screenshots={screenshots}
               sessionId={sessionId}
               streamText={visibleStream}

@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.schemas import (
     MessageOut,
+    MessagePageOut,
     MessageSearchHitOut,
     RunOut,
     SessionCreate,
@@ -145,6 +146,42 @@ async def search_session_messages(
         )
         for hit in hits
     ]
+
+
+@router.get("/sessions/{session_id}/messages/page", response_model=MessagePageOut)
+async def list_message_page(
+    session_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    before: str | None = Query(None, max_length=64),
+    db: AsyncSession = Depends(get_db),
+) -> MessagePageOut:
+    session = await db.get(Session, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    statement = select(Message).where(Message.session_id == session_id)
+    if before:
+        cursor = await db.get(Message, before)
+        if cursor is None or cursor.session_id != session_id:
+            raise HTTPException(status_code=400, detail="invalid before")
+        statement = statement.where(
+            or_(
+                Message.created_at < cursor.created_at,
+                and_(Message.created_at == cursor.created_at, Message.id < cursor.id),
+            )
+        )
+    rows = (
+        await db.scalars(
+            statement.order_by(Message.created_at.desc(), Message.id.desc()).limit(limit + 1)
+        )
+    ).all()
+    has_more = len(rows) > limit
+    page = list(rows[:limit])
+    page.reverse()
+    return MessagePageOut(
+        items=[MessageOut.model_validate(message) for message in page],
+        has_more=has_more,
+        next_before=page[0].id if has_more and page else None,
+    )
 
 
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageOut])
