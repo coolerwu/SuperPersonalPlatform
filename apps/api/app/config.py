@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     cron_default_timezone: str = "Asia/Shanghai"
 
     # Browser tools are skill-gated; these bound one Run's browser session.
-    browser_concurrency: int = 2
+    browser_concurrency: int = 5
     browser_navigation_timeout_ms: int = 30_000
     browser_action_timeout_ms: int = 10_000
     browser_settle_ms: int = 500

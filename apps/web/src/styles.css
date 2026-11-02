@@ -1375,14 +1375,6 @@ textarea {
   background: linear-gradient(180deg, rgba(246, 244, 239, 0), var(--bg) 34%);
 }
 
-.composer-busy-hint {
-  max-width: var(--chat-lane);
-  margin: 0 auto 6px;
-  padding: 0 6px;
-  color: var(--faint);
-  font-size: 11px;
-}
-
 .composer-notice {
   max-width: var(--chat-lane);
   margin: 0 auto 6px;

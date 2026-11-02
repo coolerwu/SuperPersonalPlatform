@@ -35,7 +35,6 @@ type ChatPanelProps = {
   draft: string;
   attachments: Attachment[];
   canSend: boolean;
-  sendBlocked: boolean;
   agentId: string;
   agentName: string;
   channelType: string;
@@ -373,7 +372,6 @@ export function ChatPanel(props: ChatPanelProps) {
   const canSubmit =
     props.canSend &&
     !props.sending &&
-    !props.sendBlocked &&
     (props.draft.trim().length > 0 || props.attachments.length > 0);
 
   const screenshotsByRun = new Map<string, ScreenshotInfo[]>();
@@ -685,7 +683,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 <button
                   type="button"
                   className="ghost-button"
-                  disabled={props.sendBlocked}
+                  disabled={props.sending}
                   onClick={() => props.onRetry(props.terminalRun!.run.id)}
                 >
                   重试
@@ -736,11 +734,6 @@ export function ChatPanel(props: ChatPanelProps) {
         {props.channelType === "wechat" && (
           <div className="composer-channel-hint" role="note" title={props.channelName}>
             微信会话 · 网页里发送的消息不会发回微信
-          </div>
-        )}
-        {props.sendBlocked && (
-          <div className="composer-busy-hint" role="status">
-            另一个会话的 Run 正在运行，完成后再发送。
           </div>
         )}
         <div
@@ -803,7 +796,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 <button
                   type="button"
                   role="menuitem"
-                  disabled={!props.canSend || props.sending || props.sendBlocked}
+                  disabled={!props.canSend || props.sending}
                   onClick={() => {
                     setMenuOpen(false);
                     void props.onOrganizeMemory();
@@ -925,8 +918,8 @@ export function ChatPanel(props: ChatPanelProps) {
                 type="button"
                 onClick={() => void submit()}
                 disabled={!canSubmit}
-                aria-label={props.sendBlocked ? "另一个会话的 Run 正在运行" : "发送"}
-                title={props.sendBlocked ? "另一个会话的 Run 正在运行，完成后再发送" : "发送"}
+                aria-label="发送"
+                title="发送"
               >
                 <svg
                   viewBox="0 0 24 24"

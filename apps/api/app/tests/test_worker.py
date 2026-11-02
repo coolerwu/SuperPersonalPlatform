@@ -3,6 +3,7 @@ import asyncio
 import pytest
 from sqlalchemy import select
 
+from app.config import settings
 from app.db import SessionLocal
 from app.models import Agent, Message, Run, RunEvent, Session, utcnow
 from app.services.executor import ExecutorEvent
@@ -170,6 +171,7 @@ async def test_requeue_running_runs() -> None:
 
 @pytest.mark.asyncio
 async def test_worker_runs_different_sessions_in_parallel(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "browser_concurrency", 2)
     started: list[str] = []
     active = {"count": 0, "max": 0}
     gate = asyncio.Event()

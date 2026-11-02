@@ -122,7 +122,7 @@ export default function App() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [draft, setDraft] = useState("");
   const [attachmentsByKey, setAttachmentsByKey] = useState<Record<string, Attachment[]>>({});
-  const [pendingSession, setPendingSession] = useState<string | null>(null);
+  const [pendingSessions, setPendingSessions] = useState<Record<string, true>>({});
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
   const [runReasoning, setRunReasoning] = useState<Record<string, string>>({});
   const [runTraces, setRunTraces] = useState<Record<string, RunTraceStep[]>>({});
@@ -154,7 +154,7 @@ export default function App() {
   const agentIdRef = useRef("");
   const draftsRef = useRef<Record<string, string>>({});
   const draftKeyRef = useRef("");
-  const pendingSessionRef = useRef<string | null>(null);
+  const pendingSessionsRef = useRef<Record<string, true>>({});
   const sessionCountsRef = useRef<Record<string, number>>({});
   const runSessionsRef = useRef<Record<string, string>>({});
 
@@ -163,12 +163,8 @@ export default function App() {
   const currentSession = sessions.find((item) => item.id === sessionId) ?? null;
   const agent = agents.find((item) => item.id === agentId);
   const live = liveBySession[sessionId] ?? EMPTY_LIVE;
-  const pendingHere = pendingSession !== null && pendingSession === sessionId;
+  const pendingHere = Boolean(pendingSessions[sessionId || NEW_SESSION_KEY]);
   const chatSending = pendingHere || (live.tracking && isActiveRun(live.activeRun));
-  const sending =
-    pendingSession !== null ||
-    Object.values(liveBySession).some((item) => item.tracking && isActiveRun(item.activeRun));
-  const busyElsewhere = sending && !chatSending;
   const visibleRun = live.activeRun;
   const visibleStream = live.streamText;
   const visibleReasoning = live.streamReasoning;
@@ -250,9 +246,22 @@ export default function App() {
     if (draftKeyRef.current === key) setDraft(value);
   }
 
-  function updatePending(value: string | null) {
-    pendingSessionRef.current = value;
-    setPendingSession(value);
+  // A send/retry request is pending per session, so Runs in other sessions
+  // never lock this session's composer.
+  function markPending(session: string) {
+    const key = session || NEW_SESSION_KEY;
+    if (pendingSessionsRef.current[key]) return;
+    pendingSessionsRef.current = { ...pendingSessionsRef.current, [key]: true };
+    setPendingSessions(pendingSessionsRef.current);
+  }
+
+  function clearPending(session: string) {
+    const key = session || NEW_SESSION_KEY;
+    if (!pendingSessionsRef.current[key]) return;
+    const next = { ...pendingSessionsRef.current };
+    delete next[key];
+    pendingSessionsRef.current = next;
+    setPendingSessions(next);
   }
 
   function addAttachmentFor(key: string, file: Attachment) {
@@ -519,7 +528,7 @@ export default function App() {
         rememberSessionCounts(list);
         setSessions(list);
         if (!current || !currentItem) return;
-        if (subscriptionsRef.current.has(current) || pendingSessionRef.current === current) return;
+        if (subscriptionsRef.current.has(current) || pendingSessionsRef.current[current || NEW_SESSION_KEY]) return;
         if (currentItem.active_run_id) {
           await loadMessages(current, true);
           return;
@@ -884,7 +893,7 @@ export default function App() {
     } catch (exc) {
       setSessionError(describeApiError(exc), id);
     } finally {
-      updatePending(null);
+      clearPending(id);
     }
   }
 
@@ -894,7 +903,14 @@ export default function App() {
     sessionTitle?: string,
   ): Promise<boolean> {
     const text = (overrideText ?? draft).trim();
-    if ((!text && attachments.length === 0) || !agentId || sending) return false;
+    if (
+      (!text && attachments.length === 0) ||
+      !agentId ||
+      chatSending ||
+      pendingSessionsRef.current[sessionIdRef.current || NEW_SESSION_KEY]
+    ) {
+      return false;
+    }
     const sendAgentId = agentId;
     const sendKey = sessionKey(sendAgentId, sessionIdRef.current);
     const attachmentBlock = attachments
@@ -905,7 +921,10 @@ export default function App() {
       : text;
     setError("");
     clearLiveNotice(sessionIdRef.current);
-    updatePending(sessionIdRef.current);
+    let createdSessionId = "";
+    let sent = false;
+    let targetSessionId = sessionIdRef.current;
+    markPending(targetSessionId);
     if (overrideText === undefined) setDraftFor(sendKey, "");
     const optimisticId = `local-${Date.now()}`;
     setMessages((current) => [
@@ -919,20 +938,18 @@ export default function App() {
         created_at: new Date().toISOString(),
       },
     ]);
-    let createdSessionId = "";
-    let sent = false;
-    let targetSessionId = sessionIdRef.current;
     try {
       if (!targetSessionId) {
         const created = await api.createSession(sendAgentId, sessionTitle ?? "新会话");
         createdSessionId = created.id;
+        clearPending(targetSessionId);
         targetSessionId = created.id;
+        markPending(targetSessionId);
         if (sendAgentId === agentIdRef.current) {
           sessionIdRef.current = created.id;
           suppressSessionResetRef.current = created.id;
           setSessions((current) => [created, ...current]);
           setSessionId(created.id);
-          updatePending(created.id);
           setMessagesLoading(false);
         }
       }
@@ -989,7 +1006,6 @@ export default function App() {
             setSessionId("");
           }
         }
-        updatePending(null);
         await attachRun(targetSessionId, conflict, ATTACH_NOTICE);
         void refreshSessions();
         return false;
@@ -1003,14 +1019,14 @@ export default function App() {
         }
       }
       setAgentError(describeApiError(exc), sendAgentId);
-      updatePending(null);
+      clearPending(targetSessionId);
       return false;
     }
   }
 
   async function organizeMemory(): Promise<boolean> {
     const target = agents.find((item) => item.id === agentIdRef.current);
-    if (!target || sending) return false;
+    if (!target || chatSending) return false;
     if (!target.enabled_skills.includes(MEMORY_SKILL)) {
       try {
         const updated = await api.updateAgent(target.id, {
@@ -1043,13 +1059,13 @@ export default function App() {
   }
 
   async function retry(runId: string) {
-    if (sending) return;
+    if (chatSending) return;
     const retrySessionId =
       runSessionsRef.current[runId] ?? visibleRun?.session_id ?? sessionIdRef.current;
-    if (!retrySessionId) return;
+    if (!retrySessionId || pendingSessionsRef.current[retrySessionId]) return;
     setError("");
     clearLiveNotice(retrySessionId);
-    updatePending(retrySessionId);
+    markPending(retrySessionId);
     try {
       const response = await api.retryRun(runId);
       await attachRun(retrySessionId, response.run_id, "");
@@ -1057,13 +1073,12 @@ export default function App() {
     } catch (exc) {
       const conflict = conflictRunId(exc);
       if (conflict) {
-        updatePending(null);
         await attachRun(retrySessionId, conflict, RETRY_ATTACH_NOTICE);
         void refreshSessions();
         return;
       }
       setSessionError(describeApiError(exc), retrySessionId);
-      updatePending(null);
+      clearPending(retrySessionId);
     }
   }
 
@@ -1083,7 +1098,8 @@ export default function App() {
     if (id === agentId) {
       closeAllSubscriptions();
       setLiveBySession({});
-      updatePending(null);
+      pendingSessionsRef.current = {};
+      setPendingSessions({});
       setSessionId("");
       setMessages([]);
     }
@@ -1199,7 +1215,8 @@ export default function App() {
     setMessages([]);
     setMessagesLoading(false);
     setLiveBySession({});
-    updatePending(null);
+    pendingSessionsRef.current = {};
+    setPendingSessions({});
     draftsRef.current = {};
     sessionCountsRef.current = {};
     setAttachmentsByKey({});
@@ -1420,7 +1437,6 @@ export default function App() {
               draft={draft}
               attachments={attachments}
               canSend={Boolean(agentId)}
-              sendBlocked={busyElsewhere}
               agentId={agentId}
               agentName={agent?.name ?? "Agent"}
               channelType={currentSession?.channel_type ?? ""}

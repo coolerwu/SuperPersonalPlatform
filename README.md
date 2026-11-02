@@ -54,11 +54,11 @@ npm run dev
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用到输入框；失败 Run 可重试；
 - 流式输出、停止生成、自动增高输入框；运行状态按会话保存，切走再切回会继续显示该会话的流式文本、执行过程和截图；发送时强制滚到底部，输出期间上滑后显示浮动的「回到最新」按钮；模型返回 `reasoning_content` 时，聊天中显示可折叠的「执行过程」：连续思考片段与工具调用按发生顺序交错展示，思考/工具阶段展开，开始输出答案后自动折叠，完成后默认折叠、可展开；流式文本约 80ms 节流后渲染 Markdown，长回答和思考过程不会每个 token 重排一次；
-- 多个会话可以各自跟踪自己的 Run：切走 A 去加载 B 时先清空旧消息并显示骨架，B 不会出现 A 的文本；另一个会话的 Run 运行中时当前会话禁用发送并提示，输入框仍可编辑；异步错误只显示在所属 Agent/会话。失败或取消的 Run 会保留已流出的内容，显示「失败」/「已停止」气泡、错误摘要与重试按钮，刷新后从 `run_events` 恢复；失败和 API 错误按认证、限流、上下文超限、超时、连接、配置缺失等类别显示中文提示，原始错误仍可在气泡标题或抽屉中查看；
+- 多个会话可以各自跟踪自己的 Run：切走 A 去加载 B 时先清空旧消息并显示骨架，B 不会出现 A 的文本；另一个会话的 Run 运行中时当前会话仍可发送，Run 按并发上限立即运行或排队，不再禁用输入区；异步错误只显示在所属 Agent/会话。失败或取消的 Run 会保留已流出的内容，显示「失败」/「已停止」气泡、错误摘要与重试按钮，刷新后从 `run_events` 恢复；失败和 API 错误按认证、限流、上下文超限、超时、连接、配置缺失等类别显示中文提示，原始错误仍可在气泡标题或抽屉中查看；
 - 草稿和附件按会话隔离：切换会话会恢复各自的草稿和附件，发送失败时写回发起发送的会话；「新对话」使用独立的未发送草稿；「整理记忆」不会消费草稿，新建会话时会把草稿和附件带过去；
 - 页面可见时每 5 秒刷新当前 Agent 的会话列表：微信入站产生的新会话、消息数和运行中 Run 会更新侧栏徽标；当前会话有活动 Run 时会自动接上它的实时进度；微信会话在侧栏和输入区都有提示；
 - 侧栏搜索：会话列表上方的搜索框按关键词检索当前 Agent 的历史消息（至少 2 个字符，300ms 防抖）；结果显示会话标题、片段、角色和时间，点击后切换到该会话并滚动到命中消息、短暂高亮；
-- 后端同一 session 最多一个 running Run，queued Run 可以排队；网页 Chat 与 retry 在已有活动 Run 时返回 409（带 `active_run_id`），前端直接接入该 Run 并提示刚才的消息没有发送、恢复草稿；渠道入站消息允许继续排队并由 worker 串行执行；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 2），超出的 Run 保持 `queued`；
+- 后端同一 session 最多一个 running Run，queued Run 可以排队；网页 Chat 与 retry 在已有活动 Run 时返回 409（带 `active_run_id`），前端直接接入该 Run 并提示刚才的消息没有发送、恢复草稿；渠道入站消息允许继续排队并由 worker 串行执行；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 5），超出的 Run 保持 `queued`；
 - 服务停止/重启时正在运行的 Run 会重新排队并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的页面会自动重连（瞬时连接错误按退避重试）；收到 `reason=service_restart` 的 `run_queued` 时清空上一次尝试的流式文本，并显示「服务重启，Run 已重新排队」。恢复时保留中断前的 checkpoint 消息并追加「继续上次任务」提示，不重复原始用户输入；未返回结果的工具调用会补一条结果未知的 error 消息。重新入队不会回滚已经发生的文件/浏览器副作用，恢复提示会要求 Agent 不要重复执行；
 - 模型调用遇到 429/5xx/超时/连接错误时最多重试 3 次（指数退避 + jitter）；401/400 等 4xx 不重试；重试在模型层实现，主 Agent、general-purpose 子 Agent 和 step-limit 总结都会覆盖；流式调用已输出 token 后不重试，避免重复文本；可重试失败会记录 warning 日志；
 - 单个 Run 的步骤上限默认 500（`RUN_RECURSION_LIMIT`，主 Agent 与子 Agent 共用）；真的达到上限时先在原会话上自动续跑一次，仍超限才用同一模型带上完整对话生成最终答复，Run 仍以 completed 收尾并标注被截断；
@@ -145,7 +145,7 @@ metadata:
   - `browser_press(key, tab)`：按下按键；
   - `browser_screenshot(tab, full_page=false)`：按需截取当前页面，返回 PNG 图片；只在用户明确要求查看截图/外观/布局时调用，Provider 模型需要支持图片输入；PNG 同时保存到 `workspaces/<agent_id>/screenshots/<session_id>/<run_id>/`，聊天里显示在对应 assistant 消息下方，Agent 文件工具也能访问；
   - `browser_close(tab)`：关闭标签页并释放并发槽位。
-  - 每次 Run 懒启动一个浏览器进程和一个 context，最多 `BROWSER_CONCURRENCY=2` 个标签页；Run 结束、失败、超时或取消时自动关闭。ref 只对最近一次快照有效，动作后会返回新快照。
+  - 每次 Run 懒启动一个浏览器进程和一个 context，最多 `BROWSER_CONCURRENCY=5` 个标签页；Run 结束、失败、超时或取消时自动关闭。ref 只对最近一次快照有效，动作后会返回新快照。
   - 只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地地址、带凭据 URL、`file://` 和下载；只处理主 frame，不接管弹窗。
   - 搜索类页面优先尝试移动版/轻量入口（`m.baidu.com`、`www.google.com/search?q=`、`html.duckduckgo.com`、`cn.bing.com`、维基百科）；Google 需要主机网络能直连，当前网络被 DNS 污染时会被地址校验拒绝；遇到验证码、安全验证或 HTTP 403/429 时返回明确错误并提示换入口，不会尝试绕过验证。
 
@@ -280,7 +280,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 | `KB_EXCLUDE_DIRS` | 同步时跳过的目录/文件名（逗号分隔） | `.obsidian,.git,.trash,node_modules,.DS_Store` |
 | `KB_MAX_LISTING_ENTRIES` | 单次 PROPFIND 的条目上限；达到后本轮不做删除判断 | `750` |
 | `KB_BLOCKED_RETRY_SECONDS` | 收到 `BlockedTemporarily` / HTTP 503 后的暂停秒数 | `1800` |
-| `BROWSER_CONCURRENCY` | 每个 Run 的浏览器标签页上限，同时决定不同 session 的 Run 并发数 | `2` |
+| `BROWSER_CONCURRENCY` | 每个 Run 的浏览器标签页上限，同时决定不同 session 的 Run 并发数 | `5` |
 | `BROWSER_NAVIGATION_TIMEOUT_MS` | 页面导航超时 | `30000` |
 | `BROWSER_ACTION_TIMEOUT_MS` | 点击/填写动作超时 | `10000` |
 | `BROWSER_MAX_ELEMENTS` | 每次快照的交互元素上限 | `120` |
