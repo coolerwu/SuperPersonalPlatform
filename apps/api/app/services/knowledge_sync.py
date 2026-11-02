@@ -919,14 +919,15 @@ class KnowledgeSyncRuntime:
         self._wake.set()
 
     def status(self) -> dict[str, object]:
-        blocked = time.monotonic() < self._blocked_until
+        remaining = self._blocked_until - time.monotonic()
+        blocked = remaining > 0
         return {
             "enabled": self.enabled and self.configured,
             "configured": self.configured,
             "blocked": blocked,
             "syncing": self.syncing,
             "retry_at": (
-                datetime.fromtimestamp(self._blocked_until, timezone.utc).isoformat()
+                datetime.fromtimestamp(time.time() + remaining, timezone.utc).isoformat()
                 if blocked
                 else None
             ),

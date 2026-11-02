@@ -483,7 +483,7 @@ async def test_runtime_pauses_after_temporary_block(tmp_path: Path) -> None:
     await runtime.stop()
 
     assert runtime.status()["blocked"] is True
-    assert runtime.status()["retry_at"]
+    assert str(runtime.status()["retry_at"]).startswith("20")
     assert "限制" in runtime.last_error
 
 
