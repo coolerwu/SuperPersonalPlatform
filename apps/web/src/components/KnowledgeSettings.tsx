@@ -124,11 +124,15 @@ export function KnowledgeSettings() {
   const status = state?.status;
   const statusLabel = !config
     ? "读取中"
-    : !config.webdav_url
-      ? "未配置"
-      : config.enabled
-        ? "已启用"
-        : "已停用";
+    : status?.blocked
+      ? "限流中"
+      : status?.syncing
+        ? "同步中"
+        : !config.webdav_url
+          ? "未配置"
+          : config.enabled
+            ? "已启用"
+            : "已停用";
   const result = status?.last_result;
   const resultLabel = result
     ? `下载 ${result.downloaded} · 上传 ${result.uploaded} · 冲突 ${result.conflicts}`
@@ -146,6 +150,9 @@ export function KnowledgeSettings() {
         本地镜像：{config?.local_dir ?? "—"}
       </div>
       <div className="system-counts">上次结果：{resultLabel}</div>
+      {status?.blocked && status.retry_at && (
+        <div className="system-counts">限流解除后自动重试：{formatTime(status.retry_at)}</div>
+      )}
       {status?.last_error && <div className="error-banner">{status.last_error}</div>}
 
       <div className="settings-subhead">WebDAV 配置</div>
@@ -239,6 +246,11 @@ export function KnowledgeSettings() {
       <div className="hint">
         WebDAV 密码保存在 app.db，与 Provider 密钥相同，不会回传前端、不写日志；留空表示不修改。
         保存后立即唤醒同步；Agent 要在「技能」页启用 knowledge-base 才能看到 /knowledge/。
+      </div>
+      <div className="hint">
+        坚果云免费账号限制约每 30 分钟 600 次 WebDAV 请求（所有第三方应用共享），平台已自动限速；
+        首次同步大目录会持续较长时间，建议根目录只指向笔记子目录。遇到限流会暂停约 30 分钟后自动重试。
+        更改 WebDAV 地址、账号或根目录会重置本地镜像，旧镜像保留为备份。
       </div>
     </>
   );

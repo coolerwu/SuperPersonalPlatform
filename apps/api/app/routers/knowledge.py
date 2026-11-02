@@ -37,6 +37,9 @@ def _runtime_status(request: Request) -> dict[str, object]:
     return {
         "enabled": False,
         "configured": False,
+        "blocked": False,
+        "syncing": False,
+        "retry_at": None,
         "local_dir": str(settings.knowledge_dir),
         "interval_seconds": max(MIN_SYNC_INTERVAL_SECONDS, settings.kb_sync_interval_seconds),
         "last_sync_at": None,
@@ -104,7 +107,7 @@ async def update_knowledge(
 
     runtime = getattr(request.app.state, "knowledge", None)
     if runtime is not None:
-        runtime.wake()
+        runtime.wake(force=True)
     return {"config": _config_out(row), "status": _runtime_status(request)}
 
 
@@ -115,5 +118,11 @@ async def sync_knowledge(request: Request, db: AsyncSession = Depends(get_db)) -
         raise HTTPException(status_code=400, detail="知识库尚未配置或已停用")
     runtime = getattr(request.app.state, "knowledge", None)
     if runtime is not None:
+        status = runtime.status()
+        if status.get("blocked"):
+            raise HTTPException(
+                status_code=429,
+                detail="坚果云暂时限制了 WebDAV 访问，请等待限流解除后再试",
+            )
         runtime.wake()
     return {"queued": True, "status": _runtime_status(request)}

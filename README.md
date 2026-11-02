@@ -214,6 +214,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 - 平台在生产机维护一份本地镜像（默认 `~/.super-personal-platform/knowledge/`），由 `KnowledgeSyncRuntime` 在 API 进程内与坚果云 WebDAV 双向同步：服务启动后立即同步一次（已配置时），之后按配置页的间隔增量同步（默认 300 秒）。只传输新增或变化的文件，不监听文件系统。
 - 配置在「配置」页的「知识库」tab：启用开关、WebDAV 地址（例如 `https://dav.jianguoyun.com/dav/`）、账号、应用密码（坚果云「第三方应用密码」，不是登录密码）、根目录、同步间隔。保存后立即唤醒同步，不需要重启服务；密码保存在 `app.db`，接口只返回 `has_password`。`.env` 的 `KB_WEBDAV_*` 只在数据库里还没有配置时作为首次启动的初始值，方便无界面部署；之后以配置页为准。根目录必须是已存在的目录；根目录不存在时这一轮同步会报错并保留本地镜像，不会把它当成空目录清空。
 - 同步规则：远端和本地都改过同一文件时，远端版本保留原名，本地版本另存为 `<name>.conflict-local-<时间戳>` 并上传；远端删除且本地未修改时删除本地；本地删除不传播，远端文件会在下一轮恢复。单文件默认上限 50 MB（`KB_MAX_FILE_BYTES`），超出跳过；路径限制在配置的根目录内，拒绝 `..` 和符号链接。
+- 坚果云限流：免费账号每 30 分钟约 600 次 WebDAV 请求（付费 1500 次，所有第三方应用共享），单次 `PROPFIND` 最多 750 项，且不支持 `Depth: infinity`。平台默认每 4.5 秒最多发一个请求（`KB_REQUEST_INTERVAL_SECONDS`），默认跳过 `.obsidian`、`.git`、`.trash`、`node_modules`、`.DS_Store`（`KB_EXCLUDE_DIRS`）；收到 `BlockedTemporarily` 时暂停约 30 分钟（`KB_BLOCKED_RETRY_SECONDS`）。列表达到 750 项、被截断或某个子目录读取失败时，本轮不做删除判断。首次同步大目录会持续较长时间，建议把根目录指向专门的笔记子目录。更改 WebDAV 地址、账号或根目录时，本地镜像和同步状态会移到 `knowledge.old-<时间戳>` / `knowledge_sync_state.json.old-<时间戳>`，再按新配置重建，避免旧文件被上传到新根目录。
 - Agent 使用：在「技能」页为当前 Agent 启用 `knowledge-base`，之后它就能用现有文件工具 `ls`、`glob`、`grep`、`read_file`、`edit_file` 操作 `/knowledge/`；未启用的 Agent 不挂载该路径。写新笔记默认放在根目录、文件名用 `YYYY-MM-DD-标题.md`（以技能正文和你知识库根目录的 `README.md` 约定为准），写入本地镜像后几分钟内同步回坚果云。
 - 凭据只存在于 API 进程和 `app.db`，不返回前端、不写日志；Agent 能看到目录内容，但看不到 WebDAV 账号。
 - 接口：`GET/PUT /api/knowledge` 读取和保存配置（响应包含同步状态，不含密码），`POST /api/knowledge/sync` 立即触发一次同步；`GET /api/system` 的 `knowledge` 字段也返回同步状态。冲突文件的保留提示只写日志，不主动推送。
@@ -275,6 +276,10 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 | `KB_SYNC_INTERVAL_SECONDS` | 知识库初始同步间隔（秒，最小 30）；之后由配置页管理 | `300` |
 | `KB_SYNC_TIMEOUT_SECONDS` | 单次 WebDAV 请求超时（秒） | `30` |
 | `KB_MAX_FILE_BYTES` | 单个知识库文件的大小上限 | `52428800` |
+| `KB_REQUEST_INTERVAL_SECONDS` | WebDAV 请求最小间隔（秒），用于遵守坚果云限流 | `4.5` |
+| `KB_EXCLUDE_DIRS` | 同步时跳过的目录/文件名（逗号分隔） | `.obsidian,.git,.trash,node_modules,.DS_Store` |
+| `KB_MAX_LISTING_ENTRIES` | 单次 PROPFIND 的条目上限；达到后本轮不做删除判断 | `750` |
+| `KB_BLOCKED_RETRY_SECONDS` | 收到 `BlockedTemporarily` / HTTP 503 后的暂停秒数 | `1800` |
 | `BROWSER_CONCURRENCY` | 每个 Run 的浏览器标签页上限，同时决定不同 session 的 Run 并发数 | `2` |
 | `BROWSER_NAVIGATION_TIMEOUT_MS` | 页面导航超时 | `30000` |
 | `BROWSER_ACTION_TIMEOUT_MS` | 点击/填写动作超时 | `10000` |

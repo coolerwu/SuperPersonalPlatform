@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from pathlib import Path
 
 import httpx
@@ -14,6 +15,7 @@ from app.services.knowledge_sync import (
     RemoteEntry,
     WebDavClient,
     WebDavError,
+    WebDavUnavailable,
 )
 
 
@@ -23,7 +25,7 @@ class FakeDav:
     def __init__(self, files: dict[str, bytes] | None = None) -> None:
         self.files = dict(files or {})
         self.uploads: list[str] = []
-        self.listing_truncated = False
+        self.listing_incomplete = False
 
     def _etag(self, rel: str) -> str:
         return hashlib.md5(self.files[rel]).hexdigest()
@@ -192,13 +194,13 @@ async def test_truncated_listing_does_not_delete_local(tmp_path: Path) -> None:
     await sync.sync_once()
 
     dav.files.clear()
-    dav.listing_truncated = True
+    dav.listing_incomplete = True
     result = await sync.sync_once()
 
     assert result.removed_local == 0
     assert (local / "keep.md").exists()
 
-    dav.listing_truncated = False
+    dav.listing_incomplete = False
     result = await sync.sync_once()
     assert result.removed_local == 1
     assert not (local / "keep.md").exists()
@@ -322,6 +324,7 @@ async def test_webdav_client_lists_chinese_paths() -> None:
         "pass",
         root="知识库",
         http_client=http,
+        request_interval=0,
     )
 
     files = await client.list_files()
@@ -346,6 +349,7 @@ async def test_webdav_client_rejects_missing_root() -> None:
         "pass",
         root="missing",
         http_client=http,
+        request_interval=0,
     )
 
     with pytest.raises(WebDavError):
@@ -369,6 +373,7 @@ async def test_webdav_client_writes_chinese_paths() -> None:
         "pass",
         root="知识库",
         http_client=http,
+        request_interval=0,
     )
 
     entry = await client.put("笔记/new.md", b"data")
@@ -380,3 +385,143 @@ async def test_webdav_client_writes_chinese_paths() -> None:
     )
     assert await client.get("笔记/new.md") == b"payload"
     await http.aclose()
+
+
+async def test_webdav_client_flags_entry_cap() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(207, text=MULTISTATUS)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = WebDavClient(
+        "https://dav.example.com/dav/",
+        "user",
+        "pass",
+        root="知识库",
+        http_client=http,
+        request_interval=0,
+        max_listing_entries=3,
+    )
+
+    files = await client.list_files()
+
+    assert set(files) == {"sub/笔记.md"}
+    assert client.listing_incomplete is True
+    await http.aclose()
+
+
+async def test_webdav_client_detects_temporary_block() -> None:
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<d:error xmlns:d="DAV:" xmlns:s="http://ns.jianguoyun.com">'
+        "<s:exception>BlockedTemporarily</s:exception>"
+        "<s:message>Too many requests are received recently</s:message>"
+        "</d:error>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text=body)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = WebDavClient(
+        "https://dav.example.com/dav/",
+        "user",
+        "pass",
+        root="知识库",
+        http_client=http,
+        request_interval=0,
+    )
+
+    with pytest.raises(WebDavUnavailable) as info:
+        await client.list_files()
+    assert info.value.blocked is True
+    assert info.value.retry_after_seconds >= 60
+    await http.aclose()
+
+
+async def test_webdav_client_excludes_config_dirs() -> None:
+    client = WebDavClient(
+        "https://dav.example.com/dav/",
+        "user",
+        "pass",
+        exclude_dirs=".obsidian,.git",
+        request_interval=0,
+    )
+    try:
+        assert client._excluded(".obsidian/app.json")
+        assert client._excluded("notes/.git/config")
+        assert not client._excluded("notes/a.md")
+    finally:
+        await client.close()
+
+
+async def test_runtime_pauses_after_temporary_block(tmp_path: Path) -> None:
+    class BlockedDav(FakeDav):
+        async def list_files(self) -> dict[str, RemoteEntry]:
+            raise WebDavUnavailable(503, "/", blocked=True, retry_after_seconds=60)
+
+    async def loader() -> KnowledgeSettings:
+        return KnowledgeSettings(
+            enabled=True,
+            webdav_url="https://dav.example.com/dav/",
+            username="user",
+            password="pass",
+            root="",
+            interval_seconds=30,
+        )
+
+    runtime = KnowledgeSyncRuntime(
+        config_loader=loader,
+        client_factory=lambda settings: BlockedDav(),
+        local_dir=tmp_path / "knowledge",
+        state_path=tmp_path / "state.json",
+    )
+    await runtime.start()
+    for _ in range(50):
+        if runtime.status()["blocked"]:
+            break
+        await asyncio.sleep(0.02)
+    await runtime.stop()
+
+    assert runtime.status()["blocked"] is True
+    assert runtime.status()["retry_at"]
+    assert "限制" in runtime.last_error
+
+
+async def test_runtime_resets_mirror_when_remote_changes(tmp_path: Path) -> None:
+    local = tmp_path / "knowledge"
+    local.mkdir()
+    (local / "old.md").write_text("old", encoding="utf-8")
+    state = tmp_path / "state.json"
+    state.write_text(
+        json.dumps({"version": 1, "remote_key": "old-key", "files": {}}),
+        encoding="utf-8",
+    )
+    dav = FakeDav({"new.md": b"new"})
+    config = KnowledgeSettings(
+        enabled=True,
+        webdav_url="https://dav.example.com/dav/",
+        username="user",
+        password="pass",
+        root="notes",
+        interval_seconds=30,
+    )
+
+    async def loader() -> KnowledgeSettings:
+        return config
+
+    runtime = KnowledgeSyncRuntime(
+        config_loader=loader,
+        client_factory=lambda settings: dav,
+        local_dir=local,
+        state_path=state,
+    )
+    await runtime.start()
+    for _ in range(50):
+        if runtime.last_sync_at:
+            break
+        await asyncio.sleep(0.02)
+    await runtime.stop()
+
+    assert not (local / "old.md").exists()
+    assert (local / "new.md").read_bytes() == b"new"
+    assert list(tmp_path.glob("knowledge.old-*"))

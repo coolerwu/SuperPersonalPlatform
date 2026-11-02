@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     kb_sync_interval_seconds: int = 300
     kb_sync_timeout_seconds: int = 30
     kb_max_file_bytes: int = 50 * 1024 * 1024
+    # Nutstore WebDAV rate limits: free accounts may make ~600 requests per
+    # 30 minutes across all third-party apps, and a PROPFIND returns at most
+    # 750 entries. Pace requests and treat a temporary block as a long pause.
+    kb_request_interval_seconds: float = 4.5
+    kb_exclude_dirs: str = ".obsidian,.git,.trash,node_modules,.DS_Store"
+    kb_max_listing_entries: int = 750
+    kb_blocked_retry_seconds: int = 1800
     app_knowledge_dir: Path | None = None
 
     # Crypto market data (Bitget public REST) and backtesting. Bitget is not

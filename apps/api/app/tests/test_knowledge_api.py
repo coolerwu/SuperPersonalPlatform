@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 
 import pytest
 
@@ -89,6 +90,18 @@ def test_sync_endpoint_requires_config(client, knowledge_cleanup) -> None:
     response = client.post("/api/knowledge/sync")
     assert response.status_code == 200
     assert response.json()["queued"] is True
+
+
+def test_sync_endpoint_respects_rate_limit_backoff(client, knowledge_cleanup) -> None:
+    client.put(
+        "/api/knowledge",
+        json={"enabled": True, "webdav_url": "https://dav.example.com/dav/"},
+    )
+    client.app.state.knowledge._blocked_until = time.monotonic() + 60
+
+    response = client.post("/api/knowledge/sync")
+    assert response.status_code == 429
+    assert "限流" in response.json()["detail"]
 
 
 async def test_seed_knowledge_config_from_env(

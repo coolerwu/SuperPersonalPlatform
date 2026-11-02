@@ -224,6 +224,9 @@ export type KnowledgeSyncResult = {
 export type KnowledgeStatus = {
   enabled: boolean;
   configured: boolean;
+  blocked: boolean;
+  syncing: boolean;
+  retry_at: string | null;
   local_dir: string;
   interval_seconds: number;
   last_sync_at: string | null;

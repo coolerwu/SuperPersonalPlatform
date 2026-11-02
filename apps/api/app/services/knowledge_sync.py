@@ -56,6 +56,22 @@ class WebDavError(RuntimeError):
         super().__init__(f"WebDAV request failed with HTTP {status_code} for {path!r}")
 
 
+class WebDavUnavailable(WebDavError):
+    """WebDAV is temporarily refusing requests (rate limit or outage)."""
+
+    def __init__(
+        self,
+        status_code: int,
+        path: str,
+        *,
+        blocked: bool = False,
+        retry_after_seconds: int = 1800,
+    ) -> None:
+        super().__init__(status_code, path)
+        self.blocked = blocked
+        self.retry_after_seconds = retry_after_seconds
+
+
 @dataclass(frozen=True)
 class RemoteEntry:
     path: str
@@ -125,6 +141,17 @@ def _clean_etag(value: str) -> str:
     return value.strip().strip('"')
 
 
+def _parse_excludes(value: str) -> set[str]:
+    return {part.strip() for part in value.split(",") if part.strip()}
+
+
+def _remote_key(config: KnowledgeSettings) -> str:
+    payload = "\n".join(
+        (config.webdav_url.strip(), config.username.strip(), config.root.strip())
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _hash_file(path: Path) -> str:
     digest = hashlib.md5()
     with path.open("rb") as handle:
@@ -187,10 +214,31 @@ class WebDavClient:
         root: str = "",
         timeout: float = 30,
         http_client: httpx.AsyncClient | None = None,
+        request_interval: float | None = None,
+        exclude_dirs: str | None = None,
+        max_listing_entries: int | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/") + "/"
         self.root = root.strip("/")
-        self.listing_truncated = False
+        self.listing_incomplete = False
+        self.request_interval = max(
+            0.0,
+            settings.kb_request_interval_seconds
+            if request_interval is None
+            else request_interval,
+        )
+        self.exclude_dirs = _parse_excludes(
+            settings.kb_exclude_dirs if exclude_dirs is None else exclude_dirs
+        )
+        self.max_listing_entries = max(
+            2,
+            settings.kb_max_listing_entries
+            if max_listing_entries is None
+            else max_listing_entries,
+        )
+        self._throttle_lock = asyncio.Lock()
+        self._last_request_at = 0.0
+        self._known_dirs: set[str] = set()
         self._owns_client = http_client is None
         self._client = http_client or httpx.AsyncClient(
             timeout=timeout,
@@ -224,7 +272,32 @@ class WebDavClient:
             return None
         return unicodedata.normalize("NFC", rel)
 
+    async def _throttle(self) -> None:
+        if self.request_interval <= 0:
+            return
+        async with self._throttle_lock:
+            wait = self._last_request_at + self.request_interval - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_request_at = time.monotonic()
+
+    def _unavailable(self, response: httpx.Response, rel: str) -> WebDavUnavailable:
+        text = response.text or ""
+        blocked = "BlockedTemporarily" in text or "Too many requests" in text
+        return WebDavUnavailable(
+            response.status_code,
+            rel or "/",
+            blocked=blocked,
+            retry_after_seconds=max(60, settings.kb_blocked_retry_seconds),
+        )
+
+    def _excluded(self, rel: str) -> bool:
+        return bool(self.exclude_dirs) and any(
+            part in self.exclude_dirs for part in rel.split("/")
+        )
+
     async def _propfind(self, rel: str, depth: int) -> list[tuple[str, RemoteEntry, bool]]:
+        await self._throttle()
         url = self._url(rel)
         if depth == 1 and not url.endswith("/"):
             url += "/"
@@ -234,6 +307,8 @@ class WebDavClient:
             headers={"Depth": str(depth), "Content-Type": "application/xml; charset=utf-8"},
             content=PROPFIND_BODY,
         )
+        if response.status_code in (429, 503):
+            raise self._unavailable(response, rel)
         if response.status_code == 404:
             if not rel:
                 # A missing root is a configuration error. Treating it as an
@@ -280,46 +355,78 @@ class WebDavClient:
             # A 207 response with no recognizable hrefs means the listing is
             # malformed, not that the folder is empty.
             raise WebDavError(502, "/")
+        if len(entries) >= self.max_listing_entries:
+            # Nutstore caps one PROPFIND at 750 entries. Treat a full page as
+            # incomplete so the sync does not infer remote deletions.
+            self.listing_incomplete = True
+            logger.warning(
+                "knowledge sync: listing %s hit the entry cap (%d)",
+                rel or "/",
+                len(entries),
+            )
         return entries
 
     async def list_files(self) -> dict[str, RemoteEntry]:
         files: dict[str, RemoteEntry] = {}
         pending = [""]
         seen: set[str] = set()
-        self.listing_truncated = False
+        self.listing_incomplete = False
         while pending:
             rel_dir = pending.pop()
             if rel_dir in seen:
                 continue
             if len(seen) >= MAX_REMOTE_DIRS:
                 logger.warning("knowledge sync: stopped after %d directories", MAX_REMOTE_DIRS)
-                self.listing_truncated = True
+                self.listing_incomplete = True
                 break
             seen.add(rel_dir)
-            for rel, entry, is_dir in await self._propfind(rel_dir, 1):
+            try:
+                entries = await self._propfind(rel_dir, 1)
+            except WebDavUnavailable:
+                raise
+            except WebDavError as exc:
+                if not rel_dir:
+                    raise
+                logger.warning(
+                    "knowledge sync: cannot list %s (%s); skipping subtree",
+                    rel_dir,
+                    exc,
+                )
+                self.listing_incomplete = True
+                continue
+            for rel, entry, is_dir in entries:
+                if self._excluded(rel):
+                    continue
                 if is_dir:
+                    self._known_dirs.add(rel)
                     pending.append(rel)
                 else:
                     files[rel] = entry
                 if len(files) >= MAX_REMOTE_FILES:
                     logger.warning("knowledge sync: stopped after %d files", MAX_REMOTE_FILES)
-                    self.listing_truncated = True
+                    self.listing_incomplete = True
                     return files
         return files
 
     async def get(self, rel: str) -> bytes:
+        await self._throttle()
         response = await self._client.get(self._url(rel))
+        if response.status_code in (429, 503):
+            raise self._unavailable(response, rel)
         if response.status_code != 200:
             raise WebDavError(response.status_code, rel)
         return response.content
 
     async def put(self, rel: str, data: bytes) -> RemoteEntry | None:
         await self.ensure_dirs(rel)
+        await self._throttle()
         response = await self._client.put(
             self._url(rel),
             content=data,
             headers={"Content-Type": "application/octet-stream"},
         )
+        if response.status_code in (429, 503):
+            raise self._unavailable(response, rel)
         if response.status_code not in (200, 201, 204):
             raise WebDavError(response.status_code, rel)
         etag = _clean_etag(response.headers.get("etag") or "")
@@ -334,11 +441,15 @@ class WebDavClient:
         return None
 
     async def mkcol(self, rel: str) -> None:
-        if not rel:
+        if not rel or rel in self._known_dirs:
             return
+        await self._throttle()
         response = await self._client.request("MKCOL", self._url(rel))
+        if response.status_code in (429, 503):
+            raise self._unavailable(response, rel)
         if response.status_code not in (200, 201, 204, 405):
             raise WebDavError(response.status_code, rel)
+        self._known_dirs.add(rel)
 
     async def ensure_dirs(self, rel: str) -> None:
         parts = rel.split("/")[:-1]
@@ -354,10 +465,12 @@ class KnowledgeSync:
         local_dir: Path,
         state_path: Path,
         max_file_bytes: int | None = None,
+        remote_key: str = "",
     ) -> None:
         self.client = client
         self.local_dir = Path(local_dir).expanduser()
         self.state_path = Path(state_path)
+        self.remote_key = remote_key
         self.max_file_bytes = (
             settings.kb_max_file_bytes if max_file_bytes is None else max_file_bytes
         )
@@ -374,6 +487,8 @@ class KnowledgeSync:
 
         try:
             remote = await self.client.list_files()
+        except WebDavUnavailable:
+            raise
         except WebDavError as exc:
             logger.warning("knowledge sync: cannot list WebDAV folder: %s", exc)
             if exc.status_code in (401, 403):
@@ -481,9 +596,10 @@ class KnowledgeSync:
             elif prev is not None:
                 next_state[rel] = prev
 
-        if getattr(self.client, "listing_truncated", False):
-            # Missing files in a truncated listing are not deletions. Keep the
-            # previous baselines so the next complete listing can reconcile.
+        if getattr(self.client, "listing_incomplete", False):
+            # Missing files in an incomplete or capped listing are not
+            # deletions. Keep the previous baselines so a later complete
+            # listing can reconcile.
             logger.warning("knowledge sync: remote listing was truncated; skipping local pass")
             for rel, prev in previous.items():
                 next_state.setdefault(rel, prev)
@@ -712,7 +828,11 @@ class KnowledgeSync:
 
     def _save_state(self, files: dict[str, dict]) -> None:
         payload = json.dumps(
-            {"version": STATE_VERSION, "files": dict(sorted(files.items()))},
+            {
+                "version": STATE_VERSION,
+                "remote_key": self.remote_key,
+                "files": dict(sorted(files.items())),
+            },
             ensure_ascii=False,
             indent=2,
         )
@@ -766,9 +886,11 @@ class KnowledgeSyncRuntime:
         self._task: asyncio.Task | None = None
         self._client: Any = None
         self._signature: tuple[str, str, str, str] | None = None
+        self._blocked_until = 0.0
         self.sync: KnowledgeSync | None = None
         self.enabled = False
         self.configured = False
+        self.syncing = False
         self.last_sync_at: str | None = None
         self.last_result: SyncResult | None = None
         self.last_error = ""
@@ -791,13 +913,23 @@ class KnowledgeSyncRuntime:
             self._task = None
         await self._close_client()
 
-    def wake(self) -> None:
+    def wake(self, force: bool = False) -> None:
+        if not force and time.monotonic() < self._blocked_until:
+            return
         self._wake.set()
 
     def status(self) -> dict[str, object]:
+        blocked = time.monotonic() < self._blocked_until
         return {
             "enabled": self.enabled and self.configured,
             "configured": self.configured,
+            "blocked": blocked,
+            "syncing": self.syncing,
+            "retry_at": (
+                datetime.fromtimestamp(self._blocked_until, timezone.utc).isoformat()
+                if blocked
+                else None
+            ),
             "local_dir": str(self.local_dir),
             "interval_seconds": self._interval,
             "last_sync_at": self.last_sync_at,
@@ -820,6 +952,60 @@ class KnowledgeSyncRuntime:
         except Exception:
             logger.warning("knowledge sync: failed to close WebDAV client", exc_info=True)
 
+    def _prepare_remote(self, config: KnowledgeSettings) -> str:
+        """Return the remote identity key, resetting stale mirrors when needed."""
+        key = _remote_key(config)
+        state = self.state_path
+        if not state.exists():
+            if self.local_dir.exists() and any(self.local_dir.iterdir()):
+                self._reset_mirror("missing state")
+            return key
+        try:
+            data = json.loads(state.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self._reset_mirror("unreadable state")
+            return key
+        stored = data.get("remote_key") if isinstance(data, dict) else None
+        if not stored:
+            # Adopt state files written before remote_key existed.
+            if isinstance(data, dict):
+                data["remote_key"] = key
+                try:
+                    state.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    logger.warning(
+                        "knowledge sync: cannot migrate state file", exc_info=True
+                    )
+            return key
+        if stored != key:
+            self._reset_mirror("remote changed")
+        return key
+
+    def _reset_mirror(self, reason: str) -> None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        if self.local_dir.exists():
+            target = self.local_dir.with_name(f"{self.local_dir.name}.old-{stamp}")
+            counter = 1
+            while target.exists():
+                target = self.local_dir.with_name(
+                    f"{self.local_dir.name}.old-{stamp}-{counter}"
+                )
+                counter += 1
+            try:
+                self.local_dir.rename(target)
+                logger.info("knowledge sync: moved old mirror to %s (%s)", target, reason)
+            except OSError:
+                logger.exception("knowledge sync: cannot move old mirror aside")
+        if self.state_path.exists():
+            target = self.state_path.with_name(f"{self.state_path.name}.old-{stamp}")
+            try:
+                self.state_path.rename(target)
+            except OSError:
+                logger.exception("knowledge sync: cannot move old state aside")
+
     async def _loop(self) -> None:
         while not self._stop.is_set():
             started = time.monotonic()
@@ -830,29 +1016,38 @@ class KnowledgeSyncRuntime:
                     self.configured = False
                     self.enabled = False
                     self.last_error = ""
+                    self._blocked_until = 0.0
                     await self._close_client()
                 elif not config.enabled:
                     self.configured = True
                     self.enabled = False
                     self.last_error = ""
+                    self._blocked_until = 0.0
                     await self._close_client()
                 else:
                     self.configured = True
                     self.enabled = True
                     if self.sync is None or config.signature != self._signature:
                         await self._close_client()
+                        remote_key = self._prepare_remote(config)
                         self._client = self._client_factory(config)
                         self.sync = KnowledgeSync(
                             client=self._client,
                             local_dir=self.local_dir,
                             state_path=self.state_path,
+                            remote_key=remote_key,
                         )
                         self._signature = config.signature
                     self._interval = max(
                         MIN_SYNC_INTERVAL_SECONDS, config.interval_seconds
                     )
                     interval = self._interval
-                    result = await self.sync.sync_once()
+                    self.syncing = True
+                    try:
+                        result = await self.sync.sync_once()
+                    finally:
+                        self.syncing = False
+                    self._blocked_until = 0.0
                     self.last_sync_at = datetime.now(timezone.utc).isoformat()
                     self.last_result = result
                     self.last_error = "" if result.errors == 0 else "同步完成，但有文件失败"
@@ -871,6 +1066,21 @@ class KnowledgeSyncRuntime:
                         )
             except asyncio.CancelledError:
                 raise
+            except WebDavUnavailable as exc:
+                self.last_sync_at = datetime.now(timezone.utc).isoformat()
+                wait = max(interval, exc.retry_after_seconds)
+                self._blocked_until = time.monotonic() + wait
+                if exc.blocked:
+                    self.last_error = (
+                        "坚果云暂时限制了 WebDAV 访问（请求过于频繁），已暂停同步，稍后自动重试"
+                    )
+                else:
+                    self.last_error = (
+                        f"WebDAV 暂时不可用（HTTP {exc.status_code}），已暂停同步，稍后自动重试"
+                    )
+                interval = wait
+                self._wake.clear()
+                logger.warning("knowledge sync paused for %ss: %s", wait, exc)
             except Exception as exc:
                 self.last_sync_at = datetime.now(timezone.utc).isoformat()
                 self.last_error = str(exc) or type(exc).__name__
