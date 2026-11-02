@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.db import get_db
-from app.models import Agent, CronJob, Run
+from app.models import Agent, Channel, ChannelConversation, CronJob, Run
 from app.schemas import CronJobCreate, CronJobOut, CronJobUpdate, CronRunOut
 from app.services import cron_service
 from app.services.cron_service import (
@@ -25,7 +25,11 @@ router = APIRouter(prefix="/api/cron-jobs", tags=["cron"], dependencies=[Depends
 
 
 async def _job_out(
-    db: AsyncSession, job: CronJob, status_by_id: dict[str, str] | None = None
+    db: AsyncSession,
+    job: CronJob,
+    status_by_id: dict[str, str] | None = None,
+    channel_names: dict[str, str] | None = None,
+    conversation_names: dict[str, str] | None = None,
 ) -> CronJobOut:
     last_status = None
     if job.last_run_id:
@@ -34,6 +38,32 @@ async def _job_out(
         else:
             last_status = await db.scalar(
                 select(Run.status).where(Run.id == job.last_run_id)
+            )
+    push_channel_name = ""
+    if job.push_channel_id:
+        if channel_names is not None:
+            push_channel_name = channel_names.get(job.push_channel_id, "")
+        else:
+            push_channel_name = (
+                await db.scalar(
+                    select(Channel.name).where(Channel.id == job.push_channel_id)
+                )
+                or ""
+            )
+    push_conversation_name = ""
+    if job.push_conversation_id:
+        if conversation_names is not None:
+            push_conversation_name = conversation_names.get(
+                job.push_conversation_id, ""
+            )
+        else:
+            push_conversation_name = (
+                await db.scalar(
+                    select(ChannelConversation.display_name).where(
+                        ChannelConversation.id == job.push_conversation_id
+                    )
+                )
+                or ""
             )
     return CronJobOut(
         id=job.id,
@@ -49,6 +79,10 @@ async def _job_out(
         last_run_id=job.last_run_id,
         last_run_status=last_status,
         last_skipped_at=job.last_skipped_at,
+        push_channel_id=job.push_channel_id,
+        push_conversation_id=job.push_conversation_id,
+        push_channel_name=push_channel_name,
+        push_conversation_name=push_conversation_name,
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
@@ -70,7 +104,32 @@ async def list_cron_jobs(
             await db.execute(select(Run.id, Run.status).where(Run.id.in_(run_ids)))
         ).all()
         status_by_id = {str(row[0]): str(row[1]) for row in rows}
-    return [await _job_out(db, job, status_by_id) for job in jobs]
+    channel_ids = [job.push_channel_id for job in jobs if job.push_channel_id]
+    channel_names: dict[str, str] = {}
+    if channel_ids:
+        rows = (
+            await db.execute(select(Channel.id, Channel.name).where(Channel.id.in_(channel_ids)))
+        ).all()
+        channel_names = {str(row[0]): str(row[1]) for row in rows}
+    conversation_ids = [
+        job.push_conversation_id for job in jobs if job.push_conversation_id
+    ]
+    conversation_names: dict[str, str] = {}
+    if conversation_ids:
+        rows = (
+            await db.execute(
+                select(ChannelConversation.id, ChannelConversation.display_name).where(
+                    ChannelConversation.id.in_(conversation_ids)
+                )
+            )
+        ).all()
+        conversation_names = {str(row[0]): str(row[1]) for row in rows}
+    return [
+        await _job_out(
+            db, job, status_by_id, channel_names, conversation_names
+        )
+        for job in jobs
+    ]
 
 
 @router.post("", response_model=CronJobOut, status_code=201)
@@ -86,6 +145,8 @@ async def create_cron_job(
             schedule=payload.schedule,
             timezone=payload.timezone,
             enabled=payload.enabled,
+            push_channel_id=payload.push_channel_id,
+            push_conversation_id=payload.push_conversation_id,
         )
     except CronNotFound as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
@@ -118,6 +179,8 @@ async def update_cron_job(
             schedule=payload.schedule,
             timezone=payload.timezone,
             enabled=payload.enabled,
+            push_channel_id=payload.push_channel_id,
+            push_conversation_id=payload.push_conversation_id,
         )
     except CronNotFound as exc:
         raise HTTPException(status_code=404, detail="cron job not found") from exc

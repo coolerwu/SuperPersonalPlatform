@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 
 import { api, errorText } from "../api";
 import { formatTime } from "../format";
-import type { Agent, CronJob } from "../types";
+import type { Agent, Channel, ChannelConversation, CronJob } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 type CronPageProps = {
@@ -19,6 +19,13 @@ const RUN_STATUS_TEXT: Record<string, string> = {
   completed: "已完成",
   failed: "失败",
   cancelled: "已取消",
+};
+
+const CHANNEL_STATUS_TEXT: Record<string, string> = {
+  pairing: "待登录",
+  active: "已连接",
+  paused: "已暂停",
+  expired: "登录过期",
 };
 
 function formatInZone(value: string | null, timeZone: string): string {
@@ -48,6 +55,9 @@ type EditorState = {
   schedule: string;
   timezone: string;
   enabled: boolean;
+  pushEnabled: boolean;
+  pushChannelId: string;
+  pushConversationId: string;
 };
 
 const NEW_EDITOR: EditorState = {
@@ -57,10 +67,16 @@ const NEW_EDITOR: EditorState = {
   schedule: "0 8 * * *",
   timezone: "Asia/Shanghai",
   enabled: true,
+  pushEnabled: false,
+  pushChannelId: "",
+  pushConversationId: "",
 };
 
 export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPageProps) {
   const [jobs, setJobs] = useState<CronJob[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [conversations, setConversations] = useState<ChannelConversation[]>([]);
+  const [conversationsLoading, setConversationsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -69,6 +85,7 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<CronJob | null>(null);
   const requestRef = useRef(0);
+  const conversationRequestRef = useRef(0);
   const agentIdRef = useRef("");
 
   useEffect(() => {
@@ -98,6 +115,44 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
     }
   }, []);
 
+  const loadChannels = useCallback(async (id: string) => {
+    if (!id) {
+      setChannels([]);
+      return;
+    }
+    try {
+      const list = await api.listChannels(id);
+      if (id !== agentIdRef.current) return;
+      setChannels(list);
+    } catch {
+      // Jobs still load; the push target picker stays empty.
+    }
+  }, []);
+
+  const loadConversations = useCallback(async (channelId: string) => {
+    const requestId = ++conversationRequestRef.current;
+    if (!channelId) {
+      setConversations([]);
+      setConversationsLoading(false);
+      return;
+    }
+    setConversations([]);
+    setConversationsLoading(true);
+    try {
+      const list = await api.listChannelConversations(channelId);
+      if (requestId !== conversationRequestRef.current) return;
+      setConversations(list);
+    } catch (exc) {
+      if (requestId !== conversationRequestRef.current) return;
+      setConversations([]);
+      setError(errorText(exc));
+    } finally {
+      if (requestId === conversationRequestRef.current) {
+        setConversationsLoading(false);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     setError("");
     setNotice("");
@@ -105,8 +160,12 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
     setDeleteTarget(null);
     setBusyId("");
     setJobs([]);
+    setChannels([]);
+    setConversations([]);
+    setConversationsLoading(false);
     void loadJobs(agentId);
-  }, [agentId, loadJobs]);
+    void loadChannels(agentId);
+  }, [agentId, loadJobs, loadChannels]);
 
   useEffect(() => {
     if (!agentId) return;
@@ -119,6 +178,7 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
   function openCreate() {
     setError("");
     setNotice("");
+    setConversations([]);
     setEditor({ ...NEW_EDITOR, timezone: jobs[0]?.timezone || NEW_EDITOR.timezone });
   }
 
@@ -132,15 +192,33 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
       schedule: job.schedule,
       timezone: job.timezone,
       enabled: job.enabled,
+      pushEnabled: Boolean(job.push_channel_id && job.push_conversation_id),
+      pushChannelId: job.push_channel_id ?? "",
+      pushConversationId: job.push_conversation_id ?? "",
     });
+    if (job.push_channel_id) {
+      void loadConversations(job.push_channel_id);
+    } else {
+      setConversations([]);
+    }
   }
 
   async function saveJob(event: FormEvent) {
     event.preventDefault();
     if (!agentId || !editor || saving) return;
+    if (editor.pushEnabled && (!editor.pushChannelId || !editor.pushConversationId)) {
+      setError("请选择推送渠道和联系人");
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
+    const push = editor.pushEnabled
+      ? {
+          push_channel_id: editor.pushChannelId,
+          push_conversation_id: editor.pushConversationId,
+        }
+      : { push_channel_id: "", push_conversation_id: "" };
     try {
       if (editor.id) {
         await api.updateCronJob(editor.id, {
@@ -149,6 +227,7 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
           schedule: editor.schedule,
           timezone: editor.timezone,
           enabled: editor.enabled,
+          ...push,
         });
         setNotice("定时任务已保存");
       } else {
@@ -159,6 +238,7 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
           schedule: editor.schedule,
           timezone: editor.timezone,
           enabled: editor.enabled,
+          ...push,
         });
         setNotice("定时任务已创建，专属会话已生成");
       }
@@ -282,6 +362,14 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
                         ? ` · ${RUN_STATUS_TEXT[job.last_run_status] ?? job.last_run_status}`
                         : ""}
                       {job.last_skipped_at ? " · 上次触发因会话忙被跳过" : ""}
+                    </div>
+                    <div className="channel-meta">
+                      推送：
+                      {job.push_channel_id && job.push_conversation_id
+                        ? `微信 · ${job.push_channel_name || "已删除渠道"} / ${
+                            job.push_conversation_name || "已删除联系人"
+                          }`
+                        : "不推送"}
                     </div>
                     {!job.session_id && (
                       <div className="channel-error">会话已删除，下次触发时会自动重建。</div>
@@ -415,6 +503,113 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
               />
               {editor.id ? "启用任务" : "创建后立即启用"}
             </label>
+
+            <label className="cron-checkbox">
+              <input
+                type="checkbox"
+                checked={editor.pushEnabled}
+                onChange={(event) =>
+                  setEditor((current) =>
+                    current
+                      ? {
+                          ...current,
+                          pushEnabled: event.target.checked,
+                          pushChannelId: event.target.checked ? current.pushChannelId : "",
+                          pushConversationId: event.target.checked
+                            ? current.pushConversationId
+                            : "",
+                        }
+                      : current,
+                  )
+                }
+              />
+              推送到微信
+            </label>
+
+            {editor.pushEnabled && (
+              <div className="cron-push-fields">
+                <div className="cron-form-grid">
+                  <div>
+                    <label className="field-label" htmlFor="cron-push-channel">渠道</label>
+                    <select
+                      id="cron-push-channel"
+                      value={editor.pushChannelId}
+                      onChange={(event) => {
+                        const channelId = event.target.value;
+                        setEditor((current) =>
+                          current
+                            ? {
+                                ...current,
+                                pushChannelId: channelId,
+                                pushConversationId: "",
+                              }
+                            : current,
+                        );
+                        void loadConversations(channelId);
+                      }}
+                    >
+                      <option value="">选择渠道</option>
+                      {channels.map((channel) => (
+                        <option key={channel.id} value={channel.id}>
+                          {channel.name || channel.id}
+                          {channel.status !== "active"
+                            ? `（${CHANNEL_STATUS_TEXT[channel.status] ?? channel.status}）`
+                            : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="field-label" htmlFor="cron-push-conversation">
+                      联系人
+                    </label>
+                    <select
+                      id="cron-push-conversation"
+                      value={editor.pushConversationId}
+                      onChange={(event) =>
+                        setEditor((current) =>
+                          current
+                            ? { ...current, pushConversationId: event.target.value }
+                            : current,
+                        )
+                      }
+                      disabled={!editor.pushChannelId || conversationsLoading}
+                    >
+                      <option value="">
+                        {conversationsLoading ? "加载中…" : "选择联系人"}
+                      </option>
+                      {conversations.map((conversation) => (
+                        <option key={conversation.id} value={conversation.id}>
+                          {conversation.display_name || "未命名联系人"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {channels.length === 0 && (
+                  <div className="hint">
+                    当前 Agent 还没有微信渠道；可先在「渠道」页扫码登录。
+                  </div>
+                )}
+                {editor.pushChannelId &&
+                  !conversationsLoading &&
+                  conversations.length === 0 && (
+                    <div className="hint">
+                      该渠道还没有联系人会话；需要对方先给 bot 发一条消息。
+                    </div>
+                  )}
+                {editor.pushChannelId &&
+                  channels.length > 0 &&
+                  !channels.some((channel) => channel.id === editor.pushChannelId) && (
+                    <div className="hint">
+                      原推送渠道已删除，请重新选择渠道和联系人。
+                    </div>
+                  )}
+                <div className="hint">
+                  只支持已有 1:1 联系人会话；渠道暂停时结果会等待恢复后补发。任务结果仍会保存在专属会话里。
+                </div>
+              </div>
+            )}
 
             {error && <div className="error-banner">{error}</div>}
             <div className="modal-actions">

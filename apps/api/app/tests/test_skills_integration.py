@@ -114,7 +114,14 @@ def test_cron_skill_unlocks_cron_tools() -> None:
     from app.services import cron_tools  # noqa: F401 - registers the tools
     from app.services.skill_tools import SkillToolContext, SkillToolRegistry
 
-    names = ("cron_list", "cron_create", "cron_update", "cron_delete", "cron_run")
+    names = (
+        "cron_list",
+        "cron_create",
+        "cron_update",
+        "cron_delete",
+        "cron_run",
+        "cron_targets",
+    )
     registry = SkillToolRegistry()
     cron_tools.register_cron_tools(registry)
     tools = registry.resolve_names(

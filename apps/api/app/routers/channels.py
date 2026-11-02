@@ -10,8 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.db import get_db
-from app.models import Agent, Channel, ChannelConversation, utcnow
+from app.models import Agent, Channel, ChannelConversation, Session, utcnow
 from app.schemas import (
+    ChannelConversationOut,
     ChannelCreate,
     ChannelLoginOut,
     ChannelLoginStatusOut,
@@ -87,6 +88,33 @@ async def list_channels(
         )
     ).all()
     return [await _channel_out(db, channel) for channel in channels]
+
+
+@router.get("/{channel_id}/conversations", response_model=list[ChannelConversationOut])
+async def list_channel_conversations(
+    channel_id: str, db: AsyncSession = Depends(get_db)
+) -> list[ChannelConversationOut]:
+    await _load_channel(db, channel_id)
+    rows = (
+        await db.execute(
+            select(ChannelConversation, Session.title)
+            .outerjoin(Session, Session.id == ChannelConversation.session_id)
+            .where(ChannelConversation.channel_id == channel_id)
+            .order_by(ChannelConversation.updated_at.desc())
+        )
+    ).all()
+    return [
+        ChannelConversationOut(
+            id=conversation.id,
+            channel_id=conversation.channel_id,
+            display_name=conversation.display_name or "未命名联系人",
+            session_id=conversation.session_id,
+            session_title=title or "",
+            created_at=conversation.created_at,
+            updated_at=conversation.updated_at,
+        )
+        for conversation, title in rows
+    ]
 
 
 @router.post("", response_model=ChannelOut, status_code=201)

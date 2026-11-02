@@ -112,6 +112,8 @@ class CronJob(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     last_run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_skipped_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    push_channel_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    push_conversation_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from app.models import (
     ChannelDelivery,
     ChannelInbound,
     ChannelRunLink,
+    CronJob,
     Session,
     utcnow,
 )
@@ -271,6 +272,11 @@ async def unlink_session(db: AsyncSession, session_id: str) -> int:
     if not conversation_ids:
         return 0
     await db.execute(
+        update(CronJob)
+        .where(CronJob.push_conversation_id.in_(conversation_ids))
+        .values(push_channel_id=None, push_conversation_id=None)
+    )
+    await db.execute(
         delete(ChannelDelivery).where(ChannelDelivery.conversation_id.in_(conversation_ids))
     )
     await db.execute(
@@ -286,6 +292,11 @@ async def delete_channels(db: AsyncSession, channel_ids: list[str]) -> int:
     """Delete channels and their channel-only rows, keeping Sessions/Runs."""
     if not channel_ids:
         return 0
+    await db.execute(
+        update(CronJob)
+        .where(CronJob.push_channel_id.in_(channel_ids))
+        .values(push_channel_id=None, push_conversation_id=None)
+    )
     await db.execute(delete(ChannelDelivery).where(ChannelDelivery.channel_id.in_(channel_ids)))
     await db.execute(delete(ChannelRunLink).where(ChannelRunLink.channel_id.in_(channel_ids)))
     await db.execute(delete(ChannelInbound).where(ChannelInbound.channel_id.in_(channel_ids)))

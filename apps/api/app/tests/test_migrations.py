@@ -4,7 +4,13 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.db import _ensure_agent_columns, _ensure_session_origin, engine, init_db
+from app.db import (
+    _ensure_agent_columns,
+    _ensure_cron_job_columns,
+    _ensure_session_origin,
+    engine,
+    init_db,
+)
 from app.market_db import init_market_db, market_engine
 
 
@@ -53,6 +59,33 @@ async def test_ensure_session_origin_is_idempotent(tmp_path: Path) -> None:
         ).fetchone()
         assert row is not None
         assert row[0] == "chat"
+    await engine.dispose()
+
+
+async def test_ensure_cron_job_columns_is_idempotent(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy-cron.db'}")
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            "CREATE TABLE cron_jobs (id TEXT PRIMARY KEY, name TEXT)"
+        )
+        await conn.exec_driver_sql(
+            "INSERT INTO cron_jobs (id, name) VALUES ('c', 'Legacy')"
+        )
+        await _ensure_cron_job_columns(conn)
+        await _ensure_cron_job_columns(conn)
+
+        result = await conn.exec_driver_sql("PRAGMA table_info(cron_jobs)")
+        columns = {row[1] for row in result.fetchall()}
+        assert {"push_channel_id", "push_conversation_id"} <= columns
+
+        row = (
+            await conn.exec_driver_sql(
+                "SELECT push_channel_id, push_conversation_id FROM cron_jobs WHERE id='c'"
+            )
+        ).fetchone()
+        assert row is not None
+        assert row[0] is None
+        assert row[1] is None
     await engine.dispose()
 
 

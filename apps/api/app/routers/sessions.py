@@ -14,6 +14,8 @@ from app.models import (
     Agent,
     Channel,
     ChannelConversation,
+    ChannelDelivery,
+    ChannelRunLink,
     Message,
     Run,
     RunEvent,
@@ -223,6 +225,8 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)) ->
     await cron_service.detach_session(db, session_id)
     run_ids = list((await db.scalars(select(Run.id).where(Run.session_id == session_id))).all())
     if run_ids:
+        await db.execute(delete(ChannelDelivery).where(ChannelDelivery.run_id.in_(run_ids)))
+        await db.execute(delete(ChannelRunLink).where(ChannelRunLink.run_id.in_(run_ids)))
         await db.execute(delete(RunMemory).where(RunMemory.run_id.in_(run_ids)))
         await db.execute(delete(RunEvent).where(RunEvent.run_id.in_(run_ids)))
         await db.execute(delete(Run).where(Run.id.in_(run_ids)))

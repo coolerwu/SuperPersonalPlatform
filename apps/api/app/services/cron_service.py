@@ -19,7 +19,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Agent, AuditLog, CronJob, Run, Session, utcnow
+from app.models import (
+    Agent,
+    AuditLog,
+    Channel,
+    ChannelConversation,
+    ChannelRunLink,
+    CronJob,
+    Run,
+    Session,
+    utcnow,
+)
 from app.services.run_service import ACTIVE_RUN_STATUSES, _create_run_in_db
 
 logger = logging.getLogger(__name__)
@@ -147,6 +157,28 @@ async def _ensure_unique_name(
         raise CronConflict("同一 Agent 下已存在同名定时任务")
 
 
+async def resolve_push_target(
+    db: AsyncSession,
+    agent_id: str,
+    channel_id: str | None,
+    conversation_id: str | None,
+) -> tuple[Channel | None, ChannelConversation | None]:
+    """Validate an explicit WeChat 1:1 delivery target."""
+    channel_id = str(channel_id or "").strip()
+    conversation_id = str(conversation_id or "").strip()
+    if not channel_id and not conversation_id:
+        return None, None
+    if not channel_id or not conversation_id:
+        raise CronValidationError("推送目标需要同时指定渠道和联系人")
+    channel = await db.get(Channel, channel_id)
+    if channel is None or channel.type != "wechat" or channel.agent_id != agent_id:
+        raise CronValidationError("推送渠道不存在或不属于当前 Agent")
+    conversation = await db.get(ChannelConversation, conversation_id)
+    if conversation is None or conversation.channel_id != channel.id:
+        raise CronValidationError("推送联系人不存在或不属于该渠道")
+    return channel, conversation
+
+
 async def list_jobs(db: AsyncSession, agent_id: str) -> list[CronJob]:
     return list(
         (
@@ -177,6 +209,8 @@ async def create_job(
     schedule: str,
     timezone: str = "",
     enabled: bool = True,
+    push_channel_id: str = "",
+    push_conversation_id: str = "",
 ) -> CronJob:
     """Validate and add a job + its dedicated Session to the caller's transaction."""
     agent = await db.get(Agent, agent_id)
@@ -189,6 +223,9 @@ async def create_job(
     tz_name = validate_timezone(timezone)
     upcoming = next_run(schedule, tz_name)
     await _ensure_unique_name(db, agent.id, name)
+    push_channel, push_conversation = await resolve_push_target(
+        db, agent.id, push_channel_id, push_conversation_id
+    )
 
     session = Session(agent_id=agent.id, title=session_title(name), origin="cron")
     db.add(session)
@@ -202,6 +239,8 @@ async def create_job(
         timezone=tz_name,
         enabled=bool(enabled),
         session_id=session.id,
+        push_channel_id=push_channel.id if push_channel else None,
+        push_conversation_id=push_conversation.id if push_conversation else None,
     )
     _compute_next(job, upcoming)
     db.add(job)
@@ -223,6 +262,8 @@ async def update_job(
     schedule: str | None = None,
     timezone: str | None = None,
     enabled: bool | None = None,
+    push_channel_id: str | None = None,
+    push_conversation_id: str | None = None,
 ) -> CronJob:
     job = await get_job(db, job_id, agent_id=agent_id)
     if job is None:
@@ -256,6 +297,15 @@ async def update_job(
             job.enabled = new_enabled
             schedule_changed = True
 
+    if push_channel_id is not None or push_conversation_id is not None:
+        if push_channel_id is None or push_conversation_id is None:
+            raise CronValidationError("推送目标需要同时指定渠道和联系人")
+        channel, conversation = await resolve_push_target(
+            db, job.agent_id, push_channel_id, push_conversation_id
+        )
+        job.push_channel_id = channel.id if channel else None
+        job.push_conversation_id = conversation.id if conversation else None
+
     if schedule_changed or (job.enabled and job.next_run_at is None):
         _compute_next(job)
     elif not job.enabled:
@@ -276,6 +326,33 @@ async def delete_job(db: AsyncSession, job_id: str, *, agent_id: str) -> CronJob
     await db.delete(job)
     await db.flush()
     return job
+
+
+async def _link_push_target(db: AsyncSession, job: CronJob, run: Run) -> None:
+    """Attach the run to the job's explicit WeChat conversation, if configured."""
+    if not job.push_channel_id or not job.push_conversation_id:
+        return
+    channel = await db.get(Channel, job.push_channel_id)
+    conversation = await db.get(ChannelConversation, job.push_conversation_id)
+    if (
+        channel is None
+        or channel.type != "wechat"
+        or channel.agent_id != job.agent_id
+        or conversation is None
+        or conversation.channel_id != channel.id
+    ):
+        logger.warning(
+            "cron job %s push target is unavailable; run will not be delivered",
+            job.id,
+        )
+        return
+    db.add(
+        ChannelRunLink(
+            run_id=run.id,
+            channel_id=channel.id,
+            conversation_id=conversation.id,
+        )
+    )
 
 
 async def trigger_job(
@@ -332,6 +409,7 @@ async def trigger_job(
         return None
 
     run, _message = await _create_run_in_db(db, session, job.prompt, source="cron")
+    await _link_push_target(db, job, run)
     job.last_run_at = moment
     job.last_run_id = run.id
     job.last_skipped_at = None

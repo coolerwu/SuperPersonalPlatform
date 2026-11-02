@@ -95,6 +95,10 @@ export type CronJob = {
   last_run_id: string | null;
   last_run_status: string | null;
   last_skipped_at: string | null;
+  push_channel_id: string | null;
+  push_conversation_id: string | null;
+  push_channel_name: string;
+  push_conversation_name: string;
   created_at: string;
   updated_at: string;
 };
@@ -126,6 +130,16 @@ export type ChannelLogin = {
 export type ChannelLoginStatus = {
   status: string;
   account_id: string;
+};
+
+export type ChannelConversation = {
+  id: string;
+  channel_id: string;
+  display_name: string;
+  session_id: string;
+  session_title: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type Message = {

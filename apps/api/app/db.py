@@ -164,6 +164,23 @@ async def _ensure_session_origin(conn) -> None:  # noqa: ANN001
             raise
 
 
+async def _ensure_cron_job_column(conn, column: str) -> None:  # noqa: ANN001
+    result = await conn.exec_driver_sql("PRAGMA table_info(cron_jobs)")
+    if column in {row[1] for row in result.fetchall()}:
+        return
+    try:
+        await conn.exec_driver_sql(f"ALTER TABLE cron_jobs ADD COLUMN {column} VARCHAR(32)")
+    except Exception:
+        result = await conn.exec_driver_sql("PRAGMA table_info(cron_jobs)")
+        if column not in {row[1] for row in result.fetchall()}:
+            raise
+
+
+async def _ensure_cron_job_columns(conn) -> None:  # noqa: ANN001
+    for column in ("push_channel_id", "push_conversation_id"):
+        await _ensure_cron_job_column(conn, column)
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
@@ -172,6 +189,7 @@ async def init_db() -> None:
         if settings.app_database_url.startswith("sqlite"):
             await _ensure_agent_columns(conn)
             await _ensure_session_origin(conn)
+            await _ensure_cron_job_columns(conn)
 
     if settings.app_database_url.startswith("sqlite"):
         try:

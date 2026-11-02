@@ -149,6 +149,8 @@ class CronJobCreate(BaseModel):
     schedule: str = ""
     timezone: str = ""
     enabled: bool = True
+    push_channel_id: str = ""
+    push_conversation_id: str = ""
 
 
 class CronJobUpdate(BaseModel):
@@ -157,6 +159,8 @@ class CronJobUpdate(BaseModel):
     schedule: str | None = None
     timezone: str | None = None
     enabled: bool | None = None
+    push_channel_id: str | None = None
+    push_conversation_id: str | None = None
 
 
 class CronJobOut(BaseModel):
@@ -173,6 +177,10 @@ class CronJobOut(BaseModel):
     last_run_id: str | None = None
     last_run_status: str | None = None
     last_skipped_at: datetime | None = None
+    push_channel_id: str | None = None
+    push_conversation_id: str | None = None
+    push_channel_name: str = ""
+    push_conversation_name: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -203,6 +211,16 @@ class ChannelOut(BaseModel):
     conversation_count: int = 0
     last_seen_at: datetime | None = None
     last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChannelConversationOut(BaseModel):
+    id: str
+    channel_id: str
+    display_name: str
+    session_id: str
+    session_title: str = ""
     created_at: datetime
     updated_at: datetime
 

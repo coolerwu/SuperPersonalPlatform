@@ -6,6 +6,7 @@ import type {
   BacktestResult,
   BacktestSummary,
   Channel,
+  ChannelConversation,
   ChannelLogin,
   ChannelLoginStatus,
   CronJob,
@@ -205,6 +206,8 @@ export const api = {
 
   listChannels: (agentId: string) =>
     request<Channel[]>(`/api/channels?agent_id=${encodeURIComponent(agentId)}`),
+  listChannelConversations: (channelId: string) =>
+    request<ChannelConversation[]>(`/api/channels/${channelId}/conversations`),
   createChannel: (agentId: string, name: string) =>
     request<Channel>("/api/channels", {
       method: "POST",

@@ -9,7 +9,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import CronJob, Run
+from app.models import Channel, ChannelConversation, CronJob, Run, Session
 from app.services import cron_service
 from app.services.cron_service import (
     CronBusy,
@@ -40,7 +40,7 @@ def _format_time(value: datetime | None, timezone_name: str) -> str:
     return value.astimezone(zone).strftime("%Y-%m-%d %H:%M")
 
 
-def _format_job(job: CronJob, last_status: str | None) -> str:
+def _format_job(job: CronJob, last_status: str | None, push_label: str = "") -> str:
     state = "启用" if job.enabled else "暂停"
     next_at = _format_time(job.next_run_at, job.timezone) if job.enabled else "—"
     last_at = _format_time(job.last_run_at, job.timezone) if job.last_run_at else "—"
@@ -49,8 +49,21 @@ def _format_job(job: CronJob, last_status: str | None) -> str:
     return (
         f"- id: {job.id} | 名称: {job.name} | {state} | "
         f"{job.schedule}（{job.timezone}） | 下次: {next_at} | "
-        f"最近: {last_at} {status} | 会话: {session}"
+        f"最近: {last_at} {status} | 会话: {session} | "
+        f"推送: {push_label or '不推送'}"
     )
+
+
+async def _push_label(db, job: CronJob) -> str:
+    if not job.push_channel_id or not job.push_conversation_id:
+        return "不推送"
+    channel = await db.get(Channel, job.push_channel_id)
+    conversation = await db.get(ChannelConversation, job.push_conversation_id)
+    channel_name = (channel.name if channel else "") or "已删除渠道"
+    conversation_name = (
+        (conversation.display_name if conversation else "") or "已删除联系人"
+    )
+    return f"{channel_name} / {conversation_name}"
 
 
 async def _list_text(context: SkillToolContext) -> str:
@@ -65,10 +78,18 @@ async def _list_text(context: SkillToolContext) -> str:
                 await db.execute(select(Run.id, Run.status).where(Run.id.in_(run_ids)))
             ).all()
             status_by_id = {str(row[0]): str(row[1]) for row in rows}
+        push_labels = {job.id: await _push_label(db, job) for job in jobs}
     if not jobs:
         return "当前 Agent 还没有定时任务。"
     lines = [f"## 定时任务（{len(jobs)} 个）"]
-    lines.extend(_format_job(job, status_by_id.get(job.last_run_id or "")) for job in jobs)
+    lines.extend(
+        _format_job(
+            job,
+            status_by_id.get(job.last_run_id or ""),
+            push_labels.get(job.id, ""),
+        )
+        for job in jobs
+    )
     return "\n".join(lines)
 
 
@@ -79,6 +100,8 @@ async def _create_text(
     schedule: str,
     timezone_name: str,
     enabled: bool,
+    push_channel_id: str,
+    push_conversation_id: str,
 ) -> str:
     if not context.agent_id:
         return "Error: 当前 Agent 上下文不可用"
@@ -92,9 +115,12 @@ async def _create_text(
                 schedule=schedule,
                 timezone=timezone_name,
                 enabled=enabled,
+                push_channel_id=push_channel_id,
+                push_conversation_id=push_conversation_id,
             )
             await db.commit()
             await db.refresh(job)
+            push_label = await _push_label(db, job)
         except CronNotFound:
             return "Error: 当前 Agent 不存在或已归档"
         except CronValidationError as exc:
@@ -103,11 +129,16 @@ async def _create_text(
             return f"Error: {exc}"
     state = "已启用" if job.enabled else "已暂停"
     next_at = _format_time(job.next_run_at, job.timezone) if job.enabled else "—"
+    if push_label == "不推送":
+        delivery = "结果不会主动推送，用户可在该会话查看和追问。"
+    else:
+        delivery = f"结果会推送到 {push_label}，同时保存在专属会话里。"
     return (
         f"已创建定时任务「{job.name}」（id: {job.id}），{state}。\n"
         f"cron: {job.schedule}（{job.timezone}）；下次触发: {next_at}。\n"
         f"专属会话：{session_title(job.name)}（session_id: {job.session_id}）。\n"
-        "任务在独立会话中运行，prompt 需要自包含；结果不会主动推送，用户可在该会话查看和追问。"
+        f"推送：{push_label}。\n"
+        f"任务在独立会话中运行，prompt 需要自包含；{delivery}"
     )
 
 
@@ -119,6 +150,8 @@ async def _update_text(
     schedule: str | None,
     timezone_name: str | None,
     enabled: bool | None,
+    push_channel_id: str | None,
+    push_conversation_id: str | None,
 ) -> str:
     if not context.agent_id:
         return "Error: 当前 Agent 上下文不可用"
@@ -136,9 +169,12 @@ async def _update_text(
                 schedule=schedule,
                 timezone=timezone_name,
                 enabled=enabled,
+                push_channel_id=push_channel_id,
+                push_conversation_id=push_conversation_id,
             )
             await db.commit()
             await db.refresh(job)
+            push_label = await _push_label(db, job)
         except CronNotFound:
             return "Error: 定时任务不存在，或不属于当前 Agent"
         except CronValidationError as exc:
@@ -148,8 +184,46 @@ async def _update_text(
     state = "启用" if job.enabled else "暂停"
     next_at = _format_time(job.next_run_at, job.timezone) if job.enabled else "—"
     return (
-        f"已更新定时任务「{job.name}」（id: {job.id}），当前{state}；下次触发: {next_at}。"
+        f"已更新定时任务「{job.name}」（id: {job.id}），当前{state}；"
+        f"下次触发: {next_at}；推送: {push_label}。"
     )
+
+
+async def _targets_text(context: SkillToolContext) -> str:
+    if not context.agent_id:
+        return "Error: 当前 Agent 上下文不可用"
+    async with SessionLocal() as db:
+        channels = (
+            await db.scalars(
+                select(Channel)
+                .where(Channel.agent_id == context.agent_id, Channel.type == "wechat")
+                .order_by(Channel.created_at)
+            )
+        ).all()
+        if not channels:
+            return "当前 Agent 没有微信渠道；定时任务仍可创建，但不会推送。"
+        lines = ["## 可推送的微信目标"]
+        for channel in channels:
+            label = channel.name or channel.account_id or channel.id
+            lines.append(f"渠道：{label}（id: {channel.id}）· 状态: {channel.status}")
+            rows = (
+                await db.execute(
+                    select(ChannelConversation, Session.title)
+                    .outerjoin(Session, Session.id == ChannelConversation.session_id)
+                    .where(ChannelConversation.channel_id == channel.id)
+                    .order_by(ChannelConversation.updated_at.desc())
+                )
+            ).all()
+            if not rows:
+                lines.append("  - 还没有联系人会话（需要对方先给 bot 发一条消息）")
+                continue
+            for conversation, title in rows:
+                name = conversation.display_name or "未命名联系人"
+                lines.append(
+                    f"  - {name}（conversation_id: {conversation.id}）"
+                    f" · 会话: {title or '—'}"
+                )
+    return "\n".join(lines)
 
 
 async def _delete_text(context: SkillToolContext, job_id: str) -> str:
@@ -205,17 +279,30 @@ def _make_create_tool(context: SkillToolContext) -> BaseTool:
         schedule: str,
         timezone: str = "",
         enabled: bool = True,
+        push_channel_id: str = "",
+        push_conversation_id: str = "",
     ) -> str:
         """创建定时任务并生成专属会话。"""
-        return await _create_text(context, name, prompt, schedule, timezone, enabled)
+        return await _create_text(
+            context,
+            name,
+            prompt,
+            schedule,
+            timezone,
+            enabled,
+            push_channel_id,
+            push_conversation_id,
+        )
 
     return StructuredTool.from_function(
         name="cron_create",
         description=(
             "为当前 Agent 创建定时任务。schedule 是 5 字段 cron（分 时 日 月 周），"
             "timezone 默认 Asia/Shanghai，enabled 默认 true。会同时创建专属会话；"
-            "prompt 必须自包含，因为任务会话不继承当前对话。成功后返回任务 id、"
-            "下次触发时间和会话标题。"
+            "prompt 必须自包含，因为任务会话不继承当前对话。需要推送到微信时，先调用 "
+            "cron_targets 获取渠道和联系人 id，再同时传 push_channel_id 和 "
+            "push_conversation_id；不传或都传空字符串表示不推送。成功后返回任务 id、"
+            "下次触发时间、会话标题和推送目标。"
         ),
         coroutine=cron_create,
     )
@@ -229,10 +316,20 @@ def _make_update_tool(context: SkillToolContext) -> BaseTool:
         schedule: str | None = None,
         timezone: str | None = None,
         enabled: bool | None = None,
+        push_channel_id: str | None = None,
+        push_conversation_id: str | None = None,
     ) -> str:
         """修改当前 Agent 的定时任务。"""
         return await _update_text(
-            context, job_id, name, prompt, schedule, timezone, enabled
+            context,
+            job_id,
+            name,
+            prompt,
+            schedule,
+            timezone,
+            enabled,
+            push_channel_id,
+            push_conversation_id,
         )
 
     return StructuredTool.from_function(
@@ -240,8 +337,26 @@ def _make_update_tool(context: SkillToolContext) -> BaseTool:
         description=(
             "修改当前 Agent 的定时任务，只传需要修改的字段。job_id 来自 cron_list。"
             "修改表达式、时区、名称或重新启用后会重新计算下一次触发；暂停后不再触发。"
+            "修改推送目标时同时传 push_channel_id 和 push_conversation_id；两个都传空字符串"
+            "表示清除推送，两个都不传表示保持原目标。目标 id 用 cron_targets 获取。"
         ),
         coroutine=cron_update,
+    )
+
+
+def _make_targets_tool(context: SkillToolContext) -> BaseTool:
+    async def cron_targets() -> str:
+        """列出当前 Agent 可推送的微信渠道和联系人。"""
+        return await _targets_text(context)
+
+    return StructuredTool.from_function(
+        name="cron_targets",
+        description=(
+            "列出当前 Agent 的微信渠道和已有 1:1 联系人会话，返回渠道 id、状态、"
+            "联系人 conversation_id 和绑定的网页会话标题。创建或修改定时任务的推送目标前"
+            "先用它确认目标；没有联系人会话时，需要对方先给 bot 发一条消息。"
+        ),
+        coroutine=cron_targets,
     )
 
 
@@ -282,6 +397,7 @@ def register_cron_tools(registry: SkillToolRegistry = SKILL_TOOL_REGISTRY) -> No
         ("cron_update", _make_update_tool, "修改定时任务"),
         ("cron_delete", _make_delete_tool, "删除定时任务并保留会话"),
         ("cron_run", _make_run_tool, "立即运行一次定时任务"),
+        ("cron_targets", _make_targets_tool, "列出可推送的微信渠道和联系人"),
     )
     for name, factory, description in specs:
         if registry.has(name):
