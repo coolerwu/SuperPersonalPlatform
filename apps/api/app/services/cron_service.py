@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import CroniterBadDateError, croniter
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -26,8 +27,20 @@ logger = logging.getLogger(__name__)
 SESSION_TITLE_PREFIX = "定时 · "
 
 
-class CronScheduleError(ValueError):
+class CronValidationError(ValueError):
+    """Invalid user input for a cron job."""
+
+
+class CronScheduleError(CronValidationError):
     """A cron expression or timezone that cannot produce a next occurrence."""
+
+
+class CronConflict(RuntimeError):
+    """The Agent already has a job with this name."""
+
+
+class CronNotFound(LookupError):
+    """The job does not exist or belongs to another Agent."""
 
 
 class CronBusy(Exception):
@@ -94,6 +107,175 @@ def _advance(job: CronJob, now: datetime) -> None:
         )
         job.enabled = False
         job.next_run_at = None
+
+
+MAX_NAME_LENGTH = 120
+
+
+def clean_name(raw: str) -> str:
+    name = str(raw or "").strip()
+    if not name:
+        raise CronValidationError("任务名称不能为空")
+    if len(name) > MAX_NAME_LENGTH:
+        raise CronValidationError(f"任务名称不能超过 {MAX_NAME_LENGTH} 个字符")
+    return name
+
+
+def clean_prompt(raw: str) -> str:
+    prompt = str(raw or "").strip()
+    if not prompt:
+        raise CronValidationError("任务内容不能为空")
+    return prompt
+
+
+def _compute_next(job: CronJob, upcoming: datetime | None = None) -> None:
+    # Always compute once so an expression with no future occurrence is
+    # rejected even while the job is paused.
+    upcoming = upcoming or next_run(job.schedule, job.timezone)
+    job.next_run_at = upcoming if job.enabled else None
+
+
+async def _ensure_unique_name(
+    db: AsyncSession, agent_id: str, name: str, exclude_id: str | None = None
+) -> None:
+    statement = select(CronJob.id).where(
+        CronJob.agent_id == agent_id, CronJob.name == name
+    )
+    if exclude_id is not None:
+        statement = statement.where(CronJob.id != exclude_id)
+    if await db.scalar(statement) is not None:
+        raise CronConflict("同一 Agent 下已存在同名定时任务")
+
+
+async def list_jobs(db: AsyncSession, agent_id: str) -> list[CronJob]:
+    return list(
+        (
+            await db.scalars(
+                select(CronJob)
+                .where(CronJob.agent_id == agent_id)
+                .order_by(CronJob.created_at)
+            )
+        ).all()
+    )
+
+
+async def get_job(
+    db: AsyncSession, job_id: str, *, agent_id: str | None = None
+) -> CronJob | None:
+    statement = select(CronJob).where(CronJob.id == job_id)
+    if agent_id is not None:
+        statement = statement.where(CronJob.agent_id == agent_id)
+    return await db.scalar(statement)
+
+
+async def create_job(
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    name: str,
+    prompt: str,
+    schedule: str,
+    timezone: str = "",
+    enabled: bool = True,
+) -> CronJob:
+    """Validate and add a job + its dedicated Session to the caller's transaction."""
+    agent = await db.get(Agent, agent_id)
+    if agent is None or agent.status == "archived":
+        raise CronNotFound("agent not found")
+
+    name = clean_name(name)
+    prompt = clean_prompt(prompt)
+    schedule = normalize_schedule(schedule)
+    tz_name = validate_timezone(timezone)
+    upcoming = next_run(schedule, tz_name)
+    await _ensure_unique_name(db, agent.id, name)
+
+    session = Session(agent_id=agent.id, title=session_title(name), origin="cron")
+    db.add(session)
+    await db.flush()
+
+    job = CronJob(
+        agent_id=agent.id,
+        name=name,
+        prompt=prompt,
+        schedule=schedule,
+        timezone=tz_name,
+        enabled=bool(enabled),
+        session_id=session.id,
+    )
+    _compute_next(job, upcoming)
+    db.add(job)
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise CronConflict("同一 Agent 下已存在同名定时任务") from exc
+    return job
+
+
+async def update_job(
+    db: AsyncSession,
+    job_id: str,
+    *,
+    agent_id: str,
+    name: str | None = None,
+    prompt: str | None = None,
+    schedule: str | None = None,
+    timezone: str | None = None,
+    enabled: bool | None = None,
+) -> CronJob:
+    job = await get_job(db, job_id, agent_id=agent_id)
+    if job is None:
+        raise CronNotFound("cron job not found")
+
+    schedule_changed = False
+    if name is not None:
+        new_name = clean_name(name)
+        await _ensure_unique_name(db, job.agent_id, new_name, exclude_id=job.id)
+        if new_name != job.name:
+            job.name = new_name
+            schedule_changed = True
+            session = await db.get(Session, job.session_id) if job.session_id else None
+            if session is not None:
+                session.title = session_title(new_name)
+    if prompt is not None:
+        job.prompt = clean_prompt(prompt)
+    if schedule is not None:
+        new_schedule = normalize_schedule(schedule)
+        if new_schedule != job.schedule:
+            job.schedule = new_schedule
+            schedule_changed = True
+    if timezone is not None:
+        new_timezone = validate_timezone(timezone)
+        if new_timezone != job.timezone:
+            job.timezone = new_timezone
+            schedule_changed = True
+    if enabled is not None:
+        new_enabled = bool(enabled)
+        if new_enabled != job.enabled:
+            job.enabled = new_enabled
+            schedule_changed = True
+
+    if schedule_changed or (job.enabled and job.next_run_at is None):
+        _compute_next(job)
+    elif not job.enabled:
+        job.next_run_at = None
+
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise CronConflict("同一 Agent 下已存在同名定时任务") from exc
+    return job
+
+
+async def delete_job(db: AsyncSession, job_id: str, *, agent_id: str) -> CronJob:
+    job = await get_job(db, job_id, agent_id=agent_id)
+    if job is None:
+        raise CronNotFound("cron job not found")
+    await db.delete(job)
+    await db.flush()
+    return job
 
 
 async def trigger_job(
@@ -213,12 +395,14 @@ async def run_due_jobs(now: datetime | None = None) -> list[str]:
     return fired
 
 
-async def run_job_now(job_id: str, now: datetime | None = None) -> Run:
+async def run_job_now(
+    job_id: str, now: datetime | None = None, *, agent_id: str | None = None
+) -> Run:
     """Manual "run now" entry point; does not change the schedule."""
     async with _job_lock(job_id):
         async with SessionLocal() as db:
             job = await db.get(CronJob, job_id)
-            if job is None:
+            if job is None or (agent_id is not None and job.agent_id != agent_id):
                 raise LookupError("cron job not found")
             agent = await db.get(Agent, job.agent_id)
             if agent is None or agent.status != "active":

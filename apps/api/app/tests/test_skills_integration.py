@@ -106,3 +106,30 @@ def test_browser_skill_unlocks_all_browser_tools() -> None:
         middleware, _read_messages("/skills/web-browser/SKILL.md"), metadata
     )
     assert set(visible) == BROWSER_TOOL_NAMES
+
+
+def test_cron_skill_unlocks_cron_tools() -> None:
+    from deepagents.backends import StateBackend
+
+    from app.services import cron_tools  # noqa: F401 - registers the tools
+    from app.services.skill_tools import SkillToolContext, SkillToolRegistry
+
+    names = ("cron_list", "cron_create", "cron_update", "cron_delete", "cron_run")
+    registry = SkillToolRegistry()
+    cron_tools.register_cron_tools(registry)
+    tools = registry.resolve_names(
+        names, SkillToolContext(api_key="", base_url="", agent_id="default")
+    )
+    middleware = AgentSkillsMiddleware(
+        backend=StateBackend(),
+        sources=[("/skills/", "Test")],
+        enabled_skills={"cron-scheduler"},
+        tools=tools,
+    )
+    metadata = [_skill("cron-scheduler", " ".join(names))]
+
+    assert _visible_tools(middleware, [HumanMessage(content="hi")], metadata) == []
+    visible = _visible_tools(
+        middleware, _read_messages("/skills/cron-scheduler/SKILL.md"), metadata
+    )
+    assert set(visible) == set(names)

@@ -121,7 +121,7 @@ metadata:
 - 技能启用：AI 创建的技能会自动加入当前 Agent 的启用列表，同一会话的下一次对话生效；手动创建/放入的技能仍需在这里启用。读取 SKILL.md 后，技能声明的工具才会解锁。
 - 删除：非系统技能可以在技能页删除，删除整个技能目录并从所有 Agent 的启用列表移除；系统技能不能删除。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
-- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer` 和 `quant-backtest`，分别声明 `include_tools: web_fetch` / `web_search web_fetch` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete` / `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status`。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
+- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`quant-backtest` 和 `cron-scheduler`，分别声明 `include_tools: web_fetch` / `web_search web_fetch` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete` / `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status` / `cron_list cron_create cron_update cron_delete cron_run`。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
 
@@ -151,6 +151,7 @@ metadata:
 
 - **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
 - **`backtest_run` / `backtest_status` / `backtest_result` / `backtest_cancel` / `market_probe` / `market_cache_status`**：加密货币回测工具（`quant-backtest` 技能声明）。`backtest_run` 创建 Bitget 现货单标的回测（可指定 `warmup_bars`，默认 200）并最多等待 90 秒，完成返回指标摘要，未完成返回任务 id；`backtest_status` 查状态/进度；`backtest_result` 返回指标、告警和最近交易；`backtest_cancel` 取消排队或执行中的任务；`market_probe` / `market_cache_status` 检查 Bitget 连接和本地行情缓存。
+- **`cron_list` / `cron_create` / `cron_update` / `cron_delete` / `cron_run`**：定时任务工具（`cron-scheduler` 技能声明）。只操作当前 Agent 的任务；`cron_list` 返回任务 id、表达式、时区、启停、下次触发、最近状态和专属会话；`cron_create` 创建任务并生成专属会话，prompt 必须自包含；`cron_update` 修改指定字段；`cron_delete` 删除配置但保留会话；`cron_run` 立即运行一次且不改变原计划。未启用技能或未读取 SKILL.md 时工具不可见。
 - **`execute`**（`LocalShellBackend`，不在代码注册表）：所有 Agent 始终可用。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。任何 Agent（包括微信入站会话）都能操作这台机器。
 - **`eval`**（`CodeInterpreterMiddleware`，不在代码注册表）：每次 Run 都挂载，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用文件工具。PTC 只开放文件工具，不开放 `execute`；`subagents=True`，可在 REPL 里用 `task(...)` 调度子 Agent（每次独立会话，不走父级审批）。general-purpose 子 Agent 不继承 `eval`，但可以使用 `execute`。
 
@@ -199,6 +200,7 @@ metadata:
 - 暂停或删除任务不会取消已经 queued/running 的 Run；删除任务保留会话与历史；删除会话后，任务在下一次触发时自动重建专属会话。
 - Agent 归档或暂停时不再触发；永久删除 Agent 会级联删除它的定时任务。
 - 定时 Run 与普通 Run 使用相同的 Agent 配置和工具权限（包括宿主机 `execute` 与 QuickJS `eval`），prompt 由你配置；平台只应暴露在可信网络中。
+- Agent 使用：在「技能」页为当前 Agent 启用 `cron-scheduler`，然后在对话里让它读取技能并管理任务，例如“每天早上 8 点总结昨天工作区的变化，放到一个单独的会话里”。Agent 会用 `cron_create` 建任务和专属会话，用 `cron_list` 查询、`cron_update` 暂停或修改、`cron_delete` 删除、`cron_run` 立即运行。创建时 prompt 必须自包含，因为任务会话不继承当前对话；结果不会主动推送。
 - 不做主动推送；结果只落在会话里，由用户打开查看。
 
 接口：`GET/POST /api/cron-jobs`、`PUT/DELETE /api/cron-jobs/{id}`、`POST /api/cron-jobs/{id}/run`。

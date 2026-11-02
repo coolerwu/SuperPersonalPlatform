@@ -35,6 +35,7 @@ from app.services.cron_service import CronRuntime
 from app.services.market_data import market_service
 from app.services.backtest_worker import BacktestWorker, set_active_worker
 from app.services import backtest_tools  # noqa: F401 - registers Agent backtest tools
+from app.services import cron_tools  # noqa: F401 - registers Agent cron tools
 from app.services.skills import seed_default_skills
 from app.services.weixin_runtime import WeixinRuntime
 from app.services.worker import RunWorker

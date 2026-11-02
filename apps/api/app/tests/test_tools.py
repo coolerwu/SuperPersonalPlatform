@@ -50,6 +50,9 @@ def test_tools_api_includes_builtin_web_tools(client) -> None:
     ):
         assert tools[name]["registered"] is True
         assert tools[name]["skills"] == ["quant-backtest"]
+    for name in ("cron_list", "cron_create", "cron_update", "cron_delete", "cron_run"):
+        assert tools[name]["registered"] is True
+        assert tools[name]["skills"] == ["cron-scheduler"]
 
 
 def test_tools_api_includes_platform_tools(client) -> None:

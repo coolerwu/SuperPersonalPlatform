@@ -4,75 +4,24 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.db import get_db
-from app.models import Agent, CronJob, Run, Session
+from app.models import Agent, CronJob, Run
 from app.schemas import CronJobCreate, CronJobOut, CronJobUpdate, CronRunOut
+from app.services import cron_service
 from app.services.cron_service import (
     CronBusy,
+    CronConflict,
     CronInactiveAgent,
-    CronScheduleError,
-    next_run,
-    normalize_schedule,
+    CronNotFound,
+    CronValidationError,
     run_job_now,
-    session_title,
-    validate_timezone,
 )
 from app.services.run_service import ACTIVE_RUN_STATUSES
 
 router = APIRouter(prefix="/api/cron-jobs", tags=["cron"], dependencies=[Depends(require_auth)])
-
-
-def _clean_name(raw: str) -> str:
-    name = str(raw or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="任务名称不能为空")
-    if len(name) > 120:
-        raise HTTPException(status_code=400, detail="任务名称不能超过 120 个字符")
-    return name
-
-
-def _clean_prompt(raw: str) -> str:
-    prompt = str(raw or "").strip()
-    if not prompt:
-        raise HTTPException(status_code=400, detail="任务内容不能为空")
-    return prompt
-
-
-def _clean_schedule(raw: str) -> str:
-    try:
-        return normalize_schedule(raw)
-    except CronScheduleError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-def _clean_timezone(raw: str) -> str:
-    try:
-        return validate_timezone(raw)
-    except CronScheduleError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-def _compute_next(job: CronJob) -> None:
-    # Always compute once so an expression with no future occurrence is
-    # rejected even while the job is paused.
-    upcoming = next_run(job.schedule, job.timezone)
-    job.next_run_at = upcoming if job.enabled else None
-
-
-async def _ensure_unique_name(
-    db: AsyncSession, agent_id: str, name: str, exclude_id: str | None = None
-) -> None:
-    statement = select(CronJob.id).where(
-        CronJob.agent_id == agent_id, CronJob.name == name
-    )
-    if exclude_id is not None:
-        statement = statement.where(CronJob.id != exclude_id)
-    if await db.scalar(statement) is not None:
-        raise HTTPException(status_code=409, detail="同一 Agent 下已存在同名定时任务")
 
 
 async def _job_out(
@@ -113,13 +62,7 @@ async def list_cron_jobs(
     agent = await db.get(Agent, agent_id)
     if agent is None or agent.status == "archived":
         raise HTTPException(status_code=404, detail="agent not found")
-    jobs = (
-        await db.scalars(
-            select(CronJob)
-            .where(CronJob.agent_id == agent_id)
-            .order_by(CronJob.created_at)
-        )
-    ).all()
+    jobs = await cron_service.list_jobs(db, agent_id)
     run_ids = [job.last_run_id for job in jobs if job.last_run_id]
     status_by_id: dict[str, str] = {}
     if run_ids:
@@ -134,43 +77,23 @@ async def list_cron_jobs(
 async def create_cron_job(
     payload: CronJobCreate, db: AsyncSession = Depends(get_db)
 ) -> CronJobOut:
-    agent = await db.get(Agent, payload.agent_id)
-    if agent is None or agent.status == "archived":
-        raise HTTPException(status_code=404, detail="agent not found")
-
-    name = _clean_name(payload.name)
-    prompt = _clean_prompt(payload.prompt)
-    schedule = _clean_schedule(payload.schedule)
-    timezone = _clean_timezone(payload.timezone)
-    await _ensure_unique_name(db, agent.id, name)
-
-    session = Session(
-        agent_id=agent.id,
-        title=session_title(name),
-        origin="cron",
-    )
-    db.add(session)
-    await db.flush()
-
-    job = CronJob(
-        agent_id=agent.id,
-        name=name,
-        prompt=prompt,
-        schedule=schedule,
-        timezone=timezone,
-        enabled=payload.enabled,
-        session_id=session.id,
-    )
     try:
-        _compute_next(job)
-    except CronScheduleError as exc:
+        job = await cron_service.create_job(
+            db,
+            agent_id=payload.agent_id,
+            name=payload.name,
+            prompt=payload.prompt,
+            schedule=payload.schedule,
+            timezone=payload.timezone,
+            enabled=payload.enabled,
+        )
+    except CronNotFound as exc:
+        raise HTTPException(status_code=404, detail="agent not found") from exc
+    except CronValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    db.add(job)
-    try:
-        await db.commit()
-    except IntegrityError as exc:
-        await db.rollback()
-        raise HTTPException(status_code=409, detail="同一 Agent 下已存在同名定时任务") from exc
+    except CronConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await db.commit()
     await db.refresh(job)
     return await _job_out(db, job)
 
@@ -185,49 +108,24 @@ async def update_cron_job(
     agent = await db.get(Agent, job.agent_id)
     if agent is None or agent.status == "archived":
         raise HTTPException(status_code=404, detail="agent not found")
-
-    data = payload.model_dump(exclude_unset=True)
-    schedule_changed = False
-    if data.get("name") is not None:
-        name = _clean_name(data["name"])
-        await _ensure_unique_name(db, job.agent_id, name, exclude_id=job.id)
-        if name != job.name:
-            job.name = name
-            schedule_changed = True
-            session = await db.get(Session, job.session_id) if job.session_id else None
-            if session is not None:
-                session.title = session_title(name)
-    if data.get("prompt") is not None:
-        job.prompt = _clean_prompt(data["prompt"])
-    if data.get("schedule") is not None:
-        schedule = _clean_schedule(data["schedule"])
-        if schedule != job.schedule:
-            job.schedule = schedule
-            schedule_changed = True
-    if data.get("timezone") is not None:
-        timezone = _clean_timezone(data["timezone"])
-        if timezone != job.timezone:
-            job.timezone = timezone
-            schedule_changed = True
-    if data.get("enabled") is not None:
-        enabled = bool(data["enabled"])
-        if enabled != job.enabled:
-            job.enabled = enabled
-            schedule_changed = True
-
-    if schedule_changed or (job.enabled and job.next_run_at is None):
-        try:
-            _compute_next(job)
-        except CronScheduleError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    elif not job.enabled:
-        job.next_run_at = None
-
     try:
-        await db.commit()
-    except IntegrityError as exc:
-        await db.rollback()
-        raise HTTPException(status_code=409, detail="同一 Agent 下已存在同名定时任务") from exc
+        job = await cron_service.update_job(
+            db,
+            job_id,
+            agent_id=job.agent_id,
+            name=payload.name,
+            prompt=payload.prompt,
+            schedule=payload.schedule,
+            timezone=payload.timezone,
+            enabled=payload.enabled,
+        )
+    except CronNotFound as exc:
+        raise HTTPException(status_code=404, detail="cron job not found") from exc
+    except CronValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CronConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await db.commit()
     await db.refresh(job)
     return await _job_out(db, job)
 
@@ -239,7 +137,10 @@ async def delete_cron_job(
     job = await db.get(CronJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="cron job not found")
-    await db.delete(job)
+    try:
+        await cron_service.delete_job(db, job_id, agent_id=job.agent_id)
+    except CronNotFound as exc:
+        raise HTTPException(status_code=404, detail="cron job not found") from exc
     await db.commit()
     return {"deleted": True}
 
@@ -251,11 +152,18 @@ async def run_cron_job_now(
     job = await db.get(CronJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="cron job not found")
-    active = await db.scalar(
-        select(Run)
-        .where(Run.session_id == job.session_id, Run.status.in_(ACTIVE_RUN_STATUSES))
-        .limit(1)
-    ) if job.session_id else None
+    active = (
+        await db.scalar(
+            select(Run)
+            .where(
+                Run.session_id == job.session_id,
+                Run.status.in_(ACTIVE_RUN_STATUSES),
+            )
+            .limit(1)
+        )
+        if job.session_id
+        else None
+    )
     if active is not None:
         raise HTTPException(
             status_code=409,
