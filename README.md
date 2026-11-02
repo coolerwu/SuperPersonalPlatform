@@ -74,7 +74,7 @@ npm run dev
 - Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
 - Agent：列表展示全部 Agent 的 Provider/model、启用技能数、自动记忆和状态，点击行切换当前 Agent；下方编辑名称、Provider、instructions、工作区，或新建 Agent；新建时未填写 instructions 会使用默认的中文个人助手提示词（能力说明 + 行为规范）；
 - 工作区：每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/`，不支持自定义路径；配置页只读展示机器目录，并随左上角选中的 Agent 变化。Agent 可以查看和修改工作区内的文件；
-- 技能：在侧边栏左上角的「技能」页面按当前 Agent 勾选启用；未启用的技能不会进入系统提示，读取它的 SKILL.md 也不会解锁工具。磁盘上已删除但仍在启用列表里的技能会显示为“未找到”，可取消勾选移除；
+- 技能：在侧边栏「Agent 能力」组的「技能」页面按当前 Agent 勾选启用；未启用的技能不会进入系统提示，读取它的 SKILL.md 也不会解锁工具。磁盘上已删除但仍在启用列表里的技能会显示为“未找到”，可取消勾选移除；
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
 - 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
 
@@ -82,7 +82,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `r
 
 ## 技能与工具页面
 
-侧边栏左上角（Agent 选择器下方）提供两个独立页面：
+侧边栏按「Agent 工作台 / Agent 能力 / 独立工具 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、渠道、记忆四个页面；「独立工具」组放不绑定 Agent 的回测；「平台」组放配置和退出登录。技能与工具页面的说明如下：
 
 - **技能**：列出全局技能库，按「系统技能」和「交互创建」分组，按当前 Agent 勾选/取消启用，立即保存、下一轮 Run 生效；展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 全文并直接编辑保存；非系统技能可删除（会删除技能目录并从所有 Agent 的启用列表移除）。新建技能可以让 Agent 在对话里用 `skill_save` 主动沉淀，也可以按你的要求创建；AI 创建的技能会自动加入当前 Agent 的启用列表。
 - **工具**：展示平台工具（`skill_save`、`session_search`、`session_read`，始终可用）、文件工具（始终可用）和技能工具；技能工具显示是否已在平台注册、由哪些技能声明。启用声明它的技能并在对话中读取 SKILL.md 后解锁，没有单独的工具开关。
@@ -188,7 +188,7 @@ metadata:
 
 ## 量化回测
 
-侧边栏「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
+侧边栏「独立工具」组的「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
 
 - 行情：Bitget 公共 REST（无需 API Key），按需抓取并增量缓存到 `data/market.db`。周期支持 `1min/3min/5min/15min/30min/1h/4h/6h/12h/1day/1week/1M`；日/周/月使用 Bitget 的 UTC 变体（`1Dutc/1Wutc/1Mutc`）对齐，回测只使用已完成的 K 线。同一交易对和周期第二次回测只抓取缺失的首尾区间。
 - 网络：`api.bitget.com` 在部分网络无法直连，需要在 `~/.super-personal-platform/.env` 设置统一的 `HTTP_PROXY`/`HTTPS_PROXY`（生产机为 `http://192.168.1.2:7893`）。这些变量会作用于所有出站 HTTP 调用（模型、搜索、微信、行情）。页面「测试连接」或 `GET /api/market/probe` 可诊断代理与交易对。

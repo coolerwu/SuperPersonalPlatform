@@ -137,100 +137,11 @@ export function Sidebar(props: SidebarProps) {
           </div>
         </div>
 
-        <div className="sidebar-actions sidebar-top-nav">
-          <button
-            className={`sidebar-action ${props.skillsActive ? "active" : ""}`}
-            onClick={props.onOpenSkills}
-          >
-            <span className="sidebar-action-icon">
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" />
-                <path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16z" />
-              </svg>
-            </span>
-            <span>技能</span>
-          </button>
-          <button
-            className={`sidebar-action ${props.toolsActive ? "active" : ""}`}
-            onClick={props.onOpenTools}
-          >
-            <span className="sidebar-action-icon">
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z" />
-              </svg>
-            </span>
-            <span>工具</span>
-          </button>
-          <button
-            className={`sidebar-action ${props.channelsActive ? "active" : ""}`}
-            onClick={props.onOpenChannels}
-          >
-            <span className="sidebar-action-icon">
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1" />
-                <path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1" />
-              </svg>
-            </span>
-            <span>渠道</span>
-          </button>
-          <button
-            className={`sidebar-action ${props.backtestActive ? "active" : ""}`}
-            onClick={props.onOpenBacktest}
-          >
-            <span className="sidebar-action-icon">
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M4 20h16" />
-                <path d="M7 17V9M12 15V5M17 18v-7" />
-                <rect x="5" y="10" width="4" height="5" rx="1" />
-                <rect x="10" y="6" width="4" height="6" rx="1" />
-                <rect x="15" y="12" width="4" height="4" rx="1" />
-              </svg>
-            </span>
-            <span>回测</span>
-          </button>
-        </div>
-
-        <div className="sidebar-actions">
+        <div className="sidebar-group sidebar-workspace">
+          <div className="sidebar-group-head">
+            <span className="sidebar-group-label">Agent 工作台</span>
+            <span className="sidebar-group-count">{props.sessions.length}</span>
+          </div>
           <button
             className={`sidebar-action new-session ${props.newSessionActive ? "active" : ""}`}
             onClick={props.onNewSession}
@@ -238,57 +149,6 @@ export function Sidebar(props: SidebarProps) {
             <span className="sidebar-action-icon">+</span>
             <span>新对话</span>
           </button>
-          <button
-            className={`sidebar-action ${props.memoryActive ? "active" : ""}`}
-            onClick={props.onOpenMemory}
-          >
-            <span className="sidebar-action-icon">
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <ellipse cx="12" cy="5" rx="8" ry="3" />
-                <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
-                <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
-              </svg>
-            </span>
-            <span>记忆</span>
-          </button>
-          <button
-            className={`sidebar-action ${props.settingsActive ? "active" : ""}`}
-            onClick={props.onOpenSettings}
-          >
-            <span className="sidebar-action-icon">
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                aria-hidden="true"
-              >
-                <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
-                <circle cx="16" cy="7" r="2" />
-                <circle cx="8" cy="17" r="2" />
-              </svg>
-            </span>
-            <span>配置</span>
-          </button>
-        </div>
-
-        <div className="sidebar-section sessions-section">
-          <div className="section-heading">
-            <span>会话</span>
-          </div>
           <div className="session-search">
             <input
               type="text"
@@ -386,27 +246,113 @@ export function Sidebar(props: SidebarProps) {
           )}
         </div>
 
-        <div className="sidebar-footer">
-          <button className="sidebar-action" onClick={props.onLogout}>
-            <span className="sidebar-action-icon">
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
+        <div className="sidebar-group">
+            <div className="sidebar-group-head">
+              <span className="sidebar-group-label">Agent 能力</span>
+            </div>
+            <div className="sidebar-capabilities">
+              <button
+                className={`sidebar-action ${props.skillsActive ? "active" : ""}`}
+                onClick={props.onOpenSkills}
               >
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                <path d="m16 17 5-5-5-5" />
-                <path d="M21 12H9" />
-              </svg>
-            </span>
-            <span>退出登录</span>
-          </button>
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" />
+                    <path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16z" />
+                  </svg>
+                </span>
+                <span>技能</span>
+              </button>
+              <button
+                className={`sidebar-action ${props.toolsActive ? "active" : ""}`}
+                onClick={props.onOpenTools}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17v3h3l5.3-5.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z" />
+                  </svg>
+                </span>
+                <span>工具</span>
+              </button>
+              <button
+                className={`sidebar-action ${props.channelsActive ? "active" : ""}`}
+                onClick={props.onOpenChannels}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1" />
+                    <path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1" />
+                  </svg>
+                </span>
+                <span>渠道</span>
+              </button>
+              <button
+                className={`sidebar-action ${props.memoryActive ? "active" : ""}`}
+                onClick={props.onOpenMemory}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <ellipse cx="12" cy="5" rx="8" ry="3" />
+                    <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+                    <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+                  </svg>
+                </span>
+                <span>记忆</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="sidebar-group">
+            <div className="sidebar-group-head">
+              <span className="sidebar-group-label">独立工具</span>
+            </div>
+            <button
+              className={`sidebar-action sidebar-standalone ${props.backtestActive ? "active" : ""}`}
+              onClick={props.onOpenBacktest}
+            >
+              <span className="sidebar-action-icon">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M4 20h16" />
+                  <path d="M7 17V9M12 15V5M17 18v-7" />
+                  <rect x="5" y="10" width="4" height="5" rx="1" />
+                  <rect x="10" y="6" width="4" height="6" rx="1" />
+                  <rect x="15" y="12" width="4" height="4" rx="1" />
+                </svg>
+              </span>
+              <span>回测</span>
+              <span className="sidebar-badge">不绑定 Agent</span>
+            </button>
+          </div>
+
+          <div className="sidebar-group sidebar-group-platform">
+            <div className="sidebar-group-head">
+              <span className="sidebar-group-label">平台</span>
+            </div>
+            <div className="sidebar-platform-actions">
+              <button
+                className={`sidebar-action ${props.settingsActive ? "active" : ""}`}
+                onClick={props.onOpenSettings}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                    <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
+                    <circle cx="16" cy="7" r="2" />
+                    <circle cx="8" cy="17" r="2" />
+                  </svg>
+                </span>
+                <span>配置</span>
+              </button>
+              <button className="sidebar-action" onClick={props.onLogout}>
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <path d="m16 17 5-5-5-5" />
+                    <path d="M21 12H9" />
+                  </svg>
+                </span>
+                <span>退出登录</span>
+              </button>
+            </div>
         </div>
       </aside>
     </>

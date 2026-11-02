@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError, errorText } from "../api";
 import {
@@ -82,6 +82,13 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
   const [cacheNonce, setCacheNonce] = useState(0);
   const [pollTick, setPollTick] = useState(0);
   const [pollDelay, setPollDelay] = useState(1200);
+  const [historyView, setHistoryView] = useState<{
+    detail: BacktestDetail;
+    result: BacktestResult | null;
+  } | null>(null);
+  const [historyLoadingId, setHistoryLoadingId] = useState("");
+  const [historyError, setHistoryError] = useState("");
+  const historyRequestRef = useRef(0);
 
   const refreshHistory = useCallback(async () => {
     try {
@@ -184,6 +191,49 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
     };
   }, [current, refreshHistory, pollTick, pollDelay]);
 
+  useEffect(() => {
+    if (!historyView || !ACTIVE_STATUSES.includes(historyView.detail.status)) return;
+    const backtestId = historyView.detail.id;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const detail = await api.getBacktest(backtestId);
+          if (!active) return;
+          if (detail.status === "completed") {
+            const data = await api.getBacktestResult(backtestId);
+            if (!active) return;
+            setHistoryError("");
+            setHistoryView({ detail, result: data });
+            setCacheNonce((value) => value + 1);
+            await refreshHistory();
+          } else {
+            setHistoryError("");
+            setHistoryView({ detail, result: null });
+            if (detail.status === "failed" || detail.status === "cancelled") {
+              await refreshHistory();
+            }
+          }
+        } catch (exc) {
+          if (active) setHistoryError(errorText(exc));
+        }
+      })();
+    }, 1500);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [historyView, refreshHistory]);
+
+  useEffect(() => {
+    if (!historyView) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setHistoryView(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [historyView]);
+
   const active = current !== null && ACTIVE_STATUSES.includes(current.status);
   const granularities = meta?.granularities?.length
     ? meta.granularities
@@ -250,19 +300,40 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
   }
 
   async function openBacktest(id: string) {
+    const requestId = historyRequestRef.current + 1;
+    historyRequestRef.current = requestId;
     setError("");
-    setBusy(true);
-    setResult(null);
+    setHistoryError("");
+    setHistoryLoadingId(id);
     try {
       const detail = await api.getBacktest(id);
-      setCurrent(detail);
-      if (detail.status === "completed") {
-        setResult(await api.getBacktestResult(id));
-      }
+      const data =
+        detail.status === "completed" ? await api.getBacktestResult(id) : null;
+      if (requestId !== historyRequestRef.current) return;
+      setHistoryView({ detail, result: data });
     } catch (exc) {
-      setError(errorText(exc));
+      if (requestId === historyRequestRef.current) setError(errorText(exc));
     } finally {
-      setBusy(false);
+      if (requestId === historyRequestRef.current) setHistoryLoadingId("");
+    }
+  }
+
+  async function cancelHistoryBacktest() {
+    if (!historyView) return;
+    setCancelling(true);
+    setError("");
+    setHistoryError("");
+    try {
+      await api.cancelBacktest(historyView.detail.id);
+      setHistoryView({
+        detail: await api.getBacktest(historyView.detail.id),
+        result: null,
+      });
+      await refreshHistory();
+    } catch (exc) {
+      setHistoryError(errorText(exc));
+    } finally {
+      setCancelling(false);
     }
   }
 
@@ -322,7 +393,10 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
       <header className="settings-header">
         <div>
           <div className="eyebrow">QUANT</div>
-          <h1>量化回测</h1>
+          <h1>
+            量化回测
+            <span className="page-scope-pill">独立工具</span>
+          </h1>
           <p>Bitget 公共行情 · Python 策略 · 本地缓存增量更新。日期按 UTC 计算。</p>
         </div>
         <button className="ghost-button" onClick={onClose}>
@@ -540,9 +614,11 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
                     type="button"
                     key={item.id}
                     className={`backtest-history-row ${
-                      current?.id === item.id ? "active" : ""
+                      historyView?.detail.id === item.id ? "active" : ""
                     }`}
                     onClick={() => void openBacktest(item.id)}
+                    aria-busy={historyLoadingId === item.id}
+                    title="查看回测详情"
                   >
                     <span className="backtest-history-title">
                       {item.symbol}
@@ -558,7 +634,9 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
                         : ""}
                     </span>
                     <span className={`backtest-status ${item.status}`}>
-                      {statusLabel(item.status)}
+                      {historyLoadingId === item.id
+                        ? "加载中…"
+                        : statusLabel(item.status)}
                     </span>
                   </button>
                 ))}
@@ -567,6 +645,85 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
           </section>
         </div>
       </div>
+
+      {historyView && (
+        <div className="modal-backdrop" onClick={() => setHistoryView(null)}>
+          <div
+            className="modal backtest-detail-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="回测详情"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-heading backtest-detail-head">
+              <div>
+                <h2>
+                  {historyView.detail.symbol} ·{" "}
+                  {granularityLabel(historyView.detail.granularity)}
+                </h2>
+                <p>
+                  {formatUtc(historyView.detail.start_ms)} →{" "}
+                  {formatUtc(historyView.detail.end_ms)} UTC
+                  <span
+                    className={`backtest-status ${historyView.detail.status}`}
+                  >
+                    {statusLabel(historyView.detail.status)}
+                  </span>
+                </p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setHistoryView(null)}
+                aria-label="关闭"
+                title="关闭"
+              >
+                ×
+              </button>
+            </div>
+            <div className="backtest-detail-body">
+              {historyError && (
+                <div className="error-banner">{historyError}</div>
+              )}
+              {historyView.detail.error && (
+                <div className="error-banner">
+                  {historyView.detail.error}
+                  {historyView.detail.error_detail && (
+                    <details className="backtest-error-detail">
+                      <summary>查看详情</summary>
+                      <pre>{historyView.detail.error_detail}</pre>
+                    </details>
+                  )}
+                </div>
+              )}
+              {historyView.result ? (
+                <BacktestResultPanel
+                  detail={historyView.detail}
+                  result={historyView.result}
+                />
+              ) : (
+                <div className="backtest-detail-progress">
+                  <span
+                    className={`backtest-status ${historyView.detail.status}`}
+                  >
+                    {statusLabel(historyView.detail.status)}
+                  </span>
+                  <p>{statusText(historyView.detail)}</p>
+                  {ACTIVE_STATUSES.includes(historyView.detail.status) && (
+                    <button
+                      className="ghost-button"
+                      onClick={() => void cancelHistoryBacktest()}
+                      disabled={cancelling}
+                    >
+                      {cancelling ? "取消中…" : "取消回测"}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
