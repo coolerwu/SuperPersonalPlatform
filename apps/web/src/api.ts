@@ -9,6 +9,8 @@ import type {
   ChannelLogin,
   ChannelLoginStatus,
   CronJob,
+  KnowledgeState,
+  KnowledgeStatus,
   MarketProbe,
   MarketStatus,
   MemoryItem,
@@ -249,6 +251,24 @@ export const api = {
   streamUrl: (runId: string, after = 0) => `/api/runs/${runId}/stream?after=${after}`,
 
   getSystem: () => request<SystemInfo>("/api/system"),
+  getKnowledge: () => request<KnowledgeState>("/api/knowledge"),
+  updateKnowledge: (payload: {
+    enabled?: boolean;
+    webdav_url?: string;
+    username?: string;
+    password?: string;
+    clear_password?: boolean;
+    root?: string;
+    interval_seconds?: number;
+  }) =>
+    request<KnowledgeState>("/api/knowledge", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  syncKnowledge: () =>
+    request<{ queued: boolean; status: KnowledgeStatus }>("/api/knowledge/sync", {
+      method: "POST",
+    }),
   listSkills: () => request<SkillCatalog>("/api/skills"),
   getSkill: (directory: string) =>
     request<SkillDetail>(`/api/skills/${encodeURIComponent(directory)}`),

@@ -103,6 +103,8 @@ def test_provider_create_and_system_info(client) -> None:
     assert info["skills_root"]
     assert info["counts"]["providers"] >= 2
     assert info["counts"]["agents"] >= 1
+    assert info["knowledge"]["enabled"] is False
+    assert info["knowledge"]["local_dir"]
 
 
 def test_provider_create_rejects_blank_fields(client) -> None:

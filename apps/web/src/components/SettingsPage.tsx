@@ -4,6 +4,7 @@ import { api, errorText } from "../api";
 import type { Agent, AgentSavePayload, Provider, SystemInfo } from "../types";
 import { AgentEditor } from "./AgentEditor";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
+import { KnowledgeSettings } from "./KnowledgeSettings";
 import { ProviderCreateForm } from "./ProviderCreateForm";
 import { ProviderSettings } from "./ProviderSettings";
 
@@ -41,7 +42,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
 };
 
 export function SettingsPage(props: SettingsPageProps) {
-  const [tab, setTab] = useState<"provider" | "agent" | "runtime">("provider");
+  const [tab, setTab] = useState<"provider" | "agent" | "knowledge" | "runtime">("provider");
   const [providerId, setProviderId] = useState("");
   const [providerEditing, setProviderEditing] = useState(false);
   const [agentEditing, setAgentEditing] = useState(false);
@@ -132,7 +133,7 @@ export function SettingsPage(props: SettingsPageProps) {
         <div>
           <div className="eyebrow">CONFIGURATION</div>
           <h1>配置</h1>
-          <p>Provider、Agent 和运行环境都集中在这里。</p>
+          <p>Provider、Agent、知识库和运行环境都集中在这里。</p>
         </div>
         <button className="ghost-button" onClick={props.onClose}>返回对话</button>
       </header>
@@ -153,6 +154,13 @@ export function SettingsPage(props: SettingsPageProps) {
               onClick={() => setTab("agent")}
             >
               Agent
+            </button>
+            <button
+              type="button"
+              className={tab === "knowledge" ? "active" : ""}
+              onClick={() => setTab("knowledge")}
+            >
+              知识库
             </button>
             <button
               type="button"
@@ -307,6 +315,18 @@ export function SettingsPage(props: SettingsPageProps) {
                 </div>
               </>
             )}
+          </section>
+          )}
+
+          {tab === "knowledge" && (
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <div>
+                <h2>知识库</h2>
+                <p>坚果云 WebDAV 镜像；启用 knowledge-base 技能的 Agent 可通过 /knowledge/ 读写笔记。</p>
+              </div>
+            </div>
+            <KnowledgeSettings />
           </section>
           )}
 

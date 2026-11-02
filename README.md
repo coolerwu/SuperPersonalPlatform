@@ -16,9 +16,11 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 ├── .env                 # APP_AUTH_TOKEN、LLM_* 等配置
 ├── data/
 │   ├── app.db           # SQLite
-│   └── checkpoints/     # 每个 session 的 LangGraph checkpoint
+│   ├── checkpoints/     # 每个 session 的 LangGraph checkpoint
+│   └── knowledge_sync_state.json  # 知识库同步状态（etag / 本地哈希）
 ├── workspaces/          # Agent 真实工作区根目录
-└── skills/              # 全局技能库（每个技能一个目录；.seed_state.json 记录内置技能哈希）
+├── skills/              # 全局技能库（每个技能一个目录；.seed_state.json 记录内置技能哈希）
+└── knowledge/           # 坚果云知识库的本地镜像（启用技能后挂到 /knowledge/）
 ```
 
 启动目录下的 `.env` 会覆盖 home 配置，便于本地临时覆盖。
@@ -121,7 +123,7 @@ metadata:
 - 技能启用：AI 创建的技能会自动加入当前 Agent 的启用列表，同一会话的下一次对话生效；手动创建/放入的技能仍需在这里启用。读取 SKILL.md 后，技能声明的工具才会解锁。
 - 删除：非系统技能可以在技能页删除，删除整个技能目录并从所有 Agent 的启用列表移除；系统技能不能删除。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
-- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`quant-backtest` 和 `cron-scheduler`，分别声明 `include_tools: web_fetch` / `web_search web_fetch` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete` / `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status` / `cron_list cron_create cron_update cron_delete cron_run`。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
+- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`quant-backtest`、`cron-scheduler` 和 `knowledge-base`。前六个分别声明 `include_tools: web_fetch` / `web_search web_fetch` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete` / `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status` / `cron_list cron_create cron_update cron_delete cron_run`；`knowledge-base` 不声明工具，作用是把本地知识库镜像挂到 `/knowledge/` 并说明读写约定。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
 
@@ -205,6 +207,17 @@ metadata:
 
 接口：`GET/POST /api/cron-jobs`、`PUT/DELETE /api/cron-jobs/{id}`、`POST /api/cron-jobs/{id}/run`。
 
+## 知识库（坚果云同步）
+
+Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，用来查笔记、整理资料和写新笔记。
+
+- 平台在生产机维护一份本地镜像（默认 `~/.super-personal-platform/knowledge/`），由 `KnowledgeSyncRuntime` 在 API 进程内与坚果云 WebDAV 双向同步：服务启动后立即同步一次（已配置时），之后按配置页的间隔增量同步（默认 300 秒）。只传输新增或变化的文件，不监听文件系统。
+- 配置在「配置」页的「知识库」tab：启用开关、WebDAV 地址（例如 `https://dav.jianguoyun.com/dav/`）、账号、应用密码（坚果云「第三方应用密码」，不是登录密码）、根目录、同步间隔。保存后立即唤醒同步，不需要重启服务；密码保存在 `app.db`，接口只返回 `has_password`。`.env` 的 `KB_WEBDAV_*` 只在数据库里还没有配置时作为首次启动的初始值，方便无界面部署；之后以配置页为准。根目录必须是已存在的目录；根目录不存在时这一轮同步会报错并保留本地镜像，不会把它当成空目录清空。
+- 同步规则：远端和本地都改过同一文件时，远端版本保留原名，本地版本另存为 `<name>.conflict-local-<时间戳>` 并上传；远端删除且本地未修改时删除本地；本地删除不传播，远端文件会在下一轮恢复。单文件默认上限 50 MB（`KB_MAX_FILE_BYTES`），超出跳过；路径限制在配置的根目录内，拒绝 `..` 和符号链接。
+- Agent 使用：在「技能」页为当前 Agent 启用 `knowledge-base`，之后它就能用现有文件工具 `ls`、`glob`、`grep`、`read_file`、`edit_file` 操作 `/knowledge/`；未启用的 Agent 不挂载该路径。写新笔记默认放在根目录、文件名用 `YYYY-MM-DD-标题.md`（以技能正文和你知识库根目录的 `README.md` 约定为准），写入本地镜像后几分钟内同步回坚果云。
+- 凭据只存在于 API 进程和 `app.db`，不返回前端、不写日志；Agent 能看到目录内容，但看不到 WebDAV 账号。
+- 接口：`GET/PUT /api/knowledge` 读取和保存配置（响应包含同步状态，不含密码），`POST /api/knowledge/sync` 立即触发一次同步；`GET /api/system` 的 `knowledge` 字段也返回同步状态。冲突文件的保留提示只写日志，不主动推送。
+
 ## 量化回测
 
 顶部「量化」tab 的「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
@@ -234,13 +247,15 @@ metadata:
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
   - `channels`：渠道及其 iLink 登录凭据（`bot_token` 不返回前端、不写日志）；`channel_conversations`：外部联系人与 Session 的映射（含最新 `context_token`）；`channel_inbounds`：入站消息幂等键；`channel_run_links`：哪些 Run 需要回信；`channel_deliveries`：Run 终态的发送记录，用于崩溃恢复。
   - `backtests`：回测任务与结果，含状态、策略代码、指标、下采样净值/回撤/价格、交易明细和告警；大数组按上限截断。
+  - `knowledge_configs`：知识库 WebDAV 配置（单行），含启用开关、地址、账号、应用密码、根目录和同步间隔；密码不返回前端。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles`（按 `symbol + granularity + open_time_ms` 唯一）和 `market_sync_state`（已同步范围与上次错误）。可以独立删除，下次回测会重新抓取。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
 - `messages_fts`：`messages.content` 的 FTS5 trigram 索引（external content，触发器同步）；用于 Agent 的 `session_search` / `session_read` 和侧栏搜索，首次创建或索引为空时自动 `rebuild` 回填。FTS 不可用时降级 `LIKE`。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区目录，名称为 Agent id；删除 Agent 不会删除这里的文件。`screenshots/<session_id>/<run_id>/` 保存该 Agent 的浏览器截图，删除会话时清理对应目录。
 - `~/.super-personal-platform/skills/`：全局技能库，由用户/运维维护；删除技能不会自动清理 Agent 的启用列表，运行时忽略不存在的技能。
+- `~/.super-personal-platform/knowledge/`：坚果云知识库的本地镜像，由后台同步任务维护；可以独立删除，下次同步会重新下载。`data/knowledge_sync_state.json` 记录远端 etag 与本地哈希，删除后下一轮同步会按「两边都变」的规则重新对账。
 
-备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；`data/market.db` 是可按需重建的行情缓存，建议一并备份以免重新抓取。删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
+备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；`data/market.db` 是可按需重建的行情缓存，建议一并备份以免重新抓取。`knowledge/` 是坚果云镜像，可不备份；`data/knowledge_sync_state.json` 丢失后下一轮同步会重新对账。删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
 
 ## 配置
 
@@ -252,6 +267,14 @@ metadata:
 | `APP_DATA_DIR` | 数据/checkpoint 目录 | `$APP_HOME/data` |
 | `APP_WORKSPACES_DIR` | 真实工作区根目录 | `$APP_HOME/workspaces` |
 | `APP_SKILLS_DIR` | 全局技能库根目录 | `$APP_HOME/skills` |
+| `APP_KNOWLEDGE_DIR` | 知识库本地镜像目录 | `$APP_HOME/knowledge` |
+| `KB_WEBDAV_URL` | 知识库初始配置：仅当数据库还没有配置时写入；之后在配置页「知识库」管理 | 空 |
+| `KB_WEBDAV_USERNAME` | 知识库初始 WebDAV 账号 | 空 |
+| `KB_WEBDAV_PASSWORD` | 知识库初始 WebDAV 应用密码（保存后只在 app.db，不返回前端） | 空 |
+| `KB_WEBDAV_ROOT` | 知识库初始根目录（相对 WebDAV 根） | 空 |
+| `KB_SYNC_INTERVAL_SECONDS` | 知识库初始同步间隔（秒，最小 30）；之后由配置页管理 | `300` |
+| `KB_SYNC_TIMEOUT_SECONDS` | 单次 WebDAV 请求超时（秒） | `30` |
+| `KB_MAX_FILE_BYTES` | 单个知识库文件的大小上限 | `52428800` |
 | `BROWSER_CONCURRENCY` | 每个 Run 的浏览器标签页上限，同时决定不同 session 的 Run 并发数 | `2` |
 | `BROWSER_NAVIGATION_TIMEOUT_MS` | 页面导航超时 | `30000` |
 | `BROWSER_ACTION_TIMEOUT_MS` | 点击/填写动作超时 | `10000` |
@@ -314,6 +337,7 @@ mkdir -p ~/.super-personal-platform/data
 cp deploy/.env.example ~/.super-personal-platform/.env
 # 编辑 ~/.super-personal-platform/.env，填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
 # 量化回测/外网访问需要代理时，设置 HTTP_PROXY 和 HTTPS_PROXY（生产机可用 http://192.168.1.2:7893）
+# 知识库优先在配置页的「知识库」tab 配置；KB_* 仅作为首次启动的初始值
 cp deploy/agent-command-center.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now agent-command-center.service

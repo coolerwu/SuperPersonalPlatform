@@ -21,6 +21,7 @@ from app.routers.backtests import router as backtests_router
 from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
 from app.routers.cron import router as cron_router
+from app.routers.knowledge import router as knowledge_router
 from app.routers.memories import router as memories_router
 from app.routers.market import router as market_router
 from app.routers.providers import router as providers_router
@@ -32,6 +33,7 @@ from app.routers.system import router as system_router
 from app.routers.tools import router as tools_router
 from app.services.run_service import seed_default_provider
 from app.services.cron_service import CronRuntime
+from app.services.knowledge_sync import KnowledgeSyncRuntime, seed_knowledge_config
 from app.services.market_data import market_service
 from app.services.backtest_worker import BacktestWorker, set_active_worker
 from app.services import backtest_tools  # noqa: F401 - registers Agent backtest tools
@@ -98,6 +100,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
         settings.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
         settings.skills_dir.expanduser().mkdir(parents=True, exist_ok=True)
+        settings.knowledge_dir.mkdir(parents=True, exist_ok=True)
         settings.backtests_dir.mkdir(parents=True, exist_ok=True)
         seed_default_skills()
         await init_db()
@@ -106,8 +109,11 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
         await seed_default_agent()
         await sync_default_agent_instructions()
         await ensure_agent_workspaces()
+        await seed_knowledge_config()
         weixin = WeixinRuntime()
         app.state.weixin = weixin
+        knowledge = KnowledgeSyncRuntime()
+        app.state.knowledge = knowledge
         if start_worker:
             worker = RunWorker(weixin_runtime=weixin)
             app.state.worker = worker
@@ -121,8 +127,10 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             app.state.backtest_worker = backtest_worker
             set_active_worker(backtest_worker)
             await backtest_worker.start()
+            await knowledge.start()
         yield
         if start_worker:
+            await knowledge.stop()
             backtest_worker = getattr(app.state, "backtest_worker", None)
             if backtest_worker is not None:
                 await backtest_worker.stop()
@@ -151,6 +159,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(sessions_router)
     app.include_router(chat_router)
     app.include_router(cron_router)
+    app.include_router(knowledge_router)
     app.include_router(memories_router)
     app.include_router(runs_router)
     app.include_router(screenshots_router)

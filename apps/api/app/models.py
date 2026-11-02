@@ -338,3 +338,23 @@ class Backtest(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class KnowledgeConfig(Base):
+    """Singleton WebDAV knowledge-base settings managed from the config page.
+
+    The password is stored in app.db like provider API keys: never returned by
+    the API, never written to logs.
+    """
+
+    __tablename__ = "knowledge_configs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    webdav_url: Mapped[str] = mapped_column(String(500), default="")
+    username: Mapped[str] = mapped_column(String(200), default="")
+    password: Mapped[str] = mapped_column(Text, default="")
+    root: Mapped[str] = mapped_column(String(500), default="")
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)

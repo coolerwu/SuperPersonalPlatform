@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +27,8 @@ async def _count(db: AsyncSession, model: type, *conditions: object) -> int:
 
 
 @router.get("")
-async def system_info(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+async def system_info(request: Request, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+    knowledge = getattr(request.app.state, "knowledge", None)
     return {
         "version": APP_VERSION,
         "execution_core": "deepagents",
@@ -54,4 +55,7 @@ async def system_info(db: AsyncSession = Depends(get_db)) -> dict[str, object]:
             "skills": True,
             "memory": True,
         },
+        "knowledge": knowledge.status()
+        if knowledge is not None
+        else {"enabled": False, "local_dir": str(settings.knowledge_dir)},
     }

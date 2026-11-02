@@ -24,6 +24,7 @@ from langchain_core.messages import (
 from app.config import settings
 from app.services import memory_tools  # noqa: F401 - registers memory tools
 from app.services.browser_tools import BROWSER_TOOL_NAMES, BrowserSession
+from app.services.knowledge_sync import KNOWLEDGE_SKILL_NAME
 from app.services.model_retry import ModelRetryMixin
 from app.services.session_tools import (
     build_session_read_tool,
@@ -325,7 +326,12 @@ def _shell_env() -> dict[str, str]:
     }
 
 
-def build_backend(workspace_path: str, *, skills_dir: Path | str | None = None):
+def build_backend(
+    workspace_path: str,
+    *,
+    skills_dir: Path | str | None = None,
+    knowledge_dir: Path | str | None = None,
+):
     from deepagents.backends import (
         CompositeBackend,
         FilesystemBackend,
@@ -334,13 +340,16 @@ def build_backend(workspace_path: str, *, skills_dir: Path | str | None = None):
 
     root = resolve_workspace_path(workspace_path, create=True)
     workspace_backend = LocalShellBackend(root_dir=root, virtual_mode=True, env=_shell_env())
-    if skills_dir is None:
+    routes: dict[str, Any] = {}
+    if skills_dir is not None:
+        skills_root = Path(skills_dir).expanduser().resolve()
+        routes["/skills/"] = FilesystemBackend(root_dir=skills_root, virtual_mode=True)
+    if knowledge_dir is not None:
+        knowledge_root = Path(knowledge_dir).expanduser().resolve()
+        routes["/knowledge/"] = FilesystemBackend(root_dir=knowledge_root, virtual_mode=True)
+    if not routes:
         return workspace_backend
-    skills_root = Path(skills_dir).expanduser().resolve()
-    return CompositeBackend(
-        default=workspace_backend,
-        routes={"/skills/": FilesystemBackend(root_dir=skills_root, virtual_mode=True)},
-    )
+    return CompositeBackend(default=workspace_backend, routes=routes)
 
 
 class DeepAgentExecutor:
@@ -439,7 +448,18 @@ class DeepAgentExecutor:
                 skills_dir = (
                     self.skills_dir if self.skills_dir is not None else settings.skills_dir
                 )
-                backend = build_backend(self.workspace_path, skills_dir=skills_dir)
+                knowledge_dir = None
+                if KNOWLEDGE_SKILL_NAME in self.enabled_skills:
+                    try:
+                        settings.knowledge_dir.mkdir(parents=True, exist_ok=True)
+                        knowledge_dir = settings.knowledge_dir
+                    except OSError:
+                        logger.exception("cannot prepare knowledge mirror; skipping /knowledge/")
+                backend = build_backend(
+                    self.workspace_path,
+                    skills_dir=skills_dir,
+                    knowledge_dir=knowledge_dir,
+                )
                 skill_context = SkillToolContext(
                     api_key=self.provider.api_key,
                     base_url=self.provider.base_url,

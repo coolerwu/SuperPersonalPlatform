@@ -65,6 +65,7 @@ async def test_init_db_creates_backtests_table() -> None:
         tables = {row[0] for row in result.fetchall()}
     assert "backtests" in tables
     assert "cron_jobs" in tables
+    assert "knowledge_configs" in tables
 
 
 async def test_init_market_db_is_idempotent() -> None:

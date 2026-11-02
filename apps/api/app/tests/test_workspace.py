@@ -88,6 +88,27 @@ def test_workspace_backend_reads_and_writes_real_files() -> None:
     assert read.file_data["content"] == "hello workspace"
 
 
+def test_build_backend_mounts_knowledge_route(tmp_path: Path) -> None:
+    from deepagents.backends import CompositeBackend, FilesystemBackend
+
+    knowledge_dir = tmp_path / "knowledge"
+    knowledge_dir.mkdir()
+    (knowledge_dir / "note.md").write_text("knowledge note", encoding="utf-8")
+
+    backend = build_backend("knowledge-proj", knowledge_dir=knowledge_dir)
+    assert isinstance(backend, CompositeBackend)
+    assert isinstance(backend.routes["/knowledge/"], FilesystemBackend)
+
+    read = backend.read("/knowledge/note.md")
+    assert read.error is None
+    assert read.file_data is not None
+    assert read.file_data["content"] == "knowledge note"
+
+    write = backend.write("/knowledge/new.md", "new note")
+    assert write.error is None
+    assert (knowledge_dir / "new.md").read_text(encoding="utf-8") == "new note"
+
+
 async def test_executor_invalid_workspace_fails_without_calling_model(tmp_path: Path) -> None:
     provider = SimpleNamespace(api_key="test-key", base_url="http://127.0.0.1:9", model="test-model")
     executor = DeepAgentExecutor(

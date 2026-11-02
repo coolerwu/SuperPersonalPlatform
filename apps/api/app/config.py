@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     weixin_api_timeout_ms: int = 15_000
     weixin_qr_timeout_ms: int = 35_000
 
+    # Personal knowledge base mirrored from a WebDAV folder (Nutstore).
+    # The mirror is mounted as /knowledge/ for Agents that enable the
+    # knowledge-base skill; a background task syncs it every few minutes.
+    kb_webdav_url: str = ""
+    kb_webdav_username: str = ""
+    kb_webdav_password: str = ""
+    kb_webdav_root: str = ""
+    kb_sync_interval_seconds: int = 300
+    kb_sync_timeout_seconds: int = 30
+    kb_max_file_bytes: int = 50 * 1024 * 1024
+    app_knowledge_dir: Path | None = None
+
     # Crypto market data (Bitget public REST) and backtesting. Bitget is not
     # reachable directly from every network, so the proxy can be set explicitly.
     bitget_base_url: str = "https://api.bitget.com"
@@ -92,6 +104,14 @@ class Settings(BaseSettings):
     @property
     def skills_dir(self) -> Path:
         return self.app_skills_dir or (APP_HOME / "skills")
+
+    @property
+    def knowledge_dir(self) -> Path:
+        return (self.app_knowledge_dir or (APP_HOME / "knowledge")).expanduser()
+
+    @property
+    def knowledge_state_path(self) -> Path:
+        return self.app_data_dir / "knowledge_sync_state.json"
 
     @property
     def market_db_path(self) -> Path:

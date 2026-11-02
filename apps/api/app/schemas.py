@@ -424,3 +424,13 @@ class MarketProbeOut(BaseModel):
     error: str | None = None
     base_url: str
     proxy_configured: bool = False
+
+
+class KnowledgeConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    webdav_url: str | None = Field(default=None, max_length=500)
+    username: str | None = Field(default=None, max_length=200)
+    password: str | None = Field(default=None, max_length=500)
+    clear_password: bool = False
+    root: str | None = Field(default=None, max_length=500)
+    interval_seconds: int | None = Field(default=None, ge=30, le=86400)

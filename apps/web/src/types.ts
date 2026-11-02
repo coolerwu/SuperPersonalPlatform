@@ -202,6 +202,40 @@ export type SystemInfo = {
   capabilities: Record<string, boolean>;
 };
 
+export type KnowledgeConfig = {
+  enabled: boolean;
+  webdav_url: string;
+  username: string;
+  root: string;
+  interval_seconds: number;
+  has_password: boolean;
+  local_dir: string;
+};
+
+export type KnowledgeSyncResult = {
+  downloaded: number;
+  uploaded: number;
+  conflicts: number;
+  removed_local: number;
+  skipped: number;
+  errors: number;
+};
+
+export type KnowledgeStatus = {
+  enabled: boolean;
+  configured: boolean;
+  local_dir: string;
+  interval_seconds: number;
+  last_sync_at: string | null;
+  last_error: string;
+  last_result: KnowledgeSyncResult | null;
+};
+
+export type KnowledgeState = {
+  config: KnowledgeConfig;
+  status: KnowledgeStatus;
+};
+
 export type MemoryScope = "user" | "agent";
 
 export type MemoryItem = {
