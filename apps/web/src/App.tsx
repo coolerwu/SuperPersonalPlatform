@@ -29,6 +29,7 @@ import { describeApiError } from "./errors";
 import { ChatPanel } from "./components/ChatPanel";
 import { BacktestPage } from "./components/BacktestPage";
 import { ChannelsPage } from "./components/ChannelsPage";
+import { CronPage } from "./components/CronPage";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Drawer } from "./components/Drawer";
 import { Login } from "./components/Login";
@@ -129,7 +130,7 @@ export default function App() {
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [view, setView] = useState<
-    "chat" | "settings" | "memory" | "skills" | "tools" | "channels" | "backtest"
+    "chat" | "settings" | "memory" | "skills" | "tools" | "channels" | "cron" | "backtest"
   >("chat");
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
@@ -191,9 +192,11 @@ export default function App() {
             ? "工具"
             : view === "channels"
               ? "渠道"
-              : view === "backtest"
-                ? "回测"
-                : (agent?.name ?? "Agent");
+              : view === "cron"
+                ? "定时"
+                : view === "backtest"
+                  ? "回测"
+                  : (agent?.name ?? "Agent");
 
   function setAgentError(message: string, forAgent: string) {
     if (forAgent !== agentIdRef.current) return;
@@ -313,10 +316,17 @@ export default function App() {
   }, []);
 
   function openView(
-    next: "chat" | "settings" | "memory" | "skills" | "tools" | "channels" | "backtest",
+    next: "chat" | "settings" | "memory" | "skills" | "tools" | "channels" | "cron" | "backtest",
   ) {
     setView(next);
     setSidebarOpen(false);
+  }
+
+  function openCronSession(id: string) {
+    setSearchFocus(null);
+    setSessionId(id);
+    openView("chat");
+    void refreshSessions();
   }
 
   function openSearchHit(hit: SessionSearchHit) {
@@ -332,6 +342,7 @@ export default function App() {
           id: hit.session_id,
           agent_id: agentId,
           title: hit.session_title || "新会话",
+          origin: "chat",
           message_count: 0,
           active_run_id: null,
           active_run_status: null,
@@ -1296,12 +1307,14 @@ export default function App() {
         onOpenSkills={() => openView("skills")}
         onOpenTools={() => openView("tools")}
         onOpenChannels={() => openView("channels")}
+        onOpenCron={() => openView("cron")}
         onOpenBacktest={() => openView("backtest")}
         settingsActive={view === "settings"}
         memoryActive={view === "memory"}
         skillsActive={view === "skills"}
         toolsActive={view === "tools"}
         channelsActive={view === "channels"}
+        cronActive={view === "cron"}
         backtestActive={view === "backtest"}
         onLogout={() => void logout()}
       />
@@ -1325,6 +1338,13 @@ export default function App() {
         <ToolsPage onClose={() => setView("chat")} />
       ) : view === "channels" ? (
         <ChannelsPage agent={agent} agentId={agentId} onClose={() => setView("chat")} />
+      ) : view === "cron" ? (
+        <CronPage
+          agent={agent}
+          agentId={agentId}
+          onOpenSession={openCronSession}
+          onClose={() => setView("chat")}
+        />
       ) : view === "backtest" ? (
         <BacktestPage onClose={() => setView("chat")} />
       ) : view === "settings" ? (

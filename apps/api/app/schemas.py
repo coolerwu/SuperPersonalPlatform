@@ -132,6 +132,7 @@ class SessionOut(BaseModel):
     id: str
     agent_id: str
     title: str
+    origin: str = "chat"
     message_count: int = 0
     active_run_id: str | None = None
     active_run_status: str | None = None
@@ -139,6 +140,46 @@ class SessionOut(BaseModel):
     channel_name: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class CronJobCreate(BaseModel):
+    agent_id: str = Field(min_length=1, max_length=32)
+    name: str = ""
+    prompt: str = ""
+    schedule: str = ""
+    timezone: str = ""
+    enabled: bool = True
+
+
+class CronJobUpdate(BaseModel):
+    name: str | None = None
+    prompt: str | None = None
+    schedule: str | None = None
+    timezone: str | None = None
+    enabled: bool | None = None
+
+
+class CronJobOut(BaseModel):
+    id: str
+    agent_id: str
+    name: str
+    prompt: str
+    schedule: str
+    timezone: str
+    enabled: bool
+    session_id: str | None = None
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    last_run_id: str | None = None
+    last_run_status: str | None = None
+    last_skipped_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CronRunOut(BaseModel):
+    run_id: str
+    session_id: str
 
 
 class ChannelCreate(BaseModel):

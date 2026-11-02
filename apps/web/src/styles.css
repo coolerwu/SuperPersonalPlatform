@@ -616,6 +616,11 @@ textarea {
   vertical-align: 1px;
 }
 
+.session-channel.cron {
+  background: rgba(22, 128, 92, 0.1);
+  color: var(--ok);
+}
+
 .session-meta {
   color: var(--faint);
   font-size: 11px;
@@ -2337,6 +2342,50 @@ textarea {
   flex-direction: column;
   gap: 10px;
   margin-top: 12px;
+}
+
+.cron-editor-modal {
+  width: min(640px, 100%);
+}
+
+.cron-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.cron-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cron-checkbox input {
+  width: auto;
+  margin: 0;
+}
+
+.cron-schedule {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.cron-row .channel-main {
+  min-width: 0;
+}
+
+.cron-row .channel-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .cron-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .channel-row {

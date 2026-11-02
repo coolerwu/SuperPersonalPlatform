@@ -20,6 +20,7 @@ from app.routers.agents import router as agents_router
 from app.routers.backtests import router as backtests_router
 from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
+from app.routers.cron import router as cron_router
 from app.routers.memories import router as memories_router
 from app.routers.market import router as market_router
 from app.routers.providers import router as providers_router
@@ -30,6 +31,7 @@ from app.routers.skills import router as skills_router
 from app.routers.system import router as system_router
 from app.routers.tools import router as tools_router
 from app.services.run_service import seed_default_provider
+from app.services.cron_service import CronRuntime
 from app.services.market_data import market_service
 from app.services.backtest_worker import BacktestWorker, set_active_worker
 from app.services import backtest_tools  # noqa: F401 - registers Agent backtest tools
@@ -111,6 +113,9 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             weixin.worker = worker
             await worker.start()
             await weixin.start()
+            cron = CronRuntime(worker)
+            app.state.cron = cron
+            await cron.start()
             backtest_worker = BacktestWorker()
             app.state.backtest_worker = backtest_worker
             set_active_worker(backtest_worker)
@@ -121,6 +126,9 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             if backtest_worker is not None:
                 await backtest_worker.stop()
             set_active_worker(None)
+            cron = getattr(app.state, "cron", None)
+            if cron is not None:
+                await cron.stop()
             await weixin.stop()
             worker = getattr(app.state, "worker", None)
             if worker is not None:
@@ -141,6 +149,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(channels_router)
     app.include_router(sessions_router)
     app.include_router(chat_router)
+    app.include_router(cron_router)
     app.include_router(memories_router)
     app.include_router(runs_router)
     app.include_router(screenshots_router)

@@ -1,6 +1,6 @@
 # Agent Command Center
 
-v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置页）与多渠道（微信个人号），浅色界面，assistant 消息支持 Markdown。
+v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置页）、多渠道（微信个人号）与定时任务（cron），浅色界面，assistant 消息支持 Markdown。
 
 - `apps/api`：FastAPI + deepagents + LangGraph
 - `apps/web`：React + Vite + TypeScript
@@ -186,6 +186,23 @@ metadata:
 - iLink 扫码连接的是 iLink bot 身份，普通微信群事件通常不会下发；v1 只支持单聊文本，不支持主动推送。
 - iLink 协议实现参考 Nous Research 的 [hermes-agent](https://github.com/NousResearch/hermes-agent) Weixin 适配器（MIT），许可声明见 `THIRD_PARTY_NOTICES.md`。
 
+## 定时任务（Cron）
+
+侧栏「Agent 能力 → 定时」按当前 Agent 管理定时任务。
+
+- 新建任务时填写名称、任务内容（每轮发给 Agent 的消息）、5 字段 cron 表达式（分 时 日 月 周）、IANA 时区和是否启用；表达式非法、无法计算下一次触发时间、名称或内容为空、同一 Agent 重名都会被拒绝并显示中文错误。
+- 一个任务创建时同时创建一条专属 Session（标题 `定时 · <任务名>`），之后每次触发都在同一会话里创建 user Message + queued Run（`source=cron`）。用户可以在会话里继续追问，追问进入同一 checkpoint，成为后续触发的上下文；**新建任务才新建会话**。
+- `CronRuntime` 在 API 进程内每 `CRON_TICK_SECONDS`（默认 20 秒）扫描到期任务；触发复用现有 `RunWorker` 和并发上限，不新增执行器。调度器按单进程部署设计，不要为 API 启动多个 uvicorn worker，否则同一任务可能重复触发。
+- 到点时如果任务会话里已有 queued/running 的 Run，本次触发跳过并记录到 `audit_log`，不排队堆积。
+- 服务停机跨过多个触发点后恢复，每个任务最多补跑一次，随后按表达式继续计算下一次；暂停后恢复不补暂停期间的计划。
+- 时区按任务配置解释（默认 `Asia/Shanghai`），存储仍为 UTC；任务页显示下次触发时间、最近运行状态和「打开会话」入口，支持暂停/启用、编辑、立即运行和删除。
+- 暂停或删除任务不会取消已经 queued/running 的 Run；删除任务保留会话与历史；删除会话后，任务在下一次触发时自动重建专属会话。
+- Agent 归档或暂停时不再触发；永久删除 Agent 会级联删除它的定时任务。
+- 定时 Run 与普通 Run 使用相同的 Agent 配置和工具权限（包括宿主机 `execute` 与 QuickJS `eval`），prompt 由你配置；平台只应暴露在可信网络中。
+- 不做主动推送；结果只落在会话里，由用户打开查看。
+
+接口：`GET/POST /api/cron-jobs`、`PUT/DELETE /api/cron-jobs/{id}`、`POST /api/cron-jobs/{id}/run`。
+
 ## 量化回测
 
 顶部「量化」tab 的「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
@@ -204,10 +221,11 @@ metadata:
 
 - `app.db`：SQLite（WAL），文件权限 600；
   - `agents`：Agent 名称、instructions、Provider、`enabled_skills`（启用的技能名 JSON 列表）；
-  - `sessions`：会话，首次发送消息时才创建；标题取第一条用户消息前 24 个字；会话摘要返回 `active_run_id` / `active_run_status` 与 `channel_type` / `channel_name`；
+  - `sessions`：会话，首次发送消息时才创建；标题取第一条用户消息前 24 个字；`origin='cron'` 标记定时任务会话；会话摘要返回 `active_run_id` / `active_run_status`、`origin` 与 `channel_type` / `channel_name`；
   - `messages`：每条用户/assistant 消息一行，assistant 消息在 Run 完成时写入；
-  - `runs`：每次发送/重试一行，含状态、input/output、错误、token 用量、时间；
+  - `runs`：每次发送/重试/定时触发一行，含 `source`（`manual` / `retry` / `wechat` / `cron`）、状态、input/output、错误、token 用量、时间；
   - `run_events`：append-only，含 `run_queued`、`assistant_delta`（每个流式片段一行）、`reasoning_delta`（思考片段）、`model_usage`、`run_completed`、`memory_saved` 等；
+  - `cron_jobs`：定时任务配置、专属 Session、`next_run_at`（UTC）、最近运行/跳过时间；任务删除后 Session 保留，Session 删除后任务解绑并在下次触发时重建；
   - `memory_items`：长期记忆，`scope=user|agent`，含 content、tags、来源 Run/Message、last_used_at；
   - `run_memories`：某次 Run 实际注入了哪些记忆；
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
@@ -239,6 +257,8 @@ metadata:
 | `BROWSER_MAX_SNAPSHOT_CHARS` | 单次快照总字符上限 | `12000` |
 | `BROWSER_SCREENSHOT_MAX_BYTES` | 单张截图大小上限 | `4000000` |
 | `BROWSER_NO_SANDBOX` | Chromium 启动失败时的逃生开关 | `false` |
+| `CRON_TICK_SECONDS` | 定时任务扫描间隔（秒） | `20` |
+| `CRON_DEFAULT_TIMEZONE` | 新建定时任务的默认 IANA 时区 | `Asia/Shanghai` |
 | `LLM_BASE_URL` | OpenAI-compatible 端点 | `https://api.deepseek.com` |
 | `LLM_API_KEY` | 模型密钥 | 空 |
 | `LLM_MODEL` | 模型名 | `deepseek-v4-flash` |

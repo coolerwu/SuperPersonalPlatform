@@ -79,6 +79,39 @@ class Session(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     agent_id: Mapped[str] = mapped_column(String(32), ForeignKey("agents.id"), index=True)
     title: Mapped[str] = mapped_column(String(200), default="新会话")
+    origin: Mapped[str] = mapped_column(String(20), default="chat", server_default="chat")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class CronJob(Base):
+    """One scheduled prompt bound to an Agent and a dedicated Session.
+
+    A job keeps a single long-lived Session so scheduled runs and the user's
+    follow-up messages share one checkpoint. Deleting the job keeps the
+    session; deleting the session detaches the job, which recreates one on the
+    next trigger.
+    """
+
+    __tablename__ = "cron_jobs"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "name", name="uq_cron_job_agent_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    agent_id: Mapped[str] = mapped_column(String(32), ForeignKey("agents.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    prompt: Mapped[str] = mapped_column(Text)
+    schedule: Mapped[str] = mapped_column(String(100))
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Shanghai")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    session_id: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("sessions.id"), nullable=True, index=True
+    )
+    next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_skipped_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 

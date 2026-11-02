@@ -71,11 +71,30 @@ export type Session = {
   id: string;
   agent_id: string;
   title: string;
+  origin: "chat" | "cron" | string;
   message_count: number;
   active_run_id: string | null;
   active_run_status: string | null;
   channel_type: string | null;
   channel_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CronJob = {
+  id: string;
+  agent_id: string;
+  name: string;
+  prompt: string;
+  schedule: string;
+  timezone: string;
+  enabled: boolean;
+  session_id: string | null;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_run_id: string | null;
+  last_run_status: string | null;
+  last_skipped_at: string | null;
   created_at: string;
   updated_at: string;
 };

@@ -8,6 +8,7 @@ import type {
   Channel,
   ChannelLogin,
   ChannelLoginStatus,
+  CronJob,
   MarketProbe,
   MarketStatus,
   MemoryItem,
@@ -209,6 +210,31 @@ export const api = {
     ),
   reloginWechat: (channelId: string) =>
     request<Channel>(`/api/channels/${channelId}/wechat/relogin`, { method: "POST" }),
+
+  listCronJobs: (agentId: string) =>
+    request<CronJob[]>(`/api/cron-jobs?agent_id=${encodeURIComponent(agentId)}`),
+  createCronJob: (payload: {
+    agent_id: string;
+    name: string;
+    prompt: string;
+    schedule: string;
+    timezone: string;
+    enabled: boolean;
+  }) => request<CronJob>("/api/cron-jobs", { method: "POST", body: JSON.stringify(payload) }),
+  updateCronJob: (
+    jobId: string,
+    payload: Partial<Pick<CronJob, "name" | "prompt" | "schedule" | "timezone" | "enabled">>,
+  ) =>
+    request<CronJob>(`/api/cron-jobs/${jobId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteCronJob: (jobId: string) =>
+    request<{ deleted: boolean }>(`/api/cron-jobs/${jobId}`, { method: "DELETE" }),
+  runCronJob: (jobId: string) =>
+    request<{ run_id: string; session_id: string }>(`/api/cron-jobs/${jobId}/run`, {
+      method: "POST",
+    }),
 
   sendMessage: (sessionId: string, content: string) =>
     request<{ run_id: string; session_id: string; message_id: string }>("/api/chat/messages", {

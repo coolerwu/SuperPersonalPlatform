@@ -28,7 +28,7 @@ from app.schemas import (
     SessionCreate,
     SessionOut,
 )
-from app.services import channel_service
+from app.services import channel_service, cron_service
 from app.services.run_service import active_run_for_session
 from app.services.session_search import search_messages
 from app.services.workspace import WorkspaceError, resolve_workspace_path
@@ -66,6 +66,7 @@ async def _session_out(
         id=session.id,
         agent_id=session.agent_id,
         title=session.title,
+        origin=session.origin,
         message_count=await _message_count(db, session.id),
         active_run_id=active.id if active is not None else None,
         active_run_status=active.status if active is not None else None,
@@ -182,6 +183,7 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)) ->
     if active is not None:
         raise HTTPException(status_code=409, detail="session has an active run")
     await channel_service.unlink_session(db, session_id)
+    await cron_service.detach_session(db, session_id)
     run_ids = list((await db.scalars(select(Run.id).where(Run.session_id == session_id))).all())
     if run_ids:
         await db.execute(delete(RunMemory).where(RunMemory.run_id.in_(run_ids)))

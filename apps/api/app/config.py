@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     run_recursion_limit: int = 500
     max_history_messages: int = 40
 
+    # Cron jobs run inside the API process. The tick only needs to be shorter
+    # than the smallest supported interval (one minute).
+    cron_tick_seconds: int = 20
+    cron_default_timezone: str = "Asia/Shanghai"
+
     # Browser tools are skill-gated; these bound one Run's browser session.
     browser_concurrency: int = 2
     browser_navigation_timeout_ms: int = 30_000

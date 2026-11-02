@@ -25,12 +25,14 @@ type SidebarProps = {
   onOpenSkills: () => void;
   onOpenTools: () => void;
   onOpenChannels: () => void;
+  onOpenCron: () => void;
   onOpenBacktest: () => void;
   settingsActive: boolean;
   memoryActive: boolean;
   skillsActive: boolean;
   toolsActive: boolean;
   channelsActive: boolean;
+  cronActive: boolean;
   backtestActive: boolean;
   onLogout: () => void;
 };
@@ -238,6 +240,11 @@ export function Sidebar(props: SidebarProps) {
                           微信
                         </span>
                       )}
+                      {session.origin === "cron" && (
+                        <span className="session-channel cron" title="定时任务会话">
+                          定时
+                        </span>
+                      )}
                       {session.title || "新会话"}
                     </div>
                     <div className="session-meta">
@@ -305,6 +312,18 @@ export function Sidebar(props: SidebarProps) {
                   </svg>
                 </span>
                 <span>渠道</span>
+              </button>
+              <button
+                className={`sidebar-action ${props.cronActive ? "active" : ""}`}
+                onClick={props.onOpenCron}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 7v5l3 2" />
+                  </svg>
+                </span>
+                <span>定时</span>
               </button>
               <button
                 className={`sidebar-action ${props.memoryActive ? "active" : ""}`}

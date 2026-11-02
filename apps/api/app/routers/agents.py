@@ -15,6 +15,7 @@ from app.db import get_db
 from app.models import (
     Agent,
     Channel,
+    CronJob,
     MemoryItem,
     Message,
     Provider,
@@ -157,6 +158,7 @@ async def delete_agent_permanently(
             runtime.clear_login(channel_id)
     await channel_service.delete_channels(db, channel_ids)
 
+    await db.execute(delete(CronJob).where(CronJob.agent_id == agent_id))
     session_ids = list((await db.scalars(select(Session.id).where(Session.agent_id == agent_id))).all())
     run_ids = list((await db.scalars(select(Run.id).where(Run.agent_id == agent_id))).all())
     memory_ids = list(

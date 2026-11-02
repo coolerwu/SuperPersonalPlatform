@@ -148,6 +148,22 @@ async def _ensure_agent_columns(conn) -> None:  # noqa: ANN001
         await _ensure_agent_column(conn, column)
 
 
+async def _ensure_session_origin(conn) -> None:  # noqa: ANN001
+    result = await conn.exec_driver_sql("PRAGMA table_info(sessions)")
+    if "origin" in {row[1] for row in result.fetchall()}:
+        return
+    try:
+        await conn.exec_driver_sql(
+            "ALTER TABLE sessions ADD COLUMN origin VARCHAR(20) NOT NULL DEFAULT 'chat'"
+        )
+    except Exception:
+        # Another process may have added the column concurrently; only re-raise
+        # when it is genuinely still missing.
+        result = await conn.exec_driver_sql("PRAGMA table_info(sessions)")
+        if "origin" not in {row[1] for row in result.fetchall()}:
+            raise
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
@@ -155,6 +171,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         if settings.app_database_url.startswith("sqlite"):
             await _ensure_agent_columns(conn)
+            await _ensure_session_origin(conn)
 
     if settings.app_database_url.startswith("sqlite"):
         try:
