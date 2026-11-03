@@ -96,13 +96,44 @@ async def test_send_image_uploads_encrypted_png_and_sends_image_item() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_image_requires_upload_param() -> None:
+async def test_send_image_uses_upload_full_url_when_present() -> None:
+    captured: list[httpx.Request] = []
+    image = b"\x89PNG\r\n\x1a\n" + b"qr-code" * 8
+    full_url = "https://cdn.example.com/c2c/upload?encrypted_query_param=abc&filekey=def"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        url = str(request.url)
+        if "getuploadurl" in url:
+            return httpx.Response(
+                200, json={"ret": 0, "upload_full_url": full_url}
+            )
+        if url.startswith("https://cdn.example.com"):
+            return httpx.Response(200, headers={"x-encrypted-param": "dl-2"})
+        return httpx.Response(200, json={"ret": 0, "errcode": 0})
+
+    client = _client(handler)
+    try:
+        result = await client.send_image(to_user_id="user-1", image=image)
+        assert result["ret"] == 0
+    finally:
+        await client.aclose()
+
+    _, cdn_request, send_request = captured
+    assert str(cdn_request.url) == full_url
+    send_body = json.loads(send_request.content)
+    media = send_body["msg"]["item_list"][0]["image_item"]["media"]
+    assert media["encrypt_query_param"] == "dl-2"
+
+
+@pytest.mark.asyncio
+async def test_send_image_requires_upload_url() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"ret": 0})
 
     client = _client(handler)
     try:
-        with pytest.raises(Exception, match="upload_param"):
+        with pytest.raises(Exception, match="upload url"):
             await client.send_image(to_user_id="u", image=b"png")
     finally:
         await client.aclose()

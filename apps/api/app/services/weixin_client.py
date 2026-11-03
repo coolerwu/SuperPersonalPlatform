@@ -328,13 +328,23 @@ class WeixinClient:
             timeout_ms=settings.weixin_api_timeout_ms,
         )
         _raise_for_result(upload)
-        upload_param = str(upload.get("upload_param") or "")
-        if not upload_param:
-            raise WeixinApiError("iLink getuploadurl returned no upload_param")
-        url = (
-            f"{ILINK_CDN_BASE_URL}/upload"
-            f"?encrypted_query_param={quote(upload_param)}&filekey={quote(filekey)}"
-        )
+        upload_param = str(upload.get("upload_param") or "").strip()
+        upload_full_url = str(upload.get("upload_full_url") or "").strip()
+        if upload_full_url:
+            url = upload_full_url
+        elif upload_param:
+            url = (
+                f"{ILINK_CDN_BASE_URL}/upload"
+                f"?encrypted_query_param={quote(upload_param)}&filekey={quote(filekey)}"
+            )
+        else:
+            logger.warning(
+                "iLink getuploadurl returned no upload url; keys=%s",
+                sorted(str(key) for key in upload.keys()),
+            )
+            raise WeixinApiError("iLink getuploadurl returned no upload url")
+        if not url.startswith(("https://", "http://")):
+            raise WeixinApiError("iLink getuploadurl returned an invalid upload url")
         try:
             response = await self._client.post(
                 url,
