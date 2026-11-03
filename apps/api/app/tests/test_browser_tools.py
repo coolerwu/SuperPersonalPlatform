@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import stat
 from typing import Any
 
 import pytest
@@ -12,6 +14,7 @@ from app.services.browser_tools import (
     BrowserToolError,
     format_snapshot,
     is_public_ip,
+    merge_storage_state,
     normalize_ref,
     normalize_tab_name,
     parse_snapshot,
@@ -263,11 +266,18 @@ class FakePage:
     async def wait_for_timeout(self, _ms: int) -> None:
         return None
 
+    async def evaluate(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {}
+
     async def screenshot(self, **_kwargs: Any) -> bytes:
         return b"\x89PNG\r\n\x1a\n" + b"screenshot-bytes"
 
 
 class FakeContext:
+    def __init__(self) -> None:
+        self.init_scripts: list[str] = []
+        self.storage_state_value: dict[str, Any] = {"cookies": [], "origins": []}
+
     def set_default_timeout(self, _timeout: int) -> None:
         return None
 
@@ -283,25 +293,44 @@ class FakeContext:
     async def new_page(self) -> FakePage:
         return FakePage()
 
+    async def add_init_script(self, script: str) -> None:
+        self.init_scripts.append(script)
+
+    async def storage_state(self) -> dict[str, Any]:
+        return self.storage_state_value
+
     async def close(self) -> None:
         return None
 
 
 class FakeBrowser:
-    async def new_context(self, **_kwargs: Any) -> FakeContext:
-        return FakeContext()
+    version = "141.0.0.0"
+
+    def __init__(self) -> None:
+        self.context_kwargs: dict[str, Any] = {}
+        self.context = FakeContext()
+
+    async def new_context(self, **kwargs: Any) -> FakeContext:
+        self.context_kwargs = kwargs
+        return self.context
 
     async def close(self) -> None:
         return None
 
 
 class FakeChromium:
-    async def launch(self, **_kwargs: Any) -> FakeBrowser:
-        return FakeBrowser()
+    def __init__(self) -> None:
+        self.launch_kwargs: dict[str, Any] = {}
+        self.browser = FakeBrowser()
+
+    async def launch(self, **kwargs: Any) -> FakeBrowser:
+        self.launch_kwargs = kwargs
+        return self.browser
 
 
 class FakePlaywright:
-    chromium = FakeChromium()
+    def __init__(self) -> None:
+        self.chromium = FakeChromium()
 
     async def stop(self) -> None:
         return None
@@ -366,3 +395,189 @@ def test_browser_action_payload_is_compact() -> None:
         content="Error: private address", tool_call_id="call-2", name="browser_open"
     )
     assert browser_action_payload((), "main", "browser_open", failure)["ok"] is False
+
+
+def test_merge_storage_state_prefers_incoming_entries() -> None:
+    existing = {
+        "cookies": [
+            {"name": "a", "value": "old", "domain": ".x.com", "path": "/"},
+            {"name": "b", "value": "keep", "domain": ".x.com", "path": "/"},
+        ],
+        "origins": [
+            {
+                "origin": "https://x.com",
+                "localStorage": [
+                    {"name": "token", "value": "old"},
+                    {"name": "keep", "value": "1"},
+                ],
+            }
+        ],
+    }
+    incoming = {
+        "cookies": [{"name": "a", "value": "new", "domain": ".x.com", "path": "/"}],
+        "origins": [
+            {
+                "origin": "https://x.com",
+                "localStorage": [{"name": "token", "value": "new"}],
+            }
+        ],
+    }
+
+    merged = merge_storage_state(existing, incoming)
+
+    assert {(cookie["name"], cookie["value"]) for cookie in merged["cookies"]} == {
+        ("a", "new"),
+        ("b", "keep"),
+    }
+    values = {
+        item["name"]: item["value"] for item in merged["origins"][0]["localStorage"]
+    }
+    assert values == {"token": "new", "keep": "1"}
+
+
+async def test_normal_identity_and_persisted_login_state(tmp_path) -> None:
+    state_path = tmp_path / "browser_state.json"
+    playwright = FakePlaywright()
+
+    async def start() -> FakePlaywright:
+        return playwright
+
+    session = BrowserSession(
+        concurrency=1, state_path=state_path, start_playwright=start
+    )
+    try:
+        await session._get_or_create_tab("main", create=True)
+        launch_kwargs = playwright.chromium.launch_kwargs
+        context_kwargs = playwright.chromium.browser.context_kwargs
+        init_scripts = playwright.chromium.browser.context.init_scripts
+
+        assert "--disable-blink-features=AutomationControlled" in launch_kwargs["args"]
+        assert "HeadlessChrome" not in context_kwargs["user_agent"]
+        assert "Chrome/141.0.0.0" in context_kwargs["user_agent"]
+        assert context_kwargs["locale"] == "zh-CN"
+        assert context_kwargs["timezone_id"] == "Asia/Shanghai"
+        assert context_kwargs["extra_http_headers"]["Accept-Language"].startswith("zh-CN")
+        assert any("webdriver" in script for script in init_scripts)
+        assert "storage_state" not in context_kwargs
+
+        playwright.chromium.browser.context.storage_state_value = {
+            "cookies": [
+                {
+                    "name": "web_session",
+                    "value": "abc",
+                    "domain": ".xiaohongshu.com",
+                    "path": "/",
+                }
+            ],
+            "origins": [],
+        }
+    finally:
+        await session.aclose()
+
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["cookies"][0]["name"] == "web_session"
+    assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
+
+    second = FakePlaywright()
+
+    async def start_second() -> FakePlaywright:
+        return second
+
+    session2 = BrowserSession(
+        concurrency=1, state_path=state_path, start_playwright=start_second
+    )
+    try:
+        await session2._get_or_create_tab("main", create=True)
+        loaded = second.chromium.browser.context_kwargs["storage_state"]
+        assert loaded["cookies"][0]["value"] == "abc"
+    finally:
+        await session2.aclose()
+
+
+async def test_unusable_state_falls_back_to_clean_context(tmp_path) -> None:
+    state_path = tmp_path / "browser_state.json"
+    state_path.write_text(
+        json.dumps({"cookies": [{"bad": "cookie"}], "origins": []}), encoding="utf-8"
+    )
+
+    class RejectingBrowser(FakeBrowser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def new_context(self, **kwargs: Any) -> FakeContext:
+            self.calls += 1
+            if "storage_state" in kwargs:
+                raise RuntimeError("invalid storage state")
+            return await super().new_context(**kwargs)
+
+    class RejectingChromium(FakeChromium):
+        def __init__(self) -> None:
+            super().__init__()
+            self.browser = RejectingBrowser()
+
+    class RejectingPlaywright(FakePlaywright):
+        def __init__(self) -> None:
+            super().__init__()
+            self.chromium = RejectingChromium()
+
+    playwright = RejectingPlaywright()
+
+    async def start() -> FakePlaywright:
+        return playwright
+
+    session = BrowserSession(
+        concurrency=1, state_path=state_path, start_playwright=start
+    )
+    try:
+        await session._get_or_create_tab("main", create=True)
+    finally:
+        await session.aclose()
+
+    assert playwright.chromium.browser.calls == 2
+    assert "storage_state" not in playwright.chromium.browser.context_kwargs
+
+
+async def test_snapshot_wait_seconds_is_clamped(tmp_path) -> None:
+    recorded: list[int] = []
+
+    class RecordingPage(FakePage):
+        async def wait_for_timeout(self, ms: int) -> None:
+            recorded.append(ms)
+
+    class RecordingContext(FakeContext):
+        async def new_page(self) -> FakePage:
+            return RecordingPage()
+
+    class RecordingBrowser(FakeBrowser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.context = RecordingContext()
+
+    class RecordingChromium(FakeChromium):
+        def __init__(self) -> None:
+            super().__init__()
+            self.browser = RecordingBrowser()
+
+    class RecordingPlaywright(FakePlaywright):
+        def __init__(self) -> None:
+            super().__init__()
+            self.chromium = RecordingChromium()
+
+    playwright = RecordingPlaywright()
+
+    async def start() -> FakePlaywright:
+        return playwright
+
+    session = BrowserSession(
+        concurrency=1,
+        state_path=tmp_path / "browser_state.json",
+        start_playwright=start,
+    )
+    try:
+        await session._get_or_create_tab("main", create=True)
+        await session.snapshot("main", wait_seconds=999)
+    finally:
+        await session.aclose()
+
+    assert recorded == [60_000]

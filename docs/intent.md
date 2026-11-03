@@ -1743,3 +1743,45 @@ F18/F41 中每条微信消息立即创建一个 queued Run，用户连续发几�
 - 待打包消息的数据库持久化、outbox 表；
 - 按渠道/联系人设置不同打包窗口；
 - 语音/视频转写或媒体出站。
+
+### F46 浏览器普通身份与登录态持久化
+
+- 状态：已完成
+- 日期：2026-11-03
+- 来源：用户要求访问小红书等反爬站点时"像一个正常人"，不要一打开就被识别为机器人，并能复用登录态
+
+#### 背景与目标
+
+F11 的浏览器使用 Playwright 默认无头 Chromium：UA 含 `HeadlessChrome`、`navigator.webdriver` 为 true，小红书等站点会直接跳到「安全限制」（300012）；同时每次 Run 都新建 context，登录态用完即弃，连正常登录都无法保持。目标：让平台内浏览器以普通桌面 Chrome 身份访问站点，登录一次后跨 Run 复用 cookies/localStorage；遇到验证码仍停止，不自动破解。
+
+#### 功能点
+
+1. 默认启用普通浏览器身份（`BROWSER_NORMAL_IDENTITY=true`）：UA 使用普通桌面 Chrome 格式（版本取实际 Chromium 版本），`locale=zh-CN`、`timezone=Asia/Shanghai`、`Accept-Language=zh-CN,zh;q=0.9,en;q=0.8`；启动参数增加 `--disable-blink-features=AutomationControlled`，并通过 init script 隐藏 `navigator.webdriver`。
+2. 登录态持久化（`BROWSER_PERSIST_STATE=true`）：创建 context 时加载 `data/browser_state.json`（Playwright storage_state：cookies + localStorage）；Run 结束（完成、失败、取消、超时）在关闭浏览器前写回。文件原子写入，权限 0600，不返回前端、不写日志。
+3. 并发安全：如果运行期间另一个 Run 改过状态文件（文件摘要与加载时不同），保存时按 cookie `(name, domain, path)` 和 origin/localStorage `name` 合并，新值优先；文件未被其他 Run 改过时整体覆盖，保证登出也能传播。
+4. `browser_snapshot` 增加 `wait_seconds`（0–60）：先等待再返回快照，用于引导用户扫码登录或等待异步渲染。
+5. 扫码登录流程由 `web-browser` 技能驱动：打开登录页 → `browser_screenshot` 展示二维码（截图实时显示在当前 Run 的消息下方）→ 提示用户用手机扫码 → `browser_snapshot(wait_seconds=30)` 等待并确认 → 登录成功后继续原任务；登录态随后落盘，后续 Run 自动复用。
+6. 验证页检测补充「安全限制」、`/website-login/error` 和 `error_code=300012`；验证码、滑块等人工验证仍立即停止，不自动识别或绕过。
+7. 新增配置：`BROWSER_NORMAL_IDENTITY`、`BROWSER_USER_AGENT`、`BROWSER_LOCALE`、`BROWSER_TIMEZONE`、`BROWSER_ACCEPT_LANGUAGE`、`BROWSER_PERSIST_STATE`、`BROWSER_STATE_PATH`。
+
+#### 验收标准
+
+- 平台内打开 `https://www.xiaohongshu.com/explore` 不再跳转 300012 安全限制，返回正常页面和登录入口。
+- 完成一次扫码登录后，后续 Run 打开同一站点仍保持登录态。
+- 关闭 `BROWSER_NORMAL_IDENTITY` 或 `BROWSER_PERSIST_STATE` 后行为回到旧版（默认 UA、每次全新 context）。
+- 验证码/安全验证页面仍返回明确错误并停止，不自动破解。
+- 后端测试与前端构建通过。
+
+#### 约束边界
+
+- 仍是无头 Chromium；不引入指纹随机化、代理轮换、验证码识别或账号池。
+- 登录态文件包含 cookies，只存在本机 `data/`，权限 0600；删除 `data/browser_state.json` 即可强制退出所有网站登录。
+- 站点仍可能按 IP、行为或其他信号拦截；本能力不保证所有站点可访问。
+- 登录二维码需要用户自己用手机扫码；平台不代填密码、不接收或记录短信验证码。
+- 存储状态按站点全局共享，不区分 Agent/Session。
+
+#### 非目标
+
+- 绕过验证码、滑块、风控验证；
+- 多账号/账号池、代理池、指纹随机化；
+- 浏览器远程可视（noVNC）或接管用户本机浏览器。

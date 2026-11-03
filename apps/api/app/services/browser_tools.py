@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import importlib.util
 import ipaddress
 import json
 import logging
+import os
 import re
 import socket
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
@@ -51,9 +55,12 @@ VERIFICATION_URL_MARKERS = (
     "/cdn-cgi/challenge",
     "/sorry",
     "verify.",
+    "/website-login/error",
+    "error_code=300012",
 )
 VERIFICATION_TITLE_MARKERS = (
     "安全验证",
+    "安全限制",
     "验证码",
     "captcha",
     "verify you are human",
@@ -61,6 +68,15 @@ VERIFICATION_TITLE_MARKERS = (
     "attention required",
     "unusual traffic",
 )
+
+NORMAL_USER_AGENT_TEMPLATE = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/{version} Safari/537.36"
+)
+WEBDRIVER_MASK_SCRIPT = (
+    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+)
+MAX_SNAPSHOT_WAIT_SECONDS = 60
 
 
 class BrowserToolError(Exception):
@@ -391,6 +407,67 @@ def _short_error(exc: BaseException) -> str:
     return " ".join(str(exc).split())[:300] or type(exc).__name__
 
 
+def _cookie_key(item: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(item.get("name") or ""),
+        str(item.get("domain") or ""),
+        str(item.get("path") or "/"),
+    )
+
+
+def _merge_cookies(*groups: Any) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            key = _cookie_key(item)
+            if not key[0] or not key[1]:
+                continue
+            merged[key] = item
+    return list(merged.values())
+
+
+def _merge_origins(*groups: Any) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            origin = str(item.get("origin") or "")
+            if not origin:
+                continue
+            target = merged.setdefault(origin, {"origin": origin, "localStorage": []})
+            entries = {
+                str(entry.get("name") or ""): entry
+                for entry in target.get("localStorage") or []
+                if isinstance(entry, dict) and entry.get("name")
+            }
+            for entry in item.get("localStorage") or []:
+                if isinstance(entry, dict) and entry.get("name"):
+                    entries[str(entry["name"])] = entry
+            target["localStorage"] = list(entries.values())
+            for key, value in item.items():
+                if key not in ("origin", "localStorage"):
+                    target[key] = value
+    return list(merged.values())
+
+
+def merge_storage_state(
+    existing: dict[str, Any] | None, incoming: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge Playwright storage states; incoming cookies and localStorage win."""
+    base = existing if isinstance(existing, dict) else {}
+    return {
+        "cookies": _merge_cookies(base.get("cookies"), incoming.get("cookies")),
+        "origins": _merge_origins(base.get("origins"), incoming.get("origins")),
+    }
+
+
 def verification_reason(
     url: str,
     title: str,
@@ -444,6 +521,13 @@ class BrowserSession:
         max_snapshot_chars: int | None = None,
         screenshot_max_bytes: int | None = None,
         no_sandbox: bool | None = None,
+        normal_identity: bool | None = None,
+        user_agent: str | None = None,
+        locale: str | None = None,
+        timezone: str | None = None,
+        accept_language: str | None = None,
+        persist_state: bool | None = None,
+        state_path: str | Path | None = None,
         resolver: HostResolver | None = None,
         start_playwright: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
@@ -495,6 +579,34 @@ class BrowserSession:
         self.no_sandbox = bool(
             no_sandbox if no_sandbox is not None else settings.browser_no_sandbox
         )
+        self.normal_identity = bool(
+            normal_identity
+            if normal_identity is not None
+            else settings.browser_normal_identity
+        )
+        self.user_agent = str(
+            user_agent if user_agent is not None else settings.browser_user_agent
+        ).strip()
+        self.locale = str(locale if locale is not None else settings.browser_locale)
+        self.timezone = str(
+            timezone if timezone is not None else settings.browser_timezone
+        )
+        self.accept_language = str(
+            accept_language
+            if accept_language is not None
+            else settings.browser_accept_language
+        )
+        self.persist_state = bool(
+            persist_state
+            if persist_state is not None
+            else settings.browser_persist_state
+        )
+        self.state_path = (
+            Path(state_path).expanduser()
+            if state_path is not None
+            else settings.browser_storage_state_path
+        )
+        self._state_digest: str | None = None
         self._resolver = resolver
         self._start_playwright = start_playwright
 
@@ -531,11 +643,39 @@ class BrowserSession:
 
                     playwright = await async_playwright().start()
                 args = ["--no-sandbox"] if self.no_sandbox else []
+                if self.normal_identity:
+                    # Sites such as xiaohongshu redirect Playwright's default
+                    # headless client to an anti-bot page; a regular desktop
+                    # profile reaches the normal login page instead.
+                    args.append("--disable-blink-features=AutomationControlled")
                 browser = await playwright.chromium.launch(headless=True, args=args)
-                context = await browser.new_context(
-                    accept_downloads=False,
-                    viewport={"width": 1280, "height": 900},
-                )
+                context_options: dict[str, Any] = {
+                    "accept_downloads": False,
+                    "viewport": {"width": 1280, "height": 900},
+                }
+                if self.normal_identity:
+                    context_options.update(
+                        user_agent=self._user_agent(browser),
+                        locale=self.locale,
+                        timezone_id=self.timezone,
+                        extra_http_headers={"Accept-Language": self.accept_language},
+                    )
+                storage_state = self._load_storage_state()
+                if storage_state is not None:
+                    context_options["storage_state"] = storage_state
+                try:
+                    context = await browser.new_context(**context_options)
+                except Exception:
+                    if "storage_state" not in context_options:
+                        raise
+                    # A corrupt or outdated state file must not break browsing.
+                    logger.warning(
+                        "browser state rejected by Chromium; starting clean", exc_info=True
+                    )
+                    context_options.pop("storage_state", None)
+                    context = await browser.new_context(**context_options)
+                if self.normal_identity:
+                    await context.add_init_script(WEBDRIVER_MASK_SCRIPT)
                 context.set_default_timeout(self.action_timeout_ms)
                 context.set_default_navigation_timeout(self.navigation_timeout_ms)
                 await context.route("**/*", self._handle_route)
@@ -556,6 +696,93 @@ class BrowserSession:
             self._playwright = playwright
             self._browser = browser
             self._context = context
+
+    def _user_agent(self, browser: Any) -> str:
+        if self.user_agent:
+            return self.user_agent
+        version = str(getattr(browser, "version", "") or "141.0.0.0")
+        return NORMAL_USER_AGENT_TEMPLATE.format(version=version)
+
+    def _load_storage_state(self) -> dict[str, Any] | None:
+        """Load cookies/localStorage saved by an earlier Run."""
+        if not self.persist_state:
+            return None
+        try:
+            raw = self.state_path.read_bytes()
+        except FileNotFoundError:
+            self._state_digest = None
+            return None
+        except OSError:
+            logger.warning(
+                "browser state read failed: %s", self.state_path, exc_info=True
+            )
+            return None
+        self._state_digest = hashlib.sha256(raw).hexdigest()
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            logger.warning(
+                "browser state file is not valid JSON: %s", self.state_path, exc_info=True
+            )
+            return None
+        if not isinstance(payload, dict) or not isinstance(payload.get("cookies"), list):
+            return None
+        return payload
+
+    async def _save_storage_state(self) -> None:
+        """Persist the context's cookies/localStorage for later Runs.
+
+        The state loaded at startup is overwritten wholesale. If another Run
+        wrote the file while this one was active, the two states are merged so
+        a fresh login in either session is not lost.
+        """
+        if not self.persist_state or self._context is None:
+            return
+        try:
+            incoming = await self._context.storage_state()
+        except Exception:
+            logger.warning("browser state snapshot failed", exc_info=True)
+            return
+        if not isinstance(incoming, dict):
+            return
+
+        existing: dict[str, Any] | None = None
+        existing_digest: str | None = None
+        try:
+            raw = self.state_path.read_bytes()
+            existing_digest = hashlib.sha256(raw).hexdigest()
+            payload = json.loads(raw.decode("utf-8"))
+            if isinstance(payload, dict):
+                existing = payload
+        except FileNotFoundError:
+            pass
+        except (OSError, UnicodeDecodeError, ValueError):
+            logger.warning(
+                "browser state file unreadable; replacing: %s", self.state_path, exc_info=True
+            )
+        if existing is not None and existing_digest != self._state_digest:
+            merged = merge_storage_state(existing, incoming)
+        else:
+            merged = merge_storage_state(None, incoming)
+
+        temp_name = ""
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            handle, temp_name = tempfile.mkstemp(
+                prefix=".tmp-", suffix=".json", dir=self.state_path.parent
+            )
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                json.dump(merged, stream, ensure_ascii=False)
+            os.replace(temp_name, self.state_path)
+        except OSError:
+            logger.warning(
+                "browser state write failed: %s", self.state_path, exc_info=True
+            )
+            if temp_name:
+                try:
+                    os.unlink(temp_name)
+                except OSError:
+                    pass
 
     async def _stop_partial(self, playwright: Any, browser: Any) -> None:
         for closer in (
@@ -752,9 +979,12 @@ class BrowserSession:
                 header += f" (HTTP {status})"
             return await self._action_result(header, tab_state)
 
-    async def snapshot(self, tab: str = DEFAULT_TAB) -> str:
+    async def snapshot(self, tab: str = DEFAULT_TAB, *, wait_seconds: int = 0) -> str:
         tab_state = await self._get_or_create_tab(tab, create=False)
+        wait_seconds = max(0, min(int(wait_seconds), MAX_SNAPSHOT_WAIT_SECONDS))
         async with tab_state.lock:
+            if wait_seconds:
+                await tab_state.page.wait_for_timeout(wait_seconds * 1000)
             return await self._take_snapshot(tab_state)
 
     async def click(self, ref: str, tab: str = DEFAULT_TAB) -> str:
@@ -881,6 +1111,10 @@ class BrowserSession:
         if self._closed:
             return
         self._closed = True
+        try:
+            await asyncio.wait_for(self._save_storage_state(), timeout=10)
+        except Exception:
+            logger.warning("browser state save failed", exc_info=True)
         tabs = list(self._tabs.values())
         self._tabs.clear()
         for tab_state in tabs:
@@ -931,8 +1165,9 @@ def _make_browser_open_tool(context: SkillToolContext) -> BaseTool:
     return StructuredTool.from_function(
         name="browser_open",
         description=(
-            "用无头浏览器打开 http/https 网页（仅公开地址），返回标题、正文和可交互元素 ref。"
-            "适合 JS 渲染页面、点击、填写和登录；默认只返回文字，用户明确要求截图时再调用 browser_screenshot。"
+            "打开 http/https 网页（仅公开地址），返回标题、正文和可交互元素 ref。"
+            "使用普通桌面浏览器身份并复用之前保存的登录态；适合 JS 渲染页面、点击、填写和登录。"
+            "默认只返回文字；需要让用户扫码或查看页面外观时调用 browser_screenshot。"
             "tab 默认 main，同一 Run 最多 2 个标签页。"
         ),
         coroutine=browser_open,
@@ -940,15 +1175,18 @@ def _make_browser_open_tool(context: SkillToolContext) -> BaseTool:
 
 
 def _make_browser_snapshot_tool(context: SkillToolContext) -> BaseTool:
-    async def browser_snapshot(tab: str = DEFAULT_TAB) -> str:
+    async def browser_snapshot(tab: str = DEFAULT_TAB, wait_seconds: int = 0) -> str:
         """返回当前页面的最新快照。"""
-        return await _call(context, lambda session: session.snapshot(tab))
+        return await _call(
+            context, lambda session: session.snapshot(tab, wait_seconds=wait_seconds)
+        )
 
     return StructuredTool.from_function(
         name="browser_snapshot",
         description=(
             "读取当前标签页的最新快照（标题、正文、可交互元素 ref）。"
             "每次快照后旧 ref 全部失效，必须使用本次返回的 ref。"
+            "wait_seconds 取 0-60，先等待再读取，用于等待用户扫码登录或页面异步加载。"
         ),
         coroutine=browser_snapshot,
     )
@@ -1008,8 +1246,9 @@ def _make_browser_screenshot_tool(context: SkillToolContext) -> BaseTool:
     return StructuredTool.from_function(
         name="browser_screenshot",
         description=(
-            "截取当前标签页并返回 PNG 图片。仅在用户明确要求查看截图、页面外观或布局时调用；"
-            "Provider 模型必须支持图片输入。full_page=true 截取整页。"
+            "截取当前标签页并返回 PNG 图片，同时展示给用户。"
+            "用户要求查看截图、页面外观或布局，或需要用户扫码登录时调用；"
+            "full_page=true 截取整页。Provider 模型必须支持图片输入。"
         ),
         coroutine=browser_screenshot,
     )
@@ -1029,8 +1268,12 @@ def _make_browser_close_tool(context: SkillToolContext) -> BaseTool:
 
 def register_browser_tools(registry: SkillToolRegistry = SKILL_TOOL_REGISTRY) -> None:
     specs = (
-        ("browser_open", _make_browser_open_tool, "用无头浏览器打开网页并返回文字快照"),
-        ("browser_snapshot", _make_browser_snapshot_tool, "读取当前标签页的最新文字快照"),
+        ("browser_open", _make_browser_open_tool, "打开网页并返回文字快照（普通桌面浏览器身份）"),
+        (
+            "browser_snapshot",
+            _make_browser_snapshot_tool,
+            "读取当前标签页的最新文字快照（可等待扫码登录）",
+        ),
         ("browser_click", _make_browser_click_tool, "点击快照中的元素"),
         ("browser_fill", _make_browser_fill_tool, "向输入框填写文本"),
         ("browser_press", _make_browser_press_tool, "按下键盘按键"),

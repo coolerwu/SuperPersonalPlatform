@@ -45,6 +45,17 @@ class Settings(BaseSettings):
     cron_default_timezone: str = "Asia/Shanghai"
 
     # Browser tools are skill-gated; these bound one Run's browser session.
+    # `normal_identity` presents a regular desktop Chrome profile instead of
+    # Playwright's default headless fingerprint; sites that reject headless
+    # traffic then show their normal login page. The login state (cookies +
+    # localStorage) is persisted so later Runs stay logged in.
+    browser_normal_identity: bool = True
+    browser_user_agent: str = ""
+    browser_locale: str = "zh-CN"
+    browser_timezone: str = "Asia/Shanghai"
+    browser_accept_language: str = "zh-CN,zh;q=0.9,en;q=0.8"
+    browser_persist_state: bool = True
+    browser_state_path: str = ""
     browser_concurrency: int = 5
     browser_navigation_timeout_ms: int = 30_000
     browser_action_timeout_ms: int = 10_000
@@ -129,6 +140,12 @@ class Settings(BaseSettings):
     @property
     def market_db_path(self) -> Path:
         return self.app_data_dir / "market.db"
+
+    @property
+    def browser_storage_state_path(self) -> Path:
+        if self.browser_state_path:
+            return Path(self.browser_state_path).expanduser()
+        return self.app_data_dir / "browser_state.json"
 
     @property
     def backtests_dir(self) -> Path:

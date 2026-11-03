@@ -17,6 +17,7 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 ├── data/
 │   ├── app.db           # SQLite
 │   ├── checkpoints/     # 每个 session 的 LangGraph checkpoint
+│   ├── browser_state.json  # 浏览器 cookies/localStorage（0600，可删）
 │   └── knowledge_sync_state.json  # 知识库同步状态（etag / 本地哈希）
 ├── workspaces/          # Agent 真实工作区根目录
 ├── skills/              # 全局技能库（每个技能一个目录；.seed_state.json 记录内置技能哈希）
@@ -62,7 +63,7 @@ npm run dev
 - 服务停止/重启时正在运行的 Run 会重新排队并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的页面会自动重连（瞬时连接错误按退避重试）；收到 `reason=service_restart` 的 `run_queued` 时清空上一次尝试的流式文本，并显示「服务重启，Run 已重新排队」。恢复时保留中断前的 checkpoint 消息并追加「继续上次任务」提示，不重复原始用户输入；未返回结果的工具调用会补一条结果未知的 error 消息。重新入队不会回滚已经发生的文件/浏览器副作用，恢复提示会要求 Agent 不要重复执行；
 - 模型调用遇到 429/5xx/超时/连接错误时最多重试 3 次（指数退避 + jitter）；401/400 等 4xx 不重试；重试在模型层实现，主 Agent、general-purpose 子 Agent 和 step-limit 总结都会覆盖；流式调用已输出 token 后不重试，避免重复文本；可重试失败会记录 warning 日志；
 - 单个 Run 的步骤上限默认 500（`RUN_RECURSION_LIMIT`，主 Agent 与子 Agent 共用）；真的达到上限时先在原会话上自动续跑一次，仍超限才用同一模型带上完整对话生成最终答复，Run 仍以 completed 收尾并标注被截断；
-- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；所有 Agent 都可以用 `execute` 在宿主机执行命令（LocalShellBackend，以服务账号权限运行，没有沙箱），用 `eval` 在隔离的 QuickJS 环境里执行 JavaScript（无文件与网络，PTC 只开放文件工具）；两者无需启用技能或读取授权。浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，默认返回文字和元素引用；用户明确要求时可返回页面截图，截图保存到 Agent 工作区并显示在对应回复下方）；
+- Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；所有 Agent 都可以用 `execute` 在宿主机执行命令（LocalShellBackend，以服务账号权限运行，没有沙箱），用 `eval` 在隔离的 QuickJS 环境里执行 JavaScript（无文件与网络，PTC 只开放文件工具）；两者无需启用技能或读取授权。浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，但默认使用普通桌面浏览器身份（真实 Chrome UA、zh-CN、隐藏 `navigator.webdriver`），登录态保存到 `data/browser_state.json` 并跨 Run 复用；默认返回文字和元素引用；用户明确要求或需要展示登录二维码时可返回页面截图，截图保存到 Agent 工作区并显示在对应回复下方）；
 - 技能与工具：左侧「技能」页面为当前 Agent 启用技能；模型读取 `/skills/<name>/SKILL.md` 后，技能声明的工具才会解锁；上下文压缩后会自动重新注入已启用技能的正文，保持解锁；文件工具始终可用；「工具」页面展示平台工具、文件工具与技能工具的注册与声明情况；平台工具 `skill_save` 始终可用，Agent 可以在对话中主动把可复用流程创建成技能，AI 创建的技能会自动加入当前 Agent 的启用列表，下一次对话生效；
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 - 消息历史分页：Chat 首屏只加载最新 50 条，向上滚动按 50 条加载更早消息并保持滚动位置；搜索命中会自动向前翻页定位并高亮。
@@ -138,15 +139,15 @@ metadata:
 
 - **`web_search`**：调用 DeepSeek Search API（`POST {provider.base_url}/v1/tools/search`），请求 `query`（1-128 字）、`count`（1-50，默认 10）、`need_content`，返回标题、链接、摘要、来源、日期、权威性评分。支持 `site:`、`-`、引号、`lang:`、`after:`、`before:` 等搜索语法。
 - **`web_fetch`**：调用 DeepSeek Fetch API（`POST {provider.base_url}/v1/tools/fetch`），请求 `{url}`，返回 `{title, content}`（Markdown）。`url` 必须是完整 http/https 地址，不能带用户名/密码。
-- **浏览器工具**（Playwright，本地无头 Chromium）：
+- **浏览器工具**（Playwright，本地无头 Chromium，普通桌面浏览器身份）：
   - `browser_open(url, tab="main")`：打开网页，返回标题、正文和可交互元素 ref；
-  - `browser_snapshot(tab="main")`：读取当前标签页的最新快照；
+  - `browser_snapshot(tab="main", wait_seconds=0)`：读取当前标签页的最新快照；`wait_seconds`（0-60）先等待再读取，用于等待扫码登录或异步渲染；
   - `browser_click(ref, tab)`：点击快照中的元素；
   - `browser_fill(ref, text, tab, submit=false)`：填写输入框或 select；
   - `browser_press(key, tab)`：按下按键；
-  - `browser_screenshot(tab, full_page=false)`：按需截取当前页面，返回 PNG 图片；只在用户明确要求查看截图/外观/布局时调用，Provider 模型需要支持图片输入；PNG 同时保存到 `workspaces/<agent_id>/screenshots/<session_id>/<run_id>/`，聊天里显示在对应 assistant 消息下方，Agent 文件工具也能访问；
+  - `browser_screenshot(tab, full_page=false)`：按需截取当前页面，返回 PNG 图片；用户要求查看截图、外观或布局，或需要用户扫码登录时调用，Provider 模型需要支持图片输入；PNG 同时保存到 `workspaces/<agent_id>/screenshots/<session_id>/<run_id>/`，聊天里显示在对应 assistant 消息下方，Agent 文件工具也能访问；
   - `browser_close(tab)`：关闭标签页并释放并发槽位。
-  - 每次 Run 懒启动一个浏览器进程和一个 context，最多 `BROWSER_CONCURRENCY=5` 个标签页；Run 结束、失败、超时或取消时自动关闭。ref 只对最近一次快照有效，动作后会返回新快照。
+  - 每次 Run 懒启动一个浏览器进程和一个 context，最多 `BROWSER_CONCURRENCY=5` 个标签页；Run 结束、失败、超时或取消时自动关闭，并在关闭前把 cookies/localStorage 写入 `data/browser_state.json`，下一次 Run 自动加载；ref 只对最近一次快照有效，动作后会返回新快照。
   - 只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地地址、带凭据 URL、`file://` 和下载；只处理主 frame，不接管弹窗。
   - 搜索类页面优先尝试移动版/轻量入口（`m.baidu.com`、`www.google.com/search?q=`、`html.duckduckgo.com`、`cn.bing.com`、维基百科）；Google 需要主机网络能直连，当前网络被 DNS 污染时会被地址校验拒绝；遇到验证码、安全验证或 HTTP 403/429 时返回明确错误并提示换入口，不会尝试绕过验证。
 
@@ -253,6 +254,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
   - `backtests`：回测任务与结果，含状态、策略代码、指标、下采样净值/回撤/价格、交易明细和告警；大数组按上限截断。
   - `knowledge_configs`：知识库 WebDAV 配置（单行），含启用开关、地址、账号、应用密码、根目录和同步间隔；密码不返回前端。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles`（按 `symbol + granularity + open_time_ms` 唯一）和 `market_sync_state`（已同步范围与上次错误）。可以独立删除，下次回测会重新抓取。
+- `browser_state.json`：浏览器 cookies 与 localStorage（Playwright storage_state），权限 0600；用于跨 Run 保持网站登录态，删除后所有站点需要重新登录。没有配置时不会创建。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
 - `messages_fts`：`messages.content` 的 FTS5 trigram 索引（external content，触发器同步）；用于 Agent 的 `session_search` / `session_read` 和侧栏搜索，首次创建或索引为空时自动 `rebuild` 回填。FTS 不可用时降级 `LIKE`。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区目录，名称为 Agent id；删除 Agent 不会删除这里的文件。`screenshots/<session_id>/<run_id>/` 保存该 Agent 的浏览器截图，删除会话时清理对应目录。
@@ -284,6 +286,13 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 | `KB_MAX_LISTING_ENTRIES` | 单次 PROPFIND 的条目上限；达到后本轮不做删除判断 | `750` |
 | `KB_BLOCKED_RETRY_SECONDS` | 收到 `BlockedTemporarily` / HTTP 503 后的暂停秒数 | `1800` |
 | `BROWSER_CONCURRENCY` | 每个 Run 的浏览器标签页上限，同时决定不同 session 的 Run 并发数 | `5` |
+| `BROWSER_NORMAL_IDENTITY` | 使用普通桌面浏览器身份（真实 UA、locale、隐藏 webdriver、关闭自动化特征） | `true` |
+| `BROWSER_USER_AGENT` | 自定义 UA；留空时按实际 Chromium 版本生成普通 Chrome UA | 空 |
+| `BROWSER_LOCALE` | 浏览器语言 | `zh-CN` |
+| `BROWSER_TIMEZONE` | 浏览器时区 | `Asia/Shanghai` |
+| `BROWSER_ACCEPT_LANGUAGE` | Accept-Language 请求头 | `zh-CN,zh;q=0.9,en;q=0.8` |
+| `BROWSER_PERSIST_STATE` | 把 cookies/localStorage 保存到 `browser_state.json` 并跨 Run 复用 | `true` |
+| `BROWSER_STATE_PATH` | 登录态文件路径；留空时为 `$APP_DATA_DIR/browser_state.json` | 空 |
 | `BROWSER_NAVIGATION_TIMEOUT_MS` | 页面导航超时 | `30000` |
 | `BROWSER_ACTION_TIMEOUT_MS` | 点击/填写动作超时 | `10000` |
 | `BROWSER_MAX_ELEMENTS` | 每次快照的交互元素上限 | `120` |
