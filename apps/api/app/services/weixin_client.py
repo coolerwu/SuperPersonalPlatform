@@ -3,31 +3,38 @@
 The protocol flow (QR login, ``getupdates`` long polling, ``sendmessage`` with
 the latest per-peer ``context_token``, and the iLink headers) follows
 Nous Research's hermes-agent Weixin adapter, which is MIT licensed. See
-``THIRD_PARTY_NOTICES.md``. Only text messages are handled here.
+``THIRD_PARTY_NOTICES.md``. Text and image messages are handled here; image
+uploads follow the iLink CDN flow (getuploadurl -> AES-128-ECB upload ->
+sendmessage with ``image_item``).
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import secrets
 import uuid
 from typing import Any
+from urllib.parse import quote
 
 import httpx
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
+ILINK_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
 ILINK_APP_ID = "bot"
 CHANNEL_VERSION = "2.2.0"
 ILINK_APP_CLIENT_VERSION = (2 << 16) | (2 << 8) | 0
 
 EP_GET_UPDATES = "ilink/bot/getupdates"
 EP_SEND_MESSAGE = "ilink/bot/sendmessage"
+EP_GET_UPLOAD_URL = "ilink/bot/getuploadurl"
 EP_GET_BOT_QR = "ilink/bot/get_bot_qrcode"
 EP_GET_QR_STATUS = "ilink/bot/get_qrcode_status"
 
@@ -38,6 +45,8 @@ ITEM_FILE = 4
 ITEM_VIDEO = 5
 MSG_TYPE_BOT = 2
 MSG_STATE_FINISH = 2
+UPLOAD_MEDIA_IMAGE = 1
+ENCRYPT_AES128_ECB = 1
 
 QR_STATUSES = {"wait", "scaned", "scaned_but_redirect", "expired", "confirmed"}
 
@@ -145,6 +154,14 @@ def qr_svg(scan_url: str) -> str:
     except Exception:
         logger.exception("failed to render WeChat QR code")
         return ""
+
+
+def _encrypt_media(data: bytes, key: bytes) -> bytes:
+    """AES-128-ECB with PKCS#7 padding, as required by the iLink CDN."""
+    padding = 16 - len(data) % 16
+    padded = data + bytes([padding]) * padding
+    encryptor = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+    return encryptor.update(padded) + encryptor.finalize()
 
 
 class WeixinClient:
@@ -276,6 +293,102 @@ class WeixinClient:
             "message_type": MSG_TYPE_BOT,
             "message_state": MSG_STATE_FINISH,
             "item_list": [{"type": ITEM_TEXT, "text_item": {"text": text}}],
+        }
+        if context_token:
+            message["context_token"] = context_token
+        data = await self._request(
+            "POST",
+            EP_SEND_MESSAGE,
+            payload={"msg": message},
+            token=self.token,
+            timeout_ms=settings.weixin_api_timeout_ms,
+        )
+        _raise_for_result(data)
+        return data
+
+    async def _upload_image(self, *, to_user_id: str, image: bytes) -> tuple[str, str, int]:
+        """Upload an image to the iLink CDN; return (download_param, aes_key, size)."""
+        filekey = secrets.token_hex(16)
+        aes_key = secrets.token_bytes(16)
+        ciphertext = _encrypt_media(image, aes_key)
+        upload = await self._request(
+            "POST",
+            EP_GET_UPLOAD_URL,
+            payload={
+                "filekey": filekey,
+                "media_type": UPLOAD_MEDIA_IMAGE,
+                "to_user_id": to_user_id,
+                "rawsize": len(image),
+                "rawfilemd5": hashlib.md5(image).hexdigest(),
+                "filesize": len(ciphertext),
+                "no_need_thumb": True,
+                "aeskey": aes_key.hex(),
+            },
+            token=self.token,
+            timeout_ms=settings.weixin_api_timeout_ms,
+        )
+        _raise_for_result(upload)
+        upload_param = str(upload.get("upload_param") or "")
+        if not upload_param:
+            raise WeixinApiError("iLink getuploadurl returned no upload_param")
+        url = (
+            f"{ILINK_CDN_BASE_URL}/upload"
+            f"?encrypted_query_param={quote(upload_param)}&filekey={quote(filekey)}"
+        )
+        try:
+            response = await self._client.post(
+                url,
+                content=ciphertext,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+        except httpx.HTTPError as exc:
+            raise WeixinApiError(
+                f"iLink CDN upload failed: {type(exc).__name__}"
+            ) from exc
+        if response.status_code >= 400:
+            raise WeixinApiError(
+                f"iLink CDN upload HTTP {response.status_code}: {response.text[:200]}"
+            )
+        download_param = response.headers.get("x-encrypted-param", "")
+        if not download_param:
+            raise WeixinApiError("iLink CDN upload missing x-encrypted-param")
+        aes_key_b64 = base64.b64encode(aes_key.hex().encode()).decode()
+        return download_param, aes_key_b64, len(ciphertext)
+
+    async def send_image(
+        self,
+        *,
+        to_user_id: str,
+        image: bytes,
+        context_token: str | None = None,
+        client_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not self.token:
+            raise WeixinApiError("weixin bot token is missing")
+        if not image:
+            raise ValueError("image must not be empty")
+        download_param, aes_key_b64, ciphertext_size = await self._upload_image(
+            to_user_id=to_user_id, image=image
+        )
+        message: dict[str, Any] = {
+            "from_user_id": "",
+            "to_user_id": to_user_id,
+            "client_id": client_id or f"acc-{uuid.uuid4().hex}",
+            "message_type": MSG_TYPE_BOT,
+            "message_state": MSG_STATE_FINISH,
+            "item_list": [
+                {
+                    "type": ITEM_IMAGE,
+                    "image_item": {
+                        "media": {
+                            "encrypt_query_param": download_param,
+                            "aes_key": aes_key_b64,
+                            "encrypt_type": ENCRYPT_AES128_ECB,
+                        },
+                        "mid_size": ciphertext_size,
+                    },
+                }
+            ],
         }
         if context_token:
             message["context_token"] = context_token

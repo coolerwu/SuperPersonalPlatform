@@ -275,7 +275,7 @@ def browser_action_payload(
 
 def _save_screenshot(
     message: ToolMessage, *, workspace_path: str, session_id: str, run_id: str
-) -> str | None:
+) -> tuple[str, Path] | None:
     if not workspace_path or not session_id or not run_id:
         return None
     content = message.content
@@ -314,7 +314,7 @@ def _save_screenshot(
         except OSError:
             logger.exception("failed to save screenshot session=%s run=%s", session_id, run_id)
             return None
-        return screenshot_id
+        return screenshot_id, target
     return None
 
 
@@ -662,7 +662,7 @@ class DeepAgentExecutor:
                 dedupe_key = call_id or str(id(message))
                 if tool_name in BROWSER_TOOL_NAMES and dedupe_key not in seen_tool_results:
                     seen_tool_results.add(dedupe_key)
-                    screenshot_id = (
+                    saved = (
                         _save_screenshot(
                             message,
                             workspace_path=self.workspace_path,
@@ -672,6 +672,7 @@ class DeepAgentExecutor:
                         if tool_name == "browser_screenshot"
                         else None
                     )
+                    screenshot_id = saved[0] if saved is not None else None
                     yield ExecutorEvent(
                         "browser_action",
                         browser_action_payload(
@@ -682,6 +683,10 @@ class DeepAgentExecutor:
                             screenshot_id=screenshot_id,
                         ),
                     )
+                    if saved is not None:
+                        # Channel Runs push the image while the browser is still
+                        # open; a login QR is useless once the Run ends.
+                        await self._push_channel_image(saved[1])
                 continue
             if not isinstance(message, AIMessageChunk):
                 continue
@@ -763,6 +768,21 @@ class DeepAgentExecutor:
                 )
             else:
                 yield ExecutorEvent("assistant_delta", {"delta": text})
+
+    async def _push_channel_image(self, path: Path) -> None:
+        """Send a screenshot to the WeChat conversation that started this Run."""
+        from app.services.channel_images import send_run_image
+
+        try:
+            await asyncio.wait_for(send_run_image(self.run_id, path), timeout=30)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "failed to push screenshot to channel run=%s",
+                self.run_id,
+                exc_info=True,
+            )
 
     async def _answer_after_step_limit(
         self,
