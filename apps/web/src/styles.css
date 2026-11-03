@@ -1627,6 +1627,15 @@ textarea {
   white-space: nowrap;
 }
 
+.composer-file-thumb {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-left: -5px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
 .composer-file-remove {
   width: 18px;
   height: 18px;
@@ -3544,6 +3553,35 @@ textarea {
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
+}
+
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.message-image {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel-2);
+  line-height: 0;
+}
+
+.message-image:hover {
+  border-color: var(--border-strong);
+}
+
+.message-image img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(240px, 100%);
+  max-height: 200px;
+  object-fit: cover;
 }
 
 .message-file {

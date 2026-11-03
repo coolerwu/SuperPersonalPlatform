@@ -203,6 +203,10 @@ export const api = {
     request<ScreenshotInfo[]>(`/api/sessions/${sessionId}/screenshots`),
   screenshotUrl: (sessionId: string, runId: string, screenshotId: string) =>
     `/api/sessions/${sessionId}/screenshots/${runId}/${screenshotId}.png`,
+  uploadUrl: (agentId: string, path: string) => {
+    const name = path.startsWith("/uploads/") ? path.slice("/uploads/".length) : path;
+    return `/api/agents/${encodeURIComponent(agentId)}/uploads/${encodeURIComponent(name)}`;
+  },
 
   listChannels: (agentId: string) =>
     request<Channel[]>(`/api/channels?agent_id=${encodeURIComponent(agentId)}`),

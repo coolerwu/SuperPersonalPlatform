@@ -76,6 +76,7 @@ class InboundResult:
     command: str | None = None
     reply: str | None = None
     cancel_run_ids: tuple[str, ...] = ()
+    conversation_id: str | None = None
 
 
 def _session_title(conversation_name: str, text: str) -> str:
@@ -231,6 +232,87 @@ def split_reply(text: str, max_chars: int | None = None) -> list[str]:
     return chunks or [content[:limit]]
 
 
+async def inbound_seen(channel_id: str, external_message_id: str) -> bool:
+    """True when iLink has already delivered (and we recorded) this message id."""
+    if not external_message_id:
+        return False
+    async with SessionLocal() as db:
+        existing = await db.scalar(
+            select(ChannelInbound.id).where(
+                ChannelInbound.channel_id == channel_id,
+                ChannelInbound.external_message_id == external_message_id,
+            )
+        )
+        return existing is not None
+
+
+async def record_inbound_event(
+    *,
+    channel_id: str,
+    external_message_id: str,
+    conversation_id: str | None = None,
+    session_id: str | None = None,
+) -> bool:
+    """Record a message that intentionally creates no Run (e.g. unsupported media)."""
+    async with SessionLocal() as db:
+        db.add(
+            ChannelInbound(
+                channel_id=channel_id,
+                external_message_id=external_message_id,
+                conversation_id=conversation_id,
+                session_id=session_id,
+            )
+        )
+        try:
+            await db.commit()
+            return True
+        except IntegrityError:
+            await db.rollback()
+            return False
+
+
+async def record_inbound_ids(
+    *,
+    channel_id: str,
+    ids: list[str],
+    run_id: str,
+    message_id: str,
+    conversation_id: str,
+    session_id: str,
+) -> None:
+    """Record every id in a batched packet so replays cannot create a second Run."""
+    if not ids:
+        return
+    async with SessionLocal() as db:
+        existing = set(
+            (
+                await db.scalars(
+                    select(ChannelInbound.external_message_id).where(
+                        ChannelInbound.channel_id == channel_id,
+                        ChannelInbound.external_message_id.in_(ids),
+                    )
+                )
+            ).all()
+        )
+        changed = False
+        for external_id in dict.fromkeys(ids):
+            if external_id in existing:
+                continue
+            db.add(
+                ChannelInbound(
+                    channel_id=channel_id,
+                    external_message_id=external_id,
+                    conversation_id=conversation_id,
+                    session_id=session_id,
+                    message_id=message_id,
+                    run_id=run_id,
+                )
+            )
+            changed = True
+        if changed:
+            await db.commit()
+
+
 async def record_delivery(db: AsyncSession, run, content: str) -> ChannelDelivery | None:
     """Record the final answer as owed to the channel in the run's transaction."""
     link = await db.get(ChannelRunLink, run.id)
@@ -305,6 +387,7 @@ async def ingest_inbound(
                 session_id=existing.session_id,
                 message_id=existing.message_id,
                 duplicate=True,
+                conversation_id=existing.conversation_id,
             )
 
         conversation = await db.scalar(
@@ -344,6 +427,7 @@ async def ingest_inbound(
                 command=command,
                 reply=reply,
                 cancel_run_ids=cancel_run_ids,
+                conversation_id=conversation.id if conversation is not None else None,
             )
 
         if conversation is None:
@@ -397,6 +481,7 @@ async def ingest_inbound(
             session_id=session.id,
             message_id=message.id,
             duplicate=False,
+            conversation_id=conversation.id,
         )
 
 

@@ -39,6 +39,7 @@ from app.services.skill_tools import (
 from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 logger = logging.getLogger(__name__)
+RunContent = str | list[dict[str, Any]]
 _BROWSER_CLEANUP_TASKS: set[asyncio.Task[Any]] = set()
 
 STEP_LIMIT_NOTICE = "（已达到执行步骤上限，以下是当前进展总结）"
@@ -154,7 +155,7 @@ def _drop_dangling_tool_calls(messages: Sequence[Any]) -> list[Any]:
     return trimmed
 
 
-def _run_input_message(content: str, run_id: str) -> HumanMessage:
+def _run_input_message(content: RunContent, run_id: str) -> HumanMessage:
     """Tag the run's user message so a resumed run can find it in the checkpoint."""
     if run_id:
         return HumanMessage(content=content, id=run_id)
@@ -212,7 +213,7 @@ def _resume_input(messages: Sequence[Any], run_id: str) -> dict[str, Any]:
     }
 
 
-def _fresh_input(content: str, run_id: str) -> dict[str, Any]:
+def _fresh_input(content: RunContent, run_id: str) -> dict[str, Any]:
     return {
         "messages": [_run_input_message(content, run_id)],
         "skills_metadata": None,
@@ -378,7 +379,7 @@ class DeepAgentExecutor:
         self.skills_dir = skills_dir
         self.run_id = run_id
 
-    async def run(self, *, instructions: str, session_id: str, content: str) -> AsyncIterator[ExecutorEvent]:
+    async def run(self, *, instructions: str, session_id: str, content: RunContent) -> AsyncIterator[ExecutorEvent]:
         try:
             from deepagents import create_deep_agent
             from langchain_openai import ChatOpenAI
@@ -603,7 +604,7 @@ class DeepAgentExecutor:
         )
 
     async def _initial_state(
-        self, agent: Any, config: dict[str, Any], content: str
+        self, agent: Any, config: dict[str, Any], content: RunContent
     ) -> dict[str, Any]:
         """Resume an interrupted run from its checkpoint instead of repeating its input."""
         messages: list[Any] = []

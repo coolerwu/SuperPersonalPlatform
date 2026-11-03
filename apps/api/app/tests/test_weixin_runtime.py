@@ -48,10 +48,12 @@ class FakeWorker:
 
 
 class FakeClient:
-    def __init__(self, *, updates=None, send_error=None, **kwargs) -> None:
+    def __init__(self, *, updates=None, send_error=None, media=b"", **kwargs) -> None:
         self.updates = updates
         self.send_error = send_error
+        self.media = media
         self.sent: list[tuple[str, str, str | None]] = []
+        self.downloads: list[str] = []
         self.closed = False
 
     async def get_updates(self, sync_buf: str):
@@ -60,6 +62,12 @@ class FakeClient:
         if self.updates is not None:
             return self.updates
         await asyncio.sleep(3600)
+
+    async def download(self, url: str, *, max_bytes: int) -> bytes:
+        self.downloads.append(url)
+        if len(self.media) > max_bytes:
+            raise WeixinApiError("media too large")
+        return self.media
 
     async def send_text(self, *, to_user_id, text, context_token=None, client_id=None):
         if self.send_error is not None:
@@ -129,7 +137,9 @@ def test_split_reply_respects_limit_and_boundaries() -> None:
 async def test_handle_message_filters_self_groups_and_media() -> None:
     channel_id = await _active_channel()
     worker = FakeWorker()
-    runtime = WeixinRuntime(worker=worker, client_factory=lambda **kwargs: FakeClient())
+    runtime = WeixinRuntime(
+        worker=worker, client_factory=lambda **kwargs: FakeClient(), batch_seconds=0
+    )
     credentials = ChannelCredentials(
         channel_id=channel_id,
         account_id="bot@im.bot",
@@ -176,6 +186,7 @@ async def test_handle_message_filters_self_groups_and_media() -> None:
             "context_token": "ctx-dm",
         },
     )
+    await runtime.flush_all()
     assert worker.wakes == 1
     async with SessionLocal() as db:
         run = await db.scalar(
@@ -190,7 +201,9 @@ async def test_handle_message_filters_self_groups_and_media() -> None:
 @pytest.mark.asyncio
 async def test_handle_message_dedups_repeated_text_under_new_ids() -> None:
     channel_id = await _active_channel()
-    runtime = WeixinRuntime(worker=FakeWorker(), client_factory=lambda **kwargs: FakeClient())
+    runtime = WeixinRuntime(
+        worker=FakeWorker(), client_factory=lambda **kwargs: FakeClient(), batch_seconds=0
+    )
     credentials = ChannelCredentials(
         channel_id=channel_id,
         account_id="bot@im.bot",
@@ -204,6 +217,7 @@ async def test_handle_message_dedups_repeated_text_under_new_ids() -> None:
     }
     await runtime._handle_message(credentials, {**payload, "message_id": "dedup-1"})
     await runtime._handle_message(credentials, {**payload, "message_id": "dedup-2"})
+    await runtime.flush_all()
 
     async with SessionLocal() as db:
         count = await db.scalar(
@@ -435,3 +449,184 @@ async def test_delivery_skips_paused_channel_and_waits() -> None:
         delivery = await db.get(ChannelDelivery, run_id)
         assert delivery is not None
         assert delivery.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_rapid_messages_are_batched_into_one_run() -> None:
+    channel_id = await _active_channel()
+    worker = FakeWorker()
+    runtime = WeixinRuntime(
+        worker=worker,
+        client_factory=lambda **kwargs: FakeClient(),
+        batch_seconds=0.05,
+        batch_max_seconds=1.0,
+    )
+    credentials = ChannelCredentials(
+        channel_id=channel_id,
+        account_id="bot@im.bot",
+        token="token",
+        base_url="https://ilinkai.weixin.qq.com",
+        sync_buf="",
+    )
+    for index, text in enumerate(("第一句", "第二句", "第三句")):
+        await runtime._handle_message(
+            credentials,
+            {
+                "message_id": f"batch-{index}",
+                "from_user_id": "user-batch",
+                "item_list": [{"type": 1, "text_item": {"text": text}}],
+            },
+        )
+    await asyncio.sleep(0.15)
+
+    async with SessionLocal() as db:
+        runs = (
+            await db.scalars(
+                select(Run)
+                .join(ChannelRunLink, ChannelRunLink.run_id == Run.id)
+                .where(ChannelRunLink.channel_id == channel_id)
+            )
+        ).all()
+        assert len(runs) == 1
+        assert "第一句" in runs[0].input
+        assert "第二句" in runs[0].input
+        assert "第三句" in runs[0].input
+        inbound_count = await db.scalar(
+            select(func.count(ChannelInbound.external_message_id)).where(
+                ChannelInbound.channel_id == channel_id
+            )
+        )
+        assert inbound_count == 3
+    assert worker.wakes == 1
+
+
+@pytest.mark.asyncio
+async def test_media_and_quote_are_saved_into_the_batched_run() -> None:
+    channel_id = await _active_channel()
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    client = FakeClient(media=png)
+    runtime = WeixinRuntime(worker=FakeWorker(), client_factory=lambda **kwargs: client)
+    credentials = ChannelCredentials(
+        channel_id=channel_id,
+        account_id="bot@im.bot",
+        token="token",
+        base_url="https://ilinkai.weixin.qq.com",
+        sync_buf="",
+    )
+    await runtime._handle_message(
+        credentials,
+        {
+            "message_id": "media-quote-1",
+            "from_user_id": "user-media",
+            "item_list": [
+                {
+                    "type": 1,
+                    "text_item": {"text": "这张图是什么"},
+                    "ref_msg": {
+                        "title": "Alice",
+                        "message_item": {
+                            "type": 1,
+                            "text_item": {"text": "原来的问题"},
+                        },
+                    },
+                },
+                {
+                    "type": 2,
+                    "image_item": {
+                        "media": {"full_url": "https://cdn.example.com/a.png"},
+                    },
+                },
+            ],
+        },
+        client,
+    )
+    await runtime.flush_all()
+
+    async with SessionLocal() as db:
+        run = await db.scalar(
+            select(Run)
+            .join(ChannelRunLink, ChannelRunLink.run_id == Run.id)
+            .where(ChannelRunLink.channel_id == channel_id)
+        )
+        assert run is not None
+        assert "附件已上传到工作区" in run.input
+        assert "这张图是什么" in run.input
+        assert "[引用 Alice]" in run.input
+        assert "原来的问题" in run.input
+        assert "/uploads/wx-" in run.input
+    assert client.downloads == ["https://cdn.example.com/a.png"]
+
+
+@pytest.mark.asyncio
+async def test_voice_message_gets_a_direct_reply_without_a_run() -> None:
+    channel_id = await _active_channel()
+    client = FakeClient()
+    runtime = WeixinRuntime(worker=FakeWorker(), client_factory=lambda **kwargs: client)
+    credentials = ChannelCredentials(
+        channel_id=channel_id,
+        account_id="bot@im.bot",
+        token="token",
+        base_url="https://ilinkai.weixin.qq.com",
+        sync_buf="",
+    )
+    await runtime._handle_message(
+        credentials,
+        {
+            "message_id": "voice-1",
+            "from_user_id": "user-voice",
+            "item_list": [{"type": 3}],
+            "context_token": "ctx-voice",
+        },
+        client,
+    )
+    assert client.sent
+    assert "暂不支持" in client.sent[-1][1]
+    async with SessionLocal() as db:
+        count = await db.scalar(
+            select(func.count(Run.id))
+            .join(ChannelRunLink, ChannelRunLink.run_id == Run.id)
+            .where(ChannelRunLink.channel_id == channel_id)
+        )
+        assert count == 0
+        inbound = await db.scalar(
+            select(func.count(ChannelInbound.external_message_id)).where(
+                ChannelInbound.channel_id == channel_id
+            )
+        )
+        assert inbound == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_buf_is_saved_only_after_the_packet_flushes(monkeypatch) -> None:
+    channel_id = await _active_channel()
+    runtime = WeixinRuntime(
+        worker=FakeWorker(),
+        client_factory=lambda **kwargs: FakeClient(),
+        batch_seconds=0.2,
+    )
+    saved: list[tuple[str, str]] = []
+
+    async def fake_save(channel: str, value: str) -> None:
+        saved.append((channel, value))
+
+    monkeypatch.setattr(runtime, "_save_sync_buf", fake_save)
+    credentials = ChannelCredentials(
+        channel_id=channel_id,
+        account_id="bot@im.bot",
+        token="token",
+        base_url="https://ilinkai.weixin.qq.com",
+        sync_buf="",
+    )
+    await runtime._handle_message(
+        credentials,
+        {
+            "message_id": "sync-1",
+            "from_user_id": "user-sync",
+            "item_list": [{"type": 1, "text_item": {"text": "等等我"}}],
+        },
+    )
+    runtime._pending_sync[channel_id] = "new-buffer"
+    await runtime._save_sync_if_idle(channel_id)
+    assert saved == []
+    await runtime.flush_all()
+    assert saved == [(channel_id, "new-buffer")]

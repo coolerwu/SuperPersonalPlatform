@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import mimetypes
 import shutil
-import unicodedata
-import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,22 +28,16 @@ from app.models import (
 from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.schemas import AgentCreate, AgentOut, AgentUpdate, AttachmentOut
 from app.services import channel_service
+from app.services.attachments import (
+    MAX_ATTACHMENT_BYTES,
+    new_stored_name,
+    resolve_upload_file,
+    safe_attachment_name,
+    save_attachment_bytes,
+)
 from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 router = APIRouter(prefix="/api/agents", tags=["agents"], dependencies=[Depends(require_auth)])
-
-MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
-MAX_ATTACHMENT_NAME_BYTES = 180
-
-
-def _safe_attachment_name(raw: str) -> str:
-    value = unicodedata.normalize("NFC", str(raw or "").replace("\\", "/"))
-    name = Path(value).name.strip()
-    name = "".join(char for char in name if unicodedata.category(char) not in ("Cc", "Cf"))
-    name = name.lstrip(".") or "attachment"
-    while len(name.encode("utf-8")) > MAX_ATTACHMENT_NAME_BYTES:
-        name = name[:-1]
-    return name or "attachment"
 
 
 def agent_out(agent: Agent, provider: Provider | None) -> AgentOut:
@@ -211,20 +205,28 @@ async def upload_attachment(
     if len(body) > MAX_ATTACHMENT_BYTES:
         raise HTTPException(status_code=413, detail="attachment is too large")
 
-    uploads = resolve_workspace_path(f"{agent_id}/uploads", create=True)
-    display_name = _safe_attachment_name(filename)
-    stored_name = f"{uuid.uuid4().hex[:10]}-{display_name}"
-    target = uploads / stored_name
-    try:
-        with target.open("xb") as handle:
-            handle.write(body)
-    except FileExistsError:
-        stored_name = f"{uuid.uuid4().hex}-{display_name}"
-        target = uploads / stored_name
-        with target.open("xb") as handle:
-            handle.write(body)
+    display_name = safe_attachment_name(filename)
+    stored_name = new_stored_name(display_name)
+    saved = save_attachment_bytes(agent_id, stored_name, body)
+    return AttachmentOut(name=display_name, path=saved.path, size=saved.size)
 
-    return AttachmentOut(name=display_name, path=f"/uploads/{stored_name}", size=len(body))
+
+@router.get("/{agent_id}/uploads/{filename}")
+async def get_upload(
+    agent_id: str, filename: str, db: AsyncSession = Depends(get_db)
+) -> FileResponse:
+    agent = await db.get(Agent, agent_id)
+    if agent is None or agent.status == "archived":
+        raise HTTPException(status_code=404, detail="agent not found")
+    path = resolve_upload_file(agent_id, filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="attachment not found")
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @router.delete("/{agent_id}")

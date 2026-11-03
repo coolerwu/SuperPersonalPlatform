@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Agent, Message, Provider, Run, RunEvent, Session, utcnow
+from app.services.attachments import title_from_content
 
 ACTIVE_RUN_STATUSES = ("queued", "running")
 
@@ -73,7 +74,7 @@ async def _create_run_in_db(
     message.run_id = run.id
 
     if not session.title or session.title == "新会话":
-        session.title = content.strip()[:24] or "新会话"
+        session.title = title_from_content(content)
     session.updated_at = utcnow()
     db.add(RunEvent(run_id=run.id, type="run_queued", payload={"content": content}))
     return run, message

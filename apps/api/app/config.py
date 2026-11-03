@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     run_timeout_seconds: int = 300
     run_recursion_limit: int = 500
     max_history_messages: int = 40
+    vision_max_images: int = 4
+    vision_max_image_bytes: int = 4 * 1024 * 1024
 
     # Cron jobs run inside the API process. The tick only needs to be shorter
     # than the smallest supported interval (one minute).
@@ -59,6 +61,10 @@ class Settings(BaseSettings):
     channel_reply_max_chars: int = 1800
     channel_delivery_max_attempts: int = 3
     channel_inbound_max_chars: int = 8000
+    channel_inbound_batch_seconds: float = 5.0
+    channel_inbound_batch_max_seconds: float = 15.0
+    channel_media_max_bytes: int = 20 * 1024 * 1024
+    channel_media_max_items: int = 4
     weixin_long_poll_timeout_ms: int = 35_000
     weixin_api_timeout_ms: int = 15_000
     weixin_qr_timeout_ms: int = 35_000

@@ -1,10 +1,19 @@
-import { KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  ClipboardEvent,
+  DragEvent,
+  KeyboardEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { api } from "../api";
 import type { Attachment, Message, Run, ScreenshotInfo } from "../types";
 import { formatTime } from "../format";
 import { copyText } from "../clipboard";
-import { formatBytes, parseUserContent, userMessageText } from "../messageContent";
+import { formatBytes, isImageName, parseUserContent, userMessageText } from "../messageContent";
+import { prepareImageForUpload } from "../imageUpload";
 import { formatDuration, type RunTraceStep } from "../runActivity";
 import { describeApiError, describeRunError } from "../errors";
 import { useThrottledText } from "../useThrottledText";
@@ -66,6 +75,7 @@ type UploadItem = {
   name: string;
   size: number;
   percent: number;
+  previewUrl?: string;
 };
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
@@ -477,13 +487,20 @@ export function ChatPanel(props: ChatPanelProps) {
   async function uploadFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setAttachError("");
-    for (const file of Array.from(files)) {
+    for (const original of Array.from(files)) {
+      const file = await prepareImageForUpload(original);
       if (file.size > MAX_ATTACHMENT_BYTES) {
         setAttachError(`${file.name} 超过 10 MB，未上传`);
         continue;
       }
       const id = `upload-${(uploadSeqRef.current += 1)}`;
-      setUploads((current) => [...current, { id, name: file.name, size: file.size, percent: 0 }]);
+      const previewUrl = file.type.startsWith("image/")
+        ? URL.createObjectURL(file)
+        : undefined;
+      setUploads((current) => [
+        ...current,
+        { id, name: file.name, size: file.size, percent: 0, previewUrl },
+      ]);
       try {
         const uploaded = await api.uploadAttachment(props.agentId, file, (percent) => {
           setUploads((current) =>
@@ -495,8 +512,22 @@ export function ChatPanel(props: ChatPanelProps) {
         setAttachError(describeApiError(exc));
       } finally {
         setUploads((current) => current.filter((item) => item.id !== id));
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
       }
     }
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = event.clipboardData?.files;
+    if (!files || files.length === 0) return;
+    event.preventDefault();
+    void uploadFiles(files);
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    if (event.dataTransfer.files.length === 0) return;
+    event.preventDefault();
+    void uploadFiles(event.dataTransfer.files);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -562,21 +593,48 @@ export function ChatPanel(props: ChatPanelProps) {
                 <div className="message-bubble user">
                   {parsed.kind === "attachments" ? (
                     <>
-                      <div className="message-files">
-                        {parsed.files.map((file, index) => (
-                          <span
-                            className="message-file"
-                            key={`${file.path}-${index}`}
-                            title={file.path}
-                          >
-                            <FileIcon />
-                            <span className="message-file-name">{file.name}</span>
-                            {file.size !== null && (
-                              <span className="message-file-size">{formatBytes(file.size)}</span>
-                            )}
-                          </span>
-                        ))}
-                      </div>
+                      {parsed.files.some((file) => isImageName(file.name)) && (
+                        <div className="message-images">
+                          {parsed.files
+                            .filter((file) => isImageName(file.name))
+                            .map((file, index) => {
+                              const url = api.uploadUrl(props.agentId, file.path);
+                              return (
+                                <a
+                                  className="message-image"
+                                  key={`${file.path}-${index}`}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title={`打开 ${file.name}`}
+                                >
+                                  <img src={url} alt={file.name} loading="lazy" />
+                                </a>
+                              );
+                            })}
+                        </div>
+                      )}
+                      {parsed.files.some((file) => !isImageName(file.name)) && (
+                        <div className="message-files">
+                          {parsed.files
+                            .filter((file) => !isImageName(file.name))
+                            .map((file, index) => (
+                              <span
+                                className="message-file"
+                                key={`${file.path}-${index}`}
+                                title={file.path}
+                              >
+                                <FileIcon />
+                                <span className="message-file-name">{file.name}</span>
+                                {file.size !== null && (
+                                  <span className="message-file-size">
+                                    {formatBytes(file.size)}
+                                  </span>
+                                )}
+                              </span>
+                            ))}
+                        </div>
+                      )}
                       {parsed.text && <Markdown content={parsed.text} />}
                     </>
                   ) : parsed.kind === "memory-command" ? (
@@ -819,6 +877,8 @@ export function ChatPanel(props: ChatPanelProps) {
           className={`composer-card ${expanded ? "expanded" : ""} ${
             props.attachments.length > 0 || uploading || attachError ? "has-files" : ""
           }`}
+          onDrop={handleDrop}
+          onDragOver={(event) => event.preventDefault()}
         >
           <div className="composer-tools" ref={toolsRef}>
             <button
@@ -939,6 +999,9 @@ export function ChatPanel(props: ChatPanelProps) {
             <div className="composer-files">
               {uploads.map((item) => (
                 <span className="composer-file uploading" key={item.id}>
+                  {item.previewUrl && (
+                    <img className="composer-file-thumb" src={item.previewUrl} alt="" />
+                  )}
                   <span className="composer-file-name" title={item.name}>
                     {item.name}
                   </span>
@@ -948,6 +1011,13 @@ export function ChatPanel(props: ChatPanelProps) {
               ))}
               {props.attachments.map((file) => (
                 <span className="composer-file" key={file.path}>
+                  {isImageName(file.name) && (
+                    <img
+                      className="composer-file-thumb"
+                      src={api.uploadUrl(props.agentId, file.path)}
+                      alt=""
+                    />
+                  )}
                   <span className="composer-file-name" title={`${file.name} · ${file.path}`}>
                     {file.name}
                   </span>
@@ -974,6 +1044,7 @@ export function ChatPanel(props: ChatPanelProps) {
             value={props.draft}
             onChange={(event) => props.onDraftChange(event.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={
               !props.canSend
                 ? "先选择一个 Agent 和会话"

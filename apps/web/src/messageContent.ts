@@ -11,6 +11,23 @@ export type MessageFile = {
   size: number | null;
 };
 
+const IMAGE_SUFFIXES = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".heic",
+  ".heif",
+  ".avif",
+]);
+
+export function isImageName(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 && IMAGE_SUFFIXES.has(name.slice(dot).toLowerCase());
+}
+
 export type UserContent =
   | { kind: "text"; text: string }
   | { kind: "attachments"; files: MessageFile[]; text: string }

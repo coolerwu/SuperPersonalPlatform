@@ -32,6 +32,10 @@ EP_GET_BOT_QR = "ilink/bot/get_bot_qrcode"
 EP_GET_QR_STATUS = "ilink/bot/get_qrcode_status"
 
 ITEM_TEXT = 1
+ITEM_IMAGE = 2
+ITEM_VOICE = 3
+ITEM_FILE = 4
+ITEM_VIDEO = 5
 MSG_TYPE_BOT = 2
 MSG_STATE_FINISH = 2
 
@@ -55,6 +59,10 @@ class WeixinSessionExpired(WeixinApiError):
 
 class WeixinRateLimited(WeixinApiError):
     """iLink asked us to slow down; retry after a backoff."""
+
+
+class WeixinMediaError(WeixinError):
+    """A downloaded media item is unavailable or exceeds the configured cap."""
 
 
 def _safe_id(value: str, keep: int = 8) -> str:
@@ -280,3 +288,31 @@ class WeixinClient:
         )
         _raise_for_result(data)
         return data
+
+    async def download(self, url: str, *, max_bytes: int) -> bytes:
+        """Fetch an inbound CDN object without sending bot credentials."""
+        if not url.lower().startswith(("https://", "http://")):
+            raise WeixinMediaError("weixin media url must use http or https")
+        try:
+            async with self._client.stream("GET", url) as response:
+                if response.status_code >= 400:
+                    raise WeixinMediaError(
+                        f"weixin media download HTTP {response.status_code}"
+                    )
+                declared = response.headers.get("content-length", "")
+                if declared.isdigit() and int(declared) > max_bytes:
+                    raise WeixinMediaError("weixin media is too large")
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise WeixinMediaError("weixin media is too large")
+                    chunks.append(chunk)
+                if not chunks:
+                    raise WeixinMediaError("weixin media is empty")
+                return b"".join(chunks)
+        except httpx.HTTPError as exc:
+            raise WeixinMediaError(
+                f"weixin media download failed: {type(exc).__name__}"
+            ) from exc

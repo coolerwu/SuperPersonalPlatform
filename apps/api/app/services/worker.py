@@ -11,6 +11,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import Agent, Message, Provider, Run, RunEvent, Session, utcnow
 from app.services import memory_service
+from app.services.attachments import build_model_content
 from app.services.executor import DeepAgentExecutor
 from app.services.run_service import (
     append_event,
@@ -164,6 +165,12 @@ class RunWorker:
             agent_id = agent.id
             session_id = session.id
             content = run.input
+            model_content = build_model_content(
+                content,
+                settings.workspaces_dir.expanduser().resolve() / agent.id,
+                max_images=settings.vision_max_images,
+                max_image_bytes=settings.vision_max_image_bytes,
+            )
 
         if memory_ids:
             try:
@@ -177,7 +184,7 @@ class RunWorker:
                     executor.run(
                         instructions=instructions,
                         session_id=session_id,
-                        content=content,
+                        content=model_content,
                     )
                 ) as events:
                     async for event in events:

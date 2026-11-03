@@ -539,3 +539,16 @@ async def test_executor_hides_summarization_chunks(tmp_path, monkeypatch) -> Non
     completed = [event for event in events if event.type == "run_completed"]
     assert len(completed) == 1
     assert completed[0].payload["output"] == "visible answer"
+
+
+def test_fresh_input_accepts_multimodal_content() -> None:
+    from app.services.executor import _fresh_input
+
+    content = [
+        {"type": "text", "text": "看图"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]
+    state = _fresh_input(content, "run-1")
+    message = state["messages"][0]
+    assert message.content == content
+    assert message.id == "run-1"

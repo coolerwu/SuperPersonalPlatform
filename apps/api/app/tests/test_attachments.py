@@ -69,3 +69,69 @@ def test_attachment_requires_auth() -> None:
             content=b"hello",
         )
         assert response.status_code == 401
+
+
+def test_uploaded_file_is_served_with_auth_and_content_type(client) -> None:
+    agent_id = _agent_id(client)
+    upload = client.post(
+        f"/api/agents/{agent_id}/attachments",
+        params={"filename": "photo.png"},
+        content=b"\x89PNG\r\n\x1a\nhello",
+    )
+    assert upload.status_code == 201
+    filename = upload.json()["path"].rsplit("/", 1)[-1]
+    response = client.get(f"/api/agents/{agent_id}/uploads/{filename}")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content == b"\x89PNG\r\n\x1a\nhello"
+
+
+def test_uploaded_file_route_rejects_traversal_and_missing_files(client) -> None:
+    agent_id = _agent_id(client)
+    assert client.get(f"/api/agents/{agent_id}/uploads/..%2Fapp.db").status_code == 404
+    assert client.get(f"/api/agents/{agent_id}/uploads/missing.png").status_code == 404
+    assert client.get("/api/agents/missing/uploads/a.png").status_code == 404
+
+
+def test_uploaded_file_route_requires_auth() -> None:
+    with TestClient(create_app(start_worker=False)) as unauthenticated:
+        response = unauthenticated.get("/api/agents/default/uploads/a.png")
+        assert response.status_code == 401
+
+
+def test_title_from_attachment_only_content_uses_the_file_name() -> None:
+    from app.services.attachments import title_from_content
+
+    content = (
+        "附件已上传到工作区：\n"
+        "- 报价单.pdf（工作区路径：/uploads/abc-报价单.pdf，大小：12 字节）"
+    )
+    assert title_from_content(content) == "报价单.pdf"
+
+
+def test_build_model_content_attaches_images_only(client) -> None:
+    from app.services.attachments import build_model_content
+
+    agent_id = _agent_id(client)
+    image = client.post(
+        f"/api/agents/{agent_id}/attachments",
+        params={"filename": "photo.png"},
+        content=b"\x89PNG\r\n\x1a\n" + b"0" * 20,
+    ).json()
+    note = client.post(
+        f"/api/agents/{agent_id}/attachments",
+        params={"filename": "note.txt"},
+        content=b"hello",
+    ).json()
+    content = (
+        "附件已上传到工作区：\n"
+        f"- {image['name']}（工作区路径：{image['path']}，大小：{image['size']} 字节）\n"
+        f"- {note['name']}（工作区路径：{note['path']}，大小：{note['size']} 字节）\n\n"
+        "看看这张图"
+    )
+    built = build_model_content(content, settings.workspaces_dir / agent_id)
+    assert isinstance(built, list)
+    assert built[0] == {"type": "text", "text": content}
+    assert built[1]["type"] == "image_url"
+    assert built[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert len(built) == 2
