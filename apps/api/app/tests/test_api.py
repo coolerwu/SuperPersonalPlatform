@@ -1,6 +1,23 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
+from app.db import SessionLocal
 from app.main import create_app
+from app.models import Run, utcnow
+from app.services.run_service import complete_run
+
+
+def _set_run_running(run_id: str) -> None:
+    async def update() -> None:
+        async with SessionLocal() as db:
+            run = await db.get(Run, run_id)
+            assert run is not None
+            run.status = "running"
+            run.started_at = utcnow()
+            await db.commit()
+
+    asyncio.run(update())
 
 
 def test_auth_required() -> None:
@@ -51,7 +68,7 @@ def test_agent_and_session_isolation(client) -> None:
     assert {item["id"] for item in second_list} == {second_session["id"]}
 
 
-def test_chat_creates_run_and_enforces_one_active_run(client) -> None:
+def test_chat_queues_follow_up_runs(client) -> None:
     agent_id = client.get("/api/agents").json()[0]["id"]
     session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
 
@@ -66,13 +83,69 @@ def test_chat_creates_run_and_enforces_one_active_run(client) -> None:
     events = client.get(f"/api/runs/{run_id}/events").json()
     assert events[0]["type"] == "run_queued"
 
-    conflict = client.post("/api/chat/messages", json={"session_id": session_id, "content": "again"})
-    assert conflict.status_code == 409
-    assert conflict.json()["detail"]["active_run_id"] == run_id
+    follow_up = client.post("/api/chat/messages", json={"session_id": session_id, "content": "again"})
+    assert follow_up.status_code == 201
+    follow_up_id = follow_up.json()["run_id"]
+
+    follow_up_run = client.get(f"/api/runs/{follow_up_id}").json()
+    assert follow_up_run["status"] == "queued"
+
+    active = client.get(f"/api/sessions/{session_id}/active-run").json()
+    assert active["id"] == run_id
 
     messages = client.get(f"/api/sessions/{session_id}/messages").json()
-    assert [message["role"] for message in messages] == ["user"]
-    assert messages[0]["run_id"] == run_id
+    assert [message["role"] for message in messages] == ["user", "user"]
+    assert [message["run_id"] for message in messages] == [run_id, follow_up_id]
+
+
+def test_chat_queues_follow_up_behind_running_run(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+
+    first = client.post("/api/chat/messages", json={"session_id": session_id, "content": "one"})
+    assert first.status_code == 201
+    first_id = first.json()["run_id"]
+    _set_run_running(first_id)
+
+    second = client.post("/api/chat/messages", json={"session_id": session_id, "content": "two"})
+    assert second.status_code == 201
+    second_id = second.json()["run_id"]
+
+    active = client.get(f"/api/sessions/{session_id}/active-run").json()
+    assert active["id"] == first_id
+    assert active["status"] == "running"
+    assert client.get(f"/api/runs/{second_id}").json()["status"] == "queued"
+
+
+def test_queued_follow_up_keeps_conversation_order(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+
+    first = client.post("/api/chat/messages", json={"session_id": session_id, "content": "Q1"})
+    second = client.post("/api/chat/messages", json={"session_id": session_id, "content": "Q2"})
+    assert first.status_code == 201
+    assert second.status_code == 201
+    first_id = first.json()["run_id"]
+    second_id = second.json()["run_id"]
+
+    for run_id, output in ((first_id, "A1"), (second_id, "A2")):
+        asyncio.run(
+            complete_run(
+                run_id,
+                output=output,
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+            )
+        )
+
+    messages = client.get(f"/api/sessions/{session_id}/messages").json()
+    assert [(message["role"], message["content"]) for message in messages] == [
+        ("user", "Q1"),
+        ("assistant", "A1"),
+        ("user", "Q2"),
+        ("assistant", "A2"),
+    ]
 
 
 def test_provider_create_and_system_info(client) -> None:

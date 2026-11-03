@@ -352,12 +352,22 @@ async def test_inbound_queues_while_an_active_run_exists(client) -> None:
         assert [run.status for run in runs] == ["queued", "queued"]
         assert {run.id for run in runs} == {first.run_id, second.run_id}
 
-    # The web composer still refuses to add a third run to the same Session.
+    # The web composer queues behind the channel Runs as well.
     response = client.post(
         "/api/chat/messages",
         json={"session_id": first.session_id, "content": "from web"},
     )
-    assert response.status_code == 409
+    assert response.status_code == 201
+    third_id = response.json()["run_id"]
+
+    async with SessionLocal() as db:
+        runs = (
+            await db.scalars(
+                select(Run).where(Run.session_id == first.session_id).order_by(Run.created_at)
+            )
+        ).all()
+        assert [run.status for run in runs] == ["queued", "queued", "queued"]
+        assert [run.id for run in runs] == [first.run_id, second.run_id, third_id]
 
 
 @pytest.mark.asyncio

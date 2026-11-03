@@ -88,6 +88,7 @@ const EMPTY_LIVE: SessionLive = {
 };
 
 type RunSubscription = {
+  runId: string;
   source: EventSource | null;
   timer: number | null;
 };
@@ -100,6 +101,7 @@ const RECONNECT_NOTICE = "服务连接中断，正在重试…";
 const RESTART_NOTICE = "服务重启，Run 已重新排队";
 const ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时进度；刚才的消息没有发送。";
 const RETRY_ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时进度。";
+const QUEUED_NOTICE = "已排队，前面的任务完成后会自动执行";
 const NEW_SESSION_KEY = "__new__";
 
 /** Drafts and attachments belong to one conversation (or one pending new one). */
@@ -184,7 +186,8 @@ export default function App() {
   const agent = agents.find((item) => item.id === agentId);
   const live = liveBySession[sessionId] ?? EMPTY_LIVE;
   const pendingHere = Boolean(pendingSessions[sessionId || NEW_SESSION_KEY]);
-  const chatSending = pendingHere || (live.tracking && isActiveRun(live.activeRun));
+  const runActive = live.tracking && isActiveRun(live.activeRun);
+  const chatSending = pendingHere || runActive;
   const visibleRun = live.activeRun;
   const visibleStream = live.streamText;
   const visibleReasoning = live.streamReasoning;
@@ -629,7 +632,7 @@ export default function App() {
 
   function subscribe(id: string, runId: string, after = 0) {
     closeSubscription(id);
-    const subscription: RunSubscription = { source: null, timer: null };
+    const subscription: RunSubscription = { runId, source: null, timer: null };
     subscriptionsRef.current.set(id, subscription);
     let lastId = after;
     const source = new EventSource(api.streamUrl(runId, after));
@@ -663,6 +666,21 @@ export default function App() {
     setLiveBySession((current) => {
       const session = current[id] ?? EMPTY_LIVE;
       const next: SessionLive = { ...session, events: [...session.events, event] };
+      if (
+        next.activeRun?.status === "queued" &&
+        next.activeRun.id === event.run_id &&
+        (event.type === "assistant_delta" ||
+          event.type === "reasoning_delta" ||
+          event.type === "tool_call")
+      ) {
+        // Queued Runs have no "started" event; the first output marks the
+        // transition so the live bubble stops saying "排队中".
+        next.activeRun = {
+          ...next.activeRun,
+          status: "running",
+          started_at: next.activeRun.started_at ?? event.created_at,
+        };
+      }
       if (event.type === "run_queued") {
         if (event.payload.reason === "service_restart") {
           // The checkpoint keeps the interrupted attempt; the requeued run will
@@ -704,7 +722,7 @@ export default function App() {
 
   async function pollRun(id: string, runId: string, after = 0) {
     closeSubscription(id);
-    const subscription: RunSubscription = { source: null, timer: null };
+    const subscription: RunSubscription = { runId, source: null, timer: null };
     subscriptionsRef.current.set(id, subscription);
     let lastId = after;
     let failures = 0;
@@ -835,7 +853,9 @@ export default function App() {
       finishedRunsRef.current.add(runId);
       void refreshSessions();
     } catch (exc) {
+      updateLive(id, (session) => ({ ...session, tracking: false, notice: "" }));
       setSessionError(describeApiError(exc), id);
+      void refreshSessions();
     } finally {
       finishingRunsRef.current.delete(runId);
     }
@@ -980,6 +1000,10 @@ export default function App() {
   }
 
   async function attachRun(id: string, runId: string, notice: string) {
+    if (subscriptionsRef.current.get(id)?.runId === runId) {
+      clearPending(id);
+      return;
+    }
     try {
       const [run, runEvents] = await Promise.all([api.getRun(runId), api.getRunEvents(runId)]);
       if (run.session_id !== id) return;
@@ -1019,21 +1043,20 @@ export default function App() {
     sessionTitle?: string,
   ): Promise<boolean> {
     const text = (overrideText ?? draft).trim();
+    const sendAgentId = agentId;
+    const sendKey = sessionKey(sendAgentId, sessionIdRef.current);
+    const quoteText =
+      overrideText === undefined ? (quotesByKey[sendKey] ?? "").trim() : "";
     if (
-      (!text && attachments.length === 0) ||
+      (!text && attachments.length === 0 && !quoteText) ||
       !agentId ||
-      chatSending ||
       pendingSessionsRef.current[sessionIdRef.current || NEW_SESSION_KEY]
     ) {
       return false;
     }
-    const sendAgentId = agentId;
-    const sendKey = sessionKey(sendAgentId, sessionIdRef.current);
     const attachmentBlock = attachments
       .map((file) => `- ${file.name}（工作区路径：${file.path}，大小：${file.size} 字节）`)
       .join("\n");
-    const quoteText =
-      overrideText === undefined ? (quotesByKey[sendKey] ?? "").trim() : "";
     const quoteBlock = quoteText
       ? quoteText.split("\n").map((line) => `> ${line}`).join("\n")
       : "";
@@ -1111,7 +1134,24 @@ export default function App() {
       } catch {
         // Keep the optimistic user message; the run is already created.
       }
-      await attachRun(targetSessionId, response.run_id, "");
+      const activeRunNow = await api
+        .getSessionActiveRun(targetSessionId)
+        .catch(() => undefined);
+      if (activeRunNow?.id === response.run_id) {
+        await attachRun(targetSessionId, response.run_id, "");
+      } else {
+        clearPending(targetSessionId);
+        const stillTracked = Boolean(
+          live.tracking && live.activeRun && live.activeRun.id !== response.run_id,
+        );
+        if (activeRunNow || (activeRunNow === undefined && stillTracked)) {
+          updateLive(targetSessionId, (session) =>
+            session.activeRun?.id === response.run_id
+              ? session
+              : { ...session, notice: QUEUED_NOTICE },
+          );
+        }
+      }
       void refreshSessions();
       return true;
     } catch (exc) {
@@ -1571,6 +1611,8 @@ export default function App() {
               runReasoning={runReasoning}
               runTraces={runTraces}
               sending={chatSending}
+              runActive={runActive}
+              pendingSend={pendingHere}
               activity={visibleActivity}
               terminalRun={terminalRun}
               error={error}

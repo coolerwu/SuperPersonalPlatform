@@ -31,6 +31,8 @@ type ChatPanelProps = {
   runReasoning: Record<string, string>;
   runTraces: Record<string, RunTraceStep[]>;
   sending: boolean;
+  runActive: boolean;
+  pendingSend: boolean;
   activity: string;
   terminalRun: TerminalRun | null;
   error: string;
@@ -402,8 +404,10 @@ export function ChatPanel(props: ChatPanelProps) {
 
   const canSubmit =
     props.canSend &&
-    !props.sending &&
-    (props.draft.trim().length > 0 || props.attachments.length > 0);
+    !props.pendingSend &&
+    (props.draft.trim().length > 0 ||
+      props.attachments.length > 0 ||
+      props.quote.trim().length > 0);
 
   const screenshotsByRun = new Map<string, ScreenshotInfo[]>();
   for (const shot of props.screenshots) {
@@ -436,7 +440,7 @@ export function ChatPanel(props: ChatPanelProps) {
   const elapsedLabel =
     props.sending && liveElapsed >= 10 ? `已用 ${formatDuration(liveElapsed)}` : "";
   const activityText = queued
-    ? "排队中，等待其他会话完成"
+    ? "排队中，等待前面的任务完成"
     : props.trace.some((step) => step.kind === "tool")
       ? ""
       : props.activity;
@@ -970,12 +974,18 @@ export function ChatPanel(props: ChatPanelProps) {
             value={props.draft}
             onChange={(event) => props.onDraftChange(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={props.canSend ? "给 Agent 发消息…" : "先选择一个 Agent 和会话"}
+            placeholder={
+              !props.canSend
+                ? "先选择一个 Agent 和会话"
+                : props.runActive
+                  ? "继续追问，发送后会排队…"
+                  : "给 Agent 发消息…"
+            }
             rows={1}
             disabled={!props.canSend}
           />
           <div className="composer-actions">
-            {props.sending ? (
+            {props.runActive && (
               <button
                 className="composer-send-button stop"
                 type="button"
@@ -987,31 +997,30 @@ export function ChatPanel(props: ChatPanelProps) {
                   <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
               </button>
-            ) : (
-              <button
-                className="composer-send-button"
-                type="button"
-                onClick={() => void submit()}
-                disabled={!canSubmit}
-                aria-label="发送"
-                title="发送"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width="15"
-                  height="15"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.9"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M22 2 11 13" />
-                  <path d="M22 2 15 22l-4-9-9-4Z" />
-                </svg>
-              </button>
             )}
+            <button
+              className="composer-send-button"
+              type="button"
+              onClick={() => void submit()}
+              disabled={!canSubmit}
+              aria-label={props.runActive ? "排队追问" : "发送"}
+              title={props.runActive ? "排队追问" : "发送"}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M22 2 11 13" />
+                <path d="M22 2 15 22l-4-9-9-4Z" />
+              </svg>
+            </button>
           </div>
         </div>
         <input

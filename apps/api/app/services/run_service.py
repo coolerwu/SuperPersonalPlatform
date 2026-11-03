@@ -147,7 +147,17 @@ async def complete_run(
         run.total_tokens = total_tokens
         run.finished_at = utcnow()
         if run.session_id:
-            db.add(Message(session_id=run.session_id, role="assistant", content=output, run_id=run.id))
+            # Keep the answer next to its question even when a follow-up was
+            # queued while this Run was still executing.
+            db.add(
+                Message(
+                    session_id=run.session_id,
+                    role="assistant",
+                    content=output,
+                    run_id=run.id,
+                    created_at=run.created_at,
+                )
+            )
             session = await db.get(Session, run.session_id)
             if session is not None:
                 session.updated_at = utcnow()

@@ -16,7 +16,7 @@ async def send_message(payload: ChatRequest, request: Request) -> ChatResponse:
     if not content:
         raise HTTPException(status_code=400, detail="content is required")
     try:
-        run, message = await create_run(payload.session_id, content)
+        run, message = await create_run(payload.session_id, content, allow_queue=True)
     except ActiveRunConflict as exc:
         raise HTTPException(
             status_code=409,
