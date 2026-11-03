@@ -33,7 +33,10 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-v4-flash"
     llm_temperature: float = 0.7
 
-    run_timeout_seconds: int = 300
+    # A browser login (QR scan) may legitimately take several minutes in the
+    # same Run, so the wall-clock cap leaves room for a 5-minute wait plus the
+    # actual task after login.
+    run_timeout_seconds: int = 900
     run_recursion_limit: int = 500
     max_history_messages: int = 40
     vision_max_images: int = 4

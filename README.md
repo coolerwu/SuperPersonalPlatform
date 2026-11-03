@@ -141,7 +141,7 @@ metadata:
 - **`web_fetch`**：调用 DeepSeek Fetch API（`POST {provider.base_url}/v1/tools/fetch`），请求 `{url}`，返回 `{title, content}`（Markdown）。`url` 必须是完整 http/https 地址，不能带用户名/密码。
 - **浏览器工具**（Playwright，本地无头 Chromium，普通桌面浏览器身份）：
   - `browser_open(url, tab="main")`：打开网页，返回标题、正文和可交互元素 ref；
-  - `browser_snapshot(tab="main", wait_seconds=0)`：读取当前标签页的最新快照；`wait_seconds`（0-60）先等待再读取，用于等待扫码登录或异步渲染；
+  - `browser_snapshot(tab="main", wait_seconds=0)`：读取当前标签页的最新快照；`wait_seconds`（0-60）先等待再读取，用于等待扫码登录或异步渲染；扫码登录按 60 秒一段循环，最多等 5 分钟，二维码过期就重新截图；
   - `browser_click(ref, tab)`：点击快照中的元素；
   - `browser_fill(ref, text, tab, submit=false)`：填写输入框或 select；
   - `browser_press(key, tab)`：按下按键；

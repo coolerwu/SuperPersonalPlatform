@@ -1759,14 +1759,17 @@ F11 的浏览器使用 Playwright 默认无头 Chromium：UA 含 `HeadlessChrome
 1. 默认启用普通浏览器身份（`BROWSER_NORMAL_IDENTITY=true`）：UA 使用普通桌面 Chrome 格式（版本取实际 Chromium 版本），`locale=zh-CN`、`timezone=Asia/Shanghai`、`Accept-Language=zh-CN,zh;q=0.9,en;q=0.8`；启动参数增加 `--disable-blink-features=AutomationControlled`，并通过 init script 隐藏 `navigator.webdriver`。
 2. 登录态持久化（`BROWSER_PERSIST_STATE=true`）：创建 context 时加载 `data/browser_state.json`（Playwright storage_state：cookies + localStorage）；Run 结束（完成、失败、取消、超时）在关闭浏览器前写回。文件原子写入，权限 0600，不返回前端、不写日志。
 3. 并发安全：如果运行期间另一个 Run 改过状态文件（文件摘要与加载时不同），保存时按 cookie `(name, domain, path)` 和 origin/localStorage `name` 合并，新值优先；文件未被其他 Run 改过时整体覆盖，保证登出也能传播。
-4. `browser_snapshot` 增加 `wait_seconds`（0–60）：先等待再返回快照，用于引导用户扫码登录或等待异步渲染。
-5. 扫码登录流程由 `web-browser` 技能驱动：打开登录页 → `browser_screenshot` 展示二维码（截图实时显示在当前 Run 的消息下方）→ 提示用户用手机扫码 → `browser_snapshot(wait_seconds=30)` 等待并确认 → 登录成功后继续原任务；登录态随后落盘，后续 Run 自动复用。
+4. `browser_snapshot` 增加 `wait_seconds`（0–60）：先等待再返回快照，用于引导用户扫码登录或等待异步渲染；扫码时按 60 秒一段循环等待，方便在二维码过期后重新截图。
+5. 扫码登录流程由 `web-browser` 技能驱动，并且必须在同一个 Run 内完成：打开登录页 → `browser_screenshot` 展示二维码（截图实时显示在当前 Run 的消息下方）→ 提示用户用手机扫码并确认 → 循环 `browser_snapshot(wait_seconds=60)` 检查是否已登录；页面提示二维码过期时重新 `browser_screenshot` 展示新二维码；最多等待 5 分钟。明确禁止"结束 Run 等用户回复「扫了」"：Run 结束浏览器立即关闭，二维码随之失效。登录成功后继续原任务，登录态随后落盘，后续 Run 自动复用。
 6. 验证页检测补充「安全限制」、`/website-login/error` 和 `error_code=300012`；验证码、滑块等人工验证仍立即停止，不自动识别或绕过。
 7. 新增配置：`BROWSER_NORMAL_IDENTITY`、`BROWSER_USER_AGENT`、`BROWSER_LOCALE`、`BROWSER_TIMEZONE`、`BROWSER_ACCEPT_LANGUAGE`、`BROWSER_PERSIST_STATE`、`BROWSER_STATE_PATH`。
+8. `RUN_TIMEOUT_SECONDS` 默认从 300 秒提高到 900 秒，保证"展示二维码 + 最多 5 分钟等待 + 登录后的实际任务"能在同一个 Run 内完成。
 
 #### 验收标准
 
 - 平台内打开 `https://www.xiaohongshu.com/explore` 不再跳转 300012 安全限制，返回正常页面和登录入口。
+- 展示二维码后，Agent 在同一个 Run 内持续等待最多 5 分钟；用户扫码并确认后无需再发一条消息，Agent 立即继续原任务。
+- 二维码过期时 Agent 重新截图展示新二维码，不要求用户回复。
 - 完成一次扫码登录后，后续 Run 打开同一站点仍保持登录态。
 - 关闭 `BROWSER_NORMAL_IDENTITY` 或 `BROWSER_PERSIST_STATE` 后行为回到旧版（默认 UA、每次全新 context）。
 - 验证码/安全验证页面仍返回明确错误并停止，不自动破解。
@@ -1777,7 +1780,7 @@ F11 的浏览器使用 Playwright 默认无头 Chromium：UA 含 `HeadlessChrome
 - 仍是无头 Chromium；不引入指纹随机化、代理轮换、验证码识别或账号池。
 - 登录态文件包含 cookies，只存在本机 `data/`，权限 0600；删除 `data/browser_state.json` 即可强制退出所有网站登录。
 - 站点仍可能按 IP、行为或其他信号拦截；本能力不保证所有站点可访问。
-- 登录二维码需要用户自己用手机扫码；平台不代填密码、不接收或记录短信验证码。
+- 登录二维码需要用户自己用手机扫码；平台不代填密码、不接收或记录短信验证码。二维码有效期由站点决定，过期后只能重新截图；用户需要在 Run 等待期间完成扫码，Run 结束后页面关闭。
 - 存储状态按站点全局共享，不区分 Agent/Session。
 
 #### 非目标
