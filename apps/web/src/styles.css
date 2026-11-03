@@ -835,7 +835,8 @@ textarea {
 
 .message-row {
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 6px;
   margin: 0 auto 22px;
   max-width: var(--chat-lane);
   animation: message-in 180ms ease both;
@@ -853,11 +854,10 @@ textarea {
 }
 
 .message-row.user {
-  justify-content: flex-end;
+  align-items: flex-end;
 }
 
 .message-row.assistant {
-  justify-content: flex-start;
   align-items: flex-start;
 }
 
@@ -1087,14 +1087,27 @@ textarea {
   text-transform: uppercase;
 }
 
-.message-meta {
+.message-footer {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  max-width: 100%;
+  min-height: 18px;
+  padding: 0 4px;
+}
+
+.message-footer.user {
+  justify-content: flex-end;
+}
+
+.message-footer-time {
   color: var(--faint);
   font-size: 11px;
-  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.message-footer .message-actions {
+  margin-left: 0;
 }
 
 .message-actions {
@@ -1395,6 +1408,63 @@ textarea {
   color: var(--faint);
   font-size: 11px;
   text-align: center;
+}
+
+.composer-quote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: var(--chat-lane);
+  margin: 0 auto 6px;
+  padding: 7px 9px 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.composer-quote-label {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.composer-quote-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.composer-quote-remove {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--faint);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.composer-quote-remove:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .composer-card {
@@ -3285,7 +3355,7 @@ textarea {
   }
 
   .message-row {
-    gap: 10px;
+    gap: 6px;
     margin-bottom: 18px;
   }
 
@@ -4087,7 +4157,25 @@ body:has(.app-shell.pearl) .select-empty {
 /* Messages */
 
 .pearl .message-row.assistant {
-  gap: 0;
+  gap: 6px;
+}
+
+.pearl .message-footer {
+  padding: 0 6px;
+}
+
+.pearl .message-footer-time {
+  color: #98a0ad;
+}
+
+.pearl .message-footer .message-action {
+  color: #8a93a0;
+}
+
+.pearl .message-footer .message-action:hover {
+  border-color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.8);
+  color: #5b4bf0;
 }
 
 .pearl .message-history {
@@ -4209,20 +4297,6 @@ body:has(.app-shell.pearl) .select-empty {
 
 .pearl .message-bubble.user .markdown th {
   background: rgba(255, 255, 255, 0.08);
-}
-
-.pearl .message-bubble.user .message-meta {
-  color: rgba(255, 255, 255, 0.55);
-}
-
-.pearl .message-bubble.user .message-action {
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.pearl .message-bubble.user .message-action:hover {
-  border-color: rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
 }
 
 .pearl .message-bubble.user .message-file {
@@ -4359,10 +4433,10 @@ body:has(.app-shell.pearl) .select-empty {
   align-items: center;
   justify-content: flex-start;
   gap: 7px;
-  width: fit-content;
-  height: 26px;
-  margin-left: auto;
-  padding: 0 11px;
+  width: 100%;
+  height: 30px;
+  margin-left: 0;
+  padding: 0 12px;
   border: 1px solid rgba(255, 255, 255, 0.95);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.6);
@@ -4378,6 +4452,7 @@ body:has(.app-shell.pearl) .select-empty {
 
 .pearl .run-trace > summary::after {
   content: "⌄";
+  margin-left: auto;
   color: #8a93a0;
   font-size: 10px;
   line-height: 1;
@@ -4566,6 +4641,33 @@ body:has(.app-shell.pearl) .select-empty {
 
 .pearl .composer {
   background: linear-gradient(180deg, rgba(233, 237, 243, 0), rgba(233, 237, 243, 0.5) 60%);
+}
+
+.pearl .composer-quote {
+  padding: 8px 10px 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(18px) saturate(1.2);
+  box-shadow: 0 8px 22px rgba(28, 34, 52, 0.07);
+}
+
+.pearl .composer-quote-label {
+  background: rgba(122, 108, 255, 0.12);
+  color: #5b4bf0;
+}
+
+.pearl .composer-quote-text {
+  color: #5f6a78;
+}
+
+.pearl .composer-quote-remove {
+  color: #8a93a0;
+}
+
+.pearl .composer-quote-remove:hover {
+  background: rgba(122, 108, 255, 0.12);
+  color: #5b4bf0;
 }
 
 .pearl .composer-card {

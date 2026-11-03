@@ -46,7 +46,7 @@ li{margin:4px 0}
   <section class="hero">
     <p class="eyebrow">Exploratory backtest · ETHUSDT · 1day</p>
     <h1>一个指标不够，但指标越多也不一定更好</h1>
-    <p>2021-01-01 → 2024-12-31，现货只做多，手续费 0.1%，滑点 0.05%，收盘信号/收盘成交。数据来自生产 market.db 的 ETHUSDT 日线（2020-06-01 起，200 根预热），共 1675 根、评估区间 1,461 根、缺口 0。</p>
+    <p>2021-01-01 → 2024-12-31 是历史图表样本；2025-01-01 → 2026-11-03 的真样本外见下方新增表。现货只做多，手续费 0.1%，滑点 0.05%，收盘信号/收盘成交。数据来自生产 market.db 的 ETHUSDT 日线（2020-06-01 起，200 根预热），共 1675 根、评估区间 1,461 根、缺口 0。</p>
     <span class="tag">只读分析 · 不构成投资建议</span>
   </section>
 
@@ -71,6 +71,23 @@ li{margin:4px 0}
     <p>指标更多不等于更好；量能过滤把大部分有效行情过滤掉了。</p>
   </div>
 </div>
+
+
+  <section class="section card" id="oos-2026">
+    <h2>2025–2026 真样本外：排名翻转了</h2>
+    <p>数据补到 2026-11-02，评估区间 2025-01-01 → 2026-11-03。2021–2024 里最好的 SMA200，这两年里只做到 -3.4%，没亏大钱但也没赚钱；2021–2024 里最差的“趋势+RSI+量能”（-51.8%），这两年里反而 +37.5%。这不是说它突然变好了，而是说明同一套规则在不同 regime 下排名会翻转。</p>
+    <div class='table-wrap'><table><thead><tr><th>策略</th><th>总收益</th><th>CAGR</th><th>最大回撤</th><th>Sharpe</th><th>交易</th></tr></thead><tbody>
+      <tr><td>买入持有</td><td class='neg'>-32.6%</td><td class='neg'>-19.3%</td><td class='neg'>-67.5%</td><td>0.03</td><td>1</td></tr>
+      <tr><td>SMA200 趋势</td><td class='neg'>-3.4%</td><td class='neg'>-1.9%</td><td class='neg'>-38.7%</td><td>0.14</td><td>8</td></tr>
+      <tr><td>3/3 共振</td><td class='neg'>-3.3%</td><td class='neg'>-1.8%</td><td class='neg'>-31.4%</td><td>0.02</td><td>13</td></tr>
+      <tr><td>趋势 + RSI&gt;55</td><td class='pos'>+18.1%</td><td class='pos'>+9.5%</td><td class='neg'>-24.2%</td><td>0.47</td><td>14</td></tr>
+      <tr><td>趋势 + MACD</td><td class='neg'>-31.4%</td><td class='neg'>-18.5%</td><td class='neg'>-45.6%</td><td>-0.70</td><td>14</td></tr>
+      <tr><td>Donchian 20/10</td><td class='neg'>-39.8%</td><td class='neg'>-24.1%</td><td class='neg'>-57.2%</td><td>-0.60</td><td>12</td></tr>
+      <tr><td>趋势 + RSI + 量能</td><td class='pos'>+37.5%</td><td class='pos'>+18.9%</td><td class='neg'>-12.3%</td><td>0.98</td><td>25</td></tr>
+      <tr><td>趋势 + RSI 滞回</td><td class='pos'>+35.8%</td><td class='pos'>+18.1%</td><td class='neg'>-26.1%</td><td>0.70</td><td>6</td></tr>
+    </tbody></table></div>
+    <p class="note">样本外只有 6–25 笔交易，不能据此下“哪个策略长期最好”的结论；但它足以否定“找到一个最好指标就能长期赚钱”。2025–2026 的图没有重画，本页图表仍是 2021–2024 历史样本。</p>
+  </section>
 
 
   <section class="section card">

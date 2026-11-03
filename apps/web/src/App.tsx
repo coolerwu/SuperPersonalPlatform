@@ -138,6 +138,7 @@ export default function App() {
   const [olderError, setOlderError] = useState("");
   const [draft, setDraft] = useState("");
   const [attachmentsByKey, setAttachmentsByKey] = useState<Record<string, Attachment[]>>({});
+  const [quotesByKey, setQuotesByKey] = useState<Record<string, string>>({});
   const [pendingSessions, setPendingSessions] = useState<Record<string, true>>({});
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
   const [runReasoning, setRunReasoning] = useState<Record<string, string>>({});
@@ -1031,9 +1032,16 @@ export default function App() {
     const attachmentBlock = attachments
       .map((file) => `- ${file.name}（工作区路径：${file.path}，大小：${file.size} 字节）`)
       .join("\n");
+    const quoteText =
+      overrideText === undefined ? (quotesByKey[sendKey] ?? "").trim() : "";
+    const quoteBlock = quoteText
+      ? quoteText.split("\n").map((line) => `> ${line}`).join("\n")
+      : "";
+    // The attachment header must stay first so the UI can parse files on reload.
+    const body = [quoteBlock, text].filter(Boolean).join("\n\n");
     const content = attachmentBlock
-      ? `附件已上传到工作区：\n${attachmentBlock}${text ? `\n\n${text}` : ""}`
-      : text;
+      ? `附件已上传到工作区：\n${attachmentBlock}${body ? `\n\n${body}` : ""}`
+      : body;
     setError("");
     clearLiveNotice(sessionIdRef.current);
     let createdSessionId = "";
@@ -1072,6 +1080,7 @@ export default function App() {
       sent = true;
       if (overrideText === undefined) {
         clearAttachmentsFor(sendKey);
+        clearQuoteFor(sendKey);
       }
       if (overrideText !== undefined && createdSessionId) {
         // A command (整理记忆) consumes neither the draft nor the attachments,
@@ -1171,9 +1180,20 @@ export default function App() {
   }
 
   function quote(text: string) {
-    const quoted = text.split("\n").map((line) => `> ${line}`).join("\n");
-    changeDraft((current) => (current.trim() ? `${quoted}\n\n${current}` : `${quoted}\n\n`));
+    const value = text.trim();
+    if (!value) return;
+    const key = draftKeyRef.current;
+    setQuotesByKey((current) => ({ ...current, [key]: value }));
     setFocusSignal((current) => current + 1);
+  }
+
+  function clearQuoteFor(key: string) {
+    setQuotesByKey((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   }
 
   async function retry(runId: string) {
@@ -1557,6 +1577,7 @@ export default function App() {
               notice={visibleNotice}
               activeRun={visibleRun}
               draft={draft}
+              quote={quotesByKey[activeKey] ?? ""}
               attachments={attachments}
               canSend={Boolean(agentId)}
               agentId={agentId}
@@ -1570,6 +1591,7 @@ export default function App() {
               }
               focusMessageNonce={searchFocus?.nonce ?? 0}
               onDraftChange={changeDraft}
+              onClearQuote={() => clearQuoteFor(activeKey)}
               onAddAttachment={(file) => addAttachmentFor(activeKey, file)}
               onRemoveAttachment={(path) => removeAttachmentFor(activeKey, path)}
               onSend={(attachments) => send(attachments)}

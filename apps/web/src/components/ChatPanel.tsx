@@ -37,6 +37,7 @@ type ChatPanelProps = {
   notice: string;
   activeRun: Run | null;
   draft: string;
+  quote: string;
   attachments: Attachment[];
   canSend: boolean;
   agentId: string;
@@ -48,6 +49,7 @@ type ChatPanelProps = {
   focusMessageId: string;
   focusMessageNonce: number;
   onDraftChange: (value: string) => void;
+  onClearQuote: () => void;
   onAddAttachment: (file: Attachment) => void;
   onRemoveAttachment: (path: string) => void;
   onSend: (attachments: Attachment[]) => Promise<boolean>;
@@ -592,18 +594,23 @@ export function ChatPanel(props: ChatPanelProps) {
                   ) : (
                     <Markdown content={message.content} />
                   )}
-                  <div className="message-meta">
-                    <span>你 · {formatTime(message.created_at)}</span>
-                    <div className="message-actions">
-                      <CopyButton text={copyContent} />
-                      <button
-                        type="button"
-                        className="message-action"
-                        onClick={() => props.onQuote(copyContent)}
-                      >
-                        引用
-                      </button>
-                    </div>
+                </div>
+                <div className="message-footer user">
+                  <span className="message-footer-time">
+                    你 · {formatTime(message.created_at)}
+                  </span>
+                  <div className="message-actions">
+                    <CopyButton text={copyContent} />
+                    <button
+                      type="button"
+                      className="message-action"
+                      onClick={() => {
+                        props.onQuote(copyContent);
+                        textareaRef.current?.focus();
+                      }}
+                    >
+                      引用
+                    </button>
                   </div>
                 </div>
               </div>
@@ -619,16 +626,6 @@ export function ChatPanel(props: ChatPanelProps) {
                 <div className="message-head">
                   <span className="message-author">{props.agentName || "Agent"}</span>
                   <span className="message-time">{formatTime(message.created_at)}</span>
-                  <div className="message-actions">
-                    <CopyButton text={message.content} />
-                    <button
-                      type="button"
-                      className="message-action"
-                      onClick={() => props.onQuote(message.content)}
-                    >
-                      引用
-                    </button>
-                  </div>
                 </div>
                 <RunTrace
                   steps={message.run_id ? props.runTraces[message.run_id] ?? [] : []}
@@ -643,6 +640,21 @@ export function ChatPanel(props: ChatPanelProps) {
                   sessionId={props.sessionId}
                   items={message.run_id ? screenshotsByRun.get(message.run_id) ?? [] : []}
                 />
+              </div>
+              <div className="message-footer assistant">
+                <div className="message-actions">
+                  <CopyButton text={message.content} />
+                  <button
+                    type="button"
+                    className="message-action"
+                    onClick={() => {
+                      props.onQuote(message.content);
+                      textareaRef.current?.focus();
+                    }}
+                  >
+                    引用
+                  </button>
+                </div>
               </div>
             </div>
           );
@@ -780,6 +792,23 @@ export function ChatPanel(props: ChatPanelProps) {
         {props.channelType === "wechat" && (
           <div className="composer-channel-hint" role="note" title={props.channelName}>
             微信会话 · 网页里发送的消息不会发回微信
+          </div>
+        )}
+        {props.quote && (
+          <div className="composer-quote" role="note" aria-label="引用内容">
+            <span className="composer-quote-label" aria-hidden="true">
+              引用
+            </span>
+            <div className="composer-quote-text">{props.quote}</div>
+            <button
+              type="button"
+              className="composer-quote-remove"
+              aria-label="取消引用"
+              title="取消引用"
+              onClick={props.onClearQuote}
+            >
+              ×
+            </button>
           </div>
         )}
         <div
