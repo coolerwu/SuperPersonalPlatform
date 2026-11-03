@@ -8,8 +8,8 @@ import { Select } from "./Select";
 type SidebarProps = {
   open: boolean;
   onClose: () => void;
-  workspace: "agent" | "quant";
-  onWorkspaceChange: (workspace: "agent" | "quant") => void;
+  workspace: "agent" | "features";
+  onWorkspaceChange: (workspace: "agent" | "features") => void;
   agents: Agent[];
   agentId: string;
   onAgentChange: (id: string) => void;
@@ -107,11 +107,11 @@ export function Sidebar(props: SidebarProps) {
             <button
               type="button"
               role="tab"
-              aria-selected={props.workspace === "quant"}
-              className={`workspace-tab ${props.workspace === "quant" ? "active" : ""}`}
-              onClick={() => props.onWorkspaceChange("quant")}
+              aria-selected={props.workspace === "features"}
+              className={`workspace-tab ${props.workspace === "features" ? "active" : ""}`}
+              onClick={() => props.onWorkspaceChange("features")}
             >
-              量化
+              功能
             </button>
           </div>
           <button
@@ -374,7 +374,7 @@ export function Sidebar(props: SidebarProps) {
           </>
         ) : (
           <>
-            <div className="sidebar-group sidebar-quant">
+            <div className="sidebar-group sidebar-features">
               <div className="sidebar-group-head">
                 <span className="sidebar-group-label">独立工具</span>
               </div>
@@ -394,7 +394,7 @@ export function Sidebar(props: SidebarProps) {
                 <span>回测</span>
                 <span className="sidebar-badge">不绑定 Agent</span>
               </button>
-              <p className="sidebar-quant-hint">Bitget 公共行情 · 本地缓存 · 历史回测</p>
+              <p className="sidebar-features-hint">手动操作 · 不绑定 Agent</p>
             </div>
 
             <div className="sidebar-group sidebar-group-platform">

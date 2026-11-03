@@ -1477,9 +1477,9 @@ export default function App() {
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        workspace={view === "backtest" ? "quant" : "agent"}
+        workspace={view === "backtest" ? "features" : "agent"}
         onWorkspaceChange={(workspace) =>
-          openView(workspace === "quant" ? "backtest" : "chat")
+          openView(workspace === "features" ? "backtest" : "chat")
         }
         agents={agents}
         agentId={agentId}

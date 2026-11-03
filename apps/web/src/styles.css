@@ -3958,12 +3958,12 @@ textarea {
   box-shadow: 0 4px 14px rgba(28, 34, 52, 0.08);
 }
 
-.pearl .sidebar-quant {
+.pearl .sidebar-features {
   flex: 1;
   min-height: 0;
 }
 
-.pearl .sidebar-quant-hint {
+.pearl .sidebar-features-hint {
   margin: 2px 10px 0;
   color: #8a93a0;
   font-size: 10.5px;
