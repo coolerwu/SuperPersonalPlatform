@@ -199,6 +199,145 @@ async def test_inbound_maps_each_contact_to_its_own_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_new_command_rebinds_contact_to_fresh_session() -> None:
+    channel_id = await _create_active_channel()
+    first = await _ingest(channel_id, "msg-before-new")
+    result = await _ingest(channel_id, "msg-new", text="/new")
+
+    assert result.duplicate is False
+    assert result.run_id is None
+    assert result.message_id is None
+    assert result.command == "/new"
+    assert result.reply
+    assert result.session_id is not None
+    assert result.session_id != first.session_id
+
+    async with SessionLocal() as db:
+        conversation = await db.scalar(
+            select(ChannelConversation).where(ChannelConversation.channel_id == channel_id)
+        )
+        assert conversation is not None
+        assert conversation.session_id == result.session_id
+        assert await db.get(Session, first.session_id) is not None
+        assert await db.get(Session, result.session_id) is not None
+        inbound = await db.scalar(
+            select(ChannelInbound).where(
+                ChannelInbound.channel_id == channel_id,
+                ChannelInbound.external_message_id == "msg-new",
+            )
+        )
+        assert inbound is not None
+        assert inbound.run_id is None
+        assert inbound.session_id == result.session_id
+        runs = (
+            await db.scalars(
+                select(Run).where(Run.session_id.in_([first.session_id, result.session_id]))
+            )
+        ).all()
+        assert [run.id for run in runs] == [first.run_id]
+
+
+@pytest.mark.asyncio
+async def test_new_command_mentions_running_tasks() -> None:
+    channel_id = await _create_active_channel()
+    await _ingest(channel_id, "msg-running")
+    result = await _ingest(channel_id, "msg-new-busy", text="/new")
+
+    assert result.command == "/new"
+    assert result.reply is not None
+    assert "任务" in result.reply
+
+
+@pytest.mark.asyncio
+async def test_clear_is_alias_for_new() -> None:
+    channel_id = await _create_active_channel()
+    first = await _ingest(channel_id, "msg-clear-before")
+    result = await _ingest(channel_id, "msg-clear", text="/clear")
+
+    assert result.command == "/clear"
+    assert result.reply
+    assert result.session_id is not None
+    assert result.session_id != first.session_id
+
+
+@pytest.mark.asyncio
+async def test_status_help_and_unknown_commands_create_no_run() -> None:
+    channel_id = await _create_active_channel()
+    started = await _ingest(channel_id, "msg-status-base")
+
+    status = await _ingest(channel_id, "msg-status", text="/status")
+    assert status.run_id is None
+    assert status.reply is not None
+    assert status.reply.startswith("Agent：")
+    assert "会话：" in status.reply
+    assert status.session_id == started.session_id
+
+    help_result = await _ingest(channel_id, "msg-help", text="/help")
+    assert help_result.reply is not None
+    assert "/new" in help_result.reply
+
+    unknown = await _ingest(channel_id, "msg-unknown", text="/foo")
+    assert unknown.reply is not None
+    assert "未知命令" in unknown.reply
+
+    async with SessionLocal() as db:
+        count = await db.scalar(
+            select(func.count(Run.id)).where(Run.session_id == started.session_id)
+        )
+        assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_command_returns_active_runs_to_cancel() -> None:
+    channel_id = await _create_active_channel()
+    first = await _ingest(channel_id, "msg-stop-1")
+    second = await _ingest(channel_id, "msg-stop-2")
+    result = await _ingest(channel_id, "msg-stop", text="/stop")
+
+    assert result.command == "/stop"
+    assert result.reply is None
+    assert set(result.cancel_run_ids) == {first.run_id, second.run_id}
+
+    idle = await _ingest(channel_id, "msg-stop-idle", text="/stop", external_id="other-user")
+    assert idle.reply is not None
+    assert idle.cancel_run_ids == ()
+    assert "没有" in idle.reply
+
+
+@pytest.mark.asyncio
+async def test_command_idempotent_by_message_id() -> None:
+    channel_id = await _create_active_channel()
+    first = await _ingest(channel_id, "msg-dup-new", text="/new")
+    second = await _ingest(channel_id, "msg-dup-new", text="/new")
+
+    assert first.duplicate is False
+    assert second.duplicate is True
+    assert second.run_id is None
+    assert second.reply is None
+    async with SessionLocal() as db:
+        inbound_count = await db.scalar(
+            select(func.count(ChannelInbound.id)).where(
+                ChannelInbound.channel_id == channel_id
+            )
+        )
+        assert inbound_count == 1
+        conversation = await db.scalar(
+            select(ChannelConversation).where(ChannelConversation.channel_id == channel_id)
+        )
+        assert conversation is not None
+        assert conversation.session_id == first.session_id
+
+
+@pytest.mark.asyncio
+async def test_plain_slash_text_still_goes_to_agent() -> None:
+    channel_id = await _create_active_channel()
+    result = await _ingest(channel_id, "msg-path", text="/etc/passwd 是什么")
+
+    assert result.command is None
+    assert result.run_id is not None
+
+
+@pytest.mark.asyncio
 async def test_inbound_queues_while_an_active_run_exists(client) -> None:
     channel_id = await _create_active_channel()
     first = await _ingest(channel_id, "msg-q1")

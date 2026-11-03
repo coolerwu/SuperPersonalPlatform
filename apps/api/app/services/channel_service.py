@@ -23,6 +23,7 @@ from app.models import (
     ChannelInbound,
     ChannelRunLink,
     CronJob,
+    Run,
     Session,
     utcnow,
 )
@@ -31,6 +32,35 @@ from app.services.run_service import _create_run_in_db
 DELIVERY_FAILURE_TEXT = "处理这条消息时出错了，请稍后在网页端查看或重试。"
 DELIVERY_TRUNCATED_TEXT = "（内容过长，已截断）"
 MAX_REPLY_CHUNKS = 10
+
+HELP_TEXT = (
+    "可用命令：\n"
+    "/new 开始新会话（旧会话保留在网页端）\n"
+    "/clear 同 /new\n"
+    "/status 查看当前会话与任务状态\n"
+    "/stop 停止当前会话排队或运行中的任务\n"
+    "/help 显示本说明\n\n"
+    "直接发送其他内容即可与 Agent 对话。"
+)
+UNKNOWN_COMMAND_TEXT = f"未知命令。\n\n{HELP_TEXT}"
+STOP_EMPTY_TEXT = "当前没有正在运行或排队的任务。"
+STOP_UNAVAILABLE_TEXT = "停止任务失败：运行队列不可用，请稍后再试。"
+STOP_FINISHED_TEXT = "任务已经结束，无需停止。"
+
+_COMMAND_RE = re.compile(r"^/[A-Za-z][A-Za-z0-9_-]{0,15}$")
+KNOWN_COMMANDS = frozenset({"/new", "/clear", "/help", "/status", "/stop"})
+
+
+def is_command_text(text: str) -> bool:
+    """True only for a whole message that is a single slash command token."""
+    return bool(_COMMAND_RE.match((text or "").strip()))
+
+
+def parse_command(text: str) -> str | None:
+    stripped = (text or "").strip()
+    if not _COMMAND_RE.match(stripped):
+        return None
+    return stripped.lower()
 
 
 class ChannelUnavailable(Exception):
@@ -43,11 +73,94 @@ class InboundResult:
     session_id: str | None
     message_id: str | None
     duplicate: bool = False
+    command: str | None = None
+    reply: str | None = None
+    cancel_run_ids: tuple[str, ...] = ()
 
 
 def _session_title(conversation_name: str, text: str) -> str:
     label = (conversation_name or text).strip().replace("\n", " ")
     return f"微信 · {label[:24]}" if label else "微信 · 新会话"
+
+
+async def _active_run_rows(db: AsyncSession, session_id: str) -> list[tuple[str, str]]:
+    rows = await db.execute(
+        select(Run.id, Run.status)
+        .where(Run.session_id == session_id, Run.status.in_(("queued", "running")))
+        .order_by(Run.created_at)
+    )
+    return [(run_id, status) for run_id, status in rows.all()]
+
+
+async def _apply_command(
+    db: AsyncSession,
+    *,
+    command: str,
+    channel: Channel,
+    agent: Agent,
+    conversation: ChannelConversation | None,
+    external_id: str,
+    contact_name: str,
+) -> tuple[ChannelConversation | None, Session | None, str | None, tuple[str, ...]]:
+    """Run one channel command; returns (conversation, session, reply, runs to cancel)."""
+    session = None
+    if conversation is not None:
+        session = await db.get(Session, conversation.session_id)
+
+    if command not in KNOWN_COMMANDS:
+        return conversation, session, UNKNOWN_COMMAND_TEXT, ()
+
+    if command in ("/new", "/clear"):
+        active: list[tuple[str, str]] = []
+        if session is not None:
+            active = await _active_run_rows(db, session.id)
+        new_session = Session(
+            agent_id=channel.agent_id, title=_session_title(contact_name, "")
+        )
+        db.add(new_session)
+        await db.flush()
+        if conversation is None:
+            conversation = ChannelConversation(
+                channel_id=channel.id,
+                external_id=external_id,
+                display_name=contact_name,
+                session_id=new_session.id,
+            )
+            db.add(conversation)
+            await db.flush()
+        else:
+            conversation.session_id = new_session.id
+        reply = "已开始新会话，之前的对话不会带入；旧会话仍保留在网页端。"
+        if active:
+            reply += (
+                f"\n之前还有 {len(active)} 个任务排队或运行中，"
+                "完成后仍会回复到这里。"
+            )
+        return conversation, new_session, reply, ()
+
+    if command == "/help":
+        return conversation, session, HELP_TEXT, ()
+
+    if command == "/status":
+        if session is None:
+            return conversation, None, "当前还没有会话，直接发消息即可开始新对话。", ()
+        active = await _active_run_rows(db, session.id)
+        running = sum(1 for _, status in active if status == "running")
+        queued = sum(1 for _, status in active if status == "queued")
+        reply = (
+            f"Agent：{agent.name}\n"
+            f"会话：{session.title}\n"
+            f"运行中：{running} 个，排队：{queued} 个"
+        )
+        return conversation, session, reply, ()
+
+    # /stop
+    if session is None:
+        return conversation, None, STOP_EMPTY_TEXT, ()
+    active = await _active_run_rows(db, session.id)
+    if not active:
+        return conversation, session, STOP_EMPTY_TEXT, ()
+    return conversation, session, None, tuple(run_id for run_id, _ in active)
 
 
 def _split_blocks(text: str) -> list[str]:
@@ -156,6 +269,8 @@ async def ingest_inbound(
     if not external_message_id or not external_conversation_id:
         raise ValueError("message and conversation ids are required")
 
+    command = parse_command(text)
+
     async with SessionLocal() as db:
         channel = await db.get(Channel, channel_id)
         if channel is None or channel.type != "wechat":
@@ -198,17 +313,50 @@ async def ingest_inbound(
                 ChannelConversation.external_id == external_conversation_id,
             )
         )
+        contact_name = (conversation_name or sender_name).strip()
+        if conversation is not None:
+            if contact_name and conversation.display_name != contact_name:
+                conversation.display_name = contact_name
+
+        if command is not None:
+            conversation, session, reply, cancel_run_ids = await _apply_command(
+                db,
+                command=command,
+                channel=channel,
+                agent=agent,
+                conversation=conversation,
+                external_id=external_conversation_id,
+                contact_name=contact_name,
+            )
+            inbound.conversation_id = conversation.id if conversation is not None else None
+            inbound.session_id = session.id if session is not None else None
+            if context_token and conversation is not None:
+                conversation.context_token = context_token
+                conversation.context_token_updated_at = utcnow()
+            channel.last_seen_at = utcnow()
+            channel.last_error = None
+            await db.commit()
+            return InboundResult(
+                run_id=None,
+                session_id=session.id if session is not None else None,
+                message_id=None,
+                duplicate=False,
+                command=command,
+                reply=reply,
+                cancel_run_ids=cancel_run_ids,
+            )
+
         if conversation is None:
             session = Session(
                 agent_id=channel.agent_id,
-                title=_session_title(conversation_name or sender_name, text),
+                title=_session_title(contact_name, text),
             )
             db.add(session)
             await db.flush()
             conversation = ChannelConversation(
                 channel_id=channel_id,
                 external_id=external_conversation_id,
-                display_name=conversation_name or sender_name,
+                display_name=contact_name,
                 session_id=session.id,
             )
             db.add(conversation)
@@ -219,13 +367,11 @@ async def ingest_inbound(
                 # The session was deleted; keep the dedup row but start fresh.
                 session = Session(
                     agent_id=channel.agent_id,
-                    title=_session_title(conversation_name or sender_name, text),
+                    title=_session_title(contact_name, text),
                 )
                 db.add(session)
                 await db.flush()
                 conversation.session_id = session.id
-            if conversation_name and conversation.display_name != conversation_name:
-                conversation.display_name = conversation_name
 
         run, message = await _create_run_in_db(db, session, text, source="wechat")
         db.add(

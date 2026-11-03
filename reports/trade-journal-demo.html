@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>交易记录 · 量化工作区 Demo</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #e9edf3;
+    --panel: rgba(255, 255, 255, 0.66);
+    --panel-solid: #f7f8fb;
+    --panel-2: #f1f3f8;
+    --border: rgba(26, 30, 38, 0.09);
+    --border-strong: rgba(26, 30, 38, 0.16);
+    --text: #1a1e26;
+    --muted: #5b6472;
+    --faint: #77818e;
+    --accent: #5b4bf0;
+    --accent-strong: #4a3ae0;
+    --accent-soft: rgba(122, 108, 255, 0.1);
+    --accent-rgb: 122 108 255;
+    --ok: #15803d;
+    --ok-soft: rgba(21, 128, 61, 0.08);
+    --danger: #dc2626;
+    --danger-soft: rgba(220, 38, 38, 0.08);
+    --warn: #b45309;
+    --warn-soft: rgba(180, 83, 9, 0.1);
+    --teal: #0fb5a6;
+    --shadow-sm: 0 1px 2px rgba(26, 30, 38, 0.05);
+    --shadow-md: 0 18px 44px rgba(28, 34, 52, 0.1);
+    --shadow-lg: 0 26px 70px rgba(28, 34, 52, 0.16);
+    font-family: Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui,
+      -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    color: var(--text);
+    background:
+      radial-gradient(1200px 760px at 52% -14%, #f8fafd 0%, rgba(248, 250, 253, 0) 60%),
+      linear-gradient(160deg, #e6ebf3 0%, #e9edf3 55%, #e3e8f0 100%);
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: -10%;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 18% 12%, rgba(15, 181, 166, 0.34), transparent 34%),
+      radial-gradient(circle at 86% 22%, rgba(122, 108, 255, 0.3), transparent 40%),
+      radial-gradient(circle at 52% 96%, rgba(255, 170, 120, 0.28), transparent 42%);
+    filter: blur(2px);
+  }
+  button, input, select, textarea { font: inherit; }
+  button { cursor: pointer; }
+  .shell {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    gap: 14px;
+    min-height: 100vh;
+    padding: 14px;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    position: sticky;
+    top: 14px;
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 250px;
+    width: 250px;
+    height: calc(100vh - 28px);
+    padding: 16px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.56);
+    box-shadow: 0 24px 60px rgba(28, 34, 52, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(28px) saturate(1.25);
+  }
+  .brand-row { display: flex; align-items: center; gap: 10px; padding: 0 4px 14px; }
+  .brand-orb {
+    width: 26px; height: 26px; border-radius: 50%;
+    background: conic-gradient(from 210deg, #0fb5a6, #7a6cff, #ffb38a, #0fb5a6);
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.7), 0 6px 16px rgba(122, 108, 255, 0.28);
+    position: relative;
+  }
+  .brand-orb::after {
+    content: ""; position: absolute; inset: 8px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.92); box-shadow: 0 0 10px rgba(255, 255, 255, 0.85);
+  }
+  .brand-name { font-size: 12.5px; font-weight: 650; letter-spacing: -0.01em; }
+  .brand-name small { display: block; margin-top: 2px; color: var(--faint); font-size: 9.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
+  .workspace-tabs {
+    display: flex; gap: 2px; padding: 3px; margin-bottom: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.8); border-radius: 999px;
+    background: rgba(255, 255, 255, 0.5);
+  }
+  .workspace-tab {
+    flex: 1; height: 28px; border: 0; border-radius: 999px; background: transparent;
+    color: var(--muted); font-size: 11.5px; font-weight: 500;
+  }
+  .workspace-tab.active { background: rgba(255, 255, 255, 0.95); color: #4b3bdb; font-weight: 600; box-shadow: 0 4px 14px rgba(28, 34, 52, 0.08); }
+  .side-group { display: flex; flex-direction: column; gap: 6px; }
+  .side-head { padding: 1px 10px; color: var(--faint); font-size: 10.5px; letter-spacing: 0.08em; }
+  .side-action {
+    display: flex; align-items: center; gap: 9px; width: 100%; min-height: 38px;
+    padding: 8px 10px; border: 0; border-radius: 11px; background: transparent;
+    color: var(--muted); font-size: 12.5px; text-align: left;
+  }
+  .side-action:hover { background: rgba(255, 255, 255, 0.5); color: var(--text); }
+  .side-action.active { background: rgba(122, 108, 255, 0.11); color: #4b3bdb; font-weight: 600; }
+  .side-action svg { flex: 0 0 auto; width: 16px; height: 16px; }
+  .side-action span:nth-child(2) { flex: 1; min-width: 0; }
+  .side-badge {
+    margin-left: auto; padding: 1px 7px; border-radius: 999px;
+    background: rgba(122, 108, 255, 0.1); color: #5b4bf0;
+    font-size: 9.5px; font-weight: 500; white-space: nowrap;
+  }
+  .side-action.active .side-badge { background: rgba(255, 255, 255, 0.6); }
+  .side-hint { margin: 2px 10px 0; color: #8a93a0; font-size: 10.5px; line-height: 1.55; }
+  .side-spacer { flex: 1; }
+  .side-foot { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid rgba(26, 30, 38, 0.07); }
+  .agent-chip {
+    display: flex; align-items: center; gap: 7px; padding: 9px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.85); border-radius: 11px;
+    background: rgba(255, 255, 255, 0.5); color: var(--muted); font-size: 11px;
+  }
+  .agent-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 3px rgba(15, 181, 166, 0.12); }
+  .agent-chip .muted { color: var(--faint); }
+
+  /* Main */
+  .main { flex: 1; min-width: 0; padding: 6px 18px 30px 4px; }
+  .content { max-width: 1280px; margin: 0 auto; }
+  .topbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; padding: 12px 0 18px; }
+  .eyebrow { color: var(--faint); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; }
+  h1 { display: flex; align-items: center; gap: 10px; margin: 7px 0 6px; font-size: 26px; letter-spacing: -0.03em; }
+  .pill {
+    display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: 0;
+  }
+  .topbar p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+  .top-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  .ghost, .primary, .soft {
+    height: 36px; border-radius: 11px; padding: 0 14px; font-size: 12px; font-weight: 600;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  }
+  .ghost { border: 1px solid rgba(255, 255, 255, 0.9); background: rgba(255, 255, 255, 0.5); color: var(--muted); }
+  .ghost:hover { background: rgba(255, 255, 255, 0.8); color: var(--text); }
+  .primary {
+    border: 0; color: #fff;
+    background: linear-gradient(120deg, #0fb5a6, #7a6cff);
+    box-shadow: 0 8px 22px rgba(122, 108, 255, 0.28);
+  }
+  .primary:hover { transform: translateY(-1px); box-shadow: 0 12px 28px rgba(122, 108, 255, 0.34); }
+  .soft { border: 1px solid rgba(122, 108, 255, 0.18); background: rgba(122, 108, 255, 0.08); color: var(--accent); }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .stat-card {
+    padding: 13px 14px 12px; border: 1px solid rgba(255, 255, 255, 0.82); border-radius: 16px;
+    background: rgba(255, 255, 255, 0.56); box-shadow: 0 10px 30px rgba(28, 34, 52, 0.06);
+    backdrop-filter: blur(16px);
+  }
+  .stat-card .label { color: var(--faint); font-size: 10.5px; letter-spacing: 0.02em; white-space: nowrap; }
+  .stat-card .value { margin-top: 6px; font-size: 22px; font-weight: 650; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+  .stat-card .sub { margin-top: 4px; color: var(--faint); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tone-ok { color: var(--ok); }
+  .tone-bad { color: var(--danger); }
+  .tone-accent { color: var(--accent); }
+
+  .workspace-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; align-items: start; }
+  .left-col, .right-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .panel {
+    border: 1px solid rgba(255, 255, 255, 0.82); border-radius: 18px;
+    background: rgba(255, 255, 255, 0.62); box-shadow: 0 14px 42px rgba(28, 34, 52, 0.07);
+    backdrop-filter: blur(20px) saturate(1.1);
+  }
+  .panel-pad { padding: 14px 16px; }
+  .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 16px 10px; }
+  .panel-head h2 { margin: 0 0 3px; font-size: 14px; letter-spacing: -0.01em; }
+  .panel-head p { margin: 0; color: var(--faint); font-size: 11px; line-height: 1.5; }
+  .agent-note {
+    display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 999px;
+    background: rgba(15, 181, 166, 0.08); color: #0f766e; font-size: 10px; white-space: nowrap;
+  }
+  .agent-note::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--teal); }
+
+  .toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; flex-wrap: wrap; }
+  .field-inline {
+    height: 32px; border: 1px solid var(--border); border-radius: 9px; padding: 0 9px;
+    background: rgba(255, 255, 255, 0.72); color: var(--text); font-size: 11.5px; outline: none;
+  }
+  .field-inline:focus { border-color: rgba(122, 108, 255, 0.45); box-shadow: 0 0 0 3px rgba(122, 108, 255, 0.08); }
+  .search-box { position: relative; margin-left: auto; }
+  .search-box input { width: 190px; padding-left: 28px; }
+  .search-box svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--faint); width: 14px; height: 14px; pointer-events: none; }
+  .toolbar .reset { border: 0; background: transparent; color: var(--faint); font-size: 11px; padding: 0 4px; }
+  .toolbar .reset:hover { color: var(--accent); }
+
+  .table-wrap { overflow-x: auto; padding: 0 6px 8px; }
+  table { width: 100%; min-width: 700px; border-collapse: collapse; font-size: 11.5px; }
+  th {
+    padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--faint);
+    font-weight: 600; text-align: left; white-space: nowrap; font-size: 10.5px;
+  }
+  td { padding: 10px; border-bottom: 1px solid rgba(26, 30, 38, 0.055); color: var(--muted); white-space: nowrap; vertical-align: middle; }
+  tbody tr { cursor: pointer; transition: background 0.12s ease; }
+  tbody tr:hover { background: rgba(255, 255, 255, 0.55); }
+  tbody tr.selected { background: rgba(122, 108, 255, 0.075); }
+  tbody tr:last-child td { border-bottom: 0; }
+  .time-cell { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--faint); }
+  .trade-cell { display: flex; flex-direction: column; gap: 4px; }
+  .trade-symbol { display: flex; align-items: center; gap: 6px; color: var(--text); font-weight: 650; font-size: 12px; }
+  .dir { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; padding: 1px 6px; border-radius: 999px; font-size: 9.5px; font-weight: 600; }
+  .dir.long { background: var(--ok-soft); color: var(--ok); }
+  .dir.short { background: var(--danger-soft); color: var(--danger); }
+  .tags { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .tag {
+    display: inline-flex; padding: 1px 6px; border-radius: 999px;
+    background: rgba(26, 30, 38, 0.045); color: var(--faint); font-size: 9.5px; white-space: nowrap;
+  }
+  .tag.accent { background: var(--accent-soft); color: var(--accent); }
+  .tag.warn { background: var(--warn-soft); color: var(--warn); }
+  .agent-spark { color: var(--teal); font-size: 10px; }
+  .setup-cell { color: var(--muted); }
+  .price-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--text); }
+  .price-path .arrow { color: var(--faint); padding: 0 4px; }
+  .num { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  .status-badge { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 9.5px; white-space: nowrap; }
+  .status-badge.closed { background: var(--accent-soft); color: var(--accent); }
+  .status-badge.open { background: var(--warn-soft); color: var(--warn); }
+  .status-badge.cancelled { background: rgba(26, 30, 38, 0.05); color: var(--faint); }
+  .empty-row td { padding: 28px 10px; text-align: center; color: var(--faint); }
+
+  /* Detail panel */
+  .detail-panel { overflow: hidden; }
+  .detail-top { padding: 15px 16px 12px; border-bottom: 1px solid var(--border); }
+  .detail-symbol-row { display: flex; align-items: center; gap: 8px; }
+  .detail-symbol { font-size: 17px; font-weight: 700; letter-spacing: -0.02em; }
+  .detail-sub { margin-top: 4px; color: var(--faint); font-size: 10.5px; }
+  .detail-pnl { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 14px; }
+  .detail-pnl .big { font-size: 27px; font-weight: 700; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+  .detail-pnl .ret { font-size: 12px; font-weight: 600; }
+  .detail-pnl .unit { margin-left: 3px; color: var(--faint); font-size: 10px; font-weight: 500; }
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; padding: 14px 16px 4px; }
+  .kv .k { color: var(--faint); font-size: 10px; }
+  .kv .v { margin-top: 3px; color: var(--text); font-size: 11.5px; font-weight: 550; }
+  .kv .v.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  .detail-block { padding: 12px 16px 0; }
+  .detail-block h3 { margin: 0 0 6px; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: 0.03em; }
+  .detail-block p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.65; }
+  .quote-block {
+    margin: 0 16px; padding: 10px 12px; border-left: 2px solid rgba(122, 108, 255, 0.28);
+    border-radius: 0 8px 8px 0; background: rgba(122, 108, 255, 0.045);
+  }
+  .quote-block p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.65; }
+  .detail-tags { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 16px 0; }
+  .process-row { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 10px 16px 0; color: var(--faint); font-size: 10.5px; }
+  .process-row b { color: var(--text); font-weight: 600; }
+  .detail-actions { display: flex; gap: 8px; padding: 14px 16px 16px; }
+  .detail-actions button { flex: 1; height: 34px; border-radius: 10px; font-size: 11.5px; font-weight: 600; }
+
+  .insight-panel { padding: 14px 16px; }
+  .insight-panel h2 { margin: 0 0 3px; font-size: 14px; }
+  .insight-panel > p { margin: 0 0 12px; color: var(--faint); font-size: 11px; }
+  .bar-row { display: grid; grid-template-columns: 74px 1fr 36px; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: 10.5px; }
+  .bar-track { height: 6px; border-radius: 999px; background: rgba(26, 30, 38, 0.06); overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #0fb5a6, #7a6cff); }
+  .bar-row b { text-align: right; color: var(--text); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .insight-divider { margin: 14px 0 12px; border-top: 1px solid var(--border); }
+  .agent-card {
+    padding: 12px; border: 1px solid rgba(122, 108, 255, 0.14); border-radius: 14px;
+    background: linear-gradient(135deg, rgba(15, 181, 166, 0.07), rgba(122, 108, 255, 0.08));
+  }
+  .agent-card .who { display: flex; align-items: center; gap: 6px; color: var(--accent); font-size: 10.5px; font-weight: 650; }
+  .agent-card .who::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: linear-gradient(120deg, #0fb5a6, #7a6cff); }
+  .agent-card p { margin: 7px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.65; }
+  .agent-card a { display: inline-block; margin-top: 8px; color: var(--accent); font-size: 10.5px; font-weight: 600; text-decoration: none; cursor: pointer; }
+
+  /* Modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 40; display: none; align-items: flex-start; justify-content: center;
+    padding: 5vh 18px; background: rgba(20, 24, 34, 0.22); backdrop-filter: blur(8px);
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    width: min(860px, 100%); max-height: 90vh; overflow: auto;
+    border: 1px solid rgba(255, 255, 255, 0.9); border-radius: 20px;
+    background: rgba(250, 251, 254, 0.96); box-shadow: var(--shadow-lg);
+  }
+  .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+  .modal-head h2 { margin: 0 0 4px; font-size: 18px; letter-spacing: -0.02em; }
+  .modal-head p { margin: 0; color: var(--faint); font-size: 11.5px; }
+  .modal-close { width: 30px; height: 30px; border: 0; border-radius: 9px; background: rgba(26, 30, 38, 0.05); color: var(--muted); font-size: 18px; line-height: 1; }
+  .modal-close:hover { background: rgba(26, 30, 38, 0.09); color: var(--text); }
+  .form-body { padding: 18px 20px 4px; }
+  .form-section { margin-bottom: 18px; }
+  .form-section h3 { margin: 0 0 10px; color: var(--faint); font-size: 10.5px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+  .form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; }
+  .form-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .form-field > span { color: var(--faint); font-size: 10.5px; }
+  .form-field input, .form-field select, .form-field textarea {
+    width: 100%; border: 1px solid var(--border); border-radius: 9px; background: #fff;
+    color: var(--text); font-size: 12px; outline: none;
+  }
+  .form-field input, .form-field select { height: 34px; padding: 0 9px; }
+  .form-field textarea { min-height: 74px; padding: 8px 9px; resize: vertical; line-height: 1.55; }
+  .form-field input:focus, .form-field select:focus, .form-field textarea:focus {
+    border-color: rgba(122, 108, 255, 0.5); box-shadow: 0 0 0 3px rgba(122, 108, 255, 0.08);
+  }
+  .form-field input:disabled { background: #f3f5f9; color: var(--faint); }
+  .form-wide { grid-column: 1 / -1; }
+  .form-note { margin: 4px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.5; }
+  .modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px 18px; border-top: 1px solid var(--border); }
+  .preview {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 8px 12px; border-radius: 10px; background: rgba(122, 108, 255, 0.055);
+    color: var(--faint); font-size: 10.5px;
+  }
+  .preview b { color: var(--text); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .modal-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+  .modal-actions button { height: 36px; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 26px; z-index: 60; transform: translate(-50%, 16px);
+    padding: 9px 14px; border-radius: 999px; background: rgba(23, 27, 34, 0.9); color: #fff;
+    font-size: 11.5px; opacity: 0; pointer-events: none; transition: opacity 0.18s ease, transform 0.18s ease;
+    box-shadow: 0 12px 30px rgba(20, 24, 34, 0.22);
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 1180px) {
+    .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+    .right-col { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+  }
+  @media (max-width: 860px) {
+    .shell { padding: 0; }
+    .sidebar { display: none; }
+    .main { padding: 18px 16px 28px; }
+    .topbar { align-items: flex-start; flex-direction: column; }
+    .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .right-col { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand-row">
+      <span class="brand-orb"></span>
+      <div class="brand-name">Agent Command Center<small>Personal Console</small></div>
+    </div>
+    <div class="workspace-tabs">
+      <button class="workspace-tab">Agent</button>
+      <button class="workspace-tab active">量化</button>
+    </div>
+    <div class="side-group">
+      <div class="side-head">独立工具</div>
+      <button class="side-action">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 20h16"/><path d="M7 17V9M12 15V5M17 18v-7"/>
+          <rect x="5" y="10" width="4" height="5" rx="1"/><rect x="10" y="6" width="4" height="6" rx="1"/><rect x="15" y="12" width="4" height="4" rx="1"/>
+        </svg>
+        <span>回测</span><span class="side-badge">不绑定 Agent</span>
+      </button>
+      <button class="side-action active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>
+        </svg>
+        <span>交易记录</span><span class="side-badge">不绑定 Agent</span>
+      </button>
+      <p class="side-hint">手工记录 · 复盘 · Agent 可读</p>
+    </div>
+    <div class="side-spacer"></div>
+    <div class="side-foot">
+      <div class="agent-chip"><span class="dot"></span>默认助手 <span class="muted">· deepseek-chat</span></div>
+      <button class="side-action">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>
+        </svg>
+        <span>退出登录</span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="content">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">量化工作区 / 独立工具</div>
+          <h1>交易记录 <span class="pill">手工日志</span></h1>
+          <p>记录真实或模拟交易的计划、执行与复盘，Agent 可通过 <b>trade-journal</b> 技能读取。</p>
+        </div>
+        <div class="top-actions">
+          <button class="ghost" onclick="toast('演示模式：导出 CSV 未启用')">导出 CSV</button>
+          <button class="primary" onclick="openForm()">+ 新建记录</button>
+        </div>
+      </header>
+
+      <section class="stat-grid">
+        <div class="stat-card"><div class="label">已平仓</div><div class="value">24</div><div class="sub">持仓中 2 · 已取消 1</div></div>
+        <div class="stat-card"><div class="label">胜率</div><div class="value tone-accent">58.3%</div><div class="sub">14 胜 / 10 负</div></div>
+        <div class="stat-card"><div class="label">平均收益</div><div class="value tone-ok">+1.42%</div><div class="sub">中位数 +0.86%</div></div>
+        <div class="stat-card"><div class="label">平均 R</div><div class="value">0.86</div><div class="sub">最佳 2.1R</div></div>
+        <div class="stat-card"><div class="label">盈亏比</div><div class="value">1.67</div><div class="sub">总盈利 / 总亏损</div></div>
+        <div class="stat-card"><div class="label">累计盈亏</div><div class="value tone-ok">+1,284 <span style="font-size:10px;font-weight:500;color:var(--faint)">USDT</span></div><div class="sub">10 月 · 已填数量</div></div>
+      </section>
+
+      <div class="workspace-grid">
+        <div class="left-col">
+          <div class="panel toolbar">
+            <select class="field-inline" id="filterStatus" onchange="renderTable()">
+              <option value="">全部状态</option><option value="closed">已平仓</option><option value="open">持仓中</option><option value="cancelled">已取消</option>
+            </select>
+            <select class="field-inline" id="filterDirection" onchange="renderTable()">
+              <option value="">全部方向</option><option value="long">做多</option><option value="short">做空</option>
+            </select>
+            <select class="field-inline" onchange="toast('演示模式：交易对筛选未启用')">
+              <option>全部交易对</option><option>ETHUSDT</option><option>BTCUSDT</option><option>SOLUSDT</option>
+            </select>
+            <select class="field-inline" onchange="toast('演示模式：日期筛选未启用')">
+              <option>最近 30 天</option><option>本月</option><option>上月</option><option>全部</option>
+            </select>
+            <button class="reset" onclick="resetFilters()">重置</button>
+            <div class="search-box">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input class="field-inline" id="filterSearch" placeholder="搜索策略、理由、标签" oninput="renderTable()" />
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div><h2>最近交易</h2><p>2026-10-01 → 2026-10-31 · 展示最近 8 笔</p></div>
+              <span class="agent-note">Agent 已启用 trade-journal</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>时间</th><th>交易</th><th>策略 / 形态</th><th>入场 → 出场</th><th>收益</th><th>R</th><th>盈亏</th><th>状态</th></tr></thead>
+                <tbody id="tableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="right-col">
+          <div class="panel detail-panel" id="detailPanel"></div>
+          <div class="panel insight-panel">
+            <h2>本周期复盘</h2>
+            <p>按策略胜率 · 最近 24 笔已平仓</p>
+            <div class="bar-row"><span>趋势回踩</span><div class="bar-track"><div class="bar-fill" style="width:67%"></div></div><b>67%</b></div>
+            <div class="bar-row"><span>区间假突破</span><div class="bar-track"><div class="bar-fill" style="width:45%"></div></div><b>45%</b></div>
+            <div class="bar-row"><span>突破</span><div class="bar-track"><div class="bar-fill" style="width:50%"></div></div><b>50%</b></div>
+            <div class="insight-divider"></div>
+            <h2 style="font-size:12px;margin-bottom:8px">高频错误</h2>
+            <div class="tags">
+              <span class="tag warn">移动止损 3</span><span class="tag warn">追高 2</span><span class="tag warn">提前止盈 2</span><span class="tag">无 17</span>
+            </div>
+            <div class="insight-divider"></div>
+            <div class="agent-card">
+              <div class="who">Agent 复盘建议</div>
+              <p>趋势回踩的 R 明显高于突破，主要亏损来自追高和过早移动止损。要不要按策略拆开看？</p>
+              <a onclick="toast('演示模式：已复制复盘提示词')">让 Agent 按策略拆解 →</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <div class="modal-head">
+      <div><h2 id="modalTitle">新建交易记录</h2><p>只记录，不连接交易所，不会下单或自动平仓。</p></div>
+      <button class="modal-close" onclick="closeForm()">×</button>
+    </div>
+    <div class="form-body">
+      <div class="form-section">
+        <h3>基本信息</h3>
+        <div class="form-grid">
+          <label class="form-field"><span>交易对</span><input id="f-symbol" value="ETHUSDT" /></label>
+          <label class="form-field"><span>市场</span><select id="f-market"><option>现货</option><option>合约</option></select></label>
+          <label class="form-field"><span>方向</span><select id="f-direction"><option value="long">做多</option><option value="short">做空</option></select></label>
+          <label class="form-field"><span>状态</span><select id="f-status" onchange="toggleExitFields()"><option value="closed" selected>已平仓</option><option value="open">持仓中</option><option value="cancelled">已取消</option></select></label>
+          <label class="form-field"><span>模式</span><select id="f-mode"><option>实盘</option><option>模拟</option><option>回测</option></select></label>
+          <label class="form-field"><span>周期</span><select id="f-timeframe"><option>4h</option><option>1h</option><option>1day</option><option>1week</option></select></label>
+        </div>
+      </div>
+      <div class="form-section">
+        <h3>执行</h3>
+        <div class="form-grid">
+          <label class="form-field"><span>入场时间</span><input id="f-entryAt" type="datetime-local" value="2026-10-31T14:20" /></label>
+          <label class="form-field"><span>入场价</span><input id="f-entryPrice" type="number" step="0.01" value="3812" oninput="updatePreview()" /></label>
+          <label class="form-field"><span>数量</span><input id="f-qty" type="number" step="0.01" value="0.5" oninput="updatePreview()" /></label>
+          <label class="form-field"><span>出场时间</span><input id="f-exitAt" type="datetime-local" value="" /></label>
+          <label class="form-field"><span>出场价</span><input id="f-exitPrice" type="number" step="0.01" value="" oninput="updatePreview()" /></label>
+          <label class="form-field"><span>手续费（USDT）</span><input id="f-fees" type="number" step="0.01" value="4.2" oninput="updatePreview()" /></label>
+          <label class="form-field"><span>止损</span><input id="f-stop" type="number" step="0.01" value="3730" oninput="updatePreview()" /></label>
+          <label class="form-field"><span>止盈</span><input id="f-target" type="number" step="0.01" value="4000" /></label>
+          <label class="form-field"><span>关联回测（可选）</span><input id="f-backtest" placeholder="回测任务 ID" /></label>
+        </div>
+      </div>
+      <div class="form-section">
+        <h3>复盘与标签</h3>
+        <div class="form-grid">
+          <label class="form-field"><span>策略 / 形态</span><input id="f-setup" value="趋势回踩" /></label>
+          <label class="form-field"><span>情绪</span><select id="f-emotion"><option>平静</option><option>犹豫</option><option>FOMO</option><option>焦虑</option><option>自信</option></select></label>
+          <label class="form-field"><span>信心</span><select id="f-confidence"><option>1</option><option>2</option><option>3</option><option selected>4</option><option>5</option></select></label>
+          <label class="form-field"><span>是否按计划</span><select id="f-followed"><option>是</option><option>否</option></select></label>
+          <label class="form-field"><span>标签（逗号分隔）</span><input id="f-tags" value="趋势, 回踩" /></label>
+          <label class="form-field"><span>错误标签（逗号分隔）</span><input id="f-mistakes" value="" /></label>
+          <label class="form-field form-wide"><span>交易理由 / 计划</span><textarea id="f-thesis">日线在 SMA200 上方，4h 回踩 20EMA 后收出吞没；风险 1R，目标前高。</textarea></label>
+          <label class="form-field form-wide"><span>复盘总结</span><textarea id="f-review" placeholder="平仓后再写：执行是否符合计划？哪里可以更好？"></textarea></label>
+        </div>
+        <p class="form-note">价格收益按开平仓价计算；净盈亏需要填写数量，手续费会从盈亏中扣除。R 倍数需要填写止损。</p>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <div class="preview">
+        <span>价格收益 <b id="p-return">—</b></span>
+        <span>R 倍数 <b id="p-r">—</b></span>
+        <span>净盈亏 <b id="p-pnl">—</b></span>
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" onclick="closeForm()">取消</button>
+        <button class="primary" onclick="saveForm()">保存记录</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+  const records = [
+    {
+      id: "r1", time: "10-31 14:20", symbol: "ETHUSDT", direction: "long", setup: "趋势回踩",
+      entry: 3812, exit: 3946, returnPct: 3.51, r: 1.63, pnl: 263.8, status: "closed",
+      tags: ["趋势", "回踩", "A+"], agent: true, timeframe: "4h", qty: 2.0, fees: 4.2,
+      stop: 3730, target: 4000, mode: "实盘",
+      thesis: "日线在 SMA200 上方，4h 回踩 20EMA 后收出吞没；风险 1R，目标前高。",
+      review: "按计划入场，移动止损到成本后被动止盈；没有追高。",
+      emotion: "平静", confidence: 4, followed: true, mistakes: [], backtest: "5fd8…c326"
+    },
+    {
+      id: "r2", time: "10-30 09:05", symbol: "BTCUSDT", direction: "short", setup: "区间假突破",
+      entry: 72400, exit: 71150, returnPct: 1.73, r: 3.13, pnl: 122.9, status: "closed",
+      tags: ["反转", "假突破"], agent: false, timeframe: "1h", qty: 0.1, fees: 2.1,
+      stop: 72800, target: 70500, mode: "实盘",
+      thesis: "区间上沿假突破，1h 收回收盘价下方，尝试做空回落。",
+      review: "止盈偏早，但执行符合计划。",
+      emotion: "犹豫", confidence: 3, followed: true, mistakes: ["提前止盈"], backtest: ""
+    },
+    {
+      id: "r3", time: "10-29 21:40", symbol: "ETHUSDT", direction: "long", setup: "趋势回踩",
+      entry: 3760, exit: 3702, returnPct: -1.54, r: -1.0, pnl: -120.1, status: "closed",
+      tags: ["趋势", "止损"], agent: false, timeframe: "4h", qty: 2.0, fees: 4.1,
+      stop: 3702, target: 3900, mode: "实盘",
+      thesis: "趋势内回踩，预期 4h 支撑有效。",
+      review: "入场早了一根 K 线，止损按计划执行。",
+      emotion: "焦虑", confidence: 2, followed: true, mistakes: ["入场过早"], backtest: ""
+    },
+    {
+      id: "r4", time: "10-28 08:15", symbol: "SOLUSDT", direction: "long", setup: "突破",
+      entry: 186.2, exit: 191.8, returnPct: 3.01, r: 1.87, pnl: 80.4, status: "closed",
+      tags: ["突破", "放量"], agent: false, timeframe: "1h", qty: 15, fees: 3.6,
+      stop: 183.2, target: 196, mode: "实盘",
+      thesis: "平台上沿放量突破，回踩不破后跟进。",
+      review: "按计划持有到目标位附近。",
+      emotion: "平静", confidence: 4, followed: true, mistakes: [], backtest: ""
+    },
+    {
+      id: "r5", time: "10-27 16:50", symbol: "ETHUSDT", direction: "long", setup: "趋势回踩",
+      entry: 3690, exit: 3780, returnPct: 2.44, r: 1.39, pnl: 198.1, status: "closed",
+      tags: ["趋势", "回踩"], agent: true, timeframe: "4h", qty: 2.25, fees: 4.4,
+      stop: 3625, target: 3800, mode: "实盘",
+      thesis: "日线趋势未破，4h 回踩均线后出现反转 K 线。",
+      review: "按计划执行，止盈略早。",
+      emotion: "平静", confidence: 4, followed: true, mistakes: ["提前止盈"], backtest: ""
+    },
+    {
+      id: "r6", time: "10-26 11:30", symbol: "BTCUSDT", direction: "long", setup: "日线趋势",
+      entry: 70800, exit: 70100, returnPct: -0.99, r: -0.78, pnl: -93.8, status: "closed",
+      tags: ["趋势", "止损"], agent: false, timeframe: "1day", qty: 0.13, fees: 2.8,
+      stop: 69900, target: 73500, mode: "实盘",
+      thesis: "日线趋势延续，回踩不破后做多。",
+      review: "宏观消息前入场，忽略了事件风险。",
+      emotion: "FOMO", confidence: 3, followed: false, mistakes: ["忽略事件", "追高"], backtest: ""
+    },
+    {
+      id: "r7", time: "10-25 20:10", symbol: "ETHUSDT", direction: "short", setup: "冲高回落",
+      entry: 3840, exit: 3795, returnPct: 1.17, r: 1.29, pnl: 72.05, status: "closed",
+      tags: ["反转"], agent: false, timeframe: "1h", qty: 1.67, fees: 3.1,
+      stop: 3875, target: 3750, mode: "模拟",
+      thesis: "前高附近放量滞涨，尝试短线回落。",
+      review: "模拟单，执行尚可。",
+      emotion: "自信", confidence: 3, followed: true, mistakes: [], backtest: ""
+    },
+    {
+      id: "r8", time: "10-24 09:45", symbol: "ETHUSDT", direction: "long", setup: "趋势回踩",
+      entry: 3720, exit: 3910, returnPct: 5.11, r: 2.11, pnl: 341.2, status: "closed",
+      tags: ["趋势", "回踩", "A+"], agent: true, timeframe: "4h", qty: 1.82, fees: 4.6,
+      stop: 3630, target: 3920, mode: "实盘",
+      thesis: "4h 回踩结构低点，日线趋势向上；风险 1R，目标前高。",
+      review: "本周期最好的一笔：等待回踩、按计划持有。",
+      emotion: "平静", confidence: 5, followed: true, mistakes: [], backtest: ""
+    }
+  ];
+
+  let selectedId = records[0].id;
+  let editingId = null;
+
+  function esc(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  }
+  function fmtPrice(value) {
+    if (value == null || value === "") return "—";
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "—";
+    return n.toLocaleString("en-US", { maximumFractionDigits: n >= 1000 ? 0 : n >= 100 ? 1 : 2 });
+  }
+  function fmtPct(value) {
+    if (value == null || !Number.isFinite(Number(value))) return "—";
+    const n = Number(value);
+    return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+  }
+  function fmtR(value) {
+    if (value == null || !Number.isFinite(Number(value))) return "—";
+    const n = Number(value);
+    return `${n >= 0 ? "+" : ""}${n.toFixed(2)}R`;
+  }
+  function fmtPnl(value) {
+    if (value == null || !Number.isFinite(Number(value))) return "—";
+    const n = Number(value);
+    return `${n >= 0 ? "+" : ""}${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  }
+  function tone(value) { return Number(value) >= 0 ? "tone-ok" : "tone-bad"; }
+  function directionLabel(value) { return value === "long" ? "多" : "空"; }
+  function statusLabel(value) { return value === "closed" ? "已平仓" : value === "open" ? "持仓中" : "已取消"; }
+
+  function renderTable() {
+    const status = document.getElementById("filterStatus").value;
+    const direction = document.getElementById("filterDirection").value;
+    const search = document.getElementById("filterSearch").value.trim().toLowerCase();
+    const rows = records.filter((record) => {
+      if (status && record.status !== status) return false;
+      if (direction && record.direction !== direction) return false;
+      if (search) {
+        const haystack = [record.symbol, record.setup, record.thesis, record.review, ...(record.tags || []), ...(record.mistakes || [])].join(" ").toLowerCase();
+        if (!haystack.includes(search)) return false;
+      }
+      return true;
+    });
+    const body = document.getElementById("tableBody");
+    if (!rows.length) {
+      body.innerHTML = '<tr class="empty-row"><td colspan="8">没有匹配的交易记录</td></tr>';
+      return;
+    }
+    if (!rows.some((record) => record.id === selectedId)) selectedId = rows[0].id;
+    body.innerHTML = rows.map((record) => `
+      <tr class="${record.id === selectedId ? "selected" : ""}" onclick="selectRecord('${record.id}')">
+        <td class="time-cell">${esc(record.time)}</td>
+        <td>
+          <div class="trade-cell">
+            <div class="trade-symbol">${esc(record.symbol)} <span class="dir ${record.direction}">${directionLabel(record.direction)}</span>${record.agent ? '<span class="agent-spark" title="Agent 创建">✦</span>' : ""}</div>
+            <div class="tags">${record.tags.slice(0, 2).map((tag) => `<span class="tag">${esc(tag)}</span>`).join("")}</div>
+          </div>
+        </td>
+        <td class="setup-cell">${esc(record.setup)}</td>
+        <td class="price-path">${fmtPrice(record.entry)}<span class="arrow">→</span>${fmtPrice(record.exit)}</td>
+        <td class="num ${tone(record.returnPct)}">${fmtPct(record.returnPct)}</td>
+        <td class="num ${tone(record.r)}">${fmtR(record.r)}</td>
+        <td class="num ${tone(record.pnl)}">${fmtPnl(record.pnl)}</td>
+        <td><span class="status-badge ${record.status}">${statusLabel(record.status)}</span></td>
+      </tr>
+    `).join("");
+    renderDetail();
+  }
+
+  function renderDetail() {
+    const record = records.find((item) => item.id === selectedId) || records[0];
+    const panel = document.getElementById("detailPanel");
+    const direction = record.direction === "long" ? "多" : "空";
+    const status = statusLabel(record.status);
+    const pnlTone = tone(record.pnl);
+    const mistakes = (record.mistakes || []).length ? record.mistakes.map((item) => `<span class="tag warn">${esc(item)}</span>`).join("") : '<span class="tag">无</span>';
+    panel.innerHTML = `
+      <div class="detail-top">
+        <div class="detail-symbol-row">
+          <span class="detail-symbol">${esc(record.symbol)}</span>
+          <span class="dir ${record.direction}">${direction}</span>
+          <span class="status-badge ${record.status}">${status}</span>
+          <span class="tag accent">${esc(record.mode || "实盘")}</span>
+        </div>
+        <div class="detail-sub">${esc(record.setup)} · ${esc(record.timeframe || "4h")} · ${esc(record.time)} 入场</div>
+        <div class="detail-pnl">
+          <div class="big ${pnlTone}">${fmtPnl(record.pnl)}<span class="unit">USDT</span></div>
+          <div class="ret ${pnlTone}">${fmtPct(record.returnPct)} · ${fmtR(record.r)}</div>
+        </div>
+      </div>
+      <div class="detail-grid">
+        <div class="kv"><div class="k">入场</div><div class="v mono">${fmtPrice(record.entry)}</div></div>
+        <div class="kv"><div class="k">出场</div><div class="v mono">${fmtPrice(record.exit)}</div></div>
+        <div class="kv"><div class="k">止损</div><div class="v mono">${fmtPrice(record.stop)}</div></div>
+        <div class="kv"><div class="k">止盈</div><div class="v mono">${fmtPrice(record.target)}</div></div>
+        <div class="kv"><div class="k">数量 / 手续费</div><div class="v mono">${record.qty ?? "—"} / ${record.fees ?? 0} USDT</div></div>
+        <div class="kv"><div class="k">关联回测</div><div class="v mono">${record.backtest ? esc(record.backtest) : "—"}</div></div>
+      </div>
+      <div class="detail-block"><h3>交易理由 / 计划</h3><div class="quote-block"><p>${esc(record.thesis)}</p></div></div>
+      <div class="detail-block"><h3>复盘总结</h3><p>${esc(record.review || "还没有写复盘。")}</p></div>
+      <div class="detail-tags">${record.tags.map((tag) => `<span class="tag ${tag === "A+" ? "accent" : ""}">${esc(tag)}</span>`).join("")}${mistakes}</div>
+      <div class="process-row">
+        <span>情绪 <b>${esc(record.emotion || "—")}</b></span>
+        <span>信心 <b>${esc(record.confidence ?? "—")}/5</b></span>
+        <span>按计划 <b>${record.followed ? "是" : "否"}</b></span>
+      </div>
+      <div class="detail-actions">
+        <button class="ghost" onclick="openForm('${record.id}')">编辑记录</button>
+        <button class="soft" onclick="toast('演示模式：已生成复盘提示词')">让 Agent 复盘</button>
+      </div>
+    `;
+  }
+
+  function selectRecord(id) {
+    selectedId = id;
+    renderTable();
+  }
+
+  function resetFilters() {
+    document.getElementById("filterStatus").value = "";
+    document.getElementById("filterDirection").value = "";
+    document.getElementById("filterSearch").value = "";
+    renderTable();
+  }
+
+  function toggleExitFields() {
+    const isClosed = document.getElementById("f-status").value === "closed";
+    document.getElementById("f-exitAt").disabled = !isClosed;
+    document.getElementById("f-exitPrice").disabled = !isClosed;
+    if (isClosed && !document.getElementById("f-exitAt").value) {
+      document.getElementById("f-exitAt").value = "2026-10-31T20:05";
+      document.getElementById("f-exitPrice").value = "3946";
+    }
+    updatePreview();
+  }
+
+  function updatePreview() {
+    const status = document.getElementById("f-status").value;
+    const direction = document.getElementById("f-direction").value === "long" ? 1 : -1;
+    const entry = Number(document.getElementById("f-entryPrice").value);
+    const exit = Number(document.getElementById("f-exitPrice").value);
+    const qty = Number(document.getElementById("f-qty").value);
+    const fees = Number(document.getElementById("f-fees").value) || 0;
+    const stop = Number(document.getElementById("f-stop").value);
+    const valid = status === "closed" && Number.isFinite(entry) && entry > 0 && Number.isFinite(exit) && exit > 0;
+    const returnPct = valid ? (exit / entry - 1) * direction * 100 : null;
+    const r = valid && Number.isFinite(stop) && Math.abs(entry - stop) > 0 ? ((exit - entry) * direction) / Math.abs(entry - stop) : null;
+    const pnl = valid && Number.isFinite(qty) && qty > 0 ? (exit - entry) * qty * direction - fees : null;
+    document.getElementById("p-return").textContent = returnPct == null ? "—" : fmtPct(returnPct);
+    document.getElementById("p-r").textContent = r == null ? "—" : fmtR(r);
+    document.getElementById("p-pnl").textContent = pnl == null ? "—" : `${fmtPnl(pnl)} USDT`;
+  }
+
+  function openForm(id) {
+    editingId = id || null;
+    const record = id ? records.find((item) => item.id === id) : null;
+    document.getElementById("modalTitle").textContent = record ? "编辑交易记录" : "新建交易记录";
+    document.getElementById("f-symbol").value = record ? record.symbol : "ETHUSDT";
+    document.getElementById("f-market").value = record && record.mode === "合约" ? "合约" : "现货";
+    document.getElementById("f-direction").value = record ? record.direction : "long";
+    document.getElementById("f-status").value = record ? record.status : "closed";
+    document.getElementById("f-mode").value = record ? record.mode : "实盘";
+    document.getElementById("f-timeframe").value = record ? record.timeframe : "4h";
+    document.getElementById("f-entryAt").value = "2026-10-31T14:20";
+    document.getElementById("f-entryPrice").value = record ? record.entry : 3812;
+    document.getElementById("f-qty").value = record ? record.qty : 0.5;
+    document.getElementById("f-exitAt").value = record && record.exit ? "2026-10-31T20:05" : "";
+    document.getElementById("f-exitPrice").value = record && record.exit ? record.exit : "";
+    document.getElementById("f-fees").value = record ? record.fees : 4.2;
+    document.getElementById("f-stop").value = record ? record.stop : 3730;
+    document.getElementById("f-target").value = record ? record.target : 4000;
+    document.getElementById("f-setup").value = record ? record.setup : "趋势回踩";
+    document.getElementById("f-emotion").value = record ? record.emotion : "平静";
+    document.getElementById("f-confidence").value = record ? record.confidence : 4;
+    document.getElementById("f-followed").value = record && record.followed === false ? "否" : "是";
+    document.getElementById("f-tags").value = record ? record.tags.join(", ") : "趋势, 回踩";
+    document.getElementById("f-mistakes").value = record ? (record.mistakes || []).join(", ") : "";
+    document.getElementById("f-thesis").value = record ? record.thesis : "日线在 SMA200 上方，4h 回踩 20EMA 后收出吞没；风险 1R，目标前高。";
+    document.getElementById("f-review").value = record ? record.review : "";
+    document.getElementById("f-backtest").value = record ? record.backtest : "";
+    toggleExitFields();
+    document.getElementById("modalBackdrop").classList.add("open");
+  }
+
+  function closeForm() {
+    document.getElementById("modalBackdrop").classList.remove("open");
+  }
+
+  function saveForm() {
+    const symbol = document.getElementById("f-symbol").value.trim().toUpperCase();
+    const entry = Number(document.getElementById("f-entryPrice").value);
+    if (!symbol || !Number.isFinite(entry) || entry <= 0) {
+      toast("请填写交易对和入场价");
+      return;
+    }
+    const status = document.getElementById("f-status").value;
+    const direction = document.getElementById("f-direction").value;
+    const exit = Number(document.getElementById("f-exitPrice").value);
+    const qty = Number(document.getElementById("f-qty").value);
+    const fees = Number(document.getElementById("f-fees").value) || 0;
+    const stop = Number(document.getElementById("f-stop").value);
+    const closed = status === "closed" && Number.isFinite(exit) && exit > 0;
+    const sign = direction === "long" ? 1 : -1;
+    const record = {
+      id: editingId || `r${Date.now()}`,
+      time: "10-31 14:20",
+      symbol,
+      direction,
+      setup: document.getElementById("f-setup").value.trim() || "未命名策略",
+      entry,
+      exit: closed ? exit : null,
+      returnPct: closed ? (exit / entry - 1) * sign * 100 : null,
+      r: closed && Number.isFinite(stop) && Math.abs(entry - stop) > 0 ? ((exit - entry) * sign) / Math.abs(entry - stop) : null,
+      pnl: closed && Number.isFinite(qty) && qty > 0 ? (exit - entry) * qty * sign - fees : null,
+      status,
+      tags: document.getElementById("f-tags").value.split(/[,，]/).map((item) => item.trim()).filter(Boolean),
+      agent: false,
+      timeframe: document.getElementById("f-timeframe").value,
+      qty: Number.isFinite(qty) ? qty : null,
+      fees,
+      stop: Number.isFinite(stop) ? stop : null,
+      target: Number(document.getElementById("f-target").value) || null,
+      mode: document.getElementById("f-mode").value,
+      thesis: document.getElementById("f-thesis").value.trim(),
+      review: document.getElementById("f-review").value.trim(),
+      emotion: document.getElementById("f-emotion").value,
+      confidence: Number(document.getElementById("f-confidence").value),
+      followed: document.getElementById("f-followed").value === "是",
+      mistakes: document.getElementById("f-mistakes").value.split(/[,，]/).map((item) => item.trim()).filter(Boolean),
+      backtest: document.getElementById("f-backtest").value.trim()
+    };
+    if (editingId) {
+      const index = records.findIndex((item) => item.id === editingId);
+      if (index >= 0) records[index] = record;
+    } else {
+      records.unshift(record);
+    }
+    selectedId = record.id;
+    closeForm();
+    renderTable();
+    toast(editingId ? "演示模式：已更新列表" : "演示模式：已添加到列表");
+    editingId = null;
+  }
+
+  let toastTimer = null;
+  function toast(message) {
+    const el = document.getElementById("toast");
+    el.textContent = message;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+  }
+
+  document.getElementById("modalBackdrop").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeForm();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeForm();
+  });
+  document.querySelectorAll("#f-entryPrice, #f-exitPrice, #f-qty, #f-fees, #f-stop, #f-direction, #f-status").forEach((el) => {
+    el.addEventListener("input", updatePreview);
+    el.addEventListener("change", updatePreview);
+  });
+  renderTable();
+</script>
+</body>
+</html>

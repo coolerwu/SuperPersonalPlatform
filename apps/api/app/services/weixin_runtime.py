@@ -182,7 +182,7 @@ class WeixinRuntime:
                 if isinstance(messages, list):
                     for message in messages:
                         try:
-                            await self._handle_message(credentials, message)
+                            await self._handle_message(credentials, message, client)
                         except Exception:
                             logger.exception(
                                 "weixin inbound failed channel=%s", channel_id
@@ -219,7 +219,12 @@ class WeixinRuntime:
     def _remember_text(self, key: str) -> None:
         self._recent_text[key] = time.monotonic()
 
-    async def _handle_message(self, credentials: ChannelCredentials, message: Any) -> None:
+    async def _handle_message(
+        self,
+        credentials: ChannelCredentials,
+        message: Any,
+        client: WeixinClient | None = None,
+    ) -> None:
         if not isinstance(message, dict):
             return
         sender_id = str(message.get("from_user_id") or "").strip()
@@ -232,9 +237,10 @@ class WeixinRuntime:
         text = extract_text(message.get("item_list")).strip()
         if not text:
             return
+        is_command = channel_service.is_command_text(text)
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         dedup_key = f"{credentials.channel_id}:{sender_id}:{digest}"
-        if self._text_seen(dedup_key):
+        if not is_command and self._text_seen(dedup_key):
             logger.debug("weixin content dedup channel=%s sender=%s", credentials.channel_id, sender_id[:8])
             return
         message_id = str(message.get("message_id") or "").strip()
@@ -259,9 +265,73 @@ class WeixinRuntime:
             text=text,
             context_token=context_token or None,
         )
-        if not result.duplicate and self.worker is not None:
+        if not result.duplicate and self.worker is not None and result.run_id:
             self.worker.wake()
-        self._remember_text(dedup_key)
+        if is_command and not result.duplicate:
+            await self._handle_command_reply(credentials, message, result, client)
+        if not is_command:
+            self._remember_text(dedup_key)
+
+    async def _handle_command_reply(
+        self,
+        credentials: ChannelCredentials,
+        message: Any,
+        result: channel_service.InboundResult,
+        client: WeixinClient | None,
+    ) -> None:
+        reply = result.reply
+        if result.cancel_run_ids:
+            reply = await self._cancel_runs(result.cancel_run_ids)
+        if not reply:
+            return
+        to_user_id = str(message.get("from_user_id") or "").strip()
+        context_token = str(message.get("context_token") or "").strip() or None
+        temporary = client is None
+        if client is None:
+            client = self._build_client(credentials)
+        try:
+            await self._send_chunk(
+                client,
+                channel_id=credentials.channel_id,
+                to_user_id=to_user_id,
+                text=reply,
+                context_token=context_token,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "weixin command reply failed channel=%s command=%s: %s",
+                credentials.channel_id,
+                result.command,
+                exc,
+            )
+        finally:
+            if temporary:
+                try:
+                    await client.aclose()
+                except Exception:
+                    logger.exception("failed to close temporary weixin client")
+
+    async def _cancel_runs(self, run_ids: tuple[str, ...]) -> str:
+        if self.worker is None:
+            return channel_service.STOP_UNAVAILABLE_TEXT
+        stopped = 0
+        failed = 0
+        for run_id in run_ids:
+            try:
+                if await self.worker.cancel(run_id):
+                    stopped += 1
+            except LookupError:
+                continue
+            except Exception:
+                failed += 1
+                logger.exception("weixin command cancel failed run=%s", run_id)
+        if stopped:
+            return f"已停止 {stopped} 个任务。"
+        if failed:
+            return channel_service.STOP_UNAVAILABLE_TEXT
+        return channel_service.STOP_FINISHED_TEXT
 
     async def _recycle_client(
         self, channel_id: str, client: WeixinClient

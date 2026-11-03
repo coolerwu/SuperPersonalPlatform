@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Channel, ChannelDelivery, ChannelRunLink, Run, utcnow
+from app.models import Channel, ChannelDelivery, ChannelInbound, ChannelRunLink, Run, utcnow
 from app.services.channel_service import ingest_inbound, split_reply
 from app.services.run_service import complete_run
 from app.services.weixin_client import WeixinApiError, WeixinSessionExpired
@@ -37,9 +37,14 @@ async def _cancel_wechat_runs():
 class FakeWorker:
     def __init__(self) -> None:
         self.wakes = 0
+        self.cancelled: list[str] = []
 
     def wake(self) -> None:
         self.wakes += 1
+
+    async def cancel(self, run_id: str) -> bool:
+        self.cancelled.append(run_id)
+        return True
 
 
 class FakeClient:
@@ -207,6 +212,112 @@ async def test_handle_message_dedups_repeated_text_under_new_ids() -> None:
             .where(ChannelRunLink.channel_id == channel_id)
         )
         assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_command_replies_without_creating_a_run() -> None:
+    channel_id = await _active_channel()
+    worker = FakeWorker()
+    client = FakeClient()
+    runtime = WeixinRuntime(worker=worker, client_factory=lambda **kwargs: FakeClient())
+    credentials = ChannelCredentials(
+        channel_id=channel_id,
+        account_id="bot@im.bot",
+        token="token",
+        base_url="https://ilinkai.weixin.qq.com",
+        sync_buf="",
+    )
+
+    await runtime._handle_message(
+        credentials,
+        {
+            "message_id": "cmd-new-1",
+            "from_user_id": "user-cmd",
+            "item_list": [{"type": 1, "text_item": {"text": "/new"}}],
+            "context_token": "ctx-cmd",
+        },
+        client,
+    )
+
+    assert len(client.sent) == 1
+    to_user_id, text, context = client.sent[0]
+    assert to_user_id == "user-cmd"
+    assert "已开始新会话" in text
+    assert context == "ctx-cmd"
+    assert worker.wakes == 0
+    async with SessionLocal() as db:
+        count = await db.scalar(
+            select(func.count(Run.id))
+            .join(ChannelRunLink, ChannelRunLink.run_id == Run.id)
+            .where(ChannelRunLink.channel_id == channel_id)
+        )
+        assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_repeated_command_text_is_not_deduped() -> None:
+    channel_id = await _active_channel()
+    client = FakeClient()
+    runtime = WeixinRuntime(worker=FakeWorker(), client_factory=lambda **kwargs: FakeClient())
+    credentials = ChannelCredentials(
+        channel_id=channel_id,
+        account_id="bot@im.bot",
+        token="token",
+        base_url="https://ilinkai.weixin.qq.com",
+        sync_buf="",
+    )
+    payload = {
+        "from_user_id": "user-repeat",
+        "item_list": [{"type": 1, "text_item": {"text": "/new"}}],
+    }
+    await runtime._handle_message(credentials, {**payload, "message_id": "cmd-new-a"}, client)
+    await runtime._handle_message(credentials, {**payload, "message_id": "cmd-new-b"}, client)
+
+    assert len(client.sent) == 2
+    async with SessionLocal() as db:
+        count = await db.scalar(
+            select(func.count(ChannelInbound.external_message_id)).where(
+                ChannelInbound.channel_id == channel_id
+            )
+        )
+        assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_stop_command_cancels_active_runs() -> None:
+    channel_id = await _active_channel()
+    suffix = uuid.uuid4().hex[:10]
+    result = await ingest_inbound(
+        channel_id=channel_id,
+        external_message_id=f"msg-stop-{suffix}",
+        external_conversation_id="user-stop",
+        conversation_name="Alice",
+        text="长任务",
+    )
+    assert result.run_id is not None
+
+    worker = FakeWorker()
+    client = FakeClient()
+    runtime = WeixinRuntime(worker=worker, client_factory=lambda **kwargs: FakeClient())
+    credentials = ChannelCredentials(
+        channel_id=channel_id,
+        account_id="bot@im.bot",
+        token="token",
+        base_url="https://ilinkai.weixin.qq.com",
+        sync_buf="",
+    )
+    await runtime._handle_message(
+        credentials,
+        {
+            "message_id": f"cmd-stop-{suffix}",
+            "from_user_id": "user-stop",
+            "item_list": [{"type": 1, "text_item": {"text": "/stop"}}],
+        },
+        client,
+    )
+
+    assert worker.cancelled == [result.run_id]
+    assert client.sent[-1][1] == "已停止 1 个任务。"
 
 
 @pytest.mark.asyncio
