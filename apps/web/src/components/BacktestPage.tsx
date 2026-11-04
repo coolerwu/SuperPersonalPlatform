@@ -408,7 +408,7 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
           <div className="eyebrow">QUANT</div>
           <h1>
             量化回测
-            <span className="page-scope-pill">独立工具</span>
+            <span className="page-scope-pill">交易</span>
           </h1>
           <p>Bitget 公共行情 · Python 策略 · 本地缓存增量更新。日期按 UTC 计算。</p>
         </div>

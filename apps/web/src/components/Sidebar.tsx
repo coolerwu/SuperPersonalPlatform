@@ -378,7 +378,7 @@ export function Sidebar(props: SidebarProps) {
           <>
             <div className="sidebar-group sidebar-features">
               <div className="sidebar-group-head">
-                <span className="sidebar-group-label">独立工具</span>
+                <span className="sidebar-group-label">交易</span>
               </div>
               <button
                 className={`sidebar-action sidebar-standalone ${props.backtestActive ? "active" : ""}`}
