@@ -286,7 +286,6 @@ export function ChatPanel(props: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
-  const scrollHandlerFrameRef = useRef<number | null>(null);
   const olderAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickRef = useRef(true);
@@ -443,21 +442,16 @@ export function ChatPanel(props: ChatPanelProps) {
   }, []);
 
   function handleScroll() {
-    if (scrollHandlerFrameRef.current !== null) return;
-    scrollHandlerFrameRef.current = window.requestAnimationFrame(() => {
-      scrollHandlerFrameRef.current = null;
-      const element = scrollRef.current;
-      if (!element) return;
-      const nearBottom =
-        element.scrollHeight - element.scrollTop - element.clientHeight < 96;
-      stickRef.current = nearBottom;
-      setAtBottom((current) => (current === nearBottom ? current : nearBottom));
-      const nearTop =
-        element.scrollHeight > element.clientHeight + 160 && element.scrollTop < 80;
-      if (nearTop && props.hasMore && !props.loadingOlder) {
-        void requestOlder();
-      }
-    });
+    const element = scrollRef.current;
+    if (!element) return;
+    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+    stickRef.current = nearBottom;
+    setAtBottom((current) => (current === nearBottom ? current : nearBottom));
+    const nearTop =
+      element.scrollHeight > element.clientHeight + 160 && element.scrollTop < 80;
+    if (nearTop && props.hasMore && !props.loadingOlder) {
+      void requestOlder();
+    }
   }
 
   function jumpToBottom() {

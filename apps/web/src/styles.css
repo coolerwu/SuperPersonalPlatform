@@ -827,7 +827,6 @@ textarea {
   overflow-y: auto;
   overscroll-behavior: contain;
   overflow-anchor: none;
-  contain: paint;
   padding: 26px max(clamp(18px, 4vw, 42px), calc((100% - var(--chat-lane)) / 2)) 18px;
 }
 
