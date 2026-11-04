@@ -394,7 +394,6 @@ export function Sidebar(props: SidebarProps) {
                   </svg>
                 </span>
                 <span>回测</span>
-                <span className="sidebar-badge">不绑定 Agent</span>
               </button>
               <button
                 className={`sidebar-action sidebar-standalone ${props.journalActive ? "active" : ""}`}
@@ -407,9 +406,8 @@ export function Sidebar(props: SidebarProps) {
                   </svg>
                 </span>
                 <span>交易记录</span>
-                <span className="sidebar-badge">不绑定 Agent</span>
               </button>
-              <p className="sidebar-features-hint">手动操作 · 不绑定 Agent</p>
+              <p className="sidebar-features-hint">手动操作 · 本地工具</p>
             </div>
 
             <div className="sidebar-group sidebar-group-platform">
