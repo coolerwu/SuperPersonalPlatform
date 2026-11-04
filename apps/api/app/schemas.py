@@ -458,3 +458,52 @@ class KnowledgeConfigUpdate(BaseModel):
     clear_password: bool = False
     root: str | None = Field(default=None, max_length=500)
     interval_seconds: int | None = Field(default=None, ge=30, le=86400)
+
+
+class TradeJournalCreate(BaseModel):
+    symbol: str = Field(min_length=1, max_length=32)
+    entry_at: str = Field(min_length=1, max_length=64)
+    entry_price: float = Field(gt=0)
+    thesis: str = Field(min_length=1, max_length=20000)
+    direction: str = "long"
+    market: str | None = None
+    currency: str | None = None
+    instrument_type: str | None = None
+    stop_loss: float | None = Field(default=None, gt=0)
+    quantity: float | None = Field(default=None, gt=0)
+    fees: float = Field(default=0.0, ge=0)
+    exit_at: str | None = None
+    exit_price: float | None = Field(default=None, gt=0)
+    review: str = ""
+    tags: list[str] | None = None
+    followed_plan: bool | None = None
+    meta: dict | None = None
+
+
+class TradeJournalUpdate(BaseModel):
+    symbol: str | None = Field(default=None, min_length=1, max_length=32)
+    entry_at: str | None = Field(default=None, min_length=1, max_length=64)
+    entry_price: float | None = Field(default=None, gt=0)
+    thesis: str | None = Field(default=None, min_length=1, max_length=20000)
+    direction: str | None = None
+    market: str | None = None
+    currency: str | None = None
+    instrument_type: str | None = None
+    stop_loss: float | None = Field(default=None, gt=0)
+    quantity: float | None = Field(default=None, gt=0)
+    fees: float | None = Field(default=None, ge=0)
+    exit_at: str | None = None
+    exit_price: float | None = Field(default=None, gt=0)
+    review: str | None = None
+    tags: list[str] | None = None
+    followed_plan: bool | None = None
+    meta: dict | None = None
+
+
+class TradeJournalClose(BaseModel):
+    exit_at: str = Field(min_length=1, max_length=64)
+    exit_price: float = Field(gt=0)
+    fees: float | None = Field(default=None, ge=0)
+    review: str | None = None
+    tags: list[str] | None = None
+    followed_plan: bool | None = None

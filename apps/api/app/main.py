@@ -31,6 +31,7 @@ from app.routers.sessions import router as sessions_router
 from app.routers.skills import router as skills_router
 from app.routers.system import router as system_router
 from app.routers.tools import router as tools_router
+from app.routers.trade_journal import router as trade_journal_router
 from app.services.run_service import seed_default_provider
 from app.services.cron_service import CronRuntime
 from app.services.knowledge_sync import KnowledgeSyncRuntime, seed_knowledge_config
@@ -169,6 +170,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(system_router)
     app.include_router(market_router)
     app.include_router(backtests_router)
+    app.include_router(trade_journal_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, bool]:

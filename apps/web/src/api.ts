@@ -28,6 +28,12 @@ import type {
   SkillDetail,
   SystemInfo,
   ToolsCatalog,
+  TradeJournalClosePayload,
+  TradeJournalCreatePayload,
+  TradeJournalQuery,
+  TradeJournalRecord,
+  TradeJournalStats,
+  TradeJournalUpdatePayload,
 } from "./types";
 
 export class ApiError extends Error {
@@ -359,4 +365,64 @@ export const api = {
     const search = new URLSearchParams({ symbol, granularity });
     return request<MarketProbe>(`/api/market/probe?${search.toString()}`);
   },
+  listTradeJournal: (params: {
+    market?: string;
+    symbol?: string;
+    direction?: string;
+    status?: string;
+    tag?: string;
+    start?: string;
+    end?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        search.set(key, String(value));
+      }
+    });
+    const query = search.toString();
+    return request<TradeJournalQuery>(`/api/trade-journal${query ? `?${query}` : ""}`);
+  },
+  getTradeJournalStats: (params: {
+    market?: string;
+    symbol?: string;
+    direction?: string;
+    tag?: string;
+    start?: string;
+    end?: string;
+  } = {}) => {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        search.set(key, String(value));
+      }
+    });
+    const query = search.toString();
+    return request<TradeJournalStats>(
+      `/api/trade-journal/stats${query ? `?${query}` : ""}`,
+    );
+  },
+  getTradeJournal: (id: string) =>
+    request<TradeJournalRecord>(`/api/trade-journal/${encodeURIComponent(id)}`),
+  createTradeJournal: (payload: TradeJournalCreatePayload) =>
+    request<TradeJournalRecord>("/api/trade-journal", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateTradeJournal: (id: string, payload: TradeJournalUpdatePayload) =>
+    request<TradeJournalRecord>(`/api/trade-journal/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  closeTradeJournal: (id: string, payload: TradeJournalClosePayload) =>
+    request<TradeJournalRecord>(
+      `/api/trade-journal/${encodeURIComponent(id)}/close`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
 };

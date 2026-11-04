@@ -409,3 +409,95 @@ export type MarketProbe = {
   base_url: string;
   proxy_configured: boolean;
 };
+
+export type TradeJournalStatus = "open" | "closed" | string;
+
+export type TradeJournalRecord = {
+  id: string;
+  market: string;
+  instrument_type: string;
+  symbol: string;
+  direction: "long" | "short" | string;
+  currency: string;
+  entry_at: string;
+  entry_price: number;
+  exit_at: string | null;
+  exit_price: number | null;
+  stop_loss: number | null;
+  quantity: number | null;
+  fees: number;
+  followed_plan: boolean | null;
+  thesis: string;
+  review: string;
+  tags: string[];
+  source: string;
+  meta: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  status: TradeJournalStatus;
+  return_pct: number | null;
+  r_multiple: number | null;
+  pnl: number | null;
+  win: boolean | null;
+  warnings: string[];
+};
+
+export type TradeJournalQuery = {
+  total: number;
+  items: TradeJournalRecord[];
+  offset: number;
+  limit: number;
+};
+
+export type TradeJournalStatsGroup = {
+  tag?: string;
+  market?: string;
+  count: number;
+  win_rate: number | null;
+  avg_return: number | null;
+  avg_r: number | null;
+  total_pnl: number | null;
+  currency: string | null;
+  pnl_currencies: string[];
+  profit_factor: number | null;
+};
+
+export type TradeJournalStats = TradeJournalStatsGroup & {
+  total: number;
+  open_count: number;
+  by_market: TradeJournalStatsGroup[];
+  by_tag: TradeJournalStatsGroup[];
+  best: TradeJournalRecord | null;
+  worst: TradeJournalRecord | null;
+};
+
+export type TradeJournalCreatePayload = {
+  symbol: string;
+  entry_at: string;
+  entry_price: number;
+  thesis: string;
+  direction?: string;
+  market?: string;
+  currency?: string;
+  instrument_type?: string;
+  stop_loss?: number | null;
+  quantity?: number | null;
+  fees?: number;
+  exit_at?: string | null;
+  exit_price?: number | null;
+  review?: string;
+  tags?: string[];
+  followed_plan?: boolean | null;
+  meta?: Record<string, unknown>;
+};
+
+export type TradeJournalUpdatePayload = Partial<TradeJournalCreatePayload>;
+
+export type TradeJournalClosePayload = {
+  exit_at: string;
+  exit_price: number;
+  fees?: number;
+  review?: string;
+  tags?: string[];
+  followed_plan?: boolean | null;
+};

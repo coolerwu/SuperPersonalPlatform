@@ -28,6 +28,7 @@ import { MEMORY_COMMAND } from "./messageContent";
 import { describeApiError } from "./errors";
 import { ChatPanel } from "./components/ChatPanel";
 import { BacktestPage } from "./components/BacktestPage";
+import { TradeJournalPage } from "./components/TradeJournalPage";
 import { ChannelsPage } from "./components/ChannelsPage";
 import { CronPage } from "./components/CronPage";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -149,7 +150,15 @@ export default function App() {
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [view, setView] = useState<
-    "chat" | "settings" | "memory" | "skills" | "tools" | "channels" | "cron" | "backtest"
+    | "chat"
+    | "settings"
+    | "memory"
+    | "skills"
+    | "tools"
+    | "channels"
+    | "cron"
+    | "backtest"
+    | "journal"
   >("chat");
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
@@ -215,7 +224,9 @@ export default function App() {
                 ? "定时"
                 : view === "backtest"
                   ? "回测"
-                  : (agent?.name ?? "Agent");
+                  : view === "journal"
+                    ? "交易记录"
+                    : (agent?.name ?? "Agent");
 
   function setAgentError(message: string, forAgent: string) {
     if (forAgent !== agentIdRef.current) return;
@@ -348,7 +359,16 @@ export default function App() {
   }, []);
 
   function openView(
-    next: "chat" | "settings" | "memory" | "skills" | "tools" | "channels" | "cron" | "backtest",
+    next:
+      | "chat"
+      | "settings"
+      | "memory"
+      | "skills"
+      | "tools"
+      | "channels"
+      | "cron"
+      | "backtest"
+      | "journal",
   ) {
     setView(next);
     setSidebarOpen(false);
@@ -1477,7 +1497,7 @@ export default function App() {
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        workspace={view === "backtest" ? "features" : "agent"}
+        workspace={view === "backtest" || view === "journal" ? "features" : "agent"}
         onWorkspaceChange={(workspace) =>
           openView(workspace === "features" ? "backtest" : "chat")
         }
@@ -1504,6 +1524,7 @@ export default function App() {
         onOpenChannels={() => openView("channels")}
         onOpenCron={() => openView("cron")}
         onOpenBacktest={() => openView("backtest")}
+        onOpenJournal={() => openView("journal")}
         settingsActive={view === "settings"}
         memoryActive={view === "memory"}
         skillsActive={view === "skills"}
@@ -1511,6 +1532,7 @@ export default function App() {
         channelsActive={view === "channels"}
         cronActive={view === "cron"}
         backtestActive={view === "backtest"}
+        journalActive={view === "journal"}
         onLogout={() => void logout()}
       />
 
@@ -1542,6 +1564,8 @@ export default function App() {
         />
       ) : view === "backtest" ? (
         <BacktestPage onClose={() => setView("chat")} />
+      ) : view === "journal" ? (
+        <TradeJournalPage onClose={() => setView("chat")} />
       ) : view === "settings" ? (
         <SettingsPage
           agents={agents}

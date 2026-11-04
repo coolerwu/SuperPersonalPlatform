@@ -5348,3 +5348,209 @@ body:has(.app-shell.pearl) .select-empty {
   }
 }
 
+
+/* Trade journal */
+.journal-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.journal-stat-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+
+.journal-stat-grid span {
+  color: var(--faint);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
+.journal-stat-grid strong {
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.journal-stat-grid small {
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.journal-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.journal-filters select {
+  width: auto;
+  min-width: 110px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.journal-filters input {
+  flex: 1;
+  min-width: 180px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.journal-filters .ghost-button {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.journal-table {
+  min-width: 920px;
+}
+
+.journal-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
+.journal-symbol {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.journal-market {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.journal-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.journal-tags span {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(26, 30, 38, 0.045);
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.journal-price {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--text);
+}
+
+.journal-price span {
+  color: var(--faint);
+  padding: 0 4px;
+}
+
+.journal-edit {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.journal-edit:hover {
+  color: var(--accent-strong);
+}
+
+.journal-empty {
+  padding: 30px 10px !important;
+  text-align: center;
+  color: var(--faint);
+}
+
+.journal-notice {
+  padding: 10px 14px;
+  border: 1px solid var(--ok-soft);
+  border-radius: 10px;
+  background: var(--ok-soft);
+  color: var(--ok-ink);
+  font-size: 12px;
+}
+
+.backtest-status.closed {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.backtest-status.open {
+  background: #f7ecd9;
+  color: var(--warn);
+}
+
+.journal-modal {
+  width: min(860px, 100%);
+}
+
+.journal-modal-sub {
+  margin: 6px 0 0;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.journal-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 14px;
+  margin-top: 16px;
+}
+
+.journal-form-grid .backtest-field select,
+.journal-form-grid .backtest-field textarea {
+  font-size: 12px;
+}
+
+.journal-form-grid .backtest-field textarea {
+  min-height: 78px;
+  line-height: 1.55;
+}
+
+.journal-wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1180px) {
+  .journal-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .journal-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .journal-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .journal-form-grid {
+    grid-template-columns: 1fr;
+  }
+}

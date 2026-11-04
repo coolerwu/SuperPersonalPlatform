@@ -87,7 +87,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `r
 
 ## 技能与工具页面
 
-侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、渠道、记忆四个页面；「平台」组放配置和退出登录。功能工作区放不绑定 Agent 的手动工具（当前只有回测），不显示 Agent 选择器和会话。技能与工具页面的说明如下：
+侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、渠道、记忆四个页面；「平台」组放配置和退出登录。功能工作区放不绑定 Agent 的手动工具（当前有回测、交易记录），不显示 Agent 选择器和会话。技能与工具页面的说明如下：
 
 - **技能**：列出全局技能库，按「系统技能」和「交互创建」分组，按当前 Agent 勾选/取消启用，立即保存、下一轮 Run 生效；展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 全文并直接编辑保存；非系统技能可删除（会删除技能目录并从所有 Agent 的启用列表移除）。新建技能可以让 Agent 在对话里用 `skill_save` 主动沉淀，也可以按你的要求创建；AI 创建的技能会自动加入当前 Agent 的启用列表。
 - **工具**：展示平台工具（`skill_save`、`session_search`、`session_read`，始终可用）、文件工具（始终可用）和技能工具；技能工具显示是否已在平台注册、由哪些技能声明。启用声明它的技能并在对话中读取 SKILL.md 后解锁，没有单独的工具开关。
@@ -240,13 +240,14 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 
 ## 交易记录
 
-「交易记录」第一版是 Agent 工具，不提供网页。记录保存在 `data/trade-journal.jsonl`，一行一笔，便于查看、复制和备份；不新增数据库表。
+「交易记录」在功能工作区有独立页面，也可以由 Agent 通过 `trade-journal` 技能读写。记录保存在 `data/trade-journal.jsonl`，一行一笔，便于查看、复制和备份；不新增数据库表。页面支持状态/市场/关键词筛选、新建/编辑、平仓和统计；接口为 `GET/POST /api/trade-journal`、`GET /api/trade-journal/stats`、`GET/PUT /api/trade-journal/{id}`、`POST /api/trade-journal/{id}/close`。
 
 - 字段：`symbol`、`direction`、`entry_at`、`entry_price`、`thesis` 必填；`exit_at`、`exit_price` 平仓时同时提供；可选 `market`、`currency`、`instrument_type`、`stop_loss`、`quantity`、`fees`、`review`、`tags`、`followed_plan`、`meta`。
 - 市场：`crypto` 默认 `USDT`/`spot`，代码如 `BTCUSDT`；`a_share` 默认 `CNY`/`stock`，代码建议 `600519.SH`、`000001.SZ`、`300750.SZ`、`688981.SH`。`market` 可省略，平台会从代码推断。
 - 计算：`status`、价格收益、R 倍数、净盈亏、胜负由平台计算，不写入文件；没有 `quantity` 时只有价格收益和 R，没有金额盈亏；多币种盈亏不直接相加。
 - 标签：用 `tags` 数组，推荐命名空间 `setup:`、`mistake:`、`emotion:`、`regime:`、`board:`、`sector:`、`limit:`；`thesis`/`review` 是全文检索的文本，`meta` 放市场特有、暂不检索的细节。
 - 写入：服务层按进程内事件循环串行写入，更新用临时文件原子替换，文件权限 0600；文件损坏行会被跳过，不影响其他记录。
+- 页面使用：功能工作区 →「交易记录」；点「新建记录」填写交易对、市场、方向、入场时间/价格、理由；平仓时把状态改成「已平仓」并补出场时间/价格。列表按状态、市场、关键词筛选，右侧统计随记录更新。页面不提供删除。
 - Agent 使用：在「技能」页为当前 Agent 启用 `trade-journal`，让它读取 SKILL.md 后，就可以说“记一笔：11 月 2 日 10:15 买 600519.SH，1450，止损 1418，100 股，理由是日线回踩 20 日线缩量企稳”。平仓后说“1498 出了，复盘一下”，Agent 会用 `trade_journal_close` 补出场和复盘；之后用 `trade_journal_query` / `trade_journal_stats` 按标签、市场、时间复盘。
 - 边界：不接交易所、不自动下单、不计算实时浮盈、不删除记录；A 股对 T+1、数量整数和止损方向做提示，涨跌停、费用和交易日历不在第一版精确计算。
 

@@ -27,6 +27,7 @@ type SidebarProps = {
   onOpenChannels: () => void;
   onOpenCron: () => void;
   onOpenBacktest: () => void;
+  onOpenJournal: () => void;
   settingsActive: boolean;
   memoryActive: boolean;
   skillsActive: boolean;
@@ -34,6 +35,7 @@ type SidebarProps = {
   channelsActive: boolean;
   cronActive: boolean;
   backtestActive: boolean;
+  journalActive: boolean;
   onLogout: () => void;
 };
 
@@ -392,6 +394,19 @@ export function Sidebar(props: SidebarProps) {
                   </svg>
                 </span>
                 <span>回测</span>
+                <span className="sidebar-badge">不绑定 Agent</span>
+              </button>
+              <button
+                className={`sidebar-action sidebar-standalone ${props.journalActive ? "active" : ""}`}
+                onClick={props.onOpenJournal}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M5 4h14v16H5z" />
+                    <path d="M8 8h8M8 12h8M8 16h5" />
+                  </svg>
+                </span>
+                <span>交易记录</span>
                 <span className="sidebar-badge">不绑定 Agent</span>
               </button>
               <p className="sidebar-features-hint">手动操作 · 不绑定 Agent</p>
