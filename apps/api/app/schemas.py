@@ -140,6 +140,7 @@ class SessionOut(BaseModel):
     channel_name: str | None = None
     created_at: datetime
     updated_at: datetime
+    last_message_at: datetime
 
 
 class CronJobCreate(BaseModel):
@@ -273,6 +274,18 @@ class ChatResponse(BaseModel):
     run_id: str
     session_id: str
     message_id: str
+
+
+class ChatCommandRequest(BaseModel):
+    agent_id: str = Field(min_length=1)
+    session_id: str | None = None
+    command: str = Field(min_length=2, max_length=17)
+
+
+class ChatCommandResponse(BaseModel):
+    command: str
+    reply: str
+    cancelled_count: int = 0
 
 
 class AttachmentOut(BaseModel):

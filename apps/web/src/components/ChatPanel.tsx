@@ -46,6 +46,7 @@ type ChatPanelProps = {
   terminalRun: TerminalRun | null;
   error: string;
   notice: string;
+  commandReply: { command: string; text: string } | null;
   activeRun: Run | null;
   draft: string;
   quote: string;
@@ -85,6 +86,22 @@ const SUGGESTIONS = [
   "总结这段内容的要点",
   "解释一个技术概念",
 ];
+
+function commandReplyLabel(command: string): string {
+  switch (command) {
+    case "/new":
+    case "/clear":
+      return "新会话";
+    case "/help":
+      return "命令说明";
+    case "/status":
+      return "会话状态";
+    case "/stop":
+      return "停止任务";
+    default:
+      return "命令";
+  }
+}
 
 function elapsedSeconds(from: string | null | undefined, toMs?: number): number {
   if (!from) return 0;
@@ -360,7 +377,7 @@ export function ChatPanel(props: ChatPanelProps) {
     scrollToBottom();
     const frame = window.requestAnimationFrame(scrollToBottom);
     return () => window.cancelAnimationFrame(frame);
-  }, [props.messages, props.streamText, props.sending]);
+  }, [props.messages, props.streamText, props.sending, props.commandReply]);
 
   useLayoutEffect(() => {
     const anchor = olderAnchorRef.current;
@@ -565,7 +582,7 @@ export function ChatPanel(props: ChatPanelProps) {
         )}
         {props.loading && props.messages.length === 0 && <MessageSkeleton />}
 
-        {!props.loading && props.messages.length === 0 && !props.sending && (
+        {!props.loading && props.messages.length === 0 && !props.sending && !props.commandReply && (
           <div className="chat-empty">
             <div className="chat-empty-mark">ACC</div>
             <h2>和 {props.agentName || "Agent"} 开始对话</h2>
@@ -821,6 +838,20 @@ export function ChatPanel(props: ChatPanelProps) {
           <div className="message-row assistant">
             <div className="message-bubble assistant">
               <ScreenshotStrip sessionId={props.sessionId} items={orphanScreenshots} />
+            </div>
+          </div>
+        )}
+
+        {props.commandReply && (
+          <div className="message-row system">
+            <div className="message-bubble system">
+              <div className="message-command-reply-head">
+                <span className="message-command-tag">
+                  {commandReplyLabel(props.commandReply.command)}
+                </span>
+                <span className="message-command-code">{props.commandReply.command}</span>
+              </div>
+              <div className="message-command-reply">{props.commandReply.text}</div>
             </div>
           </div>
         )}

@@ -1,10 +1,11 @@
 import asyncio
+from datetime import timedelta
 
 from fastapi.testclient import TestClient
 
 from app.db import SessionLocal
 from app.main import create_app
-from app.models import Run, utcnow
+from app.models import Message, Run, Session, utcnow
 from app.services.run_service import complete_run
 
 
@@ -66,6 +67,51 @@ def test_agent_and_session_isolation(client) -> None:
     second_list = client.get(f"/api/agents/{second_agent}/sessions").json()
     assert {item["id"] for item in first_list} == {first_session["id"]}
     assert {item["id"] for item in second_list} == {second_session["id"]}
+
+
+def test_session_list_orders_by_last_message_time(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    older = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+    newer = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+    base = utcnow()
+
+    def seed(session_id: str, message_at, session_updated_at) -> None:
+        async def insert() -> None:
+            async with SessionLocal() as db:
+                db.add(
+                    Message(
+                        session_id=session_id,
+                        role="user",
+                        content="hello",
+                        created_at=message_at,
+                    )
+                )
+                session = await db.get(Session, session_id)
+                assert session is not None
+                session.updated_at = session_updated_at
+                await db.commit()
+
+        asyncio.run(insert())
+
+    # A late run completion bumps `updated_at`, but the conversation itself is
+    # older, so it must stay below the session with the newer message.
+    seed(older, base, base + timedelta(hours=2))
+    seed(newer, base + timedelta(minutes=5), base + timedelta(minutes=5))
+
+    sessions = client.get(f"/api/agents/{agent_id}/sessions").json()
+    by_id = {item["id"]: item for item in sessions}
+    assert by_id[older]["updated_at"] > by_id[newer]["updated_at"]
+    assert by_id[older]["last_message_at"] < by_id[newer]["last_message_at"]
+    ids = [item["id"] for item in sessions]
+    assert ids.index(newer) < ids.index(older)
+
+
+def test_session_list_falls_back_to_created_at_without_messages(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    created = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()
+    sessions = client.get(f"/api/agents/{agent_id}/sessions").json()
+    item = next(entry for entry in sessions if entry["id"] == created["id"])
+    assert item["last_message_at"] == item["created_at"]
 
 
 def test_chat_queues_follow_up_runs(client) -> None:

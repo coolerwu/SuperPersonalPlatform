@@ -270,6 +270,12 @@ export const api = {
       body: JSON.stringify({ session_id: sessionId, content }),
     }),
 
+  runChatCommand: (payload: { agent_id: string; session_id: string | null; command: string }) =>
+    request<{ command: string; reply: string; cancelled_count: number }>("/api/chat/commands", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   getRun: (runId: string) => request<Run>(`/api/runs/${runId}`),
   getRunEvents: (runId: string, after = 0) => request<RunEvent[]>(`/api/runs/${runId}/events?after=${after}`),
   cancelRun: (runId: string) => request<{ cancelled: boolean }>(`/api/runs/${runId}/cancel`, { method: "POST" }),
@@ -365,6 +371,7 @@ export const api = {
     const search = new URLSearchParams({ symbol, granularity });
     return request<MarketProbe>(`/api/market/probe?${search.toString()}`);
   },
+
   listTradeJournal: (params: {
     market?: string;
     symbol?: string;

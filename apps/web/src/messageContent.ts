@@ -1,6 +1,13 @@
 export const MEMORY_COMMAND =
   "请整理长期记忆：先读取 /skills/memory-organizer/SKILL.md，然后按技能说明合并重复记忆、删除失效记忆，不要新增事实。";
 
+const SLASH_COMMAND = /^\/[A-Za-z][A-Za-z0-9_-]{0,15}$/;
+
+/** True only when the whole text is one slash command token, like /new. */
+export function isSlashCommand(text: string): boolean {
+  return SLASH_COMMAND.test(text.trim());
+}
+
 const ATTACHMENT_HEADER = "附件已上传到工作区：";
 const ATTACHMENT_LINE = /^- (.+?)（工作区路径：(.*)）$/;
 const ATTACHMENT_SIZE = /^(.*)，大小：(\d+)\s*(?:字节)?$/;

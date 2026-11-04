@@ -3668,6 +3668,51 @@ textarea {
   word-break: break-word;
 }
 
+.message-row.system {
+  align-items: stretch;
+}
+
+.message-bubble.system {
+  width: 100%;
+  padding: 12px 15px;
+  border: 1px dashed rgb(var(--accent-rgb) / 0.28);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.6);
+  color: var(--text);
+}
+
+.message-command-reply-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.message-command-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border: 1px solid rgb(var(--accent-rgb) / 0.22);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.message-command-code {
+  color: var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.message-command-reply {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+
 .composer-file-size {
   color: var(--faint);
   font-size: 11px;

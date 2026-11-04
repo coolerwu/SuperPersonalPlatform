@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -60,6 +61,7 @@ async def _session_out(
     db: AsyncSession,
     session: Session,
     channel: tuple[str | None, str | None] | None = None,
+    last_message_at: datetime | None = None,
 ) -> SessionOut:
     active = await active_run_for_session(db, session.id)
     if channel is None:
@@ -77,6 +79,7 @@ async def _session_out(
         channel_name=channel_name,
         created_at=session.created_at,
         updated_at=session.updated_at,
+        last_message_at=last_message_at or session.created_at,
     )
 
 
@@ -85,11 +88,24 @@ async def list_sessions(agent_id: str, db: AsyncSession = Depends(get_db)) -> li
     agent = await db.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
-    sessions = (
-        await db.scalars(
-            select(Session).where(Session.agent_id == agent_id).order_by(Session.updated_at.desc())
+    last_message_at = (
+        select(func.max(Message.created_at))
+        .where(Message.session_id == Session.id)
+        .correlate(Session)
+        .scalar_subquery()
+    )
+    rows = (
+        await db.execute(
+            select(Session, last_message_at.label("last_message_at"))
+            .where(Session.agent_id == agent_id)
+            .order_by(
+                func.coalesce(last_message_at, Session.created_at).desc(),
+                Session.id.desc(),
+            )
         )
     ).all()
+    sessions = [row[0] for row in rows]
+    last_by_session = {row[0].id: row[1] for row in rows}
     channel_by_session: dict[str, tuple[str | None, str | None]] = {}
     if sessions:
         rows = (
@@ -105,7 +121,12 @@ async def list_sessions(agent_id: str, db: AsyncSession = Depends(get_db)) -> li
             str(row[0]): (str(row[1]), str(row[2])) for row in rows
         }
     return [
-        await _session_out(db, session, channel_by_session.get(session.id, (None, None)))
+        await _session_out(
+            db,
+            session,
+            channel_by_session.get(session.id, (None, None)),
+            last_by_session.get(session.id),
+        )
         for session in sessions
     ]
 

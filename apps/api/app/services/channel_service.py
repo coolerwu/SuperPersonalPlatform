@@ -27,40 +27,21 @@ from app.models import (
     Session,
     utcnow,
 )
+from app.services.chat_commands import (
+    HELP_TEXT,
+    KNOWN_COMMANDS,
+    STOP_EMPTY_TEXT,
+    STOP_FINISHED_TEXT,
+    STOP_UNAVAILABLE_TEXT,
+    UNKNOWN_COMMAND_TEXT,
+    is_command_text,
+    parse_command,
+)
 from app.services.run_service import _create_run_in_db
 
 DELIVERY_FAILURE_TEXT = "处理这条消息时出错了，请稍后在网页端查看或重试。"
 DELIVERY_TRUNCATED_TEXT = "（内容过长，已截断）"
 MAX_REPLY_CHUNKS = 10
-
-HELP_TEXT = (
-    "可用命令：\n"
-    "/new 开始新会话（旧会话保留在网页端）\n"
-    "/clear 同 /new\n"
-    "/status 查看当前会话与任务状态\n"
-    "/stop 停止当前会话排队或运行中的任务\n"
-    "/help 显示本说明\n\n"
-    "直接发送其他内容即可与 Agent 对话。"
-)
-UNKNOWN_COMMAND_TEXT = f"未知命令。\n\n{HELP_TEXT}"
-STOP_EMPTY_TEXT = "当前没有正在运行或排队的任务。"
-STOP_UNAVAILABLE_TEXT = "停止任务失败：运行队列不可用，请稍后再试。"
-STOP_FINISHED_TEXT = "任务已经结束，无需停止。"
-
-_COMMAND_RE = re.compile(r"^/[A-Za-z][A-Za-z0-9_-]{0,15}$")
-KNOWN_COMMANDS = frozenset({"/new", "/clear", "/help", "/status", "/stop"})
-
-
-def is_command_text(text: str) -> bool:
-    """True only for a whole message that is a single slash command token."""
-    return bool(_COMMAND_RE.match((text or "").strip()))
-
-
-def parse_command(text: str) -> str | None:
-    stripped = (text or "").strip()
-    if not _COMMAND_RE.match(stripped):
-        return None
-    return stripped.lower()
 
 
 class ChannelUnavailable(Exception):

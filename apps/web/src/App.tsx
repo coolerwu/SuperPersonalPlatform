@@ -24,7 +24,7 @@ import {
   toolTraceStep,
   type RunTraceStep,
 } from "./runActivity";
-import { MEMORY_COMMAND } from "./messageContent";
+import { MEMORY_COMMAND, isSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
 import { ChatPanel } from "./components/ChatPanel";
 import { BacktestPage } from "./components/BacktestPage";
@@ -64,6 +64,24 @@ function mergeMessages(current: Message[], incoming: Message[]): Message[] {
     (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
   );
 }
+
+/** The session list is ordered by conversation activity, not run housekeeping. */
+function sessionActivity(session: Session): string {
+  return session.last_message_at || session.updated_at;
+}
+
+function sortSessionsByActivity(list: Session[]): Session[] {
+  return [...list].sort(
+    (a, b) => sessionActivity(b).localeCompare(sessionActivity(a)) || b.id.localeCompare(a.id),
+  );
+}
+
+/** A slash-command reply shown once in the current chat lane, never persisted. */
+type CommandReply = {
+  key: string;
+  command: string;
+  text: string;
+};
 
 /** Live run state is kept per session so switching away never drops it. */
 type SessionLive = {
@@ -140,6 +158,7 @@ export default function App() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [olderError, setOlderError] = useState("");
   const [draft, setDraft] = useState("");
+  const [commandReply, setCommandReply] = useState<CommandReply | null>(null);
   const [attachmentsByKey, setAttachmentsByKey] = useState<Record<string, Attachment[]>>({});
   const [quotesByKey, setQuotesByKey] = useState<Record<string, string>>({});
   const [pendingSessions, setPendingSessions] = useState<Record<string, true>>({});
@@ -188,8 +207,11 @@ export default function App() {
   const pendingSessionsRef = useRef<Record<string, true>>({});
   const sessionCountsRef = useRef<Record<string, number>>({});
   const runSessionsRef = useRef<Record<string, string>>({});
+  const commandPendingRef = useRef(false);
 
   const activeKey = sessionKey(agentId, sessionId);
+  const visibleCommandReply =
+    commandReply && commandReply.key === activeKey ? commandReply : null;
   const attachments = attachmentsByKey[activeKey] ?? [];
   const currentSession = sessions.find((item) => item.id === sessionId) ?? null;
   const agent = agents.find((item) => item.id === agentId);
@@ -376,12 +398,14 @@ export default function App() {
 
   function openCronSession(id: string) {
     setSearchFocus(null);
+    setCommandReply(null);
     setSessionId(id);
     openView("chat");
     void refreshSessions();
   }
 
   function openSearchHit(hit: SessionSearchHit) {
+    setCommandReply(null);
     setSearchFocus({
       sessionId: hit.session_id,
       messageId: hit.message_id,
@@ -402,6 +426,7 @@ export default function App() {
           channel_name: null,
           created_at: hit.created_at,
           updated_at: hit.created_at,
+          last_message_at: hit.created_at,
         },
         ...current,
       ];
@@ -441,6 +466,7 @@ export default function App() {
     setOlderError("");
     setSessions([]);
     setError("");
+    setCommandReply(null);
     setSearchFocus(null);
     if (!auth || !agentId) {
       sessionsRequestRef.current += 1;
@@ -1057,6 +1083,40 @@ export default function App() {
     }
   }
 
+  async function runCommand(command: string, sendKey: string): Promise<boolean> {
+    if (commandPendingRef.current) return false;
+    const targetAgentId = agentId;
+    const targetSessionId = sessionIdRef.current;
+    commandPendingRef.current = true;
+    setError("");
+    clearLiveNotice(targetSessionId);
+    setCommandReply(null);
+    setDraftFor(sendKey, "");
+    try {
+      const response = await api.runChatCommand({
+        agent_id: targetAgentId,
+        session_id: targetSessionId || null,
+        command,
+      });
+      if (targetAgentId !== agentIdRef.current) return false;
+      const startsNew = response.command === "/new" || response.command === "/clear";
+      if (startsNew) newSession();
+      setCommandReply({
+        key: sessionKey(targetAgentId, startsNew ? "" : targetSessionId),
+        command: response.command,
+        text: response.reply,
+      });
+      if (response.command === "/stop") void refreshSessions();
+      return true;
+    } catch (exc) {
+      setSessionError(describeApiError(exc), targetSessionId);
+      setDraftFor(sendKey, command);
+      return false;
+    } finally {
+      commandPendingRef.current = false;
+    }
+  }
+
   async function send(
     attachments: Attachment[] = [],
     overrideText?: string,
@@ -1074,6 +1134,10 @@ export default function App() {
     ) {
       return false;
     }
+    if (overrideText === undefined && isSlashCommand(text)) {
+      return runCommand(text, sendKey);
+    }
+    setCommandReply(null);
     const attachmentBlock = attachments
       .map((file) => `- ${file.name}（工作区路径：${file.path}，大小：${file.size} 字节）`)
       .join("\n");
@@ -1308,6 +1372,7 @@ export default function App() {
     if (!agentId) return;
     setView("chat");
     setSidebarOpen(false);
+    setCommandReply(null);
     sessionIdRef.current = "";
     setSessionId("");
     setMessages([]);
@@ -1421,6 +1486,7 @@ export default function App() {
     setAgentId("");
     setSessionId("");
     setDraft("");
+    setCommandReply(null);
     setSidebarOpen(false);
     setView("chat");
   }
@@ -1504,10 +1570,11 @@ export default function App() {
         agents={agents}
         agentId={agentId}
         onAgentChange={setAgentId}
-        sessions={sessions}
+        sessions={sortSessionsByActivity(sessions)}
         sessionId={sessionId}
         onSelectSession={(id) => {
           setSearchFocus(null);
+          setCommandReply(null);
           setSessionId(id);
           openView("chat");
         }}
@@ -1641,6 +1708,7 @@ export default function App() {
               terminalRun={terminalRun}
               error={error}
               notice={visibleNotice}
+              commandReply={visibleCommandReply}
               activeRun={visibleRun}
               draft={draft}
               quote={quotesByKey[activeKey] ?? ""}

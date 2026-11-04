@@ -256,7 +256,7 @@ export function Sidebar(props: SidebarProps) {
                       {session.active_run_status === "queued" && (
                         <span className="session-activity queued">排队</span>
                       )}
-                      {session.message_count} 条 · {formatTime(session.updated_at)}
+                      {session.message_count} 条 · {formatTime(session.last_message_at || session.updated_at)}
                     </div>
                   </div>
                   <button

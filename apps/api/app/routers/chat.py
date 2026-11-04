@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth import require_auth
-from app.schemas import ChatRequest, ChatResponse
-from app.services import memory_service
+from app.schemas import ChatCommandRequest, ChatCommandResponse, ChatRequest, ChatResponse
+from app.services import chat_commands, memory_service
 from app.services.run_service import ActiveRunConflict, append_event, create_run
 
 router = APIRouter(prefix="/api/chat", tags=["chat"], dependencies=[Depends(require_auth)])
@@ -49,3 +49,24 @@ async def send_message(payload: ChatRequest, request: Request) -> ChatResponse:
     if worker is not None:
         worker.wake()
     return ChatResponse(run_id=run.id, session_id=run.session_id, message_id=message.id)
+
+
+@router.post("/commands", response_model=ChatCommandResponse)
+async def run_command(payload: ChatCommandRequest, request: Request) -> ChatCommandResponse:
+    command = chat_commands.parse_command(payload.command)
+    if command is None:
+        raise HTTPException(status_code=400, detail="not a command")
+    try:
+        result = await chat_commands.execute_command(
+            agent_id=payload.agent_id,
+            session_id=payload.session_id,
+            command=command,
+            worker=getattr(request.app.state, "worker", None),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ChatCommandResponse(
+        command=result.command,
+        reply=result.reply or "",
+        cancelled_count=result.cancelled_count,
+    )

@@ -79,6 +79,7 @@ export type Session = {
   channel_name: string | null;
   created_at: string;
   updated_at: string;
+  last_message_at: string;
 };
 
 export type CronJob = {
