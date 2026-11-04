@@ -826,6 +826,8 @@ textarea {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  overflow-anchor: none;
+  contain: paint;
   padding: 26px max(clamp(18px, 4vw, 42px), calc((100% - var(--chat-lane)) / 2)) 18px;
 }
 
@@ -3911,7 +3913,6 @@ textarea {
     radial-gradient(circle at 18% 12%, rgba(15, 181, 166, 0.42), transparent 34%),
     radial-gradient(circle at 86% 22%, rgba(122, 108, 255, 0.36), transparent 40%),
     radial-gradient(circle at 52% 96%, rgba(255, 170, 120, 0.36), transparent 42%);
-  animation: pearl-aurora 38s ease-in-out infinite alternate;
 }
 
 @keyframes pearl-aurora {
@@ -4397,7 +4398,6 @@ body:has(.app-shell.pearl) .select-empty {
   border-radius: 50%;
   background: conic-gradient(from 140deg, #0fb5a6, #7a6cff, #ffb38a, #0fb5a6);
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8);
-  animation: pearl-orb 14s linear infinite;
 }
 
 .pearl .message-author {
