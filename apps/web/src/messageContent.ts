@@ -8,6 +8,37 @@ export function isSlashCommand(text: string): boolean {
   return SLASH_COMMAND.test(text.trim());
 }
 
+export type SlashCommandItem = {
+  command: string;
+  label: string;
+  description: string;
+};
+
+/** Suggestions for the composer's "/" palette; keep in sync with chat_commands. */
+export const SLASH_COMMANDS: SlashCommandItem[] = [
+  { command: "/new", label: "新会话", description: "开始新会话，旧会话保留在会话列表" },
+  { command: "/clear", label: "同 /new", description: "与 /new 相同，不删除历史" },
+  { command: "/stop", label: "停止任务", description: "停止当前会话排队或运行中的任务" },
+  { command: "/status", label: "会话状态", description: "查看当前 Agent、会话与任务数量" },
+  { command: "/help", label: "命令说明", description: "查看全部可用命令" },
+];
+
+const COMMAND_DRAFT = /^\/[A-Za-z0-9_-]*$/;
+
+/**
+ * The prefix typed after "/" while the composer should offer commands.
+ * Returns null when the draft is not a bare command prefix.
+ */
+export function slashCommandQuery(text: string): string | null {
+  const value = text.trimStart();
+  if (!COMMAND_DRAFT.test(value)) return null;
+  return value.toLowerCase();
+}
+
+export function filterSlashCommands(query: string): SlashCommandItem[] {
+  return SLASH_COMMANDS.filter((item) => item.command.startsWith(query));
+}
+
 const ATTACHMENT_HEADER = "附件已上传到工作区：";
 const ATTACHMENT_LINE = /^- (.+?)（工作区路径：(.*)）$/;
 const ATTACHMENT_SIZE = /^(.*)，大小：(\d+)\s*(?:字节)?$/;

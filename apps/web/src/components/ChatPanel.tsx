@@ -12,7 +12,14 @@ import { api } from "../api";
 import type { Attachment, Message, Run, ScreenshotInfo } from "../types";
 import { formatTime } from "../format";
 import { copyText } from "../clipboard";
-import { formatBytes, isImageName, parseUserContent, userMessageText } from "../messageContent";
+import {
+  filterSlashCommands,
+  formatBytes,
+  isImageName,
+  parseUserContent,
+  slashCommandQuery,
+  userMessageText,
+} from "../messageContent";
 import { prepareImageForUpload } from "../imageUpload";
 import { formatDuration, type RunTraceStep } from "../runActivity";
 import { describeApiError, describeRunError } from "../errors";
@@ -289,6 +296,8 @@ export function ChatPanel(props: ChatPanelProps) {
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [attachError, setAttachError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [commandMenuDismissed, setCommandMenuDismissed] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [now, setNow] = useState(() => Date.now());
   const [highlightId, setHighlightId] = useState("");
@@ -298,6 +307,21 @@ export function ChatPanel(props: ChatPanelProps) {
   const throttledStreamReasoning = useThrottledText(props.streamReasoning);
 
   const uploading = uploads.length > 0;
+  const commandQuery = slashCommandQuery(props.draft);
+  const commandMatches = commandQuery === null ? [] : filterSlashCommands(commandQuery);
+  const commandMenuOpen = commandMatches.length > 0 && !commandMenuDismissed;
+  const activeCommandIndex =
+    commandMatches.length > 0 ? Math.min(commandIndex, commandMatches.length - 1) : -1;
+  const selectedCommand =
+    activeCommandIndex >= 0 ? commandMatches[activeCommandIndex] : null;
+
+  useEffect(() => {
+    setCommandIndex(0);
+  }, [commandQuery]);
+
+  useEffect(() => {
+    if (commandMenuOpen) setMenuOpen(false);
+  }, [commandMenuOpen]);
 
   useEffect(() => {
     if (props.focusSignal > 0) textareaRef.current?.focus();
@@ -555,10 +579,46 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (commandMenuOpen) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        setCommandIndex(
+          (current) =>
+            (current + delta + commandMatches.length) % commandMatches.length,
+        );
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCommandMenuDismissed(true);
+        return;
+      }
+      if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+        if (event.nativeEvent.isComposing) return;
+        const picked = selectedCommand;
+        if (picked) {
+          const exact = picked.command === props.draft.trim().toLowerCase();
+          if (event.key === "Tab" || !exact) {
+            event.preventDefault();
+            applyCommand(picked.command);
+            return;
+          }
+          // Enter on the exact command sends it instead of only filling it.
+          setCommandMenuDismissed(true);
+        }
+      }
+    }
     if (event.key !== "Enter" || event.shiftKey) return;
     if (event.nativeEvent.isComposing) return;
     event.preventDefault();
     void submit();
+  }
+
+  function applyCommand(command: string) {
+    props.onDraftChange(command);
+    setCommandMenuDismissed(true);
+    textareaRef.current?.focus();
   }
 
   function useSuggestion(text: string) {
@@ -918,6 +978,35 @@ export function ChatPanel(props: ChatPanelProps) {
           onDrop={handleDrop}
           onDragOver={(event) => event.preventDefault()}
         >
+          {commandMenuOpen && (
+            <div
+              className="composer-commands"
+              id="composer-command-list"
+              role="listbox"
+              aria-label="可用命令"
+            >
+              <div className="composer-commands-head">输入 / 选择命令</div>
+              {commandMatches.map((item, index) => (
+                <button
+                  key={item.command}
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeCommandIndex}
+                  className={`composer-command ${index === activeCommandIndex ? "active" : ""}`}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseMove={() => setCommandIndex(index)}
+                  onClick={() => applyCommand(item.command)}
+                >
+                  <span className="composer-command-name">{item.command}</span>
+                  <span className="composer-command-label">{item.label}</span>
+                  <span className="composer-command-desc">{item.description}</span>
+                </button>
+              ))}
+              <div className="composer-commands-hint">
+                ↑↓ 选择 · Enter/Tab 填入 · Esc 关闭
+              </div>
+            </div>
+          )}
           <div className="composer-tools" ref={toolsRef}>
             <button
               type="button"
@@ -926,7 +1015,10 @@ export function ChatPanel(props: ChatPanelProps) {
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               title="添加附件"
-              onClick={() => setMenuOpen((current) => !current)}
+              onClick={() => {
+                setCommandMenuDismissed(true);
+                setMenuOpen((current) => !current);
+              }}
             >
               <svg
                 viewBox="0 0 24 24"
@@ -1080,9 +1172,18 @@ export function ChatPanel(props: ChatPanelProps) {
           <textarea
             ref={textareaRef}
             value={props.draft}
-            onChange={(event) => props.onDraftChange(event.target.value)}
+            onChange={(event) => {
+              props.onDraftChange(event.target.value);
+              setCommandMenuDismissed(false);
+              setCommandIndex(0);
+            }}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
+            onFocus={() => setCommandMenuDismissed(false)}
+            onBlur={() => setCommandMenuDismissed(true)}
+            aria-autocomplete="list"
+            aria-expanded={commandMenuOpen}
+            aria-controls={commandMenuOpen ? "composer-command-list" : undefined}
             placeholder={
               !props.canSend
                 ? "先选择一个 Agent 和会话"
