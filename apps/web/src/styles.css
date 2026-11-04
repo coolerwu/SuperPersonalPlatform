@@ -842,6 +842,12 @@ textarea {
   animation: message-in 180ms ease both;
 }
 
+/* Assistant rows replace the streaming bubble on completion; fading them in
+   would make the finished answer blink. */
+.message-row.assistant {
+  animation: none;
+}
+
 @keyframes message-in {
   from {
     opacity: 0;
