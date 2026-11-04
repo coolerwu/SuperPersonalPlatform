@@ -155,6 +155,10 @@ class Settings(BaseSettings):
         return self.app_data_dir / "backtests"
 
     @property
+    def trade_journal_path(self) -> Path:
+        return self.app_data_dir / "trade-journal.jsonl"
+
+    @property
     def cors_origins(self) -> list[str]:
         return [item.strip() for item in self.app_cors_origins.split(",") if item.strip()]
 

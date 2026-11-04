@@ -17,6 +17,7 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 ├── data/
 │   ├── app.db           # SQLite
 │   ├── checkpoints/     # 每个 session 的 LangGraph checkpoint
+│   ├── trade-journal.jsonl  # 交易记录（一行一笔，0600）
 │   ├── browser_state.json  # 浏览器 cookies/localStorage（0600，可删）
 │   └── knowledge_sync_state.json  # 知识库同步状态（etag / 本地哈希）
 ├── workspaces/          # Agent 真实工作区根目录
@@ -125,7 +126,7 @@ metadata:
 - 技能启用：AI 创建的技能会自动加入当前 Agent 的启用列表，同一会话的下一次对话生效；手动创建/放入的技能仍需在这里启用。读取 SKILL.md 后，技能声明的工具才会解锁。
 - 删除：非系统技能可以在技能页删除，删除整个技能目录并从所有 Agent 的启用列表移除；系统技能不能删除。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
-- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`quant-backtest`、`cron-scheduler` 和 `knowledge-base`。前六个分别声明 `include_tools: web_fetch` / `web_search web_fetch` / 七个 `browser_*` 工具 / `memory_list memory_update memory_delete` / `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status` / `cron_list cron_targets cron_create cron_update cron_delete cron_run`；`knowledge-base` 不声明工具，作用是把本地知识库镜像挂到 `/knowledge/` 并说明读写约定。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
+- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`quant-backtest`、`cron-scheduler`、`trade-journal` 和 `knowledge-base`。`web-fetch` 声明 `include_tools: web_fetch`；`web-search` 声明 `web_search web_fetch`；`web-browser` 声明七个 `browser_*` 工具；`memory-organizer` 声明 `memory_list memory_update memory_delete`；`quant-backtest` 声明 `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status`；`cron-scheduler` 声明 `cron_list cron_targets cron_create cron_update cron_delete cron_run`；`trade-journal` 声明 `trade_journal_record trade_journal_update trade_journal_close trade_journal_query trade_journal_stats`；`knowledge-base` 不声明工具，作用是把本地知识库镜像挂到 `/knowledge/` 并说明读写约定。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
 
@@ -156,12 +157,13 @@ metadata:
 - **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
 - **`backtest_run` / `backtest_status` / `backtest_result` / `backtest_cancel` / `market_probe` / `market_cache_status`**：加密货币回测工具（`quant-backtest` 技能声明）。`backtest_run` 创建 Bitget 现货单标的回测（可指定 `warmup_bars`，默认 200）并最多等待 90 秒，完成返回指标摘要，未完成返回任务 id；`backtest_status` 查状态/进度；`backtest_result` 返回指标、告警和最近交易；`backtest_cancel` 取消排队或执行中的任务；`market_probe` / `market_cache_status` 检查 Bitget 连接和本地行情缓存。
 - **`cron_list` / `cron_targets` / `cron_create` / `cron_update` / `cron_delete` / `cron_run`**：定时任务工具（`cron-scheduler` 技能声明）。只操作当前 Agent 的任务；`cron_list` 返回任务 id、表达式、时区、启停、下次触发、最近状态、专属会话和推送目标；`cron_targets` 列出当前 Agent 的微信渠道和已有 1:1 联系人会话；`cron_create` 创建任务并生成专属会话，prompt 必须自包含，可同时传 `push_channel_id` / `push_conversation_id`；`cron_update` 修改指定字段，两个推送 id 都传空字符串表示清除；`cron_delete` 删除配置但保留会话；`cron_run` 立即运行一次且不改变原计划。未启用技能或未读取 SKILL.md 时工具不可见。
+- **`trade_journal_record` / `trade_journal_update` / `trade_journal_close` / `trade_journal_query` / `trade_journal_stats`**：交易记录工具（`trade-journal` 技能声明）。`trade_journal_record` 记录一笔 crypto 或 A 股交易（必填 symbol、entry_at、entry_price、thesis，平仓可同时给 exit_at/exit_price/review），`trade_journal_update` 修改已有字段，`trade_journal_close` 平仓并补复盘，`trade_journal_query` 按 id/市场/标的/状态/标签/时间/关键词查询，`trade_journal_stats` 输出胜率、平均收益、平均 R、盈亏比和按市场/标签分组。记录保存在 `data/trade-journal.jsonl`；工具不删除记录，也不接交易所。
 - **`execute`**（`LocalShellBackend`，不在代码注册表）：所有 Agent 始终可用。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。任何 Agent（包括微信入站会话）都能操作这台机器。
 - **`eval`**（`CodeInterpreterMiddleware`，不在代码注册表）：每次 Run 都挂载，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用文件工具。PTC 只开放文件工具，不开放 `execute`；`subagents=True`，可在 REPL 里用 `task(...)` 调度子 Agent（每次独立会话，不走父级审批）。general-purpose 子 Agent 不继承 `eval`，但可以使用 `execute`。
 
 `execute` 与 `eval` 不参与技能启用列表，也没有读取门控；工具 schema 和库自带提示词负责用法说明，默认 Agent 的提示词会说明两者的存在与安全约束。
 
-工具实现分别在 `apps/api/app/services/skill_tools.py`（Search/Fetch）、`apps/api/app/services/browser_tools.py`（浏览器）、`apps/api/app/services/memory_tools.py`（记忆）和 `apps/api/app/services/backtest_tools.py`（回测/行情）；`execute` 由 `deepagents` 的 `LocalShellBackend` 提供，`eval` 由 `langchain-quickjs` 提供。新增注册表工具时注册一个 factory，按运行时 Provider/会话构建 LangChain `BaseTool`。
+工具实现分别在 `apps/api/app/services/skill_tools.py`（Search/Fetch）、`apps/api/app/services/browser_tools.py`（浏览器）、`apps/api/app/services/memory_tools.py`（记忆）、`apps/api/app/services/backtest_tools.py`（回测/行情）和 `apps/api/app/services/trade_journal_tools.py`（交易记录）；`execute` 由 `deepagents` 的 `LocalShellBackend` 提供，`eval` 由 `langchain-quickjs` 提供。新增注册表工具时注册一个 factory，按运行时 Provider/会话构建 LangChain `BaseTool`。
 
 ## 记忆
 
@@ -236,6 +238,18 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 - 限制：单次回测最多 `BACKTEST_MAX_BARS`（默认 200000）根 K 线；缺口超过修复预算时保留为空仓，并在结果里告警；模拟做空不含借币成本、资金费率与强平。
 - Agent 使用：在「技能」页为当前 Agent 启用 `quant-backtest`，然后在对话里让它读取技能并跑回测，例如“用 20/60 日均线策略回测 BTCUSDT 最近 90 天的 1h 数据”。Agent 会使用 `backtest_run` 创建任务（最多等待 90 秒）、`backtest_status` 查询进度、`backtest_result` 查看指标和交易；网页和 Agent 共用同一套任务与行情缓存。
 
+## 交易记录
+
+「交易记录」第一版是 Agent 工具，不提供网页。记录保存在 `data/trade-journal.jsonl`，一行一笔，便于查看、复制和备份；不新增数据库表。
+
+- 字段：`symbol`、`direction`、`entry_at`、`entry_price`、`thesis` 必填；`exit_at`、`exit_price` 平仓时同时提供；可选 `market`、`currency`、`instrument_type`、`stop_loss`、`quantity`、`fees`、`review`、`tags`、`followed_plan`、`meta`。
+- 市场：`crypto` 默认 `USDT`/`spot`，代码如 `BTCUSDT`；`a_share` 默认 `CNY`/`stock`，代码建议 `600519.SH`、`000001.SZ`、`300750.SZ`、`688981.SH`。`market` 可省略，平台会从代码推断。
+- 计算：`status`、价格收益、R 倍数、净盈亏、胜负由平台计算，不写入文件；没有 `quantity` 时只有价格收益和 R，没有金额盈亏；多币种盈亏不直接相加。
+- 标签：用 `tags` 数组，推荐命名空间 `setup:`、`mistake:`、`emotion:`、`regime:`、`board:`、`sector:`、`limit:`；`thesis`/`review` 是全文检索的文本，`meta` 放市场特有、暂不检索的细节。
+- 写入：服务层按进程内事件循环串行写入，更新用临时文件原子替换，文件权限 0600；文件损坏行会被跳过，不影响其他记录。
+- Agent 使用：在「技能」页为当前 Agent 启用 `trade-journal`，让它读取 SKILL.md 后，就可以说“记一笔：11 月 2 日 10:15 买 600519.SH，1450，止损 1418，100 股，理由是日线回踩 20 日线缩量企稳”。平仓后说“1498 出了，复盘一下”，Agent 会用 `trade_journal_close` 补出场和复盘；之后用 `trade_journal_query` / `trade_journal_stats` 按标签、市场、时间复盘。
+- 边界：不接交易所、不自动下单、不计算实时浮盈、不删除记录；A 股对 T+1、数量整数和止损方向做提示，涨跌停、费用和交易日历不在第一版精确计算。
+
 ## 数据存储
 
 生产数据都在 `~/.super-personal-platform/data/`：
@@ -254,6 +268,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
   - `backtests`：回测任务与结果，含状态、策略代码、指标、下采样净值/回撤/价格、交易明细和告警；大数组按上限截断。
   - `knowledge_configs`：知识库 WebDAV 配置（单行），含启用开关、地址、账号、应用密码、根目录和同步间隔；密码不返回前端。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles`（按 `symbol + granularity + open_time_ms` 唯一）和 `market_sync_state`（已同步范围与上次错误）。可以独立删除，下次回测会重新抓取。
+- `trade-journal.jsonl`：交易记录，一行一个 JSON 对象，权限 0600；由 `trade-journal` 技能的工具读写，不建数据库表。字段和计算口径见「交易记录」；可以独立备份、复制和手工查看。
 - `browser_state.json`：浏览器 cookies 与 localStorage（Playwright storage_state），权限 0600；用于跨 Run 保持网站登录态，删除后所有站点需要重新登录。没有配置时不会创建。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
 - `messages_fts`：`messages.content` 的 FTS5 trigram 索引（external content，触发器同步）；用于 Agent 的 `session_search` / `session_read` 和侧栏搜索，首次创建或索引为空时自动 `rebuild` 回填。FTS 不可用时降级 `LIKE`。
@@ -261,7 +276,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 - `~/.super-personal-platform/skills/`：全局技能库，由用户/运维维护；删除技能不会自动清理 Agent 的启用列表，运行时忽略不存在的技能。
 - `~/.super-personal-platform/knowledge/`：坚果云知识库的本地镜像，由后台同步任务维护；可以独立删除，下次同步会重新下载。`data/knowledge_sync_state.json` 记录远端 etag 与本地哈希，删除后下一轮同步会按「两边都变」的规则重新对账。
 
-备份时停服务后复制 `data/app.db` 和 `data/checkpoints/`；`data/market.db` 是可按需重建的行情缓存，建议一并备份以免重新抓取。`knowledge/` 是坚果云镜像，可不备份；`data/knowledge_sync_state.json` 丢失后下一轮同步会重新对账。删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
+备份时停服务后复制 `data/app.db`、`data/checkpoints/` 和 `data/trade-journal.jsonl`；`data/market.db` 是可按需重建的行情缓存，建议一并备份以免重新抓取。`knowledge/` 是坚果云镜像，可不备份；`data/knowledge_sync_state.json` 丢失后下一轮同步会重新对账。删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
 
 ## 配置
 
