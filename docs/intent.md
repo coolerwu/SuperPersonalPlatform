@@ -521,8 +521,8 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 1. 移除记忆页面的「整理记忆」按钮、`POST /api/memories/consolidate` 及相关解析/批处理代码；记忆页只保留手动 CRUD 和搜索。
 2. 聊天输入区「＋」菜单新增「整理记忆」指令，点击后直接发起一个 Run；不覆盖输入框里已有的草稿。
-3. 新增内置技能 `memory-organizer`，声明 `include_tools: memory_list memory_update memory_delete`；正文规定先列出记忆，再按批合并语义重复项、删除失效/矛盾/被否定项，只更新和删除、不新增事实。
-4. 新增技能工具 `memory_list` / `memory_update` / `memory_delete`：列表可指定 `scope=user|agent|all`（默认 all，含当前 Agent），支持 `offset` 翻页，返回 id、scope、标签和正文；更新/删除只允许作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不注册新增工具。
+3. 新增内置技能 `memory-organizer`，声明 `include_tools: memory_list memory_update memory_delete memory_move`；正文规定先列出记忆，再按批合并语义重复项、删除失效/矛盾/被否定项，并把属于用户偏好/个人事实的 Agent 记忆归位到用户级；只更新、删除和归位，不新增事实。
+4. 新增技能工具 `memory_list` / `memory_update` / `memory_delete` / `memory_move`：列表可指定 `scope=user|agent|all`（默认 all，含当前 Agent），支持 `offset` 翻页，返回 id、scope、标签和正文；更新/删除只允许作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；`memory_move` 只允许把当前 Agent 的 agent memory 归位到 user memory（已有相同内容则合并），不注册新增工具。
 5. 首次点击「整理记忆」时，如果当前 Agent 未启用该技能，前端自动把 `memory-organizer` 加入 `enabled_skills` 再发送；菜单项会提示这一点。
 6. 技能随启动 seed，并遵循现有内置技能规则：用户未修改的随版本更新，改过的保持不动。
 7. `DeepAgentExecutor` 把 `agent_id` 传入 `SkillToolContext`，供记忆工具做 scope 授权。
@@ -2136,4 +2136,41 @@ F6 规定 user memory 只由“记住……”或记忆页手动新增写入，�
 
 - 向量/语义检索、记忆审核、版本历史；
 - 手动选择 scope 之外的记忆页面改动；
-- 历史记忆迁移或重新分类。
+- 自动批量迁移或重分类历史记忆（存量归位由 F57 的整理记忆完成）。
+
+### F57 整理记忆支持跨 scope 归位
+
+- 状态：已完成
+- 日期：2026-11-04
+- 来源：用户发现现有记忆全在 Agent 级，整理记忆时模型明确说工具只能 update/delete，无法新建或跨层级移动
+
+#### 背景与目标
+
+F56 让新提取的记忆可以写 user scope，但历史记忆仍全在 agent scope；`memory-organizer` 只有 update/delete，无法把明显属于用户偏好的条目归位，用户只能手动处理。目标：给 organizer 增加 Agent→用户 的单向归位能力，让一次「整理记忆」就能修复存量错位；不新增事实、不改表结构。
+
+#### 功能点
+
+1. 新增服务 `move_memory_to_user(memory_id, agent_id)`：只允许当前 Agent 的 agent memory；移动到 user scope 时清空 `agent_id`；如果已存在完全相同内容的 user memory，则合并标签、删除原 agent 条目，避免重复。
+2. 新增工具 `memory_move(memory_id)`，加入 `memory-organizer` 的 `include_tools`；只支持 Agent→用户，不接受其他方向或跨 Agent 移动。
+3. organizer 技能正文新增第三类操作：把明显属于用户长期偏好/个人事实的 Agent 记忆归位；项目/Agent 知识不移动，拿不准时保留。
+4. 整理完成后的汇报增加“归位多少条”。
+5. 不改表结构、不做自动批量迁移；存量数据由用户再次触发「整理记忆」修复。
+
+#### 验收标准
+
+- 当前 Agent 的 Agent 记忆可以通过 `memory_move` 变为 user memory，`agent_id` 为空。
+- 另一 Agent 的记忆返回 not found；已经是 user 的记忆返回错误。
+- 目标 user scope 已有相同内容时合并并删除原 agent 条目，标签合并。
+- `memory-organizer` 声明并解锁 `memory_move`；后端测试与前端构建通过。
+
+#### 约束边界
+
+- 只做 Agent→用户，不做用户→Agent、跨 Agent 移动或批量迁移。
+- `memory_move` 只改 scope，不改正文；需要改内容时由 organizer 另行 update。
+- user scope 200 条上限仍然生效。
+
+#### 非目标
+
+- 记忆页面上的手动“移动到用户级”按钮；
+- 自动批量重分类所有历史记忆；
+- 新增记忆或改变自动学习流程。

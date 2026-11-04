@@ -403,6 +403,56 @@ async def delete_memory(memory_id: str) -> bool:
         return True
 
 
+async def move_memory_to_user(memory_id: str, *, agent_id: str) -> MemoryItem | None:
+    """Move one of the current Agent's memories into the global user scope.
+
+    Returns None when the memory is missing, belongs to another Agent, is
+    already user-scoped, or the user scope is full. An existing user memory
+    with identical content is merged instead of duplicated.
+    """
+    if not agent_id:
+        return None
+    async with SessionLocal() as db:
+        item = await db.get(MemoryItem, memory_id)
+        if item is None or item.scope != "agent" or item.agent_id != agent_id:
+            return None
+        existing = await db.scalar(
+            select(MemoryItem)
+            .where(
+                MemoryItem.scope == "user",
+                MemoryItem.agent_id.is_(None),
+                MemoryItem.content == item.content,
+            )
+            .limit(1)
+        )
+        if existing is not None:
+            existing.tags = normalize_tags(
+                [*(existing.tags or []), *(item.tags or [])]
+            )
+            existing.updated_at = utcnow()
+            await db.execute(delete(RunMemory).where(RunMemory.memory_id == item.id))
+            await db.delete(item)
+            await db.commit()
+            await db.refresh(existing)
+            return existing
+        count = int(
+            await db.scalar(
+                select(func.count())
+                .select_from(MemoryItem)
+                .where(MemoryItem.scope == "user")
+            )
+            or 0
+        )
+        if count >= MAX_ITEMS_PER_SCOPE:
+            return None
+        item.scope = "user"
+        item.agent_id = None
+        item.updated_at = utcnow()
+        await db.commit()
+        await db.refresh(item)
+        return item
+
+
 def _cjk_bigrams(text: str) -> set[str]:
     grams: set[str] = set()
     for run in _CJK_RE.findall((text or "").lower()):

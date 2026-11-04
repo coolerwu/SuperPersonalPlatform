@@ -49,7 +49,7 @@ def _tools(context: SkillToolContext):
     return {
         tool.name: tool
         for tool in SKILL_TOOL_REGISTRY.resolve_names(
-            ["memory_list", "memory_update", "memory_delete"], context
+            ["memory_list", "memory_update", "memory_delete", "memory_move"], context
         )
     }
 
@@ -62,8 +62,9 @@ def test_memory_organizer_skill_declares_memory_tools(tmp_path) -> None:
         "memory_list",
         "memory_update",
         "memory_delete",
+        "memory_move",
     )
-    assert {"memory_list", "memory_update", "memory_delete"} <= {
+    assert {"memory_list", "memory_update", "memory_delete", "memory_move"} <= {
         spec.name for spec in SKILL_TOOL_REGISTRY.specs()
     }
 
@@ -137,3 +138,50 @@ async def test_memory_list_validates_scope_and_limit() -> None:
     assert (await tools["memory_list"].ainvoke({"offset": -1})).startswith("Error:")
     empty = _tools(SkillToolContext(api_key="", base_url=""))
     assert (await empty["memory_list"].ainvoke({"scope": "agent"})).startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_memory_move_promotes_current_agent_memory() -> None:
+    agent_a = await _create_agent()
+    agent_b = await _create_agent()
+    item_a = await memory_service.create_memory(
+        scope="agent", agent_id=agent_a, content="回答先给结论"
+    )
+    item_b = await memory_service.create_memory(
+        scope="agent", agent_id=agent_b, content="Agent B 的记忆"
+    )
+    tools = _tools(_context(agent_a))
+
+    blocked = await tools["memory_move"].ainvoke({"memory_id": item_b.id})
+    assert blocked == "Error: memory not found"
+
+    moved = await tools["memory_move"].ainvoke({"memory_id": item_a.id})
+    assert "已归位到用户记忆" in moved
+    stored = await memory_service.get_memory(item_a.id)
+    assert stored is not None
+    assert stored.scope == "user"
+    assert stored.agent_id is None
+
+    again = await tools["memory_move"].ainvoke({"memory_id": item_a.id})
+    assert again.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_memory_move_merges_duplicate_user_memory() -> None:
+    agent_id = await _create_agent()
+    content = "用户喜欢回答先给结论"
+    user_item = await memory_service.create_memory(
+        scope="user", content=content, tags=["style"]
+    )
+    agent_item = await memory_service.create_memory(
+        scope="agent", agent_id=agent_id, content=content, tags=["preference"]
+    )
+    tools = _tools(_context(agent_id))
+
+    result = await tools["memory_move"].ainvoke({"memory_id": agent_item.id})
+    assert "已合并到用户记忆" in result
+    assert await memory_service.get_memory(agent_item.id) is None
+    stored = await memory_service.get_memory(user_item.id)
+    assert stored is not None
+    assert stored.scope == "user"
+    assert set(stored.tags) == {"style", "preference"}

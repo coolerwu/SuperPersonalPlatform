@@ -173,7 +173,7 @@ metadata:
 - **Agent 记忆**：只对当前 Agent 生效，适合角色和领域知识；
 - 手动新增/编辑/删除/搜索；对话里“记住：……”会立即写入用户记忆；
 - Agent 编辑区有「自动学习记忆」开关：开启后，Run 完成时最多返回 12 个记忆操作；先用 FTS5（trigram）在 user memory 和当前 Agent memory 中找出相关历史记忆，再让模型返回 add/update/delete 做合并，并为新增条目选择 `scope=user|agent`（用户长期偏好/个人事实写 user，Agent 工作方式/项目知识写 agent，不确定用 agent；update/delete 保持原 scope），去重后直接写入，每个 scope 上限 200 条；提取在 Run 完成后以后台任务执行，不占用 Run 并发槽，同一 Agent 的提取串行执行，避免并发写入重复记忆；
-- **整理记忆**：聊天输入区「＋」菜单的「整理记忆」指令会直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` 合并重复、删除失效项，只更新/删除、不新增事实；范围是 user memory 和当前 Agent 的 agent memory。首次使用时会自动为当前 Agent 启用该技能；
+- **整理记忆**：聊天输入区「＋」菜单的「整理记忆」指令会直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` / `memory_move` 合并重复、删除失效项，并把明显属于用户偏好或个人事实、但落在当前 Agent 记忆里的条目归位到 user memory；只更新/删除/归位、不新增事实；范围是 user memory 和当前 Agent 的 agent memory。首次使用时会自动为当前 Agent 启用该技能；
 - 每次 Run 只注入与本轮输入相关的记忆：中文按双字组（过滤停用词）、英文按词元匹配，user 与当前 Agent 同池按相关度竞争（不做 scope 配额或 user 全量注入）；最多 12 条、1500 字，单条最多 320 字，没有相关记忆时不注入。记忆作为数据块附加到系统提示词，不会自动修改 Agent instructions；记录实际使用的 memory id。
 
 ## 渠道（微信个人号）

@@ -41,7 +41,7 @@ def test_builtin_registry_has_web_tools() -> None:
     assert {"web_fetch", "web_search"} | BROWSER_TOOL_NAMES <= {
         spec.name for spec in SKILL_TOOL_REGISTRY.specs()
     }
-    assert {"memory_list", "memory_update", "memory_delete"} <= {
+    assert {"memory_list", "memory_update", "memory_delete", "memory_move"} <= {
         spec.name for spec in SKILL_TOOL_REGISTRY.specs()
     }
 

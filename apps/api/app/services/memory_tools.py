@@ -109,6 +109,25 @@ async def _delete_memory(context: SkillToolContext, memory_id: str) -> str:
     return f"已删除记忆 {memory_id}：{old_content}"
 
 
+async def _move_memory(context: SkillToolContext, memory_id: str) -> str:
+    memory_id = str(memory_id or "").strip()
+    if not memory_id:
+        return "Error: memory_id is required"
+    item = await memory_service.get_memory(memory_id)
+    if item is None or not _can_edit(context, item):
+        return "Error: memory not found"
+    if item.scope != "agent":
+        return "Error: only agent memory can be moved to user scope"
+    moved = await memory_service.move_memory_to_user(
+        memory_id, agent_id=context.agent_id or ""
+    )
+    if moved is None:
+        return "Error: memory not found or user memory limit reached"
+    if moved.id == memory_id:
+        return f"已归位到用户记忆 {moved.id}：{moved.content}"
+    return f"已合并到用户记忆 {moved.id}：{moved.content}"
+
+
 def _make_list_tool(context: SkillToolContext) -> BaseTool:
     async def memory_list(
         scope: str = "all",
@@ -163,11 +182,28 @@ def _make_delete_tool(context: SkillToolContext) -> BaseTool:
     )
 
 
+def _make_move_tool(context: SkillToolContext) -> BaseTool:
+    async def memory_move(memory_id: str) -> str:
+        """把当前 Agent 的一条记忆归位为用户级记忆。"""
+        return await _move_memory(context, memory_id)
+
+    return StructuredTool.from_function(
+        name="memory_move",
+        description=(
+            "把当前 Agent 的一条记忆归位为用户级记忆（对所有 Agent 生效）；"
+            "只支持 Agent→用户方向，已有相同内容的用户记忆时自动合并。"
+            "id 必须来自 memory_list，且必须是当前 Agent 的记忆。"
+        ),
+        coroutine=memory_move,
+    )
+
+
 def register_memory_tools(registry: SkillToolRegistry = SKILL_TOOL_REGISTRY) -> None:
     specs = (
         ("memory_list", _make_list_tool, "列出用户记忆和当前 Agent 记忆"),
         ("memory_update", _make_update_tool, "更新一条长期记忆"),
         ("memory_delete", _make_delete_tool, "删除一条长期记忆"),
+        ("memory_move", _make_move_tool, "把当前 Agent 记忆归位为用户记忆"),
     )
     for name, factory, description in specs:
         if registry.has(name):
