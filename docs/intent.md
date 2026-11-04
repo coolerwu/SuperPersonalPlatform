@@ -235,7 +235,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 2. user memory 对所有 Agent 生效；agent memory 只对指定 Agent 生效；session 工作记忆继续由 checkpoint 负责。
 3. 配置页独立「记忆」页面：用户/Agent 两个 tab，支持新增、编辑、删除、搜索。
 4. 对话里以“记住……”开头的内容，立即写入 user memory。
-5. 每个 Agent 有「自动学习记忆」开关；Run 完成后先用 FTS5（trigram）召回相关历史记忆，再让模型返回 add/update/delete，合并或删除旧记忆，最多 12 个操作；带来源、去重、200 条上限。提取在 Run 落 completed 之后作为后台任务执行，不占用 Run 并发槽；同一 Agent 的提取在进程内串行，后一次能看到前一次刚写入的记忆，避免并发写入语义重复但措辞不同的记忆。
+5. 每个 Agent 有「自动学习记忆」开关；Run 完成后先用 FTS5（trigram）召回相关历史记忆（user memory + 当前 Agent memory），再让模型返回 add/update/delete 并为新增条目选择 `scope=user|agent`，合并或删除旧记忆，最多 12 个操作；带来源、去重、200 条上限。提取在 Run 落 completed 之后作为后台任务执行，不占用 Run 并发槽；同一 Agent 的提取在进程内串行，后一次能看到前一次刚写入的记忆，避免并发写入语义重复但措辞不同的记忆。
 6. 每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入系统提示词，标注为数据而非指令；记录 `run_memories` 用量。
 7. 记忆内容不自动修改 Agent instructions。
 8. 记忆页面提供「整理记忆」按钮：对当前 scope 的记忆分批交给模型，只允许 update/delete，合并重复、删除失效项，不新增事实。（已由 F15 取代：移到聊天输入区「＋」菜单，改为 `memory-organizer` 技能触发。）
@@ -252,7 +252,6 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 - 向量/语义检索、embedding；
 - Agent 自主修改 instructions；
-- user memory 自动提取；
 - 记忆审核状态、版本历史或自动遗忘；
 - 跨设备同步。
 
@@ -2099,3 +2098,42 @@ F53 让网页聊天支持 `/new`、`/stop` 等命令，但输入框没有任何�
 - 命令历史、最近使用排序；
 - 自然语言建议或模型生成的快捷指令；
 - 带参数命令、自定义命令或命令别名管理。
+
+### F56 自动学习区分用户与 Agent 记忆
+
+- 状态：已完成
+- 日期：2026-11-04
+- 来源：用户发现生产环境只有 agent 记忆、0 条 user 记忆；原设计只自动提取 agent memory
+
+#### 背景与目标
+
+F6 规定 user memory 只由“记住……”或记忆页手动新增写入，自动学习只写 agent memory；长期使用后 user 记忆一直为空。目标：自动学习在提取时区分“关于用户的长期偏好/事实”和“当前 Agent 的工作方式/项目知识”，前者写 user memory，后者写 agent memory；不新增表、依赖或前端页面。
+
+#### 功能点
+
+1. 提取提示要求每条 add 返回 `scope=user|agent`：user 用于用户本人的长期偏好、习惯、身份或背景事实，以及用户明确要求长期记住的个人信息；agent 用于 Agent 工作方式、项目/领域知识和只与当前 Agent 相关的约定；不确定时用 agent。
+2. 合并候选改为 user memory + 当前 Agent memory（FTS 命中与最近更新回退），候选行带上 scope；模型可以 update/delete 两类记忆。
+3. 新增按 scope 写入：user 条目不绑定 agent，agent 条目仍绑定当前 Agent；单 scope 上限 200 不变。
+4. update/delete 以已有记忆的 scope 为准，不接受模型通过 update 迁移 scope；`memory_saved` 事件记录实际 scope。
+5. 显式“记住……”的 Run 仍跳过自动提取，避免重复写入；微信入站没有显式立即写入路径，但这类内容仍可能在 Run 完成后被自动学习命中。
+6. 已存在的 agent 记忆不迁移；后续 Run 的新提取才会产生 user 记忆。
+
+#### 验收标准
+
+- 一段同时包含“用户偏好先给结论”和“Agent 用中文回答”的对话，自动提取后分别落在 user / agent scope。
+- 更新一条 user 记忆时即使模型返回 `scope=agent`，仍保持 user scope。
+- 合并候选包含相关 user 记忆。
+- `memory_saved` 事件的 scope 与实际写入一致；后端测试与前端构建通过（前端无改动）。
+
+#### 约束边界
+
+- scope 由模型判断，不做规则分类；不确定时偏向 agent，避免把项目细节写进全局 user memory。
+- 不做历史记忆重分类或迁移。
+- 微信入站的“记住……”仍不会立即写入 user memory，显式入口目前只在网页聊天 `POST /api/chat/messages`。
+- user memory 对所有 Agent 生效，写入需要克制。
+
+#### 非目标
+
+- 向量/语义检索、记忆审核、版本历史；
+- 手动选择 scope 之外的记忆页面改动；
+- 历史记忆迁移或重新分类。

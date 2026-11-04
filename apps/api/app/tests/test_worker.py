@@ -447,7 +447,7 @@ async def test_memory_extraction_does_not_hold_run_slot(monkeypatch) -> None:
         return []
 
     monkeypatch.setattr("app.services.worker.DeepAgentExecutor", QuickExecutor)
-    monkeypatch.setattr("app.services.memory_service.extract_agent_memories", slow_extract)
+    monkeypatch.setattr("app.services.memory_service.extract_memories", slow_extract)
     await _cancel_queued_runs()
     session_ids = [await _new_session() for _ in range(3)]
     await _enable_auto_memory(session_ids[0])
@@ -501,7 +501,7 @@ async def test_memory_extraction_is_serialized_per_agent(monkeypatch) -> None:
         return []
 
     monkeypatch.setattr("app.services.worker.DeepAgentExecutor", QuickExecutor)
-    monkeypatch.setattr("app.services.memory_service.extract_agent_memories", tracked_extract)
+    monkeypatch.setattr("app.services.memory_service.extract_memories", tracked_extract)
     await _cancel_queued_runs()
     session_ids = [await _new_session() for _ in range(2)]
     await _enable_auto_memory(session_ids[0])

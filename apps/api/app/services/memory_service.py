@@ -139,6 +139,7 @@ class MemoryChange:
     action: str
     memory_id: str
     content: str
+    scope: str
 
 
 def normalize_content(text: str) -> str:
@@ -244,7 +245,7 @@ async def find_merge_candidates(
     query: str,
     limit: int = 12,
 ) -> list[MemoryItem]:
-    ids = await _fts_ids(query=query, agent_id=agent_id, agent_only=True, limit=limit)
+    ids = await _fts_ids(query=query, agent_id=agent_id, agent_only=False, limit=limit)
     async with SessionLocal() as db:
         items = [await db.get(MemoryItem, memory_id) for memory_id in ids]
         items = [item for item in items if item is not None]
@@ -254,8 +255,13 @@ async def find_merge_candidates(
                     await db.scalars(
                         select(MemoryItem)
                         .where(
-                            MemoryItem.scope == "agent",
-                            MemoryItem.agent_id == agent_id,
+                            or_(
+                                MemoryItem.scope == "user",
+                                and_(
+                                    MemoryItem.scope == "agent",
+                                    MemoryItem.agent_id == agent_id,
+                                ),
+                            )
                         )
                         .order_by(MemoryItem.updated_at.desc())
                         .limit(limit)
@@ -578,6 +584,7 @@ def parse_extraction(text: str) -> list[dict[str, Any]]:
         return []
     result: list[dict[str, Any]] = []
     for entry in memories:
+        scope = "agent"
         if isinstance(entry, str):
             action, memory_id, content, tags = "add", "", entry, []
         elif isinstance(entry, dict):
@@ -585,6 +592,9 @@ def parse_extraction(text: str) -> list[dict[str, Any]]:
             memory_id = str(entry.get("id") or "")
             content = entry.get("content", "")
             tags = entry.get("tags", [])
+            candidate_scope = str(entry.get("scope") or "agent").lower()
+            if candidate_scope in ("user", "agent"):
+                scope = candidate_scope
         else:
             continue
         if action not in ("add", "update", "delete"):
@@ -597,6 +607,7 @@ def parse_extraction(text: str) -> list[dict[str, Any]]:
         result.append(
             {
                 "action": action,
+                "scope": scope,
                 "id": memory_id,
                 "content": content,
                 "tags": normalize_tags(tags),
@@ -622,7 +633,7 @@ def _message_text(message: Any) -> str:
     return ""
 
 
-async def extract_agent_memories(
+async def extract_memories(
     *,
     provider: Any,
     agent_id: str,
@@ -643,7 +654,7 @@ async def extract_agent_memories(
         agent_id=agent_id, query=user_content, limit=12
     )
     candidate_lines = "\n".join(
-        f"- id: {item.id} | content: {item.content} | tags: {', '.join(item.tags or [])}"
+        f"- id: {item.id} | scope: {item.scope} | content: {item.content} | tags: {', '.join(item.tags or [])}"
         for item in candidates
     ) or "（无）"
 
@@ -656,16 +667,18 @@ async def extract_agent_memories(
     )
     system_prompt = (
         "你是一个长期记忆管理器。读取当前这轮对话，并参考已有记忆，决定如何更新记忆。\n"
-        "只返回 JSON：{\"memories\":[{\"action\":\"add|update|delete\",\"id\":\"...\",\"content\":\"...\",\"tags\":[\"...\"]}]}\n"
+        "只返回 JSON：{\"memories\":[{\"action\":\"add|update|delete\",\"scope\":\"user|agent\",\"id\":\"...\",\"content\":\"...\",\"tags\":[\"...\"]}]}\n"
         "规则：\n"
         "1. 只提取用户长期偏好、稳定事实、明确决定、长期约定。\n"
-        "2. 不要提取一次性任务状态、当前对话细节、密码/API key/token、模型猜测。\n"
-        "3. 语义相同或只是措辞变化：用 update 合并到已有记忆，不要新增。\n"
-        "4. 偏好变化或前后矛盾：用 update 覆盖旧记忆，以当前对话为准。\n"
-        "5. 已失效或被明确否定的记忆：用 delete。\n"
-        "6. 没有匹配的已有记忆才用 add。\n"
-        "7. update/delete 的 id 只能来自下面给出的已有记忆；最多 12 个操作。\n"
-        "8. 每条记忆写成独立、可复用的简体中文陈述句；没有就返回 {\"memories\":[]}。\n\n"
+        "2. scope=user：关于用户本人的长期偏好、习惯、身份或背景事实，以及用户明确要求长期记住的个人信息；user memory 对所有 Agent 生效，不要写入只属于某个 Agent 的内容。\n"
+        "3. scope=agent：当前 Agent 的工作方式、项目/领域知识、助手行为约定，或只与这个 Agent 相关的长期信息；不确定时用 agent。\n"
+        "4. 不要提取一次性任务状态、当前对话细节、密码/API key/token、模型猜测。\n"
+        "5. 语义相同或只是措辞变化：用 update 合并到已有记忆，不要新增。\n"
+        "6. 偏好变化或前后矛盾：用 update 覆盖旧记忆，以当前对话为准。\n"
+        "7. 已失效或被明确否定的记忆：用 delete。\n"
+        "8. 没有匹配的已有记忆才用 add。\n"
+        "9. update/delete 的 id 只能来自下面给出的已有记忆；scope 以已有记忆为准，不要用它迁移记忆；最多 12 个操作。\n"
+        "10. 每条记忆写成独立、可复用的简体中文陈述句；没有就返回 {\"memories\":[]}。\n\n"
         f"已有记忆：\n{candidate_lines}"
     )
     human_prompt = (
@@ -687,16 +700,19 @@ async def extract_agent_memories(
     for entry in entries:
         action = entry["action"]
         if action == "add":
+            scope = entry["scope"]
             item = await create_memory(
-                scope="agent",
-                agent_id=agent_id,
+                scope=scope,
+                agent_id=agent_id if scope == "agent" else None,
                 content=entry["content"],
                 tags=entry["tags"],
                 source_message_id=source_message_id,
                 source_run_id=run_id,
             )
             if item is not None:
-                changes.append(MemoryChange("add", item.id, item.content))
+                changes.append(
+                    MemoryChange("add", item.id, item.content, item.scope)
+                )
             continue
 
         target = allowed.get(entry["id"])
@@ -711,9 +727,13 @@ async def extract_agent_memories(
                 source_run_id=run_id,
             )
             if updated is not None:
-                changes.append(MemoryChange("update", updated.id, updated.content))
+                changes.append(
+                    MemoryChange("update", updated.id, updated.content, updated.scope)
+                )
         elif action == "delete":
             old_content = target.content
             if await delete_memory(target.id):
-                changes.append(MemoryChange("delete", target.id, old_content))
+                changes.append(
+                    MemoryChange("delete", target.id, old_content, target.scope)
+                )
     return changes

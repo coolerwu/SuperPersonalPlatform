@@ -389,7 +389,13 @@ def test_parse_extraction_handles_fenced_json() -> None:
         '```json\n{"memories":[{"content":"用户偏好中文","tags":["preference"]}]}\n```'
     )
     assert result == [
-        {"action": "add", "id": "", "content": "用户偏好中文", "tags": ["preference"]}
+        {
+            "action": "add",
+            "scope": "agent",
+            "id": "",
+            "content": "用户偏好中文",
+            "tags": ["preference"],
+        }
     ]
 
     operations = parse_extraction(
@@ -400,7 +406,20 @@ def test_parse_extraction_handles_fenced_json() -> None:
     )
     assert operations[0]["action"] == "update"
     assert operations[0]["id"] == "mem_a"
-    assert operations[1] == {"action": "delete", "id": "mem_b", "content": "", "tags": []}
+    assert operations[0]["scope"] == "agent"
+    assert operations[1] == {
+        "action": "delete",
+        "scope": "agent",
+        "id": "mem_b",
+        "content": "",
+        "tags": [],
+    }
+
+    scoped = parse_extraction(
+        '{"memories":[{"action":"add","scope":"user","content":"用户喜欢简短回答"},'
+        '{"action":"add","scope":"bogus","content":"未知 scope 回退"}]}'
+    )
+    assert [entry["scope"] for entry in scoped] == ["user", "agent"]
 
 
 def test_fts_query_builds_or_terms() -> None:

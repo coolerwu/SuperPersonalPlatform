@@ -294,7 +294,7 @@ class RunWorker:
                     .limit(1)
                 )
             async with self._memory_lock(agent_id):
-                changes = await memory_service.extract_agent_memories(
+                changes = await memory_service.extract_memories(
                     provider=provider,
                     agent_id=agent_id,
                     user_content=content,
@@ -309,7 +309,7 @@ class RunWorker:
                     {
                         "source": "auto",
                         "action": change.action,
-                        "scope": "agent",
+                        "scope": change.scope,
                         "memory_id": change.memory_id,
                         "content": change.content,
                     },
