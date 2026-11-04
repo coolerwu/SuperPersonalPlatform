@@ -3841,8 +3841,8 @@ textarea {
 .pearl .sidebar {
   border: 1px solid rgba(255, 255, 255, 0.8);
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.55);
-  backdrop-filter: blur(28px) saturate(1.25);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 253, 0.84));
+  backdrop-filter: none;
   box-shadow: 0 24px 60px rgba(28, 34, 52, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   padding: 16px 14px;
   gap: 12px;
@@ -4206,8 +4206,8 @@ body:has(.app-shell.pearl) .select-empty {
 .pearl .chat-topbar {
   border: 1px solid rgba(255, 255, 255, 0.8);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.45);
-  backdrop-filter: blur(22px) saturate(1.25);
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: none;
   box-shadow: 0 10px 30px rgba(28, 34, 52, 0.06);
 }
 
@@ -4758,8 +4758,8 @@ body:has(.app-shell.pearl) .select-empty {
   padding: 9px 10px 9px 12px;
   border: 1px solid rgba(255, 255, 255, 0.95);
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(24px) saturate(1.3);
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: none;
   box-shadow: 0 20px 50px rgba(28, 34, 52, 0.13), inset 0 1px 0 rgba(255, 255, 255, 0.95);
 }
 
@@ -4875,8 +4875,8 @@ body:has(.app-shell.pearl) .select-empty {
 
 .pearl .scroll-bottom-button {
   border-color: rgba(255, 255, 255, 0.95);
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(16px);
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: none;
   box-shadow: 0 10px 26px rgba(28, 34, 52, 0.12);
 }
 
@@ -4971,8 +4971,8 @@ body:has(.app-shell.pearl) .select-empty {
 
   .pearl .mobile-bar {
     border-bottom-color: rgba(26, 30, 38, 0.08);
-    background: rgba(238, 241, 247, 0.92);
-    backdrop-filter: blur(18px);
+    background: rgba(238, 241, 247, 0.96);
+    backdrop-filter: none;
   }
 
   .pearl .sidebar {

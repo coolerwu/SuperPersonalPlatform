@@ -278,6 +278,7 @@ function MessageSkeleton() {
 export function ChatPanel(props: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
   const olderAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickRef = useRef(true);
@@ -372,12 +373,18 @@ export function ChatPanel(props: ChatPanelProps) {
     element.scrollTop = element.scrollHeight;
   }
 
+  function scheduleScrollToBottom() {
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      if (stickRef.current) scrollToBottom();
+    });
+  }
+
   useEffect(() => {
     if (!stickRef.current) return;
-    scrollToBottom();
-    const frame = window.requestAnimationFrame(scrollToBottom);
-    return () => window.cancelAnimationFrame(frame);
-  }, [props.messages, props.streamText, props.sending, props.commandReply]);
+    scheduleScrollToBottom();
+  }, [props.messages, throttledStreamText, props.sending, props.commandReply]);
 
   useLayoutEffect(() => {
     const anchor = olderAnchorRef.current;
@@ -403,7 +410,7 @@ export function ChatPanel(props: ChatPanelProps) {
     const content = contentRef.current;
     if (!container || !content) return;
     const observer = new ResizeObserver(() => {
-      if (stickRef.current) scrollToBottom();
+      if (stickRef.current) scheduleScrollToBottom();
     });
     observer.observe(content);
     observer.observe(container);
@@ -764,7 +771,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 agentName={props.agentName}
               />
               {props.streamText ? (
-                <Markdown content={throttledStreamText} />
+                <Markdown content={throttledStreamText} streaming />
               ) : (
                 <div className="muted">{queued ? "排队中…" : "正在生成…"}</div>
               )}

@@ -55,12 +55,18 @@ const components: Components = {
   },
 };
 
-export const Markdown = memo(function Markdown({ content }: { content: string }) {
+export const Markdown = memo(function Markdown({
+  content,
+  streaming = false,
+}: {
+  content: string;
+  streaming?: boolean;
+}) {
   return (
     <div className="markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
+        rehypePlugins={streaming ? [] : [[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
         components={components}
       >
         {content}
