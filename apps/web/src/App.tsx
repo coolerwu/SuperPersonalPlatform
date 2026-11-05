@@ -28,6 +28,7 @@ import { MEMORY_COMMAND, isSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
 import { ChatPanel } from "./components/ChatPanel";
 import { BacktestPage } from "./components/BacktestPage";
+import { ChanPage } from "./components/ChanPage";
 import { TradeJournalPage } from "./components/TradeJournalPage";
 import { ChannelsPage } from "./components/ChannelsPage";
 import { CronPage } from "./components/CronPage";
@@ -178,6 +179,7 @@ export default function App() {
     | "cron"
     | "backtest"
     | "journal"
+    | "chan"
   >("chat");
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
@@ -248,7 +250,9 @@ export default function App() {
                   ? "回测"
                   : view === "journal"
                     ? "交易记录"
-                    : (agent?.name ?? "Agent");
+                    : view === "chan"
+                      ? "缠论图"
+                      : (agent?.name ?? "Agent");
 
   function setAgentError(message: string, forAgent: string) {
     if (forAgent !== agentIdRef.current) return;
@@ -390,7 +394,8 @@ export default function App() {
       | "channels"
       | "cron"
       | "backtest"
-      | "journal",
+      | "journal"
+      | "chan",
   ) {
     setView(next);
     setSidebarOpen(false);
@@ -1563,7 +1568,7 @@ export default function App() {
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        workspace={view === "backtest" || view === "journal" ? "features" : "agent"}
+        workspace={view === "backtest" || view === "journal" || view === "chan" ? "features" : "agent"}
         onWorkspaceChange={(workspace) =>
           openView(workspace === "features" ? "backtest" : "chat")
         }
@@ -1592,6 +1597,7 @@ export default function App() {
         onOpenCron={() => openView("cron")}
         onOpenBacktest={() => openView("backtest")}
         onOpenJournal={() => openView("journal")}
+        onOpenChan={() => openView("chan")}
         settingsActive={view === "settings"}
         memoryActive={view === "memory"}
         skillsActive={view === "skills"}
@@ -1600,6 +1606,7 @@ export default function App() {
         cronActive={view === "cron"}
         backtestActive={view === "backtest"}
         journalActive={view === "journal"}
+        chanActive={view === "chan"}
         onLogout={() => void logout()}
       />
 
@@ -1633,6 +1640,8 @@ export default function App() {
         <BacktestPage onClose={() => setView("chat")} />
       ) : view === "journal" ? (
         <TradeJournalPage onClose={() => setView("chat")} />
+      ) : view === "chan" ? (
+        <ChanPage onClose={() => setView("chat")} />
       ) : view === "settings" ? (
         <SettingsPage
           agents={agents}

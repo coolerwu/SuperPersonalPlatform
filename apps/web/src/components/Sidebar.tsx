@@ -28,6 +28,7 @@ type SidebarProps = {
   onOpenCron: () => void;
   onOpenBacktest: () => void;
   onOpenJournal: () => void;
+  onOpenChan: () => void;
   settingsActive: boolean;
   memoryActive: boolean;
   skillsActive: boolean;
@@ -36,6 +37,7 @@ type SidebarProps = {
   cronActive: boolean;
   backtestActive: boolean;
   journalActive: boolean;
+  chanActive: boolean;
   onLogout: () => void;
 };
 
@@ -406,6 +408,18 @@ export function Sidebar(props: SidebarProps) {
                   </svg>
                 </span>
                 <span>交易记录</span>
+              </button>
+              <button
+                className={`sidebar-action sidebar-standalone ${props.chanActive ? "active" : ""}`}
+                onClick={props.onOpenChan}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 18 8 9l4 6 4-9 4 12" />
+                    <path d="M4 20h16" />
+                  </svg>
+                </span>
+                <span>缠论图</span>
               </button>
               <p className="sidebar-features-hint">手动操作 · 本地工具</p>
             </div>

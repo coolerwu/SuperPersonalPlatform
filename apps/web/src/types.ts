@@ -507,3 +507,72 @@ export type TradeJournalClosePayload = {
   tags?: string[];
   followed_plan?: boolean | null;
 };
+
+export type ChanCandle = {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
+
+export type ChanMergedBar = ChanCandle & {
+  start_time: number;
+  end_time: number;
+  merged_index: number;
+};
+
+export type ChanFractal = {
+  type: "top" | "bottom" | string;
+  time: number;
+  price: number;
+  merged_index: number;
+};
+
+export type ChanStroke = {
+  start_time: number;
+  start_price: number;
+  end_time: number;
+  end_price: number;
+  direction: "up" | "down" | string;
+  high: number;
+  low: number;
+};
+
+export type ChanZone = {
+  start_time: number;
+  end_time: number;
+  zg: number;
+  zd: number;
+  start_stroke: number;
+  end_stroke: number;
+};
+
+export type ChanRules = {
+  name: string;
+  bi_min_span: number;
+  bi_rule: string;
+  fractal_rule: string;
+  zone_rule: string;
+  segments: boolean;
+  buy_sell_points: boolean;
+};
+
+export type ChanAnalysis = {
+  symbol: string;
+  granularity: string;
+  requested_bars: number;
+  bars: number;
+  merged_bars: number;
+  stroke_count: number;
+  zone_count: number;
+  start_ms: number;
+  end_ms: number;
+  candles: ChanCandle[];
+  merged: ChanMergedBar[];
+  fractals: ChanFractal[];
+  strokes: ChanStroke[];
+  zones: ChanZone[];
+  rules: ChanRules;
+  warnings: string[];
+};

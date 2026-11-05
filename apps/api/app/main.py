@@ -21,6 +21,7 @@ from app.routers.app_settings import router as app_settings_router
 from app.routers.backtests import router as backtests_router
 from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
+from app.routers.chan import router as chan_router
 from app.routers.cron import router as cron_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.memories import router as memories_router
@@ -179,6 +180,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(system_router)
     app.include_router(market_router)
     app.include_router(backtests_router)
+    app.include_router(chan_router)
     app.include_router(trade_journal_router)
 
     @app.get("/api/health")

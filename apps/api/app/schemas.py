@@ -524,3 +524,9 @@ class TradeJournalClose(BaseModel):
     review: str | None = None
     tags: list[str] | None = None
     followed_plan: bool | None = None
+
+
+class ChanAnalyzeRequest(BaseModel):
+    symbol: str = Field(min_length=3, max_length=30)
+    granularity: str = Field(default="1h", min_length=2, max_length=10)
+    bars: int = Field(default=300, ge=20, le=1000)
