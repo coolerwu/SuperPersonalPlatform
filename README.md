@@ -62,7 +62,7 @@ npm run dev
 - 侧栏搜索：会话列表上方的搜索框按关键词检索当前 Agent 的历史消息（至少 2 个字符，300ms 防抖）；结果显示会话标题、片段、角色和时间，点击后切换到该会话并滚动到命中消息、短暂高亮；
 - 后端同一 session 最多一个 running Run，queued Run 可以排队；网页 Chat 在运行中发送会创建 queued Run 并显示「已排队」，当前 Run 完成后按创建顺序自动执行；retry 在已有活动 Run 时仍返回 409（带 `active_run_id`），前端接入该 Run 并提示刚才的消息没有发送、恢复草稿；微信入站 5 秒打包后也进入同一队列，由 worker 串行执行；不同 session 的 Run 最多并发 `BROWSER_CONCURRENCY` 个（默认 5），超出的 Run 保持 `queued`；
 - 服务停止/重启时正在运行的 Run 会重新排队并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的页面会自动重连（瞬时连接错误按退避重试）；收到 `reason=service_restart` 的 `run_queued` 时清空上一次尝试的流式文本，并显示「服务重启，Run 已重新排队」。恢复时保留中断前的 checkpoint 消息并追加「继续上次任务」提示，不重复原始用户输入；未返回结果的工具调用会补一条结果未知的 error 消息。重新入队不会回滚已经发生的文件/浏览器副作用，恢复提示会要求 Agent 不要重复执行；
-- 会话保留：最后一条消息（没有消息时按创建时间）超过 `SESSION_RETENTION_DAYS`（默认 30 天）的会话会被后台任务自动删除，并同时清理消息、Run、Run 事件、checkpoint 和截图目录；有排队/运行中 Run 的会话跳过。微信会话解绑后，该联系人下一条消息会新建会话；定时任务在下次触发时重建会话。删除不可恢复，`SESSION_RETENTION_DAYS=0` 可关闭清理；
+- 会话保留：最后一条消息（没有消息时按创建时间）超过配置页「运行环境」tab 设置的保留天数（默认 30 天，0 表示不清理）的会话会被后台任务自动删除，并同时清理消息、Run、Run 事件、checkpoint 和截图目录；有排队/运行中 Run 的会话跳过。微信会话解绑后，该联系人下一条消息会新建会话；定时任务在下次触发时重建会话。删除不可恢复；`SESSION_RETENTION_DAYS` 只在首次创建配置时作为默认值；
 - 模型调用遇到 429/5xx/超时/连接错误时最多重试 3 次（指数退避 + jitter）；401/400 等 4xx 不重试；重试在模型层实现，主 Agent、general-purpose 子 Agent 和 step-limit 总结都会覆盖；流式调用已输出 token 后不重试，避免重复文本；可重试失败会记录 warning 日志；
 - 单个 Run 的步骤上限默认 500（`RUN_RECURSION_LIMIT`，主 Agent 与子 Agent 共用）；真的达到上限时先在原会话上自动续跑一次，仍超限才用同一模型带上完整对话生成最终答复，Run 仍以 completed 收尾并标注被截断；
 - Agent 可在当前工作区内查看、创建和修改文件（ls / read_file / write_file / edit_file / delete / glob / grep）；所有 Agent 都可以用 `execute` 在宿主机执行命令（LocalShellBackend，以服务账号权限运行，没有沙箱），用 `eval` 在隔离的 QuickJS 环境里执行 JavaScript（无文件与网络，PTC 只开放文件工具）；两者无需启用技能或读取授权。浏览器能力通过 `web-browser` 技能解锁（无头 Chromium，但默认使用普通桌面浏览器身份（真实 Chrome UA、zh-CN、隐藏 `navigator.webdriver`），登录态保存到 `data/browser_state.json` 并跨 Run 复用；默认返回文字和元素引用；用户明确要求或需要展示登录二维码时可返回页面截图，截图保存到 Agent 工作区并显示在对应回复下方）；
@@ -82,7 +82,7 @@ npm run dev
 - 工作区：每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/`，不支持自定义路径；配置页只读展示机器目录，并随左上角选中的 Agent 变化。Agent 可以查看和修改工作区内的文件；
 - 技能：在侧边栏「Agent 能力」组的「技能」页面按当前 Agent 勾选启用；未启用的技能不会进入系统提示，读取它的 SKILL.md 也不会解锁工具。磁盘上已删除但仍在启用列表里的技能会显示为“未找到”，可取消勾选移除；
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
-- 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）。
+- 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）；同时可设置会话自动清理的保留天数（默认 30 天，0 表示不清理；`GET/PUT /api/settings`，存 `app_configs`）。
 
 Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `reasoning_delta` 流式片段，在右侧抽屉里展开查看。`tool_call` 事件记录工具名与解析后的参数，聊天中的活动行据此显示「正在读取 …」「正在浏览 …」，运行超过 10 秒后附上已用时间。
 
@@ -270,6 +270,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
   - `channels`：渠道及其 iLink 登录凭据（`bot_token` 不返回前端、不写日志）；`channel_conversations`：外部联系人与 Session 的映射（含最新 `context_token`）；`channel_inbounds`：入站消息幂等键；`channel_run_links`：哪些 Run 需要回信；`channel_deliveries`：Run 终态的发送记录，用于崩溃恢复。
   - `backtests`：回测任务与结果，含状态、策略代码、指标、下采样净值/回撤/价格、交易明细和告警；大数组按上限截断。
   - `knowledge_configs`：知识库 WebDAV 配置（单行），含启用开关、地址、账号、应用密码、根目录和同步间隔；密码不返回前端。
+  - `app_configs`：平台设置（单行），当前保存会话自动清理的保留天数。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles`（按 `symbol + granularity + open_time_ms` 唯一）和 `market_sync_state`（已同步范围与上次错误）。可以独立删除，下次回测会重新抓取。
 - `trade-journal.jsonl`：交易记录，一行一个 JSON 对象，权限 0600；由 `trade-journal` 技能的工具读写，不建数据库表。字段和计算口径见「交易记录」；可以独立备份、复制和手工查看。
 - `browser_state.json`：浏览器 cookies 与 localStorage（Playwright storage_state），权限 0600；用于跨 Run 保持网站登录态，删除后所有站点需要重新登录。没有配置时不会创建。
@@ -333,7 +334,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 | `VISION_MAX_IMAGES` | 单轮发送给模型的图片上限 | `4` |
 | `VISION_MAX_IMAGE_BYTES` | 单张图片发送给模型的上限；超过时先压缩 | `4194304` |
 | `VISION_MAX_IMAGE_EDGE` | 超大图片压缩后的最长边（像素，最小 320） | `1600` |
-| `SESSION_RETENTION_DAYS` | 会话保留天数；最后消息早于该天数会被自动删除，`0` 关闭 | `30` |
+| `SESSION_RETENTION_DAYS` | 会话保留初始值（天）；仅在首次创建配置时写入，之后在配置页「运行环境」修改，`0` 表示不清理 | `30` |
 | `SESSION_CLEANUP_INTERVAL_SECONDS` | 会话清理扫描间隔（秒，最小 60） | `3600` |
 | `WEIXIN_LONG_POLL_TIMEOUT_MS` | iLink `getupdates` 长轮询窗口 | `35000` |
 | `WEIXIN_API_TIMEOUT_MS` | iLink `sendmessage` 请求超时 | `15000` |

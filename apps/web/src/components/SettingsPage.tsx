@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
-import type { Agent, AgentSavePayload, Provider, SystemInfo } from "../types";
+import type { Agent, AgentSavePayload, AppSettings, Provider, SystemInfo } from "../types";
 import { AgentEditor } from "./AgentEditor";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { KnowledgeSettings } from "./KnowledgeSettings";
@@ -54,6 +54,11 @@ export function SettingsPage(props: SettingsPageProps) {
   const [deleting, setDeleting] = useState(false);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [systemError, setSystemError] = useState("");
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+  const [retentionDays, setRetentionDays] = useState(30);
+  const [savingRetention, setSavingRetention] = useState(false);
+  const [retentionNotice, setRetentionNotice] = useState("");
+  const [retentionError, setRetentionError] = useState("");
 
   const provider = props.providers.find((item) => item.id === providerId) ?? props.providers[0];
   const agent = props.agents.find((item) => item.id === props.agentId);
@@ -90,6 +95,46 @@ export function SettingsPage(props: SettingsPageProps) {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void api
+      .getSettings()
+      .then((next) => {
+        if (!active) return;
+        setAppSettings(next);
+        setRetentionDays(next.session_retention_days);
+      })
+      .catch((exc) => {
+        if (active) setRetentionError(errorText(exc));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function saveRetention(event: FormEvent) {
+    event.preventDefault();
+    if (savingRetention) return;
+    setSavingRetention(true);
+    setRetentionError("");
+    setRetentionNotice("");
+    try {
+      const next = await api.updateSettings({
+        session_retention_days: Math.max(
+          0,
+          Math.min(3650, Math.round(retentionDays || 0)),
+        ),
+      });
+      setAppSettings(next);
+      setRetentionDays(next.session_retention_days);
+      setRetentionNotice("已保存；下一轮清理生效。");
+    } catch (exc) {
+      setRetentionError(errorText(exc));
+    } finally {
+      setSavingRetention(false);
+    }
+  }
 
   async function saveAgent(payload: AgentSavePayload) {
     setSavingAgent(true);
@@ -370,6 +415,38 @@ export function SettingsPage(props: SettingsPageProps) {
                 </div>
               </>
             )}
+
+            <div className="settings-subhead">会话保留</div>
+            <form className="editor" onSubmit={saveRetention}>
+              <p className="hint">
+                最后一条消息超过保留天数的会话会被自动删除，并清理消息、Run、
+                checkpoint 和截图；0 表示不清理。
+              </p>
+              <label className="field-label" htmlFor="retention-days">保留天数</label>
+              <input
+                id="retention-days"
+                type="number"
+                min={0}
+                max={3650}
+                step={1}
+                value={retentionDays}
+                onChange={(event) =>
+                  setRetentionDays(Number(event.target.value) || 0)
+                }
+              />
+              {retentionError && <div className="error-banner">{retentionError}</div>}
+              {retentionNotice && <div className="hint">{retentionNotice}</div>}
+              <div className="form-actions">
+                <button className="primary" type="submit" disabled={savingRetention}>
+                  {savingRetention ? "保存中…" : "保存会话保留设置"}
+                </button>
+              </div>
+              {appSettings && (
+                <div className="hint">
+                  清理任务每 {appSettings.session_cleanup_interval_seconds} 秒扫描一次。
+                </div>
+              )}
+            </form>
           </section>
           )}
         </div>

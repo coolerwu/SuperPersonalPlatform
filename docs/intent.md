@@ -2306,8 +2306,8 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 #### 功能点
 
 1. 把 `DELETE /api/sessions/{session_id}` 的级联删除逻辑抽到服务层（`apps/api/app/services/session_service.py`），接口与后台清理共用；接口行为不变（存在活动 Run 返回 409）。
-2. 新增配置 `SESSION_RETENTION_DAYS`（默认 30，0 表示关闭）和 `SESSION_CLEANUP_INTERVAL_SECONDS`（默认 3600，最小 60）。
-3. 后台 `SessionCleanupRuntime` 在 API 进程内运行：启动后立即执行首轮，之后按间隔扫描；每批最多 200 个会话、单轮最多 10 批，避免长时间占用。
+2. 保留天数可在配置页「运行环境」tab 修改（默认 30，0 表示关闭），存 `app_configs` 单行表；新增 `GET/PUT /api/settings`，保存后下一轮清理生效。`SESSION_RETENTION_DAYS`（默认 30）只在首次创建配置时作为种子，`SESSION_CLEANUP_INTERVAL_SECONDS`（默认 3600，最小 60）继续由环境变量控制。
+3. 后台 `SessionCleanupRuntime` 在 API 进程内运行：启动后立即执行首轮，之后按间隔扫描，每轮读取配置页的保留天数；每批最多 200 个会话、单轮最多 10 批，避免长时间占用。
 4. 判定「超过 30 天」以最后一条消息时间为准，没有消息时回退会话创建时间；有 `queued`/`running` Run 的会话跳过。
 5. 清理范围与手动删除一致：messages、runs、run_events、run_memories、channel_run_links、channel_deliveries、该会话的 checkpoint sqlite 和 `screenshots/<session_id>/`；同时解绑微信会话（下次入站新建会话）和定时任务（下次触发重建会话）。
 6. 单个会话删除失败记录日志并继续；删除不可恢复，不提供回收站。
@@ -2318,14 +2318,15 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 - 最后消息在 31 天前的会话被删除，29 天前的保留；没有消息、创建于 31 天前的会话被删除。
 - 有 queued/running Run 的会话不被删除。
 - 删除后 messages/runs/run_events 消失，checkpoint 文件和截图目录被清理，微信绑定与定时任务解绑。
-- `SESSION_RETENTION_DAYS=0` 时不删除任何会话；后端测试与前端构建通过。
+- 配置页「运行环境」tab 显示并保存保留天数；`GET /api/settings` 默认返回 30，`PUT` 接受 0–3650，越界返回 422。
+- `SESSION_RETENTION_DAYS=0`（或配置页填 0）时不删除任何会话；后端测试与前端构建通过。
 
 #### 约束边界
 
 - 删除按最后消息时间判断，不按 Agent 或渠道区分；归档 Agent 的会话同样会被清理。
 - 单进程部署下只有一个清理任务；多进程部署时清理是幂等的，但可能重复扫描。
 - 清理与用户恰好向旧会话新建 Run 之间存在极小的竞态窗口，未额外加锁（与手动删除接口一致）。
-- 只支持固定天数，不做按 Agent 配置或手动批量删除页面。
+- 保留天数是全局配置，不支持按 Agent 区分，也没有手动批量删除页面。
 
 #### 非目标
 

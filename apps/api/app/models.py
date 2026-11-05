@@ -360,3 +360,14 @@ class KnowledgeConfig(Base):
     interval_seconds: Mapped[int] = mapped_column(Integer, default=300)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class AppConfig(Base):
+    """Singleton platform settings managed from the config page."""
+
+    __tablename__ = "app_configs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    session_retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)

@@ -260,6 +260,11 @@ export type KnowledgeState = {
   status: KnowledgeStatus;
 };
 
+export type AppSettings = {
+  session_retention_days: number;
+  session_cleanup_interval_seconds: number;
+};
+
 export type MemoryScope = "user" | "agent";
 
 export type MemoryItem = {

@@ -473,6 +473,10 @@ class KnowledgeConfigUpdate(BaseModel):
     interval_seconds: int | None = Field(default=None, ge=30, le=86400)
 
 
+class AppSettingsUpdate(BaseModel):
+    session_retention_days: int = Field(ge=0, le=3650)
+
+
 class TradeJournalCreate(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
     entry_at: str = Field(min_length=1, max_length=64)

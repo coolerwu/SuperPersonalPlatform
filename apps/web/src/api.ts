@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AppSettings,
   Attachment,
   BacktestDetail,
   BacktestMeta,
@@ -283,6 +284,12 @@ export const api = {
   streamUrl: (runId: string, after = 0) => `/api/runs/${runId}/stream?after=${after}`,
 
   getSystem: () => request<SystemInfo>("/api/system"),
+  getSettings: () => request<AppSettings>("/api/settings"),
+  updateSettings: (payload: { session_retention_days: number }) =>
+    request<AppSettings>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   getKnowledge: () => request<KnowledgeState>("/api/knowledge"),
   updateKnowledge: (payload: {
     enabled?: boolean;
