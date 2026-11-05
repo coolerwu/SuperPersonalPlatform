@@ -24,7 +24,6 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
   const [analysis, setAnalysis] = useState<ChanAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [paramsOpen, setParamsOpen] = useState(false);
   const [showMerged, setShowMerged] = useState(true);
   const [showFractals, setShowFractals] = useState(true);
   const [showStrokes, setShowStrokes] = useState(true);
@@ -56,22 +55,43 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
 
   return (
     <main className="backtest-page chan-page">
-      <header className="settings-header">
-        <div>
-          <div className="eyebrow">TRADING / CHAN</div>
-          <h1>
-            缠论图
-            <span className="page-scope-pill">程序化结构</span>
-          </h1>
-          <p>包含处理 · 分型 · 老笔 · 中枢 · 笔级别买卖点；只使用已收盘 K 线。</p>
+      <header className="chan-toolbar">
+        <label className="chan-control">
+          <span>交易对</span>
+          <input
+            className="chan-symbol"
+            value={symbol}
+            onChange={(event) => setSymbol(event.target.value.toUpperCase())}
+            placeholder="BTCUSDT"
+            autoComplete="off"
+          />
+        </label>
+        <label className="chan-control">
+          <span>周期</span>
+          <select value={granularity} onChange={(event) => setGranularity(event.target.value)}>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+            <option value="1day">1day</option>
+          </select>
+        </label>
+        <label className="chan-control">
+          <span>K 线</span>
+          <select value={bars} onChange={(event) => setBars(Number(event.target.value))}>
+            <option value="200">200</option>
+            <option value="300">300</option>
+            <option value="500">500</option>
+            <option value="800">800</option>
+          </select>
+        </label>
+        <div className="chan-toggles chan-toolbar-toggles">
+          <label><input type="checkbox" checked={showMerged} onChange={(e) => setShowMerged(e.target.checked)} /> 合并 K 线</label>
+          <label><input type="checkbox" checked={showFractals} onChange={(e) => setShowFractals(e.target.checked)} /> 分型</label>
+          <label><input type="checkbox" checked={showStrokes} onChange={(e) => setShowStrokes(e.target.checked)} /> 笔</label>
+          <label><input type="checkbox" checked={showZones} onChange={(e) => setShowZones(e.target.checked)} /> 中枢</label>
+          <label><input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} /> 买卖点</label>
         </div>
-        <div className="settings-card-actions">
-          <button className="ghost-button" onClick={onClose}>
-            返回对话
-          </button>
-          <button className="ghost-button" onClick={() => setParamsOpen((current) => !current)}>
-            {paramsOpen ? "收起参数" : "参数"}
-          </button>
+        <div className="chan-toolbar-actions">
+          <button className="ghost-button" onClick={onClose}>返回对话</button>
           <button className="primary" onClick={() => void analyze()} disabled={loading}>
             {loading ? "分析中…" : "分析"}
           </button>
@@ -81,59 +101,6 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
       <div className="settings-scroll">
         <div className="settings-lane">
           {error && <div className="error-banner">{error}</div>}
-
-          {paramsOpen && (
-            <section className="settings-card chan-params-card">
-              <div className="settings-card-head">
-                <div>
-                  <h2>分析参数</h2>
-                  <p>第一版只做 crypto、单周期；线段暂不画，买卖点为笔级别近似。</p>
-                </div>
-                <div className="settings-card-actions">
-                  <button className="ghost-button" onClick={() => void analyze()} disabled={loading}>
-                    {loading ? "拉取中…" : "刷新最新"}
-                  </button>
-                </div>
-              </div>
-
-              <div className="chan-form-grid">
-                <label className="backtest-field">
-                  <span>交易对</span>
-                  <input
-                    value={symbol}
-                    onChange={(event) => setSymbol(event.target.value.toUpperCase())}
-                    placeholder="BTCUSDT 或 ETHUSDT"
-                    autoComplete="off"
-                  />
-                </label>
-                <label className="backtest-field">
-                  <span>周期</span>
-                  <select value={granularity} onChange={(event) => setGranularity(event.target.value)}>
-                    <option value="1h">1h</option>
-                    <option value="4h">4h</option>
-                    <option value="1day">1day</option>
-                  </select>
-                </label>
-                <label className="backtest-field">
-                  <span>最近 K 线</span>
-                  <select value={bars} onChange={(event) => setBars(Number(event.target.value))}>
-                    <option value="200">200</option>
-                    <option value="300">300</option>
-                    <option value="500">500</option>
-                    <option value="800">800</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className="chan-toggles">
-                <label><input type="checkbox" checked={showMerged} onChange={(e) => setShowMerged(e.target.checked)} /> 合并 K 线</label>
-                <label><input type="checkbox" checked={showFractals} onChange={(e) => setShowFractals(e.target.checked)} /> 笔端点分型</label>
-                <label><input type="checkbox" checked={showStrokes} onChange={(e) => setShowStrokes(e.target.checked)} /> 笔</label>
-                <label><input type="checkbox" checked={showZones} onChange={(e) => setShowZones(e.target.checked)} /> 中枢</label>
-                <label><input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} /> 买卖点</label>
-              </div>
-            </section>
-          )}
 
           {analysis ? (
             <>

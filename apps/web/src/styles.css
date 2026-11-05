@@ -5798,3 +5798,62 @@ body:has(.app-shell.pearl) .select-empty {
 
 .chan-legend .dot.buy { background: #0f766e; }
 .chan-legend .dot.sell { background: #b91c1c; }
+
+.chan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  flex: 0 0 auto;
+  padding: 13px max(clamp(18px, 4vw, 42px), calc((100% - var(--settings-lane)) / 2));
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(14px);
+}
+
+.chan-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.chan-control input,
+.chan-control select {
+  width: auto;
+  height: 34px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.chan-control .chan-symbol {
+  width: 132px;
+}
+
+.chan-toolbar-toggles {
+  margin: 0;
+  gap: 8px 14px;
+}
+
+.chan-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+@media (max-width: 860px) {
+  .chan-toolbar {
+    padding: 12px 16px;
+  }
+
+  .chan-toolbar-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .chan-toolbar-actions .primary {
+    flex: 1;
+  }
+}
