@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     max_history_messages: int = 40
     vision_max_images: int = 4
     vision_max_image_bytes: int = 4 * 1024 * 1024
+    # Oversized attachments are re-encoded down to this longest edge before
+    # they are sent to the model; the file on disk keeps its original bytes.
+    vision_max_image_edge: int = 1600
+
+    # Sessions whose last message is older than the retention window are
+    # deleted by a background task; 0 disables the cleanup.
+    session_retention_days: int = 30
+    session_cleanup_interval_seconds: int = 3600
 
     # Cron jobs run inside the API process. The tick only needs to be shorter
     # than the smallest supported interval (one minute).

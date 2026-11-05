@@ -78,6 +78,30 @@ def test_parse_inbound_handles_quoted_media() -> None:
     assert "引用中包含图片" in parsed.quote
 
 
+def test_parse_inbound_keeps_quote_metadata_when_ilink_omits_text() -> None:
+    parsed = parse_inbound(
+        [
+            {
+                "type": 1,
+                "text_item": {"text": "这段引用是什么"},
+                "ref_msg": {
+                    "message_item": {
+                        "type": 0,
+                        "msg_id": "item-42",
+                        "create_time_ms": 1762300000000,
+                        "is_completed": True,
+                    }
+                },
+            }
+        ]
+    )
+    assert parsed.quotes[0].unresolved is True
+    assert parsed.quotes[0].msg_id == "item-42"
+    assert parsed.quotes[0].create_time_ms == 1762300000000
+    assert parsed.quote == "[引用]\n（引用原文不可用）"
+    assert parsed.quotes[0].render("被找回的原文") == "[引用]\n> 被找回的原文"
+
+
 def test_parse_inbound_ignores_malformed_media_items() -> None:
     parsed = parse_inbound([{"type": 2}, {"type": 4}])
     assert parsed.has_content is False

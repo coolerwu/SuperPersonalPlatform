@@ -608,7 +608,10 @@ class WeixinRuntime:
         if parsed.unsupported:
             labels = "、".join(dict.fromkeys(parsed.unsupported))
             notes.append(f"（已忽略一条{labels}消息）")
-        parts = [parsed.quote, text, *notes]
+        quote = await self._render_quote(
+            credentials.channel_id, sender_id, parsed, message_id
+        )
+        parts = [quote, text, *notes]
         content = "\n\n".join(part.strip() for part in parts if part.strip())
         if not content and not saved:
             return
@@ -623,6 +626,40 @@ class WeixinRuntime:
         )
         if text:
             self._remember_text(dedup_key)
+
+    async def _render_quote(
+        self,
+        channel_id: str,
+        sender_id: str,
+        parsed: weixin_media.ParsedInbound,
+        message_id: str,
+    ) -> str:
+        """Render ref_msg quotes, recovering text iLink left out of the payload."""
+        rendered: list[str] = []
+        for quote in parsed.quotes:
+            resolved = ""
+            if quote.unresolved:
+                try:
+                    resolved = await channel_service.resolve_quoted_text(
+                        channel_id=channel_id,
+                        external_conversation_id=sender_id,
+                        msg_id=quote.msg_id,
+                        create_time_ms=quote.create_time_ms,
+                    )
+                except Exception:
+                    logger.exception(
+                        "weixin quote lookup failed channel=%s", channel_id
+                    )
+                if not resolved:
+                    logger.info(
+                        "weixin quote unresolved channel=%s message=%s msg_id=%s create_time_ms=%s",
+                        channel_id,
+                        message_id[:16],
+                        quote.msg_id or "-",
+                        quote.create_time_ms or "-",
+                    )
+            rendered.append(quote.render(resolved))
+        return "\n\n".join(rendered).strip()
 
     async def _agent_id_for(self, channel_id: str) -> str:
         async with SessionLocal() as db:

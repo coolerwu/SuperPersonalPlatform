@@ -135,3 +135,107 @@ def test_build_model_content_attaches_images_only(client) -> None:
     assert built[1]["type"] == "image_url"
     assert built[1]["image_url"]["url"].startswith("data:image/png;base64,")
     assert len(built) == 2
+
+
+def _attachment_content(entries: list[tuple[str, int]], body: str = "看图") -> str:
+    lines = ["附件已上传到工作区："]
+    lines.extend(
+        f"- {name}（工作区路径：/uploads/{name}，大小：{size} 字节）"
+        for name, size in entries
+    )
+    return "\n".join(lines) + "\n\n" + body
+
+
+def test_build_model_content_warns_about_oversized_image(tmp_path) -> None:
+    from app.services.attachments import build_model_content
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    data = b"\x89PNG\r\n\x1a\n" + b"0" * 40
+    (uploads / "big.png").write_bytes(data)
+    content = _attachment_content([("big.png", len(data))])
+
+    built = build_model_content(content, tmp_path, max_image_bytes=10)
+    assert isinstance(built, str)
+    assert "没有加入本次模型输入" in built
+    assert "big.png" in built
+    assert "超过单张" in built
+    assert "无法压缩" in built
+    assert "重新发送" in built
+
+
+def test_build_model_content_warns_when_image_count_exceeded(tmp_path) -> None:
+    from app.services.attachments import build_model_content
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    entries: list[tuple[str, int]] = []
+    for index in range(5):
+        name = f"p{index}.png"
+        data = b"\x89PNG\r\n\x1a\n" + bytes([index]) * 16
+        (uploads / name).write_bytes(data)
+        entries.append((name, len(data)))
+    content = _attachment_content(entries)
+
+    built = build_model_content(content, tmp_path, max_images=2)
+    assert isinstance(built, list)
+    assert len([block for block in built if block["type"] == "image_url"]) == 2
+    note = built[0]["text"]
+    assert "超过单轮 2 张图片上限" in note
+    assert "p4.png" in note
+
+
+def test_build_model_content_ignores_non_image_attachments(tmp_path) -> None:
+    from app.services.attachments import build_model_content
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    data = b"%PDF-1.4 hello"
+    (uploads / "doc.pdf").write_bytes(data)
+    content = _attachment_content([("doc.pdf", len(data))], body="读一下文件")
+
+    built = build_model_content(content, tmp_path)
+    assert built == content
+
+
+def test_build_model_content_warns_about_unrecognized_image(tmp_path) -> None:
+    from app.services.attachments import build_model_content
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    data = b"not an image"
+    (uploads / "scan.png").write_bytes(data)
+    content = _attachment_content([("scan.png", len(data))])
+
+    built = build_model_content(content, tmp_path)
+    assert isinstance(built, str)
+    assert "图片格式无法识别" in built
+
+
+def test_build_model_content_compresses_oversized_image(tmp_path) -> None:
+    import base64
+    import os
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.services.attachments import build_model_content
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    source = Image.frombytes("RGB", (2200, 1400), os.urandom(2200 * 1400 * 3))
+    buffer = BytesIO()
+    source.save(buffer, format="PNG")
+    data = buffer.getvalue()
+    (uploads / "big.png").write_bytes(data)
+    content = _attachment_content([("big.png", len(data))])
+
+    built = build_model_content(content, tmp_path, max_image_bytes=200_000)
+    assert isinstance(built, list)
+    url = built[1]["image_url"]["url"]
+    assert url.startswith("data:image/jpeg;base64,")
+    payload = base64.b64decode(url.split(",", 1)[1])
+    assert len(payload) <= 200_000
+    with Image.open(BytesIO(payload)) as compressed:
+        assert max(compressed.size) <= 1600
+    assert (uploads / "big.png").read_bytes() == data

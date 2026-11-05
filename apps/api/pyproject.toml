@@ -29,6 +29,7 @@ dependencies = [
   "pandas>=2.2,<3",
   "numpy>=1.26,<3",
   "croniter>=2,<7",
+  "pillow>=10,<13",
 ]
 
 [project.optional-dependencies]

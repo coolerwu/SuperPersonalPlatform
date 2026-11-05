@@ -15,9 +15,13 @@ import re
 import unicodedata
 import uuid
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from PIL import Image, ImageOps
+
+from app.config import settings
 from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 logger = logging.getLogger(__name__)
@@ -27,6 +31,7 @@ MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 MAX_ATTACHMENT_NAME_BYTES = 180
 MAX_MODEL_IMAGES = 4
 MAX_MODEL_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_LISTED_SKIPPED_IMAGES = 5
 
 _ATTACHMENT_FILE = re.compile(
     r"^- (?P<name>.+?)（工作区路径：(?P<path>.+?)，大小：(?P<size>\d+)\s*字节）$"
@@ -231,6 +236,121 @@ def _attachment_file(workspace: Path, workspace_path: str) -> Path | None:
     return resolved
 
 
+def _size_label(size: int) -> str:
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size} 字节"
+
+
+IMAGE_QUALITY_STEPS = (85, 75, 65)
+IMAGE_MIN_EDGE = 640
+MAX_DECODE_PIXELS = 50_000_000
+
+
+def _flatten_image(image: Image.Image) -> Image.Image:
+    if image.mode in ("RGBA", "LA") or (
+        image.mode == "P" and "transparency" in image.info
+    ):
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.split()[-1])
+        return background
+    return image.convert("RGB")
+
+
+def compress_image_for_model(
+    data: bytes, *, max_bytes: int, max_edge: int
+) -> bytes | None:
+    """Re-encode an oversized image as JPEG under the model input limits.
+
+    Returns None when Pillow cannot decode the image or it still exceeds the
+    byte budget at the smallest allowed edge; callers fall back to the
+    invisible-image note instead of silently dropping it.
+    """
+    try:
+        with Image.open(BytesIO(data)) as source:
+            if source.width * source.height > MAX_DECODE_PIXELS:
+                logger.warning(
+                    "image too large to decode for model compression: %sx%s",
+                    source.width,
+                    source.height,
+                )
+                return None
+            if getattr(source, "is_animated", False):
+                source.seek(0)
+            source.load()
+            image = ImageOps.exif_transpose(source)
+            image.load()
+    except Exception as exc:  # Pillow raises several unrelated types
+        logger.warning("cannot decode image for model compression: %s", exc)
+        return None
+    image = _flatten_image(image)
+    edge = max(320, int(max_edge))
+    while True:
+        longest = max(image.size)
+        if longest > edge:
+            ratio = edge / longest
+            resized = image.resize(
+                (
+                    max(1, round(image.width * ratio)),
+                    max(1, round(image.height * ratio)),
+                ),
+                Image.Resampling.LANCZOS,
+            )
+        else:
+            resized = image
+        for quality in IMAGE_QUALITY_STEPS:
+            buffer = BytesIO()
+            resized.save(
+                buffer,
+                format="JPEG",
+                quality=quality,
+                optimize=True,
+                progressive=True,
+            )
+            if buffer.tell() <= max_bytes:
+                return buffer.getvalue()
+        if edge <= IMAGE_MIN_EDGE:
+            return None
+        edge = max(IMAGE_MIN_EDGE, int(edge * 0.8))
+
+
+def _skipped_images_note(skipped: list[tuple[str, str]]) -> str:
+    """Tell the model about images that could not become image blocks.
+
+    The model would otherwise believe the turn had no images at all and could
+    claim to have looked at them; keep the note explicit about what it cannot
+    see and how the user can fix it.
+    """
+    if not skipped:
+        return ""
+    lines = ["", "（系统提示：以下图片没有加入本次模型输入，你看不到它们："]
+    for label, reason in skipped[:MAX_LISTED_SKIPPED_IMAGES]:
+        lines.append(f"- {label}：{reason}")
+    remaining = len(skipped) - MAX_LISTED_SKIPPED_IMAGES
+    if remaining > 0:
+        lines.append(f"- 另有 {remaining} 张图片未列出。")
+    lines.append(
+        "如需查看，请让用户压缩后或改用普通（非原图）方式重新发送图片；"
+        "不要声称你看到过这些图片。）"
+    )
+    return "\n".join(lines)
+
+
+def _is_image_file(path: Path, name: str) -> bool:
+    """Suffix check with a cheap magic-byte fallback for misnamed images."""
+    if is_image_name(name):
+        return True
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(32)
+    except OSError:
+        return False
+    return detect_image_mime(head) is not None
+
+
 def build_model_content(
     content: str,
     workspace: Path,
@@ -242,29 +362,63 @@ def build_model_content(
 
     The database and checkpoint keep only the text form; if the model cannot
     read images the Run fails instead of silently losing the files, which is
-    the documented v1 behavior.
+    the documented v1 behavior. Images that cannot be attached are named in a
+    system note so the model knows they exist but are invisible.
     """
     files = parse_attachment_files(content)
     if not files:
         return content
     blocks: list[dict[str, Any]] = []
+    skipped: list[tuple[str, str]] = []
     for file in files:
-        if len(blocks) >= max_images:
-            break
         path = _attachment_file(workspace, file.path)
         if path is None:
+            continue
+        label = f"{file.name}（{file.path}）"
+        if len(blocks) >= max_images:
+            if _is_image_file(path, file.name):
+                skipped.append((label, f"超过单轮 {max_images} 张图片上限"))
             continue
         try:
             data = path.read_bytes()
         except OSError:
             logger.warning("cannot read attachment for model: %s", path)
-            continue
-        if len(data) > max_image_bytes:
-            logger.warning("attachment too large for model: %s (%d bytes)", path, len(data))
+            if is_image_name(file.name):
+                skipped.append((label, "读取失败"))
             continue
         mime = detect_image_mime(data)
         if mime is None:
+            if is_image_name(file.name):
+                skipped.append((label, "图片格式无法识别"))
             continue
+        if len(data) > max_image_bytes:
+            compressed = compress_image_for_model(
+                data,
+                max_bytes=max_image_bytes,
+                max_edge=settings.vision_max_image_edge,
+            )
+            if compressed is None:
+                logger.warning(
+                    "attachment too large and not compressible: %s (%d bytes)",
+                    path,
+                    len(data),
+                )
+                skipped.append(
+                    (
+                        label,
+                        f"大小 {_size_label(len(data))}，超过单张 "
+                        f"{_size_label(max_image_bytes)} 上限，且无法压缩到限制内",
+                    )
+                )
+                continue
+            logger.info(
+                "compressed attachment for model: %s (%d -> %d bytes)",
+                path,
+                len(data),
+                len(compressed),
+            )
+            data = compressed
+            mime = "image/jpeg"
         encoded = base64.b64encode(data).decode("ascii")
         blocks.append(
             {
@@ -272,6 +426,7 @@ def build_model_content(
                 "image_url": {"url": f"data:{mime};base64,{encoded}"},
             }
         )
+    text_content = f"{content}{_skipped_images_note(skipped)}"
     if not blocks:
-        return content
-    return [{"type": "text", "text": content}, *blocks]
+        return text_content
+    return [{"type": "text", "text": text_content}, *blocks]

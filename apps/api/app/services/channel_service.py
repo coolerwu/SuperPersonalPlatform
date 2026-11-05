@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +24,7 @@ from app.models import (
     ChannelInbound,
     ChannelRunLink,
     CronJob,
+    Message,
     Run,
     Session,
     utcnow,
@@ -42,6 +44,10 @@ from app.services.run_service import _create_run_in_db
 DELIVERY_FAILURE_TEXT = "处理这条消息时出错了，请稍后在网页端查看或重试。"
 DELIVERY_TRUNCATED_TEXT = "（内容过长，已截断）"
 MAX_REPLY_CHUNKS = 10
+
+# Quote-replies arrive without text; look the quoted message up by time.
+QUOTE_LOOKUP_WINDOW_SECONDS = 30.0
+QUOTE_LOOKUP_LATE_SECONDS = 2.0
 
 
 class ChannelUnavailable(Exception):
@@ -292,6 +298,99 @@ async def record_inbound_ids(
             changed = True
         if changed:
             await db.commit()
+
+
+async def resolve_quoted_text(
+    *,
+    channel_id: str,
+    external_conversation_id: str,
+    msg_id: str = "",
+    create_time_ms: int | None = None,
+) -> str:
+    """Recover the text of a quote-reply that iLink delivered empty.
+
+    iLink usually strips ``text_item`` from ``ref_msg`` and keeps only
+    ``msg_id`` / ``create_time_ms``, so the quoted message is looked up among
+    this conversation's own inbound messages and delivered replies.
+    """
+    async with SessionLocal() as db:
+        conversation = await db.scalar(
+            select(ChannelConversation).where(
+                ChannelConversation.channel_id == channel_id,
+                ChannelConversation.external_id == external_conversation_id,
+            )
+        )
+        if conversation is None:
+            return ""
+        if msg_id:
+            message_id = await db.scalar(
+                select(ChannelInbound.message_id)
+                .where(
+                    ChannelInbound.channel_id == channel_id,
+                    ChannelInbound.external_message_id == msg_id,
+                    ChannelInbound.message_id.is_not(None),
+                )
+                .order_by(ChannelInbound.id.desc())
+                .limit(1)
+            )
+            if message_id:
+                content = await db.scalar(
+                    select(Message.content).where(Message.id == message_id)
+                )
+                if content and content.strip():
+                    return content.strip()
+        if create_time_ms is None:
+            return ""
+
+        target = datetime.fromtimestamp(create_time_ms / 1000, tz=timezone.utc)
+        earliest = target - timedelta(seconds=QUOTE_LOOKUP_LATE_SECONDS)
+        latest = target + timedelta(seconds=QUOTE_LOOKUP_WINDOW_SECONDS)
+        candidates: list[tuple[float, str]] = []
+
+        inbound_rows = await db.execute(
+            select(Message.content, ChannelInbound.created_at)
+            .join(Message, Message.id == ChannelInbound.message_id)
+            .where(
+                ChannelInbound.channel_id == channel_id,
+                ChannelInbound.conversation_id == conversation.id,
+                ChannelInbound.message_id.is_not(None),
+                ChannelInbound.created_at >= earliest,
+                ChannelInbound.created_at <= latest,
+            )
+        )
+        for content, recorded_at in inbound_rows.all():
+            if content and content.strip():
+                candidates.append(
+                    (abs((recorded_at - target).total_seconds()), content.strip())
+                )
+
+        delivery_rows = await db.execute(
+            select(
+                ChannelDelivery.content,
+                ChannelDelivery.created_at,
+                ChannelDelivery.delivered_at,
+            ).where(
+                ChannelDelivery.channel_id == channel_id,
+                ChannelDelivery.conversation_id == conversation.id,
+                or_(
+                    ChannelDelivery.created_at.between(earliest, latest),
+                    ChannelDelivery.delivered_at.between(earliest, latest),
+                ),
+            )
+        )
+        for content, created_at, delivered_at in delivery_rows.all():
+            sent_at = delivered_at or created_at
+            if not (content and content.strip()):
+                continue
+            if not earliest <= sent_at <= latest:
+                continue
+            candidates.append(
+                (abs((sent_at - target).total_seconds()), content.strip())
+            )
+
+        if not candidates:
+            return ""
+        return min(candidates, key=lambda item: item[0])[1]
 
 
 async def record_delivery(db: AsyncSession, run, content: str) -> ChannelDelivery | None:

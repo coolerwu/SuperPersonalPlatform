@@ -35,6 +35,7 @@ from app.routers.trade_journal import router as trade_journal_router
 from app.services.run_service import seed_default_provider
 from app.services.cron_service import CronRuntime
 from app.services.knowledge_sync import KnowledgeSyncRuntime, seed_knowledge_config
+from app.services.session_service import SessionCleanupRuntime
 from app.services.market_data import market_service
 from app.services.backtest_worker import BacktestWorker, set_active_worker
 from app.services import backtest_tools  # noqa: F401 - registers Agent backtest tools
@@ -130,8 +131,14 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             set_active_worker(backtest_worker)
             await backtest_worker.start()
             await knowledge.start()
+            session_cleanup = SessionCleanupRuntime()
+            app.state.session_cleanup = session_cleanup
+            await session_cleanup.start()
         yield
         if start_worker:
+            session_cleanup = getattr(app.state, "session_cleanup", None)
+            if session_cleanup is not None:
+                await session_cleanup.stop()
             await knowledge.stop()
             backtest_worker = getattr(app.state, "backtest_worker", None)
             if backtest_worker is not None:

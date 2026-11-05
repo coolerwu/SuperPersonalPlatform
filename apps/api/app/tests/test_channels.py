@@ -15,7 +15,11 @@ from app.models import (
     Session,
     utcnow,
 )
-from app.services.channel_service import ChannelUnavailable, ingest_inbound
+from app.services.channel_service import (
+    ChannelUnavailable,
+    ingest_inbound,
+    resolve_quoted_text,
+)
 from app.routers.sessions import _session_out
 
 
@@ -557,3 +561,30 @@ async def test_session_summary_exposes_wechat_channel(client) -> None:  # noqa: 
     assert summary.channel_type == "wechat"
     assert summary.channel_name is not None
     assert summary.channel_name.startswith("test-wechat-")
+
+
+@pytest.mark.asyncio
+async def test_quoted_text_resolves_by_external_message_id() -> None:
+    channel_id = await _create_active_channel()
+    contact = "user-quote-by-id"
+    external_id = "wx-message-quote-id"
+    await ingest_inbound(
+        channel_id=channel_id,
+        external_message_id=external_id,
+        external_conversation_id=contact,
+        conversation_name="Alice",
+        text="我被引用的原话",
+    )
+    resolved = await resolve_quoted_text(
+        channel_id=channel_id,
+        external_conversation_id=contact,
+        msg_id=external_id,
+    )
+    assert resolved == "我被引用的原话"
+    missing = await resolve_quoted_text(
+        channel_id=channel_id,
+        external_conversation_id=contact,
+        msg_id="unknown-id",
+        create_time_ms=1762300000000,
+    )
+    assert missing == ""

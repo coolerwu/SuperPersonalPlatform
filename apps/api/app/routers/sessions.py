@@ -1,28 +1,19 @@
 from __future__ import annotations
 
-import shutil
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
-from app.config import settings
 from app.db import get_db
 from app.models import (
     Agent,
     Channel,
     ChannelConversation,
-    ChannelDelivery,
-    ChannelRunLink,
     Message,
-    Run,
-    RunEvent,
-    RunMemory,
     Session,
-    utcnow,
 )
 from app.schemas import (
     MessageOut,
@@ -32,10 +23,9 @@ from app.schemas import (
     SessionCreate,
     SessionOut,
 )
-from app.services import channel_service, cron_service
+from app.services import session_service
 from app.services.run_service import active_run_for_session
 from app.services.session_search import search_messages
-from app.services.workspace import WorkspaceError, resolve_workspace_path
 
 router = APIRouter(prefix="/api", tags=["sessions"], dependencies=[Depends(require_auth)])
 
@@ -233,37 +223,9 @@ async def get_active_run(
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
-    session = await db.get(Session, session_id)
-    if session is None:
+    result = await session_service.delete_session_cascade(db, session_id)
+    if result == session_service.SESSION_MISSING:
         raise HTTPException(status_code=404, detail="session not found")
-    agent_id = session.agent_id
-    active = await db.scalar(
-        select(Run).where(Run.session_id == session_id, Run.status.in_(("queued", "running"))).limit(1)
-    )
-    if active is not None:
+    if result == session_service.SESSION_ACTIVE:
         raise HTTPException(status_code=409, detail="session has an active run")
-    await channel_service.unlink_session(db, session_id)
-    await cron_service.detach_session(db, session_id)
-    run_ids = list((await db.scalars(select(Run.id).where(Run.session_id == session_id))).all())
-    if run_ids:
-        await db.execute(delete(ChannelDelivery).where(ChannelDelivery.run_id.in_(run_ids)))
-        await db.execute(delete(ChannelRunLink).where(ChannelRunLink.run_id.in_(run_ids)))
-        await db.execute(delete(RunMemory).where(RunMemory.run_id.in_(run_ids)))
-        await db.execute(delete(RunEvent).where(RunEvent.run_id.in_(run_ids)))
-        await db.execute(delete(Run).where(Run.id.in_(run_ids)))
-    await db.execute(delete(Message).where(Message.session_id == session_id))
-    await db.commit()
-    await db.delete(session)
-    await db.commit()
-    checkpoint: Path = settings.checkpoint_dir / f"{session_id}.sqlite"
-    if checkpoint.exists():
-        checkpoint.unlink(missing_ok=True)
-    try:
-        workspace = resolve_workspace_path(agent_id, create=False)
-    except WorkspaceError:
-        workspace = None
-    if workspace is not None:
-        screenshots = workspace / "screenshots" / session_id
-        if screenshots.exists():
-            shutil.rmtree(screenshots, ignore_errors=True)
     return {"deleted": True}

@@ -630,3 +630,73 @@ async def test_sync_buf_is_saved_only_after_the_packet_flushes(monkeypatch) -> N
     assert saved == []
     await runtime.flush_all()
     assert saved == [(channel_id, "new-buffer")]
+
+
+@pytest.mark.asyncio
+async def test_empty_quote_is_recovered_from_the_delivered_reply() -> None:
+    channel_id = await _active_channel()
+    contact = f"user-{uuid.uuid4().hex[:10]}"
+    origin = await ingest_inbound(
+        channel_id=channel_id,
+        external_message_id=f"msg-{uuid.uuid4().hex[:10]}",
+        external_conversation_id=contact,
+        conversation_name="Alice",
+        text="今天的日报呢",
+        context_token="ctx",
+    )
+    assert origin.run_id is not None
+    await complete_run(
+        origin.run_id,
+        output="昨天的日报正文",
+        input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+    )
+    async with SessionLocal() as db:
+        delivery = await db.scalar(
+            select(ChannelDelivery).where(ChannelDelivery.run_id == origin.run_id)
+        )
+        assert delivery is not None
+        quoted_at = int(delivery.created_at.timestamp() * 1000)
+
+    runtime = WeixinRuntime(worker=FakeWorker(), client_factory=lambda **kwargs: FakeClient())
+    credentials = ChannelCredentials(
+        channel_id=channel_id,
+        account_id="bot@im.bot",
+        token="token",
+        base_url="https://ilinkai.weixin.qq.com",
+        sync_buf="",
+    )
+    await runtime._handle_message(
+        credentials,
+        {
+            "message_id": f"quote-{uuid.uuid4().hex[:10]}",
+            "from_user_id": contact,
+            "item_list": [
+                {
+                    "type": 1,
+                    "text_item": {"text": "这条引用你看到了吗"},
+                    "ref_msg": {
+                        "message_item": {
+                            "type": 0,
+                            "create_time_ms": quoted_at,
+                            "is_completed": True,
+                        }
+                    },
+                }
+            ],
+        },
+    )
+    await runtime.flush_all()
+
+    async with SessionLocal() as db:
+        run = await db.scalar(
+            select(Run)
+            .join(ChannelRunLink, ChannelRunLink.run_id == Run.id)
+            .where(ChannelRunLink.conversation_id == origin.conversation_id)
+            .order_by(Run.created_at.desc())
+        )
+        assert run is not None
+        assert "[引用]" in run.input
+        assert "> 昨天的日报正文" in run.input
+        assert "这条引用你看到了吗" in run.input

@@ -1,8 +1,11 @@
 """Inbound WeChat media: quoted items, CDN download, and AES-128-ECB decrypt.
 
 iLink delivers text, image, voice, file and video items in ``item_list``. A
-reply may also carry ``ref_msg.message_item`` for the quoted message. v1 reads
-text, images and files; voice and video are acknowledged but not downloaded.
+reply may also carry ``ref_msg.message_item`` for the quoted message, but the
+platform usually strips the quoted text and leaves only ``msg_id`` /
+``create_time_ms``; the runtime resolves those against stored messages. v1
+reads text, images and files; voice and video are acknowledged but not
+downloaded.
 """
 
 from __future__ import annotations
@@ -51,11 +54,52 @@ class MediaRef:
 
 
 @dataclass(frozen=True)
+class QuoteRef:
+    """One ``ref_msg`` quote and the signals needed to recover its text.
+
+    iLink normally omits ``text_item`` from a quote-reply and keeps only
+    ``msg_id`` / ``create_time_ms``, so an empty quote is resolved by the
+    runtime from stored messages before the Run is created.
+    """
+
+    title: str = ""
+    text: str = ""
+    media_kind: str = ""
+    unsupported: str = ""
+    msg_id: str = ""
+    create_time_ms: int | None = None
+
+    @property
+    def unresolved(self) -> bool:
+        return (
+            not self.text.strip()
+            and not self.media_kind
+            and not self.unsupported
+            and bool(self.msg_id or self.create_time_ms)
+        )
+
+    def render(self, text: str = "") -> str:
+        body = (self.text or text).strip()
+        lines = [f"[引用 {self.title}]" if self.title else "[引用]"]
+        if body:
+            clipped = body[:_QUOTE_TEXT_LIMIT]
+            lines.extend(f"> {line}" for line in clipped.splitlines())
+        elif not self.media_kind and not self.unsupported:
+            lines.append("（引用原文不可用）")
+        if self.media_kind:
+            lines.append(f"（引用中包含{self.media_kind == 'image' and '图片' or '文件'}）")
+        if self.unsupported:
+            lines.append(f"（引用中包含{self.unsupported}，暂不支持）")
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
 class ParsedInbound:
     text: str
     quote: str
     media: list[MediaRef]
     unsupported: list[str]
+    quotes: list[QuoteRef]
 
     @property
     def has_content(self) -> bool:
@@ -98,9 +142,17 @@ def _unsupported_kind(item_type: Any) -> str:
     return ""
 
 
+def _positive_int(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 def parse_inbound(item_list: list[Any] | None) -> ParsedInbound:
     texts: list[str] = []
-    quotes: list[str] = []
+    quote_refs: list[QuoteRef] = []
     media: list[MediaRef] = []
     unsupported: list[str] = []
 
@@ -119,23 +171,38 @@ def parse_inbound(item_list: list[Any] | None) -> ParsedInbound:
             ref_unsupported = _unsupported_kind(ref_item.get("type"))
             if ref_media is not None:
                 media.append(ref_media)
-            title = ""
-            if isinstance(ref, dict):
-                title = str(
-                    ref.get("title")
-                    or ref.get("from_user_name")
-                    or ref.get("sender_name")
-                    or ""
-                ).strip()
-            quote_lines = [f"[引用 {title}]" if title else "[引用]"]
-            if ref_text:
-                clipped = ref_text[:_QUOTE_TEXT_LIMIT]
-                quote_lines.extend(f"> {line}" for line in clipped.splitlines())
-            if ref_media is not None:
-                quote_lines.append(f"（引用中包含{ref_media.kind == 'image' and '图片' or '文件'}）")
-            if ref_unsupported:
-                quote_lines.append(f"（引用中包含{ref_unsupported}，暂不支持）")
-            quotes.append("\n".join(quote_lines))
+            title = str(
+                ref.get("title")
+                or ref.get("from_user_name")
+                or ref.get("sender_name")
+                or ""
+            ).strip()
+            msg_id = str(ref_item.get("msg_id") or ref.get("msg_id") or "").strip()
+            create_time_ms = _positive_int(
+                ref_item.get("create_time_ms") or ref.get("create_time_ms")
+            )
+            if (
+                not ref_text
+                and ref_media is None
+                and not ref_unsupported
+                and not msg_id
+                and create_time_ms is None
+            ):
+                logger.info(
+                    "weixin quote has no text or lookup signal: item_keys=%s ref_keys=%s",
+                    sorted(str(key) for key in ref_item.keys()),
+                    sorted(str(key) for key in ref.keys()),
+                )
+            quote_refs.append(
+                QuoteRef(
+                    title=title,
+                    text=ref_text,
+                    media_kind=ref_media.kind if ref_media is not None else "",
+                    unsupported=ref_unsupported,
+                    msg_id=msg_id,
+                    create_time_ms=create_time_ms,
+                )
+            )
         direct_media = _media_ref(raw, quoted=False)
         if direct_media is not None:
             media.append(direct_media)
@@ -151,9 +218,10 @@ def parse_inbound(item_list: list[Any] | None) -> ParsedInbound:
 
     return ParsedInbound(
         text="\n".join(texts).strip(),
-        quote="\n\n".join(quotes).strip(),
+        quote="\n\n".join(quote.render() for quote in quote_refs).strip(),
         media=media,
         unsupported=unsupported,
+        quotes=quote_refs,
     )
 
 
