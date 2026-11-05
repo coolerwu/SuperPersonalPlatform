@@ -527,6 +527,7 @@ export type ChanFractal = {
   time: number;
   price: number;
   merged_index: number;
+  used?: boolean;
 };
 
 export type ChanStroke = {

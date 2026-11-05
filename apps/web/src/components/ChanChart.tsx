@@ -175,7 +175,8 @@ export function ChanChart({
     }
 
     if (showFractals && analysis.fractals.length) {
-      const markers: SeriesMarker<Time>[] = analysis.fractals.map((fractal) => ({
+      const structural = analysis.fractals.filter((fractal) => fractal.used !== false);
+      const markers: SeriesMarker<Time>[] = structural.map((fractal) => ({
         time: seconds(fractal.time),
         position: fractal.type === "top" ? "aboveBar" : "belowBar",
         color: fractal.type === "top" ? DOWN : UP,

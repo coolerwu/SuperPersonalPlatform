@@ -145,8 +145,8 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
                 <div className="chan-legend">
                   <span><i className="dot candle" />原始 K 线</span>
                   <span><i className="dot merged" />合并 K 线</span>
-                  <span><i className="dot top" />顶分型</span>
-                  <span><i className="dot bottom" />底分型</span>
+                  <span><i className="dot top" />笔端点分型（顶）</span>
+                  <span><i className="dot bottom" />笔端点分型（底）</span>
                   <span><i className="dot stroke" />笔</span>
                   <span><i className="dot zone" />中枢边界</span>
                 </div>

@@ -152,6 +152,7 @@ def test_analyze_frame_shape_and_rules() -> None:
     assert result["rules"]["bi_min_span"] == 4
     assert result["rules"]["segments"] is False
     assert isinstance(result["fractals"], list)
+    assert all("used" in fractal for fractal in result["fractals"])
     assert isinstance(result["strokes"], list)
     assert isinstance(result["zones"], list)
 

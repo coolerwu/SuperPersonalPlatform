@@ -254,6 +254,13 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
     fractals = find_fractals(merged)
     strokes = build_strokes(fractals)
     zones = find_zones(strokes)
+    used_fractals = {
+        (int(stroke["start_time"]), float(stroke["start_price"])) for stroke in strokes
+    } | {
+        (int(stroke["end_time"]), float(stroke["end_price"])) for stroke in strokes
+    }
+    for fractal in fractals:
+        fractal["used"] = (int(fractal["time"]), float(fractal["price"])) in used_fractals
     warnings: list[str] = []
     if skipped:
         warnings.append(f"{skipped} 根行情为缺口或异常值，已跳过")
