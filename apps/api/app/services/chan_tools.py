@@ -135,7 +135,7 @@ def _make_analyze_tool(context: SkillToolContext) -> BaseTool:
         name="chan_analyze",
         description=(
             "分析 crypto 单周期的程序化缠论结构。symbol 例如 BTCUSDT；"
-            "granularity 只支持 1h、4h、1day；bars 默认 300，范围 20-1000。"
+            "granularity 支持 15min、1h、4h、1day、1week（也接受 15m/1w）；bars 默认 300，范围 20-1000。"
             "返回数据区间、合并 K 线数、笔、中枢、1/2/3 买卖点和 warnings 的摘要，"
             "不返回完整 K 线数组。只使用已收盘 K 线；买卖点是笔级别近似，"
             "不是交易建议。用户要求看缠论结构或解释分型/笔/中枢/买卖点时使用。"

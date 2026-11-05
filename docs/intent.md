@@ -2348,7 +2348,7 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 
 1. 功能工作区「交易」组新增「缠论图」，与回测、交易记录并列，不绑定 Agent。
 2. 行情复用现有 Bitget 公共 REST 和 `market.db` 缓存；只使用已收盘 K 线，按需增量拉取，不引入 WebSocket。
-3. 支持 `BTCUSDT/ETHUSDT`（可输入其他 Bitget 现货交易对）、`1h/4h/1day`、最近 200/300/500/800 根 K 线。
+3. 支持 `BTCUSDT/ETHUSDT`（可输入其他 Bitget 现货交易对）、`15min/1h/4h/1day/1week`、最近 200/300/500/800 根 K 线。
 4. 程序计算：包含处理（向上取高高、向下取低低）、严格三根顶/底分型、老笔（顶底交替，至少 5 根合并 K 线含两端分型）、连续三笔重叠中枢（ZG/ZD）。
 5. 页面叠加原始 K 线、合并 K 线、笔端点分型、笔折线、中枢色块和 1/2/3 买卖点标记；提供显示开关、规则说明和 warnings。
 6. 新增只读接口 `POST /api/chan/analyze`，入参 `symbol/granularity/bars`，返回 candles、merged、fractals、strokes、zones、points、rules、warnings；不建新表、不落库。
@@ -2357,7 +2357,7 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 #### 验收标准
 
 - 从「交易」组进入「缠论图」，选择 BTCUSDT 1h 300 根后能看到 K 线、合并 K 线、分型、笔、中枢色块和买卖点标记。
-- 切换 4h/1day 或显示开关后图随之更新；刷新只增量拉取 Bitget 缺失的最近 K 线。
+- 切换 15min/4h/1day/1w 或显示开关后图随之更新；刷新只增量拉取 Bitget 缺失的最近 K 线。
 - 笔按老笔规则连接，顶底交替；不足 3 笔时页面提示没有中枢。
 - 数据缺口或样本不足时显示 warnings，不把缺口当成连续结构。
 - 后端测试与前端构建通过；生产需配置 Bitget 代理。
@@ -2429,7 +2429,7 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 
 1. 新增内置技能 `chanlun`，默认不启用；声明 `include_tools: chan_analyze`。
 2. `chan_analyze(symbol, granularity="1h", bars=300)` 复用 `chan_analysis.analyze_symbol`，返回数据区间、合并 K 线数、笔/中枢/买卖点摘要、最近几笔、中枢 ZG/ZD、买卖点原因、rules 和 warnings。
-3. 只支持 crypto、`1h/4h/1day`、20–1000 根；只使用已收盘 K 线；失败返回中文 Error。
+3. 只支持 crypto、`15min/1h/4h/1day/1week`（接受 `15m`/`1w` 别名）、20–1000 根；只使用已收盘 K 线；失败返回中文 Error。
 4. 技能正文写明程序化老笔口径、买卖点为笔级别近似、不做线段/多级别/严格背驰；允许否定用户，但必须指出具体结构位置。
 5. 工具结果限制长度，不返回完整 candles/merged 数组；页面与 Agent 共用同一服务。
 6. 技能 seed 后需用户在 Agent 技能页启用；未启用或未读取 SKILL.md 时工具不可见。

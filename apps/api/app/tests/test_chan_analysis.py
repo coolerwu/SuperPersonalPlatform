@@ -190,3 +190,10 @@ def test_find_buy_sell_points() -> None:
     zone = {"zg": 110, "zd": 100, "start_stroke": 0, "end_stroke": 1}
     points = find_buy_sell_points(zone_strokes, [zone], [0, 0, 0, 0, 0])
     assert any(item["type"] == "3buy" for item in points)
+
+
+def test_chan_supports_15min_and_week() -> None:
+    from app.services.chan_analysis import SUPPORTED_GRANULARITIES
+
+    assert "15min" in SUPPORTED_GRANULARITIES
+    assert "1week" in SUPPORTED_GRANULARITIES

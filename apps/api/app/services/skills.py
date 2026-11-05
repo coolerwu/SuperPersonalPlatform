@@ -180,7 +180,7 @@ def strategy(df):
 """,
     "chanlun": """---
 name: chanlun
-description: 用户要求用缠论看加密货币 K 线、分型、笔、中枢、1/2/3 买卖点，或让你解释缠论结构时使用。读取本技能后解锁 chan_analyze；只支持 crypto 1h/4h/1day，结构是程序化老笔近似。
+description: 用户要求用缠论看加密货币 K 线、分型、笔、中枢、1/2/3 买卖点，或让你解释缠论结构时使用。读取本技能后解锁 chan_analyze；支持 crypto 15min/1h/4h/1day/1week，结构是程序化老笔近似。
 metadata:
   include_tools: chan_analyze
 ---
@@ -202,7 +202,7 @@ metadata:
 
 ## 操作流程
 
-1. 确认交易对、周期和 K 线根数；默认 `BTCUSDT / 1h / 300`，只支持 `1h`、`4h`、`1day`，根数 20–1000。
+1. 确认交易对、周期和 K 线根数；默认 `BTCUSDT / 1h / 300`，支持 `15min`、`1h`、`4h`、`1day`、`1week`（可用 `15m`/`1w` 别名），根数 20–1000。
 2. 调用 `chan_analyze(symbol, granularity, bars)`。它返回区间、笔/中枢/买卖点摘要和 warnings，不返回完整 K 线。
 3. 汇报时先说数据区间和 warnings，再说结构；不要把一两笔直接说成趋势。
 4. 解释买卖点时说明它在中枢内还是中枢外、是第几类、是否只是笔级别；提醒用户这是近似，不是交易信号。

@@ -69,9 +69,11 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
         <label className="chan-control">
           <span>周期</span>
           <select value={granularity} onChange={(event) => setGranularity(event.target.value)}>
+            <option value="15min">15min</option>
             <option value="1h">1h</option>
             <option value="4h">4h</option>
             <option value="1day">1day</option>
+            <option value="1week">1w</option>
           </select>
         </label>
         <label className="chan-control">
@@ -107,7 +109,7 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
               <section className="settings-card">
                 <div className="settings-card-head">
                   <div>
-                    <h2>{analysis.symbol} · {analysis.granularity}</h2>
+                    <h2>{analysis.symbol} · {analysis.granularity === "1week" ? "1w" : analysis.granularity}</h2>
                     <p>
                       {formatUtc(analysis.start_ms)} → {formatUtc(analysis.end_ms)} ·{" "}
                       {analysis.bars} 根原始 K 线 · {analysis.merged_bars} 根合并 K 线 ·{" "}

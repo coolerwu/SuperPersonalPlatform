@@ -21,7 +21,8 @@ from app.services.timeframes import floor_open_ms, now_ms, shift_open_ms
 MAX_BARS = 1000
 MIN_BARS = 20
 OLD_BI_MIN_SPAN = 4  # five merged bars inclusive
-SUPPORTED_GRANULARITIES = ("1h", "4h", "1day")
+SUPPORTED_GRANULARITIES = ("15min", "1h", "4h", "1day", "1week")
+GRANULARITY_ALIASES = {"15m": "15min", "1w": "1week", "1wk": "1week", "1d": "1day"}
 
 
 class ChanError(ValueError):
@@ -438,8 +439,9 @@ async def analyze_symbol(
     symbol = str(symbol or "").strip().upper()
     if not symbol:
         raise ChanError("交易对不能为空")
+    granularity = GRANULARITY_ALIASES.get(str(granularity).strip().lower(), str(granularity).strip())
     if granularity not in SUPPORTED_GRANULARITIES:
-        raise ChanError("第一版只支持 1h、4h、1day")
+        raise ChanError("只支持 15min、1h、4h、1day、1week")
     if not MIN_BARS <= bars <= MAX_BARS:
         raise ChanError(f"bars 必须在 {MIN_BARS}-{MAX_BARS} 之间")
     end_open = floor_open_ms(now_ms(), granularity)
