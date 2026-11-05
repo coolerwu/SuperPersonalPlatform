@@ -2453,3 +2453,40 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 - 线段、多级别联立、严格背驰判断；
 - 自动交易或收益承诺；
 - 把完整 K 线数组塞进模型上下文。
+
+### F66 浏览器走代理与 DNS 校验
+
+- 状态：已完成
+- 日期：2026-11-05
+- 来源：生产环境浏览器打不开 YouTube；排查发现本地 DNS 被污染，且 Chromium 启动时完全没有使用 `.env` 里的 HTTP 代理
+
+#### 背景与目标
+
+`.env` 配置了可用的 `HTTP_PROXY`/`HTTPS_PROXY`，curl 走代理可以访问 YouTube，但浏览器工具的 `browser_open` 在发请求前先用本地 `getaddrinfo` 校验域名必须解析到公网地址，被污染到 `2001::1` 的 DNS 直接拦下；同时 Chromium 启动参数里没有代理配置，即使 DNS 正常也会直连超时。目标：让浏览器复用统一出站代理，代理场景下不被本地 DNS 阻断；不改生产机器的系统 DNS。
+
+#### 功能点
+
+1. `BrowserSession` 读取 `HTTPS_PROXY` / `HTTP_PROXY`（`BrowserSession(proxy_url=...)` 可覆盖）与 `NO_PROXY`（`proxy_bypass=...` 可覆盖），`BrowserSession.__init__` 之后即确定。
+2. 启动 Chromium 时把这组配置传给 Playwright `chromium.launch(proxy=...)`：`server` 自动补 `http://` 前缀，URL 中的用户名/密码拆到 `username`/`password` 字段，IPv6 地址保留方括号；`NO_PROXY` 条目转成 `bypass`（同时给出裸后缀与 `.后缀` 两种形式）。
+3. `_check_host` 在代理生效且该主机不在 `NO_PROXY` 中时跳过本地「必须解析到公网地址」校验（域名由代理解析）；仍执行字面量检查，拒绝 localhost、私网/保留地址、`file://` 和带凭据 URL；`NO_PROXY` 命中（实际直连）的主机继续做本地解析校验。
+4. 没有配置代理时行为完全不变（`proxy_url` 为空则不传 `proxy` 参数，DNS 校验照旧）。
+5. 不新增依赖、不改数据库；代理地址与凭据不写日志。
+
+#### 验收标准
+
+- 配置代理后 `browser_open("https://www.youtube.com/")` 能打开页面并返回快照，不再报「resolves to a private or reserved address」。
+- 未配置代理时，私网/回环域名仍被拒绝，行为与之前一致。
+- `NO_PROXY` 中列出的域名在配置代理时仍走本地解析校验。
+- 浏览器启动参数包含正确的 `proxy.server` 与 `bypass`；后端测试与前端构建通过。
+
+#### 约束边界
+
+- 有代理时 SSRF 防护退化为「只拦字面量私网地址与 localhost」，域名解析交给代理；这是单用户私有平台在代理可信前提下的取舍。
+- 代理不可达时表现为导航失败，不在浏览器内部重试或切换直连。
+- 不改系统 DNS、hosts 或网络配置；不引入 socks5 专用组件。
+
+#### 非目标
+
+- 自动探测或切换代理、按站点分流；
+- 浏览器内的证书固定、代理认证弹窗；
+- 修改 `web_fetch` / `web_search` 的现有代理行为（它们已经跟随环境变量）。

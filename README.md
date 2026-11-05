@@ -151,8 +151,8 @@ metadata:
   - `browser_screenshot(tab, full_page=false)`：按需截取当前页面，返回 PNG 图片；用户要求查看截图、外观或布局，或需要用户扫码登录时调用，Provider 模型需要支持图片输入；PNG 同时保存到 `workspaces/<agent_id>/screenshots/<session_id>/<run_id>/`，聊天里显示在对应 assistant 消息下方，Agent 文件工具也能访问；
   - `browser_close(tab)`：关闭标签页并释放并发槽位。
   - 每次 Run 懒启动一个浏览器进程和一个 context，最多 `BROWSER_CONCURRENCY=5` 个标签页；Run 结束、失败、超时或取消时自动关闭，并在关闭前把 cookies/localStorage 写入 `data/browser_state.json`，下一次 Run 自动加载；ref 只对最近一次快照有效，动作后会返回新快照。
-  - 只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地地址、带凭据 URL、`file://` 和下载；只处理主 frame，不接管弹窗。
-  - 搜索类页面优先尝试移动版/轻量入口（`m.baidu.com`、`www.google.com/search?q=`、`html.duckduckgo.com`、`cn.bing.com`、维基百科）；Google 需要主机网络能直连，当前网络被 DNS 污染时会被地址校验拒绝；遇到验证码、安全验证或 HTTP 403/429 时返回明确错误并提示换入口，不会尝试绕过验证。
+  - 只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地地址、带凭据 URL、`file://` 和下载；只处理主 frame，不接管弹窗。配置了 `HTTPS_PROXY`/`HTTP_PROXY` 时 Chromium 显式走同一代理（`NO_PROXY` 作为 bypass），此时域名由代理解析，本地 DNS 污染不再阻断访问，但仍拦截 localhost 和私网地址字面量；未配置代理时保持原来的本地解析校验。
+  - 搜索类页面优先尝试移动版/轻量入口（`m.baidu.com`、`www.google.com/search?q=`、`html.duckduckgo.com`、`cn.bing.com`、维基百科）；配置了代理时 Google、YouTube 等站点经由代理访问，未配置代理时仍需主机能直连；遇到验证码、安全验证或 HTTP 403/429 时返回明确错误并提示换入口，不会尝试绕过验证。
 
 `web_search` 和 `web_fetch` 使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：启用 `web-search` 并读取其 SKILL.md 后，会同时解锁 `web_search` 和 `web_fetch`；只抓取网页时也可以启用独立的 `web-fetch` 技能。`web-browser` 同样需要启用并读取其 SKILL.md。
 

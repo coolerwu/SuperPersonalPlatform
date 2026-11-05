@@ -14,7 +14,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from langchain_core.tools import BaseTool, StructuredTool
 
@@ -109,6 +109,34 @@ def is_public_ip(value: str) -> bool:
         or address.is_unspecified
         or not address.is_global
     )
+
+
+def _bypass_suffix(entry: str) -> str:
+    """Reduce one NO_PROXY entry to a lowercase host suffix."""
+    value = entry.strip().lower()
+    if "://" in value:
+        value = urlsplit(value).hostname or ""
+    value = value.split("/", 1)[0]
+    if value.startswith("*."):
+        value = value[1:]
+    value = value.lstrip(".")
+    if value.count(":") == 1:
+        name, _, port = value.partition(":")
+        if port.isdigit():
+            value = name
+    return value
+
+
+def is_bypassed_host(host: str, entries: list[str] | tuple[str, ...]) -> bool:
+    """Match a host against NO_PROXY entries (suffix semantics, '*' for all)."""
+    value = host.strip().lower().rstrip(".")
+    for entry in entries:
+        if entry.strip() == "*":
+            return True
+        suffix = _bypass_suffix(entry)
+        if suffix and (value == suffix or value.endswith(f".{suffix}")):
+            return True
+    return False
 
 
 def _check_literal_host(hostname: str) -> None:
@@ -528,6 +556,8 @@ class BrowserSession:
         accept_language: str | None = None,
         persist_state: bool | None = None,
         state_path: str | Path | None = None,
+        proxy_url: str | None = None,
+        proxy_bypass: str | None = None,
         resolver: HostResolver | None = None,
         start_playwright: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
@@ -623,6 +653,63 @@ class BrowserSession:
         self._tab_slots = asyncio.Semaphore(self.concurrency)
         self._checked_hosts: set[str] = set()
 
+        proxy_value = (
+            proxy_url
+            if proxy_url is not None
+            else (settings.https_proxy or settings.http_proxy or "")
+        )
+        self.proxy_url = str(proxy_value or "").strip()
+        bypass_value = (
+            proxy_bypass if proxy_bypass is not None else (settings.no_proxy or "")
+        )
+        self.proxy_bypass = str(bypass_value or "").strip()
+        self._bypass_entries = tuple(
+            entry.strip() for entry in self.proxy_bypass.split(",") if entry.strip()
+        )
+
+    def _playwright_proxy(self) -> dict[str, str] | None:
+        """Chromium ignores HTTP_PROXY; hand it the proxy explicitly."""
+        server = self.proxy_url
+        if not server:
+            return None
+        if "://" not in server:
+            server = f"http://{server}"
+        try:
+            parts = urlsplit(server)
+            host = parts.hostname or ""
+            port = parts.port
+        except ValueError:
+            logger.warning("invalid browser proxy url; browsing without it")
+            return None
+        if not host:
+            logger.warning("invalid browser proxy url; browsing without it")
+            return None
+        if ":" in host:
+            host = f"[{host}]"
+        netloc = host if port is None else f"{host}:{port}"
+        proxy = {"server": f"{parts.scheme or 'http'}://{netloc}"}
+        if parts.username:
+            proxy["username"] = unquote(parts.username)
+            proxy["password"] = unquote(parts.password or "")
+        bypass = self._playwright_bypass()
+        if bypass:
+            proxy["bypass"] = bypass
+        return proxy
+
+    def _playwright_bypass(self) -> str:
+        values: list[str] = []
+        for entry in self._bypass_entries:
+            if entry == "*":
+                values.append("*")
+                continue
+            suffix = _bypass_suffix(entry)
+            if suffix:
+                values.extend((suffix, f".{suffix}"))
+        return ",".join(dict.fromkeys(values))
+
+    def _uses_proxy(self, host: str) -> bool:
+        return bool(self.proxy_url) and not is_bypassed_host(host, self._bypass_entries)
+
     async def _ensure_started(self) -> None:
         if self._browser is not None:
             return
@@ -648,7 +735,11 @@ class BrowserSession:
                     # headless client to an anti-bot page; a regular desktop
                     # profile reaches the normal login page instead.
                     args.append("--disable-blink-features=AutomationControlled")
-                browser = await playwright.chromium.launch(headless=True, args=args)
+                launch_options: dict[str, Any] = {"headless": True, "args": args}
+                proxy = self._playwright_proxy()
+                if proxy is not None:
+                    launch_options["proxy"] = proxy
+                browser = await playwright.chromium.launch(**launch_options)
                 context_options: dict[str, Any] = {
                     "accept_downloads": False,
                     "viewport": {"width": 1280, "height": 900},
@@ -834,6 +925,11 @@ class BrowserSession:
     async def _check_host(self, host: str, port: int) -> None:
         _check_literal_host(host)
         if host in self._checked_hosts:
+            return
+        if self._uses_proxy(host):
+            # Chromium resolves through the proxy, so a poisoned local
+            # resolver must not decide whether the request is allowed.
+            self._checked_hosts.add(host)
             return
         await _resolve_public_addresses(host, port, self._resolver)
         self._checked_hosts.add(host)

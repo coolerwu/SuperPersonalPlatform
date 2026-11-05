@@ -581,3 +581,77 @@ async def test_snapshot_wait_seconds_is_clamped(tmp_path) -> None:
         await session.aclose()
 
     assert recorded == [60_000]
+
+
+async def test_chromium_launches_with_the_configured_proxy() -> None:
+    playwright = FakePlaywright()
+
+    async def start() -> FakePlaywright:
+        return playwright
+
+    session = BrowserSession(
+        proxy_url="192.168.1.2:7893",
+        proxy_bypass="localhost,127.0.0.1,.internal",
+        start_playwright=start,
+    )
+    try:
+        await session._ensure_started()
+    finally:
+        await session.aclose()
+
+    proxy = playwright.chromium.launch_kwargs["proxy"]
+    assert proxy["server"] == "http://192.168.1.2:7893"
+    assert proxy["bypass"] == (
+        "localhost,.localhost,127.0.0.1,.127.0.0.1,internal,.internal"
+    )
+
+
+def test_proxy_url_credentials_are_split_for_playwright() -> None:
+    session = BrowserSession(proxy_url="http://user:p%40ss@proxy.local:8080")
+    assert session._playwright_proxy() == {
+        "server": "http://proxy.local:8080",
+        "username": "user",
+        "password": "p@ss",
+    }
+
+
+async def test_proxied_hosts_skip_poisoned_local_dns() -> None:
+    async def blocked(host: str, port: int) -> list[str]:
+        return ["2001::1"]
+
+    session = BrowserSession(proxy_url="http://127.0.0.1:7890", resolver=blocked)
+    await session._check_host("www.youtube.com", 443)
+    assert "www.youtube.com" in session._checked_hosts
+
+
+async def test_no_proxy_entries_still_validate_dns() -> None:
+    async def private(host: str, port: int) -> list[str]:
+        return ["10.0.0.1"]
+
+    session = BrowserSession(
+        proxy_url="http://127.0.0.1:7890",
+        proxy_bypass=".example.com",
+        resolver=private,
+    )
+    with pytest.raises(BrowserToolError, match="private or reserved"):
+        await session._check_host("www.example.com", 443)
+
+
+async def test_without_a_proxy_dns_validation_is_unchanged() -> None:
+    async def private(host: str, port: int) -> list[str]:
+        return ["10.0.0.1"]
+
+    session = BrowserSession(proxy_url="", proxy_bypass="", resolver=private)
+    assert session._playwright_proxy() is None
+    with pytest.raises(BrowserToolError, match="private or reserved"):
+        await session._check_host("www.youtube.com", 443)
+
+
+def test_invalid_proxy_url_falls_back_to_direct() -> None:
+    session = BrowserSession(proxy_url="http://proxy.local:99999")
+    assert session._playwright_proxy() is None
+
+
+def test_ipv6_proxy_server_keeps_brackets() -> None:
+    session = BrowserSession(proxy_url="http://[2001:db8::1]:8080")
+    assert session._playwright_proxy() == {"server": "http://[2001:db8::1]:8080"}
