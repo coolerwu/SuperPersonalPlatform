@@ -7,6 +7,7 @@ from app.services.chan_analysis import (
     ChanError,
     analyze_frame,
     build_strokes,
+    find_buy_sell_points,
     find_fractals,
     find_zones,
     merge_inclusions,
@@ -155,8 +156,37 @@ def test_analyze_frame_shape_and_rules() -> None:
     assert all("used" in fractal for fractal in result["fractals"])
     assert isinstance(result["strokes"], list)
     assert isinstance(result["zones"], list)
+    assert isinstance(result["points"], list)
+    assert result["rules"]["buy_sell_points"] is True
 
 
 def test_analyze_frame_rejects_empty() -> None:
     with pytest.raises(ChanError):
         analyze_frame(pd.DataFrame())
+
+
+
+def test_find_buy_sell_points() -> None:
+    strokes = [
+        {"direction": "down", "start_time": 0, "end_time": 1, "start_price": 120, "end_price": 100, "high": 120, "low": 100},
+        {"direction": "up", "start_time": 1, "end_time": 2, "start_price": 100, "end_price": 118, "high": 118, "low": 100},
+        {"direction": "down", "start_time": 2, "end_time": 3, "start_price": 118, "end_price": 95, "high": 118, "low": 95},
+        {"direction": "up", "start_time": 3, "end_time": 4, "start_price": 95, "end_price": 120, "high": 120, "low": 95},
+        {"direction": "down", "start_time": 4, "end_time": 5, "start_price": 120, "end_price": 98, "high": 120, "low": 98},
+    ]
+    points = find_buy_sell_points(strokes, [], [-20, 10, -5, 12, -3])
+    kinds = [item["type"] for item in points]
+    assert "1buy" in kinds
+    assert "2buy" in kinds
+    assert points[0]["type"] == "1buy"
+
+    zone_strokes = [
+        {"direction": "down", "start_time": 0, "end_time": 1, "start_price": 120, "end_price": 100, "high": 120, "low": 100},
+        {"direction": "up", "start_time": 1, "end_time": 2, "start_price": 100, "end_price": 115, "high": 115, "low": 100},
+        {"direction": "down", "start_time": 2, "end_time": 3, "start_price": 115, "end_price": 105, "high": 115, "low": 105},
+        {"direction": "up", "start_time": 3, "end_time": 4, "start_price": 105, "end_price": 120, "high": 120, "low": 105},
+        {"direction": "down", "start_time": 4, "end_time": 5, "start_price": 120, "end_price": 112, "high": 120, "low": 112},
+    ]
+    zone = {"zg": 110, "zd": 100, "start_stroke": 0, "end_stroke": 1}
+    points = find_buy_sell_points(zone_strokes, [zone], [0, 0, 0, 0, 0])
+    assert any(item["type"] == "3buy" for item in points)

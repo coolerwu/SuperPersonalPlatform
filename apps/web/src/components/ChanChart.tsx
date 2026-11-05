@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import {
   ColorType,
   CrosshairMode,
-  LineStyle,
   createChart,
   type IChartApi,
   type SeriesMarker,
@@ -15,7 +14,8 @@ import type { ChanAnalysis } from "../types";
 const UP = "#0f766e";
 const DOWN = "#b91c1c";
 const STROKE = "#5b4bf0";
-const ZONE = "rgba(91, 75, 240, 0.58)";
+const ZONE_FILL = "rgba(91, 75, 240, 0.12)";
+const ZONE_LINE = "rgba(91, 75, 240, 0.68)";
 
 function createBaseChart(container: HTMLDivElement, height: number): IChartApi {
   return createChart(container, {
@@ -41,10 +41,15 @@ function createBaseChart(container: HTMLDivElement, height: number): IChartApi {
   });
 }
 
-function watchResize(container: HTMLDivElement, chart: IChartApi): () => void {
+function watchResize(
+  container: HTMLDivElement,
+  chart: IChartApi,
+  onChange: () => void,
+): () => void {
   if (typeof ResizeObserver === "undefined") return () => undefined;
   const observer = new ResizeObserver(() => {
     chart.applyOptions({ width: container.clientWidth });
+    onChange();
   });
   observer.observe(container);
   return () => observer.disconnect();
@@ -54,26 +59,42 @@ function seconds(value: number): UTCTimestamp {
   return (value / 1000) as UTCTimestamp;
 }
 
+const POINT_STYLE: Record<
+  string,
+  { color: string; text: string; buy: boolean }
+> = {
+  "1buy": { color: "#0f766e", text: "1买", buy: true },
+  "2buy": { color: "#0ea5e9", text: "2买", buy: true },
+  "3buy": { color: "#7c3aed", text: "3买", buy: true },
+  "1sell": { color: "#b91c1c", text: "1卖", buy: false },
+  "2sell": { color: "#f97316", text: "2卖", buy: false },
+  "3sell": { color: "#db2777", text: "3卖", buy: false },
+};
+
 export function ChanChart({
   analysis,
   showMerged,
   showFractals,
   showStrokes,
   showZones,
-  height = 520,
+  showPoints,
+  height = 560,
 }: {
   analysis: ChanAnalysis;
   showMerged: boolean;
   showFractals: boolean;
   showStrokes: boolean;
   showZones: boolean;
+  showPoints: boolean;
   height?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const overlayRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !analysis.candles.length) return;
+    const overlay = overlayRef.current;
+    if (!container || !overlay || !analysis.candles.length) return;
     const chart = createBaseChart(container, height);
     const candles = chart.addCandlestickSeries({
       upColor: UP,
@@ -145,55 +166,92 @@ export function ChanChart({
       strokeSeries.setData(points);
     }
 
-    if (showZones && analysis.zones.length) {
+    const drawZones = () => {
+      const rect = container.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      overlay.width = Math.max(1, Math.floor(rect.width * ratio));
+      overlay.height = Math.max(1, Math.floor(rect.height * ratio));
+      overlay.style.width = `${rect.width}px`;
+      overlay.style.height = `${rect.height}px`;
+      const context = overlay.getContext("2d");
+      if (!context) return;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, rect.width, rect.height);
+      if (!showZones || !analysis.zones.length) return;
       for (const zone of analysis.zones) {
-        const upper = chart.addLineSeries({
-          color: ZONE,
-          lineWidth: 1,
-          lineStyle: LineStyle.Dotted,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
+        const x1 = chart.timeScale().timeToCoordinate(seconds(zone.start_time));
+        const x2 = chart.timeScale().timeToCoordinate(seconds(zone.end_time));
+        const y1 = candles.priceToCoordinate(zone.zg);
+        const y2 = candles.priceToCoordinate(zone.zd);
+        if (x1 === null || x2 === null || y1 === null || y2 === null) continue;
+        const left = Math.min(x1, x2);
+        const top = Math.min(y1, y2);
+        const width = Math.abs(x2 - x1);
+        const zoneHeight = Math.abs(y2 - y1);
+        context.fillStyle = ZONE_FILL;
+        context.fillRect(left, top, width, zoneHeight);
+        context.strokeStyle = ZONE_LINE;
+        context.lineWidth = 1;
+        context.setLineDash([4, 4]);
+        context.strokeRect(left, top, width, zoneHeight);
+        context.setLineDash([]);
+        if (width > 58) {
+          context.fillStyle = "rgba(75, 59, 219, 0.9)";
+          context.font = "11px Inter, PingFang SC, sans-serif";
+          context.fillText("中枢", left + 6, top + 14);
+        }
+      }
+    };
+
+    const markers: SeriesMarker<Time>[] = [];
+    const pointTimes = new Set<number>();
+    if (showPoints) {
+      for (const point of analysis.points) {
+        const style = POINT_STYLE[point.type];
+        if (!style) continue;
+        pointTimes.add(point.time);
+        markers.push({
+          time: seconds(point.time),
+          position: style.buy ? "belowBar" : "aboveBar",
+          color: style.color,
+          shape: style.buy ? "arrowUp" : "arrowDown",
+          text: style.text,
         });
-        upper.setData([
-          { time: seconds(zone.start_time), value: zone.zg },
-          { time: seconds(zone.end_time), value: zone.zg },
-        ]);
-        const lower = chart.addLineSeries({
-          color: ZONE,
-          lineWidth: 1,
-          lineStyle: LineStyle.Dotted,
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        lower.setData([
-          { time: seconds(zone.start_time), value: zone.zd },
-          { time: seconds(zone.end_time), value: zone.zd },
-        ]);
       }
     }
-
-    if (showFractals && analysis.fractals.length) {
-      const structural = analysis.fractals.filter((fractal) => fractal.used !== false);
-      const markers: SeriesMarker<Time>[] = structural.map((fractal) => ({
-        time: seconds(fractal.time),
-        position: fractal.type === "top" ? "aboveBar" : "belowBar",
-        color: fractal.type === "top" ? DOWN : UP,
-        shape: fractal.type === "top" ? "arrowDown" : "arrowUp",
-        text: fractal.type === "top" ? "顶" : "底",
-      }));
-      markers.sort((left, right) => Number(left.time) - Number(right.time));
-      candles.setMarkers(markers);
+    if (showFractals) {
+      for (const fractal of analysis.fractals) {
+        if (fractal.used === false || pointTimes.has(fractal.time)) continue;
+        markers.push({
+          time: seconds(fractal.time),
+          position: fractal.type === "top" ? "aboveBar" : "belowBar",
+          color: fractal.type === "top" ? DOWN : UP,
+          shape: fractal.type === "top" ? "arrowDown" : "arrowUp",
+          text: fractal.type === "top" ? "顶" : "底",
+        });
+      }
     }
+    markers.sort((left, right) => Number(left.time) - Number(right.time));
+    candles.setMarkers(markers);
 
     chart.timeScale().fitContent();
-    const unwatch = watchResize(container, chart);
+    const timeScale = chart.timeScale();
+    const redraw = () => requestAnimationFrame(drawZones);
+    timeScale.subscribeVisibleLogicalRangeChange(redraw);
+    const unwatch = watchResize(container, chart, redraw);
+    requestAnimationFrame(drawZones);
+
     return () => {
+      timeScale.unsubscribeVisibleLogicalRangeChange(redraw);
       unwatch();
       chart.remove();
     };
-  }, [analysis, showMerged, showFractals, showStrokes, showZones, height]);
+  }, [analysis, showMerged, showFractals, showStrokes, showZones, showPoints, height]);
 
-  return <div className="backtest-chart chan-chart" ref={containerRef} style={{ height }} />;
+  return (
+    <div className="chan-chart-wrap" style={{ height }}>
+      <div className="chan-chart-canvas" ref={containerRef} />
+      <canvas className="chan-zone-overlay" ref={overlayRef} />
+    </div>
+  );
 }

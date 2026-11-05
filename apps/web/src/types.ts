@@ -549,12 +549,21 @@ export type ChanZone = {
   end_stroke: number;
 };
 
+export type ChanPoint = {
+  type: "1buy" | "2buy" | "3buy" | "1sell" | "2sell" | "3sell" | string;
+  time: number;
+  price: number;
+  stroke_index: number;
+  reason: string;
+};
+
 export type ChanRules = {
   name: string;
   bi_min_span: number;
   bi_rule: string;
   fractal_rule: string;
   zone_rule: string;
+  point_rule: string;
   segments: boolean;
   buy_sell_points: boolean;
 };
@@ -567,6 +576,7 @@ export type ChanAnalysis = {
   merged_bars: number;
   stroke_count: number;
   zone_count: number;
+  point_count: number;
   start_ms: number;
   end_ms: number;
   candles: ChanCandle[];
@@ -574,6 +584,7 @@ export type ChanAnalysis = {
   fractals: ChanFractal[];
   strokes: ChanStroke[];
   zones: ChanZone[];
+  points: ChanPoint[];
   rules: ChanRules;
   warnings: string[];
 };

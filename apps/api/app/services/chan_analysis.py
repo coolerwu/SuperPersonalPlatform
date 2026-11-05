@@ -227,6 +227,120 @@ def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return zones
 
 
+def _macd_areas(frame: pd.DataFrame, strokes: list[dict[str, Any]]) -> list[float]:
+    """Sum the MACD histogram over each stroke; used as a simple divergence proxy."""
+    close = frame["close"].astype(float)
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    hist = macd - macd.ewm(span=9, adjust=False).mean()
+    times = [int(pd.Timestamp(timestamp).timestamp() * 1000) for timestamp in frame.index]
+    values = [float(value) for value in hist.tolist()]
+    areas: list[float] = []
+    for stroke in strokes:
+        total = 0.0
+        start = int(stroke["start_time"])
+        end = int(stroke["end_time"])
+        for timestamp, value in zip(times, values):
+            if start < timestamp <= end:
+                total += value
+        areas.append(total)
+    return areas
+
+
+def find_buy_sell_points(
+    strokes: list[dict[str, Any]],
+    zones: list[dict[str, Any]],
+    macd_areas: list[float],
+) -> list[dict[str, Any]]:
+    """Find approximate stroke-level 1/2/3 buy and sell points.
+
+    First points use price extremum + MACD-area divergence. Second points are
+    the first pullback that does not break the first point. Third points are
+    the first pullback/rebound outside a central zone. This is deliberately
+    labelled as an approximation: it uses strokes, not full segments.
+    """
+    points: list[dict[str, Any]] = []
+    used: set[tuple[int, float]] = set()
+
+    def add(kind: str, index: int, reason: str) -> None:
+        stroke = strokes[index]
+        key = (int(stroke["end_time"]), round(float(stroke["end_price"]), 10))
+        if key in used:
+            return
+        used.add(key)
+        points.append(
+            {
+                "type": kind,
+                "time": int(stroke["end_time"]),
+                "price": float(stroke["end_price"]),
+                "stroke_index": index,
+                "reason": reason,
+            }
+        )
+
+    for index, stroke in enumerate(strokes):
+        if index < 2:
+            continue
+        previous = strokes[index - 2]
+        if stroke["direction"] == "down" and previous["direction"] == "down":
+            if (
+                float(stroke["end_price"]) < float(previous["end_price"])
+                and abs(macd_areas[index]) < abs(macd_areas[index - 2]) * 0.9
+            ):
+                add("1buy", index, "价格创新低但 MACD 面积缩小")
+        elif stroke["direction"] == "up" and previous["direction"] == "up":
+            if (
+                float(stroke["end_price"]) > float(previous["end_price"])
+                and macd_areas[index] < macd_areas[index - 2] * 0.9
+            ):
+                add("1sell", index, "价格创新高但 MACD 面积缩小")
+
+    for point in [item for item in points if item["type"] == "1buy"]:
+        for index in range(int(point["stroke_index"]) + 2, len(strokes), 2):
+            stroke = strokes[index]
+            if stroke["direction"] != "down":
+                continue
+            if float(stroke["end_price"]) > float(point["price"]):
+                add("2buy", index, f"1 买后回踩不破 {point['price']}")
+                break
+
+    for point in [item for item in points if item["type"] == "1sell"]:
+        for index in range(int(point["stroke_index"]) + 2, len(strokes), 2):
+            stroke = strokes[index]
+            if stroke["direction"] != "up":
+                continue
+            if float(stroke["end_price"]) < float(point["price"]):
+                add("2sell", index, f"1 卖后反抽不破 {point['price']}")
+                break
+
+    for zone in zones:
+        start = int(zone["end_stroke"]) + 1
+        for index in range(start, len(strokes) - 1):
+            stroke = strokes[index]
+            if stroke["direction"] == "up" and float(stroke["end_price"]) > float(zone["zg"]):
+                following = strokes[index + 1]
+                if (
+                    following["direction"] == "down"
+                    and float(following["end_price"]) > float(zone["zg"])
+                ):
+                    add("3buy", index + 1, "离开中枢后回踩不进入 ZG")
+                break
+        for index in range(start, len(strokes) - 1):
+            stroke = strokes[index]
+            if stroke["direction"] == "down" and float(stroke["end_price"]) < float(zone["zd"]):
+                following = strokes[index + 1]
+                if (
+                    following["direction"] == "up"
+                    and float(following["end_price"]) < float(zone["zd"])
+                ):
+                    add("3sell", index + 1, "离开中枢后反抽不进入 ZD")
+                break
+
+    points.sort(key=lambda item: int(item["time"]))
+    return points[:40]
+
+
 def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
     """Compute Chan structures from an OHLC frame indexed by UTC time."""
     if frame.empty:
@@ -254,6 +368,8 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
     fractals = find_fractals(merged)
     strokes = build_strokes(fractals)
     zones = find_zones(strokes)
+    macd_areas = _macd_areas(frame, strokes)
+    points = find_buy_sell_points(strokes, zones, macd_areas)
     used_fractals = {
         (int(stroke["start_time"]), float(stroke["start_price"])) for stroke in strokes
     } | {
@@ -293,20 +409,23 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
         "fractals": fractals,
         "strokes": strokes,
         "zones": zones,
+        "points": points,
         "rules": {
             "name": "程序化缠论 · 老笔",
             "bi_min_span": OLD_BI_MIN_SPAN,
             "bi_rule": "顶底分型交替，至少 5 根合并 K 线（含两端分型）",
             "fractal_rule": "三根合并 K 线严格顶/底",
             "zone_rule": "连续三笔重叠；ZG=三笔高点最小值，ZD=三笔低点最大值",
+            "point_rule": "笔级别近似：1 买卖用 MACD 面积背驰，2 买卖回踩不破，3 买卖离开中枢后回抽不入中枢",
             "segments": False,
-            "buy_sell_points": False,
+            "buy_sell_points": True,
         },
         "warnings": warnings,
         "bars": len(bars),
         "merged_bars": len(merged),
         "stroke_count": len(strokes),
         "zone_count": len(zones),
+        "point_count": len(points),
     }
 
 
