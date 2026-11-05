@@ -52,6 +52,7 @@ npm run dev
 
 - 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec；
 - 新对话采用懒创建：点击「新对话」只清空当前视图，首次发送时才创建 Session；
+- 每个页面有独立路径：`/chat`（打开某个会话为 `/chat/<session_id>`）、`/config`、`/memory`、`/skills`、`/tools`、`/channels`、`/cron`、`/backtest`、`/journal`、`/chan`；刷新或直接打开链接会回到对应页面和会话，浏览器前进/后退可用，未知路径回到聊天页；选中的 Agent 会记在浏览器本地，下次打开沿用；
 - 对话里以“记住：……”开头的内容会写入用户记忆；
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用；按钮位于气泡下方、气泡之外，引用内容显示在输入框上方并可单独取消，发送时以 `> ` 引用块写入消息；失败 Run 可重试；

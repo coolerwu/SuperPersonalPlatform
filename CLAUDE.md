@@ -43,6 +43,7 @@
 - 配置页集中管理 Provider（查看/新增/编辑）、Agent 和运行环境；「运行环境」tab 除只读信息外，可设置会话自动清理的保留天数（默认 30 天，0 关闭），保存到 `app_configs` 单行表，接口为 `GET/PUT /api/settings`。另有独立的「记忆」页面管理 user/agent 记忆。`GET /api/system` 只返回非敏感信息。
 - 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent tab 列出全部 Agent 摘要（Provider/model、启用技能数、自动记忆、状态），点击行即切换这个全局选中的 Agent，侧边栏同步；下方编辑区只编辑当前 Agent，不持有第二套选择状态。新增 per-agent 配置时必须沿用这一规则。侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）：Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组，Agent 工作台放 Agent 选择器、新对话与会话列表，「Agent 能力」组提供「技能」「工具」「渠道」「定时」「记忆」页面，「平台」组放配置与退出；功能工作区放不绑定 Agent 的手动工具（当前有回测、交易记录、缠论图），不显示 Agent 选择器与会话。技能启停按当前 Agent 立即保存；工具页只展示平台工具、文件工具与技能工具的注册/声明情况，不单独启停工具；渠道页按当前 Agent 管理微信渠道与扫码登录；定时页按当前 Agent 管理定时任务与会话入口。
 - Chat 内容列统一宽度：header、消息流、composer 都以 `--chat-lane` 对齐。
+- 前端路由：用 History API 自建轻量路由（`apps/web/src/routes.ts`，不引入路由库）。页面路径：`/chat`（可选 `/chat/<session_id>`）、`/config`、`/memory`、`/skills`、`/tools`、`/channels`、`/cron`、`/backtest`、`/journal`、`/chan`；侧栏和页面内切换 push 历史，刷新或直达按路径恢复页面与会话，浏览器前进/后退同步，未知路径回到聊天页（随后落到当前 Agent 的第一个会话）。选中的 Agent 记在 `localStorage`（`acc.selectedAgent`），会话只在当前 Agent 的会话列表内恢复。FastAPI 的 SPA fallback 把非 `/api` 路径回 `index.html`。
 
 ## 运行约定
 

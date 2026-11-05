@@ -26,6 +26,7 @@ import {
 } from "./runActivity";
 import { MEMORY_COMMAND, isSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
+import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
 import { ChatPanel } from "./components/ChatPanel";
 import { BacktestPage } from "./components/BacktestPage";
 import { ChanPage } from "./components/ChanPage";
@@ -123,6 +124,24 @@ const ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时�
 const RETRY_ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时进度。";
 const QUEUED_NOTICE = "已排队，前面的任务完成后会自动执行";
 const NEW_SESSION_KEY = "__new__";
+const AGENT_STORAGE_KEY = "acc.selectedAgent";
+
+function readStoredAgent(): string {
+  try {
+    return window.localStorage.getItem(AGENT_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function storeAgent(id: string): void {
+  if (!id) return;
+  try {
+    window.localStorage.setItem(AGENT_STORAGE_KEY, id);
+  } catch {
+    // Private mode or full storage: routing still works without the hint.
+  }
+}
 
 /** Drafts and attachments belong to one conversation (or one pending new one). */
 function sessionKey(agentId: string, sessionId: string): string {
@@ -143,6 +162,7 @@ function conflictRunId(error: unknown): string | null {
 }
 
 export default function App() {
+  const [initialRoute] = useState(() => parsePath(window.location.pathname));
   const [auth, setAuth] = useState<boolean | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -150,7 +170,7 @@ export default function App() {
   const [skillsErrors, setSkillsErrors] = useState<string[]>([]);
   const [agentId, setAgentId] = useState("");
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [sessionId, setSessionId] = useState("");
+  const [sessionId, setSessionId] = useState(initialRoute?.sessionId ?? "");
   const [screenshots, setScreenshots] = useState<ScreenshotInfo[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
@@ -169,18 +189,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [view, setView] = useState<
-    | "chat"
-    | "settings"
-    | "memory"
-    | "skills"
-    | "tools"
-    | "channels"
-    | "cron"
-    | "backtest"
-    | "journal"
-    | "chan"
-  >("chat");
+  const [view, setView] = useState<View>(initialRoute?.view ?? "chat");
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
@@ -210,6 +219,8 @@ export default function App() {
   const sessionCountsRef = useRef<Record<string, number>>({});
   const runSessionsRef = useRef<Record<string, string>>({});
   const commandPendingRef = useRef(false);
+  // A /chat/<id> deep link is applied once the agent's sessions load.
+  const restoreSessionRef = useRef(initialRoute?.sessionId ?? "");
 
   const activeKey = sessionKey(agentId, sessionId);
   const visibleCommandReply =
@@ -384,28 +395,58 @@ export default function App() {
     };
   }, []);
 
-  function openView(
-    next:
-      | "chat"
-      | "settings"
-      | "memory"
-      | "skills"
-      | "tools"
-      | "channels"
-      | "cron"
-      | "backtest"
-      | "journal"
-      | "chan",
-  ) {
-    setView(next);
-    setSidebarOpen(false);
+  function pushPath(path: string) {
+    if (window.location.pathname !== path) {
+      window.history.pushState(null, "", path);
+    }
   }
+
+  function navigate(next: View, nextSessionId: string = sessionIdRef.current) {
+    setView(next);
+    setSessionId(nextSessionId);
+    setSidebarOpen(false);
+    pushPath(pathForView(next, nextSessionId));
+  }
+
+  function openView(next: View) {
+    navigate(next);
+  }
+
+  // Keep the address bar in step with derived state (session auto-selection,
+  // deep-link fallback) without stacking a history entry for every change.
+  useEffect(() => {
+    if (!auth) return;
+    const path = pathForView(view, sessionId);
+    if (window.location.pathname !== path) {
+      window.history.replaceState(null, "", path);
+    }
+  }, [auth, view, sessionId]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const route = parsePath(window.location.pathname);
+      if (!route) {
+        window.history.replaceState(null, "", DEFAULT_PATH);
+        setView("chat");
+        setSessionId("");
+        return;
+      }
+      setSidebarOpen(false);
+      if (route.view === "chat") {
+        setSearchFocus(null);
+        setCommandReply(null);
+        setSessionId(route.sessionId);
+      }
+      setView(route.view);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   function openCronSession(id: string) {
     setSearchFocus(null);
     setCommandReply(null);
-    setSessionId(id);
-    openView("chat");
+    navigate("chat", id);
     void refreshSessions();
   }
 
@@ -436,8 +477,7 @@ export default function App() {
         ...current,
       ];
     });
-    setSessionId(hit.session_id);
-    openView("chat");
+    navigate("chat", hit.session_id);
     if (hit.session_id === sessionIdRef.current) {
       void loadMessages(hit.session_id, false, hit.message_id).catch((exc) => {
         setSessionError(describeApiError(exc), hit.session_id);
@@ -456,6 +496,7 @@ export default function App() {
 
   useEffect(() => {
     agentIdRef.current = agentId;
+    storeAgent(agentId);
     // Drop the previous agent's session before its view can appear under the
     // new agent. Live runs of other sessions keep streaming in the background.
     sessionIdRef.current = "";
@@ -569,7 +610,12 @@ export default function App() {
       setNewAgentOpen(true);
       return;
     }
-    setAgentId((current) => (current && agentList.some((item) => item.id === current) ? current : agentList[0].id));
+    const storedAgent = readStoredAgent();
+    setAgentId((current) => {
+      if (current && agentList.some((item) => item.id === current)) return current;
+      if (storedAgent && agentList.some((item) => item.id === storedAgent)) return storedAgent;
+      return agentList[0].id;
+    });
   }
 
   async function loadSessions(forAgent: string) {
@@ -579,6 +625,7 @@ export default function App() {
     rememberSessionCounts(list);
     setSessions(list);
     if (list.length === 0) {
+      restoreSessionRef.current = "";
       sessionIdRef.current = "";
       setSessionId("");
       setMessages([]);
@@ -593,8 +640,14 @@ export default function App() {
       return;
     }
     if (!list.some((item) => item.id === sessionIdRef.current)) {
-      sessionIdRef.current = list[0].id;
-      setSessionId(list[0].id);
+      const restore = restoreSessionRef.current;
+      restoreSessionRef.current = "";
+      const target =
+        restore && list.some((item) => item.id === restore) ? restore : list[0].id;
+      sessionIdRef.current = target;
+      setSessionId(target);
+    } else {
+      restoreSessionRef.current = "";
     }
   }
 
@@ -1383,6 +1436,7 @@ export default function App() {
     setMessages([]);
     setMessagesLoading(false);
     setError("");
+    pushPath(DEFAULT_PATH);
   }
 
   async function deleteSession(id: string) {
@@ -1580,8 +1634,7 @@ export default function App() {
         onSelectSession={(id) => {
           setSearchFocus(null);
           setCommandReply(null);
-          setSessionId(id);
-          openView("chat");
+          navigate("chat", id);
         }}
         onSelectSearchHit={openSearchHit}
         onNewSession={newSession}
@@ -1614,7 +1667,7 @@ export default function App() {
         <MemoryPage
           agents={agents}
           agentId={agentId}
-          onClose={() => setView("chat")}
+          onClose={() => openView("chat")}
         />
       ) : view === "skills" ? (
         <SkillsPage
@@ -1623,25 +1676,25 @@ export default function App() {
           skillsErrors={skillsErrors}
           onRefresh={refreshSkills}
           onSaveEnabled={saveEnabledSkills}
-          onClose={() => setView("chat")}
+          onClose={() => openView("chat")}
         />
       ) : view === "tools" ? (
-        <ToolsPage onClose={() => setView("chat")} />
+        <ToolsPage onClose={() => openView("chat")} />
       ) : view === "channels" ? (
-        <ChannelsPage agent={agent} agentId={agentId} onClose={() => setView("chat")} />
+        <ChannelsPage agent={agent} agentId={agentId} onClose={() => openView("chat")} />
       ) : view === "cron" ? (
         <CronPage
           agent={agent}
           agentId={agentId}
           onOpenSession={openCronSession}
-          onClose={() => setView("chat")}
+          onClose={() => openView("chat")}
         />
       ) : view === "backtest" ? (
-        <BacktestPage onClose={() => setView("chat")} />
+        <BacktestPage onClose={() => openView("chat")} />
       ) : view === "journal" ? (
-        <TradeJournalPage onClose={() => setView("chat")} />
+        <TradeJournalPage onClose={() => openView("chat")} />
       ) : view === "chan" ? (
-        <ChanPage onClose={() => setView("chat")} />
+        <ChanPage onClose={() => openView("chat")} />
       ) : view === "settings" ? (
         <SettingsPage
           agents={agents}
@@ -1653,7 +1706,7 @@ export default function App() {
           onSelectAgent={setAgentId}
           onNewAgent={() => setNewAgentOpen(true)}
           onDeleteAgent={deleteAgentPermanently}
-          onClose={() => setView("chat")}
+          onClose={() => openView("chat")}
         />
       ) : (
         <main className="chat-column">

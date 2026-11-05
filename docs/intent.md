@@ -2375,3 +2375,42 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 - 实时 WebSocket、Tick 级刷新；
 - 自动交易或把缠论结构接入回测信号；
 - A 股数据源。
+
+### F64 前端页面路由
+
+- 状态：已完成
+- 日期：2026-11-05
+- 来源：用户反馈页面没有路径，刷新后总是回到聊天页，之前打开的页面丢失
+
+#### 背景与目标
+
+前端页面切换只存在内存 state（chat / settings / memory / skills / tools / channels / cron / backtest / journal / chan），刷新、直达链接和浏览器前进后退都无法保持，选中的 Agent 也会回到列表第一个。目标：给每个页面可读路径，刷新和直达能恢复页面与会话，且不引入路由库。
+
+#### 功能点
+
+1. 新增 `apps/web/src/routes.ts`：`View` ↔ 路径映射、`pathForView`、`parsePath`；路径为 `/chat`、`/config`、`/memory`、`/skills`、`/tools`、`/channels`、`/cron`、`/backtest`、`/journal`。
+2. 聊天页把当前会话写进路径 `/chat/<session_id>`；「新对话」为 `/chat`。
+3. 用户导航（侧栏切页、返回对话、选中会话、定时页打开会话、新对话）pushState；刷新、会话自动切换、编辑 URL 后的回退等派生状态用 replaceState，不堆积历史。
+4. 监听 `popstate`：浏览器前进/后退同步页面与会话；未知路径回到聊天页，随后按会话自动选择落到当前 Agent 的第一个会话。
+5. 直达 `/chat/<id>` 时等当前 Agent 的会话列表加载完再选中该会话；不在列表里则回退到第一个会话并同步 URL。
+6. 选中的 Agent 写入 `localStorage`（`acc.selectedAgent`），加载时优先当前值、其次本地记录、最后第一个 Agent。
+7. 不引入新依赖；登录态仍由 cookie 判断，登录页不作为路由，登录后回到原路径。
+
+#### 验收标准
+
+- 在技能、配置等页面刷新，仍停留在该页面，URL 与页面一致。
+- 直接打开 `/skills` 或 `/chat/<session_id>` 能进入对应页面/会话。
+- 浏览器后退/前进在页面与会话之间切换正确。
+- 未知路径落到聊天页。
+- 类型检查与前端构建通过。
+
+#### 约束边界
+
+- Agent 不写进 URL；会话只在当前选中的 Agent 会话列表内恢复。
+- 不新增页面、不改变页面内部状态管理；深链只恢复页面与会话，不恢复滚动位置或未发送草稿。
+- 不引入 react-router 等路由依赖。
+
+#### 非目标
+
+- 服务端路由、SEO 与分享链接权限；
+- 登录页路径与未登录跳转策略。
