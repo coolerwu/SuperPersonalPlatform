@@ -530,3 +530,16 @@ class ChanAnalyzeRequest(BaseModel):
     symbol: str = Field(min_length=3, max_length=30)
     granularity: str = Field(default="1h", min_length=2, max_length=10)
     bars: int = Field(default=300, ge=20, le=1000)
+
+
+class ChanBacktestRequest(BaseModel):
+    symbol: str = Field(min_length=3, max_length=30)
+    granularity: str = Field(default="1h", min_length=2, max_length=10)
+    bars: int = Field(default=300, ge=60, le=500)
+    initial_capital: float = Field(default=10_000.0, gt=0, le=1e12)
+    fee_rate: float = Field(default=0.001, ge=0, le=0.1)
+    slippage_rate: float = Field(default=0.0005, ge=0, le=0.1)
+    stop_pct: float = Field(default=0.01, gt=0, le=0.2)
+    risk_pct: float = Field(default=0.01, gt=0, le=0.1)
+    r_multiple: float = Field(default=2.0, gt=0, le=50)
+    max_hold_bars: int = Field(default=50, ge=1, le=1000)

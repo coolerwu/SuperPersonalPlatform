@@ -7,6 +7,8 @@ import type {
   BacktestResult,
   BacktestSummary,
   ChanAnalysis,
+  ChanBacktestPayload,
+  ChanBacktestResult,
   Channel,
   ChannelConversation,
   ChannelLogin,
@@ -443,6 +445,12 @@ export const api = {
 
   analyzeChan: (payload: { symbol: string; granularity: string; bars?: number }) =>
     request<ChanAnalysis>("/api/chan/analyze", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  runChanBacktest: (payload: ChanBacktestPayload) =>
+    request<ChanBacktestResult>("/api/chan/backtest", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

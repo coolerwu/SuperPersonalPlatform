@@ -588,3 +588,71 @@ export type ChanAnalysis = {
   rules: ChanRules;
   warnings: string[];
 };
+
+export type ChanBacktestTrade = {
+  signal_type: string;
+  side: "long" | "short" | string;
+  confirm_time: number;
+  entry_time: number;
+  entry_price: number;
+  exit_time: number;
+  exit_price: number;
+  quantity: number;
+  stop_loss: number;
+  take_profit: number;
+  bars_held: number;
+  pnl: number;
+  r_multiple: number | null;
+  reason: string;
+  forced: boolean;
+};
+
+export type ChanBacktestTypeStats = {
+  type: string;
+  trades: number;
+  win_rate: number | null;
+  avg_r: number | null;
+  profit_factor: number | null;
+  total_pnl: number;
+};
+
+export type ChanBacktestResult = {
+  symbol: string;
+  granularity: string;
+  requested_bars: number;
+  bars: number;
+  start_ms: number;
+  end_ms: number;
+  causal_signals: number;
+  initial_capital: number;
+  final_equity: number;
+  total_return: number;
+  annual_return: number | null;
+  max_drawdown: number;
+  win_rate: number | null;
+  avg_r: number | null;
+  profit_factor: number | null;
+  trades: number;
+  total_pnl: number;
+  exposure: number;
+  by_type: ChanBacktestTypeStats[];
+  trades_detail: ChanBacktestTrade[];
+  signals: Record<string, unknown>[];
+  skipped_signals: number;
+  equity: [number, number][];
+  warnings: string[];
+  data_warnings: string[];
+};
+
+export type ChanBacktestPayload = {
+  symbol: string;
+  granularity: string;
+  bars?: number;
+  initial_capital?: number;
+  fee_rate?: number;
+  slippage_rate?: number;
+  stop_pct?: number;
+  risk_pct?: number;
+  r_multiple?: number;
+  max_hold_bars?: number;
+};

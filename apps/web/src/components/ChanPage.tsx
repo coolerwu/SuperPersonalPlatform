@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, errorText } from "../api";
 import type { ChanAnalysis } from "../types";
+import { ChanBacktestPanel } from "./ChanBacktestPanel";
 import { ChanChart } from "./ChanChart";
 
 function formatUtc(ms: number): string {
@@ -29,6 +30,7 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
   const [showStrokes, setShowStrokes] = useState(true);
   const [showZones, setShowZones] = useState(true);
   const [showPoints, setShowPoints] = useState(true);
+  const [mode, setMode] = useState<"chart" | "backtest">("chart");
 
   const analyze = useCallback(async () => {
     setLoading(true);
@@ -85,18 +87,26 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
             <option value="800">800</option>
           </select>
         </label>
-        <div className="chan-toggles chan-toolbar-toggles">
-          <label><input type="checkbox" checked={showMerged} onChange={(e) => setShowMerged(e.target.checked)} /> 合并 K 线</label>
-          <label><input type="checkbox" checked={showFractals} onChange={(e) => setShowFractals(e.target.checked)} /> 分型</label>
-          <label><input type="checkbox" checked={showStrokes} onChange={(e) => setShowStrokes(e.target.checked)} /> 笔</label>
-          <label><input type="checkbox" checked={showZones} onChange={(e) => setShowZones(e.target.checked)} /> 中枢</label>
-          <label><input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} /> 买卖点</label>
+        <div className="chan-mode-tabs">
+          <button className={mode === "chart" ? "active" : ""} onClick={() => setMode("chart")}>结构图</button>
+          <button className={mode === "backtest" ? "active" : ""} onClick={() => setMode("backtest")}>信号回测</button>
         </div>
+        {mode === "chart" && (
+          <div className="chan-toggles chan-toolbar-toggles">
+            <label><input type="checkbox" checked={showMerged} onChange={(e) => setShowMerged(e.target.checked)} /> 合并 K 线</label>
+            <label><input type="checkbox" checked={showFractals} onChange={(e) => setShowFractals(e.target.checked)} /> 分型</label>
+            <label><input type="checkbox" checked={showStrokes} onChange={(e) => setShowStrokes(e.target.checked)} /> 笔</label>
+            <label><input type="checkbox" checked={showZones} onChange={(e) => setShowZones(e.target.checked)} /> 中枢</label>
+            <label><input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} /> 买卖点</label>
+          </div>
+        )}
         <div className="chan-toolbar-actions">
           <button className="ghost-button" onClick={onClose}>返回对话</button>
-          <button className="primary" onClick={() => void analyze()} disabled={loading}>
-            {loading ? "分析中…" : "分析"}
-          </button>
+          {mode === "chart" && (
+            <button className="primary" onClick={() => void analyze()} disabled={loading}>
+              {loading ? "分析中…" : "分析"}
+            </button>
+          )}
         </div>
       </header>
 
@@ -104,7 +114,9 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
         <div className="settings-lane">
           {error && <div className="error-banner">{error}</div>}
 
-          {analysis ? (
+          {mode === "backtest" ? (
+            <ChanBacktestPanel symbol={symbol} granularity={granularity} bars={bars} />
+          ) : analysis ? (
             <>
               <section className="settings-card">
                 <div className="settings-card-head">

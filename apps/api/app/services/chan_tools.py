@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from app.services import chan_analysis
+from app.services import chan_analysis, chan_backtest
 from app.services.skill_tools import (
     SKILL_TOOL_REGISTRY,
     SkillToolContext,
@@ -144,16 +144,68 @@ def _make_analyze_tool(context: SkillToolContext) -> BaseTool:
     )
 
 
+def _make_backtest_tool(context: SkillToolContext) -> BaseTool:
+    del context
+
+    async def chan_backtest_tool(
+        symbol: str,
+        granularity: str = "1h",
+        bars: int = 300,
+        stop_pct: float = 1.0,
+        risk_pct: float = 1.0,
+        r_multiple: float = 2.0,
+        max_hold_bars: int = 50,
+        fee_pct: float = 0.1,
+        slippage_pct: float = 0.05,
+        initial_capital: float = 10_000.0,
+    ) -> str:
+        """用因果前缀回放回测缠论买卖点，并返回交易计划摘要。"""
+        try:
+            result = await chan_backtest.run_backtest(
+                symbol,
+                granularity,
+                bars=bars,
+                initial_capital=initial_capital,
+                fee_rate=fee_pct / 100.0,
+                slippage_rate=slippage_pct / 100.0,
+                stop_pct=stop_pct / 100.0,
+                risk_pct=risk_pct / 100.0,
+                r_multiple=r_multiple,
+                max_hold_bars=max_hold_bars,
+            )
+        except chan_backtest.ChanBacktestError as exc:
+            return f"Error: {exc}"
+        except Exception as exc:  # noqa: BLE001 - tools return errors as text
+            logger.exception("chan backtest tool failed")
+            return f"Error: 缠论回测失败：{exc}"
+        return chan_backtest.format_result(result)
+
+    return StructuredTool.from_function(
+        name="chan_backtest",
+        description=(
+            "回测缠论买卖点的交易计划。因果前缀回放：信号在收盘确认，下一根开盘进场；"
+            "一次只持有一笔，固定止损、R 倍目标、最大持仓 K 线。参数：symbol、"
+            "granularity（15min/1h/4h/1day/1week）、bars（60-500，默认 300）、"
+            "stop_pct（止损百分比，默认 1）、risk_pct（单笔风险百分比，默认 1）、"
+            "r_multiple（默认 2）、max_hold_bars（默认 50）、fee_pct/slippage_pct。"
+            "返回收益、回撤、胜率、平均 R、按信号类型统计和最近交易；"
+            "样本少或没有交易时会明确提示。不是收益承诺。"
+        ),
+        coroutine=chan_backtest_tool,
+    )
+
+
 def register_chan_tools(
     registry: SkillToolRegistry = SKILL_TOOL_REGISTRY,
 ) -> None:
-    if registry.has("chan_analyze"):
-        return
-    registry.register_factory(
-        "chan_analyze",
-        _make_analyze_tool,
-        description="分析 crypto 的缠论结构（程序化老笔近似）",
+    specs = (
+        ("chan_analyze", _make_analyze_tool, "分析 crypto 的缠论结构（程序化老笔近似）"),
+        ("chan_backtest", _make_backtest_tool, "回测缠论买卖点的交易计划"),
     )
+    for name, factory, description in specs:
+        if registry.has(name):
+            continue
+        registry.register_factory(name, factory, description=description)
 
 
 register_chan_tools()

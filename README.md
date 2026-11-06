@@ -128,7 +128,7 @@ metadata:
 - 技能启用：AI 创建的技能会自动加入当前 Agent 的启用列表，同一会话的下一次对话生效；手动创建/放入的技能仍需在这里启用。读取 SKILL.md 后，技能声明的工具才会解锁。
 - 删除：非系统技能可以在技能页删除，删除整个技能目录并从所有 Agent 的启用列表移除；系统技能不能删除。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
-- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`chanlun` 和 `knowledge-base`。`web-fetch` 声明 `include_tools: web_fetch`；`web-search` 声明 `web_search web_fetch`；`web-browser` 声明七个 `browser_*` 工具；`memory-organizer` 声明 `memory_list memory_update memory_delete`；`quant-backtest` 声明 `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status`；`cron-scheduler` 声明 `cron_list cron_targets cron_create cron_update cron_delete cron_run`；`trade-journal` 声明 `trade_journal_record trade_journal_update trade_journal_close trade_journal_query trade_journal_stats`；`chanlun` 声明 `chan_analyze`；`knowledge-base` 不声明工具，作用是把本地知识库镜像挂到 `/knowledge/` 并说明读写约定。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
+- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`chanlun` 和 `knowledge-base`。`web-fetch` 声明 `include_tools: web_fetch`；`web-search` 声明 `web_search web_fetch`；`web-browser` 声明七个 `browser_*` 工具；`memory-organizer` 声明 `memory_list memory_update memory_delete`；`quant-backtest` 声明 `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status`；`cron-scheduler` 声明 `cron_list cron_targets cron_create cron_update cron_delete cron_run`；`trade-journal` 声明 `trade_journal_record trade_journal_update trade_journal_close trade_journal_query trade_journal_stats`；`chanlun` 声明 `chan_analyze chan_backtest`；`knowledge-base` 不声明工具，作用是把本地知识库镜像挂到 `/knowledge/` 并说明读写约定。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
 
@@ -160,6 +160,7 @@ metadata:
 - **`backtest_run` / `backtest_status` / `backtest_result` / `backtest_cancel` / `market_probe` / `market_cache_status`**：加密货币回测工具（`quant-backtest` 技能声明）。`backtest_run` 创建 Bitget 现货单标的回测（可指定 `warmup_bars`，默认 200）并最多等待 90 秒，完成返回指标摘要，未完成返回任务 id；`backtest_status` 查状态/进度；`backtest_result` 返回指标、告警和最近交易；`backtest_cancel` 取消排队或执行中的任务；`market_probe` / `market_cache_status` 检查 Bitget 连接和本地行情缓存。
 - **`cron_list` / `cron_targets` / `cron_create` / `cron_update` / `cron_delete` / `cron_run`**：定时任务工具（`cron-scheduler` 技能声明）。只操作当前 Agent 的任务；`cron_list` 返回任务 id、表达式、时区、启停、下次触发、最近状态、专属会话和推送目标；`cron_targets` 列出当前 Agent 的微信渠道和已有 1:1 联系人会话；`cron_create` 创建任务并生成专属会话，prompt 必须自包含，可同时传 `push_channel_id` / `push_conversation_id`；`cron_update` 修改指定字段，两个推送 id 都传空字符串表示清除；`cron_delete` 删除配置但保留会话；`cron_run` 立即运行一次且不改变原计划。未启用技能或未读取 SKILL.md 时工具不可见。
 - **`chan_analyze`**：缠论分析工具（`chanlun` 技能声明）。参数 `symbol`、`granularity`（`15min/1h/4h/1day/1week`）、`bars`（默认 300，20–1000）；返回数据区间、合并 K 线、笔/中枢/1/2/3 买卖点摘要和 warnings，不返回完整 K 线数组；结构是程序化老笔近似，不是交易建议。
+- **`chan_backtest`**：缠论信号回测/交易计划工具（`chanlun` 技能声明）。因果前缀回放：信号收盘确认、下一根开盘进场；一次一笔，固定止损、R 倍目标、时间止损和单笔风险；参数含 `bars`（60–500）、`stop_pct`、`risk_pct`、`r_multiple`、`max_hold_bars`、`fee_pct`、`slippage_pct`。返回收益、回撤、胜率、平均 R、按 1/2/3 买卖点分组和最近交易；样本少时明确提示。
 - **`trade_journal_record` / `trade_journal_update` / `trade_journal_close` / `trade_journal_query` / `trade_journal_stats`**：交易记录工具（`trade-journal` 技能声明）。`trade_journal_record` 记录一笔 crypto 或 A 股交易（必填 symbol、entry_at、entry_price、thesis，平仓可同时给 exit_at/exit_price/review），`trade_journal_update` 修改已有字段，`trade_journal_close` 平仓并补复盘，`trade_journal_query` 按 id/市场/标的/状态/标签/时间/关键词查询，`trade_journal_stats` 输出胜率、平均收益、平均 R、盈亏比和按市场/标签分组。记录保存在 `data/trade-journal.jsonl`；工具不删除记录，也不接交易所。
 - **`execute`**（`LocalShellBackend`，不在代码注册表）：所有 Agent 始终可用。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。任何 Agent（包括微信入站会话）都能操作这台机器。
 - **`eval`**（`CodeInterpreterMiddleware`，不在代码注册表）：每次 Run 都挂载，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用文件工具。PTC 只开放文件工具，不开放 `execute`；`subagents=True`，可在 REPL 里用 `task(...)` 调度子 Agent（每次独立会话，不走父级审批）。general-purpose 子 Agent 不继承 `eval`，但可以使用 `execute`。
@@ -265,6 +266,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 - 接口：`POST /api/chan/analyze`，入参 `symbol/granularity/bars`，返回 `candles/merged/fractals/strokes/zones/points/rules/warnings`；不建新表、不落库。
 - 页面：交易 → 缠论图；顶部工具栏直接显示参数和显示项；可切换周期、K 线根数和显示项；中枢用半透明色块呈现，买卖点标为 1买/2买/3买、1卖/2卖/3卖。
 - Agent 使用：在「技能」页为当前 Agent 启用 `chanlun`，读取 SKILL.md 后即可说“用缠论看一下 BTCUSDT 1h 最近 300 根，1 买/2 买在哪里”。Agent 会调用 `chan_analyze` 读取同一套结构摘要；它不会重画结构，买卖点只是笔级别近似，不是交易建议。
+- 信号回测：缠论图页的「信号回测」tab 用因果前缀回放，信号收盘确认、下一根开盘进场；可设止损、单笔风险、R 倍目标、最大持仓和费用，输出收益、回撤、胜率、平均 R、按信号类型统计和交易明细。页面和 Agent 的 `chan_backtest` 共用同一套逻辑；样本少或没有交易时会明确提示。
 - 实时性：Bitget REST 按需拉取，单用户、单标的、单周期刷新压力可以忽略；15min/1h/4h/1day/1w 不需要秒级刷新。需要 Tick 级推送时再做 WebSocket。
 
 ## 数据存储

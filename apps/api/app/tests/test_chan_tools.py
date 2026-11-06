@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services import chan_analysis, chan_tools  # noqa: F401 - registers the tool
+from app.services import chan_analysis, chan_backtest, chan_tools  # noqa: F401 - registers the tools
 from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolContext
 from app.services.skills import DEFAULT_SKILLS, scan_skills, seed_default_skills
 
@@ -90,5 +90,39 @@ def test_chanlun_skill_declares_tool(tmp_path) -> None:
     skills = {skill.name: skill for skill in scan_skills(tmp_path).skills}
     assert "chanlun" in DEFAULT_SKILLS
     assert "chanlun" in skills
-    assert set(skills["chanlun"].include_tools) == {"chan_analyze"}
+    assert set(skills["chanlun"].include_tools) == {"chan_analyze", "chan_backtest"}
     assert SKILL_TOOL_REGISTRY.has("chan_analyze")
+    assert SKILL_TOOL_REGISTRY.has("chan_backtest")
+
+
+async def test_chan_backtest_tool(monkeypatch) -> None:
+    async def fake_run(symbol: str, granularity: str, **kwargs) -> dict:
+        assert symbol == "BTCUSDT"
+        assert kwargs["bars"] == 300
+        return {
+            "symbol": symbol,
+            "granularity": granularity,
+            "start_ms": 1_792_800_000_000,
+            "end_ms": 1_793_880_000_000,
+            "bars": 300,
+            "causal_signals": 4,
+            "trades": 2,
+            "win_rate": 0.5,
+            "avg_r": 0.4,
+            "profit_factor": 1.2,
+            "total_return": 0.03,
+            "max_drawdown": -0.01,
+            "total_pnl": 300,
+            "initial_capital": 10000,
+            "by_type": [{"type": "1buy", "trades": 2, "win_rate": 0.5, "avg_r": 0.4, "total_pnl": 300}],
+            "trades_detail": [],
+            "warnings": ["样本少于 20 笔"],
+        }
+
+    monkeypatch.setattr(chan_backtest, "run_backtest", fake_run)
+    context = SkillToolContext(api_key="", base_url="")
+    tool = SKILL_TOOL_REGISTRY.resolve_names(["chan_backtest"], context)[0]
+    output = await tool.ainvoke({"symbol": "BTCUSDT", "bars": 300})
+    assert "缠论信号回测" in output
+    assert "1buy" in output
+    assert "样本少于 20 笔" in output
