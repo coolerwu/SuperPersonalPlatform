@@ -57,6 +57,16 @@ function formatMoney(value: number | null | undefined): string {
   })}`;
 }
 
+function formatRatio(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return `${(value * 100).toFixed(2)}%`;
+}
+
+function formatAmount(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
 function formatPrice(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
   return value.toLocaleString("en-US", {
@@ -188,12 +198,12 @@ export function ChanBacktestPanel({
             <div className="metric-grid">
               <div><span>总收益</span><strong className={result.total_return >= 0 ? "tone-good" : "tone-bad"}>{formatPct(result.total_return)}</strong></div>
               <div><span>最大回撤</span><strong className="tone-bad">{formatPct(result.max_drawdown)}</strong></div>
-              <div><span>胜率</span><strong>{result.win_rate === null ? "—" : formatPct(result.win_rate)}</strong></div>
+              <div><span>胜率</span><strong>{result.win_rate === null ? "—" : formatRatio(result.win_rate)}</strong></div>
               <div><span>平均 R</span><strong>{formatNum(result.avg_r)}</strong></div>
               <div><span>盈亏比</span><strong>{result.profit_factor === null ? "—" : result.profit_factor.toFixed(2)}</strong></div>
               <div><span>累计盈亏</span><strong className={result.total_pnl >= 0 ? "tone-good" : "tone-bad"}>{formatMoney(result.total_pnl)}</strong></div>
-              <div><span>暴露</span><strong>{formatPct(result.exposure)}</strong></div>
-              <div><span>最终权益</span><strong>{formatMoney(result.final_equity)}</strong></div>
+              <div><span>暴露</span><strong>{formatRatio(result.exposure)}</strong></div>
+              <div><span>最终权益</span><strong>{formatAmount(result.final_equity)}</strong></div>
             </div>
 
             <EquityChart points={result.equity} height={240} />
@@ -207,7 +217,7 @@ export function ChanBacktestPanel({
                       <tr key={group.type}>
                         <td>{TYPE_LABELS[group.type] ?? group.type}</td>
                         <td>{group.trades}</td>
-                        <td>{group.win_rate === null ? "—" : formatPct(group.win_rate)}</td>
+                        <td>{group.win_rate === null ? "—" : formatRatio(group.win_rate)}</td>
                         <td>{formatNum(group.avg_r)}</td>
                         <td>{group.profit_factor === null ? "—" : group.profit_factor.toFixed(2)}</td>
                         <td className={group.total_pnl >= 0 ? "tone-good" : "tone-bad"}>{formatMoney(group.total_pnl)}</td>
