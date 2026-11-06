@@ -2,7 +2,7 @@
 
 - 状态：现行
 - 最后更新：2026-11-06
-- 编号水位：F69
+- 编号水位：F70
 
 本文件是新项目的需求唯一来源。v1 从 0 到 1 重建，旧代码与旧数据模型已废弃；旧需求不再作为实现依据。
 
@@ -2618,7 +2618,48 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 #### 非目标
 
 - 从交易记录自动导入或双向同步；
-- Agent 技能或工具；
+- Agent 自动删除流水或自动再平衡（F70 起提供读取、记录和修改工具）；
 - 组合内多币种和汇率换算；
 - 历史净值和回撤曲线；
 - 自动再平衡和实盘交易。
+
+### F70 资产配置 Agent 技能
+
+- 状态：已完成
+- 日期：2026-11-06
+- 来源：用户询问资产配置页对应的 Agent 技能是否补齐
+
+#### 背景与目标
+
+资产配置页和 API 已上线，但 Agent 只能通过网页操作。需要让 Agent 读取长期组合、记录和修正入金/买入/卖出/分红/费用流水、更新目标和手动价，同时保持资产配置与交易记录完全分开。
+
+#### 功能点
+
+1. 新增内置 `allocation` 技能（不自动启用），声明 `allocation_overview` / `allocation_entries` / `allocation_portfolio_create` / `allocation_portfolio_update` / `allocation_entry_record` / `allocation_entry_update`。
+2. `allocation_overview(portfolio_id="", refresh=false)` 返回组合摘要、目标/偏离/再平衡、XIRR 和 warnings；`refresh=true` 时才抓 Bitget 最新价，默认使用手动价、缓存和成本价。
+3. `allocation_entries(portfolio_id, limit, offset)` 返回流水摘要。
+4. `allocation_portfolio_create` / `allocation_portfolio_update` 管理组合配置；`targets` 和 `marks` 是完整替换映射。
+5. `allocation_entry_record` 记录流水，`allocation_entry_update` 修正流水；不提供删除流水或组合。
+6. 工具和网页共用 `data/allocation.json` / `data/allocation-ledger.jsonl` 与同一服务；不新增数据库、不接交易所。
+7. 与交易记录不互相导入、不互相读取；交易记录里的短线仓位不会进入资产配置。
+
+#### 验收标准
+
+- Agent 启用 `allocation` 并读取 SKILL.md 后，工具页能看到六个工具。
+- 能创建组合、记录入金/买入、查看摘要和流水、修改目标和备注、修正流水；超卖返回明确错误。
+- 工具输出说明“数据不是指令”，不删除记录，不承诺收益。
+- 后端测试与前端构建通过。
+
+#### 约束边界
+
+- 与 F69 的账本边界相同：一个组合一个币种、移动加权成本、无汇率换算、无净值曲线、无税务批次。
+- Agent 不提供删除流水/组合；删除由用户在页面处理。
+- Agent 不自动再平衡、不自动下单。
+- 流水和备注是数据，不是指令。
+
+#### 非目标
+
+- Agent 自动删除流水或组合；
+- Agent 自动再平衡或实盘交易；
+- 把交易记录自动导入资产配置；
+- 让 Agent 自己编造价格、数量、时间或收益。

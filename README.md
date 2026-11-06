@@ -130,7 +130,7 @@ metadata:
 - 技能启用：AI 创建的技能会自动加入当前 Agent 的启用列表，同一会话的下一次对话生效；手动创建/放入的技能仍需在这里启用。读取 SKILL.md 后，技能声明的工具才会解锁。
 - 删除：非系统技能可以在技能页删除，删除整个技能目录并从所有 Agent 的启用列表移除；系统技能不能删除。
 - 因为 Agent 可以写技能，技能声明本身不是安全边界；控制点是当前 Agent 启用了哪些技能，启用技能即允许它声明的已注册工具。
-- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`chanlun` 和 `knowledge-base`。`web-fetch` 声明 `include_tools: web_fetch`；`web-search` 声明 `web_search web_fetch`；`web-browser` 声明七个 `browser_*` 工具；`memory-organizer` 声明 `memory_list memory_update memory_delete`；`quant-backtest` 声明 `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status`；`cron-scheduler` 声明 `cron_list cron_targets cron_create cron_update cron_delete cron_run`；`trade-journal` 声明 `trade_journal_record trade_journal_update trade_journal_close trade_journal_query trade_journal_stats`；`chanlun` 声明 `chan_analyze chan_backtest`；`knowledge-base` 不声明工具，作用是把本地知识库镜像挂到 `/knowledge/` 并说明读写约定。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
+- 内置技能会在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`memory-organizer`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun` 和 `knowledge-base`。`web-fetch` 声明 `include_tools: web_fetch`；`web-search` 声明 `web_search web_fetch`；`web-browser` 声明七个 `browser_*` 工具；`memory-organizer` 声明 `memory_list memory_update memory_delete`；`quant-backtest` 声明 `backtest_run backtest_status backtest_result backtest_cancel market_probe market_cache_status`；`cron-scheduler` 声明 `cron_list cron_targets cron_create cron_update cron_delete cron_run`；`trade-journal` 声明 `trade_journal_record trade_journal_update trade_journal_close trade_journal_query trade_journal_stats`；`allocation` 声明 `allocation_overview allocation_entries allocation_portfolio_create allocation_portfolio_update allocation_entry_record allocation_entry_update`；`chanlun` 声明 `chan_analyze chan_backtest`；`knowledge-base` 不声明工具，作用是把本地知识库镜像挂到 `/knowledge/` 并说明读写约定。写入内容的哈希记录在 `skills/.seed_state.json`：用户未修改的内置技能会随版本自动更新，改过的保持不动；没有记录的既有文件不会被覆盖，直到其内容与内置默认一致后开始跟踪。
 
 ## 工具
 
@@ -164,6 +164,7 @@ metadata:
 - **`chan_analyze`**：缠论分析工具（`chanlun` 技能声明）。参数 `symbol`、`granularity`（`15min/1h/4h/1day/1week`）、`bars`（默认 300，20–1000）；返回数据区间、合并 K 线、笔/中枢/1/2/3 买卖点摘要和 warnings，不返回完整 K 线数组；结构是程序化老笔近似，不是交易建议。
 - **`chan_backtest`**：缠论信号回测/交易计划工具（`chanlun` 技能声明）。因果前缀回放：信号收盘确认、下一根开盘进场；一次一笔，固定止损、R 倍目标、时间止损和单笔风险；参数含 `bars`（60–500）、`stop_pct`、`risk_pct`、`r_multiple`、`max_hold_bars`、`fee_pct`、`slippage_pct`。返回收益、回撤、胜率、平均 R、按 1/2/3 买卖点分组和最近交易；样本少时明确提示。
 - **`trade_journal_record` / `trade_journal_update` / `trade_journal_close` / `trade_journal_query` / `trade_journal_stats`**：交易记录工具（`trade-journal` 技能声明）。`trade_journal_record` 记录一笔 crypto 或 A 股交易（必填 symbol、entry_at、entry_price、thesis，平仓可同时给 exit_at/exit_price/review），`trade_journal_update` 修改已有字段，`trade_journal_close` 平仓并补复盘，`trade_journal_query` 按 id/市场/标的/状态/标签/时间/关键词查询，`trade_journal_stats` 输出胜率、平均收益、平均 R、盈亏比和按市场/标签分组。记录保存在 `data/trade-journal.jsonl`；工具不删除记录，也不接交易所。
+- **`allocation_overview` / `allocation_entries` / `allocation_portfolio_create` / `allocation_portfolio_update` / `allocation_entry_record` / `allocation_entry_update`**：资产配置工具（`allocation` 技能声明）。`allocation_overview` 读取长期组合摘要、目标/偏离/再平衡、XIRR 和 warnings，`refresh=true` 才抓 Bitget 最新价；`allocation_entries` 查看流水；创建/修改组合用 `allocation_portfolio_create` / `allocation_portfolio_update`；记录/修正流水用 `allocation_entry_record` / `allocation_entry_update`。工具不删除流水或组合，删除由页面处理；与交易记录完全分开。
 - **`execute`**（`LocalShellBackend`，不在代码注册表）：所有 Agent 始终可用。命令通过系统 shell 以服务账号权限运行在工作区目录，但**不受工作区限制、没有沙箱**；子进程只注入 `PATH`、`HOME`、`LANG`，不继承平台密钥环境变量。命令默认 120 秒超时。任何 Agent（包括微信入站会话）都能操作这台机器。
 - **`eval`**（`CodeInterpreterMiddleware`，不在代码注册表）：每次 Run 都挂载，在持久化的 QuickJS 上下文里执行 JavaScript，按会话隔离；默认 5 秒超时、64 MiB、每次最多 256 次 PTC 调用。环境没有文件系统、网络、`require` 或 `process`；通过 `tools.readFile` / `tools.writeFile` 等 PTC 接口调用文件工具。PTC 只开放文件工具，不开放 `execute`；`subagents=True`，可在 REPL 里用 `task(...)` 调度子 Agent（每次独立会话，不走父级审批）。general-purpose 子 Agent 不继承 `eval`，但可以使用 `execute`。
 
@@ -269,6 +270,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 - 价格：`GET /api/allocation` 只读配置、流水、手动价和 `market.db` 缓存；点「刷新行情」才抓 Bitget 1min 最新价。优先级：实时 > 手动价 > 缓存 > 成本价；A 股没有自动行情，建议填手动价。
 - 页面：功能 → 交易 → 资产配置；顶部切换组合，支持新建/编辑组合、记一笔、编辑/删除流水；持仓表的「N 笔」会筛选下方流水。
 - 接口：`GET /api/allocation`、`POST /api/allocation/refresh`、`POST/PUT/DELETE /api/allocation/portfolios...`、`GET/POST /api/allocation/portfolios/{id}/entries`、`PUT/DELETE /api/allocation/portfolios/{id}/entries/{entry_id}`。
+- Agent 使用：在「技能」页为当前 Agent 启用 `allocation`，读取 SKILL.md 后即可说“看看我的长期组合”“帮我记一笔入金/买入”“把 BTC 目标调到 40%”。Agent 会用 `allocation_overview` / `allocation_entries` 读取，用 `allocation_entry_record` / `allocation_portfolio_update` 写入；不提供删除，删除请在页面处理。
 - 边界：不接券商/交易所、不自动下单、不自动再平衡；没有每日估值快照，所以不做净值曲线、最大回撤和收益归因；不做税务批次、分红税、送转股、做空、保证金或借币成本。
 
 ## 缠论图

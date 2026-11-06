@@ -41,6 +41,7 @@ from app.services.knowledge_sync import KnowledgeSyncRuntime, seed_knowledge_con
 from app.services.session_service import SessionCleanupRuntime
 from app.services.market_data import market_service
 from app.services.backtest_worker import BacktestWorker, set_active_worker
+from app.services import allocation_tools  # noqa: F401 - registers Agent allocation tools
 from app.services import backtest_tools  # noqa: F401 - registers Agent backtest tools
 from app.services import chan_tools  # noqa: F401 - registers Agent Chan tools
 from app.services import cron_tools  # noqa: F401 - registers Agent cron tools
