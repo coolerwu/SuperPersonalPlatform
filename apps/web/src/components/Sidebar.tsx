@@ -29,6 +29,7 @@ type SidebarProps = {
   onOpenBacktest: () => void;
   onOpenJournal: () => void;
   onOpenChan: () => void;
+  onOpenAllocation: () => void;
   settingsActive: boolean;
   memoryActive: boolean;
   skillsActive: boolean;
@@ -38,6 +39,7 @@ type SidebarProps = {
   backtestActive: boolean;
   journalActive: boolean;
   chanActive: boolean;
+  allocationActive: boolean;
   onLogout: () => void;
 };
 
@@ -408,6 +410,18 @@ export function Sidebar(props: SidebarProps) {
                   </svg>
                 </span>
                 <span>交易记录</span>
+              </button>
+              <button
+                className={`sidebar-action sidebar-standalone ${props.allocationActive ? "active" : ""}`}
+                onClick={props.onOpenAllocation}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 3v9h9" />
+                  </svg>
+                </span>
+                <span>资产配置</span>
               </button>
               <button
                 className={`sidebar-action sidebar-standalone ${props.chanActive ? "active" : ""}`}

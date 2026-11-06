@@ -658,3 +658,144 @@ export type ChanBacktestPayload = {
   r_multiple?: number;
   max_hold_bars?: number;
 };
+
+export type AllocationPriceSource =
+  | "live"
+  | "mark"
+  | "cache"
+  | "cost"
+  | "none"
+  | string;
+
+export type AllocationMark = {
+  price: number;
+  as_of: string | null;
+};
+
+export type AllocationPosition = {
+  symbol: string;
+  market: string;
+  quantity: number;
+  avg_cost: number | null;
+  cost: number;
+  price: number | null;
+  price_source: AllocationPriceSource;
+  price_at: string | null;
+  price_stale: boolean;
+  market_value: number | null;
+  weight_pct: number | null;
+  target_pct: number | null;
+  drift_pp: number | null;
+  rebalance_needed: boolean | null;
+  rebalance_amount: number | null;
+  unrealized_pnl: number | null;
+  unrealized_pct: number | null;
+  realized_pnl: number;
+  dividends: number;
+  fees: number;
+  entry_count: number;
+  last_entry_at: string | null;
+  warnings: string[];
+};
+
+export type AllocationPortfolio = {
+  id: string;
+  name: string;
+  currency: string;
+  note: string;
+  cash: number;
+  total_value: number;
+  holdings_value: number;
+  invested_cost: number;
+  net_contributions: number;
+  unrealized_pnl: number;
+  realized_pnl: number;
+  dividends: number;
+  fees: number;
+  total_return: number;
+  total_return_pct: number | null;
+  xirr_pct: number | null;
+  cash_target_pct: number | null;
+  rebalance_band_pct: number;
+  targets: Record<string, number>;
+  marks: Record<string, AllocationMark>;
+  cash_weight_pct: number | null;
+  cash_drift_pp: number | null;
+  cash_rebalance_needed: boolean | null;
+  cash_rebalance_amount: number | null;
+  target_sum_pct: number | null;
+  unallocated_pct: number | null;
+  entry_count: number;
+  last_entry_at: string | null;
+  positions: AllocationPosition[];
+  warnings: string[];
+  error: string | null;
+};
+
+export type AllocationPortfolioConfig = {
+  id: string;
+  name: string;
+  currency: string;
+  cash_target_pct: number | null;
+  rebalance_band_pct: number;
+  targets: Record<string, number>;
+  marks: Record<string, AllocationMark>;
+  note: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AllocationSnapshot = {
+  generated_at: string;
+  portfolios: AllocationPortfolio[];
+  warnings: string[];
+  price_errors: { symbol: string; error: string }[];
+};
+
+export type AllocationEntry = {
+  id: string;
+  portfolio_id: string;
+  type: string;
+  at: string;
+  amount?: number;
+  symbol?: string;
+  quantity?: number;
+  price?: number;
+  fees?: number;
+  note: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AllocationEntryQuery = {
+  total: number;
+  items: AllocationEntry[];
+  offset: number;
+  limit: number;
+};
+
+export type AllocationPortfolioPayload = {
+  name: string;
+  currency: string;
+  cash_target_pct: number | null;
+  rebalance_band_pct: number;
+  targets: Record<string, number>;
+  marks: Record<string, { price: number }>;
+  note: string;
+};
+
+export type AllocationPortfolioUpdatePayload = Partial<AllocationPortfolioPayload>;
+
+export type AllocationEntryPayload = {
+  type: string;
+  at: string;
+  amount?: number | null;
+  symbol?: string | null;
+  quantity?: number | null;
+  price?: number | null;
+  fees?: number | null;
+  note?: string;
+};
+
+export type AllocationEntryUpdatePayload = Partial<AllocationEntryPayload>;

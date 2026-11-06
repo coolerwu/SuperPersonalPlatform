@@ -341,6 +341,37 @@ async def test_probe_success_and_failure(rate_limit: None) -> None:
         await failing_http.aclose()
 
 
+async def test_fetch_latest_candle(rate_limit: None) -> None:
+    fake = FakeBitget(make_bars(START, 1))
+    service, http = await _service(fake)
+    try:
+        candle = await service.fetch_latest_candle("LATESTUSDT", "1h")
+        assert candle is not None
+        assert candle["open_time_ms"] == START
+        assert candle["close"] == 100.5
+        assert fake.requests[-1]["limit"] == "1"
+    finally:
+        await http.aclose()
+
+
+async def test_fetch_latest_candle_empty_and_error(rate_limit: None) -> None:
+    service, http = await _service(FakeBitget([]))
+    try:
+        assert await service.fetch_latest_candle("EMPTYUSDT", "1h") is None
+    finally:
+        await http.aclose()
+
+    failing_http = httpx.AsyncClient(
+        transport=httpx.MockTransport(FakeBitget([], error="400171").handler)
+    )
+    failing = MarketDataService(BitgetCandleClient(http_client=failing_http))
+    try:
+        with pytest.raises(MarketDataError):
+            await failing.fetch_latest_candle("BADUSDT", "1h")
+    finally:
+        await failing_http.aclose()
+
+
 async def test_parse_candles_sorts_dedupes_and_skips_invalid() -> None:
     rows = [
         ["2000", "2", "3", "1", "2.5", "10", "20"],

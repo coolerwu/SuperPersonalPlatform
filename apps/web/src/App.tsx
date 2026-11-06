@@ -28,6 +28,7 @@ import { MEMORY_COMMAND, isSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
 import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
 import { ChatPanel } from "./components/ChatPanel";
+import { AllocationPage } from "./components/AllocationPage";
 import { BacktestPage } from "./components/BacktestPage";
 import { ChanPage } from "./components/ChanPage";
 import { TradeJournalPage } from "./components/TradeJournalPage";
@@ -263,7 +264,9 @@ export default function App() {
                     ? "交易记录"
                     : view === "chan"
                       ? "缠论图"
-                      : (agent?.name ?? "Agent");
+                      : view === "allocation"
+                        ? "资产配置"
+                        : (agent?.name ?? "Agent");
 
   function setAgentError(message: string, forAgent: string) {
     if (forAgent !== agentIdRef.current) return;
@@ -1622,7 +1625,7 @@ export default function App() {
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        workspace={view === "backtest" || view === "journal" || view === "chan" ? "features" : "agent"}
+        workspace={view === "backtest" || view === "journal" || view === "chan" || view === "allocation" ? "features" : "agent"}
         onWorkspaceChange={(workspace) =>
           openView(workspace === "features" ? "backtest" : "chat")
         }
@@ -1651,6 +1654,7 @@ export default function App() {
         onOpenBacktest={() => openView("backtest")}
         onOpenJournal={() => openView("journal")}
         onOpenChan={() => openView("chan")}
+        onOpenAllocation={() => openView("allocation")}
         settingsActive={view === "settings"}
         memoryActive={view === "memory"}
         skillsActive={view === "skills"}
@@ -1660,6 +1664,7 @@ export default function App() {
         backtestActive={view === "backtest"}
         journalActive={view === "journal"}
         chanActive={view === "chan"}
+        allocationActive={view === "allocation"}
         onLogout={() => void logout()}
       />
 
@@ -1695,6 +1700,8 @@ export default function App() {
         <TradeJournalPage onClose={() => openView("chat")} />
       ) : view === "chan" ? (
         <ChanPage />
+      ) : view === "allocation" ? (
+        <AllocationPage />
       ) : view === "settings" ? (
         <SettingsPage
           agents={agents}

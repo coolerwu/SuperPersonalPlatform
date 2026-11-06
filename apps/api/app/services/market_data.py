@@ -300,6 +300,15 @@ class MarketDataService:
         latency = int((time.monotonic() - started) * 1000)
         return ok, latency, error
 
+    async def fetch_latest_candle(
+        self, symbol: str, granularity: str = "1min"
+    ) -> dict | None:
+        """Return the newest candle for a symbol without touching the cache."""
+        symbol = symbol.strip().upper()
+        validate_granularity(granularity)
+        rows = await self._get_client().fetch_candles(symbol, granularity, limit=1)
+        return rows[-1] if rows else None
+
     async def ensure_data(
         self,
         symbol: str,

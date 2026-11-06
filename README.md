@@ -18,6 +18,8 @@ v1：网页对话助手（Chat + 多 Agent + Subagent + Checkpoint/Runs + 配置
 │   ├── app.db           # SQLite
 │   ├── checkpoints/     # 每个 session 的 LangGraph checkpoint
 │   ├── trade-journal.jsonl  # 交易记录（一行一笔，0600）
+│   ├── allocation.json  # 长期组合配置（目标/现金/手动价，0600）
+│   ├── allocation-ledger.jsonl  # 长期组合流水（一行一笔，0600）
 │   ├── browser_state.json  # 浏览器 cookies/localStorage（0600，可删）
 │   └── knowledge_sync_state.json  # 知识库同步状态（etag / 本地哈希）
 ├── workspaces/          # Agent 真实工作区根目录
@@ -52,7 +54,7 @@ npm run dev
 
 - 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec；
 - 新对话采用懒创建：点击「新对话」只清空当前视图，首次发送时才创建 Session；
-- 每个页面有独立路径：`/chat`（打开某个会话为 `/chat/<session_id>`）、`/config`、`/memory`、`/skills`、`/tools`、`/channels`、`/cron`、`/backtest`、`/journal`、`/chan`；刷新或直接打开链接会回到对应页面和会话，浏览器前进/后退可用，未知路径回到聊天页；选中的 Agent 会记在浏览器本地，下次打开沿用；
+- 每个页面有独立路径：`/chat`（打开某个会话为 `/chat/<session_id>`）、`/config`、`/memory`、`/skills`、`/tools`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；刷新或直接打开链接会回到对应页面和会话，浏览器前进/后退可用，未知路径回到聊天页；选中的 Agent 会记在浏览器本地，下次打开沿用；
 - 对话里以“记住：……”开头的内容会写入用户记忆；
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接和图片；
 - 消息操作：复制、引用；按钮位于气泡下方、气泡之外，引用内容显示在输入框上方并可单独取消，发送时以 `> ` 引用块写入消息；失败 Run 可重试；
@@ -89,7 +91,7 @@ Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `r
 
 ## 技能与工具页面
 
-侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、渠道、记忆四个页面；「平台」组放配置和退出登录。功能工作区放不绑定 Agent 的手动工具（当前有回测、交易记录、缠论图），不显示 Agent 选择器和会话。技能与工具页面的说明如下：
+侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、渠道、记忆四个页面；「平台」组放配置和退出登录。功能工作区放不绑定 Agent 的手动工具（当前有回测、交易记录、资产配置、缠论图），不显示 Agent 选择器和会话。技能与工具页面的说明如下：
 
 - **技能**：列出全局技能库，按「系统技能」和「交互创建」分组，按当前 Agent 勾选/取消启用，立即保存、下一轮 Run 生效；展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 全文并直接编辑保存；非系统技能可删除（会删除技能目录并从所有 Agent 的启用列表移除）。新建技能可以让 Agent 在对话里用 `skill_save` 主动沉淀，也可以按你的要求创建；AI 创建的技能会自动加入当前 Agent 的启用列表。
 - **工具**：展示平台工具（`skill_save`、`session_search`、`session_read`，始终可用）、文件工具（始终可用）和技能工具；技能工具显示是否已在平台注册、由哪些技能声明。启用声明它的技能并在对话中读取 SKILL.md 后解锁，没有单独的工具开关。
@@ -256,6 +258,19 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 - Agent 使用：在「技能」页为当前 Agent 启用 `trade-journal`，让它读取 SKILL.md 后，就可以说“记一笔：11 月 2 日 10:15 买 600519.SH，1450，止损 1418，100 股，理由是日线回踩 20 日线缩量企稳”。平仓后说“1498 出了，复盘一下”，Agent 会用 `trade_journal_close` 补出场和复盘；之后用 `trade_journal_query` / `trade_journal_stats` 按标签、市场、时间复盘。
 - 边界：不接交易所、不自动下单、不计算实时浮盈、不删除记录；A 股对 T+1、数量整数和止损方向做提示，涨跌停、费用和交易日历不在第一版精确计算。
 
+## 资产配置
+
+功能工作区「交易」组提供独立的长期组合账本，不绑定 Agent，也**不读取交易记录**。它记录的是长期资金、持仓、目标比例和再平衡纪律，而不是短线交易的入场、止损和复盘。
+
+- 组合：可建多个命名组合，每个组合一个基础币种（USDT、CNY……）；多币种请建多个组合，平台不做组合内汇率换算。
+- 流水：入金、出金、初始持仓、买入、卖出、分红、费用；一行一笔存在 `data/allocation-ledger.jsonl`。`初始持仓` 不改变现金，用于录入已有仓位；初始现金另记入金。
+- 推导：按时间重放流水，现金、数量、移动加权成本、已实现/未实现盈亏、投入本金、总收益和 XIRR 都由流水算出；卖出超过当时持仓会被拒绝；现金可以为负并提示。
+- 目标：每个组合可设现金目标、标的目标占比和再平衡带宽（默认 5 个百分点）；目标合计不等于 100 只提示。页面显示实际 vs 目标、偏离和再平衡金额建议。
+- 价格：`GET /api/allocation` 只读配置、流水、手动价和 `market.db` 缓存；点「刷新行情」才抓 Bitget 1min 最新价。优先级：实时 > 手动价 > 缓存 > 成本价；A 股没有自动行情，建议填手动价。
+- 页面：功能 → 交易 → 资产配置；顶部切换组合，支持新建/编辑组合、记一笔、编辑/删除流水；持仓表的「N 笔」会筛选下方流水。
+- 接口：`GET /api/allocation`、`POST /api/allocation/refresh`、`POST/PUT/DELETE /api/allocation/portfolios...`、`GET/POST /api/allocation/portfolios/{id}/entries`、`PUT/DELETE /api/allocation/portfolios/{id}/entries/{entry_id}`。
+- 边界：不接券商/交易所、不自动下单、不自动再平衡；没有每日估值快照，所以不做净值曲线、最大回撤和收益归因；不做税务批次、分红税、送转股、做空、保证金或借币成本。
+
 ## 缠论图
 
 功能工作区「交易」组提供只读的缠论结构图，不绑定 Agent，也不产生交易信号。
@@ -289,6 +304,8 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
   - `app_configs`：平台设置（单行），当前保存会话自动清理的保留天数。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles`（按 `symbol + granularity + open_time_ms` 唯一）和 `market_sync_state`（已同步范围与上次错误）。可以独立删除，下次回测会重新抓取。
 - `trade-journal.jsonl`：交易记录，一行一个 JSON 对象，权限 0600；由 `trade-journal` 技能的工具读写，不建数据库表。字段和计算口径见「交易记录」；可以独立备份、复制和手工查看。
+- `allocation.json`：长期资产组合配置，权限 0600；保存组合名称、基础币种、备注、现金目标、再平衡带宽、目标占比和手动价。见「资产配置」；不建数据库表。
+- `allocation-ledger.jsonl`：长期资产组合流水，一行一个 JSON 对象，权限 0600；入金/出金/初始持仓/买入/卖出/分红/费用，按时间重放得到现金、持仓和收益。见「资产配置」；不建数据库表。
 - `browser_state.json`：浏览器 cookies 与 localStorage（Playwright storage_state），权限 0600；用于跨 Run 保持网站登录态，删除后所有站点需要重新登录。没有配置时不会创建。
 - `checkpoints/{session_id}.sqlite`：deepagents/LangGraph 的会话状态，用于继续同一 session 的对话；平台消息以 `messages` 为准。
 - `messages_fts`：`messages.content` 的 FTS5 trigram 索引（external content，触发器同步）；用于 Agent 的 `session_search` / `session_read` 和侧栏搜索，首次创建或索引为空时自动 `rebuild` 回填。FTS 不可用时降级 `LIKE`。
@@ -296,7 +313,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 - `~/.super-personal-platform/skills/`：全局技能库，由用户/运维维护；删除技能不会自动清理 Agent 的启用列表，运行时忽略不存在的技能。
 - `~/.super-personal-platform/knowledge/`：坚果云知识库的本地镜像，由后台同步任务维护；可以独立删除，下次同步会重新下载。`data/knowledge_sync_state.json` 记录远端 etag 与本地哈希，删除后下一轮同步会按「两边都变」的规则重新对账。
 
-备份时停服务后复制 `data/app.db`、`data/checkpoints/` 和 `data/trade-journal.jsonl`；`data/market.db` 是可按需重建的行情缓存，建议一并备份以免重新抓取。`knowledge/` 是坚果云镜像，可不备份；`data/knowledge_sync_state.json` 丢失后下一轮同步会重新对账。删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
+备份时停服务后复制 `data/app.db`、`data/checkpoints/`、`data/trade-journal.jsonl`、`data/allocation.json` 和 `data/allocation-ledger.jsonl`；`data/market.db` 是可按需重建的行情缓存，建议一并备份以免重新抓取。`knowledge/` 是坚果云镜像，可不备份；`data/knowledge_sync_state.json` 丢失后下一轮同步会重新对账。删除 session 会同时删除它的 messages、runs、run_events 和 checkpoint。
 
 ## 配置
 

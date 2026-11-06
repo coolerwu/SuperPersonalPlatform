@@ -167,6 +167,14 @@ class Settings(BaseSettings):
         return self.app_data_dir / "trade-journal.jsonl"
 
     @property
+    def allocation_path(self) -> Path:
+        return self.app_data_dir / "allocation.json"
+
+    @property
+    def allocation_ledger_path(self) -> Path:
+        return self.app_data_dir / "allocation-ledger.jsonl"
+
+    @property
     def cors_origins(self) -> list[str]:
         return [item.strip() for item in self.app_cors_origins.split(",") if item.strip()]
 

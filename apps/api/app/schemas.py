@@ -543,3 +543,49 @@ class ChanBacktestRequest(BaseModel):
     risk_pct: float = Field(default=0.01, gt=0, le=0.1)
     r_multiple: float = Field(default=2.0, gt=0, le=50)
     max_hold_bars: int = Field(default=50, ge=1, le=1000)
+
+
+class AllocationMarkInput(BaseModel):
+    price: float = Field(gt=0)
+
+
+class AllocationPortfolioCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    currency: str = Field(default="USDT", min_length=2, max_length=10)
+    cash_target_pct: float | None = Field(default=None, ge=0, le=100)
+    rebalance_band_pct: float = Field(default=5.0, ge=0, le=50)
+    targets: dict[str, float] = Field(default_factory=dict)
+    marks: dict[str, AllocationMarkInput] = Field(default_factory=dict)
+    note: str = Field(default="", max_length=20_000)
+
+
+class AllocationPortfolioUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=60)
+    currency: str | None = Field(default=None, min_length=2, max_length=10)
+    cash_target_pct: float | None = Field(default=None, ge=0, le=100)
+    rebalance_band_pct: float | None = Field(default=None, ge=0, le=50)
+    targets: dict[str, float] | None = None
+    marks: dict[str, AllocationMarkInput] | None = None
+    note: str | None = Field(default=None, max_length=20_000)
+
+
+class AllocationEntryCreate(BaseModel):
+    type: str = Field(min_length=1, max_length=20)
+    at: str = Field(min_length=1, max_length=64)
+    amount: float | None = Field(default=None, gt=0)
+    symbol: str | None = Field(default=None, max_length=32)
+    quantity: float | None = Field(default=None, gt=0)
+    price: float | None = Field(default=None, gt=0)
+    fees: float | None = Field(default=None, ge=0)
+    note: str = Field(default="", max_length=2_000)
+
+
+class AllocationEntryUpdate(BaseModel):
+    type: str | None = Field(default=None, min_length=1, max_length=20)
+    at: str | None = Field(default=None, min_length=1, max_length=64)
+    amount: float | None = Field(default=None, gt=0)
+    symbol: str | None = Field(default=None, max_length=32)
+    quantity: float | None = Field(default=None, gt=0)
+    price: float | None = Field(default=None, gt=0)
+    fees: float | None = Field(default=None, ge=0)
+    note: str | None = Field(default=None, max_length=2_000)

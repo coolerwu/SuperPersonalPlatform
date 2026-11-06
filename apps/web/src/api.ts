@@ -1,5 +1,13 @@
 import type {
   Agent,
+  AllocationEntry,
+  AllocationEntryPayload,
+  AllocationEntryQuery,
+  AllocationEntryUpdatePayload,
+  AllocationPortfolioConfig,
+  AllocationPortfolioPayload,
+  AllocationPortfolioUpdatePayload,
+  AllocationSnapshot,
   AppSettings,
   Attachment,
   BacktestDetail,
@@ -454,4 +462,74 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  getAllocation: () => request<AllocationSnapshot>("/api/allocation"),
+  createAllocationPortfolio: (payload: AllocationPortfolioPayload) =>
+    request<AllocationPortfolioConfig>("/api/allocation/portfolios", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateAllocationPortfolio: (
+    id: string,
+    payload: AllocationPortfolioUpdatePayload,
+  ) =>
+    request<AllocationPortfolioConfig>(
+      `/api/allocation/portfolios/${encodeURIComponent(id)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    ),
+  deleteAllocationPortfolio: (id: string) =>
+    request<void>(`/api/allocation/portfolios/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  listAllocationEntries: (
+    portfolioId: string,
+    params: { limit?: number; offset?: number } = {},
+  ) => {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        search.set(key, String(value));
+      }
+    });
+    const query = search.toString();
+    return request<AllocationEntryQuery>(
+      `/api/allocation/portfolios/${encodeURIComponent(portfolioId)}/entries${
+        query ? `?${query}` : ""
+      }`,
+    );
+  },
+  createAllocationEntry: (portfolioId: string, payload: AllocationEntryPayload) =>
+    request<AllocationEntry>(
+      `/api/allocation/portfolios/${encodeURIComponent(portfolioId)}/entries`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
+  updateAllocationEntry: (
+    portfolioId: string,
+    entryId: string,
+    payload: AllocationEntryUpdatePayload,
+  ) =>
+    request<AllocationEntry>(
+      `/api/allocation/portfolios/${encodeURIComponent(
+        portfolioId,
+      )}/entries/${encodeURIComponent(entryId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    ),
+  deleteAllocationEntry: (portfolioId: string, entryId: string) =>
+    request<void>(
+      `/api/allocation/portfolios/${encodeURIComponent(
+        portfolioId,
+      )}/entries/${encodeURIComponent(entryId)}`,
+      { method: "DELETE" },
+    ),
+  refreshAllocation: () =>
+    request<AllocationSnapshot>("/api/allocation/refresh", { method: "POST" }),
 };

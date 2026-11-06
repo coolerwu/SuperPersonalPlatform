@@ -17,6 +17,7 @@ from app.market_db import init_market_db
 from app.models import Agent, Provider
 from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.routers.agents import router as agents_router
+from app.routers.allocation import router as allocation_router
 from app.routers.app_settings import router as app_settings_router
 from app.routers.backtests import router as backtests_router
 from app.routers.channels import router as channels_router
@@ -183,6 +184,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(backtests_router)
     app.include_router(chan_router)
     app.include_router(trade_journal_router)
+    app.include_router(allocation_router)
 
     @app.get("/api/health")
     async def health() -> dict[str, bool]:

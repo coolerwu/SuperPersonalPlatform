@@ -8,7 +8,8 @@ export type View =
   | "cron"
   | "backtest"
   | "journal"
-  | "chan";
+  | "chan"
+  | "allocation";
 
 const VIEW_PATHS: Record<View, string> = {
   chat: "/chat",
@@ -21,6 +22,7 @@ const VIEW_PATHS: Record<View, string> = {
   backtest: "/backtest",
   journal: "/journal",
   chan: "/chan",
+  allocation: "/allocation",
 };
 
 export const DEFAULT_PATH = VIEW_PATHS.chat;
