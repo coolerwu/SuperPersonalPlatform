@@ -18,7 +18,14 @@ function formatUtc(ms: number): string {
   })} UTC`;
 }
 
-export function ChanPage({ onClose }: { onClose: () => void }) {
+const POPULAR_SYMBOLS = [
+  "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
+  "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "LTCUSDT", "BCHUSDT",
+  "TRXUSDT", "TONUSDT", "SHIBUSDT", "SUIUSDT", "APTUSDT", "ARBUSDT",
+  "OPUSDT", "NEARUSDT", "ATOMUSDT", "FILUSDT", "INJUSDT", "PEPEUSDT",
+];
+
+export function ChanPage() {
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [granularity, setGranularity] = useState("1h");
   const [bars, setBars] = useState(300);
@@ -62,11 +69,15 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
           <span>交易对</span>
           <input
             className="chan-symbol"
+            list="chan-symbol-options"
             value={symbol}
             onChange={(event) => setSymbol(event.target.value.toUpperCase())}
-            placeholder="BTCUSDT"
+            placeholder="搜索或输入交易对"
             autoComplete="off"
           />
+          <datalist id="chan-symbol-options">
+            {POPULAR_SYMBOLS.map((item) => <option key={item} value={item} />)}
+          </datalist>
         </label>
         <label className="chan-control">
           <span>周期</span>
@@ -100,14 +111,13 @@ export function ChanPage({ onClose }: { onClose: () => void }) {
             <label><input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} /> 买卖点</label>
           </div>
         )}
-        <div className="chan-toolbar-actions">
-          <button className="ghost-button" onClick={onClose}>返回对话</button>
-          {mode === "chart" && (
+        {mode === "chart" && (
+          <div className="chan-toolbar-actions">
             <button className="primary" onClick={() => void analyze()} disabled={loading}>
               {loading ? "分析中…" : "分析"}
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </header>
 
       <div className="settings-scroll">

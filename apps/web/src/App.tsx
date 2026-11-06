@@ -1694,7 +1694,7 @@ export default function App() {
       ) : view === "journal" ? (
         <TradeJournalPage onClose={() => openView("chat")} />
       ) : view === "chan" ? (
-        <ChanPage onClose={() => openView("chat")} />
+        <ChanPage />
       ) : view === "settings" ? (
         <SettingsPage
           agents={agents}
