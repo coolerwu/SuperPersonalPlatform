@@ -198,9 +198,17 @@ def build_strokes(
 
 
 def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Find three-stroke overlapping central zones and extend them."""
+    """Find completed central zones: entry stroke + three overlapping + exit.
+
+    A zone must be entered by the stroke before its first center stroke and
+    left by a stroke outside [zd, zg]; a structure that is still overlapping
+    when the data ends has no exit and is not reported. After a zone the next
+    candidate starts two strokes later, so the leaving stroke becomes the
+    entry of the next zone instead of turning two zones into one continuous
+    block.
+    """
     zones: list[dict[str, Any]] = []
-    index = 0
+    index = 1  # strokes[index - 1] is the entering stroke
     while index + 2 < len(strokes):
         group = strokes[index : index + 3]
         zg = min(float(stroke["high"]) for stroke in group)
@@ -214,17 +222,22 @@ def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if float(following["low"]) > zg or float(following["high"]) < zd:
                 break
             end += 1
+        if end + 1 >= len(strokes):
+            # Still inside the zone when the sample ends: no leaving stroke.
+            break
         zones.append(
             {
                 "start_time": int(strokes[index]["start_time"]),
                 "end_time": int(strokes[end]["end_time"]),
                 "zg": zg,
                 "zd": zd,
+                "entry_stroke": index - 1,
                 "start_stroke": index,
                 "end_stroke": end,
+                "exit_stroke": end + 1,
             }
         )
-        index = end + 1
+        index = end + 2
     return zones
 
 
@@ -381,8 +394,8 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
     warnings: list[str] = []
     if skipped:
         warnings.append(f"{skipped} 根行情为缺口或异常值，已跳过")
-    if len(strokes) < 3:
-        warnings.append("当前样本的笔不足 3 条，暂时没有中枢")
+    if len(strokes) < 5:
+        warnings.append("当前样本的笔不足 5 条，暂时没有完整中枢（进入段 + 三笔 + 离开段）")
     return {
         "candles": [
             {
@@ -416,7 +429,10 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
             "bi_min_span": OLD_BI_MIN_SPAN,
             "bi_rule": "顶底分型交替，至少 5 根合并 K 线（含两端分型）",
             "fractal_rule": "三根合并 K 线严格顶/底",
-            "zone_rule": "连续三笔重叠；ZG=三笔高点最小值，ZD=三笔低点最大值",
+            "zone_rule": (
+                "进入段 + 连续三笔重叠 + 离开段；"
+                "ZG=三笔高点最小值，ZD=三笔低点最大值"
+            ),
             "point_rule": "笔级别近似：1 买卖用 MACD 面积背驰，2 买卖回踩不破，3 买卖离开中枢后回抽不入中枢",
             "segments": False,
             "buy_sell_points": True,

@@ -116,20 +116,72 @@ def test_build_strokes_old_bi_and_replacement() -> None:
     assert close == []
 
 
+def _stroke(start: int, end: int, high: float, low: float) -> dict:
+    return {"start_time": start, "end_time": end, "high": high, "low": low}
+
+
 def test_find_zones_and_extension() -> None:
     strokes = [
-        {"start_time": 1, "end_time": 2, "high": 20, "low": 10},
-        {"start_time": 2, "end_time": 3, "high": 22, "low": 12},
-        {"start_time": 3, "end_time": 4, "high": 21, "low": 11},
-        {"start_time": 4, "end_time": 5, "high": 19, "low": 13},
-        {"start_time": 5, "end_time": 6, "high": 25, "low": 23},
+        _stroke(1, 2, 30, 10),  # entry
+        _stroke(2, 3, 20, 10),
+        _stroke(3, 4, 22, 12),
+        _stroke(4, 5, 21, 11),
+        _stroke(5, 6, 19, 13),  # still overlapping: extends the zone
+        _stroke(6, 7, 25, 23),  # exit above ZG
     ]
     zones = find_zones(strokes)
     assert len(zones) == 1
     assert zones[0]["zg"] == pytest.approx(20)
     assert zones[0]["zd"] == pytest.approx(12)
-    assert zones[0]["start_stroke"] == 0
-    assert zones[0]["end_stroke"] == 3
+    assert zones[0]["entry_stroke"] == 0
+    assert zones[0]["start_stroke"] == 1
+    assert zones[0]["end_stroke"] == 4
+    assert zones[0]["exit_stroke"] == 5
+    assert zones[0]["start_time"] == 2
+    assert zones[0]["end_time"] == 6
+
+
+def test_zones_need_an_entry_stroke() -> None:
+    # The first strokes overlap, but nothing precedes them to enter the zone.
+    strokes = [
+        _stroke(1, 2, 20, 10),
+        _stroke(2, 3, 22, 12),
+        _stroke(3, 4, 21, 11),
+    ]
+    assert find_zones(strokes) == []
+
+
+def test_zones_need_a_leaving_stroke() -> None:
+    # Still inside the zone when the sample ends: the structure is unfinished.
+    strokes = [
+        _stroke(1, 2, 30, 10),
+        _stroke(2, 3, 20, 10),
+        _stroke(3, 4, 22, 12),
+        _stroke(4, 5, 21, 11),
+    ]
+    assert find_zones(strokes) == []
+
+
+def test_adjacent_zones_each_have_their_own_entry() -> None:
+    strokes = [
+        _stroke(1, 2, 30, 10),  # entry of zone 1
+        _stroke(2, 3, 20, 10),
+        _stroke(3, 4, 22, 12),
+        _stroke(4, 5, 21, 11),  # zone 1 ends here
+        _stroke(5, 6, 25, 23),  # leaves zone 1 and enters zone 2
+        _stroke(6, 7, 40, 30),
+        _stroke(7, 8, 42, 32),
+        _stroke(8, 9, 41, 31),  # zone 2 ends here
+        _stroke(9, 10, 50, 45),  # leaves zone 2
+    ]
+    zones = find_zones(strokes)
+    assert len(zones) == 2
+    assert zones[0]["exit_stroke"] == 4
+    assert zones[1]["entry_stroke"] == 4
+    assert zones[1]["start_stroke"] == 5
+    assert zones[1]["start_time"] > zones[0]["end_time"]
+    assert zones[1]["zg"] == pytest.approx(40)
+    assert zones[1]["zd"] == pytest.approx(32)
 
 
 def test_analyze_frame_shape_and_rules() -> None:

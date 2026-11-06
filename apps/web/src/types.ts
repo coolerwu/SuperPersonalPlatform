@@ -545,8 +545,10 @@ export type ChanZone = {
   end_time: number;
   zg: number;
   zd: number;
+  entry_stroke: number;
   start_stroke: number;
   end_stroke: number;
+  exit_stroke: number;
 };
 
 export type ChanPoint = {
