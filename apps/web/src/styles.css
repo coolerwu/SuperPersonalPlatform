@@ -6104,6 +6104,11 @@ body:has(.app-shell.pearl) .select-empty {
   color: var(--ok-ink);
 }
 
+.allocation-source.stock {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
 .allocation-source.mark {
   background: #eef2ff;
   color: #4f46e5;

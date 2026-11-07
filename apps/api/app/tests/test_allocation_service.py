@@ -396,14 +396,52 @@ async def test_fetch_live_prices_maps_bare_ticker(monkeypatch) -> None:
         allocation.market_service, "fetch_latest_candle", fake_fetch
     )
     prices, errors = await allocation.fetch_live_prices(
-        [
-            {"symbol": "ETH", "market": "crypto"},
-            {"symbol": "SPY", "market": "stock"},
-        ]
+        [{"symbol": "ETH", "market": "crypto"}]
     )
     assert calls == [("ETHUSDT", "1min")]
     assert prices["ETH"]["price"] == pytest.approx(2227.0)
     assert errors == []
+
+
+async def test_fetch_live_prices_fetches_stock_quote(monkeypatch) -> None:
+    from app.services.stock_quotes import StockQuote
+
+    async def fake_stock(symbol: str):
+        return StockQuote(
+            symbol=symbol,
+            price=735.29,
+            at="2026-11-06T20:00:00Z",
+            currency="USD",
+            exchange="PCY",
+            instrument_type="ETF",
+        )
+
+    monkeypatch.setattr(allocation, "fetch_stock_quote", fake_stock)
+    prices, errors = await allocation.fetch_live_prices(
+        [{"symbol": "SPY", "market": "stock"}]
+    )
+    assert errors == []
+    assert prices["SPY"]["price"] == pytest.approx(735.29)
+    assert prices["SPY"]["source"] == "stock"
+
+
+async def test_stock_live_price_source() -> None:
+    portfolio = await _portfolio(marks={"SPY": {"price": 500.0}})
+    pid = portfolio["id"]
+    await _entry(pid, "buy", _at(1), symbol="SPY", quantity=1, price=400)
+    snapshot = await _snapshot(
+        pid,
+        live_prices={
+            "SPY": {
+                "price": 735.29,
+                "at": "2026-11-06T20:00:00Z",
+                "source": "stock",
+            }
+        },
+    )
+    position = snapshot["positions"][0]
+    assert position["price_source"] == "stock"
+    assert position["price"] == pytest.approx(735.29)
 
 
 async def test_stock_position_uses_mark_and_stock_market() -> None:

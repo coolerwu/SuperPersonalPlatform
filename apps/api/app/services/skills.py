@@ -353,7 +353,7 @@ metadata:
 
 ## 估值与再平衡
 
-- `allocation_overview(refresh=true)` 会抓 Bitget 1min 最新价，可能较慢或失败；默认用缓存/手动价/成本价。A 股没有自动行情，主要靠手动价；裸加密 ticker（如 `ETH`）会映射为 `ETHUSDT`，纯股票 ticker（如 `SPY`）不送 Bitget，需要手动价。
+- `allocation_overview(refresh=true)` 会抓 Bitget 1min 加密行情和 Yahoo Finance 美股行情，可能较慢或失败；默认用缓存/手动价/成本价。A 股没有自动行情，主要靠手动价；裸加密 ticker（如 `ETH`）映射为 `ETHUSDT`；美股 ticker（如 `SPY`）走 Yahoo，USD 计价，USDT 组合近似 1:1，其他币种不换汇；失败回退手动价/成本。
 - 实际权重 = 市值 / 总资产；偏离 = 实际 - 目标，单位是百分点。
 - 只有 `abs(偏离) > rebalance_band_pct` 才提示再平衡；再平衡金额是建议，不是订单。
 - 不要自动下单、不要承诺收益；先问用户是否真的要根据偏离调整。

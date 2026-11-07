@@ -35,6 +35,7 @@ from app.config import settings
 from app.market_db import MarketSessionLocal
 from app.market_models import MarketCandle
 from app.services.market_data import market_service
+from app.services.stock_quotes import fetch_stock_quote
 
 logger = logging.getLogger(__name__)
 
@@ -1069,64 +1070,84 @@ async def load_cached_prices(symbols: list[str]) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _unique_crypto_symbols(items: list[dict[str, Any]]) -> list[str]:
+def _unique_live_items(items: list[dict[str, Any]]) -> list[dict[str, str]]:
     seen: set[str] = set()
-    symbols: list[str] = []
+    live_items: list[dict[str, str]] = []
     for item in items:
         symbol = str(item.get("symbol") or "").strip().upper()
         if not symbol or symbol in seen:
             continue
-        if infer_market(symbol) != "crypto":
+        market = infer_market(symbol)
+        if market not in ("crypto", "stock"):
             continue
         seen.add(symbol)
-        symbols.append(symbol)
-    return symbols
+        live_items.append({"symbol": symbol, "market": market})
+    return live_items
 
 
 async def fetch_live_prices(
     items: list[dict[str, Any]],
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
-    """Fetch newest Bitget candles for crypto holdings.
+    """Fetch newest Bitget crypto candles and Yahoo US stock quotes.
 
     One failed symbol must not fail the page; errors are returned alongside the
     prices that did succeed.
     """
-    symbols = _unique_crypto_symbols(items)
-    if not symbols:
+    live_items = _unique_live_items(items)
+    if not live_items:
         return {}, []
     prices: dict[str, dict[str, Any]] = {}
     errors: list[dict[str, str]] = []
-    if len(symbols) > MAX_LIVE_SYMBOLS:
-        for symbol in symbols[MAX_LIVE_SYMBOLS:]:
+    if len(live_items) > MAX_LIVE_SYMBOLS:
+        for item in live_items[MAX_LIVE_SYMBOLS:]:
             errors.append(
-                {"symbol": symbol, "error": f"单次最多刷新 {MAX_LIVE_SYMBOLS} 个标的"}
+                {
+                    "symbol": item["symbol"],
+                    "error": f"单次最多刷新 {MAX_LIVE_SYMBOLS} 个标的",
+                }
             )
-        symbols = symbols[:MAX_LIVE_SYMBOLS]
+        live_items = live_items[:MAX_LIVE_SYMBOLS]
     semaphore = asyncio.Semaphore(LIVE_CONCURRENCY)
 
-    async def one(symbol: str) -> None:
+    async def one(item: dict[str, str]) -> None:
+        symbol = item["symbol"]
+        market = item["market"]
         async with semaphore:
             try:
-                candle = await asyncio.wait_for(
-                    market_service.fetch_latest_candle(bitget_pair(symbol), "1min"),
-                    timeout=LIVE_TIMEOUT_SECONDS,
-                )
-                if not candle:
-                    errors.append({"symbol": symbol, "error": "Bitget 返回空数据"})
+                if market == "crypto":
+                    candle = await asyncio.wait_for(
+                        market_service.fetch_latest_candle(
+                            bitget_pair(symbol), "1min"
+                        ),
+                        timeout=LIVE_TIMEOUT_SECONDS,
+                    )
+                    if not candle:
+                        errors.append(
+                            {"symbol": symbol, "error": "Bitget 返回空数据"}
+                        )
+                        return
+                    price = float(candle["close"])
+                    if not math.isfinite(price) or price <= 0:
+                        errors.append(
+                            {"symbol": symbol, "error": "Bitget 返回无效价格"}
+                        )
+                        return
+                    prices[symbol] = {
+                        "price": price,
+                        "at": _iso_from_ms(int(candle["open_time_ms"])),
+                        "source": "live",
+                    }
                     return
-                price = float(candle["close"])
-                if not math.isfinite(price) or price <= 0:
-                    errors.append({"symbol": symbol, "error": "Bitget 返回无效价格"})
-                    return
+                quote = await fetch_stock_quote(symbol)
                 prices[symbol] = {
-                    "price": price,
-                    "at": _iso_from_ms(int(candle["open_time_ms"])),
-                    "source": "live",
+                    "price": quote.price,
+                    "at": quote.at,
+                    "source": "stock",
                 }
             except Exception as exc:  # noqa: BLE001 - per-symbol failure
                 errors.append({"symbol": symbol, "error": str(exc)})
 
-    await asyncio.gather(*(one(symbol) for symbol in symbols))
+    await asyncio.gather(*(one(item) for item in live_items))
     return prices, errors
 
 
@@ -1210,7 +1231,7 @@ def _resolve_price(
     if live and float(live.get("price") or 0) > 0:
         return {
             "price": float(live["price"]),
-            "source": "live",
+            "source": str(live.get("source") or "live"),
             "at": live.get("at"),
             "stale": False,
         }
@@ -1342,6 +1363,7 @@ def build_portfolio_snapshot(
             unrealized = None
             unrealized_pct = None
         position_warnings: list[str] = []
+        market = infer_market(symbol)
         price_stale = bool(resolved["stale"]) and quantity > QUANTITY_EPSILON
         if quantity > QUANTITY_EPSILON and price is None:
             position_warnings.append("缺少价格，无法估值")
@@ -1349,10 +1371,15 @@ def build_portfolio_snapshot(
             position_warnings.append("按成本价估值")
         if price_stale:
             position_warnings.append("价格已过期")
+        if market == "stock" and str(portfolio.get("currency") or "").upper() not in (
+            "USD",
+            "USDT",
+        ):
+            position_warnings.append("美股行情以 USD 计价，未做汇率换算")
         positions.append(
             {
                 "symbol": symbol,
-                "market": infer_market(symbol),
+                "market": market,
                 "quantity": quantity,
                 "avg_cost": average_cost,
                 "cost": cost,
@@ -1543,9 +1570,10 @@ def _live_items(
         for symbol, position in state["positions"].items():
             if position["quantity"] <= QUANTITY_EPSILON:
                 continue
-            if infer_market(symbol) != "crypto":
+            market = infer_market(symbol)
+            if market not in ("crypto", "stock"):
                 continue
-            items[symbol] = {"symbol": symbol, "market": "crypto"}
+            items[symbol] = {"symbol": symbol, "market": market}
     return list(items.values())
 
 

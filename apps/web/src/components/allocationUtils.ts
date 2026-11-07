@@ -115,6 +115,8 @@ export function priceSourceLabel(source: string): string {
   switch (source) {
     case "live":
       return "实时";
+    case "stock":
+      return "行情";
     case "mark":
       return "手动";
     case "cache":

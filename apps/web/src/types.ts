@@ -661,6 +661,7 @@ export type ChanBacktestPayload = {
 
 export type AllocationPriceSource =
   | "live"
+  | "stock"
   | "mark"
   | "cache"
   | "cost"
