@@ -2591,7 +2591,7 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 5. 从流水推导现金、持仓数量、移动加权成本、已实现和未实现盈亏；卖出数量超过当时持仓时拒绝。
 6. 长期指标：投入本金、当前总资产、总收益、总收益率、XIRR。
 7. 目标与实际：实际权重、目标权重、偏离百分点、是否超出再平衡带宽、再平衡金额建议；目标合计不等于 100 只提示，不阻止保存。
-8. 价格：加密货币按需从 Bitget 刷新，美股按需从 Yahoo Finance 刷新，A 股使用手动价；失败时回退本地行情缓存和成本价，并标注价格来源和时间。裸加密 ticker（如 `ETH`）映射为 `ETHUSDT` 再请求，非加密 ticker（如 `SPY`）不送 Bitget；页面顶部「刷新全部账本」一次性拉取所有组合的最新加密和美股行情，A 股、手动价和利息不会自动更新。
+8. 价格：加密货币按需从 Bitget 刷新，美股按需从东方财富刷新（Yahoo 兜底），A 股使用手动价；失败时回退本地行情缓存和成本价，并标注价格来源和时间。裸加密 ticker（如 `ETH`）映射为 `ETHUSDT` 再请求，非加密 ticker（如 `SPY`）不送 Bitget；页面顶部「刷新全部账本」一次性拉取所有组合的最新加密和美股行情，A 股、手动价和利息不会自动更新。
 9. 页面展示组合摘要、实际/目标条形图、持仓与现金、再平衡提示、流水表和口径说明。
 10. 与交易记录完全分开：不自动导入、不互相读取。
 
@@ -2664,7 +2664,7 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 - 把交易记录自动导入资产配置；
 - 让 Agent 自己编造价格、数量、时间或收益。
 
-### F71 美股行情源（Yahoo Finance）
+### F71 美股行情源（东方财富 + Yahoo 兜底）
 
 - 状态：已完成
 - 日期：2026-11-07
@@ -2676,14 +2676,14 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 
 #### 实测（生产机，2026-11-07）
 
-- Yahoo Finance chart v8：经现有代理可访问；SPY 和 AAPL 都返回 `regularMarketPrice`、`regularMarketTime`、`currency`、`exchangeName`；v7 quote 返回 401；直连被拦截。
-- Eastmoney push2（`107.SPY`）直连可用，但不同交易所要猜 `secid`；Stooq 返回 404，Sina 返回 403。
-- 选择 Yahoo chart 作为主源；失败回退手动价/成本。
+- Yahoo Finance chart v8：经现有代理可访问；SPY 和 AAPL 都返回 `regularMarketPrice`、`regularMarketTime`、`currency`、`exchangeName`；v7 quote 返回 401；直连被拦截；服务连续请求出现过 HTTP 429。
+- 东方财富 push2：直连可用，SPY=`107`、AAPL=`105`、BABA=`106`，覆盖 Nasdaq/NYSE/AMEX；价格 = `f43 / 10^f59`。
+- Stooq 返回 404，Sina 返回 403；选择东方财富为主源，Yahoo 兜底，失败再回退手动价/成本。
 
 #### 功能点
 
-1. 新增 `app/services/stock_quotes.py`，请求 Yahoo chart v8，解析 symbol、price、time、currency、exchange 和 instrumentType。
-2. `allocation.fetch_live_prices` 同时刷新 crypto（Bitget）和 stock（Yahoo）；A 股跳过；单标的失败写入 `price_errors`，不阻塞其他标的。
+1. 新增 `app/services/stock_quotes.py`，先请求东方财富 push2（105/106/107），失败再请求 Yahoo chart v8；解析 symbol、price、time、currency、exchange 和 instrumentType。
+2. `allocation.fetch_live_prices` 同时刷新 crypto（Bitget）和 stock（东方财富/Yahoo）；A 股跳过；单标的失败写入 `price_errors`，不阻塞其他标的。
 3. `_live_items` 包含有数量的 stock 持仓；`load_cached_prices` 仍只查 crypto 缓存。
 4. 价格来源新增 `stock`，页面显示「行情」；美股以 USD 计价，USDT 组合近似 1:1，其他币种不换汇并提示。
 5. 「刷新全部账本」一次性刷新所有组合的 crypto 和 stock；A 股、手动价和利息不自动更新。
@@ -2691,16 +2691,17 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 
 #### 验收标准
 
-- SPY 刷新后 `price_source=stock`，价格来自 Yahoo，`price_errors` 为空。
+- SPY 刷新后 `price_source=stock`，价格来自东方财富（或 Yahoo 兜底），`price_errors` 为空。
 - ETH 仍按 `ETHUSDT` 取价；A 股不请求外部行情。
-- Yahoo 429、网络失败或解析失败时显示中文错误并回退，不影响其他标的。
+- 东方财富/Yahoo 429、网络失败或解析失败时显示中文错误并回退，不影响其他标的。
 - 后端测试与前端构建通过。
 
 #### 约束边界
 
-- Yahoo chart 是非官方接口，可能限流或变更；生产机需要可用的 HTTP 代理。
+- 东方财富 push2 和 Yahoo chart 都是非官方接口，可能限流或变更；东方财富直连，Yahoo 需要可用的 HTTP 代理。
+- 东方财富美股 `secid` 用 105/106/107 逐个尝试；不同交易所可能变化。
 - 美股 USD 与组合币种不做汇率换算；USDT 近似 1:1。
-- 只取 `regularMarketPrice`，不做逐笔、盘前盘后或实时 WebSocket。
+- 只取最新价，不做逐笔、盘前盘后或实时 WebSocket。
 
 #### 非目标
 
