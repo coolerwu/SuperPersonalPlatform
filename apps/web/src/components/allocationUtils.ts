@@ -86,8 +86,29 @@ export function inputToIso(value: string): string {
   return Number.isNaN(date.getTime()) ? "" : date.toISOString();
 }
 
-export function marketLabel(symbol: string): string {
-  return /^\d{6}(?:\.(?:SH|SZ|BJ))?$/.test(symbol) ? "A股" : "Crypto";
+const CRYPTO_QUOTES = ["USDT", "USDC", "BTC", "ETH", "BGB"];
+const CRYPTO_BASES = new Set([
+  "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "TRX", "AVAX", "LINK",
+  "TON", "SUI", "ARB", "OP", "PEPE", "SHIB", "LTC", "BCH", "DOT", "MATIC",
+  "POL", "NEAR", "APT", "ATOM", "UNI", "AAVE", "INJ", "TIA", "SEI", "FTM",
+  "ETC", "FIL", "ICP", "HBAR", "STX", "RUNE", "GRT", "SAND", "MANA", "AXS",
+  "WLD", "JUP", "ONDO", "ENA", "TAO", "KAS", "BGB",
+]);
+
+export function marketLabel(symbol: string, market?: string | null): string {
+  if (market === "a_share") return "A股";
+  if (market === "stock") return "美股";
+  if (market === "crypto") return "Crypto";
+  const text = symbol.trim().toUpperCase();
+  if (/^\d{6}(?:\.(?:SH|SZ|BJ))?$/.test(text)) return "A股";
+  if (
+    CRYPTO_QUOTES.some(
+      (quote) => text.endsWith(quote) && text.length > quote.length,
+    )
+  ) {
+    return "Crypto";
+  }
+  return CRYPTO_BASES.has(text) ? "Crypto" : "美股";
 }
 
 export function priceSourceLabel(source: string): string {

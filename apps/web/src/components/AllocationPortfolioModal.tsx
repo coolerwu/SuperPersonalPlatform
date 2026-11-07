@@ -148,6 +148,10 @@ export function AllocationPortfolioModal({
     }
   }
 
+  function marketFor(symbol: string): string | undefined {
+    return portfolio?.positions.find((item) => item.symbol === symbol)?.market;
+  }
+
   async function save() {
     setError("");
     if (!name.trim()) {
@@ -340,7 +344,7 @@ export function AllocationPortfolioModal({
                       </div>
                     </td>
                     <td>
-                      <span className="journal-market">{marketLabel(row.symbol)}</span>
+                      <span className="journal-market">{marketLabel(row.symbol, marketFor(row.symbol))}</span>
                     </td>
                     <td>
                       <input
@@ -366,7 +370,7 @@ export function AllocationPortfolioModal({
                         onChange={(event) =>
                           updateRow(row.symbol, "mark", event.target.value)
                         }
-                        placeholder={marketLabel(row.symbol) === "A股" ? "按成本" : "可选"}
+                        placeholder={marketLabel(row.symbol, marketFor(row.symbol)) === "A股" ? "按成本" : "可选"}
                       />
                     </td>
                     <td>

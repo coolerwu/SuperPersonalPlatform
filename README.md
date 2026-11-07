@@ -267,7 +267,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 - 流水：入金、出金、初始持仓、买入、卖出、分红、费用；一行一笔存在 `data/allocation-ledger.jsonl`。`初始持仓` 不改变现金，用于录入已有仓位；初始现金另记入金。
 - 推导：按时间重放流水，现金、数量、移动加权成本、已实现/未实现盈亏、投入本金、总收益和 XIRR 都由流水算出；卖出超过当时持仓会被拒绝；现金可以为负并提示。
 - 目标：每个组合可设现金目标、标的目标占比和再平衡带宽（默认 5 个百分点）；目标合计不等于 100 只提示。页面显示实际 vs 目标、偏离和再平衡金额建议。
-- 价格：`GET /api/allocation` 只读配置、流水、手动价和 `market.db` 缓存；点「刷新行情」才抓 Bitget 1min 最新价。优先级：实时 > 手动价 > 缓存 > 成本价；A 股没有自动行情，建议填手动价。
+- 价格：`GET /api/allocation` 只读配置、流水、手动价和 `market.db` 缓存；点「刷新全部账本」才抓所有组合的 Bitget 1min 最新价。优先级：实时 > 手动价 > 缓存 > 成本价；裸 ticker（如 `ETH`）会映射为 `ETHUSDT` 再请求，纯股票 ticker（如 `SPY`）不会送 Bitget。A 股、手动价和利息不会自动更新。
 - 页面：功能 → 交易 → 资产配置；顶部切换组合，支持新建/编辑组合、记一笔、编辑/删除流水；持仓表的「N 笔」会筛选下方流水。
 - 接口：`GET /api/allocation`、`POST /api/allocation/refresh`、`POST/PUT/DELETE /api/allocation/portfolios...`、`GET/POST /api/allocation/portfolios/{id}/entries`、`PUT/DELETE /api/allocation/portfolios/{id}/entries/{entry_id}`。
 - Agent 使用：在「技能」页为当前 Agent 启用 `allocation`，读取 SKILL.md 后即可说“看看我的长期组合”“帮我记一笔入金/买入”“把 BTC 目标调到 40%”。Agent 会用 `allocation_overview` / `allocation_entries` 读取，用 `allocation_entry_record` / `allocation_portfolio_update` 写入；不提供删除，删除请在页面处理。

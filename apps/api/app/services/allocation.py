@@ -214,8 +214,38 @@ def normalize_symbol(value: object) -> str:
     return symbol
 
 
+_BITGET_QUOTES = ("USDT", "USDC", "BTC", "ETH", "BGB")
+
+# Bare tickers that are crypto, so "ETH" is quoted as ETHUSDT while a stock
+# ticker like "SPY" is not sent to Bitget at all.
+_CRYPTO_BASES = frozenset(
+    {
+        "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "TRX", "AVAX", "LINK",
+        "TON", "SUI", "ARB", "OP", "PEPE", "SHIB", "LTC", "BCH", "DOT", "MATIC",
+        "POL", "NEAR", "APT", "ATOM", "UNI", "AAVE", "INJ", "TIA", "SEI", "FTM",
+        "ETC", "FIL", "ICP", "HBAR", "STX", "RUNE", "GRT", "SAND", "MANA", "AXS",
+        "WLD", "JUP", "ONDO", "ENA", "TAO", "KAS", "BGB",
+    }
+)
+
+
 def infer_market(symbol: str) -> str:
-    return "a_share" if _A_SHARE_SYMBOL_RE.match(symbol) else "crypto"
+    if _A_SHARE_SYMBOL_RE.match(symbol):
+        return "a_share"
+    text = str(symbol or "").strip().upper()
+    for quote in _BITGET_QUOTES:
+        if text.endswith(quote) and len(text) > len(quote):
+            return "crypto"
+    return "crypto" if text in _CRYPTO_BASES else "stock"
+
+
+def bitget_pair(symbol: str) -> str:
+    """Map a bare crypto ticker (ETH) to a Bitget spot pair (ETHUSDT)."""
+    text = str(symbol or "").strip().upper()
+    for quote in _BITGET_QUOTES:
+        if text.endswith(quote) and len(text) > len(quote):
+            return text
+    return f"{text}USDT"
 
 
 def normalize_currency(value: object) -> str:
@@ -1001,20 +1031,22 @@ def collect_symbols(
 
 
 async def load_cached_prices(symbols: list[str]) -> dict[str, dict[str, Any]]:
-    """Latest close per symbol from market.db, regardless of granularity."""
+    """Latest crypto close per symbol from market.db, regardless of granularity."""
     result: dict[str, dict[str, Any]] = {}
     if not symbols:
         return result
     try:
         async with MarketSessionLocal() as db:
             for symbol in symbols:
+                if infer_market(symbol) != "crypto":
+                    continue
                 row = (
                     await db.execute(
                         select(
                             MarketCandle.open_time_ms,
                             MarketCandle.close,
                         )
-                        .where(MarketCandle.symbol == symbol)
+                        .where(MarketCandle.symbol == bitget_pair(symbol))
                         .order_by(MarketCandle.open_time_ms.desc())
                         .limit(1)
                     )
@@ -1076,7 +1108,7 @@ async def fetch_live_prices(
         async with semaphore:
             try:
                 candle = await asyncio.wait_for(
-                    market_service.fetch_latest_candle(symbol, "1min"),
+                    market_service.fetch_latest_candle(bitget_pair(symbol), "1min"),
                     timeout=LIVE_TIMEOUT_SECONDS,
                 )
                 if not candle:

@@ -185,7 +185,12 @@ export function AllocationPage() {
     try {
       const data = await api.refreshAllocation();
       setSnapshot(data);
-      setNotice("行情已刷新");
+      const failed = data.price_errors?.length ?? 0;
+      setNotice(
+        failed
+          ? `全部账本行情已刷新，${failed} 个标的失败`
+          : "全部账本行情已刷新",
+      );
     } catch (exc) {
       setError(errorText(exc));
     } finally {
@@ -394,8 +399,9 @@ export function AllocationPage() {
             className="ghost-button"
             onClick={() => void refreshPrices()}
             disabled={!portfolio || refreshing}
+            title="一次性拉取所有组合的最新加密行情；A 股和手动价不会自动更新"
           >
-            {refreshing ? "刷新中…" : "刷新行情"}
+            {refreshing ? "刷新中…" : "刷新全部账本"}
           </button>
           <button
             className="ghost-button"
@@ -686,7 +692,7 @@ export function AllocationPage() {
                             <div className="allocation-symbol">
                               {position.symbol}
                               <span className="journal-market">
-                                {marketLabel(position.symbol)}
+                                {marketLabel(position.symbol, position.market)}
                               </span>
                               {position.warnings.length > 0 && (
                                 <span
@@ -973,6 +979,7 @@ export function AllocationPage() {
                   <li>卖出按移动加权成本结转已实现盈亏，不做税务批次。</li>
                   <li>分红单独统计，不冲减成本；费用计入成本或单独扣现金。</li>
                   <li>A 股没有自动行情，按手动价、缓存或成本估值；加密价格刷新失败会回退。</li>
+                  <li>顶部「刷新全部账本」会一次性拉取所有组合的最新加密行情；A 股、手动价和利息不会自动更新。</li>
                   <li>现金可以为负，说明有入金未记录或用了外部资金；XIRR 在样本期不足 30 天时仅供参考。</li>
                 </ul>
               </section>

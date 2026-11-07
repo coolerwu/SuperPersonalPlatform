@@ -373,3 +373,53 @@ async def test_xirr_solution_and_no_solution() -> None:
     assert rate == pytest.approx(10.0, abs=0.5)
     assert allocation.compute_xirr([(start, 1000.0), (end, 1100.0)]) is None
     assert allocation.compute_xirr([]) is None
+
+
+def test_infer_market_and_bitget_pair() -> None:
+    assert allocation.infer_market("ETH") == "crypto"
+    assert allocation.infer_market("ETHUSDT") == "crypto"
+    assert allocation.infer_market("SPY") == "stock"
+    assert allocation.infer_market("600519.SH") == "a_share"
+    assert allocation.bitget_pair("ETH") == "ETHUSDT"
+    assert allocation.bitget_pair("ETHUSDT") == "ETHUSDT"
+    assert allocation.bitget_pair("ETHBTC") == "ETHBTC"
+
+
+async def test_fetch_live_prices_maps_bare_ticker(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def fake_fetch(symbol: str, granularity: str = "1min") -> dict:
+        calls.append((symbol, granularity))
+        return {"open_time_ms": 1735689600000, "close": 2227.0}
+
+    monkeypatch.setattr(
+        allocation.market_service, "fetch_latest_candle", fake_fetch
+    )
+    prices, errors = await allocation.fetch_live_prices(
+        [
+            {"symbol": "ETH", "market": "crypto"},
+            {"symbol": "SPY", "market": "stock"},
+        ]
+    )
+    assert calls == [("ETHUSDT", "1min")]
+    assert prices["ETH"]["price"] == pytest.approx(2227.0)
+    assert errors == []
+
+
+async def test_stock_position_uses_mark_and_stock_market() -> None:
+    portfolio = await _portfolio(marks={"SPY": {"price": 500.0}})
+    pid = portfolio["id"]
+    await _entry(
+        pid,
+        "buy",
+        _at(1),
+        symbol="SPY",
+        quantity=1,
+        price=400,
+    )
+    snapshot = await _snapshot(pid)
+    position = snapshot["positions"][0]
+    assert position["market"] == "stock"
+    assert position["price_source"] == "mark"
+    assert position["price"] == pytest.approx(500.0)
+    assert position["market_value"] == pytest.approx(500.0)
