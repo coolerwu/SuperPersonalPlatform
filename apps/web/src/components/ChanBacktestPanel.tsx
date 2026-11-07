@@ -210,7 +210,7 @@ export function ChanBacktestPanel({
 
             {result.by_type.length > 0 && (
               <div className="backtest-table-wrap">
-                <table className="backtest-table">
+                <table className="backtest-table chan-signal-table">
                   <thead><tr><th>信号</th><th>交易</th><th>胜率</th><th>平均 R</th><th>盈亏比</th><th>累计盈亏</th></tr></thead>
                   <tbody>
                     {result.by_type.map((group) => (
@@ -240,7 +240,7 @@ export function ChanBacktestPanel({
               <div><h2>交易明细</h2><p>按信号确认后的下一根开盘进场；止损/目标先到先算，同一根两根都碰到时按止损。</p></div>
             </div>
             <div className="backtest-table-wrap">
-              <table className="backtest-table">
+              <table className="backtest-table chan-trades-table">
                 <thead><tr><th>信号</th><th>方向</th><th>确认</th><th>入场</th><th>出场</th><th>R</th><th>盈亏</th><th>原因</th></tr></thead>
                 <tbody>
                   {result.trades_detail.length ? result.trades_detail.slice().reverse().map((trade, index) => (

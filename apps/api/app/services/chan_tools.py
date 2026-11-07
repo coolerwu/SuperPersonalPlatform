@@ -20,6 +20,7 @@ MAX_RESULT_CHARS = 12_000
 MAX_STROKES = 8
 MAX_ZONES = 10
 MAX_POINTS = 24
+MAX_DIVERGENCES = 12
 
 POINT_LABELS = {
     "1buy": "1买",
@@ -55,7 +56,8 @@ def _format(result: dict) -> str:
         f"- 区间：{_time(result.get('start_ms'))} → {_time(result.get('end_ms'))} UTC",
         f"- 原始 K 线：{result.get('bars', 0)}；合并 K 线：{result.get('merged_bars', 0)}；"
         f"笔：{result.get('stroke_count', 0)}；中枢：{result.get('zone_count', 0)}；"
-        f"买卖点：{result.get('point_count', 0)}",
+        f"买卖点：{result.get('point_count', 0)}；"
+        f"MACD 背离：{result.get('divergence_count', 0)}",
         f"- 规则：{rules.get('name', '程序化缠论 · 老笔')}；{rules.get('bi_rule', '')}",
         f"- 买卖点口径：{rules.get('point_rule', '')}",
     ]
@@ -94,6 +96,23 @@ def _format(result: dict) -> str:
             lines.append(f"- 还有 {len(points) - MAX_POINTS} 个买卖点未列出")
     else:
         lines.append("\n### 买卖点\n- 当前样本没有触发笔级别买卖点")
+
+    divergences = result.get("divergences") or []
+    if divergences:
+        lines.append("\n### MACD 背离")
+        for item in divergences[-MAX_DIVERGENCES:]:
+            label = "底背离" if item.get("kind") == "bottom" else "顶背离"
+            ratio = item.get("ratio")
+            ratio_text = f"{float(ratio) * 100:.0f}%" if ratio is not None else "—"
+            lines.append(
+                f"- {label}：{_time(item.get('time'))} {_price(item.get('price'))}；"
+                f"MACD 面积 {_price(item.get('area'))} vs 前一同向笔 "
+                f"{_price(item.get('prev_area'))}（{ratio_text}）"
+            )
+        if len(divergences) > MAX_DIVERGENCES:
+            lines.append(f"- 还有 {len(divergences) - MAX_DIVERGENCES} 个背离未列出")
+    else:
+        lines.append("\n### MACD 背离\n- 当前样本没有触发笔级别 MACD 面积背离")
 
     warnings = result.get("warnings") or []
     if warnings:
@@ -136,7 +155,7 @@ def _make_analyze_tool(context: SkillToolContext) -> BaseTool:
         description=(
             "分析 crypto 单周期的程序化缠论结构。symbol 例如 BTCUSDT；"
             "granularity 支持 15min、1h、4h、1day、1week（也接受 15m/1w）；bars 默认 300，范围 20-1000。"
-            "返回数据区间、合并 K 线数、笔、中枢、1/2/3 买卖点和 warnings 的摘要，"
+            "返回数据区间、合并 K 线数、笔、中枢、1/2/3 买卖点、MACD(12,26,9) 面积背离和 warnings 的摘要，"
             "不返回完整 K 线数组。只使用已收盘 K 线；买卖点是笔级别近似，"
             "不是交易建议。用户要求看缠论结构或解释分型/笔/中枢/买卖点时使用。"
         ),

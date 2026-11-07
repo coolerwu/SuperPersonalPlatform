@@ -37,6 +37,8 @@ export function ChanPage() {
   const [showStrokes, setShowStrokes] = useState(true);
   const [showZones, setShowZones] = useState(true);
   const [showPoints, setShowPoints] = useState(true);
+  const [showMacd, setShowMacd] = useState(true);
+  const [showDivergence, setShowDivergence] = useState(true);
   const [mode, setMode] = useState<"chart" | "backtest">("chart");
 
   const analyze = useCallback(async () => {
@@ -109,6 +111,16 @@ export function ChanPage() {
             <label><input type="checkbox" checked={showStrokes} onChange={(e) => setShowStrokes(e.target.checked)} /> 笔</label>
             <label><input type="checkbox" checked={showZones} onChange={(e) => setShowZones(e.target.checked)} /> 中枢</label>
             <label><input type="checkbox" checked={showPoints} onChange={(e) => setShowPoints(e.target.checked)} /> 买卖点</label>
+            <label><input type="checkbox" checked={showMacd} onChange={(e) => setShowMacd(e.target.checked)} /> MACD</label>
+            <label>
+              <input
+                type="checkbox"
+                checked={showMacd && showDivergence}
+                disabled={!showMacd}
+                onChange={(e) => setShowDivergence(e.target.checked)}
+              />{" "}
+              背离
+            </label>
           </div>
         )}
         {mode === "chart" && (
@@ -136,7 +148,8 @@ export function ChanPage() {
                       {formatUtc(analysis.start_ms)} → {formatUtc(analysis.end_ms)} ·{" "}
                       {analysis.bars} 根原始 K 线 · {analysis.merged_bars} 根合并 K 线 ·{" "}
                       {analysis.fractals.length} 个分型 · {analysis.strokes.length} 笔 ·{" "}
-                      {analysis.zones.length} 个中枢 · {analysis.points.length} 个买卖点
+                      {analysis.zones.length} 个中枢 · {analysis.points.length} 个买卖点 ·{" "}
+                      {analysis.divergence_count ?? analysis.divergences?.length ?? 0} 个 MACD 背离
                     </p>
                   </div>
                 </div>
@@ -149,6 +162,10 @@ export function ChanPage() {
                   <span><i className="dot zone" />中枢</span>
                   <span><i className="dot buy" />买点</span>
                   <span><i className="dot sell" />卖点</span>
+                  <span><i className="dot dif" />DIF</span>
+                  <span><i className="dot dea" />DEA</span>
+                  <span><i className="dot hist-up" />MACD 柱</span>
+                  <span><i className="dot divergence" />背离</span>
                 </div>
 
                 <ChanChart
@@ -158,6 +175,8 @@ export function ChanPage() {
                   showStrokes={showStrokes}
                   showZones={showZones}
                   showPoints={showPoints}
+                  showMacd={showMacd}
+                  showDivergence={showDivergence}
                 />
 
                 {analysis.warnings.length > 0 && (
@@ -182,7 +201,8 @@ export function ChanPage() {
                   <div><dt>笔</dt><dd>{analysis.rules.bi_rule}</dd></div>
                   <div><dt>中枢</dt><dd>{analysis.rules.zone_rule}</dd></div>
                   <div><dt>买卖点</dt><dd>{analysis.rules.point_rule}</dd></div>
-                  <div><dt>本版不做</dt><dd>线段、多级别联立；买卖点是笔级别近似，不是唯一标准。</dd></div>
+                  <div><dt>MACD 背离</dt><dd>{analysis.rules.divergence_rule ?? "同向笔比较 MACD 柱面积，价格创新高/低但面积收缩记为顶/底背离。"}</dd></div>
+                  <div><dt>本版不做</dt><dd>线段、多级别联立；买卖点与背离都是笔级别近似，不是唯一标准。</dd></div>
                 </dl>
               </section>
             </>

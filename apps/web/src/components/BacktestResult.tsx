@@ -141,7 +141,7 @@ export function BacktestResultPanel({
           <div className="empty-note">策略没有产生交易。</div>
         ) : (
           <div className="backtest-table-wrap">
-            <table className="backtest-table">
+            <table className="backtest-table backtest-trades-table">
               <thead>
                 <tr>
                   <th>方向</th>

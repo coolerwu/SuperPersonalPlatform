@@ -8,6 +8,7 @@ from app.services.chan_analysis import (
     analyze_frame,
     build_strokes,
     find_buy_sell_points,
+    find_divergences,
     find_fractals,
     find_zones,
     merge_inclusions,
@@ -212,6 +213,15 @@ def test_analyze_frame_shape_and_rules() -> None:
     assert isinstance(result["zones"], list)
     assert isinstance(result["points"], list)
     assert result["rules"]["buy_sell_points"] is True
+    assert result["macd"]["params"] == {"fast": 12, "slow": 26, "signal": 9}
+    assert len(result["macd"]["series"]) == result["bars"]
+    assert all(
+        set(point) == {"time", "dif", "dea", "hist"}
+        for point in result["macd"]["series"]
+    )
+    assert isinstance(result["divergences"], list)
+    assert result["divergence_count"] == len(result["divergences"])
+    assert result["rules"]["divergence_rule"]
 
 
 def test_analyze_frame_rejects_empty() -> None:
@@ -244,6 +254,63 @@ def test_find_buy_sell_points() -> None:
     zone = {"zg": 110, "zd": 100, "start_stroke": 0, "end_stroke": 1}
     points = find_buy_sell_points(zone_strokes, [zone], [0, 0, 0, 0, 0])
     assert any(item["type"] == "3buy" for item in points)
+
+
+def _trend_stroke(direction: str, start_time: int, end_time: int, start_price: float, end_price: float) -> dict:
+    return {
+        "direction": direction,
+        "start_time": start_time,
+        "end_time": end_time,
+        "start_price": start_price,
+        "end_price": end_price,
+        "high": max(start_price, end_price),
+        "low": min(start_price, end_price),
+    }
+
+
+def test_find_divergences_requires_new_extreme_and_shrinking_area() -> None:
+    strokes = [
+        _trend_stroke("down", 0, 1, 120, 100),
+        _trend_stroke("up", 1, 2, 100, 118),
+        _trend_stroke("down", 2, 3, 118, 95),
+        _trend_stroke("up", 3, 4, 95, 120),
+        _trend_stroke("down", 4, 5, 120, 98),
+    ]
+    divergences = find_divergences(strokes, [-20, 10, -5, 12, -3], {3: -1.2, 1: -0.8})
+    assert len(divergences) == 1
+    bottom = divergences[0]
+    assert bottom["kind"] == "bottom"
+    assert bottom["stroke_index"] == 2
+    assert bottom["price"] == pytest.approx(95)
+    assert bottom["ratio"] == pytest.approx(0.25)
+    assert bottom["dif"] == pytest.approx(-1.2)
+    assert bottom["prev_dif"] == pytest.approx(-0.8)
+
+    # No new price extreme, or an even stronger MACD area: no divergence.
+    no_extreme = [
+        _trend_stroke("down", 0, 1, 120, 100),
+        _trend_stroke("up", 1, 2, 100, 118),
+        _trend_stroke("down", 2, 3, 118, 101),
+    ]
+    assert find_divergences(no_extreme, [-20, 10, -5]) == []
+    stronger_area = [
+        _trend_stroke("down", 0, 1, 120, 100),
+        _trend_stroke("up", 1, 2, 100, 118),
+        _trend_stroke("down", 2, 3, 118, 95),
+    ]
+    assert find_divergences(stronger_area, [-20, 10, -25]) == []
+
+
+def test_find_divergences_finds_top_divergence() -> None:
+    strokes = [
+        _trend_stroke("up", 0, 1, 100, 118),
+        _trend_stroke("down", 1, 2, 118, 112),
+        _trend_stroke("up", 2, 3, 112, 125),
+    ]
+    divergences = find_divergences(strokes, [10, -8, 4])
+    assert len(divergences) == 1
+    assert divergences[0]["kind"] == "top"
+    assert divergences[0]["ratio"] == pytest.approx(0.4)
 
 
 def test_chan_supports_15min_and_week() -> None:

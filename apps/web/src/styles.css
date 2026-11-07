@@ -3295,12 +3295,16 @@ textarea {
   }
 
   .settings-header {
-    flex-direction: row;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 16px 14px;
     background: transparent;
     backdrop-filter: none;
+  }
+
+  .settings-header > div:first-child {
+    min-width: 0;
   }
 
   .settings-header .eyebrow {
@@ -3322,6 +3326,16 @@ textarea {
   .settings-header p {
     font-size: 12px;
     line-height: 1.5;
+  }
+
+  .settings-header .settings-card-actions,
+  .settings-header > button {
+    align-self: flex-end;
+  }
+
+  .settings-header .settings-card-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .settings-header .ghost-button {
@@ -5050,6 +5064,7 @@ body:has(.app-shell.pearl) .select-empty {
   .app-shell.pearl {
     padding: 0;
     gap: 0;
+    overflow: clip;
   }
 
   .pearl .mobile-bar {
@@ -5398,6 +5413,117 @@ body:has(.app-shell.pearl) .select-empty {
   .backtest-code-input {
     min-height: 200px;
   }
+
+  .backtest-trades-table {
+    min-width: 0;
+  }
+
+  .backtest-trades-table thead {
+    display: none;
+  }
+
+  .backtest-trades-table,
+  .backtest-trades-table tbody {
+    display: block;
+  }
+
+  .backtest-trades-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .backtest-trades-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "side status"
+      "entry exit"
+      "entryPrice exitPrice"
+      "ret bars";
+    gap: 8px 10px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel-2);
+  }
+
+  .backtest-trades-table td {
+    padding: 0;
+    border: 0;
+    white-space: normal;
+  }
+
+  .backtest-trades-table td:nth-child(1) {
+    grid-area: side;
+  }
+
+  .backtest-trades-table td:nth-child(2) {
+    grid-area: entry;
+  }
+
+  .backtest-trades-table td:nth-child(3) {
+    grid-area: exit;
+  }
+
+  .backtest-trades-table td:nth-child(4) {
+    grid-area: entryPrice;
+  }
+
+  .backtest-trades-table td:nth-child(5) {
+    grid-area: exitPrice;
+  }
+
+  .backtest-trades-table td:nth-child(6) {
+    grid-area: ret;
+  }
+
+  .backtest-trades-table td:nth-child(7) {
+    grid-area: bars;
+  }
+
+  .backtest-trades-table td:nth-child(8) {
+    grid-area: status;
+    justify-self: end;
+  }
+
+  .backtest-trades-table td:nth-child(2)::before,
+  .backtest-trades-table td:nth-child(3)::before,
+  .backtest-trades-table td:nth-child(4)::before,
+  .backtest-trades-table td:nth-child(5)::before,
+  .backtest-trades-table td:nth-child(6)::before,
+  .backtest-trades-table td:nth-child(7)::before {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--faint);
+    font-family: Inter, "PingFang SC", sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  .backtest-trades-table td:nth-child(2)::before {
+    content: "开仓";
+  }
+
+  .backtest-trades-table td:nth-child(3)::before {
+    content: "平仓";
+  }
+
+  .backtest-trades-table td:nth-child(4)::before {
+    content: "开仓价";
+  }
+
+  .backtest-trades-table td:nth-child(5)::before {
+    content: "平仓价";
+  }
+
+  .backtest-trades-table td:nth-child(6)::before {
+    content: "收益";
+  }
+
+  .backtest-trades-table td:nth-child(7)::before {
+    content: "持有 K 线";
+  }
 }
 
 /* Backtest detail dialog */
@@ -5681,6 +5807,121 @@ body:has(.app-shell.pearl) .select-empty {
   .journal-form-grid {
     grid-template-columns: 1fr;
   }
+
+  .journal-table {
+    min-width: 0;
+  }
+
+  .journal-table thead {
+    display: none;
+  }
+
+  .journal-table,
+  .journal-table tbody {
+    display: block;
+  }
+
+  .journal-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .journal-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      "symbol symbol status"
+      "time time edit"
+      "entry entry entry"
+      "ret r pnl";
+    gap: 8px 10px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel-2);
+  }
+
+  .journal-table td {
+    padding: 0;
+    border: 0;
+    white-space: normal;
+  }
+
+  .journal-table td:nth-child(1) {
+    grid-area: time;
+  }
+
+  .journal-table td:nth-child(2) {
+    grid-area: symbol;
+  }
+
+  .journal-table td:nth-child(3) {
+    display: none;
+  }
+
+  .journal-table td:nth-child(4) {
+    grid-area: entry;
+  }
+
+  .journal-table td:nth-child(5) {
+    grid-area: ret;
+  }
+
+  .journal-table td:nth-child(6) {
+    grid-area: r;
+  }
+
+  .journal-table td:nth-child(7) {
+    grid-area: pnl;
+  }
+
+  .journal-table td:nth-child(8) {
+    grid-area: status;
+    justify-self: end;
+  }
+
+  .journal-table td:nth-child(9) {
+    grid-area: edit;
+    justify-self: end;
+  }
+
+  .journal-table td:nth-child(5)::before,
+  .journal-table td:nth-child(6)::before,
+  .journal-table td:nth-child(7)::before {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--faint);
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  .journal-table td:nth-child(5)::before {
+    content: "收益";
+  }
+
+  .journal-table td:nth-child(6)::before {
+    content: "R";
+  }
+
+  .journal-table td:nth-child(7)::before {
+    content: "盈亏";
+  }
+
+  .journal-table .journal-edit {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    font-size: 11px;
+  }
+
+  .journal-table td.journal-empty {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    padding: 24px 6px;
+  }
 }
 
 /* Chan analysis */
@@ -5776,6 +6017,185 @@ body:has(.app-shell.pearl) .select-empty {
   .chan-rules {
     grid-template-columns: 1fr;
   }
+
+  .chan-signal-table,
+  .chan-trades-table {
+    min-width: 0;
+  }
+
+  .chan-signal-table thead,
+  .chan-trades-table thead {
+    display: none;
+  }
+
+  .chan-signal-table,
+  .chan-signal-table tbody,
+  .chan-trades-table,
+  .chan-trades-table tbody {
+    display: block;
+  }
+
+  .chan-signal-table tbody,
+  .chan-trades-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .chan-signal-table tbody tr,
+  .chan-trades-table tbody tr {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel-2);
+  }
+
+  .chan-signal-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      "signal trades win"
+      "avgR pf pnl";
+    gap: 8px 10px;
+  }
+
+  .chan-trades-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      "signal side pnl"
+      "confirm confirm confirm"
+      "entry exit r"
+      "reason reason reason";
+    gap: 8px 10px;
+  }
+
+  .chan-signal-table td,
+  .chan-trades-table td {
+    padding: 0;
+    border: 0;
+    white-space: normal;
+  }
+
+  .chan-signal-table td:nth-child(1) {
+    grid-area: signal;
+  }
+
+  .chan-signal-table td:nth-child(2) {
+    grid-area: trades;
+  }
+
+  .chan-signal-table td:nth-child(3) {
+    grid-area: win;
+  }
+
+  .chan-signal-table td:nth-child(4) {
+    grid-area: avgR;
+  }
+
+  .chan-signal-table td:nth-child(5) {
+    grid-area: pf;
+  }
+
+  .chan-signal-table td:nth-child(6) {
+    grid-area: pnl;
+  }
+
+  .chan-trades-table td:nth-child(1) {
+    grid-area: signal;
+  }
+
+  .chan-trades-table td:nth-child(2) {
+    grid-area: side;
+  }
+
+  .chan-trades-table td:nth-child(3) {
+    grid-area: confirm;
+  }
+
+  .chan-trades-table td:nth-child(4) {
+    grid-area: entry;
+  }
+
+  .chan-trades-table td:nth-child(5) {
+    grid-area: exit;
+  }
+
+  .chan-trades-table td:nth-child(6) {
+    grid-area: r;
+  }
+
+  .chan-trades-table td:nth-child(7) {
+    grid-area: pnl;
+  }
+
+  .chan-trades-table td:nth-child(8) {
+    grid-area: reason;
+  }
+
+  .chan-signal-table td:nth-child(n + 2)::before,
+  .chan-trades-table td:nth-child(n + 2)::before {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--faint);
+    font-family: Inter, "PingFang SC", sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  .chan-signal-table td:nth-child(2)::before {
+    content: "交易";
+  }
+
+  .chan-signal-table td:nth-child(3)::before {
+    content: "胜率";
+  }
+
+  .chan-signal-table td:nth-child(4)::before {
+    content: "平均 R";
+  }
+
+  .chan-signal-table td:nth-child(5)::before {
+    content: "盈亏比";
+  }
+
+  .chan-signal-table td:nth-child(6)::before {
+    content: "累计盈亏";
+  }
+
+  .chan-trades-table td:nth-child(2)::before {
+    content: "方向";
+  }
+
+  .chan-trades-table td:nth-child(3)::before {
+    content: "确认";
+  }
+
+  .chan-trades-table td:nth-child(4)::before {
+    content: "入场";
+  }
+
+  .chan-trades-table td:nth-child(5)::before {
+    content: "出场";
+  }
+
+  .chan-trades-table td:nth-child(6)::before {
+    content: "R";
+  }
+
+  .chan-trades-table td:nth-child(7)::before {
+    content: "盈亏";
+  }
+
+  .chan-trades-table td:nth-child(8)::before {
+    content: "原因";
+  }
+
+  .chan-trades-table td.journal-empty {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    padding: 24px 6px;
+  }
 }
 
 .chan-chart-wrap {
@@ -5784,9 +6204,23 @@ body:has(.app-shell.pearl) .select-empty {
   margin-top: 10px;
 }
 
+.chan-chart-main {
+  position: relative;
+  width: 100%;
+}
+
 .chan-chart-canvas {
   width: 100%;
   height: 100%;
+}
+
+.chan-macd-canvas {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.chan-toggles label:has(input:disabled) {
+  opacity: 0.55;
 }
 
 .chan-zone-overlay {
@@ -5798,6 +6232,10 @@ body:has(.app-shell.pearl) .select-empty {
 
 .chan-legend .dot.buy { background: #0f766e; }
 .chan-legend .dot.sell { background: #b91c1c; }
+.chan-legend .dot.dif { background: #5b4bf0; }
+.chan-legend .dot.dea { background: #d97706; }
+.chan-legend .dot.hist-up { background: rgba(15, 118, 110, 0.72); }
+.chan-legend .dot.divergence { background: transparent; border: 1px solid #b91c1c; }
 
 .chan-toolbar {
   display: flex;
@@ -6394,5 +6832,252 @@ body:has(.app-shell.pearl) .select-empty {
   .allocation-note {
     flex-direction: column;
     gap: 4px;
+  }
+
+  .allocation-table,
+  .allocation-ledger-table {
+    min-width: 0;
+  }
+
+  .allocation-table thead,
+  .allocation-ledger-table thead {
+    display: none;
+  }
+
+  .allocation-table,
+  .allocation-table tbody,
+  .allocation-ledger-table,
+  .allocation-ledger-table tbody {
+    display: block;
+  }
+
+  .allocation-table tbody,
+  .allocation-ledger-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .allocation-table tbody tr,
+  .allocation-ledger-table tbody tr {
+    display: grid;
+    gap: 8px 10px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel-2);
+  }
+
+  .allocation-table tbody tr {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      "symbol symbol action"
+      "qty avg price"
+      "value weight target"
+      "drift rebalance rebalance"
+      "realized realized realized";
+  }
+
+  .allocation-ledger-table tbody tr {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      "time time time"
+      "symbol symbol type"
+      "qty price amount"
+      "fees fees fees"
+      "note note note"
+      "action action action";
+  }
+
+  .allocation-table td,
+  .allocation-ledger-table td {
+    padding: 0;
+    border: 0;
+    white-space: normal;
+  }
+
+  .allocation-table .allocation-price {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .allocation-table td:nth-child(1) {
+    grid-area: symbol;
+  }
+
+  .allocation-table td:nth-child(2) {
+    grid-area: qty;
+  }
+
+  .allocation-table td:nth-child(3) {
+    grid-area: avg;
+  }
+
+  .allocation-table td:nth-child(4) {
+    grid-area: price;
+  }
+
+  .allocation-table td:nth-child(5) {
+    grid-area: value;
+  }
+
+  .allocation-table td:nth-child(6) {
+    grid-area: weight;
+  }
+
+  .allocation-table td:nth-child(7) {
+    grid-area: target;
+  }
+
+  .allocation-table td:nth-child(8) {
+    grid-area: drift;
+  }
+
+  .allocation-table td:nth-child(9) {
+    grid-area: rebalance;
+  }
+
+  .allocation-table td:nth-child(10) {
+    grid-area: realized;
+  }
+
+  .allocation-table td:nth-child(11) {
+    grid-area: action;
+    justify-self: end;
+  }
+
+  .allocation-ledger-table td:nth-child(1) {
+    grid-area: time;
+  }
+
+  .allocation-ledger-table td:nth-child(2) {
+    grid-area: type;
+    justify-self: end;
+  }
+
+  .allocation-ledger-table td:nth-child(3) {
+    grid-area: symbol;
+  }
+
+  .allocation-ledger-table td:nth-child(4) {
+    grid-area: qty;
+  }
+
+  .allocation-ledger-table td:nth-child(5) {
+    grid-area: price;
+  }
+
+  .allocation-ledger-table td:nth-child(6) {
+    grid-area: amount;
+  }
+
+  .allocation-ledger-table td:nth-child(7) {
+    grid-area: fees;
+  }
+
+  .allocation-ledger-table td:nth-child(8) {
+    grid-area: note;
+  }
+
+  .allocation-ledger-table td:nth-child(9) {
+    grid-area: action;
+    justify-self: end;
+  }
+
+  .allocation-table td:nth-child(n + 2):not(:nth-child(11))::before,
+  .allocation-ledger-table td:nth-child(n + 2):not(:nth-child(9))::before {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--faint);
+    font-family: Inter, "PingFang SC", sans-serif;
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  .allocation-table td:nth-child(2)::before {
+    content: "数量";
+  }
+
+  .allocation-table td:nth-child(3)::before {
+    content: "均价";
+  }
+
+  .allocation-table td:nth-child(4)::before {
+    content: "现价";
+  }
+
+  .allocation-table td:nth-child(5)::before {
+    content: "市值";
+  }
+
+  .allocation-table td:nth-child(6)::before {
+    content: "占比";
+  }
+
+  .allocation-table td:nth-child(7)::before {
+    content: "目标";
+  }
+
+  .allocation-table td:nth-child(8)::before {
+    content: "偏离";
+  }
+
+  .allocation-table td:nth-child(9)::before {
+    content: "再平衡";
+  }
+
+  .allocation-table td:nth-child(10)::before {
+    content: "已实现";
+  }
+
+  .allocation-ledger-table td:nth-child(2)::before {
+    content: "类型";
+  }
+
+  .allocation-ledger-table td:nth-child(3)::before {
+    content: "标的";
+  }
+
+  .allocation-ledger-table td:nth-child(4)::before {
+    content: "数量";
+  }
+
+  .allocation-ledger-table td:nth-child(5)::before {
+    content: "价格";
+  }
+
+  .allocation-ledger-table td:nth-child(6)::before {
+    content: "金额";
+  }
+
+  .allocation-ledger-table td:nth-child(7)::before {
+    content: "手续费";
+  }
+
+  .allocation-ledger-table td:nth-child(8)::before {
+    content: "备注";
+  }
+
+  .allocation-table .journal-edit,
+  .allocation-ledger-table .journal-edit {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    font-size: 11px;
+  }
+
+  .allocation-ledger-note {
+    max-width: none;
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+  }
+
+  .allocation-table td.journal-empty,
+  .allocation-ledger-table td.journal-empty {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    padding: 24px 6px;
   }
 }

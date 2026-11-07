@@ -2,8 +2,10 @@ import { useEffect, useRef } from "react";
 import {
   ColorType,
   CrosshairMode,
+  LineStyle,
   createChart,
   type IChartApi,
+  type MouseEventParams,
   type SeriesMarker,
   type Time,
   type UTCTimestamp,
@@ -16,6 +18,11 @@ const DOWN = "#b91c1c";
 const STROKE = "#5b4bf0";
 const ZONE_FILL = "rgba(91, 75, 240, 0.12)";
 const ZONE_LINE = "rgba(91, 75, 240, 0.68)";
+const MACD_DIF = "#5b4bf0";
+const MACD_DEA = "#d97706";
+const MACD_UP = "rgba(15, 118, 110, 0.72)";
+const MACD_DOWN = "rgba(185, 28, 28, 0.72)";
+const MACD_HEIGHT = 170;
 
 function createBaseChart(container: HTMLDivElement, height: number): IChartApi {
   return createChart(container, {
@@ -31,7 +38,7 @@ function createBaseChart(container: HTMLDivElement, height: number): IChartApi {
       horzLines: { color: "#efebe2" },
     },
     crosshair: { mode: CrosshairMode.Normal },
-    rightPriceScale: { borderColor: "#e6e2d8" },
+    rightPriceScale: { borderColor: "#e6e2d8", minimumWidth: 72 },
     timeScale: {
       borderColor: "#e6e2d8",
       timeVisible: true,
@@ -78,6 +85,8 @@ export function ChanChart({
   showStrokes,
   showZones,
   showPoints,
+  showMacd,
+  showDivergence,
   height = 560,
 }: {
   analysis: ChanAnalysis;
@@ -86,14 +95,18 @@ export function ChanChart({
   showStrokes: boolean;
   showZones: boolean;
   showPoints: boolean;
+  showMacd: boolean;
+  showDivergence: boolean;
   height?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  const macdRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
     const overlay = overlayRef.current;
+    const macdContainer = macdRef.current;
     if (!container || !overlay || !analysis.candles.length) return;
     const chart = createBaseChart(container, height);
     const candles = chart.addCandlestickSeries({
@@ -241,17 +254,156 @@ export function ChanChart({
     const unwatch = watchResize(container, chart, redraw);
     requestAnimationFrame(drawZones);
 
+    let macdChart: IChartApi | null = null;
+    let unwatchMacd: () => void = () => undefined;
+    let unsubscribeMainRange: () => void = () => undefined;
+    let unsubscribeMacdRange: () => void = () => undefined;
+    let unsubscribeCrosshair: () => void = () => undefined;
+    if (showMacd && macdContainer && analysis.macd?.series?.length) {
+      macdChart = createBaseChart(macdContainer, MACD_HEIGHT);
+      const macdSeries = analysis.macd.series;
+      const largest = macdSeries.reduce(
+        (peak, point) => Math.max(peak, Math.abs(point.hist), Math.abs(point.dif), Math.abs(point.dea)),
+        0,
+      );
+      const precision = largest >= 100 ? 1 : largest >= 10 ? 2 : largest >= 0.1 ? 4 : 6;
+      const priceFormat = {
+        type: "price" as const,
+        precision,
+        minMove: 10 ** -precision,
+      };
+      const histogram = macdChart.addHistogramSeries({
+        priceFormat,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      });
+      const difSeries = macdChart.addLineSeries({
+        color: MACD_DIF,
+        lineWidth: 1,
+        priceFormat,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      const deaSeries = macdChart.addLineSeries({
+        color: MACD_DEA,
+        lineWidth: 1,
+        priceFormat,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      histogram.setData(
+        macdSeries.map((point) => ({
+          time: seconds(point.time),
+          value: point.hist,
+          color: point.hist >= 0 ? MACD_UP : MACD_DOWN,
+        })),
+      );
+      difSeries.setData(
+        macdSeries.map((point) => ({ time: seconds(point.time), value: point.dif })),
+      );
+      deaSeries.setData(
+        macdSeries.map((point) => ({ time: seconds(point.time), value: point.dea })),
+      );
+      histogram.createPriceLine({
+        price: 0,
+        color: "#d5d0c4",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        axisLabelVisible: false,
+        title: "",
+      });
+
+      const macdMarkers: SeriesMarker<Time>[] = [];
+      if (showDivergence) {
+        for (const divergence of analysis.divergences ?? []) {
+          const bottom = divergence.kind === "bottom";
+          macdMarkers.push({
+            time: seconds(divergence.time),
+            position: bottom ? "belowBar" : "aboveBar",
+            color: bottom ? "#0f766e" : "#b91c1c",
+            shape: bottom ? "arrowUp" : "arrowDown",
+            text: bottom ? "底背" : "顶背",
+          });
+        }
+        macdMarkers.sort((left, right) => Number(left.time) - Number(right.time));
+        histogram.setMarkers(macdMarkers);
+      }
+
+      macdChart.timeScale().fitContent();
+      const histByTime = new Map<number, number>();
+      for (const point of macdSeries) histByTime.set(point.time, point.hist);
+      let syncing = false;
+      const syncRange = (source: IChartApi, target: IChartApi) => () => {
+        if (syncing) return;
+        const range = source.timeScale().getVisibleLogicalRange();
+        if (!range) return;
+        const current = target.timeScale().getVisibleLogicalRange();
+        if (
+          current &&
+          Math.abs(current.from - range.from) < 1e-6 &&
+          Math.abs(current.to - range.to) < 1e-6
+        ) {
+          return;
+        }
+        syncing = true;
+        target.timeScale().setVisibleLogicalRange(range);
+        syncing = false;
+      };
+      const mainToMacd = syncRange(chart, macdChart);
+      const macdToMain = syncRange(macdChart, chart);
+      timeScale.subscribeVisibleLogicalRangeChange(mainToMacd);
+      macdChart.timeScale().subscribeVisibleLogicalRangeChange(macdToMain);
+      unsubscribeMainRange = () =>
+        timeScale.unsubscribeVisibleLogicalRangeChange(mainToMacd);
+      unsubscribeMacdRange = () =>
+        macdChart?.timeScale().unsubscribeVisibleLogicalRangeChange(macdToMain);
+      const onCrosshair = (param: MouseEventParams<Time>) => {
+        if (!macdChart) return;
+        const value = param.time ? histByTime.get(Number(param.time) * 1000) : undefined;
+        if (value === undefined) {
+          macdChart.clearCrosshairPosition();
+          return;
+        }
+        macdChart.setCrosshairPosition(value, param.time as Time, histogram);
+      };
+      chart.subscribeCrosshairMove(onCrosshair);
+      unsubscribeCrosshair = () => chart.unsubscribeCrosshairMove(onCrosshair);
+      unwatchMacd = watchResize(macdContainer, macdChart, () => undefined);
+    }
+
     return () => {
+      unsubscribeCrosshair();
+      unsubscribeMainRange();
+      unsubscribeMacdRange();
+      unwatchMacd();
       timeScale.unsubscribeVisibleLogicalRangeChange(redraw);
       unwatch();
+      if (macdChart) macdChart.remove();
       chart.remove();
     };
-  }, [analysis, showMerged, showFractals, showStrokes, showZones, showPoints, height]);
+  }, [
+    analysis,
+    showMerged,
+    showFractals,
+    showStrokes,
+    showZones,
+    showPoints,
+    showMacd,
+    showDivergence,
+    height,
+  ]);
 
   return (
-    <div className="chan-chart-wrap" style={{ height }}>
-      <div className="chan-chart-canvas" ref={containerRef} />
-      <canvas className="chan-zone-overlay" ref={overlayRef} />
+    <div className="chan-chart-wrap">
+      <div className="chan-chart-main" style={{ height }}>
+        <div className="chan-chart-canvas" ref={containerRef} />
+        <canvas className="chan-zone-overlay" ref={overlayRef} />
+      </div>
+      {showMacd && (
+        <div className="chan-macd-canvas" ref={macdRef} style={{ height: MACD_HEIGHT }} />
+      )}
     </div>
   );
 }

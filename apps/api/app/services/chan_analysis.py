@@ -8,6 +8,7 @@ buy/sell points are left for a later version because their definitions vary.
 
 from __future__ import annotations
 
+import bisect
 import math
 from typing import Any
 
@@ -21,6 +22,10 @@ from app.services.timeframes import floor_open_ms, now_ms, shift_open_ms
 MAX_BARS = 1000
 MIN_BARS = 20
 OLD_BI_MIN_SPAN = 4  # five merged bars inclusive
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+DIVERGENCE_RATIO = 0.9  # area must shrink below 90% of the previous same-direction stroke
 SUPPORTED_GRANULARITIES = ("15min", "1h", "4h", "1day", "1week")
 GRANULARITY_ALIASES = {"15m": "15min", "1w": "1week", "1wk": "1week", "1d": "1day"}
 
@@ -243,31 +248,105 @@ def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return zones
 
 
-def _macd_areas(frame: pd.DataFrame, strokes: list[dict[str, Any]]) -> list[float]:
-    """Sum the MACD histogram over each stroke; used as a simple divergence proxy."""
-    close = frame["close"].astype(float)
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    hist = macd - macd.ewm(span=9, adjust=False).mean()
-    times = [int(pd.Timestamp(timestamp).timestamp() * 1000) for timestamp in frame.index]
-    values = [float(value) for value in hist.tolist()]
+def _macd_values(
+    bars: list[dict[str, Any]],
+) -> tuple[list[int], list[float], list[float], list[float]]:
+    """Return bar times and MACD DIF/DEA/histogram values aligned to them."""
+    close = pd.Series([float(bar["close"]) for bar in bars], dtype=float)
+    ema_fast = close.ewm(span=MACD_FAST, adjust=False).mean()
+    ema_slow = close.ewm(span=MACD_SLOW, adjust=False).mean()
+    dif = ema_fast - ema_slow
+    dea = dif.ewm(span=MACD_SIGNAL, adjust=False).mean()
+    hist = dif - dea
+    times = [int(bar["time"]) for bar in bars]
+    return (
+        times,
+        [float(value) for value in dif.tolist()],
+        [float(value) for value in dea.tolist()],
+        [float(value) for value in hist.tolist()],
+    )
+
+
+def _macd_areas(times: list[int], hist: list[float], strokes: list[dict[str, Any]]) -> list[float]:
+    """Sum the MACD histogram over each stroke; used as a momentum proxy."""
+    cumulative = [0.0]
+    for value in hist:
+        cumulative.append(cumulative[-1] + value)
     areas: list[float] = []
     for stroke in strokes:
-        total = 0.0
         start = int(stroke["start_time"])
         end = int(stroke["end_time"])
-        for timestamp, value in zip(times, values):
-            if start < timestamp <= end:
-                total += value
-        areas.append(total)
+        # Same window as the previous implementation: start < time <= end.
+        low = bisect.bisect_right(times, start)
+        high = bisect.bisect_right(times, end)
+        areas.append(cumulative[high] - cumulative[low])
     return areas
+
+
+def find_divergences(
+    strokes: list[dict[str, Any]],
+    macd_areas: list[float],
+    dif_by_time: dict[int, float] | None = None,
+) -> list[dict[str, Any]]:
+    """Find stroke-level MACD-area divergences.
+
+    Two same-direction strokes (one stroke apart) are compared: a tradeable
+    divergence needs a new price extreme while the summed MACD histogram
+    shrinks below ``DIVERGENCE_RATIO`` of the previous stroke's area. This is
+    the same rule that feeds the first buy/sell points; it is a simple
+    momentum proxy, not a strict Chan divergence proof.
+    """
+    divergences: list[dict[str, Any]] = []
+    for index in range(2, len(strokes)):
+        stroke = strokes[index]
+        previous = strokes[index - 2]
+        if stroke["direction"] != previous["direction"]:
+            continue
+        previous_area = abs(float(macd_areas[index - 2]))
+        if previous_area <= 0:
+            continue
+        ratio = abs(float(macd_areas[index])) / previous_area
+        if ratio >= DIVERGENCE_RATIO:
+            continue
+        if (
+            stroke["direction"] == "down"
+            and float(stroke["end_price"]) < float(previous["end_price"])
+        ):
+            kind = "bottom"
+        elif (
+            stroke["direction"] == "up"
+            and float(stroke["end_price"]) > float(previous["end_price"])
+        ):
+            kind = "top"
+        else:
+            continue
+        entry: dict[str, Any] = {
+            "kind": kind,
+            "time": int(stroke["end_time"]),
+            "price": float(stroke["end_price"]),
+            "stroke_index": index,
+            "prev_time": int(previous["end_time"]),
+            "prev_price": float(previous["end_price"]),
+            "area": float(macd_areas[index]),
+            "prev_area": float(macd_areas[index - 2]),
+            "ratio": round(ratio, 4),
+        }
+        if dif_by_time:
+            dif = dif_by_time.get(int(stroke["end_time"]))
+            prev_dif = dif_by_time.get(int(previous["end_time"]))
+            if dif is not None:
+                entry["dif"] = dif
+            if prev_dif is not None:
+                entry["prev_dif"] = prev_dif
+        divergences.append(entry)
+    return divergences
 
 
 def find_buy_sell_points(
     strokes: list[dict[str, Any]],
     zones: list[dict[str, Any]],
     macd_areas: list[float],
+    divergences: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Find approximate stroke-level 1/2/3 buy and sell points.
 
@@ -295,22 +374,15 @@ def find_buy_sell_points(
             }
         )
 
-    for index, stroke in enumerate(strokes):
-        if index < 2:
-            continue
-        previous = strokes[index - 2]
-        if stroke["direction"] == "down" and previous["direction"] == "down":
-            if (
-                float(stroke["end_price"]) < float(previous["end_price"])
-                and abs(macd_areas[index]) < abs(macd_areas[index - 2]) * 0.9
-            ):
-                add("1buy", index, "价格创新低但 MACD 面积缩小")
-        elif stroke["direction"] == "up" and previous["direction"] == "up":
-            if (
-                float(stroke["end_price"]) > float(previous["end_price"])
-                and macd_areas[index] < macd_areas[index - 2] * 0.9
-            ):
-                add("1sell", index, "价格创新高但 MACD 面积缩小")
+    if divergences is None:
+        divergences = find_divergences(strokes, macd_areas)
+    for divergence in divergences:
+        index = int(divergence["stroke_index"])
+        ratio = float(divergence["ratio"]) * 100
+        if divergence["kind"] == "bottom":
+            add("1buy", index, f"价格创新低但 MACD 面积缩小至前一同向笔的 {ratio:.0f}%（底背离）")
+        elif divergence["kind"] == "top":
+            add("1sell", index, f"价格创新高但 MACD 面积缩小至前一同向笔的 {ratio:.0f}%（顶背离）")
 
     for point in [item for item in points if item["type"] == "1buy"]:
         for index in range(int(point["stroke_index"]) + 2, len(strokes), 2):
@@ -384,8 +456,14 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
     fractals = find_fractals(merged)
     strokes = build_strokes(fractals)
     zones = find_zones(strokes)
-    macd_areas = _macd_areas(frame, strokes)
-    points = find_buy_sell_points(strokes, zones, macd_areas)
+    macd_times, dif_values, dea_values, hist_values = _macd_values(bars)
+    macd_areas = _macd_areas(macd_times, hist_values, strokes)
+    divergences = find_divergences(
+        strokes,
+        macd_areas,
+        dict(zip(macd_times, dif_values)),
+    )
+    points = find_buy_sell_points(strokes, zones, macd_areas, divergences)
     used_fractals = {
         (int(stroke["start_time"]), float(stroke["start_price"])) for stroke in strokes
     } | {
@@ -426,6 +504,16 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
         "strokes": strokes,
         "zones": zones,
         "points": points,
+        "macd": {
+            "params": {"fast": MACD_FAST, "slow": MACD_SLOW, "signal": MACD_SIGNAL},
+            "series": [
+                {"time": time, "dif": dif, "dea": dea, "hist": hist}
+                for time, dif, dea, hist in zip(
+                    macd_times, dif_values, dea_values, hist_values
+                )
+            ],
+        },
+        "divergences": divergences,
         "rules": {
             "name": "程序化缠论 · 老笔",
             "bi_min_span": OLD_BI_MIN_SPAN,
@@ -437,6 +525,12 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
                 "中枢框从进入段起点画到最后一笔中枢终点"
             ),
             "point_rule": "笔级别近似：1 买卖用 MACD 面积背驰，2 买卖回踩不破，3 买卖离开中枢后回抽不入中枢",
+            "divergence_rule": (
+                f"同向笔（间隔一笔）比较：价格创新低/高但 MACD 柱面积收缩到前一同向笔的 "
+                f"{int(DIVERGENCE_RATIO * 100)}% 以下，记为底/顶背离；"
+                "与 1 买卖点同源，是简化动量判断，不是严格缠论背驰"
+            ),
+            "macd_params": {"fast": MACD_FAST, "slow": MACD_SLOW, "signal": MACD_SIGNAL},
             "segments": False,
             "buy_sell_points": True,
         },
@@ -446,6 +540,7 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
         "stroke_count": len(strokes),
         "zone_count": len(zones),
         "point_count": len(points),
+        "divergence_count": len(divergences),
     }
 
 

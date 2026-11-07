@@ -559,6 +559,32 @@ export type ChanPoint = {
   reason: string;
 };
 
+export type ChanMacdPoint = {
+  time: number;
+  dif: number;
+  dea: number;
+  hist: number;
+};
+
+export type ChanMacd = {
+  params: { fast: number; slow: number; signal: number };
+  series: ChanMacdPoint[];
+};
+
+export type ChanDivergence = {
+  kind: "bottom" | "top" | string;
+  time: number;
+  price: number;
+  stroke_index: number;
+  prev_time: number;
+  prev_price: number;
+  area: number;
+  prev_area: number;
+  ratio: number;
+  dif?: number;
+  prev_dif?: number;
+};
+
 export type ChanRules = {
   name: string;
   bi_min_span: number;
@@ -566,6 +592,8 @@ export type ChanRules = {
   fractal_rule: string;
   zone_rule: string;
   point_rule: string;
+  divergence_rule?: string;
+  macd_params?: { fast: number; slow: number; signal: number };
   segments: boolean;
   buy_sell_points: boolean;
 };
@@ -587,6 +615,9 @@ export type ChanAnalysis = {
   strokes: ChanStroke[];
   zones: ChanZone[];
   points: ChanPoint[];
+  macd: ChanMacd;
+  divergences: ChanDivergence[];
+  divergence_count?: number;
   rules: ChanRules;
   warnings: string[];
 };

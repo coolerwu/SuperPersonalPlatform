@@ -73,7 +73,7 @@ npm run dev
 - 空状态提供建议提示词；详情抽屉默认关闭，关闭时内容列自动加宽。
 - 消息历史分页：Chat 首屏只加载最新 50 条，向上滚动按 50 条加载更早消息并保持滚动位置；搜索命中会自动向前翻页定位并高亮。
 - 顶部轻量栏显示当前 Agent 和会话标题，并作为详情抽屉开关。
-- 响应式：桌面为侧栏 + 对话 + 详情三栏；窄屏（≤860px）用顶部栏和汉堡菜单打开侧栏抽屉，详情变为全屏面板，输入区跟随软键盘与底部安全区。
+- 响应式：桌面为侧栏 + 对话 + 详情三栏；窄屏（≤860px）用顶部栏和汉堡菜单打开侧栏抽屉，详情变为全屏面板，输入区跟随软键盘与底部安全区。功能工作区（回测、交易记录、资产配置、缠论图）同样使用顶部栏和抽屉；页面头部描述占满整行、操作按钮换行右对齐，交易记录、回测与缠论回测的交易明细、资产配置的持仓与流水改为带字段标签的卡片列表。
 - 输入卡片左侧「＋」菜单提供上传附件、整理记忆和清空输入：文件保存到当前 Agent 的 `uploads/` 工作区目录（单文件 10 MB，上传时显示单文件进度和大小），图片支持选择、粘贴、拖拽，大图在浏览器端缩放到最长边 1600 px 后上传；发送后消息里带上文件名、工作区路径和字节数，Agent 可用文件工具读取，图片还会作为图片输入发给模型（最多 4 张、单张 4 MB）；超过单张上限的图片会先用 Pillow 在服务端压缩（最长边 ≤ `VISION_MAX_IMAGE_EDGE`，默认 1600，JPEG 质量逐级降低），压缩结果只用于模型输入，工作区原图不变；仍无法压缩或无法识别的图片会在消息文本末尾追加系统提示，模型会告诉用户图片未加载、请压缩后重发，不再静默丢弃。聊天里图片显示缩略图、点击可看原图，其他附件显示为文件 chip；上传文件通过鉴权接口 `GET /api/agents/{agent_id}/uploads/{filename}` 读取；「整理记忆」显示为命令卡片（原始指令可展开），不再把内部文本直接铺开；「整理记忆」直接发起一个 Run 并触发 `memory-organizer` 技能；也可以清空输入。
 
 ## 配置页
@@ -161,7 +161,7 @@ metadata:
 - **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
 - **`backtest_run` / `backtest_status` / `backtest_result` / `backtest_cancel` / `market_probe` / `market_cache_status`**：加密货币回测工具（`quant-backtest` 技能声明）。`backtest_run` 创建 Bitget 现货单标的回测（可指定 `warmup_bars`，默认 200）并最多等待 90 秒，完成返回指标摘要，未完成返回任务 id；`backtest_status` 查状态/进度；`backtest_result` 返回指标、告警和最近交易；`backtest_cancel` 取消排队或执行中的任务；`market_probe` / `market_cache_status` 检查 Bitget 连接和本地行情缓存。
 - **`cron_list` / `cron_targets` / `cron_create` / `cron_update` / `cron_delete` / `cron_run`**：定时任务工具（`cron-scheduler` 技能声明）。只操作当前 Agent 的任务；`cron_list` 返回任务 id、表达式、时区、启停、下次触发、最近状态、专属会话和推送目标；`cron_targets` 列出当前 Agent 的微信渠道和已有 1:1 联系人会话；`cron_create` 创建任务并生成专属会话，prompt 必须自包含，可同时传 `push_channel_id` / `push_conversation_id`；`cron_update` 修改指定字段，两个推送 id 都传空字符串表示清除；`cron_delete` 删除配置但保留会话；`cron_run` 立即运行一次且不改变原计划。未启用技能或未读取 SKILL.md 时工具不可见。
-- **`chan_analyze`**：缠论分析工具（`chanlun` 技能声明）。参数 `symbol`、`granularity`（`15min/1h/4h/1day/1week`）、`bars`（默认 300，20–1000）；返回数据区间、合并 K 线、笔/中枢/1/2/3 买卖点摘要和 warnings，不返回完整 K 线数组；结构是程序化老笔近似，不是交易建议。
+- **`chan_analyze`**：缠论分析工具（`chanlun` 技能声明）。参数 `symbol`、`granularity`（`15min/1h/4h/1day/1week`）、`bars`（默认 300，20–1000）；返回数据区间、合并 K 线、笔/中枢/1/2/3 买卖点、MACD 面积背离摘要和 warnings，不返回完整 K 线数组；结构是程序化老笔近似，不是交易建议。
 - **`chan_backtest`**：缠论信号回测/交易计划工具（`chanlun` 技能声明）。因果前缀回放：信号收盘确认、下一根开盘进场；一次一笔，固定止损、R 倍目标、时间止损和单笔风险；参数含 `bars`（60–500）、`stop_pct`、`risk_pct`、`r_multiple`、`max_hold_bars`、`fee_pct`、`slippage_pct`。返回收益、回撤、胜率、平均 R、按 1/2/3 买卖点分组和最近交易；样本少时明确提示。
 - **`trade_journal_record` / `trade_journal_update` / `trade_journal_close` / `trade_journal_query` / `trade_journal_stats`**：交易记录工具（`trade-journal` 技能声明）。`trade_journal_record` 记录一笔 crypto 或 A 股交易（必填 symbol、entry_at、entry_price、thesis，平仓可同时给 exit_at/exit_price/review），`trade_journal_update` 修改已有字段，`trade_journal_close` 平仓并补复盘，`trade_journal_query` 按 id/市场/标的/状态/标签/时间/关键词查询，`trade_journal_stats` 输出胜率、平均收益、平均 R、盈亏比和按市场/标签分组。记录保存在 `data/trade-journal.jsonl`；工具不删除记录，也不接交易所。
 - **`allocation_overview` / `allocation_entries` / `allocation_portfolio_create` / `allocation_portfolio_update` / `allocation_entry_record` / `allocation_entry_update`**：资产配置工具（`allocation` 技能声明）。`allocation_overview` 读取长期组合摘要、目标/偏离/再平衡、XIRR 和 warnings，`refresh=true` 才抓 Bitget 加密行情和 Yahoo 美股行情；`allocation_entries` 查看流水；创建/修改组合用 `allocation_portfolio_create` / `allocation_portfolio_update`；记录/修正流水用 `allocation_entry_record` / `allocation_entry_update`。工具不删除流水或组合，删除由页面处理；与交易记录完全分开。
@@ -278,10 +278,10 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 功能工作区「交易」组提供只读的缠论结构图，不绑定 Agent，也不产生交易信号。
 
 - 数据：复用 Bitget 公共 REST 和 `market.db` 增量缓存，只使用已收盘 K 线；按需刷新，不引入 WebSocket。单次分析默认 300 根，最多 1000 根。
-- 范围：crypto 现货、`15min/1h/4h/1day/1week`；第一版画包含处理、分型、老笔、中枢色块和笔级别 1/2/3 买卖点，不画线段和多级别。
-- 算法：确定性程序计算，不调用 AI。包含处理向上取高高、向下取低低；分型为严格三根顶/底；老笔顶底交替且至少 5 根合并 K 线（含两端分型）；中枢必须由进入段 + 连续三笔重叠 + 离开段构成（共 5 段），`ZG/ZD` 取三笔高点最小值与低点最大值；数据末端尚未走出的结构和与上一中枢首尾相接的残留结构不计为中枢；图上的中枢框从进入段起点画到中枢最后一笔终点，`ZG/ZD` 仍取三笔重叠；1/2/3 买卖点用 MACD 面积背驰、回踩不破和离开中枢后回抽不入中枢的笔级别近似规则。
-- 接口：`POST /api/chan/analyze`，入参 `symbol/granularity/bars`，返回 `candles/merged/fractals/strokes/zones/points/rules/warnings`；不建新表、不落库。
-- 页面：交易 → 缠论图；顶部工具栏直接显示参数和显示项；可切换周期、K 线根数和显示项；中枢用半透明色块呈现，买卖点标为 1买/2买/3买、1卖/2卖/3卖。
+- 范围：crypto 现货、`15min/1h/4h/1day/1week`；第一版画包含处理、分型、老笔、中枢色块、笔级别 1/2/3 买卖点和 MACD(12,26,9) 副图与背离标记，不画线段和多级别。
+- 算法：确定性程序计算，不调用 AI。包含处理向上取高高、向下取低低；分型为严格三根顶/底；老笔顶底交替且至少 5 根合并 K 线（含两端分型）；中枢必须由进入段 + 连续三笔重叠 + 离开段构成（共 5 段），`ZG/ZD` 取三笔高点最小值与低点最大值；数据末端尚未走出的结构和与上一中枢首尾相接的残留结构不计为中枢；图上的中枢框从进入段起点画到中枢最后一笔终点，`ZG/ZD` 仍取三笔重叠；1/2/3 买卖点用 MACD 面积背驰、回踩不破和离开中枢后回抽不入中枢的笔级别近似规则。MACD 副图显示 DIF/DEA/柱，背离按同向笔（间隔一笔）比较：价格创新低/高且柱面积收缩到前一同向笔的 90% 以下记为底/顶背离；它是 1 买卖点的来源，是简化动量判断，不是严格缠论背驰。
+- 接口：`POST /api/chan/analyze`，入参 `symbol/granularity/bars`，返回 `candles/merged/fractals/strokes/zones/points/macd/divergences/rules/warnings`；不建新表、不落库。
+- 页面：交易 → 缠论图；顶部工具栏直接显示参数和显示项；可切换周期、K 线根数和显示项；中枢用半透明色块呈现，买卖点标为 1买/2买/3买、1卖/2卖/3卖；MACD 副图与主图时间轴、十字线同步，背离标为「底背 / 顶背」，可用「MACD」「背离」开关隐藏。
 - Agent 使用：在「技能」页为当前 Agent 启用 `chanlun`，读取 SKILL.md 后即可说“用缠论看一下 BTCUSDT 1h 最近 300 根，1 买/2 买在哪里”。Agent 会调用 `chan_analyze` 读取同一套结构摘要；它不会重画结构，买卖点只是笔级别近似，不是交易建议。
 - 信号回测：缠论图页的「信号回测」tab 用因果前缀回放，信号收盘确认、下一根开盘进场；可设止损、单笔风险、R 倍目标、最大持仓和费用，输出收益、回撤、胜率、平均 R、按信号类型统计和交易明细。页面和 Agent 的 `chan_backtest` 共用同一套逻辑；样本少或没有交易时会明确提示。
 - 实时性：Bitget REST 按需拉取，单用户、单标的、单周期刷新压力可以忽略；15min/1h/4h/1day/1w 不需要秒级刷新。需要 Tick 级推送时再做 WebSocket。
