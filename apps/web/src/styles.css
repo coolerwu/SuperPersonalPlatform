@@ -6572,6 +6572,85 @@ body:has(.app-shell.pearl) .select-empty {
   font-size: 9px;
 }
 
+.allocation-overview-head h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.allocation-overview-head .hint {
+  margin: 0 0 14px;
+}
+
+.allocation-fx-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 4px 0 18px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.allocation-overview-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.allocation-overview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.allocation-overview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(4, minmax(0, 1fr));
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.allocation-overview-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.allocation-overview-row span {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.allocation-overview-row strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.allocation-overview-name strong {
+  font-size: 14px;
+}
+
+.allocation-overview-name small {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+@media (max-width: 860px) {
+  .allocation-overview-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .allocation-warning {
   display: inline-flex;
   align-items: center;

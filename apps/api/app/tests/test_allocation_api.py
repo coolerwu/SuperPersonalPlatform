@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.config import settings
 from app.services import allocation
+from app.services.stock_quotes import FxQuote, StockQuoteError
 
 
 @pytest.fixture(autouse=True)
@@ -217,12 +220,128 @@ def test_get_does_not_fetch_prices_and_refresh_does(client, monkeypatch) -> None
             [],
         )
 
+    async def fake_fx():
+        return FxQuote(
+            pair="USD/CNY",
+            rate=7.2,
+            at="2025-01-03T00:00:00Z",
+            source="eastmoney",
+        )
+
     monkeypatch.setattr(allocation, "fetch_live_prices", fake_fetch)
+    monkeypatch.setattr(allocation, "fetch_usd_cny_rate", fake_fx)
     refreshed = client.post("/api/allocation/refresh")
     assert refreshed.status_code == 200
     position = refreshed.json()["portfolios"][0]["positions"][0]
     assert position["price_source"] == "live"
     assert position["price"] == pytest.approx(65000.0)
+    assert refreshed.json()["fx"]["usd_cny"] == pytest.approx(7.2)
+    assert refreshed.json()["fx"]["source"] == "eastmoney"
+
+
+def test_overview_converts_usdt_and_cny(client, monkeypatch) -> None:
+    usdt = _create(client, name="USDT 组合", currency="USDT")
+    cny = _create(
+        client,
+        name="A股组合",
+        currency="CNY",
+        targets={},
+        cash_target_pct=None,
+    )
+    _add_entry(client, usdt["id"], _deposit(1000))
+    _add_entry(client, cny["id"], _deposit(7200))
+
+    async def no_prices(_items):
+        return {}, []
+
+    async def fake_fx():
+        return FxQuote(
+            pair="USD/CNY",
+            rate=7.2,
+            at="2025-01-03T00:00:00Z",
+            source="eastmoney",
+        )
+
+    monkeypatch.setattr(allocation, "fetch_live_prices", no_prices)
+    monkeypatch.setattr(allocation, "fetch_usd_cny_rate", fake_fx)
+    assert client.post("/api/allocation/refresh").status_code == 200
+
+    body = client.get("/api/allocation").json()
+    overview = body["overview"]
+    assert overview["display_currency"] == "USD"
+    assert overview["total_value"] == pytest.approx(2000.0)
+    assert overview["cash"] == pytest.approx(2000.0)
+    rows = {row["currency"]: row for row in overview["portfolios"]}
+    assert rows["USDT"]["total_value_usd"] == pytest.approx(1000.0)
+    assert rows["CNY"]["total_value_usd"] == pytest.approx(1000.0)
+    assert rows["USDT"]["weight_pct"] == pytest.approx(50.0)
+
+
+def test_refresh_keeps_previous_fx_on_failure(client, monkeypatch) -> None:
+    portfolio = _create(client)
+    _add_entry(client, portfolio["id"], _deposit(1000))
+
+    async def no_prices(_items):
+        return {}, []
+
+    async def good_fx():
+        return FxQuote(
+            pair="USD/CNY",
+            rate=7.1,
+            at="2025-01-03T00:00:00Z",
+            source="eastmoney",
+        )
+
+    async def bad_fx():
+        raise StockQuoteError("boom")
+
+    monkeypatch.setattr(allocation, "fetch_live_prices", no_prices)
+    monkeypatch.setattr(allocation, "fetch_usd_cny_rate", good_fx)
+    first = client.post("/api/allocation/refresh").json()
+    assert first["fx"]["usd_cny"] == pytest.approx(7.1)
+
+    monkeypatch.setattr(allocation, "fetch_usd_cny_rate", bad_fx)
+    second = client.post("/api/allocation/refresh").json()
+    assert second["fx"]["usd_cny"] == pytest.approx(7.1)
+    assert "boom" in second["fx_error"]
+
+
+def test_overview_excludes_unsupported_currency(client) -> None:
+    usdt = _create(client, name="USDT 组合")
+    hkd = _create(
+        client,
+        name="HKD 组合",
+        currency="HKD",
+        targets={},
+        cash_target_pct=None,
+    )
+    _add_entry(client, usdt["id"], _deposit(1000))
+    _add_entry(client, hkd["id"], _deposit(5000))
+
+    body = client.get("/api/allocation").json()
+    overview = body["overview"]
+    assert [row["currency"] for row in overview["portfolios"]] == ["USDT"]
+    assert overview["total_value"] == pytest.approx(1000.0)
+    assert any("HKD" in warning for warning in overview["warnings"])
+
+
+def test_legacy_config_without_fx_uses_default(client) -> None:
+    portfolio = _create(client)
+    _add_entry(client, portfolio["id"], _deposit(1000))
+
+    config = json.loads(settings.allocation_path.read_text(encoding="utf-8"))
+    config.pop("fx", None)
+    settings.allocation_path.write_text(
+        json.dumps(config, ensure_ascii=False), encoding="utf-8"
+    )
+
+    body = client.get("/api/allocation").json()
+    assert body["fx"]["usd_cny"] == pytest.approx(7.2)
+    assert body["fx"]["source"] == "default"
+    assert any(
+        "尚未获取实时汇率" in warning
+        for warning in body["overview"]["warnings"]
+    )
 
 
 def test_multiple_portfolios_and_pagination(client) -> None:

@@ -130,6 +130,19 @@ export function priceSourceLabel(source: string): string {
   }
 }
 
+export function fxSourceLabel(source: string): string {
+  switch (source) {
+    case "eastmoney":
+      return "东方财富";
+    case "yahoo":
+      return "Yahoo";
+    case "default":
+      return "默认汇率";
+    default:
+      return source;
+  }
+}
+
 export function entryTypeLabel(type: string): string {
   return ENTRY_LABELS[type] ?? type;
 }

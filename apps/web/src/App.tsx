@@ -387,14 +387,26 @@ export default function App() {
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
-    const syncHeight = () => {
-      document.documentElement.style.setProperty("--app-height", `${viewport.height}px`);
+    let frame = 0;
+    const syncViewport = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        const root = document.documentElement;
+        root.style.setProperty("--app-height", `${viewport.height}px`);
+        root.style.setProperty("--app-offset-top", `${viewport.offsetTop}px`);
+      });
     };
-    syncHeight();
-    viewport.addEventListener("resize", syncHeight);
+    syncViewport();
+    viewport.addEventListener("resize", syncViewport);
+    viewport.addEventListener("scroll", syncViewport);
     return () => {
-      viewport.removeEventListener("resize", syncHeight);
-      document.documentElement.style.removeProperty("--app-height");
+      if (frame) window.cancelAnimationFrame(frame);
+      viewport.removeEventListener("resize", syncViewport);
+      viewport.removeEventListener("scroll", syncViewport);
+      const root = document.documentElement;
+      root.style.removeProperty("--app-height");
+      root.style.removeProperty("--app-offset-top");
     };
   }, []);
 

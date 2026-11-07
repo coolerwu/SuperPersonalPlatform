@@ -778,11 +778,55 @@ export type AllocationPortfolioConfig = {
   updated_at: string;
 };
 
+export type AllocationFx = {
+  usd_cny: number;
+  at: string | null;
+  source: string;
+};
+
+export type AllocationOverviewPortfolio = {
+  id: string;
+  name: string;
+  currency: string;
+  rate_to_usd: number;
+  total_value: number;
+  total_value_usd: number;
+  cash: number;
+  cash_usd: number;
+  weight_pct: number | null;
+};
+
+export type AllocationOverview = {
+  display_currency: string;
+  usd_cny: number;
+  fx_at: string | null;
+  fx_source: string;
+  fx_stale: boolean;
+  total_value: number;
+  cash: number;
+  holdings_value: number;
+  invested_cost: number;
+  net_contributions: number;
+  unrealized_pnl: number;
+  realized_pnl: number;
+  dividends: number;
+  fees: number;
+  total_return: number;
+  total_return_pct: number | null;
+  xirr_pct: number | null;
+  xirr_approximate: boolean;
+  portfolios: AllocationOverviewPortfolio[];
+  warnings: string[];
+};
+
 export type AllocationSnapshot = {
   generated_at: string;
+  fx: AllocationFx;
+  overview: AllocationOverview;
   portfolios: AllocationPortfolio[];
   warnings: string[];
   price_errors: { symbol: string; error: string }[];
+  fx_error?: string;
 };
 
 export type AllocationEntry = {

@@ -2871,6 +2871,36 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 - 服务端在 `GET /api/allocation` 中自动抓取行情；
 - 定时轮询刷新（页面停留期间不重复请求）。
 
+### F77 资产配置跨组合总览与 USD/CNY 汇率
+
+- 状态：已完成
+- 日期：2026-11-07
+- 来源：用户希望把 USDT 和 CNY 组合折算后一起看总额，并要求自动抓取汇率
+
+#### 功能点
+
+1. `refresh_snapshot()` 在刷新行情时同时抓 USD/CNY 汇率：主源东方财富 push2 `secid=133.USDCNH`（USD/CNH 近似 USD/CNY，约等于），失败用 Yahoo Finance `CNY=X` 兜底；成功后写入 `data/allocation.json` 的 `fx`（`usd_cny`、`at`、`source`），失败保留上次值并在响应里返回 `fx_error`。`GET /api/allocation` 仍然不发网络请求。
+2. 汇率初始默认 7.2（`source=default`）；旧 `allocation.json` 没有 `fx` 时按默认加载。
+3. `GET /api/allocation` 的快照新增 `overview`：USD 与 USDT 按 1:1、CNY 按 `1 / usd_cny` 折算，汇总所有组合的总资产、现金、持仓市值、投入本金、浮盈、已实现、分红、费用、总收益和总收益率；组合明细返回原币总额、USD 折算和占比。
+4. 总览 XIRR 为近似值：把各组合 `external_flows` 和期末总资产按当前汇率折算后合并计算，响应标注 `xirr_approximate` 并提示仅供参考；估值不完整时不算 XIRR。
+5. 不支持的币种不计入总览并给出 warning；汇率超过 24 小时未更新或仍为默认值时提示。
+6. 页面顶部第一个 tab 改为「总览」（默认打开），显示汇总指标、汇率来源/时间和组合明细；其余组合 tab、持仓、再平衡和流水行为不变。打开页面已有的自动刷新会顺带更新汇率。
+7. Agent 的 `allocation_overview(refresh=true)` 同样会刷新汇率；工具说明同步更新。
+
+#### 验收标准
+
+- 打开资产配置页默认显示「总览」；USDT 组合按 1:1、CNY 组合按抓取汇率折算后相加。
+- 刷新后 `allocation.json` 写入 `fx`，重新加载页面不联网即可看到总览；汇率抓取失败保留上次值并显示提示。
+- 旧配置文件无 `fx` 时按 7.2 加载并提示尚未获取实时汇率。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 逐历史日期的汇率折算（XIRR 和总收益按当前汇率近似）；
+- 支持 CNY/USD 以外的汇率换算；
+- 自动交易或自动再平衡；
+- 在组合内部混用多种币种。
+
 ### F76 老笔口径说明：未成笔分型不标注
 
 - 状态：已完成

@@ -35,7 +35,7 @@ from app.config import settings
 from app.market_db import MarketSessionLocal
 from app.market_models import MarketCandle
 from app.services.market_data import market_service
-from app.services.stock_quotes import fetch_stock_quote
+from app.services.stock_quotes import fetch_stock_quote, fetch_usd_cny_rate
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,10 @@ LIVE_CONCURRENCY = 5
 LIVE_TIMEOUT_SECONDS = 5.0
 MARK_STALE_SECONDS = 7 * 24 * 3600
 CACHE_STALE_SECONDS = 24 * 3600
+FX_STALE_SECONDS = 24 * 3600
+DEFAULT_USD_CNY = 7.2
+MIN_USD_CNY = 0.1
+MAX_USD_CNY = 100.0
 MIN_XIRR_DAYS = 30
 QUANTITY_EPSILON = 1e-9
 
@@ -263,8 +267,30 @@ def _normalize_portfolio_id(value: object) -> str:
     return text
 
 
+def _default_fx() -> dict[str, Any]:
+    return {"usd_cny": DEFAULT_USD_CNY, "at": None, "source": "default"}
+
+
+def _normalize_fx(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return _default_fx()
+    try:
+        rate = float(value.get("usd_cny"))
+    except (TypeError, ValueError):
+        return _default_fx()
+    if not math.isfinite(rate) or not MIN_USD_CNY <= rate <= MAX_USD_CNY:
+        return _default_fx()
+    at = value.get("at")
+    if not isinstance(at, str) or not at.strip():
+        at = None
+    source = value.get("source")
+    if not isinstance(source, str) or not source.strip():
+        source = "default"
+    return {"usd_cny": rate, "at": at, "source": source}
+
+
 def empty_config() -> dict[str, Any]:
-    return {"version": 1, "updated_at": None, "portfolios": []}
+    return {"version": 1, "updated_at": None, "portfolios": [], "fx": _default_fx()}
 
 
 def _pick(payload: dict[str, Any], existing: dict[str, Any] | None, key: str, default: Any) -> Any:
@@ -456,7 +482,12 @@ def _normalize_config(data: object) -> dict[str, Any]:
     updated_at = data.get("updated_at")
     if not isinstance(updated_at, str) or not updated_at.strip():
         updated_at = _iso(now)
-    return {"version": 1, "updated_at": updated_at, "portfolios": portfolios}
+    return {
+        "version": 1,
+        "updated_at": updated_at,
+        "portfolios": portfolios,
+        "fx": _normalize_fx(data.get("fx")),
+    }
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -1522,6 +1553,139 @@ def build_portfolio_snapshot(
     }
 
 
+def _rate_to_usd(currency: object, usd_cny: float) -> float | None:
+    """USD and USDT are treated as 1:1; CNY is divided by the USD/CNY rate."""
+    code = str(currency or "").strip().upper()
+    if code in ("USD", "USDT"):
+        return 1.0
+    if code == "CNY":
+        return 1.0 / usd_cny if usd_cny > 0 else None
+    return None
+
+
+_OVERVIEW_TOTAL_FIELDS = (
+    "total_value",
+    "cash",
+    "holdings_value",
+    "invested_cost",
+    "net_contributions",
+    "unrealized_pnl",
+    "realized_pnl",
+    "dividends",
+    "fees",
+)
+
+
+def build_overview(
+    config: dict[str, Any],
+    entries: list[dict[str, Any]],
+    portfolios: list[dict[str, Any]],
+    fx: dict[str, Any],
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    """Convert every portfolio into USD and sum them for the overview tab."""
+    usd_cny = float(fx.get("usd_cny") or DEFAULT_USD_CNY)
+    totals = {field: 0.0 for field in _OVERVIEW_TOTAL_FIELDS}
+    rows: list[dict[str, Any]] = []
+    flows: list[tuple[datetime, float]] = []
+    warnings: list[str] = []
+    valuation_complete = True
+    snapshots_by_id = {item["id"]: item for item in portfolios}
+
+    for portfolio in config.get("portfolios", []):
+        snapshot_item = snapshots_by_id.get(portfolio["id"])
+        if snapshot_item is None:
+            continue
+        currency = str(portfolio.get("currency") or "").strip().upper()
+        rate = _rate_to_usd(currency, usd_cny)
+        if rate is None:
+            warnings.append(
+                f"组合「{portfolio.get('name')}」的币种 {currency} 暂不支持折算，未计入总览"
+            )
+            continue
+        for field in _OVERVIEW_TOTAL_FIELDS:
+            value = snapshot_item.get(field)
+            if isinstance(value, (int, float)):
+                totals[field] += float(value) * rate
+
+        portfolio_entries = [
+            entry for entry in entries if entry.get("portfolio_id") == portfolio["id"]
+        ]
+        try:
+            state = _replay(portfolio_entries)
+            flows.extend(
+                (when, amount * rate) for when, amount in state["external_flows"]
+            )
+        except AllocationError:
+            valuation_complete = False
+        if any(
+            item["quantity"] > QUANTITY_EPSILON and item["price"] is None
+            for item in snapshot_item.get("positions", [])
+        ):
+            valuation_complete = False
+
+        total_value = float(snapshot_item.get("total_value") or 0.0)
+        cash = float(snapshot_item.get("cash") or 0.0)
+        rows.append(
+            {
+                "id": portfolio["id"],
+                "name": portfolio.get("name"),
+                "currency": currency,
+                "rate_to_usd": rate,
+                "total_value": total_value,
+                "total_value_usd": total_value * rate,
+                "cash": cash,
+                "cash_usd": cash * rate,
+                "weight_pct": None,
+            }
+        )
+
+    total_value = totals["total_value"]
+    net_contributions = totals["net_contributions"]
+    total_return = total_value - net_contributions
+    total_return_pct = (
+        total_return / net_contributions * 100
+        if net_contributions > QUANTITY_EPSILON
+        else None
+    )
+    if total_value > QUANTITY_EPSILON:
+        for row in rows:
+            row["weight_pct"] = row["total_value_usd"] / total_value * 100
+
+    xirr_pct = None
+    if valuation_complete and total_value > QUANTITY_EPSILON and flows:
+        xirr_pct = compute_xirr(flows + [(now, total_value)])
+        if xirr_pct is None:
+            warnings.append("无法计算总览 XIRR（现金流不足或没有解）")
+        else:
+            warnings.append("总览 XIRR 按当前汇率折算历史现金流，仅供参考")
+
+    fx_at = fx.get("at")
+    fx_stale = fx.get("source") == "default" or _is_older_than(
+        fx_at, now, FX_STALE_SECONDS
+    )
+    if fx.get("source") == "default" or fx_at is None:
+        warnings.append(f"尚未获取实时汇率，按 1 USD ≈ {usd_cny:g} CNY 折算")
+    elif fx_stale:
+        warnings.append("汇率超过 24 小时未更新，总览为估算值")
+
+    return {
+        "display_currency": "USD",
+        "usd_cny": usd_cny,
+        "fx_at": fx_at,
+        "fx_source": fx.get("source") or "default",
+        "fx_stale": fx_stale,
+        **totals,
+        "total_return": total_return,
+        "total_return_pct": total_return_pct,
+        "xirr_pct": xirr_pct,
+        "xirr_approximate": xirr_pct is not None,
+        "portfolios": rows,
+        "warnings": list(dict.fromkeys(warnings)),
+    }
+
+
 async def get_snapshot(
     *,
     live_prices: dict[str, dict[str, Any]] | None = None,
@@ -1545,8 +1709,12 @@ async def get_snapshot(
                 cached_prices=cached_prices,
             )
         )
+    now = _now()
+    fx = config.get("fx") or _default_fx()
     return {
-        "generated_at": _now_iso(),
+        "generated_at": _iso(now),
+        "fx": fx,
+        "overview": build_overview(config, entries, portfolios, fx, now=now),
         "portfolios": portfolios,
         "warnings": [],
         "price_errors": price_errors or [],
@@ -1577,7 +1745,26 @@ def _live_items(
     return list(items.values())
 
 
+async def _save_fx(fx: dict[str, Any]) -> None:
+    async with _lock():
+        config = _read_config_sync()
+        config["fx"] = _normalize_fx(fx)
+        _write_config_sync(config)
+
+
 async def refresh_snapshot() -> dict[str, Any]:
     config, entries = await _load_all()
+    fx_error: str | None = None
+    try:
+        quote = await fetch_usd_cny_rate()
+        await _save_fx(
+            {"usd_cny": quote.rate, "at": quote.at, "source": quote.source}
+        )
+    except Exception as exc:  # noqa: BLE001 - quotes still refresh without FX
+        fx_error = str(exc)
+        logger.warning("allocation: USD/CNY rate refresh failed: %s", exc)
     live_prices, errors = await fetch_live_prices(_live_items(config, entries))
-    return await get_snapshot(live_prices=live_prices, price_errors=errors)
+    snapshot = await get_snapshot(live_prices=live_prices, price_errors=errors)
+    if fx_error:
+        snapshot["fx_error"] = fx_error
+    return snapshot

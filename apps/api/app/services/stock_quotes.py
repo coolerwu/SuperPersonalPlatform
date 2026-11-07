@@ -8,6 +8,7 @@ quote for a symbol. Neither is a real-time trading feed.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -19,6 +20,8 @@ logger = logging.getLogger(__name__)
 EASTMONEY_QUOTE_BASE = "https://push2.eastmoney.com"
 EASTMONEY_MARKETS = (105, 106, 107)
 EASTMONEY_EXCHANGES = {105: "NASDAQ", 106: "NYSE", 107: "AMEX"}
+# Eastmoney's offshore USD/CNH quote; used as an approximation of USD/CNY.
+EASTMONEY_FX_SECID = "133.USDCNH"
 YAHOO_CHART_BASE = "https://query1.finance.yahoo.com"
 REQUEST_TIMEOUT_SECONDS = 8.0
 USER_AGENT = (
@@ -234,3 +237,91 @@ async def fetch_stock_quote(symbol: str) -> StockQuote:
     except StockQuoteError as exc:
         errors.append(f"Yahoo：{exc}")
     raise StockQuoteError("美股行情获取失败：" + "；".join(errors))
+
+
+@dataclass(frozen=True)
+class FxQuote:
+    """USD/CNY exchange rate; ``rate`` is CNY per 1 USD."""
+
+    pair: str
+    rate: float
+    at: str
+    source: str
+
+
+def parse_eastmoney_fx(payload: object) -> FxQuote:
+    if not isinstance(payload, dict):
+        raise StockQuoteError("东方财富汇率返回格式不正确")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise StockQuoteError("东方财富没有返回 USD/CNY 汇率")
+    try:
+        raw = float(data.get("f43"))
+        digits = int(data.get("f59") or 4)
+    except (TypeError, ValueError) as exc:
+        raise StockQuoteError("东方财富返回的汇率无效") from exc
+    if not 0 <= digits <= 6:
+        digits = 4
+    rate = raw / (10**digits)
+    if not math.isfinite(rate) or not 0.1 <= rate <= 100:
+        raise StockQuoteError("东方财富返回的汇率无效")
+    return FxQuote(
+        pair="USD/CNY",
+        rate=rate,
+        at=_timestamp_iso(data.get("f86")),
+        source="eastmoney",
+    )
+
+
+async def fetch_eastmoney_fx(
+    *, client: httpx.AsyncClient | None = None
+) -> FxQuote:
+    owns_client = client is None
+    http = client or _client(trust_env=False)
+    try:
+        try:
+            response = await http.get(
+                f"{EASTMONEY_QUOTE_BASE}/api/qt/stock/get",
+                params={
+                    "secid": EASTMONEY_FX_SECID,
+                    "fields": "f43,f57,f58,f59,f86",
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise StockQuoteError("东方财富汇率请求超时") from exc
+        except httpx.HTTPError as exc:
+            raise StockQuoteError(f"东方财富汇率请求失败：{type(exc).__name__}") from exc
+        if response.status_code == 429:
+            raise StockQuoteError("东方财富限流（HTTP 429）")
+        if response.status_code >= 400:
+            raise StockQuoteError(f"东方财富返回 HTTP {response.status_code}")
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as exc:
+            raise StockQuoteError("东方财富返回了无法解析的数据") from exc
+        return parse_eastmoney_fx(payload)
+    finally:
+        if owns_client:
+            await http.aclose()
+
+
+async def fetch_usd_cny_rate() -> FxQuote:
+    """Fetch USD/CNY from Eastmoney (direct) with a Yahoo fallback."""
+    errors: list[str] = []
+    try:
+        return await fetch_eastmoney_fx()
+    except StockQuoteError as exc:
+        errors.append(f"东方财富：{exc}")
+    try:
+        quote = await fetch_yahoo_quote("CNY=X")
+        if not math.isfinite(quote.price) or not 0.1 <= quote.price <= 100:
+            raise StockQuoteError("Yahoo 返回的汇率无效")
+        return FxQuote(
+            pair="USD/CNY",
+            rate=quote.price,
+            at=quote.at,
+            source="yahoo",
+        )
+    except StockQuoteError as exc:
+        errors.append(f"Yahoo：{exc}")
+    raise StockQuoteError("USD/CNY 汇率获取失败：" + "；".join(errors))

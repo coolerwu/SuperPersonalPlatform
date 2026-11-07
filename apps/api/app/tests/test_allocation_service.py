@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 import pytest
 
 from app.config import settings
-from app.services import allocation
+from app.services import allocation, stock_quotes
+from app.services.stock_quotes import FxQuote, StockQuote, StockQuoteError
 
 
 @pytest.fixture(autouse=True)
@@ -461,3 +462,48 @@ async def test_stock_position_uses_mark_and_stock_market() -> None:
     assert position["price_source"] == "mark"
     assert position["price"] == pytest.approx(500.0)
     assert position["market_value"] == pytest.approx(500.0)
+
+
+def test_parse_eastmoney_fx() -> None:
+    quote = stock_quotes.parse_eastmoney_fx(
+        {"data": {"f43": 66738, "f57": "USDCNH", "f59": 4, "f86": 1794002340}}
+    )
+    assert quote.rate == pytest.approx(6.6738)
+    assert quote.source == "eastmoney"
+
+
+async def test_fetch_usd_cny_rate_prefers_eastmoney(monkeypatch) -> None:
+    async def fake_eastmoney(**kwargs):
+        return FxQuote(
+            pair="USD/CNY",
+            rate=7.1,
+            at="2025-01-03T00:00:00Z",
+            source="eastmoney",
+        )
+
+    monkeypatch.setattr(stock_quotes, "fetch_eastmoney_fx", fake_eastmoney)
+    quote = await stock_quotes.fetch_usd_cny_rate()
+    assert quote.rate == pytest.approx(7.1)
+    assert quote.source == "eastmoney"
+
+
+async def test_fetch_usd_cny_rate_falls_back_to_yahoo(monkeypatch) -> None:
+    async def boom(**kwargs):
+        raise StockQuoteError("no eastmoney")
+
+    async def fake_yahoo(symbol, client=None):
+        assert symbol == "CNY=X"
+        return StockQuote(
+            symbol="CNY=X",
+            price=7.25,
+            at="2025-01-03T00:00:00Z",
+            currency="CNY",
+            exchange="FX",
+            instrument_type="CURRENCY",
+        )
+
+    monkeypatch.setattr(stock_quotes, "fetch_eastmoney_fx", boom)
+    monkeypatch.setattr(stock_quotes, "fetch_yahoo_quote", fake_yahoo)
+    quote = await stock_quotes.fetch_usd_cny_rate()
+    assert quote.rate == pytest.approx(7.25)
+    assert quote.source == "yahoo"

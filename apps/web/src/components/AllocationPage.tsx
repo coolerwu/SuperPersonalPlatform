@@ -25,6 +25,7 @@ import {
   priceSourceLabel,
 } from "./allocationUtils";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { AllocationOverview } from "./AllocationOverview";
 
 // Auto-refresh throttle for quote requests across remounts; this is not a
 // price cache, so a browser reload starts a fresh request.
@@ -119,11 +120,7 @@ export function AllocationPage() {
 
   const portfolio = useMemo(() => {
     if (!snapshot) return null;
-    return (
-      snapshot.portfolios.find((item) => item.id === selectedId) ??
-      snapshot.portfolios[0] ??
-      null
-    );
+    return snapshot.portfolios.find((item) => item.id === selectedId) ?? null;
   }, [snapshot, selectedId]);
 
   const load = useCallback(async () => {
@@ -176,12 +173,9 @@ export function AllocationPage() {
 
   useEffect(() => {
     if (!snapshot) return;
-    if (!snapshot.portfolios.length) {
-      if (selectedId) setSelectedId("");
-      return;
-    }
+    if (!selectedId) return;
     if (!snapshot.portfolios.some((item) => item.id === selectedId)) {
-      setSelectedId(snapshot.portfolios[0].id);
+      setSelectedId("");
     }
   }, [snapshot, selectedId]);
 
@@ -197,7 +191,7 @@ export function AllocationPage() {
   }, [portfolio?.id, loadEntries]);
 
   async function refreshPrices() {
-    if (!portfolio) return;
+    if (!snapshot?.portfolios.length) return;
     setRefreshing(true);
     setError("");
     setNotice("");
@@ -417,8 +411,8 @@ export function AllocationPage() {
           <button
             className="ghost-button"
             onClick={() => void refreshPrices()}
-            disabled={!portfolio || refreshing}
-            title="一次性拉取所有组合的最新加密行情；A 股和手动价不会自动更新"
+            disabled={refreshing || !snapshot?.portfolios.length}
+            title="一次性拉取所有组合的最新行情和 USD/CNY 汇率；A 股和手动价不会自动更新"
           >
             {refreshing ? "刷新中…" : "刷新全部账本"}
           </button>
@@ -447,6 +441,13 @@ export function AllocationPage() {
           {snapshot && snapshot.portfolios.length > 0 && (
             <div className="allocation-portfolio-bar">
               <div className="allocation-tabs">
+                <button
+                  className={`allocation-tab ${!portfolio ? "active" : ""}`}
+                  onClick={() => setSelectedId("")}
+                >
+                  <span>总览</span>
+                  <small>USD</small>
+                </button>
                 {snapshot.portfolios.map((item) => (
                   <button
                     key={item.id}
@@ -468,7 +469,7 @@ export function AllocationPage() {
 
           {loading ? (
             <div className="empty-note">加载中…</div>
-          ) : !portfolio ? (
+          ) : !snapshot ? (
             error ? (
               <section className="settings-card allocation-empty">
                 <h2>资产配置加载失败</h2>
@@ -489,6 +490,22 @@ export function AllocationPage() {
                 </button>
               </section>
             )
+          ) : snapshot.portfolios.length === 0 ? (
+            <section className="settings-card allocation-empty">
+              <h2>创建你的第一个长期组合</h2>
+              <p>
+                资产配置独立于交易记录：它记录的是长期资金、持仓、目标比例和再平衡纪律，
+                不读取交易记录里的短线仓位。
+              </p>
+              <button className="primary" onClick={openCreatePortfolio}>
+                + 新建组合
+              </button>
+            </section>
+          ) : !portfolio ? (
+            <AllocationOverview
+              overview={snapshot.overview}
+              fxError={snapshot.fx_error}
+            />
           ) : portfolio.error ? (
             <section className="settings-card allocation-empty">
               <h2>这个组合的流水无法重放</h2>
