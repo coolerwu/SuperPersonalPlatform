@@ -517,7 +517,7 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
         "rules": {
             "name": "程序化缠论 · 老笔",
             "bi_min_span": OLD_BI_MIN_SPAN,
-            "bi_rule": "顶底分型交替，至少 5 根合并 K 线（含两端分型）",
+            "bi_rule": "顶底分型交替，至少 5 根合并 K 线（含两端分型）；未满足跨度的分型不成笔、不标注",
             "fractal_rule": "三根合并 K 线严格顶/底",
             "zone_rule": (
                 "进入段 + 连续三笔重叠 + 离开段；"
