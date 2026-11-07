@@ -137,7 +137,8 @@ def test_find_zones_and_extension() -> None:
     assert zones[0]["start_stroke"] == 1
     assert zones[0]["end_stroke"] == 4
     assert zones[0]["exit_stroke"] == 5
-    assert zones[0]["start_time"] == 2
+    # The box starts at the entering stroke so the structure entry is covered.
+    assert zones[0]["start_time"] == strokes[0]["start_time"]
     assert zones[0]["end_time"] == 6
 
 
@@ -179,7 +180,8 @@ def test_adjacent_zones_each_have_their_own_entry() -> None:
     assert zones[0]["exit_stroke"] == 4
     assert zones[1]["entry_stroke"] == 4
     assert zones[1]["start_stroke"] == 5
-    assert zones[1]["start_time"] > zones[0]["end_time"]
+    assert zones[1]["start_stroke"] > zones[0]["end_stroke"]
+    assert zones[1]["start_time"] == strokes[zones[1]["entry_stroke"]]["start_time"]
     assert zones[1]["zg"] == pytest.approx(40)
     assert zones[1]["zd"] == pytest.approx(32)
 

@@ -2549,16 +2549,16 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 
 1. `find_zones` 从第 2 笔开始扫描，`strokes[index-1]` 作为进入段；第一笔不能充当某中枢三段中的第一段。
 2. 三笔重叠且 `ZG > ZD` 只作为候选；必须存在离开段（第一根不与 `[ZD, ZG]` 相交的笔）。样本在重叠区结束、没有离开段的结构不输出。
-3. 中枢输出新增 `entry_stroke` / `exit_stroke`；`start_stroke` 仍是三段中的第一段，`end_stroke` 是最后一段。
-4. 一个中枢结束后从 `exit_stroke + 1` 开始找下一个候选，使上一个中枢的离开段成为下一个中枢的进入段；下一个中枢的 `start_time` 必然晚于上一个中枢的 `end_time`，不再首尾相接。
+3. 中枢输出新增 `entry_stroke` / `exit_stroke`；`start_stroke` 仍是三段中的第一段，`end_stroke` 是最后一段；`start_time` 取进入段的起点，使页面上的中枢框向左覆盖进入段（`ZG/ZD` 仍只由三笔重叠决定）。
+4. 一个中枢结束后从 `exit_stroke + 1` 开始找下一个候选，使上一个中枢的离开段成为下一个中枢的进入段；下一个中枢的三段中枢必然从上一个中枢之后开始（`start_stroke > 上一个 end_stroke`），不会再共用同一段中枢。
 5. `rules.zone_rule`、`chanlun` 技能口径、页面规则说明同步更新；笔不足 5 条时提示「没有完整中枢」。
-6. 不改 ZG/ZD 定义、买卖点规则和接口字段（只新增中枢字段），前端绘制方式不变。
+6. 不改 ZG/ZD 定义、买卖点规则和接口字段（只新增中枢字段）；前端仍按 `start_time`–`end_time` 绘制，因此中枢框会随 `start_time` 左移到进入段起点。
 
 #### 验收标准
 
 - 三笔重叠但没有前置笔时不产生中枢；有进入段但数据在重叠区结束时也不产生中枢。
 - 进入段 + 三笔 + 离开段的样本产生 1 个中枢，`entry_stroke/start_stroke/end_stroke/exit_stroke` 正确。
-- 两个相邻中枢各自有进入段（`zones[1].entry_stroke == zones[0].exit_stroke`），且 `zones[1].start_time > zones[0].end_time`。
+- 两个相邻中枢各自有进入段（`zones[1].entry_stroke == zones[0].exit_stroke`），且 `zones[1].start_stroke > zones[0].end_stroke`；每个中枢的 `start_time` 等于其进入段的起点。
 - 后端测试与前端构建通过。
 
 #### 约束边界

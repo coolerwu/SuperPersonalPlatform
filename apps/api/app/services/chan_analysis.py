@@ -205,7 +205,9 @@ def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     when the data ends has no exit and is not reported. After a zone the next
     candidate starts two strokes later, so the leaving stroke becomes the
     entry of the next zone instead of turning two zones into one continuous
-    block.
+    block. ``start_time`` is the entering stroke's start so the drawn box
+    covers the structure's entry, while ZG/ZD still come from the three
+    center strokes.
     """
     zones: list[dict[str, Any]] = []
     index = 1  # strokes[index - 1] is the entering stroke
@@ -227,7 +229,7 @@ def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             break
         zones.append(
             {
-                "start_time": int(strokes[index]["start_time"]),
+                "start_time": int(strokes[index - 1]["start_time"]),
                 "end_time": int(strokes[end]["end_time"]),
                 "zg": zg,
                 "zd": zd,
@@ -431,7 +433,8 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
             "fractal_rule": "三根合并 K 线严格顶/底",
             "zone_rule": (
                 "进入段 + 连续三笔重叠 + 离开段；"
-                "ZG=三笔高点最小值，ZD=三笔低点最大值"
+                "ZG=三笔高点最小值，ZD=三笔低点最大值；"
+                "中枢框从进入段起点画到最后一笔中枢终点"
             ),
             "point_rule": "笔级别近似：1 买卖用 MACD 面积背驰，2 买卖回踩不破，3 买卖离开中枢后回抽不入中枢",
             "segments": False,
