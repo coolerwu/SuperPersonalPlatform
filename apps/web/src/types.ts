@@ -262,6 +262,7 @@ export type KnowledgeState = {
 
 export type AppSettings = {
   session_retention_days: number;
+  memory_consolidate_every_turns: number;
   session_cleanup_interval_seconds: number;
 };
 

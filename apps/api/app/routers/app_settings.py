@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/settings", tags=["settings"], dependencies=[Depe
 def _settings_out(row: AppConfig) -> dict[str, int]:
     return {
         "session_retention_days": int(row.session_retention_days),
+        "memory_consolidate_every_turns": int(row.memory_consolidate_every_turns),
         "session_cleanup_interval_seconds": max(60, settings.session_cleanup_interval_seconds),
     }
 
@@ -31,7 +32,13 @@ async def update_settings(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
     row = await app_config.get_or_create(db)
-    row.session_retention_days = int(payload.session_retention_days)
+    row.session_retention_days = app_config.bounded_retention_days(
+        payload.session_retention_days
+    )
+    if payload.memory_consolidate_every_turns is not None:
+        row.memory_consolidate_every_turns = app_config.bounded_consolidate_turns(
+            payload.memory_consolidate_every_turns
+        )
     await db.commit()
     await db.refresh(row)
     return _settings_out(row)

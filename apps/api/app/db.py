@@ -143,9 +143,41 @@ async def _ensure_agent_column(conn, column: str) -> None:  # noqa: ANN001
             raise
 
 
+async def _ensure_agent_integer_column(conn, column: str) -> None:  # noqa: ANN001
+    result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
+    if column in {row[1] for row in result.fetchall()}:
+        return
+    try:
+        await conn.exec_driver_sql(
+            f"ALTER TABLE agents ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+        )
+    except Exception:
+        # Another process may have added the column concurrently; only re-raise
+        # when it is genuinely still missing.
+        result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
+        if column not in {row[1] for row in result.fetchall()}:
+            raise
+
+
 async def _ensure_agent_columns(conn) -> None:  # noqa: ANN001
     for column in ("enabled_skills",):
         await _ensure_agent_column(conn, column)
+    await _ensure_agent_integer_column(conn, "memory_turn_count")
+
+
+async def _ensure_app_config_columns(conn) -> None:  # noqa: ANN001
+    result = await conn.exec_driver_sql("PRAGMA table_info(app_configs)")
+    if "memory_consolidate_every_turns" in {row[1] for row in result.fetchall()}:
+        return
+    try:
+        await conn.exec_driver_sql(
+            "ALTER TABLE app_configs ADD COLUMN memory_consolidate_every_turns "
+            "INTEGER NOT NULL DEFAULT 10"
+        )
+    except Exception:
+        result = await conn.exec_driver_sql("PRAGMA table_info(app_configs)")
+        if "memory_consolidate_every_turns" not in {row[1] for row in result.fetchall()}:
+            raise
 
 
 async def _ensure_session_origin(conn) -> None:  # noqa: ANN001
@@ -188,6 +220,7 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         if settings.app_database_url.startswith("sqlite"):
             await _ensure_agent_columns(conn)
+            await _ensure_app_config_columns(conn)
             await _ensure_session_origin(conn)
             await _ensure_cron_job_columns(conn)
 

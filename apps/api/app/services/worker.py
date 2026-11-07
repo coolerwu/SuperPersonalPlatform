@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import aclosing
+from contextlib import aclosing, nullcontext
 from typing import Any
 
 from sqlalchemy import select
@@ -13,6 +13,7 @@ from app.models import Agent, Message, Provider, Run, RunEvent, Session, utcnow
 from app.services import memory_service
 from app.services.attachments import build_model_content
 from app.services.executor import DeepAgentExecutor
+from app.services.memory_organizer import MEMORY_ORGANIZER_SKILL
 from app.services.run_service import (
     append_event,
     cancel_run_record,
@@ -143,13 +144,21 @@ class RunWorker:
                 await fail_run(run_id, "ConfigurationError", "agent, session, or provider not found")
                 await self._deliver_channel_reply(run_id)
                 return
-            try:
-                memory_context, memory_ids = await memory_service.retrieve_for_prompt(
-                    agent_id=agent.id, query=run.input
-                )
-            except Exception:
-                logger.exception("memory retrieval failed for run %s", run_id)
-                memory_context, memory_ids = "", []
+            run_source = run.source
+            memory_context, memory_ids = "", []
+            if run_source != "memory":
+                try:
+                    memory_context, memory_ids = await memory_service.retrieve_for_prompt(
+                        agent_id=agent.id, query=run.input
+                    )
+                except Exception:
+                    logger.exception("memory retrieval failed for run %s", run_id)
+                    memory_context, memory_ids = "", []
+            skills = list(agent.enabled_skills or [])
+            if run_source == "memory" and MEMORY_ORGANIZER_SKILL not in skills:
+                # The organizer Run gets the skill for this Run only; the
+                # Agent's saved enabled_skills stays untouched.
+                skills.append(MEMORY_ORGANIZER_SKILL)
             executor = DeepAgentExecutor(
                 provider=provider,
                 checkpoint_dir=settings.checkpoint_dir,
@@ -157,7 +166,7 @@ class RunWorker:
                 agent_id=agent.id,
                 memory_context=memory_context,
                 workspace_path=agent.id,
-                enabled_skills=list(agent.enabled_skills or []),
+                enabled_skills=skills,
                 run_id=run_id,
             )
             instructions = agent.instructions
@@ -178,8 +187,13 @@ class RunWorker:
             except Exception:
                 logger.exception("failed to record memory usage for run %s", run_id)
 
+        # Consolidation writes memory, so serialize it with post-run extraction
+        # for the same Agent; other Runs are unaffected.
+        memory_scope = (
+            self._memory_lock(agent_id) if run_source == "memory" else nullcontext()
+        )
         try:
-            async with asyncio.timeout(settings.run_timeout_seconds):
+            async with memory_scope, asyncio.timeout(settings.run_timeout_seconds):
                 async with aclosing(
                     executor.run(
                         instructions=instructions,
@@ -198,7 +212,7 @@ class RunWorker:
                                 output_tokens=int(payload.get("output_tokens") or 0),
                                 total_tokens=int(payload.get("total_tokens") or 0),
                             )
-                            if auto_memory:
+                            if auto_memory and run_source != "memory":
                                 self._schedule_memory_extraction(
                                     provider=provider,
                                     agent_id=agent_id,

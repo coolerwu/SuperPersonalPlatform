@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.db import (
     _ensure_agent_columns,
+    _ensure_app_config_columns,
     _ensure_cron_job_columns,
     _ensure_session_origin,
     engine,
@@ -24,15 +25,42 @@ async def test_ensure_agent_columns_is_idempotent(tmp_path: Path) -> None:
 
         result = await conn.exec_driver_sql("PRAGMA table_info(agents)")
         columns = {row[1] for row in result.fetchall()}
-        assert "enabled_skills" in columns
+        assert {"enabled_skills", "memory_turn_count"} <= columns
 
         row = (
             await conn.exec_driver_sql(
-                "SELECT enabled_skills FROM agents WHERE id='a'"
+                "SELECT enabled_skills, memory_turn_count FROM agents WHERE id='a'"
             )
         ).fetchone()
         assert row is not None
         assert row[0] == "[]"
+        assert row[1] == 0
+    await engine.dispose()
+
+
+async def test_ensure_app_config_columns_is_idempotent(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy-config.db'}")
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            "CREATE TABLE app_configs (id TEXT PRIMARY KEY, session_retention_days INTEGER)"
+        )
+        await conn.exec_driver_sql(
+            "INSERT INTO app_configs (id, session_retention_days) VALUES ('default', 30)"
+        )
+        await _ensure_app_config_columns(conn)
+        await _ensure_app_config_columns(conn)
+
+        result = await conn.exec_driver_sql("PRAGMA table_info(app_configs)")
+        columns = {row[1] for row in result.fetchall()}
+        assert "memory_consolidate_every_turns" in columns
+
+        row = (
+            await conn.exec_driver_sql(
+                "SELECT memory_consolidate_every_turns FROM app_configs WHERE id='default'"
+            )
+        ).fetchone()
+        assert row is not None
+        assert row[0] == 10
     await engine.dispose()
 
 

@@ -475,6 +475,7 @@ class KnowledgeConfigUpdate(BaseModel):
 
 class AppSettingsUpdate(BaseModel):
     session_retention_days: int = Field(ge=0, le=3650)
+    memory_consolidate_every_turns: int | None = Field(default=None, ge=0, le=1000)
 
 
 class TradeJournalCreate(BaseModel):

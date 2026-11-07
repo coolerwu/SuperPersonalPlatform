@@ -1,12 +1,13 @@
 import asyncio
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Agent, Message, Run, RunEvent, Session, utcnow
 from app.services.executor import ExecutorEvent
+from app.services.memory_organizer import MEMORY_ORGANIZE_PROMPT, MEMORY_ORGANIZER_SKILL
 from app.services.run_service import create_run, requeue_running_runs
 from app.services.worker import RunWorker
 
@@ -519,3 +520,60 @@ async def test_memory_extraction_is_serialized_per_agent(monkeypatch) -> None:
         await worker.stop()
 
     assert active["max"] == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_organizer_run_gets_skill_and_skips_extraction(monkeypatch) -> None:
+    captured: dict = {}
+    scheduled: list[str] = []
+
+    class CapturingExecutor(FakeExecutor):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            captured.update(self.kwargs)
+
+    monkeypatch.setattr("app.services.worker.DeepAgentExecutor", CapturingExecutor)
+    monkeypatch.setattr(
+        RunWorker,
+        "_schedule_memory_extraction",
+        lambda self, **kwargs: scheduled.append(kwargs.get("run_id", "")),
+    )
+
+    async with SessionLocal() as db:
+        agent = Agent(name="organizer-worker-test", provider_id="default")
+        db.add(agent)
+        await db.commit()
+        await db.refresh(agent)
+        session = Session(agent_id=agent.id)
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+        run = Run(
+            agent_id=agent.id,
+            session_id=session.id,
+            source="memory",
+            status="queued",
+            input=MEMORY_ORGANIZE_PROMPT,
+        )
+        db.add(run)
+        await db.commit()
+        await db.refresh(run)
+        agent_id = agent.id
+        session_id = session.id
+        run_id = run.id
+
+    worker = RunWorker()
+    try:
+        await worker.execute_run(run_id)
+        assert captured["enabled_skills"] == [MEMORY_ORGANIZER_SKILL]
+        assert captured["memory_context"] == ""
+        assert scheduled == []
+    finally:
+        await worker.stop()
+        async with SessionLocal() as db:
+            await db.execute(delete(RunEvent).where(RunEvent.run_id == run_id))
+            await db.execute(delete(Message).where(Message.session_id == session_id))
+            await db.execute(delete(Run).where(Run.id == run_id))
+            await db.execute(delete(Session).where(Session.id == session_id))
+            await db.execute(delete(Agent).where(Agent.id == agent_id))
+            await db.commit()

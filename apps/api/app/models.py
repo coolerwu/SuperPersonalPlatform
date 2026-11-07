@@ -66,6 +66,9 @@ class Agent(Base):
     provider_id: Mapped[str] = mapped_column(String(32), ForeignKey("providers.id"), default="default")
     status: Mapped[str] = mapped_column(String(20), default="active")
     auto_memory: Mapped[bool] = mapped_column(Boolean, default=True)
+    memory_turn_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     enabled_skills: Mapped[list[str]] = mapped_column(
         JSON, default=list, nullable=False, server_default="[]"
     )
@@ -369,5 +372,6 @@ class AppConfig(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
     session_retention_days: Mapped[int] = mapped_column(Integer, default=30)
+    memory_consolidate_every_turns: Mapped[int] = mapped_column(Integer, default=10)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)

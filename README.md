@@ -85,7 +85,7 @@ npm run dev
 - 工作区：每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/`，不支持自定义路径；配置页只读展示机器目录，并随左上角选中的 Agent 变化。Agent 可以查看和修改工作区内的文件；
 - 技能：在侧边栏「Agent 能力」组的「技能」页面按当前 Agent 勾选启用；未启用的技能不会进入系统提示，读取它的 SKILL.md 也不会解锁工具。磁盘上已删除但仍在启用列表里的技能会显示为“未找到”，可取消勾选移除；
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
-- 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）；同时可设置会话自动清理的保留天数（默认 30 天，0 表示不清理；`GET/PUT /api/settings`，存 `app_configs`）。
+- 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）；同时可设置会话自动清理的保留天数（默认 30 天，0 表示不清理）和自动记忆整理间隔（每 N 个用户回合，默认 10，0 表示关闭；`GET/PUT /api/settings`，存 `app_configs`）。
 
 Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `reasoning_delta` 流式片段，在右侧抽屉里展开查看。`tool_call` 事件记录工具名与解析后的参数，聊天中的活动行据此显示「正在读取 …」「正在浏览 …」，运行超过 10 秒后附上已用时间。
 
@@ -181,6 +181,7 @@ metadata:
 - 手动新增/编辑/删除/搜索；对话里“记住：……”会立即写入用户记忆；
 - Agent 编辑区有「自动学习记忆」开关：开启后，Run 完成时最多返回 12 个记忆操作；先用 FTS5（trigram）在 user memory 和当前 Agent memory 中找出相关历史记忆，再让模型返回 add/update/delete 做合并，并为新增条目选择 `scope=user|agent`（用户长期偏好/个人事实写 user，Agent 工作方式/项目知识写 agent，不确定用 agent；update/delete 保持原 scope），去重后直接写入，每个 scope 上限 200 条；提取在 Run 完成后以后台任务执行，不占用 Run 并发槽，同一 Agent 的提取串行执行，避免并发写入重复记忆；
 - **整理记忆**：聊天输入区「＋」菜单的「整理记忆」指令会直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` / `memory_move` 合并重复、删除失效项，并把明显属于用户偏好或个人事实、但落在当前 Agent 记忆里的条目归位到 user memory；只更新/删除/归位、不新增事实；范围是 user memory 和当前 Agent 的 agent memory。首次使用时会自动为当前 Agent 启用该技能；
+- **自动整理**：每个 Agent 累计用户回合（网页与微信消息，定时任务和重试不算），达到配置页「运行环境」设置的间隔（默认 10，0 关闭）时自动发起一次「整理记忆」Run 并把计数归零；生成的会话标题为「记忆整理」，与手动整理使用同一条指令和技能。只对开启「自动学习记忆」的 Agent 生效；反复手动整理不会重复触发；
 - 每次 Run 只注入与本轮输入相关的记忆：中文按双字组（过滤停用词）、英文按词元匹配，user 与当前 Agent 同池按相关度竞争（不做 scope 配额或 user 全量注入）；最多 12 条、1500 字，单条最多 320 字，没有相关记忆时不注入。记忆作为数据块附加到系统提示词，不会自动修改 Agent instructions；记录实际使用的 memory id。
 
 ## 渠道（微信个人号）
@@ -303,7 +304,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
   - `channels`：渠道及其 iLink 登录凭据（`bot_token` 不返回前端、不写日志）；`channel_conversations`：外部联系人与 Session 的映射（含最新 `context_token`）；`channel_inbounds`：入站消息幂等键；`channel_run_links`：哪些 Run 需要回信；`channel_deliveries`：Run 终态的发送记录，用于崩溃恢复。
   - `backtests`：回测任务与结果，含状态、策略代码、指标、下采样净值/回撤/价格、交易明细和告警；大数组按上限截断。
   - `knowledge_configs`：知识库 WebDAV 配置（单行），含启用开关、地址、账号、应用密码、根目录和同步间隔；密码不返回前端。
-  - `app_configs`：平台设置（单行），当前保存会话自动清理的保留天数。
+  - `app_configs`：平台设置（单行），保存会话自动清理的保留天数和自动记忆整理间隔。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles`（按 `symbol + granularity + open_time_ms` 唯一）和 `market_sync_state`（已同步范围与上次错误）。可以独立删除，下次回测会重新抓取。
 - `trade-journal.jsonl`：交易记录，一行一个 JSON 对象，权限 0600；由 `trade-journal` 技能的工具读写，不建数据库表。字段和计算口径见「交易记录」；可以独立备份、复制和手工查看。
 - `allocation.json`：长期资产组合配置，权限 0600；保存组合名称、基础币种、备注、现金目标、再平衡带宽、目标占比和手动价。见「资产配置」；不建数据库表。
@@ -370,6 +371,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 | `VISION_MAX_IMAGE_BYTES` | 单张图片发送给模型的上限；超过时先压缩 | `4194304` |
 | `VISION_MAX_IMAGE_EDGE` | 超大图片压缩后的最长边（像素，最小 320） | `1600` |
 | `SESSION_RETENTION_DAYS` | 会话保留初始值（天）；仅在首次创建配置时写入，之后在配置页「运行环境」修改，`0` 表示不清理 | `30` |
+| `MEMORY_CONSOLIDATE_EVERY_TURNS` | 自动记忆整理间隔初始值（用户回合）；仅在首次创建配置时写入，之后在配置页「运行环境」修改，`0` 表示关闭 | `10` |
 | `SESSION_CLEANUP_INTERVAL_SECONDS` | 会话清理扫描间隔（秒，最小 60） | `3600` |
 | `WEIXIN_LONG_POLL_TIMEOUT_MS` | iLink `getupdates` 长轮询窗口 | `35000` |
 | `WEIXIN_API_TIMEOUT_MS` | iLink `sendmessage` 请求超时 | `15000` |

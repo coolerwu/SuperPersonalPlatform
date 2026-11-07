@@ -2815,3 +2815,33 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 - 引入 react-router 等路由依赖；
 - 为回测表单、图表缩放或滚动位置做深链；
 - 服务端读取或校验这些参数。
+
+### F75 按用户回合自动整理记忆
+
+- 状态：已完成
+- 日期：2026-11-07
+- 来源：用户要求每 10 个用户 turn 自动触发一次「整理记忆」，并希望阈值可配置
+
+#### 功能点
+
+1. `agents` 增加 `memory_turn_count`。只统计网页聊天（`source=manual`）和微信入站（`source=wechat`）的用户 Run；定时任务（`cron`）、重试（`retry`）和自动整理本身（`memory`）不计数。发送即计数，失败或超时也算一次 turn。
+2. 阈值是全局设置，存 `app_configs.memory_consolidate_every_turns`，默认 10，0 关闭；配置页「运行环境」tab 可修改，读写沿用 `GET/PUT /api/settings`。环境变量 `MEMORY_CONSOLIDATE_EVERY_TURNS` 只在首次创建配置行时作为种子。
+3. 计数达到阈值时在同一事务内归零，并新建「记忆整理」Session（`origin=memory`）和一条 `source=memory` 的 queued Run；其用户消息与手动「整理记忆」指令完全一致，由现有 `RunWorker` 执行，不需要新调度器。计数与触发包在 SAVEPOINT 中，记账失败不影响用户消息发送；SQL 级自增 + 带条件的归零保证并发时只会创建一个整理 Run。
+4. 只对开启「自动学习记忆」的 Agent 生效；用户手动发送「整理记忆」指令时计数直接归零，不额外计数或触发。
+5. 自动整理 Run 不注入相关记忆、不触发 Run 完成后的自动提取；执行期间持有该 Agent 的记忆锁，与自动提取串行。`memory-organizer` 只注入到本轮的技能列表，不写入 Agent 的 `enabled_skills`。
+6. 整理 Run 不关联渠道，不会推送到微信；侧栏会话列表会显示「记忆整理」会话。
+
+#### 验收标准
+
+- 阈值设为 N 时，第 N 个用户 turn 恰好创建一个整理 Run，计数归零；未满不触发，再满再次触发。
+- `cron` / `retry` 不计数，`wechat` 计数；阈值 0 或 `auto_memory=False` 不触发。
+- 手动「整理记忆」把计数归零且不额外创建整理 Run。
+- 运行环境页可读写阈值，`GET/PUT /api/settings` 返回并校验新字段。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 按钟表时间定时整理（不修改 cron 机制）；
+- 每个 Agent 独立阈值或开关；
+- 整理 Run 失败后自动重试或补跑；
+- 前端为 `origin=memory` 的会话新增徽标。

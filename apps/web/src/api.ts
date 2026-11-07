@@ -296,7 +296,10 @@ export const api = {
 
   getSystem: () => request<SystemInfo>("/api/system"),
   getSettings: () => request<AppSettings>("/api/settings"),
-  updateSettings: (payload: { session_retention_days: number }) =>
+  updateSettings: (payload: {
+    session_retention_days: number;
+    memory_consolidate_every_turns?: number;
+  }) =>
     request<AppSettings>("/api/settings", {
       method: "PUT",
       body: JSON.stringify(payload),
