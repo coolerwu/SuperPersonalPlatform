@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
 import type {
@@ -25,6 +25,11 @@ import {
   priceSourceLabel,
 } from "./allocationUtils";
 import { ConfirmDialog } from "./ConfirmDialog";
+
+// Auto-refresh throttle for quote requests across remounts; this is not a
+// price cache, so a browser reload starts a fresh request.
+const AUTO_REFRESH_INTERVAL_MS = 60_000;
+let lastAutoRefreshAt = 0;
 
 type Segment = {
   key: string;
@@ -110,6 +115,7 @@ export function AllocationPage() {
   >(undefined);
   const [deleteEntry, setDeleteEntry] = useState<AllocationEntry | null>(null);
   const [deletePortfolioOpen, setDeletePortfolioOpen] = useState(false);
+  const autoRefreshAttempted = useRef(false);
 
   const portfolio = useMemo(() => {
     if (!snapshot) return null;
@@ -154,6 +160,19 @@ export function AllocationPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Fetch fresh quotes when the page opens so the user does not have to click
+  // refresh every visit. Throttled because a request can be slow and switching
+  // pages remounts this component.
+  useEffect(() => {
+    if (!snapshot || autoRefreshAttempted.current) return;
+    if (!snapshot.portfolios.length) return;
+    autoRefreshAttempted.current = true;
+    const now = Date.now();
+    if (now - lastAutoRefreshAt < AUTO_REFRESH_INTERVAL_MS) return;
+    lastAutoRefreshAt = now;
+    void refreshPrices();
+  }, [snapshot]);
 
   useEffect(() => {
     if (!snapshot) return;
