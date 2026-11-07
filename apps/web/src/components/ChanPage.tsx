@@ -25,21 +25,86 @@ const POPULAR_SYMBOLS = [
   "OPUSDT", "NEARUSDT", "ATOMUSDT", "FILUSDT", "INJUSDT", "PEPEUSDT",
 ];
 
+const CHAN_GRANULARITIES = ["15min", "1h", "4h", "1day", "1week"] as const;
+const CHAN_BARS = [200, 300, 500, 800] as const;
+
+type ChanGranularity = (typeof CHAN_GRANULARITIES)[number];
+type ChanBars = (typeof CHAN_BARS)[number];
+type ChanMode = "chart" | "backtest";
+
+type ChanConfig = {
+  symbol: string;
+  granularity: ChanGranularity;
+  bars: ChanBars;
+  mode: ChanMode;
+  showMerged: boolean;
+  showFractals: boolean;
+  showStrokes: boolean;
+  showZones: boolean;
+  showPoints: boolean;
+  showMacd: boolean;
+  showDivergence: boolean;
+};
+
+function readChanConfig(search: string): ChanConfig {
+  const params = new URLSearchParams(search);
+  const flag = (name: string) => {
+    const value = params.get(name);
+    if (value === null) return true;
+    return value !== "0" && value.toLowerCase() !== "false";
+  };
+  const granularity = params.get("granularity") ?? "";
+  const bars = Number(params.get("bars"));
+  const symbol = (params.get("symbol") ?? "").trim().toUpperCase();
+  return {
+    symbol: symbol || "BTCUSDT",
+    granularity: (CHAN_GRANULARITIES as readonly string[]).includes(granularity)
+      ? (granularity as ChanGranularity)
+      : "1h",
+    bars: (CHAN_BARS as readonly number[]).includes(bars) ? (bars as ChanBars) : 300,
+    mode: params.get("mode") === "backtest" ? "backtest" : "chart",
+    showMerged: flag("merged"),
+    showFractals: flag("fractals"),
+    showStrokes: flag("strokes"),
+    showZones: flag("zones"),
+    showPoints: flag("points"),
+    showMacd: flag("macd"),
+    showDivergence: flag("divergence"),
+  };
+}
+
+function chanSearch(config: ChanConfig): string {
+  const params = new URLSearchParams();
+  params.set("symbol", config.symbol);
+  params.set("granularity", config.granularity);
+  params.set("bars", String(config.bars));
+  params.set("mode", config.mode);
+  params.set("merged", config.showMerged ? "1" : "0");
+  params.set("fractals", config.showFractals ? "1" : "0");
+  params.set("strokes", config.showStrokes ? "1" : "0");
+  params.set("zones", config.showZones ? "1" : "0");
+  params.set("points", config.showPoints ? "1" : "0");
+  params.set("macd", config.showMacd ? "1" : "0");
+  params.set("divergence", config.showDivergence ? "1" : "0");
+  return params.toString();
+}
+
 export function ChanPage() {
-  const [symbol, setSymbol] = useState("BTCUSDT");
-  const [granularity, setGranularity] = useState("1h");
-  const [bars, setBars] = useState(300);
+  const [initial] = useState(() => readChanConfig(window.location.search));
+  const [symbol, setSymbol] = useState(initial.symbol);
+  const [granularity, setGranularity] = useState<ChanGranularity>(initial.granularity);
+  const [bars, setBars] = useState<ChanBars>(initial.bars);
   const [analysis, setAnalysis] = useState<ChanAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [showMerged, setShowMerged] = useState(true);
-  const [showFractals, setShowFractals] = useState(true);
-  const [showStrokes, setShowStrokes] = useState(true);
-  const [showZones, setShowZones] = useState(true);
-  const [showPoints, setShowPoints] = useState(true);
-  const [showMacd, setShowMacd] = useState(true);
-  const [showDivergence, setShowDivergence] = useState(true);
-  const [mode, setMode] = useState<"chart" | "backtest">("chart");
+  const [showMerged, setShowMerged] = useState(initial.showMerged);
+  const [showFractals, setShowFractals] = useState(initial.showFractals);
+  const [showStrokes, setShowStrokes] = useState(initial.showStrokes);
+  const [showZones, setShowZones] = useState(initial.showZones);
+  const [showPoints, setShowPoints] = useState(initial.showPoints);
+  const [showMacd, setShowMacd] = useState(initial.showMacd);
+  const [showDivergence, setShowDivergence] = useState(initial.showDivergence);
+  const [mode, setMode] = useState<ChanMode>(initial.mode);
 
   const analyze = useCallback(async () => {
     setLoading(true);
@@ -64,6 +129,38 @@ export function ChanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (window.location.pathname.replace(/\/+$/, "") !== "/chan") return;
+    const next = `/chan?${chanSearch({
+      symbol,
+      granularity,
+      bars,
+      mode,
+      showMerged,
+      showFractals,
+      showStrokes,
+      showZones,
+      showPoints,
+      showMacd,
+      showDivergence,
+    })}`;
+    if (window.location.pathname + window.location.search !== next) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [
+    symbol,
+    granularity,
+    bars,
+    mode,
+    showMerged,
+    showFractals,
+    showStrokes,
+    showZones,
+    showPoints,
+    showMacd,
+    showDivergence,
+  ]);
+
   return (
     <main className="backtest-page chan-page">
       <header className="chan-toolbar">
@@ -83,7 +180,10 @@ export function ChanPage() {
         </label>
         <label className="chan-control">
           <span>周期</span>
-          <select value={granularity} onChange={(event) => setGranularity(event.target.value)}>
+          <select
+            value={granularity}
+            onChange={(event) => setGranularity(event.target.value as ChanGranularity)}
+          >
             <option value="15min">15min</option>
             <option value="1h">1h</option>
             <option value="4h">4h</option>
@@ -93,7 +193,7 @@ export function ChanPage() {
         </label>
         <label className="chan-control">
           <span>K 线</span>
-          <select value={bars} onChange={(event) => setBars(Number(event.target.value))}>
+          <select value={bars} onChange={(event) => setBars(Number(event.target.value) as ChanBars)}>
             <option value="200">200</option>
             <option value="300">300</option>
             <option value="500">500</option>
