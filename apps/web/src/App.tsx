@@ -387,21 +387,15 @@ export default function App() {
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
-    let frame = 0;
     const syncViewport = () => {
-      if (frame) return;
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        const root = document.documentElement;
-        root.style.setProperty("--app-height", `${viewport.height}px`);
-        root.style.setProperty("--app-offset-top", `${viewport.offsetTop}px`);
-      });
+      const root = document.documentElement;
+      root.style.setProperty("--app-height", `${viewport.height}px`);
+      root.style.setProperty("--app-offset-top", `${viewport.offsetTop}px`);
     };
     syncViewport();
     viewport.addEventListener("resize", syncViewport);
     viewport.addEventListener("scroll", syncViewport);
     return () => {
-      if (frame) window.cancelAnimationFrame(frame);
       viewport.removeEventListener("resize", syncViewport);
       viewport.removeEventListener("scroll", syncViewport);
       const root = document.documentElement;

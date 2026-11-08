@@ -3126,11 +3126,16 @@ textarea {
 @media (max-width: 860px) {
   .app-shell,
   .app-shell:not(.with-drawer) {
+    position: fixed;
+    top: 0;
+    right: 0;
+    left: 0;
     display: flex;
     flex-direction: column;
     height: 100vh;
     height: var(--app-height, 100dvh);
     min-height: 0;
+    transform: translateY(var(--app-offset-top, 0px));
   }
 
   .mobile-bar {
@@ -6324,45 +6329,6 @@ body:has(.app-shell.pearl) .select-empty {
 }
 
 /* Asset allocation */
-.allocation-portfolio-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-
-.allocation-tabs {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  flex: 1;
-}
-
-.allocation-tab {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 7px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.allocation-tab small {
-  color: var(--faint);
-  font-size: 9.5px;
-}
-
-.allocation-tab.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  font-weight: 600;
-}
-
 .allocation-note {
   display: flex;
   gap: 10px;
@@ -6604,6 +6570,39 @@ body:has(.app-shell.pearl) .select-empty {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.allocation-portfolio-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 22px 0 6px;
+}
+
+.allocation-portfolio-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 0 2px;
+}
+
+.allocation-portfolio-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.allocation-portfolio-title h2 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
+.allocation-portfolio-title .journal-market {
+  font-size: 10px;
 }
 
 .allocation-overview-row {
@@ -6877,19 +6876,6 @@ body:has(.app-shell.pearl) .select-empty {
 }
 
 @media (max-width: 860px) {
-  .allocation-portfolio-bar {
-    align-items: stretch;
-  }
-
-  .allocation-tabs {
-    width: 100%;
-  }
-
-  .allocation-tab {
-    flex: 1;
-    justify-content: center;
-  }
-
   .allocation-bar-row {
     flex-direction: column;
     align-items: flex-start;
