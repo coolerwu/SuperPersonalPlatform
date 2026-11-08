@@ -190,6 +190,9 @@ function ViewportDebug() {
 
 export default function App() {
   const [initialRoute] = useState(() => parsePath(window.location.pathname));
+  const [viewportDebug] = useState(() =>
+    new URLSearchParams(window.location.search).has("viewport-debug"),
+  );
   const [auth, setAuth] = useState<boolean | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -502,12 +505,10 @@ export default function App() {
     const onOrientationChange = () => {
       window.setTimeout(() => {
         typing = isEditable(document.activeElement);
-        if (!typing) {
-          fullHeight = Math.max(
-            window.innerHeight,
-            document.documentElement.clientHeight,
-          );
-        }
+        fullHeight = Math.max(
+          window.innerHeight,
+          document.documentElement.clientHeight,
+        );
         apply();
       }, 250);
       schedule();
@@ -1997,6 +1998,8 @@ export default function App() {
         onClose={() => setNewAgentOpen(false)}
         onCreate={createAgent}
       />
+
+      {viewportDebug && <ViewportDebug />}
     </div>
   );
 }

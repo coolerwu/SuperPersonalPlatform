@@ -7229,3 +7229,20 @@ body:has(.app-shell.pearl) .select-empty {
     padding: 24px 6px;
   }
 }
+
+/* Opt-in viewport debug readout (?viewport-debug=1). */
+.viewport-debug {
+  position: fixed;
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  left: 8px;
+  z-index: 200;
+  max-width: calc(100vw - 16px);
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.84);
+  color: #fff;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  pointer-events: none;
+}
