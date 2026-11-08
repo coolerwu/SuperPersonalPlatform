@@ -155,14 +155,37 @@ def find_fractals(merged: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return fractals
 
 
+def _extend_stroke(stroke: dict[str, Any], fractal: dict[str, Any]) -> None:
+    stroke["end_time"] = fractal["time"]
+    stroke["end_price"] = fractal["price"]
+    stroke["high"] = max(float(stroke["start_price"]), float(fractal["price"]))
+    stroke["low"] = min(float(stroke["start_price"]), float(fractal["price"]))
+
+
+def _breaks_stroke(stroke: dict[str, Any], fractal: dict[str, Any]) -> bool:
+    if stroke["direction"] == "down" and fractal["type"] == "top":
+        return float(fractal["price"]) > float(stroke["start_price"])
+    if stroke["direction"] == "up" and fractal["type"] == "bottom":
+        return float(fractal["price"]) < float(stroke["start_price"])
+    return False
+
+
 def build_strokes(
     fractals: list[dict[str, Any]],
     *,
     min_span: int = OLD_BI_MIN_SPAN,
 ) -> list[dict[str, Any]]:
-    """Connect alternating fractals using the old-bi five-bar rule."""
+    """Connect alternating fractals using the old-bi rule with stroke breaks.
+
+    A reverse fractal that trades beyond the current stroke's starting price
+    invalidates that stroke: the broken stroke is removed, the previous stroke
+    extends to the new extreme, and the next opposite fractal can form a new
+    stroke even if it is closer than ``min_span`` (the break itself confirms
+    the reversal). Without a break, the old-bi five-bar rule still applies.
+    """
     strokes: list[dict[str, Any]] = []
     selected: dict[str, Any] | None = None
+    after_break = False
     for fractal in fractals:
         if selected is None:
             selected = fractal
@@ -177,12 +200,19 @@ def build_strokes(
             if more_extreme:
                 selected = fractal
                 if strokes:
-                    strokes[-1]["end_time"] = fractal["time"]
-                    strokes[-1]["end_price"] = fractal["price"]
-                    strokes[-1]["high"] = max(strokes[-1]["start_price"], fractal["price"])
-                    strokes[-1]["low"] = min(strokes[-1]["start_price"], fractal["price"])
+                    _extend_stroke(strokes[-1], fractal)
             continue
-        if fractal["merged_index"] - selected["merged_index"] < min_span:
+        if strokes and _breaks_stroke(strokes[-1], fractal):
+            strokes.pop()
+            if strokes:
+                _extend_stroke(strokes[-1], fractal)
+            selected = fractal
+            after_break = True
+            continue
+        if (
+            fractal["merged_index"] - selected["merged_index"] < min_span
+            and not after_break
+        ):
             continue
         if selected["type"] == "bottom" and fractal["price"] <= selected["price"]:
             continue
@@ -200,6 +230,7 @@ def build_strokes(
             }
         )
         selected = fractal
+        after_break = False
     return strokes
 
 
@@ -546,7 +577,11 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
         "rules": {
             "name": "程序化缠论 · 老笔",
             "bi_min_span": OLD_BI_MIN_SPAN,
-            "bi_rule": "顶底分型交替，至少 5 根合并 K 线（含两端分型）；未满足跨度的分型不成笔、不标注",
+            "bi_rule": (
+                "顶底分型交替，至少 5 根合并 K 线（含两端分型）；"
+                "反向分型越过当前笔起点时作废该笔，上一笔延伸到新极值，"
+                "破笔后的第一笔不受跨度限制；未成笔分型不标注"
+            ),
             "fractal_rule": "三根合并 K 线严格顶/底",
             "zone_rule": (
                 "进入段 + 连续三笔重叠 + 确认离开段；"

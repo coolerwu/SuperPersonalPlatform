@@ -93,7 +93,7 @@ def test_build_strokes_old_bi_and_replacement() -> None:
         _fractal("bottom", 0, 10),
         _fractal("top", 5, 20),
         _fractal("bottom", 10, 12),
-        _fractal("top", 15, 22),
+        _fractal("top", 15, 19),
     ]
     strokes = build_strokes(fractals)
     assert [item["direction"] for item in strokes] == ["up", "down", "up"]
@@ -115,6 +115,70 @@ def test_build_strokes_old_bi_and_replacement() -> None:
     # Opposite fractals too close together do not create a stroke.
     close = build_strokes([_fractal("bottom", 0, 10), _fractal("top", 2, 20)])
     assert close == []
+
+
+def test_build_strokes_breaks_a_down_stroke_with_a_higher_top() -> None:
+    strokes = build_strokes(
+        [
+            _fractal("bottom", 0, 10),
+            _fractal("top", 5, 20),
+            _fractal("bottom", 9, 12),
+            _fractal("top", 10, 25),
+            _fractal("bottom", 12, 11),
+        ]
+    )
+    assert [(item["direction"], item["end_price"]) for item in strokes] == [
+        ("up", 25),
+        ("down", 11),
+    ]
+    assert strokes[0]["start_time"] == 1
+    assert strokes[1]["start_time"] == 11
+
+
+def test_build_strokes_breaks_an_up_stroke_with_a_lower_bottom() -> None:
+    strokes = build_strokes(
+        [
+            _fractal("top", 0, 20),
+            _fractal("bottom", 5, 10),
+            _fractal("top", 9, 18),
+            _fractal("bottom", 10, 5),
+            _fractal("top", 12, 9),
+        ]
+    )
+    assert [(item["direction"], item["end_price"]) for item in strokes] == [
+        ("down", 5),
+        ("up", 9),
+    ]
+
+
+def test_build_strokes_break_keeps_the_higher_same_type_extreme() -> None:
+    strokes = build_strokes(
+        [
+            _fractal("bottom", 0, 10),
+            _fractal("top", 5, 20),
+            _fractal("bottom", 9, 12),
+            _fractal("top", 10, 25),
+            _fractal("top", 11, 27),
+            _fractal("bottom", 13, 11),
+        ]
+    )
+    assert [(item["direction"], item["end_price"]) for item in strokes] == [
+        ("up", 27),
+        ("down", 11),
+    ]
+
+
+def test_build_strokes_does_not_break_when_reverse_stays_inside() -> None:
+    strokes = build_strokes(
+        [
+            _fractal("bottom", 0, 10),
+            _fractal("top", 5, 20),
+            _fractal("bottom", 9, 12),
+            _fractal("top", 10, 19),
+        ]
+    )
+    assert [item["direction"] for item in strokes] == ["up", "down"]
+    assert strokes[-1]["end_price"] == 12
 
 
 def _stroke(start: int, end: int, start_price: float, end_price: float) -> dict:
