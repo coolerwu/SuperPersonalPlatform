@@ -837,15 +837,6 @@ export default function App() {
         next.streamText = session.streamText + String(event.payload.delta ?? "");
         next.activity = "";
         if (session.notice === RECONNECT_NOTICE) next.notice = "";
-      } else if (event.type === "assistant_replace") {
-        // A revised final reply replaces everything streamed for this run.
-        next.streamText = String(event.payload.text ?? "");
-        next.activity = "";
-        if (session.notice === RECONNECT_NOTICE) next.notice = "";
-      } else if (event.type === "rubric_started") {
-        next.activity = "正在校验回复";
-      } else if (event.type === "rubric_result") {
-        next.activity = "";
       } else if (event.type === "reasoning_delta") {
         const delta = String(event.payload.delta ?? "");
         next.streamReasoning = session.streamReasoning + delta;

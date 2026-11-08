@@ -6,6 +6,7 @@ from sqlalchemy import delete, select
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Agent, Message, Run, RunEvent, Session, utcnow
+from app.services import memory_service
 from app.services.executor import ExecutorEvent
 from app.services.memory_organizer import MEMORY_ORGANIZE_PROMPT, MEMORY_ORGANIZER_SKILL
 from app.services.run_service import create_run, requeue_running_runs
@@ -131,15 +132,29 @@ async def test_worker_passes_workspace_config(monkeypatch) -> None:
         agent = await db.get(Agent, agent_id)
         assert agent is not None
         agent.enabled_skills = ["demo"]
+        agent.instructions = "回答先给结论"
         await db.commit()
 
+    user_memory = await memory_service.create_memory(
+        scope="user", content="用户偏好：用简体中文"
+    )
+    agent_memory = await memory_service.create_memory(
+        scope="agent", agent_id=agent_id, content="Agent 工作方式：先读文件"
+    )
+    assert user_memory is not None and agent_memory is not None
     run, _ = await create_run(session_id, "hi")
     worker = RunWorker()
     await worker.execute_run(run.id)
+    rubric = captured.get("rubric", "")
+    await memory_service.delete_memory(user_memory.id)
+    await memory_service.delete_memory(agent_memory.id)
+    await worker.stop()
 
     assert captured["workspace_path"] == agent_id
     assert captured["enabled_skills"] == ["demo"]
-    await worker.stop()
+    assert "回答先给结论" in rubric
+    assert "用户偏好：用简体中文" in rubric
+    assert "Agent 工作方式：先读文件" not in rubric
 
 
 @pytest.mark.asyncio

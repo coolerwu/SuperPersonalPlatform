@@ -3080,3 +3080,22 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 - 线段级别中枢、多级别联立；
 - 全局新笔口径或参数化笔规则；
 - 自动交易或收益承诺。
+
+### F82 最终回复校验（RubricMiddleware）
+
+- 状态：已完成
+- 日期：2026-11-08
+- 来源：用户要求新增 rubric middleware，rubric 依据为当前 Agent 的 prompt 和全部用户记忆
+
+#### 功能点
+
+1. 网页聊天（`source=manual|retry`）在有 user memory 时，`RunWorker` 用当前 Agent 的 instructions 和全部 user scope 记忆（不截断，不含 agent 记忆）拼成 rubric，通过 `input_state["rubric"]` 传给 deepagents 的 `RubricMiddleware`；没有 user memory 时不挂载。
+2. 中间件复用主模型，`max_iterations=1`：每条最终回复只评分一次，不修订。
+3. 评分器运行期间产生的 `messages` 流用 `rubric_evaluation_start` / `rubric_evaluation_end` 夹住过滤，不进入聊天。
+
+#### 验收标准
+
+- 有用户记忆时每条网页聊天最终回复都会校验一次；没有用户记忆时不挂载。
+- rubric 包含 instructions 和全部 user 记忆，agent 记忆不进入 rubric。
+- 评分器的输出不出现在聊天流里。
+- 后端测试与前端构建通过。

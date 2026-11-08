@@ -229,6 +229,12 @@ def _split_stream_chunk(chunk: Any) -> tuple[tuple[str, ...], Any]:
     return (), chunk
 
 
+def _stream_mode(chunk: Any) -> str | None:
+    if isinstance(chunk, tuple) and len(chunk) == 3 and isinstance(chunk[1], str):
+        return chunk[1]
+    return None
+
+
 def _is_internal_summarization(metadata: dict[str, Any]) -> bool:
     """Context-compaction calls share the model node but are not assistant output."""
     if metadata.get("lc_source") == "summarization":
@@ -367,6 +373,7 @@ class DeepAgentExecutor:
         skill_tools: SkillToolRegistry | None = None,
         skills_dir: Path | None = None,
         run_id: str = "",
+        rubric: str = "",
     ) -> None:
         self.provider = provider
         self.checkpoint_dir = checkpoint_dir
@@ -378,10 +385,11 @@ class DeepAgentExecutor:
         self.skill_tools = skill_tools if skill_tools is not None else SKILL_TOOL_REGISTRY
         self.skills_dir = skills_dir
         self.run_id = run_id
+        self.rubric = rubric
 
     async def run(self, *, instructions: str, session_id: str, content: RunContent) -> AsyncIterator[ExecutorEvent]:
         try:
-            from deepagents import create_deep_agent
+            from deepagents import RubricMiddleware, create_deep_agent
             from langchain_openai import ChatOpenAI
             from langchain_quickjs import CodeInterpreterMiddleware
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -484,6 +492,10 @@ class DeepAgentExecutor:
                         ptc=["ls", "read_file", "write_file", "edit_file", "glob", "grep"],
                     ),
                 ]
+                if self.rubric:
+                    middleware.append(
+                        RubricMiddleware(model=chat_model, max_iterations=1)
+                    )
                 # The model class owns retries (including subagents and the
                 # step-limit summary); ChatOpenAI SDK retries stay disabled so
                 # there is exactly one retry layer.
@@ -641,13 +653,29 @@ class DeepAgentExecutor:
         pending_tool_calls: dict[str, dict[str, str]] = {}
         announced_tool_calls: set[str] = set()
         tool_call_id_by_index: dict[Any, str] = {}
+        grading = False
+        if self.rubric:
+            # RubricMiddleware is a no-op unless the state handed to astream
+            # carries the rubric it should grade against.
+            input_state = {**input_state, "rubric": self.rubric}
         async for chunk in agent.astream(
             input_state,
             config=config,
-            stream_mode="messages",
+            stream_mode=["messages", "custom"],
             subgraphs=True,
         ):
+            mode = _stream_mode(chunk)
             namespace, data = _split_stream_chunk(chunk)
+            if mode == "custom":
+                if isinstance(data, dict):
+                    if data.get("type") == "rubric_evaluation_start":
+                        grading = True
+                    elif data.get("type") == "rubric_evaluation_end":
+                        grading = False
+                continue
+            if grading:
+                # Grader output shares this stream; it is not assistant text.
+                continue
             if not (isinstance(data, tuple) and len(data) >= 2):
                 continue
             message = data[0]

@@ -159,6 +159,14 @@ class RunWorker:
                 # The organizer Run gets the skill for this Run only; the
                 # Agent's saved enabled_skills stays untouched.
                 skills.append(MEMORY_ORGANIZER_SKILL)
+            rubric = ""
+            if run_source in ("manual", "retry"):
+                memories = await memory_service.list_memories(scope="user")
+                if memories:
+                    memory_block = "\n".join(
+                        f"- {memory.content}" for memory in memories
+                    )
+                    rubric = f"{agent.instructions}\n\n用户长期记忆：\n{memory_block}"
             executor = DeepAgentExecutor(
                 provider=provider,
                 checkpoint_dir=settings.checkpoint_dir,
@@ -168,6 +176,7 @@ class RunWorker:
                 workspace_path=agent.id,
                 enabled_skills=skills,
                 run_id=run_id,
+                rubric=rubric,
             )
             instructions = agent.instructions
             auto_memory = agent.auto_memory
