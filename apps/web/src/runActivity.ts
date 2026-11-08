@@ -15,7 +15,12 @@ export function attemptText(
 ): string {
   let text = "";
   for (const event of attemptEvents(events)) {
-    if (event.type === type) text += String(event.payload.delta ?? "");
+    if (event.type === type) {
+      text += String(event.payload.delta ?? "");
+    } else if (type === "assistant_delta" && event.type === "assistant_replace") {
+      // A rubric revision supersedes everything streamed before it.
+      text = String(event.payload.text ?? "");
+    }
   }
   return text;
 }

@@ -54,6 +54,8 @@ function eventText(event: RunEvent): string {
         ? `达到执行步骤上限（${limit}），已自动续跑`
         : `达到执行步骤上限（${limit}），已生成进展总结`;
     }
+    case "assistant_replace":
+      return "校验未通过，开始输出修订版";
     case "run_completed":
       return `completed: ${truncate(String(payload.output ?? ""), 180)}`;
     case "run_failed": {

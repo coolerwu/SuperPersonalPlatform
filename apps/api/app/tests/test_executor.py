@@ -597,7 +597,7 @@ async def test_executor_registers_rubric_middleware(tmp_path, monkeypatch) -> No
     assert any(
         isinstance(item, FakeRubricMiddleware) for item in captured["middleware"]
     )
-    assert captured["kwargs"]["max_iterations"] == 1
+    assert captured["kwargs"]["max_iterations"] == 2
     assert captured["kwargs"]["model"].extra_body == {"thinking": {"type": "disabled"}}
     completed = [event for event in events if event.type == "run_completed"]
     assert completed[0].payload["output"] == "answer"
@@ -640,6 +640,54 @@ async def test_executor_drops_messages_emitted_while_grading(tmp_path, monkeypat
     ] == ["answer"]
     completed = [event for event in events if event.type == "run_completed"]
     assert completed[0].payload["output"] == "answer"
+
+
+@pytest.mark.asyncio
+async def test_executor_swaps_draft_for_rubric_revision(tmp_path, monkeypatch) -> None:
+    class FakeAgent:
+        async def astream(self, _state, config=None, *, stream_mode=None, subgraphs=False):
+            yield ((), "messages", (AIMessageChunk(content="draft"), {}))
+            yield ((), "custom", {"type": "rubric_evaluation_start"})
+            yield ((), "messages", (AIMessageChunk(content="GRADER"), {}))
+            yield (
+                (),
+                "custom",
+                {"type": "rubric_evaluation_end", "result": "needs_revision"},
+            )
+            yield ((), "messages", (AIMessageChunk(content="revised"), {}))
+            yield ((), "custom", {"type": "rubric_evaluation_start"})
+            yield (
+                (),
+                "custom",
+                {"type": "rubric_evaluation_end", "result": "satisfied"},
+            )
+
+    monkeypatch.setattr("deepagents.create_deep_agent", lambda **_kwargs: FakeAgent())
+    provider = SimpleNamespace(
+        api_key="test-key", base_url="https://api.deepseek.com", model="deepseek-v4-flash"
+    )
+    executor = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="rubric-agent",
+        rubric="回答先给结论",
+    )
+
+    events = [
+        event
+        async for event in executor.run(
+            instructions="test", session_id="r" * 32, content="hi"
+        )
+    ]
+
+    assert [
+        event.payload["delta"] for event in events if event.type == "assistant_delta"
+    ] == ["draft", "revised"]
+    replaced = [event for event in events if event.type == "assistant_replace"]
+    assert [event.payload["text"] for event in replaced] == [""]
+    completed = [event for event in events if event.type == "run_completed"]
+    assert completed[0].payload["output"] == "revised"
 
 
 @pytest.mark.asyncio

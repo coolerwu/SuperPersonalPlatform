@@ -505,7 +505,7 @@ class DeepAgentExecutor:
                                 max_retries=0,
                                 extra_body={"thinking": {"type": "disabled"}},
                             ),
-                            max_iterations=1,
+                            max_iterations=2,
                         )
                     )
                 # The model class owns retries (including subagents and the
@@ -539,6 +539,9 @@ class DeepAgentExecutor:
                         ):
                             if event.type == "assistant_delta":
                                 output_parts.append(str(event.payload.get("delta") or ""))
+                            elif event.type == "assistant_replace":
+                                # A rubric revision supersedes the draft.
+                                output_parts = [str(event.payload.get("text") or "")]
                             yield event
                         break
                     except GraphRecursionError as exc:
@@ -684,6 +687,10 @@ class DeepAgentExecutor:
                         grading = True
                     elif data.get("type") == "rubric_evaluation_end":
                         grading = False
+                        if data.get("result") == "needs_revision":
+                            # The middleware resumes the agent with a revision
+                            # request; drop the draft so only it is shown.
+                            yield ExecutorEvent("assistant_replace", {"text": ""})
                 continue
             if grading:
                 # Grader output shares this stream; it is not assistant text.
