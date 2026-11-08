@@ -796,6 +796,24 @@ export type AllocationOverviewPortfolio = {
   weight_pct: number | null;
 };
 
+export type AllocationOverviewPosition = {
+  symbol: string;
+  market: string;
+  quantity: number;
+  cost_usd: number;
+  avg_cost_usd: number | null;
+  price_usd: number | null;
+  price_source: string;
+  price_stale: boolean;
+  market_value_usd: number | null;
+  weight_pct: number | null;
+  unrealized_pnl_usd: number | null;
+  realized_pnl_usd: number;
+  dividends_usd: number;
+  fees_usd: number;
+  portfolio_count: number;
+};
+
 export type AllocationOverview = {
   display_currency: string;
   usd_cny: number;
@@ -816,6 +834,7 @@ export type AllocationOverview = {
   xirr_pct: number | null;
   xirr_approximate: boolean;
   portfolios: AllocationOverviewPortfolio[];
+  positions: AllocationOverviewPosition[];
   warnings: string[];
 };
 

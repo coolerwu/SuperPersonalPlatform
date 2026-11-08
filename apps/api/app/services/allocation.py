@@ -1592,6 +1592,7 @@ def build_overview(
     warnings: list[str] = []
     valuation_complete = True
     snapshots_by_id = {item["id"]: item for item in portfolios}
+    aggregated: dict[str, dict[str, Any]] = {}
 
     for portfolio in config.get("portfolios", []):
         snapshot_item = snapshots_by_id.get(portfolio["id"])
@@ -1608,6 +1609,50 @@ def build_overview(
             value = snapshot_item.get(field)
             if isinstance(value, (int, float)):
                 totals[field] += float(value) * rate
+
+        for position in snapshot_item.get("positions", []):
+            quantity = float(position.get("quantity") or 0.0)
+            if quantity <= QUANTITY_EPSILON:
+                continue
+            symbol = str(position.get("symbol") or "")
+            if not symbol:
+                continue
+            item = aggregated.setdefault(
+                symbol,
+                {
+                    "symbol": symbol,
+                    "market": position.get("market"),
+                    "quantity": 0.0,
+                    "cost_usd": 0.0,
+                    "market_value_usd": 0.0,
+                    "realized_pnl_usd": 0.0,
+                    "dividends_usd": 0.0,
+                    "fees_usd": 0.0,
+                    "sources": set(),
+                    "price_stale": False,
+                    "valued": True,
+                    "portfolio_ids": set(),
+                },
+            )
+            item["portfolio_ids"].add(portfolio["id"])
+            item["quantity"] += quantity
+            item["cost_usd"] += float(position.get("cost") or 0.0) * rate
+            item["realized_pnl_usd"] += (
+                float(position.get("realized_pnl") or 0.0) * rate
+            )
+            item["dividends_usd"] += float(position.get("dividends") or 0.0) * rate
+            item["fees_usd"] += float(position.get("fees") or 0.0) * rate
+            market_value = position.get("market_value")
+            if market_value is None:
+                item["valued"] = False
+            else:
+                item["market_value_usd"] += float(market_value) * rate
+            source = str(position.get("price_source") or "none")
+            if source != "none":
+                item["sources"].add(source)
+            item["price_stale"] = item["price_stale"] or bool(
+                position.get("price_stale")
+            )
 
         portfolio_entries = [
             entry for entry in entries if entry.get("portfolio_id") == portfolio["id"]
@@ -1641,6 +1686,57 @@ def build_overview(
             }
         )
 
+    positions_out: list[dict[str, Any]] = []
+    for item in aggregated.values():
+        quantity = float(item["quantity"])
+        cost_usd = float(item["cost_usd"])
+        valued = bool(item["valued"]) and quantity > QUANTITY_EPSILON
+        market_value_usd = (
+            float(item["market_value_usd"]) if valued else None
+        )
+        price_usd = (
+            market_value_usd / quantity
+            if market_value_usd is not None and quantity > QUANTITY_EPSILON
+            else None
+        )
+        sources = item["sources"]
+        positions_out.append(
+            {
+                "symbol": item["symbol"],
+                "market": item["market"],
+                "quantity": quantity,
+                "cost_usd": cost_usd,
+                "avg_cost_usd": cost_usd / quantity
+                if quantity > QUANTITY_EPSILON
+                else None,
+                "price_usd": price_usd,
+                "price_source": next(iter(sources))
+                if len(sources) == 1
+                else ("mixed" if sources else "none"),
+                "price_stale": bool(item["price_stale"]),
+                "market_value_usd": market_value_usd,
+                "weight_pct": None,
+                "unrealized_pnl_usd": (
+                    market_value_usd - cost_usd
+                    if market_value_usd is not None
+                    else None
+                ),
+                "realized_pnl_usd": float(item["realized_pnl_usd"]),
+                "dividends_usd": float(item["dividends_usd"]),
+                "fees_usd": float(item["fees_usd"]),
+                "portfolio_count": len(item["portfolio_ids"]),
+            }
+        )
+    if any(row["market_value_usd"] is None for row in positions_out):
+        warnings.append("部分持仓缺少价格，市值合计不完整")
+    positions_out.sort(
+        key=lambda row: (
+            row["market_value_usd"] is None,
+            -(row["market_value_usd"] or 0.0),
+            row["symbol"],
+        )
+    )
+
     total_value = totals["total_value"]
     net_contributions = totals["net_contributions"]
     total_return = total_value - net_contributions
@@ -1652,6 +1748,9 @@ def build_overview(
     if total_value > QUANTITY_EPSILON:
         for row in rows:
             row["weight_pct"] = row["total_value_usd"] / total_value * 100
+        for row in positions_out:
+            if row["market_value_usd"] is not None:
+                row["weight_pct"] = row["market_value_usd"] / total_value * 100
 
     xirr_pct = None
     if valuation_complete and total_value > QUANTITY_EPSILON and flows:
@@ -1682,6 +1781,7 @@ def build_overview(
         "xirr_pct": xirr_pct,
         "xirr_approximate": xirr_pct is not None,
         "portfolios": rows,
+        "positions": positions_out,
         "warnings": list(dict.fromkeys(warnings)),
     }
 

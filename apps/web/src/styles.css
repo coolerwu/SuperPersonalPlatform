@@ -6566,48 +6566,15 @@ body:has(.app-shell.pearl) .select-empty {
   font-size: 14px;
 }
 
-.allocation-overview-list {
+.allocation-holdings {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.allocation-portfolio-block {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  margin: 22px 0 6px;
-}
-
-.allocation-portfolio-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 0 2px;
-}
-
-.allocation-portfolio-title {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.allocation-portfolio-title h2 {
-  margin: 0;
-  font-size: 18px;
-  letter-spacing: -0.01em;
-}
-
-.allocation-portfolio-title .journal-market {
-  font-size: 10px;
-}
-
-.allocation-overview-row {
+.allocation-holdings-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.4fr) repeat(7, minmax(0, 1fr));
   gap: 8px 12px;
   align-items: center;
   padding: 10px 14px;
@@ -6617,36 +6584,119 @@ body:has(.app-shell.pearl) .select-empty {
   font-variant-numeric: tabular-nums;
 }
 
-.allocation-overview-row > div {
+.allocation-holdings-row.cash {
+  background: var(--panel);
+}
+
+.allocation-holdings-row > div {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.allocation-overview-row span {
+.allocation-holdings-row span {
   color: var(--faint);
   font-size: 10px;
 }
 
-.allocation-overview-row strong {
+.allocation-holdings-row strong {
   font-size: 13px;
   font-weight: 600;
   overflow-wrap: anywhere;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.allocation-overview-name strong {
+.allocation-holdings-name strong {
   font-size: 14px;
 }
 
-.allocation-overview-name small {
+.allocation-holdings-name small {
   color: var(--faint);
   font-size: 10px;
 }
 
 @media (max-width: 860px) {
-  .allocation-overview-row {
+  .allocation-holdings-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .allocation-holdings-name {
+    grid-column: 1 / -1;
+  }
+}
+
+.allocation-portfolio-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.allocation-portfolio-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.allocation-portfolio-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 1fr)) auto;
+  gap: 8px 12px;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.allocation-portfolio-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.allocation-portfolio-summary span {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.allocation-portfolio-summary strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.allocation-portfolio-name strong {
+  font-size: 14px;
+}
+
+.allocation-portfolio-name small {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.allocation-ledger-portfolio {
+  display: block;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.allocation-rebalance-list.compact {
+  margin-top: 2px;
+}
+
+@media (max-width: 860px) {
+  .allocation-portfolio-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .allocation-portfolio-name,
+  .allocation-portfolio-summary .settings-card-actions {
+    grid-column: 1 / -1;
   }
 }
 

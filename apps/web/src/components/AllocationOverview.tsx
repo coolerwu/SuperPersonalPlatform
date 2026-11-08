@@ -3,6 +3,10 @@ import {
   formatAmount,
   formatDateTime,
   formatPercent,
+  formatPrice,
+  formatQuantity,
+  marketLabel,
+  priceSourceLabel,
   fxSourceLabel,
 } from "./allocationUtils";
 
@@ -11,20 +15,27 @@ const DISPLAY_CURRENCY = "USD";
 type AllocationOverviewProps = {
   overview: OverviewData;
   fxError?: string;
+  onShowLedger?: (symbol: string) => void;
 };
 
-export function AllocationOverview({ overview, fxError }: AllocationOverviewProps) {
+export function AllocationOverview({
+  overview,
+  fxError,
+  onShowLedger,
+}: AllocationOverviewProps) {
   const warnings = [
     ...overview.warnings,
     ...(fxError ? [`汇率刷新失败：${fxError}（继续使用上次汇率）`] : []),
   ];
+  const cashWeight =
+    overview.total_value > 0 ? (overview.cash / overview.total_value) * 100 : null;
 
   return (
     <section className="settings-card allocation-overview">
       <div className="allocation-overview-head">
         <h2>总览</h2>
         <p className="hint">
-          按当前汇率把各组合折算成 {overview.display_currency}：USD 与 USDT 按
+          所有组合按当前汇率折算成 {overview.display_currency} 后合并：USD 与 USDT 按
           1:1，CNY 按 1 USD ≈ {overview.usd_cny.toFixed(4)} CNY。
         </p>
       </div>
@@ -46,7 +57,7 @@ export function AllocationOverview({ overview, fxError }: AllocationOverviewProp
         <div>
           <span>现金</span>
           <strong>{formatAmount(overview.cash, DISPLAY_CURRENCY)}</strong>
-          <small>各组合现金折算后合计</small>
+          <small>{formatPercent(cashWeight)} 占比</small>
         </div>
         <div>
           <span>投入本金</span>
@@ -89,32 +100,134 @@ export function AllocationOverview({ overview, fxError }: AllocationOverviewProp
         {overview.fx_stale && <span className="allocation-stale">过期</span>}
       </div>
 
-      <h3 className="allocation-overview-title">组合明细</h3>
-      <div className="allocation-overview-list">
-        {overview.portfolios.map((item) => (
-          <div key={item.id} className="allocation-overview-row">
-            <div className="allocation-overview-name">
-              <strong>{item.name}</strong>
-              <small>{item.currency}</small>
+      <h3 className="allocation-overview-title">持仓明细（{DISPLAY_CURRENCY}）</h3>
+      <div className="allocation-holdings">
+        <div className="allocation-holdings-row cash">
+          <div className="allocation-holdings-name">
+            <strong>现金</strong>
+            <small>各组合折算</small>
+          </div>
+          <div>
+            <span>数量</span>
+            <strong>—</strong>
+          </div>
+          <div>
+            <span>均价</span>
+            <strong>—</strong>
+          </div>
+          <div>
+            <span>现价</span>
+            <strong>—</strong>
+          </div>
+          <div>
+            <span>市值</span>
+            <strong>{formatAmount(overview.cash, DISPLAY_CURRENCY)}</strong>
+          </div>
+          <div>
+            <span>占比</span>
+            <strong>{formatPercent(cashWeight)}</strong>
+          </div>
+          <div>
+            <span>浮盈</span>
+            <strong>—</strong>
+          </div>
+          <div>
+            <span>已实现</span>
+            <strong>—</strong>
+          </div>
+        </div>
+        {overview.positions.map((position) => (
+          <div className="allocation-holdings-row" key={position.symbol}>
+            <div className="allocation-holdings-name">
+              <strong>{position.symbol}</strong>
+              <small>
+                {marketLabel(position.symbol, position.market)}
+                {position.portfolio_count > 1
+                  ? ` · ${position.portfolio_count} 个组合`
+                  : ""}
+              </small>
+              {onShowLedger && (
+                <button
+                  className="journal-edit"
+                  onClick={() => onShowLedger(position.symbol)}
+                >
+                  流水
+                </button>
+              )}
             </div>
             <div>
-              <span>原币总额</span>
-              <strong>{formatAmount(item.total_value, item.currency)}</strong>
+              <span>数量</span>
+              <strong>{formatQuantity(position.quantity)}</strong>
             </div>
             <div>
-              <span>USD 折算</span>
-              <strong>{formatAmount(item.total_value_usd, DISPLAY_CURRENCY)}</strong>
+              <span>均价</span>
+              <strong>{formatPrice(position.avg_cost_usd)}</strong>
             </div>
             <div>
-              <span>现金</span>
-              <strong>{formatAmount(item.cash, item.currency)}</strong>
+              <span>现价</span>
+              <strong>
+                {formatPrice(position.price_usd)}
+                <i className={`allocation-source ${position.price_source}`}>
+                  {priceSourceLabel(position.price_source)}
+                </i>
+              </strong>
+              {position.price_stale && (
+                <span className="allocation-stale">过期</span>
+              )}
+            </div>
+            <div>
+              <span>市值</span>
+              <strong>
+                {formatAmount(position.market_value_usd, DISPLAY_CURRENCY)}
+              </strong>
             </div>
             <div>
               <span>占比</span>
-              <strong>{formatPercent(item.weight_pct)}</strong>
+              <strong>{formatPercent(position.weight_pct)}</strong>
+            </div>
+            <div>
+              <span>浮盈</span>
+              <strong
+                className={
+                  (position.unrealized_pnl_usd ?? 0) > 0
+                    ? "tone-good"
+                    : (position.unrealized_pnl_usd ?? 0) < 0
+                      ? "tone-bad"
+                      : ""
+                }
+              >
+                {formatAmount(
+                  position.unrealized_pnl_usd,
+                  DISPLAY_CURRENCY,
+                  true,
+                )}
+              </strong>
+            </div>
+            <div>
+              <span>已实现</span>
+              <strong
+                className={
+                  position.realized_pnl_usd > 0
+                    ? "tone-good"
+                    : position.realized_pnl_usd < 0
+                      ? "tone-bad"
+                      : ""
+                }
+              >
+                {formatAmount(
+                  position.realized_pnl_usd,
+                  DISPLAY_CURRENCY,
+                  true,
+                )}
+              </strong>
             </div>
           </div>
         ))}
+        {!overview.positions.length && (
+          <div className="empty-note">
+            还没有持仓。记一笔入金或初始持仓后，这里会显示合并后的持仓明细。
+          </div>
+        )}
       </div>
     </section>
   );

@@ -363,3 +363,59 @@ def test_multiple_portfolios_and_pagination(client) -> None:
     assert page["total"] == 2
     assert len(page["items"]) == 1
     assert page["limit"] == 1
+
+
+def test_overview_merges_same_symbol_across_portfolios(client, monkeypatch) -> None:
+    first = _create(client, name="USDT 组合 A")
+    second = _create(client, name="USDT 组合 B")
+    _add_entry(client, first["id"], _deposit(10000))
+    _add_entry(
+        client,
+        first["id"],
+        _buy(symbol="ETHUSDT", quantity=1, price=2000),
+    )
+    _add_entry(client, second["id"], _deposit(10000))
+    _add_entry(
+        client,
+        second["id"],
+        _buy(symbol="ETHUSDT", quantity=1, price=2500),
+    )
+
+    async def fake_fetch(_items):
+        return (
+            {
+                "ETHUSDT": {
+                    "price": 2200.0,
+                    "at": "2025-01-03T00:00:00Z",
+                    "source": "live",
+                }
+            },
+            [],
+        )
+
+    async def fake_fx():
+        return FxQuote(
+            pair="USD/CNY",
+            rate=7.2,
+            at="2025-01-03T00:00:00Z",
+            source="eastmoney",
+        )
+
+    monkeypatch.setattr(allocation, "fetch_live_prices", fake_fetch)
+    monkeypatch.setattr(allocation, "fetch_usd_cny_rate", fake_fx)
+    refreshed = client.post("/api/allocation/refresh")
+    assert refreshed.status_code == 200
+
+    overview = refreshed.json()["overview"]
+    assert len(overview["positions"]) == 1
+    position = overview["positions"][0]
+    assert position["symbol"] == "ETHUSDT"
+    assert position["quantity"] == pytest.approx(2.0)
+    assert position["market_value_usd"] == pytest.approx(4400.0)
+    assert position["price_usd"] == pytest.approx(2200.0)
+    assert position["avg_cost_usd"] == pytest.approx(2250.0)
+    assert position["unrealized_pnl_usd"] == pytest.approx(-100.0)
+    assert position["portfolio_count"] == 2
+    assert position["weight_pct"] == pytest.approx(
+        4400.0 / overview["total_value"] * 100
+    )

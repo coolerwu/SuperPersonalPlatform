@@ -121,6 +121,8 @@ export function priceSourceLabel(source: string): string {
       return "手动";
     case "cache":
       return "缓存";
+    case "mixed":
+      return "混合";
     case "cost":
       return "成本";
     case "none":

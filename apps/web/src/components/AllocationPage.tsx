@@ -5,14 +5,21 @@ import type {
   AllocationEntry,
   AllocationEntryPayload,
   AllocationPortfolio,
-  AllocationPosition,
   AllocationSnapshot,
 } from "../types";
 import { AllocationEntryModal } from "./AllocationEntryModal";
 import { AllocationOverview } from "./AllocationOverview";
 import { AllocationPortfolioModal } from "./AllocationPortfolioModal";
-import { AllocationPortfolioSection } from "./AllocationPortfolioSection";
-import { entryTypeLabel } from "./allocationUtils";
+import {
+  entryTypeLabel,
+  entryTypeTone,
+  formatAmount,
+  formatDateTime,
+  formatPercent,
+  formatPp,
+  formatPrice,
+  formatQuantity,
+} from "./allocationUtils";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 // Auto-refresh throttle for quote requests across remounts; this is not a
@@ -26,8 +33,6 @@ type EntriesState = {
   loading: boolean;
 };
 
-const EMPTY_ENTRIES: EntriesState = { items: [], total: 0, loading: false };
-
 export function AllocationPage() {
   const [snapshot, setSnapshot] = useState<AllocationSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,7 +42,9 @@ export function AllocationPage() {
   const [entriesByPortfolio, setEntriesByPortfolio] = useState<
     Record<string, EntriesState>
   >({});
-  const [ledgerFilters, setLedgerFilters] = useState<Record<string, string>>({});
+  const [ledgerSymbol, setLedgerSymbol] = useState("");
+  const [ledgerPortfolio, setLedgerPortfolio] = useState("");
+  const [newEntryPortfolioId, setNewEntryPortfolioId] = useState("");
   const [portfolioModalOpen, setPortfolioModalOpen] = useState(false);
   const [portfolioModalMode, setPortfolioModalMode] = useState<"create" | "edit">(
     "create",
@@ -117,6 +124,13 @@ export function AllocationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portfolioIdsKey]);
 
+  useEffect(() => {
+    if (!snapshot) return;
+    if (!snapshot.portfolios.some((item) => item.id === newEntryPortfolioId)) {
+      setNewEntryPortfolioId(snapshot.portfolios[0]?.id ?? "");
+    }
+  }, [snapshot, newEntryPortfolioId]);
+
   // Fetch fresh quotes when the page opens so the user does not have to click
   // refresh every visit. Throttled because a request can be slow and switching
   // pages remounts this component.
@@ -191,34 +205,19 @@ export function AllocationPage() {
     setEntryModalOpen(true);
   }
 
-  function openEditEntry(target: AllocationPortfolio, entry: AllocationEntry) {
+  function openEditEntry(entry: AllocationEntry, target: AllocationPortfolio) {
     setEntryPortfolio(target);
     setEditingEntry(entry);
     setEntryInitial(undefined);
     setEntryModalOpen(true);
   }
 
-  function openRebalance(
-    target: AllocationPortfolio,
-    position: AllocationPosition,
-  ) {
-    if (position.rebalance_amount === null) return;
-    const side = position.rebalance_amount >= 0 ? "buy" : "sell";
-    const initial: Partial<AllocationEntryPayload> = {
-      type: side,
-      symbol: position.symbol,
-    };
-    if (position.price && position.price > 0) {
-      const suggested = Number(
-        (Math.abs(position.rebalance_amount) / position.price).toFixed(8),
-      );
-      initial.price = position.price;
-      initial.quantity =
-        side === "sell"
-          ? Math.min(suggested, position.quantity)
-          : suggested;
-    }
-    openNewEntry(target, initial);
+  function showLedgerForSymbol(symbol: string) {
+    setLedgerSymbol(symbol);
+    setLedgerPortfolio("");
+    document
+      .getElementById("allocation-ledger")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function confirmDeleteEntry() {
@@ -250,6 +249,49 @@ export function AllocationPage() {
     }
   }
 
+  const overview = snapshot?.overview;
+  const rateByPortfolio = useMemo(() => {
+    const map = new Map<string, number>();
+    (overview?.portfolios ?? []).forEach((item) =>
+      map.set(item.id, item.rate_to_usd),
+    );
+    return map;
+  }, [overview]);
+
+  const mergedEntries = useMemo(() => {
+    const rows: { entry: AllocationEntry; portfolio: AllocationPortfolio }[] = [];
+    (snapshot?.portfolios ?? []).forEach((portfolio) => {
+      const state = entriesByPortfolio[portfolio.id];
+      if (!state) return;
+      state.items.forEach((entry) => rows.push({ entry, portfolio }));
+    });
+    rows.sort((left, right) => {
+      if (left.entry.at !== right.entry.at) {
+        return left.entry.at < right.entry.at ? 1 : -1;
+      }
+      return right.entry.id.localeCompare(left.entry.id);
+    });
+    return rows;
+  }, [snapshot, entriesByPortfolio]);
+
+  const ledgerSymbols = useMemo(() => {
+    const symbols = new Set<string>();
+    mergedEntries.forEach(({ entry }) => {
+      if (entry.symbol) symbols.add(entry.symbol);
+    });
+    return [...symbols].sort();
+  }, [mergedEntries]);
+
+  const visibleEntries = mergedEntries.filter(
+    ({ entry, portfolio }) =>
+      (!ledgerSymbol || entry.symbol === ledgerSymbol) &&
+      (!ledgerPortfolio || portfolio.id === ledgerPortfolio),
+  );
+
+  const entriesLoading = Object.values(entriesByPortfolio).some(
+    (state) => state.loading,
+  );
+
   const hasPortfolios = Boolean(snapshot?.portfolios.length);
 
   return (
@@ -262,8 +304,8 @@ export function AllocationPage() {
             <span className="page-scope-pill">长期组合</span>
           </h1>
           <p>
-            独立于交易记录的核心组合账本：记录入金、买入、卖出和分红，
-            按目标权重检查偏离。
+            独立于交易记录的核心组合账本：所有组合按当前汇率折算成 USD，
+            合并成一份持仓和流水明细。
           </p>
         </div>
         <div className="settings-card-actions">
@@ -335,48 +377,314 @@ export function AllocationPage() {
               <AllocationOverview
                 overview={snapshot.overview}
                 fxError={snapshot.fx_error}
+                onShowLedger={showLedgerForSymbol}
               />
 
-              {snapshot.portfolios.map((item) =>
-                item.error ? (
-                  <section
-                    className="settings-card allocation-empty"
-                    key={item.id}
-                  >
-                    <h2>{item.name} 的流水无法重放</h2>
-                    <p>{item.error}</p>
-                    <p>请检查 data/allocation-ledger.jsonl 中的流水，修正后刷新。</p>
-                  </section>
-                ) : (
-                  <AllocationPortfolioSection
-                    key={item.id}
-                    portfolio={item}
-                    entries={
-                      entriesByPortfolio[item.id]?.items ?? EMPTY_ENTRIES.items
-                    }
-                    entriesTotal={
-                      entriesByPortfolio[item.id]?.total ?? EMPTY_ENTRIES.total
-                    }
-                    entriesLoading={
-                      entriesByPortfolio[item.id]?.loading ?? EMPTY_ENTRIES.loading
-                    }
-                    ledgerSymbol={ledgerFilters[item.id] ?? ""}
-                    onLedgerSymbolChange={(symbol) =>
-                      setLedgerFilters((current) => ({
-                        ...current,
-                        [item.id]: symbol,
-                      }))
-                    }
-                    onNewEntry={(initial) => openNewEntry(item, initial)}
-                    onEditEntry={(entry) => openEditEntry(item, entry)}
-                    onDeleteEntry={(entry) =>
-                      setDeleteEntry({ portfolio: item, entry })
-                    }
-                    onEditConfig={() => openEditPortfolio(item)}
-                    onRebalance={(position) => openRebalance(item, position)}
-                  />
-                ),
-              )}
+              <section className="settings-card" id="allocation-ledger">
+                <div className="settings-card-head">
+                  <div>
+                    <h2>流水</h2>
+                    <p>
+                      所有组合合并显示，金额和价格按当前汇率折算成 USD；修改历史会整本重放。
+                    </p>
+                  </div>
+                  <div className="settings-card-actions">
+                    <select
+                      className="allocation-ledger-filter"
+                      value={ledgerPortfolio}
+                      onChange={(event) => setLedgerPortfolio(event.target.value)}
+                      aria-label="筛选组合"
+                    >
+                      <option value="">全部组合</option>
+                      {snapshot.portfolios.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="allocation-ledger-filter"
+                      value={ledgerSymbol}
+                      onChange={(event) => setLedgerSymbol(event.target.value)}
+                      aria-label="筛选标的"
+                    >
+                      <option value="">全部标的</option>
+                      {ledgerSymbols.map((symbol) => (
+                        <option key={symbol} value={symbol}>
+                          {symbol}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="allocation-ledger-filter"
+                      value={newEntryPortfolioId}
+                      onChange={(event) => setNewEntryPortfolioId(event.target.value)}
+                      aria-label="记到哪个组合"
+                    >
+                      {snapshot.portfolios.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          记到 {item.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="primary"
+                      onClick={() => {
+                        const target = snapshot.portfolios.find(
+                          (item) => item.id === newEntryPortfolioId,
+                        );
+                        if (target) openNewEntry(target);
+                      }}
+                      disabled={!newEntryPortfolioId}
+                    >
+                      + 记一笔
+                    </button>
+                  </div>
+                </div>
+                <div className="backtest-table-wrap">
+                  <table className="backtest-table allocation-ledger-table">
+                    <thead>
+                      <tr>
+                        <th>时间</th>
+                        <th>类型</th>
+                        <th>标的</th>
+                        <th>数量</th>
+                        <th>价格</th>
+                        <th>金额</th>
+                        <th>手续费</th>
+                        <th>备注</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleEntries.map(({ entry, portfolio }) => {
+                        const rate = rateByPortfolio.get(portfolio.id);
+                        const factor = rate ?? 1;
+                        const displayCurrency = rate === undefined ? portfolio.currency : "USD";
+                        return (
+                          <tr key={entry.id}>
+                            <td className="journal-time">
+                              {formatDateTime(entry.at)}
+                              <small className="allocation-ledger-portfolio">
+                                {portfolio.name}
+                              </small>
+                            </td>
+                            <td>
+                              <span
+                                className={`allocation-type ${entryTypeTone(entry.type)}`}
+                              >
+                                {entryTypeLabel(entry.type)}
+                              </span>
+                            </td>
+                            <td>{entry.symbol ?? "—"}</td>
+                            <td>
+                              {entry.quantity === undefined
+                                ? "—"
+                                : formatQuantity(entry.quantity)}
+                            </td>
+                            <td>
+                              {entry.price === undefined
+                                ? "—"
+                                : formatPrice(entry.price * factor)}
+                            </td>
+                            <td>
+                              {entry.amount === undefined
+                                ? "—"
+                                : formatAmount(entry.amount * factor, displayCurrency)}
+                            </td>
+                            <td>
+                              {entry.fees
+                                ? formatAmount(entry.fees * factor, displayCurrency)
+                                : "—"}
+                            </td>
+                            <td
+                              className="allocation-ledger-note"
+                              title={entry.note}
+                            >
+                              {entry.note || "—"}
+                            </td>
+                            <td>
+                              <button
+                                className="journal-edit"
+                                onClick={() => openEditEntry(entry, portfolio)}
+                              >
+                                编辑
+                              </button>
+                              <button
+                                className="journal-edit danger"
+                                onClick={() =>
+                                  setDeleteEntry({ portfolio, entry })
+                                }
+                              >
+                                删除
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {!visibleEntries.length && (
+                        <tr>
+                          <td colSpan={9} className="journal-empty">
+                            {entriesLoading
+                              ? "加载中…"
+                              : ledgerSymbol || ledgerPortfolio
+                                ? "没有符合筛选条件的流水。"
+                                : "还没有流水。先记一笔入金或初始持仓。"}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="settings-card" id="allocation-portfolios">
+                <div className="settings-card-head">
+                  <div>
+                    <h2>组合设置</h2>
+                    <p>
+                      每个组合单独计算目标、偏离和再平衡；持仓明细已在上方按 USD 合并。
+                    </p>
+                  </div>
+                </div>
+                <div className="allocation-portfolio-list">
+                  {snapshot.portfolios.map((item) => {
+                    const rate = rateByPortfolio.get(item.id);
+                    const rebalanceItems = item.positions.filter(
+                      (position) =>
+                        position.rebalance_needed &&
+                        position.rebalance_amount !== null,
+                    );
+                    return (
+                      <div className="allocation-portfolio-row" key={item.id}>
+                        <div className="allocation-portfolio-summary">
+                          <div className="allocation-portfolio-name">
+                            <strong>{item.name}</strong>
+                            <small>{item.currency}</small>
+                          </div>
+                          <div>
+                            <span>原币总额</span>
+                            <strong>
+                              {formatAmount(item.total_value, item.currency)}
+                            </strong>
+                          </div>
+                          <div>
+                            <span>USD 折算</span>
+                            <strong>
+                              {rate === undefined
+                                ? "—"
+                                : formatAmount(item.total_value * rate, "USD")}
+                            </strong>
+                          </div>
+                          <div>
+                            <span>目标合计</span>
+                            <strong>{formatPercent(item.target_sum_pct)}</strong>
+                          </div>
+                          <div className="settings-card-actions">
+                            <button
+                              className="ghost-button"
+                              onClick={() => openEditPortfolio(item)}
+                            >
+                              编辑配置
+                            </button>
+                            <button
+                              className="ghost-button"
+                              onClick={() => openNewEntry(item)}
+                            >
+                              记一笔
+                            </button>
+                          </div>
+                        </div>
+                        {item.error ? (
+                          <p className="error-banner">{item.error}</p>
+                        ) : rebalanceItems.length || item.cash_rebalance_needed ? (
+                          <div className="allocation-rebalance-list compact">
+                            {rebalanceItems.map((position) => (
+                              <div
+                                className="allocation-rebalance-item"
+                                key={position.symbol}
+                              >
+                                <div>
+                                  <strong>{position.symbol}</strong>
+                                  <span>偏离 {formatPp(position.drift_pp)}</span>
+                                </div>
+                                <div
+                                  className={
+                                    (position.rebalance_amount ?? 0) >= 0
+                                      ? "allocation-rebalance buy"
+                                      : "allocation-rebalance sell"
+                                  }
+                                >
+                                  {(position.rebalance_amount ?? 0) >= 0
+                                    ? "买入"
+                                    : "卖出"}{" "}
+                                  {formatAmount(
+                                    Math.abs(position.rebalance_amount ?? 0),
+                                    item.currency,
+                                  )}
+                                </div>
+                                <button
+                                  className="ghost-button"
+                                  onClick={() => {
+                                    const side =
+                                      (position.rebalance_amount ?? 0) >= 0
+                                        ? "buy"
+                                        : "sell";
+                                    const initial: Partial<AllocationEntryPayload> =
+                                      { type: side, symbol: position.symbol };
+                                    if (position.price && position.price > 0) {
+                                      const suggested = Number(
+                                        (
+                                          Math.abs(
+                                            position.rebalance_amount ?? 0,
+                                          ) / position.price
+                                        ).toFixed(8),
+                                      );
+                                      initial.price = position.price;
+                                      initial.quantity =
+                                        side === "sell"
+                                          ? Math.min(
+                                              suggested,
+                                              position.quantity,
+                                            )
+                                          : suggested;
+                                    }
+                                    openNewEntry(item, initial);
+                                  }}
+                                >
+                                  记一笔
+                                </button>
+                              </div>
+                            ))}
+                            {item.cash_rebalance_needed && (
+                              <div className="allocation-rebalance-item">
+                                <div>
+                                  <strong>现金</strong>
+                                  <span>
+                                    偏离 {formatPercent(item.cash_drift_pp)}
+                                  </span>
+                                </div>
+                                <div className="allocation-rebalance">
+                                  {formatAmount(
+                                    item.cash_rebalance_amount,
+                                    item.currency,
+                                    true,
+                                  )}
+                                </div>
+                                <span />
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="allocation-field-hint">
+                            目标内或尚未设置目标。
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
 
               <section className="settings-card allocation-notes">
                 <div className="settings-card-head">
