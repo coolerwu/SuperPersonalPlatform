@@ -436,6 +436,65 @@ export default function App() {
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
   }, []);
 
+  // Temporary: report visual viewport state so the iOS keyboard issue can be
+  // diagnosed from server logs. Remove once the layout is stable.
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const isEditable = (el: Element | null): boolean =>
+      el instanceof HTMLElement &&
+      (el.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+    let last = "";
+    let timer = 0;
+    const report = () => {
+      const active = document.activeElement as HTMLElement | null;
+      const snapshot = {
+        vvh: Math.round(viewport.height),
+        vvo: Math.round(viewport.offsetTop),
+        vvScale: Number(viewport.scale.toFixed(2)),
+        ih: window.innerHeight,
+        dch: document.documentElement.clientHeight,
+        sy: Math.round(window.scrollY),
+        focus: active?.tagName ?? "",
+        typing: isEditable(active) ? 1 : 0,
+        vis: document.visibilityState,
+        ts: Date.now(),
+      };
+      const key = JSON.stringify({ ...snapshot, ts: 0 });
+      if (key === last) return;
+      last = key;
+      void fetch("/api/client-viewport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(snapshot),
+        keepalive: true,
+      }).catch(() => undefined);
+    };
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(report, 250);
+    };
+    report();
+    viewport.addEventListener("resize", schedule);
+    viewport.addEventListener("scroll", schedule);
+    document.addEventListener("focusin", schedule);
+    document.addEventListener("focusout", schedule);
+    document.addEventListener("visibilitychange", schedule);
+    window.addEventListener("resize", schedule);
+    const interval = window.setInterval(report, 1500);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+      viewport.removeEventListener("resize", schedule);
+      viewport.removeEventListener("scroll", schedule);
+      document.removeEventListener("focusin", schedule);
+      document.removeEventListener("focusout", schedule);
+      document.removeEventListener("visibilitychange", schedule);
+      window.removeEventListener("resize", schedule);
+    };
+  }, []);
+
   function pushPath(path: string) {
     if (window.location.pathname !== path) {
       window.history.pushState(null, "", path);
@@ -842,6 +901,15 @@ export default function App() {
         next.streamText = session.streamText + String(event.payload.delta ?? "");
         next.activity = "";
         if (session.notice === RECONNECT_NOTICE) next.notice = "";
+      } else if (event.type === "assistant_replace") {
+        // A revised final reply replaces everything streamed for this run.
+        next.streamText = String(event.payload.text ?? "");
+        next.activity = "";
+        if (session.notice === RECONNECT_NOTICE) next.notice = "";
+      } else if (event.type === "rubric_started") {
+        next.activity = "正在校验回复";
+      } else if (event.type === "rubric_result") {
+        next.activity = "";
       } else if (event.type === "reasoning_delta") {
         const delta = String(event.payload.delta ?? "");
         next.streamReasoning = session.streamReasoning + delta;
