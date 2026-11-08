@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -52,8 +50,6 @@ from app.services.skills import seed_default_skills
 from app.services.weixin_runtime import WeixinRuntime
 from app.services.worker import RunWorker
 from app.services.workspace import ensure_agent_workspaces, resolve_workspace_path
-
-logger = logging.getLogger("uvicorn.error")
 
 
 async def seed_default_agent() -> None:
@@ -190,27 +186,6 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(chan_router)
     app.include_router(trade_journal_router)
     app.include_router(allocation_router)
-
-    @app.post("/api/client-viewport")
-    async def client_viewport(payload: dict) -> dict[str, bool]:
-        # Temporary diagnostics for the iOS keyboard viewport issue.
-        fields = {
-            key: payload.get(key)
-            for key in (
-                "vvh",
-                "vvo",
-                "vvScale",
-                "ih",
-                "dch",
-                "sy",
-                "focus",
-                "typing",
-                "vis",
-                "ts",
-            )
-        }
-        logger.info("client-viewport %s", json.dumps(fields, ensure_ascii=False))
-        return {"ok": True}
 
     @app.get("/api/health")
     async def health() -> dict[str, bool]:

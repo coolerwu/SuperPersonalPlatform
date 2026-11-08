@@ -162,40 +162,8 @@ function conflictRunId(error: unknown): string | null {
   return typeof runId === "string" && runId ? runId : null;
 }
 
-function ViewportDebug() {
-  const [text, setText] = useState("");
-  useEffect(() => {
-    const root = document.documentElement;
-    const ios =
-      navigator.userAgent.match(/OS (\d+)_(\d+)/)?.slice(1).join(".") ?? "?";
-    let last = "";
-    const tick = () => {
-      const viewport = window.visualViewport;
-      const active = document.activeElement as HTMLElement | null;
-      const next = [
-        `ios ${ios} f${document.hasFocus() ? 1 : 0}`,
-        `vv ${viewport ? Math.round(viewport.height) : "—"}/${viewport ? Math.round(viewport.offsetTop) : "—"} s${viewport ? viewport.scale.toFixed(2) : "—"}`,
-        `in ${window.innerHeight} doc ${root.clientHeight} y ${Math.round(window.scrollY)}`,
-        `var ${root.style.getPropertyValue("--app-height") || "—"}/${root.style.getPropertyValue("--app-offset-top") || "—"}`,
-        `focus ${active?.tagName ?? "—"}`,
-      ].join("  ");
-      if (next !== last) {
-        last = next;
-        setText(next);
-      }
-    };
-    tick();
-    const timer = window.setInterval(tick, 500);
-    return () => window.clearInterval(timer);
-  }, []);
-  return <div className="viewport-debug">{text}</div>;
-}
-
 export default function App() {
   const [initialRoute] = useState(() => parsePath(window.location.pathname));
-  const [viewportDebug] = useState(() =>
-    new URLSearchParams(window.location.search).has("viewport-debug"),
-  );
   const [auth, setAuth] = useState<boolean | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -460,65 +428,6 @@ export default function App() {
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("focusout", onFocusOut);
       document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, []);
-
-  // Temporary: report visual viewport state so the iOS keyboard issue can be
-  // diagnosed from server logs. Remove once the layout is stable.
-  useEffect(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return;
-    const isEditable = (el: Element | null): boolean =>
-      el instanceof HTMLElement &&
-      (el.isContentEditable ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
-    let last = "";
-    let timer = 0;
-    const report = () => {
-      const active = document.activeElement as HTMLElement | null;
-      const snapshot = {
-        vvh: Math.round(viewport.height),
-        vvo: Math.round(viewport.offsetTop),
-        vvScale: Number(viewport.scale.toFixed(2)),
-        ih: window.innerHeight,
-        dch: document.documentElement.clientHeight,
-        sy: Math.round(window.scrollY),
-        focus: active?.tagName ?? "",
-        typing: isEditable(active) ? 1 : 0,
-        vis: document.visibilityState,
-        ts: Date.now(),
-      };
-      const key = JSON.stringify({ ...snapshot, ts: 0 });
-      if (key === last) return;
-      last = key;
-      void fetch("/api/client-viewport", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(snapshot),
-        keepalive: true,
-      }).catch(() => undefined);
-    };
-    const schedule = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(report, 250);
-    };
-    report();
-    viewport.addEventListener("resize", schedule);
-    viewport.addEventListener("scroll", schedule);
-    document.addEventListener("focusin", schedule);
-    document.addEventListener("focusout", schedule);
-    document.addEventListener("visibilitychange", schedule);
-    window.addEventListener("resize", schedule);
-    const interval = window.setInterval(report, 1500);
-    return () => {
-      window.clearTimeout(timer);
-      window.clearInterval(interval);
-      viewport.removeEventListener("resize", schedule);
-      viewport.removeEventListener("scroll", schedule);
-      document.removeEventListener("focusin", schedule);
-      document.removeEventListener("focusout", schedule);
-      document.removeEventListener("visibilitychange", schedule);
-      window.removeEventListener("resize", schedule);
     };
   }, []);
 
@@ -1975,7 +1884,6 @@ export default function App() {
         onCreate={createAgent}
       />
 
-      {viewportDebug && <ViewportDebug />}
     </div>
   );
 }
