@@ -421,8 +421,15 @@ export default function App() {
       el instanceof HTMLElement &&
       (el.isContentEditable ||
         ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
-    // 点输入框以外的地方收起键盘；外壳高度不再跟着键盘变化，由浏览器平移
-    // 可视视口来露出 composer，键盘收起后自动恢复。
+    // iOS 26 can leave the page scrolled and the visual viewport stuck at the
+    // keyboard size after dismissal. Scrolling back forces the browser to
+    // settle the viewport again.
+    const resetViewport = () => {
+      window.scrollTo(0, 0);
+      window.setTimeout(() => window.scrollTo(0, 0), 120);
+      window.setTimeout(() => window.scrollTo(0, 0), 400);
+    };
+    // 点输入框以外的地方收起键盘并复位视口。
     const onPointerDown = (event: PointerEvent) => {
       const active = document.activeElement;
       if (!(active instanceof HTMLElement) || !isEditable(active)) return;
@@ -431,9 +438,29 @@ export default function App() {
       const target = event.target as Node | null;
       if (target && composer.contains(target)) return;
       active.blur();
+      resetViewport();
+    };
+    const onFocusOut = () => {
+      window.setTimeout(() => {
+        if (!isEditable(document.activeElement)) resetViewport();
+      }, 0);
+    };
+    const onVisibilityChange = () => {
+      if (
+        document.visibilityState === "visible" &&
+        !isEditable(document.activeElement)
+      ) {
+        resetViewport();
+      }
     };
     document.addEventListener("pointerdown", onPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("focusout", onFocusOut);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("focusout", onFocusOut);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   // Temporary: report visual viewport state so the iOS keyboard issue can be
