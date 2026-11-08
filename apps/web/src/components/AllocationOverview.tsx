@@ -3,7 +3,6 @@ import {
   formatAmount,
   formatDateTime,
   formatPercent,
-  formatPrice,
   formatQuantity,
   marketLabel,
   priceSourceLabel,
@@ -11,6 +10,13 @@ import {
 } from "./allocationUtils";
 
 const DISPLAY_CURRENCY = "USD";
+
+function formatUsdPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return value.toLocaleString("en-US", {
+    maximumFractionDigits: Math.abs(value) >= 1000 ? 2 : 4,
+  });
+}
 
 type AllocationOverviewProps = {
   overview: OverviewData;
@@ -35,8 +41,8 @@ export function AllocationOverview({
       <div className="allocation-overview-head">
         <h2>总览</h2>
         <p className="hint">
-          所有组合按当前汇率折算成 {overview.display_currency} 后合并：USD 与 USDT 按
-          1:1，CNY 按 1 USD ≈ {overview.usd_cny.toFixed(4)} CNY。
+          所有组合按当前汇率折算成 {DISPLAY_CURRENCY} 后合并：USD 与 USDT 按 1:1，
+          CNY 按 1 USD ≈ {overview.usd_cny.toFixed(4)} CNY。下面数字均为 {DISPLAY_CURRENCY}。
         </p>
       </div>
 
@@ -51,32 +57,32 @@ export function AllocationOverview({
       <div className="journal-stat-grid">
         <div>
           <span>总资产（{DISPLAY_CURRENCY}）</span>
-          <strong>{formatAmount(overview.total_value, DISPLAY_CURRENCY)}</strong>
+          <strong>{formatAmount(overview.total_value)}</strong>
           <small>现金 + 持仓市值</small>
         </div>
         <div>
           <span>现金</span>
-          <strong>{formatAmount(overview.cash, DISPLAY_CURRENCY)}</strong>
+          <strong>{formatAmount(overview.cash)}</strong>
           <small>{formatPercent(cashWeight)} 占比</small>
         </div>
         <div>
           <span>投入本金</span>
-          <strong>{formatAmount(overview.net_contributions, DISPLAY_CURRENCY)}</strong>
+          <strong>{formatAmount(overview.net_contributions)}</strong>
           <small>入金 - 出金 + 初始持仓成本</small>
         </div>
         <div>
           <span>浮盈</span>
-          <strong>{formatAmount(overview.unrealized_pnl, DISPLAY_CURRENCY, true)}</strong>
+          <strong>{formatAmount(overview.unrealized_pnl, undefined, true)}</strong>
           <small>按现价折算</small>
         </div>
         <div>
           <span>已实现</span>
-          <strong>{formatAmount(overview.realized_pnl, DISPLAY_CURRENCY, true)}</strong>
+          <strong>{formatAmount(overview.realized_pnl, undefined, true)}</strong>
           <small>卖出与分红累计</small>
         </div>
         <div>
           <span>总收益</span>
-          <strong>{formatAmount(overview.total_return, DISPLAY_CURRENCY, true)}</strong>
+          <strong>{formatAmount(overview.total_return, undefined, true)}</strong>
           <small>总资产 - 投入本金</small>
         </div>
         <div>
@@ -121,7 +127,7 @@ export function AllocationOverview({
           </div>
           <div>
             <span>市值</span>
-            <strong>{formatAmount(overview.cash, DISPLAY_CURRENCY)}</strong>
+            <strong>{formatAmount(overview.cash)}</strong>
           </div>
           <div>
             <span>占比</span>
@@ -135,6 +141,7 @@ export function AllocationOverview({
             <span>已实现</span>
             <strong>—</strong>
           </div>
+          <div className="allocation-holdings-action" />
         </div>
         {overview.positions.map((position) => (
           <div className="allocation-holdings-row" key={position.symbol}>
@@ -146,14 +153,6 @@ export function AllocationOverview({
                   ? ` · ${position.portfolio_count} 个组合`
                   : ""}
               </small>
-              {onShowLedger && (
-                <button
-                  className="journal-edit"
-                  onClick={() => onShowLedger(position.symbol)}
-                >
-                  流水
-                </button>
-              )}
             </div>
             <div>
               <span>数量</span>
@@ -161,25 +160,21 @@ export function AllocationOverview({
             </div>
             <div>
               <span>均价</span>
-              <strong>{formatPrice(position.avg_cost_usd)}</strong>
+              <strong>{formatUsdPrice(position.avg_cost_usd)}</strong>
             </div>
-            <div>
+            <div className="allocation-holdings-price">
               <span>现价</span>
-              <strong>
-                {formatPrice(position.price_usd)}
-                <i className={`allocation-source ${position.price_source}`}>
-                  {priceSourceLabel(position.price_source)}
-                </i>
-              </strong>
+              <strong>{formatUsdPrice(position.price_usd)}</strong>
+              <small className={`allocation-source ${position.price_source}`}>
+                {priceSourceLabel(position.price_source)}
+              </small>
               {position.price_stale && (
                 <span className="allocation-stale">过期</span>
               )}
             </div>
             <div>
               <span>市值</span>
-              <strong>
-                {formatAmount(position.market_value_usd, DISPLAY_CURRENCY)}
-              </strong>
+              <strong>{formatAmount(position.market_value_usd)}</strong>
             </div>
             <div>
               <span>占比</span>
@@ -196,11 +191,7 @@ export function AllocationOverview({
                       : ""
                 }
               >
-                {formatAmount(
-                  position.unrealized_pnl_usd,
-                  DISPLAY_CURRENCY,
-                  true,
-                )}
+                {formatAmount(position.unrealized_pnl_usd, undefined, true)}
               </strong>
             </div>
             <div>
@@ -214,12 +205,18 @@ export function AllocationOverview({
                       : ""
                 }
               >
-                {formatAmount(
-                  position.realized_pnl_usd,
-                  DISPLAY_CURRENCY,
-                  true,
-                )}
+                {formatAmount(position.realized_pnl_usd, undefined, true)}
               </strong>
+            </div>
+            <div className="allocation-holdings-action">
+              {onShowLedger && (
+                <button
+                  className="journal-edit"
+                  onClick={() => onShowLedger(position.symbol)}
+                >
+                  流水
+                </button>
+              )}
             </div>
           </div>
         ))}

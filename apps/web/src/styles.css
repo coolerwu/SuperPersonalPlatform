@@ -3127,7 +3127,7 @@ textarea {
   .app-shell,
   .app-shell:not(.with-drawer) {
     position: fixed;
-    top: 0;
+    top: var(--app-offset-top, 0px);
     right: 0;
     left: 0;
     display: flex;
@@ -3135,7 +3135,6 @@ textarea {
     height: 100vh;
     height: var(--app-height, 100dvh);
     min-height: 0;
-    transform: translateY(var(--app-offset-top, 0px));
   }
 
   .mobile-bar {
@@ -3233,6 +3232,7 @@ textarea {
     position: fixed;
     inset: 0;
     bottom: auto;
+    top: var(--app-offset-top, 0px);
     height: 100vh;
     height: var(--app-height, 100dvh);
     z-index: 70;
@@ -3421,6 +3421,9 @@ textarea {
   }
 
   .modal-backdrop {
+    top: var(--app-offset-top, 0px);
+    bottom: auto;
+    height: var(--app-height, 100dvh);
     align-items: end;
     padding: 0;
   }
@@ -5121,7 +5124,7 @@ body:has(.app-shell.pearl) .select-empty {
   }
 
   .pearl .drawer {
-    top: 0;
+    top: var(--app-offset-top, 0px);
     right: 0;
     bottom: 0;
     left: 0;
@@ -6574,7 +6577,7 @@ body:has(.app-shell.pearl) .select-empty {
 
 .allocation-holdings-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) repeat(7, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.4fr) repeat(7, minmax(0, 1fr)) auto;
   gap: 8px 12px;
   align-items: center;
   padding: 10px 14px;
@@ -6603,10 +6606,8 @@ body:has(.app-shell.pearl) .select-empty {
 .allocation-holdings-row strong {
   font-size: 13px;
   font-weight: 600;
+  white-space: nowrap;
   overflow-wrap: anywhere;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .allocation-holdings-name strong {
@@ -6618,6 +6619,22 @@ body:has(.app-shell.pearl) .select-empty {
   font-size: 10px;
 }
 
+.allocation-holdings-price {
+  align-items: flex-start;
+}
+
+.allocation-holdings-price .allocation-source {
+  align-self: flex-start;
+}
+
+.allocation-holdings-action {
+  align-items: flex-end;
+}
+
+.allocation-overview .journal-stat-grid strong {
+  white-space: nowrap;
+}
+
 @media (max-width: 860px) {
   .allocation-holdings-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6625,6 +6642,11 @@ body:has(.app-shell.pearl) .select-empty {
 
   .allocation-holdings-name {
     grid-column: 1 / -1;
+  }
+
+  .allocation-holdings-action {
+    grid-column: 1 / -1;
+    align-items: flex-start;
   }
 }
 

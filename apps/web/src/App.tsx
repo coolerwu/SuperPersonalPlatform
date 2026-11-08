@@ -387,18 +387,101 @@ export default function App() {
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
-    const syncViewport = () => {
-      const root = document.documentElement;
-      root.style.setProperty("--app-height", `${viewport.height}px`);
-      root.style.setProperty("--app-offset-top", `${viewport.offsetTop}px`);
+    const root = document.documentElement;
+
+    const isEditable = (el: Element | null): boolean =>
+      el instanceof HTMLElement &&
+      (el.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+
+    let typing = isEditable(document.activeElement);
+    let frame = 0;
+    let lastHeight = "";
+    let lastTop = "";
+
+    const setSize = (height: number, top: number) => {
+      const nextHeight = `${Math.round(height)}px`;
+      const nextTop = `${Math.round(top)}px`;
+      if (nextHeight !== lastHeight) {
+        root.style.setProperty("--app-height", nextHeight);
+        lastHeight = nextHeight;
+      }
+      if (nextTop !== lastTop) {
+        root.style.setProperty("--app-offset-top", nextTop);
+        lastTop = nextTop;
+      }
     };
-    syncViewport();
-    viewport.addEventListener("resize", syncViewport);
-    viewport.addEventListener("scroll", syncViewport);
+
+    const apply = () => {
+      frame = 0;
+      const layoutHeight =
+        document.documentElement.clientHeight || window.innerHeight;
+      if (!typing) {
+        setSize(layoutHeight, 0);
+        return;
+      }
+      const height = Math.round(viewport.height);
+      // iOS 26 Safari can keep visualViewport stale after the keyboard is dismissed;
+      // once it reports the full layout height, drop any leftover offset.
+      if (height >= layoutHeight - 1) {
+        setSize(layoutHeight, 0);
+        return;
+      }
+      const top = Math.min(
+        Math.max(0, viewport.offsetTop),
+        Math.max(0, layoutHeight - height),
+      );
+      setSize(height, top);
+    };
+
+    const schedule = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(apply);
+    };
+
+    const syncAfterBlur = () => {
+      window.setTimeout(() => {
+        typing = isEditable(document.activeElement);
+        if (typing) return;
+        apply();
+        window.requestAnimationFrame(apply);
+        window.setTimeout(apply, 250);
+      }, 0);
+    };
+
+    const onFocusIn = (event: FocusEvent) => {
+      typing =
+        isEditable(event.target as Element | null) ||
+        isEditable(document.activeElement);
+      schedule();
+    };
+
+    const onFocusOut = () => {
+      syncAfterBlur();
+    };
+
+    apply();
+    viewport.addEventListener("resize", schedule);
+    viewport.addEventListener("scroll", schedule);
+    window.addEventListener("resize", schedule);
+    window.addEventListener("orientationchange", schedule);
+    document.addEventListener("visibilitychange", schedule);
+    document.addEventListener("focusin", onFocusIn);
+    document.addEventListener("focusout", onFocusOut);
+    // iOS occasionally misses the final visualViewport change; a low-frequency
+    // check keeps the shell aligned without writing styles when nothing changed.
+    const timer = window.setInterval(apply, 500);
+
     return () => {
-      viewport.removeEventListener("resize", syncViewport);
-      viewport.removeEventListener("scroll", syncViewport);
-      const root = document.documentElement;
+      if (frame) window.cancelAnimationFrame(frame);
+      window.clearInterval(timer);
+      viewport.removeEventListener("resize", schedule);
+      viewport.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("orientationchange", schedule);
+      document.removeEventListener("visibilitychange", schedule);
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("focusout", onFocusOut);
       root.style.removeProperty("--app-height");
       root.style.removeProperty("--app-offset-top");
     };
