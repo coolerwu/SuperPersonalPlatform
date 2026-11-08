@@ -27,7 +27,17 @@ export function attemptText(
 
 export type RunTraceStep =
   | { kind: "reasoning"; id: number; text: string }
-  | { kind: "tool"; id: number; tool: string; agent: string; label: string };
+  | { kind: "tool"; id: number; tool: string; agent: string; label: string }
+  | {
+      kind: "rubric";
+      id: number;
+      iteration: number;
+      result: string;
+      passed: boolean;
+      total: number;
+      failed: number;
+      failures: { name: string; gap: string }[];
+    };
 
 export function appendReasoningStep(
   trace: RunTraceStep[],
@@ -53,6 +63,31 @@ export function toolTraceStep(event: RunEvent): RunTraceStep {
   };
 }
 
+export function rubricTraceStep(event: RunEvent): RunTraceStep {
+  const payload = event.payload;
+  const failures = Array.isArray(payload.failures)
+    ? payload.failures
+        .filter(
+          (item): item is Record<string, unknown> =>
+            Boolean(item) && typeof item === "object",
+        )
+        .map((item) => ({
+          name: String(item.name ?? ""),
+          gap: String(item.gap ?? ""),
+        }))
+    : [];
+  return {
+    kind: "rubric",
+    id: event.id,
+    iteration: Number(payload.iteration ?? 0),
+    result: String(payload.result ?? ""),
+    passed: Boolean(payload.passed),
+    total: Number(payload.total ?? 0),
+    failed: Number(payload.failed ?? 0),
+    failures,
+  };
+}
+
 /** Reasoning and tool calls in the order they were emitted for one attempt. */
 export function buildRunTrace(events: RunEvent[]): RunTraceStep[] {
   let trace: RunTraceStep[] = [];
@@ -65,6 +100,8 @@ export function buildRunTrace(events: RunEvent[]): RunTraceStep[] {
       );
     } else if (event.type === "tool_call") {
       trace = [...trace, toolTraceStep(event)];
+    } else if (event.type === "rubric_result") {
+      trace = [...trace, rubricTraceStep(event)];
     }
   }
   return trace;

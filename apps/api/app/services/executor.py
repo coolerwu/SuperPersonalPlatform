@@ -687,7 +687,30 @@ class DeepAgentExecutor:
                         grading = True
                     elif data.get("type") == "rubric_evaluation_end":
                         grading = False
-                        if data.get("result") == "needs_revision":
+                        criteria = data.get("criteria")
+                        entries = criteria if isinstance(criteria, list) else []
+                        failures = [
+                            {
+                                "name": str(entry.get("name") or "")[:200],
+                                "gap": str(entry.get("gap") or "")[:300],
+                            }
+                            for entry in entries
+                            if isinstance(entry, dict) and not entry.get("passed")
+                        ]
+                        result = str(data.get("result") or "")
+                        yield ExecutorEvent(
+                            "rubric_result",
+                            {
+                                "iteration": data.get("iteration"),
+                                "result": result,
+                                "passed": result == "satisfied",
+                                "total": len(entries),
+                                "failed": len(failures),
+                                "failures": failures[:20],
+                                "explanation": str(data.get("explanation") or "")[:400],
+                            },
+                        )
+                        if result == "needs_revision":
                             # The middleware resumes the agent with a revision
                             # request; drop the draft so only it is shown.
                             yield ExecutorEvent("assistant_replace", {"text": ""})

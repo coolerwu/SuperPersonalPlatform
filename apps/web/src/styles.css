@@ -1032,6 +1032,34 @@ textarea {
   font-size: 10px;
 }
 
+.run-trace-rubric {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.run-trace-rubric > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.run-trace-rubric > summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-trace-rubric-gaps {
+  margin: 0;
+  padding: 0 12px 8px 24px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
 .message-screenshots {
   display: flex;
   flex-wrap: wrap;
@@ -4776,6 +4804,19 @@ body:has(.app-shell.pearl) .select-empty {
   margin-left: 0;
   color: #8a93a0;
   font-size: 9.5px;
+}
+
+.pearl .run-trace-rubric {
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.62);
+  color: #5b6472;
+  font-size: 11.5px;
+  box-shadow: 0 3px 10px rgba(28, 34, 52, 0.05);
+}
+
+.pearl .run-trace-rubric-gaps {
+  color: #8a93a0;
 }
 
 .pearl .message-thinking:not(.run-trace) summary {

@@ -54,6 +54,25 @@ function eventText(event: RunEvent): string {
         ? `达到执行步骤上限（${limit}），已自动续跑`
         : `达到执行步骤上限（${limit}），已生成进展总结`;
     }
+    case "rubric_result": {
+      const iteration = Number(payload.iteration ?? 0) + 1;
+      const result = String(payload.result ?? "");
+      const total = Number(payload.total ?? 0);
+      const failed = Number(payload.failed ?? 0);
+      const failedCheck = result === "grader_error" || result === "failed";
+      const label =
+        result === "satisfied"
+          ? "通过"
+          : result === "needs_revision"
+            ? "未通过，将修订"
+            : result === "max_iterations_reached"
+              ? "修订后仍未通过"
+              : failedCheck
+                ? "评分失败"
+                : result || "未知";
+      const suffix = failedCheck ? "" : `（${failed}/${total} 项未通过）`;
+      return `第 ${iteration} 次校验：${label}${suffix}`;
+    }
     case "assistant_replace":
       return "校验未通过，开始输出修订版";
     case "run_completed":

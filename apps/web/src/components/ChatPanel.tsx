@@ -247,6 +247,46 @@ function RunTrace({
               </div>
             );
           }
+          if (step.kind === "rubric") {
+            const failedCheck =
+              step.result === "grader_error" || step.result === "failed";
+            const label = step.passed
+              ? `校验 ${step.iteration + 1} 通过`
+              : failedCheck
+                ? `校验 ${step.iteration + 1} 失败`
+                : step.result === "max_iterations_reached"
+                  ? `校验 ${step.iteration + 1} 仍未通过`
+                  : `校验 ${step.iteration + 1} 未通过`;
+            const count = failedCheck
+              ? "评分器未返回结果"
+              : `${step.failed}/${step.total} 项未通过`;
+            if (step.failures.length === 0) {
+              return (
+                <div className="run-trace-tool" key={`rubric-${step.id}`}>
+                  <span className="run-trace-tool-dot" aria-hidden="true" />
+                  <span className="run-trace-tool-label">{label}</span>
+                  <span className="run-trace-tool-name">{count}</span>
+                </div>
+              );
+            }
+            return (
+              <details className="run-trace-rubric" key={`rubric-${step.id}`}>
+                <summary>
+                  <span className="run-trace-tool-dot" aria-hidden="true" />
+                  <span className="run-trace-tool-label">{label}</span>
+                  <span className="run-trace-tool-name">{count}</span>
+                </summary>
+                <ul className="run-trace-rubric-gaps">
+                  {step.failures.map((item, index) => (
+                    <li key={`rubric-gap-${index}`}>
+                      {item.name}
+                      {item.gap ? `：${item.gap}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            );
+          }
           return (
             <div className="run-trace-tool" key={`tool-${step.id}`}>
               <span className="run-trace-tool-dot" aria-hidden="true" />

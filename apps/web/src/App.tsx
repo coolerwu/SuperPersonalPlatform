@@ -21,6 +21,7 @@ import {
   attemptText,
   buildRunTrace,
   describeToolCall,
+  rubricTraceStep,
   toolTraceStep,
   type RunTraceStep,
 } from "./runActivity";
@@ -851,6 +852,8 @@ export default function App() {
       } else if (event.type === "tool_call") {
         next.trace = [...session.trace, toolTraceStep(event)];
         next.activity = describeToolCall(event.payload);
+      } else if (event.type === "rubric_result") {
+        next.trace = [...session.trace, rubricTraceStep(event)];
       } else if (event.type === "browser_action") {
         // The tool finished; the next model step decides the next activity.
         next.activity = "";

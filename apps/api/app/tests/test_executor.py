@@ -652,14 +652,27 @@ async def test_executor_swaps_draft_for_rubric_revision(tmp_path, monkeypatch) -
             yield (
                 (),
                 "custom",
-                {"type": "rubric_evaluation_end", "result": "needs_revision"},
+                {
+                    "type": "rubric_evaluation_end",
+                    "iteration": 0,
+                    "result": "needs_revision",
+                    "criteria": [
+                        {"name": "风格", "passed": False, "gap": "句子太长"}
+                    ],
+                    "explanation": "需要修订",
+                },
             )
             yield ((), "messages", (AIMessageChunk(content="revised"), {}))
             yield ((), "custom", {"type": "rubric_evaluation_start"})
             yield (
                 (),
                 "custom",
-                {"type": "rubric_evaluation_end", "result": "satisfied"},
+                {
+                    "type": "rubric_evaluation_end",
+                    "iteration": 1,
+                    "result": "satisfied",
+                    "criteria": [{"name": "风格", "passed": True}],
+                },
             )
 
     monkeypatch.setattr("deepagents.create_deep_agent", lambda **_kwargs: FakeAgent())
@@ -686,6 +699,11 @@ async def test_executor_swaps_draft_for_rubric_revision(tmp_path, monkeypatch) -
     ] == ["draft", "revised"]
     replaced = [event for event in events if event.type == "assistant_replace"]
     assert [event.payload["text"] for event in replaced] == [""]
+    results = [event.payload for event in events if event.type == "rubric_result"]
+    assert [result["result"] for result in results] == ["needs_revision", "satisfied"]
+    assert results[0]["total"] == 1 and results[0]["failed"] == 1
+    assert results[0]["failures"][0]["name"] == "风格"
+    assert results[1]["passed"] is True and results[1]["failed"] == 0
     completed = [event for event in events if event.type == "run_completed"]
     assert completed[0].payload["output"] == "revised"
 
