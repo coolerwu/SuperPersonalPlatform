@@ -6921,18 +6921,18 @@ body:has(.app-shell.pearl) .select-empty {
 }
 
 .allocation-target-table {
-  min-width: 980px;
+  min-width: 860px;
 }
 
 .allocation-mini-input {
-  width: 110px;
+  width: 96px;
   height: 30px;
   padding: 0 8px;
   font-size: 12px;
 }
 
 .allocation-date-input {
-  width: 140px;
+  width: 132px;
 }
 
 .allocation-target-sum {
