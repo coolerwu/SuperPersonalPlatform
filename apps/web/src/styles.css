@@ -3137,14 +3137,10 @@ textarea {
 @media (max-width: 860px) {
   .app-shell,
   .app-shell:not(.with-drawer) {
-    position: fixed;
-    top: var(--app-offset-top, 0px);
-    right: 0;
-    left: 0;
     display: flex;
     flex-direction: column;
     height: 100vh;
-    height: var(--app-height, 100dvh);
+    height: 100dvh;
     min-height: 0;
   }
 
@@ -3243,7 +3239,6 @@ textarea {
     position: fixed;
     inset: 0;
     bottom: auto;
-    top: var(--app-offset-top, 0px);
     height: 100vh;
     height: var(--app-height, 100dvh);
     z-index: 70;
@@ -3432,9 +3427,6 @@ textarea {
   }
 
   .modal-backdrop {
-    top: var(--app-offset-top, 0px);
-    bottom: auto;
-    height: var(--app-height, 100dvh);
     align-items: end;
     padding: 0;
   }
@@ -5135,7 +5127,7 @@ body:has(.app-shell.pearl) .select-empty {
   }
 
   .pearl .drawer {
-    top: var(--app-offset-top, 0px);
+    top: 0;
     right: 0;
     bottom: 0;
     left: 0;

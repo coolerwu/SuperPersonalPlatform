@@ -417,108 +417,12 @@ export default function App() {
   }, [sidebarOpen]);
 
   useEffect(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return;
-    const root = document.documentElement;
-
     const isEditable = (el: Element | null): boolean =>
       el instanceof HTMLElement &&
       (el.isContentEditable ||
         ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
-
-    let typing = isEditable(document.activeElement);
-    let frame = 0;
-    let lastHeight = "";
-    let lastTop = "";
-    // 整屏高度，与键盘打开时的可视视口无关，避免收起后用到旧的小值。
-    const layoutHeight = () =>
-      Math.max(window.innerHeight, document.documentElement.clientHeight);
-    // 只有可视视口也恢复整屏时才相信布局高度；键盘打开或 iOS 残留旧值时
-    // visualViewport 会明显小于布局高度。
-    const viewportIsFull = () => viewport.height >= layoutHeight() - 1;
-    let fullHeight = layoutHeight();
-
-    const setSize = (height: number, top: number) => {
-      const nextHeight = `${Math.round(height)}px`;
-      const nextTop = `${Math.round(top)}px`;
-      if (nextHeight !== lastHeight) {
-        root.style.setProperty("--app-height", nextHeight);
-        lastHeight = nextHeight;
-      }
-      if (nextTop !== lastTop) {
-        root.style.setProperty("--app-offset-top", nextTop);
-        lastTop = nextTop;
-      }
-    };
-
-    const apply = () => {
-      frame = 0;
-      if (!typing) {
-        if (viewportIsFull()) {
-          fullHeight = Math.max(fullHeight, layoutHeight());
-        }
-        setSize(fullHeight, 0);
-        return;
-      }
-      // iOS 26 Safari can keep visualViewport stale after the keyboard is
-      // dismissed; once it reports the full height, drop any leftover offset.
-      if (viewportIsFull()) {
-        fullHeight = Math.max(fullHeight, layoutHeight());
-        setSize(fullHeight, 0);
-        return;
-      }
-      const height = Math.round(viewport.height);
-      const top = Math.min(
-        Math.max(0, viewport.offsetTop),
-        Math.max(0, fullHeight - height),
-      );
-      setSize(height, top);
-    };
-
-    const schedule = () => {
-      if (frame) return;
-      frame = window.requestAnimationFrame(apply);
-    };
-
-    const syncAfterBlur = () => {
-      window.setTimeout(() => {
-        typing = isEditable(document.activeElement);
-        if (typing) return;
-        apply();
-        window.requestAnimationFrame(apply);
-        window.setTimeout(apply, 250);
-      }, 0);
-    };
-
-    const onFocusIn = (event: FocusEvent) => {
-      typing =
-        isEditable(event.target as Element | null) ||
-        isEditable(document.activeElement);
-      schedule();
-    };
-
-    const onFocusOut = () => {
-      syncAfterBlur();
-    };
-
-    const onWindowResize = () => {
-      if (!typing && viewportIsFull()) {
-        fullHeight = layoutHeight();
-      }
-      schedule();
-    };
-
-    const onOrientationChange = () => {
-      window.setTimeout(() => {
-        typing = isEditable(document.activeElement);
-        fullHeight = layoutHeight();
-        apply();
-      }, 250);
-      schedule();
-    };
-
-    // 点输入框以外的地方收起键盘：既符合手机习惯，也让 iOS 26 收起键盘后
-    // 残留的 visualViewport 旧值通过失焦重置。
+    // 点输入框以外的地方收起键盘；外壳高度不再跟着键盘变化，由浏览器平移
+    // 可视视口来露出 composer，键盘收起后自动恢复。
     const onPointerDown = (event: PointerEvent) => {
       const active = document.activeElement;
       if (!(active instanceof HTMLElement) || !isEditable(active)) return;
@@ -528,40 +432,8 @@ export default function App() {
       if (target && composer.contains(target)) return;
       active.blur();
     };
-
-    apply();
-    viewport.addEventListener("resize", schedule);
-    viewport.addEventListener("scroll", schedule);
-    window.addEventListener("resize", onWindowResize);
-    window.addEventListener("scroll", schedule);
-    window.addEventListener("focus", schedule);
-    window.addEventListener("blur", schedule);
-    window.addEventListener("orientationchange", onOrientationChange);
-    document.addEventListener("visibilitychange", schedule);
-    document.addEventListener("focusin", onFocusIn);
-    document.addEventListener("focusout", onFocusOut);
     document.addEventListener("pointerdown", onPointerDown, true);
-    // iOS occasionally misses the final visualViewport change; a low-frequency
-    // check keeps the shell aligned without writing styles when nothing changed.
-    const timer = window.setInterval(apply, 500);
-
-    return () => {
-      if (frame) window.cancelAnimationFrame(frame);
-      window.clearInterval(timer);
-      viewport.removeEventListener("resize", schedule);
-      viewport.removeEventListener("scroll", schedule);
-      window.removeEventListener("resize", onWindowResize);
-      window.removeEventListener("scroll", schedule);
-      window.removeEventListener("focus", schedule);
-      window.removeEventListener("blur", schedule);
-      window.removeEventListener("orientationchange", onOrientationChange);
-      document.removeEventListener("visibilitychange", schedule);
-      document.removeEventListener("focusin", onFocusIn);
-      document.removeEventListener("focusout", onFocusOut);
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      root.style.removeProperty("--app-height");
-      root.style.removeProperty("--app-offset-top");
-    };
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
   }, []);
 
   function pushPath(path: string) {
