@@ -166,11 +166,14 @@ function ViewportDebug() {
   const [text, setText] = useState("");
   useEffect(() => {
     const root = document.documentElement;
+    const ios =
+      navigator.userAgent.match(/OS (\d+)_(\d+)/)?.slice(1).join(".") ?? "?";
     let last = "";
     const tick = () => {
       const viewport = window.visualViewport;
       const active = document.activeElement as HTMLElement | null;
       const next = [
+        `ios ${ios} f${document.hasFocus() ? 1 : 0}`,
         `vv ${viewport ? Math.round(viewport.height) : "—"}/${viewport ? Math.round(viewport.offsetTop) : "—"} s${viewport ? viewport.scale.toFixed(2) : "—"}`,
         `in ${window.innerHeight} doc ${root.clientHeight} y ${Math.round(window.scrollY)}`,
         `var ${root.style.getPropertyValue("--app-height") || "—"}/${root.style.getPropertyValue("--app-offset-top") || "—"}`,
@@ -428,10 +431,12 @@ export default function App() {
     let lastHeight = "";
     let lastTop = "";
     // 整屏高度，与键盘打开时的可视视口无关，避免收起后用到旧的小值。
-    let fullHeight = Math.max(
-      window.innerHeight,
-      document.documentElement.clientHeight,
-    );
+    const layoutHeight = () =>
+      Math.max(window.innerHeight, document.documentElement.clientHeight);
+    // 只有可视视口也恢复整屏时才相信布局高度；键盘打开或 iOS 残留旧值时
+    // visualViewport 会明显小于布局高度。
+    const viewportIsFull = () => viewport.height >= layoutHeight() - 1;
+    let fullHeight = layoutHeight();
 
     const setSize = (height: number, top: number) => {
       const nextHeight = `${Math.round(height)}px`;
@@ -449,16 +454,20 @@ export default function App() {
     const apply = () => {
       frame = 0;
       if (!typing) {
+        if (viewportIsFull()) {
+          fullHeight = Math.max(fullHeight, layoutHeight());
+        }
+        setSize(fullHeight, 0);
+        return;
+      }
+      // iOS 26 Safari can keep visualViewport stale after the keyboard is
+      // dismissed; once it reports the full height, drop any leftover offset.
+      if (viewportIsFull()) {
+        fullHeight = Math.max(fullHeight, layoutHeight());
         setSize(fullHeight, 0);
         return;
       }
       const height = Math.round(viewport.height);
-      // iOS 26 Safari can keep visualViewport stale after the keyboard is
-      // dismissed; once it reports the full height, drop any leftover offset.
-      if (height >= fullHeight - 1) {
-        setSize(fullHeight, 0);
-        return;
-      }
       const top = Math.min(
         Math.max(0, viewport.offsetTop),
         Math.max(0, fullHeight - height),
@@ -493,11 +502,8 @@ export default function App() {
     };
 
     const onWindowResize = () => {
-      if (!typing) {
-        fullHeight = Math.max(
-          window.innerHeight,
-          document.documentElement.clientHeight,
-        );
+      if (!typing && viewportIsFull()) {
+        fullHeight = layoutHeight();
       }
       schedule();
     };
@@ -505,10 +511,7 @@ export default function App() {
     const onOrientationChange = () => {
       window.setTimeout(() => {
         typing = isEditable(document.activeElement);
-        fullHeight = Math.max(
-          window.innerHeight,
-          document.documentElement.clientHeight,
-        );
+        fullHeight = layoutHeight();
         apply();
       }, 250);
       schedule();
@@ -530,6 +533,9 @@ export default function App() {
     viewport.addEventListener("resize", schedule);
     viewport.addEventListener("scroll", schedule);
     window.addEventListener("resize", onWindowResize);
+    window.addEventListener("scroll", schedule);
+    window.addEventListener("focus", schedule);
+    window.addEventListener("blur", schedule);
     window.addEventListener("orientationchange", onOrientationChange);
     document.addEventListener("visibilitychange", schedule);
     document.addEventListener("focusin", onFocusIn);
@@ -545,6 +551,9 @@ export default function App() {
       viewport.removeEventListener("resize", schedule);
       viewport.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", onWindowResize);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("focus", schedule);
+      window.removeEventListener("blur", schedule);
       window.removeEventListener("orientationchange", onOrientationChange);
       document.removeEventListener("visibilitychange", schedule);
       document.removeEventListener("focusin", onFocusIn);
