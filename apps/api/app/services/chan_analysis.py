@@ -1,9 +1,10 @@
 """Deterministic Chan-theory structure analysis for OHLC bars.
 
-This is intentionally a *rule-based* implementation, not an AI drawing. The
-first version covers inclusion merging, fractals, old-style strokes (at least
-five merged bars including both fractal bars) and central zones. Segments and
-buy/sell points are left for a later version because their definitions vary.
+This is intentionally a *rule-based* implementation, not an AI drawing. It
+covers inclusion merging, fractals, old-style strokes (at least five merged
+bars including both fractal bars), central zones, stroke-level buy/sell points
+and MACD-area divergence. Segments and multi-level analysis are left for a
+later version because their definitions vary.
 """
 
 from __future__ import annotations
@@ -202,17 +203,38 @@ def build_strokes(
     return strokes
 
 
+def _leaves_zone(stroke: dict[str, Any], zg: float, zd: float) -> str | None:
+    """Return the side a stroke ends outside the zone, if it does."""
+    end = float(stroke["end_price"])
+    if stroke["direction"] == "down" and end < zd:
+        return "down"
+    if stroke["direction"] == "up" and end > zg:
+        return "up"
+    return None
+
+
+def _stays_outside(
+    stroke: dict[str, Any], side: str, zg: float, zd: float
+) -> bool:
+    """Whether the stroke after a candidate fails to return into the zone."""
+    end = float(stroke["end_price"])
+    return end < zd if side == "down" else end > zg
+
+
 def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Find completed central zones: entry stroke + three overlapping + exit.
+    """Find completed central zones: entry + three overlapping + confirmed exit.
 
     A zone must be entered by the stroke before its first center stroke and
-    left by a stroke outside [zd, zg]; a structure that is still overlapping
-    when the data ends has no exit and is not reported. After a zone the next
-    candidate starts two strokes later, so the leaving stroke becomes the
-    entry of the next zone instead of turning two zones into one continuous
-    block. ``start_time`` is the entering stroke's start so the drawn box
-    covers the structure's entry, while ZG/ZD still come from the three
-    center strokes.
+    left by a stroke that ends outside ``[zd, zg]`` while the next stroke
+    stays outside. A stroke that pokes out and returns is an extension, not an
+    exit; this keeps a breakdown stroke from being folded into the zone it is
+    leaving. A zone whose exit is not confirmed by the next stroke is not
+    reported, because the structure is still unfinished at the sample end.
+    After a zone the next candidate starts two strokes later, so the leaving
+    stroke becomes the entry of the next zone instead of turning two zones
+    into one continuous block. ``start_time`` is the entering stroke's start
+    so the drawn box covers the structure's entry, while ZG/ZD still come from
+    the three center strokes.
     """
     zones: list[dict[str, Any]] = []
     index = 1  # strokes[index - 1] is the entering stroke
@@ -224,13 +246,19 @@ def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             index += 1
             continue
         end = index + 2
+        exit_index: int | None = None
         while end + 1 < len(strokes):
-            following = strokes[end + 1]
-            if float(following["low"]) > zg or float(following["high"]) < zd:
-                break
+            candidate = strokes[end + 1]
+            side = _leaves_zone(candidate, zg, zd)
+            if side is not None:
+                after = strokes[end + 2] if end + 2 < len(strokes) else None
+                if after is not None and _stays_outside(after, side, zg, zd):
+                    exit_index = end + 1
+                    break
+            # The stroke stayed inside, or poked out and returned: extend.
             end += 1
-        if end + 1 >= len(strokes):
-            # Still inside the zone when the sample ends: no leaving stroke.
+        if exit_index is None:
+            # No confirmed leaving stroke: the structure is still unfinished.
             break
         zones.append(
             {
@@ -241,7 +269,7 @@ def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "entry_stroke": index - 1,
                 "start_stroke": index,
                 "end_stroke": end,
-                "exit_stroke": end + 1,
+                "exit_stroke": exit_index,
             }
         )
         index = end + 2
@@ -403,27 +431,28 @@ def find_buy_sell_points(
                 break
 
     for zone in zones:
-        start = int(zone["end_stroke"]) + 1
-        for index in range(start, len(strokes) - 1):
-            stroke = strokes[index]
-            if stroke["direction"] == "up" and float(stroke["end_price"]) > float(zone["zg"]):
-                following = strokes[index + 1]
-                if (
-                    following["direction"] == "down"
-                    and float(following["end_price"]) > float(zone["zg"])
-                ):
-                    add("3buy", index + 1, "离开中枢后回踩不进入 ZG")
-                break
-        for index in range(start, len(strokes) - 1):
-            stroke = strokes[index]
-            if stroke["direction"] == "down" and float(stroke["end_price"]) < float(zone["zd"]):
-                following = strokes[index + 1]
-                if (
-                    following["direction"] == "up"
-                    and float(following["end_price"]) < float(zone["zd"])
-                ):
-                    add("3sell", index + 1, "离开中枢后反抽不进入 ZD")
-                break
+        exit_raw = zone.get("exit_stroke")
+        if exit_raw is None:
+            continue
+        exit_index = int(exit_raw)
+        if exit_index + 1 >= len(strokes):
+            continue
+        exit_stroke = strokes[exit_index]
+        following = strokes[exit_index + 1]
+        if exit_stroke["direction"] == "up":
+            if (
+                float(exit_stroke["end_price"]) > float(zone["zg"])
+                and following["direction"] == "down"
+                and float(following["end_price"]) > float(zone["zg"])
+            ):
+                add("3buy", exit_index + 1, "离开中枢后回踩不进入 ZG")
+        elif exit_stroke["direction"] == "down":
+            if (
+                float(exit_stroke["end_price"]) < float(zone["zd"])
+                and following["direction"] == "up"
+                and float(following["end_price"]) < float(zone["zd"])
+            ):
+                add("3sell", exit_index + 1, "离开中枢后反抽不进入 ZD")
 
     points.sort(key=lambda item: int(item["time"]))
     return points[:40]
@@ -520,11 +549,16 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
             "bi_rule": "顶底分型交替，至少 5 根合并 K 线（含两端分型）；未满足跨度的分型不成笔、不标注",
             "fractal_rule": "三根合并 K 线严格顶/底",
             "zone_rule": (
-                "进入段 + 连续三笔重叠 + 离开段；"
+                "进入段 + 连续三笔重叠 + 确认离开段；"
+                "离开段要收在 ZG 上方或 ZD 下方，且下一笔不回到中枢；"
+                "刺穿后回到中枢的笔算延伸；"
                 "ZG=三笔高点最小值，ZD=三笔低点最大值；"
                 "中枢框从进入段起点画到最后一笔中枢终点"
             ),
-            "point_rule": "笔级别近似：1 买卖用 MACD 面积背驰，2 买卖回踩不破，3 买卖离开中枢后回抽不入中枢",
+            "point_rule": (
+                "笔级别近似：1 买卖用 MACD 面积背驰，2 买卖回踩不破，"
+                "3 买卖取离开中枢后的第一笔回抽且不重新进入 ZG/ZD"
+            ),
             "divergence_rule": (
                 f"同向笔（间隔一笔）比较：价格创新低/高但 MACD 柱面积收缩到前一同向笔的 "
                 f"{int(DIVERGENCE_RATIO * 100)}% 以下，记为底/顶背离；"

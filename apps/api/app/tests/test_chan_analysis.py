@@ -117,18 +117,27 @@ def test_build_strokes_old_bi_and_replacement() -> None:
     assert close == []
 
 
-def _stroke(start: int, end: int, high: float, low: float) -> dict:
-    return {"start_time": start, "end_time": end, "high": high, "low": low}
+def _stroke(start: int, end: int, start_price: float, end_price: float) -> dict:
+    return {
+        "start_time": start,
+        "end_time": end,
+        "start_price": start_price,
+        "end_price": end_price,
+        "direction": "up" if end_price > start_price else "down",
+        "high": max(start_price, end_price),
+        "low": min(start_price, end_price),
+    }
 
 
 def test_find_zones_and_extension() -> None:
     strokes = [
         _stroke(1, 2, 30, 10),  # entry
-        _stroke(2, 3, 20, 10),
-        _stroke(3, 4, 22, 12),
-        _stroke(4, 5, 21, 11),
-        _stroke(5, 6, 19, 13),  # still overlapping: extends the zone
-        _stroke(6, 7, 25, 23),  # exit above ZG
+        _stroke(2, 3, 10, 20),
+        _stroke(3, 4, 20, 12),
+        _stroke(4, 5, 12, 21),
+        _stroke(5, 6, 21, 13),  # still overlapping: extends the zone
+        _stroke(6, 7, 13, 25),  # leaves above ZG
+        _stroke(7, 8, 25, 23),  # stays above ZG: confirms the exit
     ]
     zones = find_zones(strokes)
     assert len(zones) == 1
@@ -140,15 +149,15 @@ def test_find_zones_and_extension() -> None:
     assert zones[0]["exit_stroke"] == 5
     # The box starts at the entering stroke so the structure entry is covered.
     assert zones[0]["start_time"] == strokes[0]["start_time"]
-    assert zones[0]["end_time"] == 6
+    assert zones[0]["end_time"] == strokes[4]["end_time"]
 
 
 def test_zones_need_an_entry_stroke() -> None:
     # The first strokes overlap, but nothing precedes them to enter the zone.
     strokes = [
         _stroke(1, 2, 20, 10),
-        _stroke(2, 3, 22, 12),
-        _stroke(3, 4, 21, 11),
+        _stroke(2, 3, 10, 22),
+        _stroke(3, 4, 22, 12),
     ]
     assert find_zones(strokes) == []
 
@@ -157,34 +166,90 @@ def test_zones_need_a_leaving_stroke() -> None:
     # Still inside the zone when the sample ends: the structure is unfinished.
     strokes = [
         _stroke(1, 2, 30, 10),
-        _stroke(2, 3, 20, 10),
-        _stroke(3, 4, 22, 12),
-        _stroke(4, 5, 21, 11),
+        _stroke(2, 3, 10, 20),
+        _stroke(3, 4, 20, 12),
+        _stroke(4, 5, 12, 19),
     ]
     assert find_zones(strokes) == []
+
+
+def test_zones_need_a_confirmed_exit() -> None:
+    # The last stroke leaves the zone, but there is no following stroke to
+    # confirm that it did not just poke out and return.
+    strokes = [
+        _stroke(1, 2, 30, 10),
+        _stroke(2, 3, 10, 20),
+        _stroke(3, 4, 20, 12),
+        _stroke(4, 5, 12, 21),
+        _stroke(5, 6, 21, 8),
+    ]
+    assert find_zones(strokes) == []
+
+
+def test_breakdown_stroke_is_the_exit_not_an_extension() -> None:
+    # A stroke can start inside the zone and end below ZD. That is the leaving
+    # stroke, not another center stroke; the box must stop before it.
+    strokes = [
+        _stroke(1, 2, 30, 10),
+        _stroke(2, 3, 10, 20),
+        _stroke(3, 4, 20, 12),
+        _stroke(4, 5, 12, 21),
+        _stroke(5, 6, 21, 13),
+        _stroke(6, 7, 13, 20),
+        _stroke(7, 8, 20, 8),
+        _stroke(8, 9, 8, 11),
+    ]
+    zones = find_zones(strokes)
+    assert len(zones) == 1
+    assert zones[0]["end_stroke"] == 5
+    assert zones[0]["exit_stroke"] == 6
+    assert zones[0]["end_time"] == strokes[5]["end_time"]
+
+
+def test_fake_breakout_extends_the_zone() -> None:
+    # Poking above ZG and returning into the zone is an extension, not an exit.
+    strokes = [
+        _stroke(1, 2, 30, 10),
+        _stroke(2, 3, 10, 20),
+        _stroke(3, 4, 20, 12),
+        _stroke(4, 5, 12, 21),
+        _stroke(5, 6, 21, 18),
+        _stroke(6, 7, 18, 25),
+        _stroke(7, 8, 25, 14),
+        _stroke(8, 9, 14, 19),
+        _stroke(9, 10, 19, 8),
+        _stroke(10, 11, 8, 11),
+    ]
+    zones = find_zones(strokes)
+    assert len(zones) == 1
+    assert zones[0]["end_stroke"] == 7
+    assert zones[0]["exit_stroke"] == 8
 
 
 def test_adjacent_zones_each_have_their_own_entry() -> None:
     strokes = [
         _stroke(1, 2, 30, 10),  # entry of zone 1
-        _stroke(2, 3, 20, 10),
-        _stroke(3, 4, 22, 12),
-        _stroke(4, 5, 21, 11),  # zone 1 ends here
-        _stroke(5, 6, 25, 23),  # leaves zone 1 and enters zone 2
-        _stroke(6, 7, 40, 30),
-        _stroke(7, 8, 42, 32),
-        _stroke(8, 9, 41, 31),  # zone 2 ends here
-        _stroke(9, 10, 50, 45),  # leaves zone 2
+        _stroke(2, 3, 10, 20),
+        _stroke(3, 4, 20, 12),
+        _stroke(4, 5, 12, 21),
+        _stroke(5, 6, 21, 13),  # zone 1 ends here
+        _stroke(6, 7, 13, 25),  # leaves zone 1 and enters zone 2
+        _stroke(7, 8, 25, 23),  # confirms the exit, entry of zone 2
+        _stroke(8, 9, 23, 32),
+        _stroke(9, 10, 32, 24),
+        _stroke(10, 11, 24, 40),  # zone 2 ends here
+        _stroke(11, 12, 40, 38),  # confirms the exit
     ]
     zones = find_zones(strokes)
     assert len(zones) == 2
-    assert zones[0]["exit_stroke"] == 4
-    assert zones[1]["entry_stroke"] == 4
-    assert zones[1]["start_stroke"] == 5
+    assert zones[0]["end_stroke"] == 4
+    assert zones[0]["exit_stroke"] == 5
+    assert zones[1]["entry_stroke"] == 5
+    assert zones[1]["start_stroke"] == 6
     assert zones[1]["start_stroke"] > zones[0]["end_stroke"]
     assert zones[1]["start_time"] == strokes[zones[1]["entry_stroke"]]["start_time"]
-    assert zones[1]["zg"] == pytest.approx(40)
-    assert zones[1]["zd"] == pytest.approx(32)
+    assert zones[1]["zg"] == pytest.approx(25)
+    assert zones[1]["zd"] == pytest.approx(24)
 
 
 def test_analyze_frame_shape_and_rules() -> None:
@@ -251,9 +316,49 @@ def test_find_buy_sell_points() -> None:
         {"direction": "up", "start_time": 3, "end_time": 4, "start_price": 105, "end_price": 120, "high": 120, "low": 105},
         {"direction": "down", "start_time": 4, "end_time": 5, "start_price": 120, "end_price": 112, "high": 120, "low": 112},
     ]
-    zone = {"zg": 110, "zd": 100, "start_stroke": 0, "end_stroke": 1}
+    zone = {"zg": 110, "zd": 100, "start_stroke": 0, "end_stroke": 2, "exit_stroke": 3}
     points = find_buy_sell_points(zone_strokes, [zone], [0, 0, 0, 0, 0])
     assert any(item["type"] == "3buy" for item in points)
+
+
+def test_third_sell_uses_first_rebound_after_exit() -> None:
+    strokes = [
+        _stroke(1, 2, 30, 10),
+        _stroke(2, 3, 10, 20),
+        _stroke(3, 4, 20, 12),
+        _stroke(4, 5, 12, 21),
+        _stroke(5, 6, 21, 13),
+        _stroke(6, 7, 13, 20),
+        _stroke(7, 8, 20, 8),
+        _stroke(8, 9, 8, 11),
+        _stroke(9, 10, 11, 5),
+    ]
+    zones = find_zones(strokes)
+    points = find_buy_sell_points(strokes, zones, [0] * len(strokes))
+    sells = [point for point in points if point["type"] == "3sell"]
+    assert len(sells) == 1
+    assert sells[0]["time"] == strokes[7]["end_time"]
+    assert sells[0]["price"] == pytest.approx(11)
+
+
+def test_third_buy_uses_first_pullback_after_exit() -> None:
+    strokes = [
+        _stroke(1, 2, 10, 30),
+        _stroke(2, 3, 30, 20),
+        _stroke(3, 4, 20, 28),
+        _stroke(4, 5, 28, 22),
+        _stroke(5, 6, 22, 27),
+        _stroke(6, 7, 27, 23),
+        _stroke(7, 8, 23, 35),
+        _stroke(8, 9, 35, 30),
+        _stroke(9, 10, 30, 40),
+    ]
+    zones = find_zones(strokes)
+    points = find_buy_sell_points(strokes, zones, [0] * len(strokes))
+    buys = [point for point in points if point["type"] == "3buy"]
+    assert len(buys) == 1
+    assert buys[0]["time"] == strokes[7]["end_time"]
+    assert buys[0]["price"] == pytest.approx(30)
 
 
 def _trend_stroke(direction: str, start_time: int, end_time: int, start_price: float, end_price: float) -> dict:
