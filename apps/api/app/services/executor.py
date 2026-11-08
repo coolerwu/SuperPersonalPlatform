@@ -493,6 +493,12 @@ class DeepAgentExecutor:
                     ),
                 ]
                 if self.rubric:
+                    # The grader sees only a truncated transcript; these tools
+                    # let it look up earlier conversation before judging.
+                    grader_tools = [
+                        build_session_search_tool(skill_context),
+                        build_session_read_tool(skill_context),
+                    ]
                     # The grader forces tool use for structured output, which
                     # this provider rejects while thinking mode is on.
                     middleware.append(
@@ -505,6 +511,7 @@ class DeepAgentExecutor:
                                 max_retries=0,
                                 extra_body={"thinking": {"type": "disabled"}},
                             ),
+                            tools=grader_tools,
                             max_iterations=2,
                         )
                     )

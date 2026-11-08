@@ -183,7 +183,7 @@ metadata:
 - **整理记忆**：聊天输入区「＋」菜单的「整理记忆」指令会直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` / `memory_move` 合并重复、删除失效项，并把明显属于用户偏好或个人事实、但落在当前 Agent 记忆里的条目归位到 user memory；只更新/删除/归位、不新增事实；范围是 user memory 和当前 Agent 的 agent memory。首次使用时会自动为当前 Agent 启用该技能；
 - **自动整理**：每个 Agent 累计用户回合（网页与微信消息，定时任务和重试不算），达到配置页「运行环境」设置的间隔（默认 10，0 关闭）时自动发起一次「整理记忆」Run 并把计数归零；生成的会话标题为「记忆整理」，与手动整理使用同一条指令和技能。只对开启「自动学习记忆」的 Agent 生效；反复手动整理不会重复触发；
 - 每次 Run 只注入与本轮输入相关的记忆：中文按双字组（过滤停用词）、英文按词元匹配，user 与当前 Agent 同池按相关度竞争（不做 scope 配额或 user 全量注入）；最多 12 条、1500 字，单条最多 320 字，没有相关记忆时不注入。记忆作为数据块附加到系统提示词，不会自动修改 Agent instructions；记录实际使用的 memory id。
-- **回复校验**：网页聊天的每条最终回复在结束前会用 deepagents 的 `RubricMiddleware` 校验一次，rubric 由当前 Agent 的 instructions 和全部用户记忆（不含 agent 记忆）组成；评分失败时中间件让主 Agent 修订一次再确认，聊天里只保留修订版，两次评分结果和未通过项显示在消息的「执行过程」里。评分器失败时保留当前回复，不阻断 Run；没有用户记忆时不校验。
+- **回复校验**：网页聊天的每条最终回复在结束前会用 deepagents 的 `RubricMiddleware` 校验一次，rubric 由当前 Agent 的 instructions 和全部用户记忆（不含 agent 记忆）组成；评分器可以调用 `session_search` / `session_read` 核对历史对话，评分失败时让主 Agent 修订一次再确认，聊天里只保留修订版，两次评分结果和未通过项显示在消息的「执行过程」里。评分器失败时保留当前回复，不阻断 Run；没有用户记忆时不校验。
 
 ## 渠道（微信个人号）
 

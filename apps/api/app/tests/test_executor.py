@@ -599,6 +599,10 @@ async def test_executor_registers_rubric_middleware(tmp_path, monkeypatch) -> No
     )
     assert captured["kwargs"]["max_iterations"] == 2
     assert captured["kwargs"]["model"].extra_body == {"thinking": {"type": "disabled"}}
+    assert [tool.name for tool in captured["kwargs"]["tools"]] == [
+        "session_search",
+        "session_read",
+    ]
     completed = [event for event in events if event.type == "run_completed"]
     assert completed[0].payload["output"] == "answer"
 

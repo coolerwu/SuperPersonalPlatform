@@ -3090,7 +3090,7 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 #### 功能点
 
 1. 网页聊天（`source=manual|retry`）在有 user memory 时，`RunWorker` 用当前 Agent 的 instructions 和全部 user scope 记忆（不截断，不含 agent 记忆）拼成 rubric，通过 `input_state["rubric"]` 传给 deepagents 的 `RubricMiddleware`；没有 user memory 时不挂载。
-2. 中间件使用独立的评分模型（`temperature=0`，关闭 thinking，因为 provider 在 thinking 模式下拒绝强制 `tool_choice`），`max_iterations=2`：首次不通过时注入一次修订，修订版替换草稿并作为最终 output，修订后再评分确认，不启动第二次修订。
+2. 中间件使用独立的评分模型（`temperature=0`，关闭 thinking，因为 provider 在 thinking 模式下拒绝强制 `tool_choice`），并挂 `session_search` / `session_read` 供评分器核对被截断的历史对话；`max_iterations=2`：首次不通过时注入一次修订，修订版替换草稿并作为最终 output，修订后再评分确认，不启动第二次修订。
 3. 评分器运行期间产生的 `messages` 流用 `rubric_evaluation_start` / `rubric_evaluation_end` 夹住过滤，不进入聊天。
 4. 每次评分写成 `rubric_result` 事件（iteration、result、通过/未通过数、未通过项和 gap），前端在助手消息的「执行过程」里按顺序展示两次校验，未通过项可展开。
 
