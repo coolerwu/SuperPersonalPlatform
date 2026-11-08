@@ -117,6 +117,10 @@ export function priceSourceLabel(source: string): string {
       return "实时";
     case "stock":
       return "行情";
+    case "fund":
+      return "净值";
+    case "accrual":
+      return "计息";
     case "mark":
       return "手动";
     case "cache":

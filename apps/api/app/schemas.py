@@ -550,6 +550,12 @@ class AllocationMarkInput(BaseModel):
     price: float = Field(gt=0)
 
 
+class AllocationAccrualInput(BaseModel):
+    annual_rate: float = Field(ge=0, le=100)
+    start: str = Field(min_length=1, max_length=20)
+    compound: bool = False
+
+
 class AllocationPortfolioCreate(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     currency: str = Field(default="USDT", min_length=2, max_length=10)
@@ -557,6 +563,7 @@ class AllocationPortfolioCreate(BaseModel):
     rebalance_band_pct: float = Field(default=5.0, ge=0, le=50)
     targets: dict[str, float] = Field(default_factory=dict)
     marks: dict[str, AllocationMarkInput] = Field(default_factory=dict)
+    accruals: dict[str, AllocationAccrualInput] = Field(default_factory=dict)
     note: str = Field(default="", max_length=20_000)
 
 
@@ -567,6 +574,7 @@ class AllocationPortfolioUpdate(BaseModel):
     rebalance_band_pct: float | None = Field(default=None, ge=0, le=50)
     targets: dict[str, float] | None = None
     marks: dict[str, AllocationMarkInput] | None = None
+    accruals: dict[str, AllocationAccrualInput] | None = None
     note: str | None = Field(default=None, max_length=20_000)
 
 

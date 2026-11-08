@@ -9,6 +9,9 @@ type TargetRow = {
   target: string;
   mark: string;
   held: boolean;
+  rate: string;
+  start: string;
+  compound: boolean;
 };
 
 type Props = {
@@ -57,6 +60,7 @@ export function AllocationPortfolioModal({
         ...portfolio.positions.map((item) => item.symbol),
         ...Object.keys(portfolio.targets),
         ...Object.keys(portfolio.marks),
+        ...Object.keys(portfolio.accruals ?? {}),
       ]);
       setRows(
         sortRows(
@@ -73,6 +77,12 @@ export function AllocationPortfolioModal({
             held: portfolio.positions.some(
               (item) => item.symbol === symbol && item.quantity > 0,
             ),
+            rate:
+              portfolio.accruals?.[symbol]?.annual_rate === undefined
+                ? ""
+                : String(portfolio.accruals[symbol].annual_rate),
+            start: portfolio.accruals?.[symbol]?.start ?? "",
+            compound: Boolean(portfolio.accruals?.[symbol]?.compound),
           })),
         ),
       );
@@ -99,9 +109,21 @@ export function AllocationPortfolioModal({
     }, 0) + (cashTarget.trim() && Number.isFinite(Number(cashTarget)) ? Number(cashTarget) : 0);
   const targetMismatch = hasAnyTarget && Math.abs(targetSum - 100) > 0.5;
 
-  function updateRow(symbol: string, key: "target" | "mark", value: string) {
+  function updateRow(
+    symbol: string,
+    key: "target" | "mark" | "rate" | "start",
+    value: string,
+  ) {
     setRows((current) =>
       current.map((row) => (row.symbol === symbol ? { ...row, [key]: value } : row)),
+    );
+  }
+
+  function toggleCompound(symbol: string) {
+    setRows((current) =>
+      current.map((row) =>
+        row.symbol === symbol ? { ...row, compound: !row.compound } : row,
+      ),
     );
   }
 
@@ -123,7 +145,7 @@ export function AllocationPortfolioModal({
     setRows((current) =>
       sortRows([
         ...current,
-        { symbol, target: "", mark: "", held: false },
+        { symbol, target: "", mark: "", held: false, rate: "", start: "", compound: false },
       ]),
     );
     setNewSymbol("");
@@ -191,6 +213,33 @@ export function AllocationPortfolioModal({
       setError("现金目标占比必须在 0-100 之间");
       return;
     }
+    const accruals: Record<
+      string,
+      { annual_rate: number; start: string; compound: boolean }
+    > = {};
+    for (const row of rows) {
+      const hasRate = row.rate.trim() !== "";
+      const hasStart = row.start.trim() !== "";
+      if (!hasRate && !hasStart) continue;
+      if (!hasRate || !hasStart) {
+        setError(`${row.symbol} 的固定收益需要同时填写年化利率和起息日`);
+        return;
+      }
+      const rateValue = Number(row.rate);
+      if (!Number.isFinite(rateValue) || rateValue < 0 || rateValue > 100) {
+        setError(`${row.symbol} 的年化利率必须在 0-100 之间`);
+        return;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(row.start.trim())) {
+        setError(`${row.symbol} 的起息日格式必须是 YYYY-MM-DD`);
+        return;
+      }
+      accruals[row.symbol] = {
+        annual_rate: rateValue,
+        start: row.start.trim(),
+        compound: row.compound,
+      };
+    }
     const bandValue = band.trim() ? Number(band) : 5;
     if (!Number.isFinite(bandValue) || bandValue < 0 || bandValue > 50) {
       setError("再平衡带宽必须在 0-50 个百分点之间");
@@ -205,6 +254,7 @@ export function AllocationPortfolioModal({
         rebalance_band_pct: bandValue,
         targets,
         marks,
+        accruals,
         note: note.trim(),
       };
       const saved = portfolio
@@ -293,7 +343,7 @@ export function AllocationPortfolioModal({
           <div className="settings-card-head">
             <div>
               <h2>目标配置</h2>
-              <p>持仓标的会自动出现；也可以添加还没买入的目标标的。移除只删除目标和手动价，不会卖出持仓。</p>
+              <p>持仓标的会自动出现；也可以添加还没买入的目标标的。移除只删除目标、手动价和计息配置，不会卖出持仓。固定收益填年化利率和起息日后按天累计，可选择是否复投。</p>
             </div>
             <div className="settings-card-actions">
               <button
@@ -331,6 +381,9 @@ export function AllocationPortfolioModal({
                   <th>市场</th>
                   <th>目标占比 %</th>
                   <th>手动价</th>
+                  <th>年化 %</th>
+                  <th>起息日</th>
+                  <th>复投</th>
                   <th />
                 </tr>
               </thead>
@@ -374,6 +427,38 @@ export function AllocationPortfolioModal({
                       />
                     </td>
                     <td>
+                      <input
+                        className="allocation-mini-input"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="any"
+                        value={row.rate}
+                        onChange={(event) =>
+                          updateRow(row.symbol, "rate", event.target.value)
+                        }
+                        placeholder="—"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="allocation-mini-input allocation-date-input"
+                        type="date"
+                        value={row.start}
+                        onChange={(event) =>
+                          updateRow(row.symbol, "start", event.target.value)
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={row.compound}
+                        onChange={() => toggleCompound(row.symbol)}
+                        aria-label={`${row.symbol} 利息复投`}
+                      />
+                    </td>
+                    <td>
                       <button className="journal-edit" onClick={() => removeRow(row.symbol)}>
                         移除
                       </button>
@@ -382,7 +467,7 @@ export function AllocationPortfolioModal({
                 ))}
                 {!rows.length && (
                   <tr>
-                    <td colSpan={5} className="journal-empty">
+                    <td colSpan={8} className="journal-empty">
                       还没有标的。先添加目标，或记录买入后自动出现。
                     </td>
                   </tr>

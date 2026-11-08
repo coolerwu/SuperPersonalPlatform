@@ -731,6 +731,12 @@ export type AllocationPosition = {
   warnings: string[];
 };
 
+export type AllocationAccrual = {
+  annual_rate: number;
+  start: string;
+  compound: boolean;
+};
+
 export type AllocationPortfolio = {
   id: string;
   name: string;
@@ -752,6 +758,7 @@ export type AllocationPortfolio = {
   rebalance_band_pct: number;
   targets: Record<string, number>;
   marks: Record<string, AllocationMark>;
+  accruals: Record<string, AllocationAccrual>;
   cash_weight_pct: number | null;
   cash_drift_pp: number | null;
   cash_rebalance_needed: boolean | null;
@@ -773,6 +780,7 @@ export type AllocationPortfolioConfig = {
   rebalance_band_pct: number;
   targets: Record<string, number>;
   marks: Record<string, AllocationMark>;
+  accruals: Record<string, AllocationAccrual>;
   note: string;
   created_at: string;
   updated_at: string;
@@ -878,6 +886,7 @@ export type AllocationPortfolioPayload = {
   rebalance_band_pct: number;
   targets: Record<string, number>;
   marks: Record<string, { price: number }>;
+  accruals?: Record<string, AllocationAccrual>;
   note: string;
 };
 

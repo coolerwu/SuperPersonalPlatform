@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime, timezone
 
+import httpx
 import pytest
 
 from app.config import settings
@@ -507,3 +508,76 @@ async def test_fetch_usd_cny_rate_falls_back_to_yahoo(monkeypatch) -> None:
     quote = await stock_quotes.fetch_usd_cny_rate()
     assert quote.rate == pytest.approx(7.25)
     assert quote.source == "yahoo"
+
+
+async def test_fixed_income_accrual_simple_and_compound() -> None:
+    simple = await _portfolio(
+        name="固收-单利",
+        accruals={
+            "UST4": {"annual_rate": 10, "start": "2025-01-01", "compound": False}
+        },
+    )
+    await _entry(
+        simple["id"], "buy", _at(1), symbol="UST4", quantity=1000, price=1
+    )
+    config = await allocation.load_config()
+    item = next(p for p in config["portfolios"] if p["id"] == simple["id"])
+    entries = await _entries(simple["id"])
+    snapshot = allocation.build_portfolio_snapshot(
+        item, entries, now=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+    position = snapshot["positions"][0]
+    assert position["price_source"] == "accrual"
+    assert position["price"] == pytest.approx(1.1)
+    assert position["market_value"] == pytest.approx(1100.0)
+    assert position["unrealized_pnl"] == pytest.approx(100.0)
+
+    compound = await _portfolio(
+        name="固收-复利",
+        accruals={
+            "UST4": {"annual_rate": 10, "start": "2025-01-01", "compound": True}
+        },
+    )
+    await _entry(
+        compound["id"], "buy", _at(1), symbol="UST4", quantity=1000, price=1
+    )
+    config = await allocation.load_config()
+    item = next(p for p in config["portfolios"] if p["id"] == compound["id"])
+    entries = await _entries(compound["id"])
+    snapshot = allocation.build_portfolio_snapshot(
+        item, entries, now=datetime(2027, 1, 1, tzinfo=timezone.utc)
+    )
+    position = snapshot["positions"][0]
+    assert position["price_source"] == "accrual"
+    assert position["market_value"] == pytest.approx(1210.0)
+
+
+async def test_fetch_fund_nav_parses_eastmoney() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "Fcodes=000307" in str(request.url)
+        return httpx.Response(
+            200,
+            json={
+                "Datas": [
+                    {
+                        "FCODE": "000307",
+                        "SHORTNAME": "易方达黄金ETF联接A",
+                        "NAV": "2.8456",
+                        "PDATE": "2026-11-06",
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    ) as client:
+        quote = await stock_quotes.fetch_fund_nav("000307", client=client)
+    assert quote.price == pytest.approx(2.8456)
+    assert quote.at == "2026-11-06T00:00:00Z"
+    assert quote.currency == "CNY"
+
+
+async def test_fetch_fund_nav_rejects_non_fund_code() -> None:
+    with pytest.raises(StockQuoteError):
+        await stock_quotes.fetch_fund_nav("BTCUSDT")

@@ -6,7 +6,7 @@ import pytest
 
 from app.config import settings
 from app.services import allocation
-from app.services.stock_quotes import FxQuote, StockQuoteError
+from app.services.stock_quotes import FxQuote, StockQuote, StockQuoteError
 
 
 @pytest.fixture(autouse=True)
@@ -419,3 +419,93 @@ def test_overview_merges_same_symbol_across_portfolios(client, monkeypatch) -> N
     assert position["weight_pct"] == pytest.approx(
         4400.0 / overview["total_value"] * 100
     )
+
+
+def test_fixed_income_accrual_in_snapshot(client) -> None:
+    portfolio = _create(
+        client,
+        name="固收组合",
+        targets={},
+        cash_target_pct=None,
+        accruals={
+            "UST4": {
+                "annual_rate": 10,
+                "start": "2025-01-01",
+                "compound": False,
+            }
+        },
+    )
+    _add_entry(client, portfolio["id"], _deposit(10000))
+    _add_entry(
+        client,
+        portfolio["id"],
+        {
+            "type": "buy",
+            "at": "2025-01-01T00:00:00Z",
+            "symbol": "UST4",
+            "quantity": 1000,
+            "price": 1,
+            "fees": 0,
+        },
+    )
+
+    position = client.get("/api/allocation").json()["portfolios"][0]["positions"][0]
+    assert position["price_source"] == "accrual"
+    assert position["market_value"] > 1000
+    assert position["unrealized_pnl"] > 0
+
+
+def test_invalid_accrual_rejected(client) -> None:
+    payload = _portfolio(
+        accruals={"UST4": {"annual_rate": 10, "start": "not-a-date"}}
+    )
+    response = client.post("/api/allocation/portfolios", json=payload)
+    assert response.status_code == 422
+
+
+def test_refresh_uses_fund_nav_for_a_share_funds(client, monkeypatch) -> None:
+    portfolio = _create(
+        client,
+        name="基金组合",
+        currency="CNY",
+        targets={},
+        cash_target_pct=None,
+    )
+    _add_entry(client, portfolio["id"], _deposit(10000))
+    _add_entry(
+        client,
+        portfolio["id"],
+        {
+            "type": "buy",
+            "at": "2025-01-02T00:00:00Z",
+            "symbol": "000307",
+            "quantity": 1000,
+            "price": 2.5,
+            "fees": 0,
+        },
+    )
+
+    async def fake_nav(symbol, client=None):
+        return StockQuote(
+            symbol=symbol,
+            price=2.8456,
+            at="2026-11-06T00:00:00Z",
+            currency="CNY",
+            exchange="FUND",
+            instrument_type="FUND",
+        )
+
+    async def fake_fx():
+        return FxQuote(
+            pair="USD/CNY",
+            rate=7.2,
+            at="2026-11-06T00:00:00Z",
+            source="eastmoney",
+        )
+
+    monkeypatch.setattr(allocation, "fetch_fund_nav", fake_nav)
+    monkeypatch.setattr(allocation, "fetch_usd_cny_rate", fake_fx)
+    body = client.post("/api/allocation/refresh").json()
+    position = body["portfolios"][0]["positions"][0]
+    assert position["price_source"] == "fund"
+    assert position["price"] == pytest.approx(2.8456)

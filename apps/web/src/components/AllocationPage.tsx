@@ -313,7 +313,7 @@ export function AllocationPage() {
             className="ghost-button"
             onClick={() => void refreshPrices()}
             disabled={refreshing || !hasPortfolios}
-            title="一次性拉取所有组合的最新行情和 USD/CNY 汇率；A 股和手动价不会自动更新"
+            title="一次性拉取所有组合的最新行情和 USD/CNY 汇率；A 股股票和手动价不会自动更新"
           >
             {refreshing ? "刷新中…" : "刷新全部账本"}
           </button>
@@ -698,7 +698,10 @@ export function AllocationPage() {
                   <li>现金、持仓和收益都由流水推导；漏记会让现金、成本和收益失真。</li>
                   <li>卖出按移动加权成本结转已实现盈亏，不做税务批次。</li>
                   <li>分红单独统计，不冲减成本；费用计入成本或单独扣现金。</li>
-                  <li>A 股没有自动行情，按手动价、缓存或成本估值；加密价格刷新失败会回退。</li>
+                  <li>A 股股票没有自动行情，按手动价、缓存或成本估值；6 位基金代码刷新时抓最新公布净值，失败回退手动价/成本；加密价格刷新失败会回退。</li>
+                  <li>
+                    固定收益按配置的年化利率和起息日每天累计（可选复投），利息计入持仓市值和浮盈；按当前持仓成本计算，适合一次买入后长期持有。
+                  </li>
                   <li>
                     美股价格先取东方财富，失败再用 Yahoo Finance 兜底（非官方接口），按 USD 计；
                     总览按 USD/CNY 汇率近似折算，组合内部不做汇率换算。失败时回退手动价/成本。

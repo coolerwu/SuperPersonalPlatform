@@ -35,13 +35,18 @@ from app.config import settings
 from app.market_db import MarketSessionLocal
 from app.market_models import MarketCandle
 from app.services.market_data import market_service
-from app.services.stock_quotes import fetch_stock_quote, fetch_usd_cny_rate
+from app.services.stock_quotes import (
+    fetch_fund_nav,
+    fetch_stock_quote,
+    fetch_usd_cny_rate,
+)
 
 logger = logging.getLogger(__name__)
 
 MAX_PORTFOLIOS = 50
 MAX_TARGETS = 200
 MAX_MARKS = 200
+MAX_ACCRUALS = 200
 MAX_ENTRIES = 50_000
 MAX_NAME_CHARS = 60
 MAX_SYMBOL_CHARS = 32
@@ -371,6 +376,44 @@ def _normalize_marks(
     return marks
 
 
+def _normalize_accruals(value: object) -> dict[str, dict[str, Any]]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise AllocationError("accruals 必须是 symbol 到计息配置的映射")
+    result: dict[str, dict[str, Any]] = {}
+    for raw_symbol, raw in value.items():
+        symbol = normalize_symbol(raw_symbol)
+        if not isinstance(raw, dict):
+            raise AllocationError(f"accruals.{symbol} 必须是对象")
+        rate = _number(
+            raw.get("annual_rate"),
+            f"accruals.{symbol}.annual_rate",
+            minimum=0.0,
+            maximum=100.0,
+            default=None,
+        )
+        if rate is None:
+            raise AllocationError(f"accruals.{symbol}.annual_rate 不能为空")
+        raw_start = raw.get("start")
+        if not isinstance(raw_start, str) or not raw_start.strip():
+            raise AllocationError(f"accruals.{symbol}.start 不能为空")
+        try:
+            start = date.fromisoformat(raw_start.strip()[:10])
+        except ValueError as exc:
+            raise AllocationError(
+                f"accruals.{symbol}.start 必须是 YYYY-MM-DD"
+            ) from exc
+        result[symbol] = {
+            "annual_rate": float(rate),
+            "start": start.isoformat(),
+            "compound": bool(raw.get("compound", False)),
+        }
+    if len(result) > MAX_ACCRUALS:
+        raise AllocationError(f"单个组合最多 {MAX_ACCRUALS} 个计息标的")
+    return result
+
+
 def _normalize_portfolio(
     payload: dict[str, Any],
     *,
@@ -414,6 +457,7 @@ def _normalize_portfolio(
         now_iso=now_iso,
         honor_times=honor_mark_times,
     )
+    accruals = _normalize_accruals(_pick(payload, existing, "accruals", {}))
     note = _text(
         _pick(payload, existing, "note", ""),
         "note",
@@ -440,6 +484,7 @@ def _normalize_portfolio(
         "rebalance_band_pct": band,
         "targets": targets,
         "marks": marks,
+        "accruals": accruals,
         "note": note,
         "created_at": created_at,
         "updated_at": updated_at,
@@ -1109,7 +1154,7 @@ def _unique_live_items(items: list[dict[str, Any]]) -> list[dict[str, str]]:
         if not symbol or symbol in seen:
             continue
         market = infer_market(symbol)
-        if market not in ("crypto", "stock"):
+        if market not in ("crypto", "stock", "a_share"):
             continue
         seen.add(symbol)
         live_items.append({"symbol": symbol, "market": market})
@@ -1167,6 +1212,16 @@ async def fetch_live_prices(
                         "price": price,
                         "at": _iso_from_ms(int(candle["open_time_ms"])),
                         "source": "live",
+                    }
+                    return
+                if market == "a_share":
+                    fund = await asyncio.wait_for(
+                        fetch_fund_nav(symbol), timeout=LIVE_TIMEOUT_SECONDS
+                    )
+                    prices[symbol] = {
+                        "price": fund.price,
+                        "at": fund.at,
+                        "source": "fund",
                     }
                     return
                 quote = await fetch_stock_quote(symbol)
@@ -1314,6 +1369,7 @@ def _snapshot_base(portfolio: dict[str, Any]) -> dict[str, Any]:
         "rebalance_band_pct": portfolio.get("rebalance_band_pct", 5.0),
         "targets": dict(portfolio.get("targets") or {}),
         "marks": dict(portfolio.get("marks") or {}),
+        "accruals": dict(portfolio.get("accruals") or {}),
         "cash_weight_pct": None,
         "cash_drift_pp": None,
         "cash_rebalance_needed": None,
@@ -1325,6 +1381,43 @@ def _snapshot_base(portfolio: dict[str, Any]) -> dict[str, Any]:
         "positions": [],
         "warnings": [],
         "error": None,
+    }
+
+
+def _accrual_price(
+    accrual: dict[str, Any],
+    *,
+    cost: float,
+    quantity: float,
+    now: datetime,
+) -> dict[str, Any] | None:
+    """Value a fixed-income position by accruing its annual rate from ``start``.
+
+    Compounding uses daily exponentiation on the original cost; simple interest
+    accrues linearly. Interest stays inside the position value (unrealized)
+    until the position is sold or a cash entry is recorded.
+    """
+    try:
+        start = date.fromisoformat(str(accrual.get("start")))
+    except (TypeError, ValueError):
+        return None
+    days = max(0, (now.date() - start).days)
+    rate = float(accrual.get("annual_rate") or 0.0) / 100.0
+    if rate <= 0:
+        factor = 1.0
+    elif accrual.get("compound"):
+        factor = (1.0 + rate) ** (days / 365.0)
+    else:
+        factor = 1.0 + rate * days / 365.0
+    value = cost * factor
+    price = value / quantity if quantity > QUANTITY_EPSILON else None
+    if price is None or not math.isfinite(price) or price <= 0:
+        return None
+    return {
+        "price": price,
+        "source": "accrual",
+        "at": f"{start.isoformat()}T00:00:00Z",
+        "stale": False,
     }
 
 
@@ -1355,6 +1448,7 @@ def build_portfolio_snapshot(
 
     targets = portfolio.get("targets") or {}
     marks = portfolio.get("marks") or {}
+    accruals = portfolio.get("accruals") or {}
     band = float(portfolio.get("rebalance_band_pct") or 0.0)
     symbols = set(state["positions"].keys()) | set(targets.keys())
     positions: list[dict[str, Any]] = []
@@ -1376,6 +1470,13 @@ def build_portfolio_snapshot(
             marks=marks,
             now=now,
         )
+        accrual = accruals.get(symbol)
+        if accrual and quantity > QUANTITY_EPSILON and cost > 0:
+            accrual_price = _accrual_price(
+                accrual, cost=cost, quantity=quantity, now=now
+            )
+            if accrual_price is not None:
+                resolved = accrual_price
         price = resolved["price"]
         if quantity <= QUANTITY_EPSILON:
             market_value: float | None = 0.0
@@ -1835,11 +1936,17 @@ def _live_items(
             state = _replay(portfolio_entries)
         except AllocationError:
             continue
+        accrual_symbols = {
+            str(symbol).upper()
+            for symbol in (portfolio.get("accruals") or {}).keys()
+        }
         for symbol, position in state["positions"].items():
             if position["quantity"] <= QUANTITY_EPSILON:
                 continue
+            if symbol in accrual_symbols:
+                continue
             market = infer_market(symbol)
-            if market not in ("crypto", "stock"):
+            if market not in ("crypto", "stock", "a_share"):
                 continue
             items[symbol] = {"symbol": symbol, "market": market}
     return list(items.values())

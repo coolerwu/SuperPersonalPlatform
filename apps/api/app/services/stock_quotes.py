@@ -22,6 +22,7 @@ EASTMONEY_MARKETS = (105, 106, 107)
 EASTMONEY_EXCHANGES = {105: "NASDAQ", 106: "NYSE", 107: "AMEX"}
 # Eastmoney's offshore USD/CNH quote; used as an approximation of USD/CNY.
 EASTMONEY_FX_SECID = "133.USDCNH"
+FUND_NAV_BASE = "https://fundmobapi.eastmoney.com"
 YAHOO_CHART_BASE = "https://query1.finance.yahoo.com"
 REQUEST_TIMEOUT_SECONDS = 8.0
 USER_AGENT = (
@@ -325,3 +326,68 @@ async def fetch_usd_cny_rate() -> FxQuote:
     except StockQuoteError as exc:
         errors.append(f"Yahoo：{exc}")
     raise StockQuoteError("USD/CNY 汇率获取失败：" + "；".join(errors))
+
+
+async def fetch_fund_nav(
+    code: str, *, client: httpx.AsyncClient | None = None
+) -> StockQuote:
+    """Latest published NAV for an open-end fund from Eastmoney."""
+    text = str(code or "").strip()
+    if not (len(text) == 6 and text.isdigit()):
+        raise StockQuoteError("基金代码必须是 6 位数字")
+    owns_client = client is None
+    http = client or _client(trust_env=False)
+    try:
+        try:
+            response = await http.get(
+                f"{FUND_NAV_BASE}/FundMNewApi/FundMNFInfo",
+                params={
+                    "Fcodes": text,
+                    "plat": "Android",
+                    "appType": "ttjj",
+                    "product": "EFund",
+                    "Version": "1",
+                    "deviceid": "1",
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise StockQuoteError("东方财富基金净值请求超时") from exc
+        except httpx.HTTPError as exc:
+            raise StockQuoteError(
+                f"东方财富基金净值请求失败：{type(exc).__name__}"
+            ) from exc
+        if response.status_code == 429:
+            raise StockQuoteError("东方财富限流（HTTP 429）")
+        if response.status_code >= 400:
+            raise StockQuoteError(f"东方财富返回 HTTP {response.status_code}")
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as exc:
+            raise StockQuoteError("东方财富返回了无法解析的数据") from exc
+        rows = payload.get("Datas") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            raise StockQuoteError(f"东方财富没有找到基金 {text} 的净值")
+        data = rows[0]
+        try:
+            nav = float(data.get("NAV"))
+        except (TypeError, ValueError) as exc:
+            raise StockQuoteError(f"基金 {text} 的净值无效") from exc
+        if not math.isfinite(nav) or nav <= 0:
+            raise StockQuoteError(f"基金 {text} 的净值无效")
+        day = str(data.get("PDATE") or "").strip()
+        at = (
+            f"{day}T00:00:00Z"
+            if day
+            else _iso(datetime.now(timezone.utc))
+        )
+        return StockQuote(
+            symbol=text,
+            price=nav,
+            at=at,
+            currency="CNY",
+            exchange="FUND",
+            instrument_type="FUND",
+        )
+    finally:
+        if owns_client:
+            await http.aclose()

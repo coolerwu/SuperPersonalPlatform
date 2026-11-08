@@ -6921,7 +6921,7 @@ body:has(.app-shell.pearl) .select-empty {
 }
 
 .allocation-target-table {
-  min-width: 720px;
+  min-width: 980px;
 }
 
 .allocation-mini-input {
@@ -6929,6 +6929,10 @@ body:has(.app-shell.pearl) .select-empty {
   height: 30px;
   padding: 0 8px;
   font-size: 12px;
+}
+
+.allocation-date-input {
+  width: 140px;
 }
 
 .allocation-target-sum {
