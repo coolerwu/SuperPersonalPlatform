@@ -1,8 +1,11 @@
 import { Children, isValidElement, memo, ReactNode, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
 
 import { copyText } from "../clipboard";
 
@@ -65,8 +68,21 @@ export const Markdown = memo(function Markdown({
   return (
     <div className="markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={streaming ? [] : [[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
+        remarkPlugins={[
+          remarkGfm,
+          // Only $$...$$ is math; single-dollar text such as "$100 and $120"
+          // must stay plain text.
+          [remarkMath, { singleDollarTextMath: false }],
+          remarkBreaks,
+        ]}
+        rehypePlugins={
+          streaming
+            ? [[rehypeKatex, { throwOnError: false, strict: false }]]
+            : [
+                [rehypeKatex, { throwOnError: false, strict: false }],
+                [rehypeHighlight, { detect: true, ignoreMissing: true }],
+              ]
+        }
         components={components}
       >
         {content}

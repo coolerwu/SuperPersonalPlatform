@@ -162,6 +162,32 @@ function conflictRunId(error: unknown): string | null {
   return typeof runId === "string" && runId ? runId : null;
 }
 
+function ViewportDebug() {
+  const [text, setText] = useState("");
+  useEffect(() => {
+    const root = document.documentElement;
+    let last = "";
+    const tick = () => {
+      const viewport = window.visualViewport;
+      const active = document.activeElement as HTMLElement | null;
+      const next = [
+        `vv ${viewport ? Math.round(viewport.height) : "—"}/${viewport ? Math.round(viewport.offsetTop) : "—"} s${viewport ? viewport.scale.toFixed(2) : "—"}`,
+        `in ${window.innerHeight} doc ${root.clientHeight} y ${Math.round(window.scrollY)}`,
+        `var ${root.style.getPropertyValue("--app-height") || "—"}/${root.style.getPropertyValue("--app-offset-top") || "—"}`,
+        `focus ${active?.tagName ?? "—"}`,
+      ].join("  ");
+      if (next !== last) {
+        last = next;
+        setText(next);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 500);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <div className="viewport-debug">{text}</div>;
+}
+
 export default function App() {
   const [initialRoute] = useState(() => parsePath(window.location.pathname));
   const [auth, setAuth] = useState<boolean | null>(null);
@@ -398,6 +424,11 @@ export default function App() {
     let frame = 0;
     let lastHeight = "";
     let lastTop = "";
+    // 整屏高度，与键盘打开时的可视视口无关，避免收起后用到旧的小值。
+    let fullHeight = Math.max(
+      window.innerHeight,
+      document.documentElement.clientHeight,
+    );
 
     const setSize = (height: number, top: number) => {
       const nextHeight = `${Math.round(height)}px`;
@@ -414,22 +445,20 @@ export default function App() {
 
     const apply = () => {
       frame = 0;
-      const layoutHeight =
-        document.documentElement.clientHeight || window.innerHeight;
       if (!typing) {
-        setSize(layoutHeight, 0);
+        setSize(fullHeight, 0);
         return;
       }
       const height = Math.round(viewport.height);
-      // iOS 26 Safari can keep visualViewport stale after the keyboard is dismissed;
-      // once it reports the full layout height, drop any leftover offset.
-      if (height >= layoutHeight - 1) {
-        setSize(layoutHeight, 0);
+      // iOS 26 Safari can keep visualViewport stale after the keyboard is
+      // dismissed; once it reports the full height, drop any leftover offset.
+      if (height >= fullHeight - 1) {
+        setSize(fullHeight, 0);
         return;
       }
       const top = Math.min(
         Math.max(0, viewport.offsetTop),
-        Math.max(0, layoutHeight - height),
+        Math.max(0, fullHeight - height),
       );
       setSize(height, top);
     };
@@ -460,14 +489,51 @@ export default function App() {
       syncAfterBlur();
     };
 
+    const onWindowResize = () => {
+      if (!typing) {
+        fullHeight = Math.max(
+          window.innerHeight,
+          document.documentElement.clientHeight,
+        );
+      }
+      schedule();
+    };
+
+    const onOrientationChange = () => {
+      window.setTimeout(() => {
+        typing = isEditable(document.activeElement);
+        if (!typing) {
+          fullHeight = Math.max(
+            window.innerHeight,
+            document.documentElement.clientHeight,
+          );
+        }
+        apply();
+      }, 250);
+      schedule();
+    };
+
+    // 点输入框以外的地方收起键盘：既符合手机习惯，也让 iOS 26 收起键盘后
+    // 残留的 visualViewport 旧值通过失焦重置。
+    const onPointerDown = (event: PointerEvent) => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement) || !isEditable(active)) return;
+      const composer = active.closest(".composer");
+      if (!composer) return;
+      const target = event.target as Node | null;
+      if (target && composer.contains(target)) return;
+      active.blur();
+    };
+
     apply();
     viewport.addEventListener("resize", schedule);
     viewport.addEventListener("scroll", schedule);
-    window.addEventListener("resize", schedule);
-    window.addEventListener("orientationchange", schedule);
+    window.addEventListener("resize", onWindowResize);
+    window.addEventListener("orientationchange", onOrientationChange);
     document.addEventListener("visibilitychange", schedule);
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("focusout", onFocusOut);
+    document.addEventListener("pointerdown", onPointerDown, true);
     // iOS occasionally misses the final visualViewport change; a low-frequency
     // check keeps the shell aligned without writing styles when nothing changed.
     const timer = window.setInterval(apply, 500);
@@ -477,11 +543,12 @@ export default function App() {
       window.clearInterval(timer);
       viewport.removeEventListener("resize", schedule);
       viewport.removeEventListener("scroll", schedule);
-      window.removeEventListener("resize", schedule);
-      window.removeEventListener("orientationchange", schedule);
+      window.removeEventListener("resize", onWindowResize);
+      window.removeEventListener("orientationchange", onOrientationChange);
       document.removeEventListener("visibilitychange", schedule);
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
+      document.removeEventListener("pointerdown", onPointerDown, true);
       root.style.removeProperty("--app-height");
       root.style.removeProperty("--app-offset-top");
     };

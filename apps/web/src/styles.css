@@ -1180,6 +1180,17 @@ textarea {
   margin-bottom: 0;
 }
 
+.markdown .katex-display {
+  margin: 10px 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.markdown .katex {
+  font-size: 1.02em;
+}
+
 .markdown p {
   margin: 0 0 10px;
 }
