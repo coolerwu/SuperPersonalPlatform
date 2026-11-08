@@ -598,6 +598,7 @@ async def test_executor_registers_rubric_middleware(tmp_path, monkeypatch) -> No
         isinstance(item, FakeRubricMiddleware) for item in captured["middleware"]
     )
     assert captured["kwargs"]["max_iterations"] == 1
+    assert captured["kwargs"]["model"].extra_body == {"thinking": {"type": "disabled"}}
     completed = [event for event in events if event.type == "run_completed"]
     assert completed[0].payload["output"] == "answer"
 

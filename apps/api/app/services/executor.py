@@ -493,8 +493,20 @@ class DeepAgentExecutor:
                     ),
                 ]
                 if self.rubric:
+                    # The grader forces tool use for structured output, which
+                    # this provider rejects while thinking mode is on.
                     middleware.append(
-                        RubricMiddleware(model=chat_model, max_iterations=1)
+                        RubricMiddleware(
+                            model=ChatOpenAI(
+                                api_key=self.provider.api_key,
+                                base_url=self.provider.base_url,
+                                model=self.provider.model,
+                                temperature=0,
+                                max_retries=0,
+                                extra_body={"thinking": {"type": "disabled"}},
+                            ),
+                            max_iterations=1,
+                        )
                     )
                 # The model class owns retries (including subagents and the
                 # step-limit summary); ChatOpenAI SDK retries stay disabled so
