@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import bisect
 import math
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -18,7 +19,7 @@ import pandas as pd
 from app.config import settings
 from app.services.backtest_engine import load_candles
 from app.services.market_data import MarketDataError, market_service
-from app.services.timeframes import floor_open_ms, now_ms, shift_open_ms
+from app.services.timeframes import count_bars, floor_open_ms, now_ms, shift_open_ms
 
 MAX_BARS = 1000
 MIN_BARS = 20
@@ -714,11 +715,46 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def parse_date_window(
+    start_date: str | None,
+    end_date: str | None,
+) -> tuple[int | None, int | None]:
+    """Parse UTC date or datetime strings into an analysis window.
+
+    A bare date is inclusive on both ends: ``start`` becomes 00:00 UTC of that
+    day and ``end`` becomes 00:00 UTC of the next day (the window's upper bound
+    is exclusive). A full ISO datetime is used as given, with the end treated
+    as exclusive.
+    """
+
+    def parse(value: str | None, *, is_end: bool) -> int | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            if "T" in text or " " in text:
+                moment = datetime.fromisoformat(text)
+                if moment.tzinfo is None:
+                    moment = moment.replace(tzinfo=timezone.utc)
+                return int(moment.timestamp() * 1000)
+            day = date.fromisoformat(text)
+            moment = datetime.combine(day, time.min, tzinfo=timezone.utc)
+            if is_end:
+                moment += timedelta(days=1)
+            return int(moment.timestamp() * 1000)
+        except ValueError as exc:
+            raise ChanError("日期格式应为 YYYY-MM-DD 或 ISO 时间（UTC）") from exc
+
+    return parse(start_date, is_end=False), parse(end_date, is_end=True)
+
+
 async def analyze_symbol(
     symbol: str,
     granularity: str,
     *,
-    bars: int = 300,
+    bars: int = 500,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
 ) -> dict[str, Any]:
     symbol = str(symbol or "").strip().upper()
     if not symbol:
@@ -726,12 +762,28 @@ async def analyze_symbol(
     granularity = GRANULARITY_ALIASES.get(str(granularity).strip().lower(), str(granularity).strip())
     if granularity not in SUPPORTED_GRANULARITIES:
         raise ChanError("只支持 15min、1h、4h、1day、1week")
-    if not MIN_BARS <= bars <= MAX_BARS:
-        raise ChanError(f"bars 必须在 {MIN_BARS}-{MAX_BARS} 之间")
-    end_open = floor_open_ms(now_ms(), granularity)
-    start_ms = shift_open_ms(end_open, granularity, -bars)
+    now_open = floor_open_ms(now_ms(), granularity)
+    if end_ms is not None:
+        end_open = min(floor_open_ms(int(end_ms), granularity), now_open)
+    else:
+        end_open = now_open
+    if start_ms is not None:
+        window_start = floor_open_ms(int(start_ms), granularity)
+    else:
+        if not MIN_BARS <= bars <= MAX_BARS:
+            raise ChanError(f"bars 必须在 {MIN_BARS}-{MAX_BARS} 之间")
+        window_start = shift_open_ms(end_open, granularity, -bars)
+    if end_open <= window_start:
+        raise ChanError("所选时间窗口内没有已经完成的 K 线")
+    wanted = count_bars(window_start, end_open, granularity)
+    if wanted > MAX_BARS:
+        raise ChanError(
+            f"所选时间窗口约 {wanted} 根 K 线，超过上限 {MAX_BARS}；请缩短窗口或换更大的周期"
+        )
+    if wanted < MIN_BARS:
+        raise ChanError(f"所选时间窗口只有 {wanted} 根 K 线，至少需要 {MIN_BARS} 根")
     try:
-        ensure = await market_service.ensure_data(symbol, granularity, start_ms, end_open)
+        ensure = await market_service.ensure_data(symbol, granularity, window_start, end_open)
     except MarketDataError as exc:
         raise ChanError(str(exc)) from exc
     end_ms = ensure.end_open_ms
@@ -739,7 +791,7 @@ async def analyze_symbol(
         settings.market_db_path,
         symbol,
         granularity,
-        start_ms,
+        window_start,
         end_ms,
     )
     if frame.empty:
@@ -749,6 +801,6 @@ async def analyze_symbol(
     result["granularity"] = granularity
     result["start_ms"] = int(frame.index[0].timestamp() * 1000)
     result["end_ms"] = int(frame.index[-1].timestamp() * 1000)
-    result["requested_bars"] = bars
+    result["requested_bars"] = wanted
     result["warnings"] = list(ensure.warnings) + list(result.get("warnings") or [])
     return result

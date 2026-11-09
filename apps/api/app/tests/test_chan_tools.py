@@ -59,10 +59,17 @@ def _result() -> dict:
 
 
 async def test_chan_analyze_tool_formats_summary(monkeypatch) -> None:
-    async def fake_analyze(symbol: str, granularity: str, *, bars: int = 300) -> dict:
+    async def fake_analyze(
+        symbol: str,
+        granularity: str,
+        *,
+        bars: int = 500,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> dict:
         assert symbol == "BTCUSDT"
         assert granularity == "1h"
-        assert bars == 300
+        assert start_ms is None and end_ms is None
         return _result()
 
     monkeypatch.setattr(chan_analysis, "analyze_symbol", fake_analyze)
@@ -75,8 +82,37 @@ async def test_chan_analyze_tool_formats_summary(monkeypatch) -> None:
     assert "不是交易建议" in output
 
 
+async def test_chan_analyze_tool_passes_the_date_window(monkeypatch) -> None:
+    captured: dict = {}
+
+    async def fake_analyze(
+        symbol: str,
+        granularity: str,
+        *,
+        bars: int = 500,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> dict:
+        captured.update(start_ms=start_ms, end_ms=end_ms)
+        return _result()
+
+    monkeypatch.setattr(chan_analysis, "analyze_symbol", fake_analyze)
+    await _tool().ainvoke(
+        {"symbol": "BTCUSDT", "start_date": "2026-10-01", "end_date": "2026-10-31"}
+    )
+    assert captured["start_ms"] is not None
+    assert captured["end_ms"] - captured["start_ms"] == 31 * 24 * 60 * 60 * 1000
+
+
 async def test_chan_analyze_tool_returns_error_text(monkeypatch) -> None:
-    async def fake_analyze(symbol: str, granularity: str, *, bars: int = 300) -> dict:
+    async def fake_analyze(
+        symbol: str,
+        granularity: str,
+        *,
+        bars: int = 500,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> dict:
         raise chan_analysis.ChanError("只支持 1h、4h、1day")
 
     monkeypatch.setattr(chan_analysis, "analyze_symbol", fake_analyze)
@@ -98,7 +134,7 @@ def test_chanlun_skill_declares_tool(tmp_path) -> None:
 async def test_chan_backtest_tool(monkeypatch) -> None:
     async def fake_run(symbol: str, granularity: str, **kwargs) -> dict:
         assert symbol == "BTCUSDT"
-        assert kwargs["bars"] == 300
+        assert kwargs["start_ms"] is None and kwargs["end_ms"] is None
         return {
             "symbol": symbol,
             "granularity": granularity,
@@ -122,7 +158,7 @@ async def test_chan_backtest_tool(monkeypatch) -> None:
     monkeypatch.setattr(chan_backtest, "run_backtest", fake_run)
     context = SkillToolContext(api_key="", base_url="")
     tool = SKILL_TOOL_REGISTRY.resolve_names(["chan_backtest"], context)[0]
-    output = await tool.ainvoke({"symbol": "BTCUSDT", "bars": 300})
+    output = await tool.ainvoke({"symbol": "BTCUSDT"})
     assert "缠论信号回测" in output
     assert "1buy" in output
     assert "样本少于 20 笔" in output

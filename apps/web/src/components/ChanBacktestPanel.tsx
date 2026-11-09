@@ -90,22 +90,23 @@ function formatUtc(ms: number): string {
 export function ChanBacktestPanel({
   symbol,
   granularity,
-  bars,
+  startDate,
+  endDate,
 }: {
   symbol: string;
   granularity: string;
-  bars: number;
+  startDate: string;
+  endDate: string;
 }) {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [result, setResult] = useState<ChanBacktestResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const effectiveBars = Math.min(bars, 500);
 
   useEffect(() => {
     setResult(null);
     setError("");
-  }, [symbol, granularity, bars]);
+  }, [symbol, granularity, startDate, endDate]);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -133,7 +134,8 @@ export function ChanBacktestPanel({
       const next = await api.runChanBacktest({
         symbol: symbol.trim().toUpperCase(),
         granularity,
-        bars: effectiveBars,
+        start_date: startDate,
+        end_date: endDate,
         initial_capital: initialCapital,
         fee_rate: feePct / 100,
         slippage_rate: slippagePct / 100,
@@ -158,7 +160,7 @@ export function ChanBacktestPanel({
             <h2>信号回测 / 交易计划</h2>
             <p>
               因果前缀回放：信号收盘确认，下一根开盘进场；一次一笔，固定止损、R 倍目标和时间止损。
-              {bars > 500 ? ` 回测最多使用 500 根（当前 ${bars}）。` : ` 当前 ${effectiveBars} 根。`}
+              时间窗口 {startDate} → {endDate}（UTC，含结束日，最多 1000 根）。
             </p>
           </div>
           <div className="settings-card-actions">

@@ -145,14 +145,17 @@ def _make_analyze_tool(context: SkillToolContext) -> BaseTool:
     async def chan_analyze(
         symbol: str,
         granularity: str = "1h",
-        bars: int = 300,
+        start_date: str = "",
+        end_date: str = "",
     ) -> str:
         """分析一个交易对的缠论结构。"""
         try:
+            start_ms, end_ms = chan_analysis.parse_date_window(start_date, end_date)
             result = await chan_analysis.analyze_symbol(
                 symbol,
                 granularity,
-                bars=bars,
+                start_ms=start_ms,
+                end_ms=end_ms,
             )
         except chan_analysis.ChanError as exc:
             return f"Error: {exc}"
@@ -165,7 +168,9 @@ def _make_analyze_tool(context: SkillToolContext) -> BaseTool:
         name="chan_analyze",
         description=(
             "分析 crypto 单周期的程序化缠论结构。symbol 例如 BTCUSDT；"
-            "granularity 支持 15min、1h、4h、1day、1week（也接受 15m/1w）；bars 默认 300，范围 20-1000。"
+            "granularity 支持 15min、1h、4h、1day、1week（也接受 15m/1w）；"
+            "K 线范围用时间窗口 start_date / end_date（UTC，YYYY-MM-DD，结束日包含在内；"
+            "也可传 ISO 时间），不传时默认最近 500 根；用户给出区间就按区间返回。"
             "返回数据区间、合并 K 线数、笔、中枢、1/2/3 买卖点、MACD(12,26,9) 面积背离和 warnings 的摘要，"
             "不返回完整 K 线数组。只使用已收盘 K 线；买卖点是笔级别近似，"
             "不是交易建议。用户要求看缠论结构或解释分型/笔/中枢/买卖点时使用。"
@@ -180,7 +185,8 @@ def _make_backtest_tool(context: SkillToolContext) -> BaseTool:
     async def chan_backtest_tool(
         symbol: str,
         granularity: str = "1h",
-        bars: int = 300,
+        start_date: str = "",
+        end_date: str = "",
         stop_pct: float = 1.0,
         risk_pct: float = 1.0,
         r_multiple: float = 2.0,
@@ -191,10 +197,12 @@ def _make_backtest_tool(context: SkillToolContext) -> BaseTool:
     ) -> str:
         """用因果前缀回放回测缠论买卖点，并返回交易计划摘要。"""
         try:
+            start_ms, end_ms = chan_analysis.parse_date_window(start_date, end_date)
             result = await chan_backtest.run_backtest(
                 symbol,
                 granularity,
-                bars=bars,
+                start_ms=start_ms,
+                end_ms=end_ms,
                 initial_capital=initial_capital,
                 fee_rate=fee_pct / 100.0,
                 slippage_rate=slippage_pct / 100.0,
@@ -215,7 +223,8 @@ def _make_backtest_tool(context: SkillToolContext) -> BaseTool:
         description=(
             "回测缠论买卖点的交易计划。因果前缀回放：信号在收盘确认，下一根开盘进场；"
             "一次只持有一笔，固定止损、R 倍目标、最大持仓 K 线。参数：symbol、"
-            "granularity（15min/1h/4h/1day/1week）、bars（60-500，默认 300）、"
+            "granularity（15min/1h/4h/1day/1week）、"
+            "时间窗口 start_date / end_date（UTC，YYYY-MM-DD，结束日包含在内；不传默认最近 500 根，60-1000 根）、"
             "stop_pct（止损百分比，默认 1）、risk_pct（单笔风险百分比，默认 1）、"
             "r_multiple（默认 2）、max_hold_bars（默认 50）、fee_pct/slippage_pct。"
             "返回收益、回撤、胜率、平均 R、按信号类型统计和最近交易；"

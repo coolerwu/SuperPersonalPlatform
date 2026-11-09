@@ -688,6 +688,8 @@ export type ChanBacktestPayload = {
   symbol: string;
   granularity: string;
   bars?: number;
+  start_date?: string;
+  end_date?: string;
   initial_capital?: number;
   fee_rate?: number;
   slippage_rate?: number;

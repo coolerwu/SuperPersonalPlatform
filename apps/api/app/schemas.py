@@ -530,13 +530,17 @@ class TradeJournalClose(BaseModel):
 class ChanAnalyzeRequest(BaseModel):
     symbol: str = Field(min_length=3, max_length=30)
     granularity: str = Field(default="1h", min_length=2, max_length=10)
-    bars: int = Field(default=300, ge=20, le=1000)
+    bars: int = Field(default=500, ge=20, le=1000)
+    start_date: str | None = Field(default=None, max_length=40)
+    end_date: str | None = Field(default=None, max_length=40)
 
 
 class ChanBacktestRequest(BaseModel):
     symbol: str = Field(min_length=3, max_length=30)
     granularity: str = Field(default="1h", min_length=2, max_length=10)
-    bars: int = Field(default=300, ge=60, le=500)
+    bars: int = Field(default=500, ge=60, le=1000)
+    start_date: str | None = Field(default=None, max_length=40)
+    end_date: str | None = Field(default=None, max_length=40)
     initial_capital: float = Field(default=10_000.0, gt=0, le=1e12)
     fee_rate: float = Field(default=0.001, ge=0, le=0.1)
     slippage_rate: float = Field(default=0.0005, ge=0, le=0.1)

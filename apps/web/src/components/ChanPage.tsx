@@ -26,16 +26,46 @@ const POPULAR_SYMBOLS = [
 ];
 
 const CHAN_GRANULARITIES = ["15min", "1h", "4h", "1day", "1week"] as const;
-const CHAN_BARS = [200, 300, 500, 800] as const;
+const GRANULARITY_MS: Record<(typeof CHAN_GRANULARITIES)[number], number> = {
+  "15min": 15 * 60_000,
+  "1h": 60 * 60_000,
+  "4h": 4 * 60 * 60_000,
+  "1day": 24 * 60 * 60_000,
+  "1week": 7 * 24 * 60 * 60_000,
+};
+const DEFAULT_WINDOW_BARS = 500;
 
 type ChanGranularity = (typeof CHAN_GRANULARITIES)[number];
-type ChanBars = (typeof CHAN_BARS)[number];
 type ChanMode = "chart" | "backtest";
+
+function utcIso(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function addUtcDays(iso: string, days: number): string {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return utcIso(date);
+}
+
+function isIsoDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+}
+
+function defaultEndDate(): string {
+  return utcIso(new Date());
+}
+
+function windowStartDate(end: string, granularity: ChanGranularity, bars = DEFAULT_WINDOW_BARS): string {
+  const spanDays = Math.ceil((bars * GRANULARITY_MS[granularity]) / 86_400_000);
+  return addUtcDays(end, -Math.max(1, spanDays));
+}
 
 type ChanConfig = {
   symbol: string;
   granularity: ChanGranularity;
-  bars: ChanBars;
+  start: string;
+  end: string;
   mode: ChanMode;
   showMerged: boolean;
   showFractals: boolean;
@@ -54,14 +84,22 @@ function readChanConfig(search: string): ChanConfig {
     return value !== "0" && value.toLowerCase() !== "false";
   };
   const granularity = params.get("granularity") ?? "";
-  const bars = Number(params.get("bars"));
   const symbol = (params.get("symbol") ?? "").trim().toUpperCase();
+  const nextGranularity = (CHAN_GRANULARITIES as readonly string[]).includes(granularity)
+    ? (granularity as ChanGranularity)
+    : "1h";
+  const end = (params.get("end") ?? "").trim();
+  const start = (params.get("start") ?? "").trim();
+  const endDate = isIsoDate(end) ? end : defaultEndDate();
+  const legacyBars = Number(params.get("bars"));
+  const startFallback = Number.isFinite(legacyBars) && legacyBars >= 20 && legacyBars <= 1000
+    ? windowStartDate(endDate, nextGranularity, legacyBars)
+    : windowStartDate(endDate, nextGranularity);
   return {
     symbol: symbol || "BTCUSDT",
-    granularity: (CHAN_GRANULARITIES as readonly string[]).includes(granularity)
-      ? (granularity as ChanGranularity)
-      : "1h",
-    bars: (CHAN_BARS as readonly number[]).includes(bars) ? (bars as ChanBars) : 300,
+    granularity: nextGranularity,
+    start: isIsoDate(start) ? start : startFallback,
+    end: endDate,
     mode: params.get("mode") === "backtest" ? "backtest" : "chart",
     showMerged: flag("merged"),
     showFractals: flag("fractals"),
@@ -77,7 +115,8 @@ function chanSearch(config: ChanConfig): string {
   const params = new URLSearchParams();
   params.set("symbol", config.symbol);
   params.set("granularity", config.granularity);
-  params.set("bars", String(config.bars));
+  params.set("start", config.start);
+  params.set("end", config.end);
   params.set("mode", config.mode);
   params.set("merged", config.showMerged ? "1" : "0");
   params.set("fractals", config.showFractals ? "1" : "0");
@@ -93,7 +132,8 @@ export function ChanPage() {
   const [initial] = useState(() => readChanConfig(window.location.search));
   const [symbol, setSymbol] = useState(initial.symbol);
   const [granularity, setGranularity] = useState<ChanGranularity>(initial.granularity);
-  const [bars, setBars] = useState<ChanBars>(initial.bars);
+  const [start, setStart] = useState(initial.start);
+  const [end, setEnd] = useState(initial.end);
   const [analysis, setAnalysis] = useState<ChanAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -107,13 +147,18 @@ export function ChanPage() {
   const [mode, setMode] = useState<ChanMode>(initial.mode);
 
   const analyze = useCallback(async () => {
+    if (!isIsoDate(start) || !isIsoDate(end) || start >= end) {
+      setError("请选择有效的时间窗口：开始日期早于结束日期");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
       const result = await api.analyzeChan({
         symbol: symbol.trim().toUpperCase(),
         granularity,
-        bars,
+        start_date: start,
+        end_date: end,
       });
       setAnalysis(result);
     } catch (exc) {
@@ -121,7 +166,7 @@ export function ChanPage() {
     } finally {
       setLoading(false);
     }
-  }, [symbol, granularity, bars]);
+  }, [symbol, granularity, start, end]);
 
   useEffect(() => {
     void analyze();
@@ -134,7 +179,8 @@ export function ChanPage() {
     const next = `/chan?${chanSearch({
       symbol,
       granularity,
-      bars,
+      start,
+      end,
       mode,
       showMerged,
       showFractals,
@@ -150,7 +196,8 @@ export function ChanPage() {
   }, [
     symbol,
     granularity,
-    bars,
+    start,
+    end,
     mode,
     showMerged,
     showFractals,
@@ -182,7 +229,11 @@ export function ChanPage() {
           <span>周期</span>
           <select
             value={granularity}
-            onChange={(event) => setGranularity(event.target.value as ChanGranularity)}
+            onChange={(event) => {
+              const next = event.target.value as ChanGranularity;
+              setGranularity(next);
+              setStart(windowStartDate(end, next));
+            }}
           >
             <option value="15min">15min</option>
             <option value="1h">1h</option>
@@ -192,13 +243,22 @@ export function ChanPage() {
           </select>
         </label>
         <label className="chan-control">
-          <span>K 线</span>
-          <select value={bars} onChange={(event) => setBars(Number(event.target.value) as ChanBars)}>
-            <option value="200">200</option>
-            <option value="300">300</option>
-            <option value="500">500</option>
-            <option value="800">800</option>
-          </select>
+          <span>开始</span>
+          <input
+            type="date"
+            value={start}
+            max={end}
+            onChange={(event) => setStart(event.target.value)}
+          />
+        </label>
+        <label className="chan-control">
+          <span>结束</span>
+          <input
+            type="date"
+            value={end}
+            min={start}
+            onChange={(event) => setEnd(event.target.value)}
+          />
         </label>
         <div className="chan-mode-tabs">
           <button className={mode === "chart" ? "active" : ""} onClick={() => setMode("chart")}>结构图</button>
@@ -237,7 +297,7 @@ export function ChanPage() {
           {error && <div className="error-banner">{error}</div>}
 
           {mode === "backtest" ? (
-            <ChanBacktestPanel symbol={symbol} granularity={granularity} bars={bars} />
+            <ChanBacktestPanel symbol={symbol} granularity={granularity} startDate={start} endDate={end} />
           ) : analysis ? (
             <>
               <section className="settings-card">

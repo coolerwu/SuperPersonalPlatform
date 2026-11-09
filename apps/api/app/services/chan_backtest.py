@@ -20,10 +20,10 @@ from app.config import settings
 from app.services.backtest_engine import load_candles
 from app.services.chan_analysis import ChanError, analyze_frame
 from app.services.market_data import MarketDataError, market_service
-from app.services.timeframes import floor_open_ms, now_ms, shift_open_ms
+from app.services.timeframes import count_bars, floor_open_ms, now_ms, shift_open_ms
 
 MIN_BARS = 60
-MAX_BARS = 500
+MAX_BARS = 1000
 DEFAULT_INITIAL_CAPITAL = 10_000.0
 DEFAULT_FEE_RATE = 0.001
 DEFAULT_SLIPPAGE_RATE = 0.0005
@@ -341,7 +341,9 @@ async def run_backtest(
     symbol: str,
     granularity: str,
     *,
-    bars: int = 300,
+    bars: int = 500,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
     initial_capital: float = DEFAULT_INITIAL_CAPITAL,
     fee_rate: float = DEFAULT_FEE_RATE,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
@@ -356,8 +358,6 @@ async def run_backtest(
         raise ChanBacktestError("交易对不能为空")
     if granularity not in SUPPORTED_GRANULARITIES:
         raise ChanBacktestError("只支持 15min、1h、4h、1day、1week")
-    if not MIN_BARS <= bars <= MAX_BARS:
-        raise ChanBacktestError(f"回测 K 线必须在 {MIN_BARS}-{MAX_BARS} 根之间")
     if not 0 < stop_pct < 0.2:
         raise ChanBacktestError("止损百分比必须在 0-20% 之间")
     if not 0 < risk_pct <= 0.1:
@@ -367,13 +367,31 @@ async def run_backtest(
     if not 1 <= max_hold_bars <= 1000:
         raise ChanBacktestError("最大持仓 K 线必须在 1-1000 之间")
 
-    end_open = floor_open_ms(now_ms(), granularity)
-    start_ms = shift_open_ms(end_open, granularity, -bars)
+    now_open = floor_open_ms(now_ms(), granularity)
+    if end_ms is not None:
+        end_open = min(floor_open_ms(int(end_ms), granularity), now_open)
+    else:
+        end_open = now_open
+    if start_ms is not None:
+        window_start = floor_open_ms(int(start_ms), granularity)
+    else:
+        if not MIN_BARS <= bars <= MAX_BARS:
+            raise ChanBacktestError(f"回测 K 线必须在 {MIN_BARS}-{MAX_BARS} 根之间")
+        window_start = shift_open_ms(end_open, granularity, -bars)
+    if end_open <= window_start:
+        raise ChanBacktestError("所选时间窗口内没有已经完成的 K 线")
+    wanted = count_bars(window_start, end_open, granularity)
+    if wanted > MAX_BARS:
+        raise ChanBacktestError(
+            f"所选时间窗口约 {wanted} 根 K 线，超过上限 {MAX_BARS}；请缩短窗口或换更大的周期"
+        )
+    if wanted < MIN_BARS:
+        raise ChanBacktestError(f"所选时间窗口只有 {wanted} 根 K 线，至少需要 {MIN_BARS} 根")
     try:
-        ensure = await market_service.ensure_data(symbol, granularity, start_ms, end_open)
+        ensure = await market_service.ensure_data(symbol, granularity, window_start, end_open)
     except MarketDataError as exc:
         raise ChanBacktestError(str(exc)) from exc
-    frame = load_candles(settings.market_db_path, symbol, granularity, start_ms, ensure.end_open_ms)
+    frame = load_candles(settings.market_db_path, symbol, granularity, window_start, ensure.end_open_ms)
     if frame.empty:
         raise ChanBacktestError("行情缓存为空，请先检查 Bitget 连接或换一个交易对/周期")
     signals = collect_causal_signals(frame)
@@ -392,7 +410,7 @@ async def run_backtest(
         {
             "symbol": symbol,
             "granularity": granularity,
-            "requested_bars": bars,
+            "requested_bars": wanted,
             "causal_signals": len(signals),
             "data_warnings": ensure.warnings,
         }

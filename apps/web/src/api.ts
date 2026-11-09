@@ -454,7 +454,13 @@ export const api = {
       },
     ),
 
-  analyzeChan: (payload: { symbol: string; granularity: string; bars?: number }) =>
+  analyzeChan: (payload: {
+    symbol: string;
+    granularity: string;
+    bars?: number;
+    start_date?: string;
+    end_date?: string;
+  }) =>
     request<ChanAnalysis>("/api/chan/analyze", {
       method: "POST",
       body: JSON.stringify(payload),
