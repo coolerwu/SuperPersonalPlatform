@@ -49,14 +49,17 @@ def test_analyze_route_returns_structures(client, monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["symbol"] == "BTCUSDT"
     assert captured["start_ms"] == _ms("2026-10-01T00:00:00")
-    # The end date is inclusive, so the exclusive bound is the next midnight.
-    assert captured["end_ms"] == _ms("2026-11-01T00:00:00")
+    # A bare end date covers the whole day, so the window includes it.
+    assert captured["end_ms"] == _ms("2026-10-31T23:59:59.999")
 
 
 def test_parse_date_window_accepts_iso_and_rejects_bad_text() -> None:
     start_ms, end_ms = parse_date_window("2026-10-01T08:00:00", "2026-10-02T08:00:00")
     assert start_ms == _ms("2026-10-01T08:00:00")
     assert end_ms == _ms("2026-10-02T08:00:00")
+    day_start, day_end = parse_date_window("2026-10-01", "2026-10-02")
+    assert day_start == _ms("2026-10-01T00:00:00")
+    assert day_end == _ms("2026-10-02T23:59:59.999")
     assert parse_date_window(None, "") == (None, None)
     with pytest.raises(ChanError):
         parse_date_window("10/01/2026", None)

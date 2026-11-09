@@ -19,7 +19,13 @@ import pandas as pd
 from app.config import settings
 from app.services.backtest_engine import load_candles
 from app.services.market_data import MarketDataError, market_service
-from app.services.timeframes import count_bars, floor_open_ms, now_ms, shift_open_ms
+from app.services.timeframes import (
+    count_bars,
+    floor_open_ms,
+    next_open_ms,
+    now_ms,
+    shift_open_ms,
+)
 
 MAX_BARS = 1000
 MIN_BARS = 20
@@ -719,12 +725,11 @@ def parse_date_window(
     start_date: str | None,
     end_date: str | None,
 ) -> tuple[int | None, int | None]:
-    """Parse UTC date or datetime strings into an analysis window.
+    """Parse UTC date or datetime strings into an inclusive analysis window.
 
-    A bare date is inclusive on both ends: ``start`` becomes 00:00 UTC of that
-    day and ``end`` becomes 00:00 UTC of the next day (the window's upper bound
-    is exclusive). A full ISO datetime is used as given, with the end treated
-    as exclusive.
+    The returned instants are inclusive: a bare date covers that whole day
+    (``end`` becomes 23:59:59.999) and a full ISO datetime is used as given.
+    Callers snap both bounds to the chart granularity.
     """
 
     def parse(value: str | None, *, is_end: bool) -> int | None:
@@ -740,7 +745,7 @@ def parse_date_window(
             day = date.fromisoformat(text)
             moment = datetime.combine(day, time.min, tzinfo=timezone.utc)
             if is_end:
-                moment += timedelta(days=1)
+                moment += timedelta(days=1, microseconds=-1000)
             return int(moment.timestamp() * 1000)
         except ValueError as exc:
             raise ChanError("日期格式应为 YYYY-MM-DD 或 ISO 时间（UTC）") from exc
@@ -764,7 +769,10 @@ async def analyze_symbol(
         raise ChanError("只支持 15min、1h、4h、1day、1week")
     now_open = floor_open_ms(now_ms(), granularity)
     if end_ms is not None:
-        end_open = min(floor_open_ms(int(end_ms), granularity), now_open)
+        end_open = min(
+            next_open_ms(floor_open_ms(int(end_ms), granularity), granularity),
+            now_open,
+        )
     else:
         end_open = now_open
     if start_ms is not None:

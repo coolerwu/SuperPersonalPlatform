@@ -101,7 +101,8 @@ async def test_chan_analyze_tool_passes_the_date_window(monkeypatch) -> None:
         {"symbol": "BTCUSDT", "start_date": "2026-10-01", "end_date": "2026-10-31"}
     )
     assert captured["start_ms"] is not None
-    assert captured["end_ms"] - captured["start_ms"] == 31 * 24 * 60 * 60 * 1000
+    # A bare end date covers the whole day up to 23:59:59.999.
+    assert captured["end_ms"] - captured["start_ms"] == 31 * 24 * 60 * 60 * 1000 - 1
 
 
 async def test_chan_analyze_tool_returns_error_text(monkeypatch) -> None:

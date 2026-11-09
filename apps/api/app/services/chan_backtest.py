@@ -20,7 +20,7 @@ from app.config import settings
 from app.services.backtest_engine import load_candles
 from app.services.chan_analysis import ChanError, analyze_frame
 from app.services.market_data import MarketDataError, market_service
-from app.services.timeframes import count_bars, floor_open_ms, now_ms, shift_open_ms
+from app.services.timeframes import count_bars, floor_open_ms, next_open_ms, now_ms, shift_open_ms
 
 MIN_BARS = 60
 MAX_BARS = 1000
@@ -369,7 +369,10 @@ async def run_backtest(
 
     now_open = floor_open_ms(now_ms(), granularity)
     if end_ms is not None:
-        end_open = min(floor_open_ms(int(end_ms), granularity), now_open)
+        end_open = min(
+            next_open_ms(floor_open_ms(int(end_ms), granularity), granularity),
+            now_open,
+        )
     else:
         end_open = now_open
     if start_ms is not None:

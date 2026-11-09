@@ -33,32 +33,41 @@ const GRANULARITY_MS: Record<(typeof CHAN_GRANULARITIES)[number], number> = {
   "1day": 24 * 60 * 60_000,
   "1week": 7 * 24 * 60 * 60_000,
 };
+const GRANULARITY_STEP_SECONDS: Record<(typeof CHAN_GRANULARITIES)[number], number> = {
+  "15min": 900,
+  "1h": 3600,
+  "4h": 14_400,
+  "1day": 86_400,
+  "1week": 604_800,
+};
 const DEFAULT_WINDOW_BARS = 500;
 
 type ChanGranularity = (typeof CHAN_GRANULARITIES)[number];
 type ChanMode = "chart" | "backtest";
 
-function utcIso(date: Date): string {
-  return date.toISOString().slice(0, 10);
+function toUtcInput(ms: number): string {
+  const date = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 }
 
-function addUtcDays(iso: string, days: number): string {
-  const date = new Date(`${iso}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return utcIso(date);
+function parseUtcInput(value: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return null;
+  const ms = Date.parse(`${value}Z`);
+  return Number.isFinite(ms) ? ms : null;
 }
 
-function isIsoDate(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+function snapUtc(ms: number, granularity: ChanGranularity): number {
+  const step = GRANULARITY_MS[granularity];
+  return Math.floor(ms / step) * step;
 }
 
-function defaultEndDate(): string {
-  return utcIso(new Date());
-}
-
-function windowStartDate(end: string, granularity: ChanGranularity, bars = DEFAULT_WINDOW_BARS): string {
-  const spanDays = Math.ceil((bars * GRANULARITY_MS[granularity]) / 86_400_000);
-  return addUtcDays(end, -Math.max(1, spanDays));
+function defaultWindow(granularity: ChanGranularity): { start: string; end: string } {
+  const end = snapUtc(Date.now(), granularity);
+  return {
+    start: toUtcInput(end - DEFAULT_WINDOW_BARS * GRANULARITY_MS[granularity]),
+    end: toUtcInput(end),
+  };
 }
 
 type ChanConfig = {
@@ -88,18 +97,19 @@ function readChanConfig(search: string): ChanConfig {
   const nextGranularity = (CHAN_GRANULARITIES as readonly string[]).includes(granularity)
     ? (granularity as ChanGranularity)
     : "1h";
-  const end = (params.get("end") ?? "").trim();
-  const start = (params.get("start") ?? "").trim();
-  const endDate = isIsoDate(end) ? end : defaultEndDate();
+  const defaults = defaultWindow(nextGranularity);
+  const endMs = parseUtcInput((params.get("end") ?? "").trim()) ?? parseUtcInput(defaults.end) ?? Date.now();
   const legacyBars = Number(params.get("bars"));
-  const startFallback = Number.isFinite(legacyBars) && legacyBars >= 20 && legacyBars <= 1000
-    ? windowStartDate(endDate, nextGranularity, legacyBars)
-    : windowStartDate(endDate, nextGranularity);
+  const windowBars = Number.isFinite(legacyBars) && legacyBars >= 20 && legacyBars <= 1000
+    ? legacyBars
+    : DEFAULT_WINDOW_BARS;
+  const startMs = parseUtcInput((params.get("start") ?? "").trim())
+    ?? endMs - windowBars * GRANULARITY_MS[nextGranularity];
   return {
     symbol: symbol || "BTCUSDT",
     granularity: nextGranularity,
-    start: isIsoDate(start) ? start : startFallback,
-    end: endDate,
+    start: toUtcInput(startMs),
+    end: toUtcInput(endMs),
     mode: params.get("mode") === "backtest" ? "backtest" : "chart",
     showMerged: flag("merged"),
     showFractals: flag("fractals"),
@@ -147,8 +157,10 @@ export function ChanPage() {
   const [mode, setMode] = useState<ChanMode>(initial.mode);
 
   const analyze = useCallback(async () => {
-    if (!isIsoDate(start) || !isIsoDate(end) || start >= end) {
-      setError("请选择有效的时间窗口：开始日期早于结束日期");
+    const startMs = parseUtcInput(start);
+    const endMs = parseUtcInput(end);
+    if (startMs === null || endMs === null || startMs >= endMs) {
+      setError("请选择有效的时间窗口：开始时间早于结束时间（UTC，精确到所选周期）");
       return;
     }
     setLoading(true);
@@ -232,7 +244,9 @@ export function ChanPage() {
             onChange={(event) => {
               const next = event.target.value as ChanGranularity;
               setGranularity(next);
-              setStart(windowStartDate(end, next));
+              const endMs = snapUtc(parseUtcInput(end) ?? Date.now(), next);
+              setEnd(toUtcInput(endMs));
+              setStart(toUtcInput(endMs - DEFAULT_WINDOW_BARS * GRANULARITY_MS[next]));
             }}
           >
             <option value="15min">15min</option>
@@ -243,18 +257,20 @@ export function ChanPage() {
           </select>
         </label>
         <label className="chan-control">
-          <span>开始</span>
+          <span>开始 (UTC)</span>
           <input
-            type="date"
+            type="datetime-local"
+            step={GRANULARITY_STEP_SECONDS[granularity]}
             value={start}
             max={end}
             onChange={(event) => setStart(event.target.value)}
           />
         </label>
         <label className="chan-control">
-          <span>结束</span>
+          <span>结束 (UTC)</span>
           <input
-            type="date"
+            type="datetime-local"
+            step={GRANULARITY_STEP_SECONDS[granularity]}
             value={end}
             min={start}
             onChange={(event) => setEnd(event.target.value)}
