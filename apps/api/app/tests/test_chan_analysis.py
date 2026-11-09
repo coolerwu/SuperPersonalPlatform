@@ -117,7 +117,7 @@ def test_build_strokes_old_bi_and_replacement() -> None:
     assert close == []
 
 
-def test_build_strokes_breaks_a_down_stroke_with_a_higher_top() -> None:
+def test_build_strokes_keeps_a_confirmed_down_stroke_when_price_reclaims_its_start() -> None:
     strokes = build_strokes(
         [
             _fractal("bottom", 0, 10),
@@ -127,15 +127,18 @@ def test_build_strokes_breaks_a_down_stroke_with_a_higher_top() -> None:
             _fractal("bottom", 12, 11),
         ]
     )
+    # The top at 25 is one merged bar from the 12 bottom, so it is not a pen
+    # endpoint and does not rewrite the confirmed down stroke; that stroke
+    # extends to the lower bottom at 11 instead.
     assert [(item["direction"], item["end_price"]) for item in strokes] == [
-        ("up", 25),
+        ("up", 20),
         ("down", 11),
     ]
     assert strokes[0]["start_time"] == 1
-    assert strokes[1]["start_time"] == 11
+    assert strokes[1]["start_time"] == 6
 
 
-def test_build_strokes_breaks_an_up_stroke_with_a_lower_bottom() -> None:
+def test_build_strokes_keeps_a_confirmed_up_stroke_when_price_reclaims_its_start() -> None:
     strokes = build_strokes(
         [
             _fractal("top", 0, 20),
@@ -145,30 +148,38 @@ def test_build_strokes_breaks_an_up_stroke_with_a_lower_bottom() -> None:
             _fractal("top", 12, 9),
         ]
     )
+    # The bottom at 5 is one merged bar after the top at 18, so the confirmed
+    # up stroke stays at 18; no stroke is retracted.
     assert [(item["direction"], item["end_price"]) for item in strokes] == [
-        ("down", 5),
-        ("up", 9),
+        ("down", 10),
+        ("up", 18),
     ]
 
 
-def test_build_strokes_break_keeps_the_higher_same_type_extreme() -> None:
+def test_build_strokes_keeps_multiple_pens_when_price_breaks_a_pen_start() -> None:
     strokes = build_strokes(
         [
-            _fractal("bottom", 0, 10),
-            _fractal("top", 5, 20),
-            _fractal("bottom", 9, 12),
-            _fractal("top", 10, 25),
-            _fractal("top", 11, 27),
-            _fractal("bottom", 13, 11),
+            _fractal("top", 0, 100),
+            _fractal("bottom", 4, 70),
+            _fractal("top", 8, 95),
+            _fractal("bottom", 9, 60),
+            _fractal("top", 12, 90),
+            _fractal("bottom", 16, 50),
         ]
     )
-    assert [(item["direction"], item["end_price"]) for item in strokes] == [
-        ("up", 27),
-        ("down", 11),
+    # The reversal below the rally's start does not fold the rally into one
+    # long down stroke; the confirmed pens are kept.
+    assert [
+        (item["direction"], item["start_price"], item["end_price"])
+        for item in strokes
+    ] == [
+        ("down", 100, 70),
+        ("up", 70, 95),
+        ("down", 95, 50),
     ]
 
 
-def test_build_strokes_does_not_break_when_reverse_stays_inside() -> None:
+def test_build_strokes_alternates_between_valid_fractals() -> None:
     strokes = build_strokes(
         [
             _fractal("bottom", 0, 10),

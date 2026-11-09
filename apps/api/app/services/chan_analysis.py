@@ -162,30 +162,23 @@ def _extend_stroke(stroke: dict[str, Any], fractal: dict[str, Any]) -> None:
     stroke["low"] = min(float(stroke["start_price"]), float(fractal["price"]))
 
 
-def _breaks_stroke(stroke: dict[str, Any], fractal: dict[str, Any]) -> bool:
-    if stroke["direction"] == "down" and fractal["type"] == "top":
-        return float(fractal["price"]) > float(stroke["start_price"])
-    if stroke["direction"] == "up" and fractal["type"] == "bottom":
-        return float(fractal["price"]) < float(stroke["start_price"])
-    return False
-
-
 def build_strokes(
     fractals: list[dict[str, Any]],
     *,
     min_span: int = OLD_BI_MIN_SPAN,
 ) -> list[dict[str, Any]]:
-    """Connect alternating fractals using the old-bi rule with stroke breaks.
+    """Connect alternating fractals using the old-bi five-bar rule.
 
-    A reverse fractal that trades beyond the current stroke's starting price
-    invalidates that stroke: the broken stroke is removed, the previous stroke
-    extends to the new extreme, and the next opposite fractal can form a new
-    stroke even if it is closer than ``min_span`` (the break itself confirms
-    the reversal). Without a break, the old-bi five-bar rule still applies.
+    A stroke confirmed by a reverse fractal and the minimum span stands: later
+    price action does not retract it, even when a new extreme trades beyond the
+    stroke's starting price. The only allowed revision is the classic
+    current-stroke extension: a more extreme same-type fractal moves the last
+    stroke's endpoint. Retracting whole strokes here collapsed long trends
+    into a single straight stroke whenever several close fractals alternated
+    beyond each other's starts.
     """
     strokes: list[dict[str, Any]] = []
     selected: dict[str, Any] | None = None
-    after_break = False
     for fractal in fractals:
         if selected is None:
             selected = fractal
@@ -202,17 +195,7 @@ def build_strokes(
                 if strokes:
                     _extend_stroke(strokes[-1], fractal)
             continue
-        if strokes and _breaks_stroke(strokes[-1], fractal):
-            strokes.pop()
-            if strokes:
-                _extend_stroke(strokes[-1], fractal)
-            selected = fractal
-            after_break = True
-            continue
-        if (
-            fractal["merged_index"] - selected["merged_index"] < min_span
-            and not after_break
-        ):
+        if fractal["merged_index"] - selected["merged_index"] < min_span:
             continue
         if selected["type"] == "bottom" and fractal["price"] <= selected["price"]:
             continue
@@ -230,7 +213,6 @@ def build_strokes(
             }
         )
         selected = fractal
-        after_break = False
     return strokes
 
 
@@ -579,8 +561,8 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
             "bi_min_span": OLD_BI_MIN_SPAN,
             "bi_rule": (
                 "顶底分型交替，至少 5 根合并 K 线（含两端分型）；"
-                "反向分型越过当前笔起点时作废该笔，上一笔延伸到新极值，"
-                "破笔后的第一笔不受跨度限制；未成笔分型不标注"
+                "笔一旦成立不因后续价格越过起点而回滚，"
+                "只有最后一笔会延伸到更极端的同向分型；未成笔分型不标注"
             ),
             "fractal_rule": "三根合并 K 线严格顶/底",
             "zone_rule": (
