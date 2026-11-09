@@ -3092,14 +3092,16 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 1. 网页聊天（`source=manual|retry`）在有 user memory 时，`RunWorker` 用当前 Agent 的 instructions 和全部 user scope 记忆（不截断，不含 agent 记忆）拼成 rubric，通过 `input_state["rubric"]` 传给 deepagents 的 `RubricMiddleware`；没有 user memory 时不挂载。
 2. 中间件使用独立的评分模型（`temperature=0`，关闭 thinking，因为 provider 在 thinking 模式下拒绝强制 `tool_choice`），并挂 `session_search` / `session_read` 供评分器核对被截断的历史对话。平台在 `app/services/rubric.py` 中构造 `RubricMiddleware` 子类并保持 `max_iterations=2`：草稿结束评分一次，首次不通过时注入一次修订，修订版直接作为最终 output，不再二次评分；修订后自然停止时子类跳过评分并把评分状态标为终结（上游按评分次数计数，否则每条回复都会评分两次，最后仍被标成 `max_iterations_reached`）。
 3. 评分器运行期间产生的 `messages` 流用 `rubric_evaluation_start` / `rubric_evaluation_end` 夹住过滤，不进入聊天；开始评分时另写 `rubric_start` 事件（iteration），前端据此显示「质检中」。
-4. 每次评分写成 `rubric_result` 事件（iteration、result、通过/未通过数、未通过项和 gap），前端在助手消息的「执行过程」里展示质检结果，未通过项可展开；聊天活动行在评分期间显示「质检中」，未通过后显示「质检未通过，正在修订」，修订版替换草稿后直接输出。
+4. 每次评分写成 `rubric_result` 事件（iteration、result、通过/未通过数、未通过项和 gap），前端在助手消息的「执行过程」里展示质检结果，未通过项可展开；聊天活动行在评分期间显示「质检中」，未通过后显示「质检未通过，正在修订」。
+5. 质检未通过时不立即清空已经流式输出的草稿：草稿继续显示在聊天里，修订文本单独缓冲，Run 完成后用修订版整段替换（持久化消息即修订版）。活动行在整个修订期间保持「质检未通过，正在修订」，不再出现正文消失后等待「正在生成…」的空窗；刷新或重连时按 `assistant_replace` 事件重建同样的「草稿可见、修订在后台生成」状态。
 
 #### 验收标准
 
 - 有用户记忆时每条网页聊天最终回复都会校验一次；没有用户记忆时不挂载。
 - rubric 包含 instructions 和全部 user 记忆，agent 记忆不进入 rubric。
 - 评分未通过时只评分一次：注入一次修订，修订版直接作为最终 output，不再二次评分，也不在最后标记 `max_iterations_reached`。
-- 评分期间聊天活动行显示「质检中」；未通过时显示「质检未通过，正在修订」，修订版替换草稿后输出。
+- 评分期间聊天活动行显示「质检中」；未通过时显示「质检未通过，正在修订」。
+- 质检未通过时草稿保持可见，修订版在 Run 完成后整段替换草稿；过程中不出现正文被清空、等待「正在生成…」的空窗。
 - 评分结果出现在「执行过程」里，未通过项可以展开。
 - 评分器的输出不出现在聊天流里。
 - 后端测试与前端构建通过。

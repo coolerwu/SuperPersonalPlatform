@@ -18,9 +18,11 @@ import type {
 import {
   activityFromEvents,
   appendReasoningStep,
+  attemptDisplay,
   attemptText,
   buildRunTrace,
   describeToolCall,
+  RUBRIC_REVISING_ACTIVITY,
   rubricActivity,
   rubricTraceStep,
   toolTraceStep,
@@ -93,6 +95,9 @@ type SessionLive = {
   activeRun: Run | null;
   events: RunEvent[];
   streamText: string;
+  /** Revision buffered behind the visible draft; swapped in when the run finishes. */
+  revisionText: string;
+  revising: boolean;
   streamReasoning: string;
   trace: RunTraceStep[];
   activity: string;
@@ -104,6 +109,8 @@ const EMPTY_LIVE: SessionLive = {
   activeRun: null,
   events: [],
   streamText: "",
+  revisionText: "",
+  revising: false,
   streamReasoning: "",
   trace: [],
   activity: "",
@@ -828,6 +835,8 @@ export default function App() {
           // The checkpoint keeps the interrupted attempt; the requeued run will
           // stream a fresh answer, so drop the previous attempt's live text.
           next.streamText = "";
+          next.revisionText = "";
+          next.revising = false;
           next.streamReasoning = "";
           next.trace = [];
           next.activity = "";
@@ -836,16 +845,31 @@ export default function App() {
           next.notice = "";
         }
       } else if (event.type === "assistant_delta") {
-        next.streamText = session.streamText + String(event.payload.delta ?? "");
-        next.activity = "";
+        const delta = String(event.payload.delta ?? "");
+        if (session.revising) {
+          // The draft stays on screen; the revision is swapped in when the
+          // run finishes.
+          next.revisionText = session.revisionText + delta;
+          next.activity = RUBRIC_REVISING_ACTIVITY;
+        } else {
+          next.streamText = session.streamText + delta;
+          next.activity = "";
+        }
         if (session.notice === RECONNECT_NOTICE) next.notice = "";
       } else if (event.type === "assistant_replace") {
-        // A rubric revision replaces everything streamed for this run. The
-        // empty replacement keeps the "质检未通过，正在修订" activity line.
         const text = String(event.payload.text ?? "");
-        next.streamText = text;
-        if (text) next.activity = "";
-        if (session.notice === RECONNECT_NOTICE) next.notice = "";
+        if (text) {
+          next.streamText = text;
+          next.revisionText = "";
+          next.revising = false;
+          next.activity = "";
+        } else {
+          // A rubric revision is coming: keep the draft visible and buffer the
+          // revision, so the answer never blanks out to "正在生成…".
+          next.revising = true;
+          next.revisionText = "";
+          if (session.notice === RECONNECT_NOTICE) next.notice = "";
+        }
       } else if (event.type === "reasoning_delta") {
         const delta = String(event.payload.delta ?? "");
         next.streamReasoning = session.streamReasoning + delta;
@@ -974,6 +998,8 @@ export default function App() {
         activeRun: run,
         events: runEvents,
         streamText: keepText ? text : "",
+        revisionText: "",
+        revising: false,
         streamReasoning: keepText ? reasoning : "",
         trace,
         activity: "",
@@ -987,12 +1013,15 @@ export default function App() {
         rememberEvents(nextEvents);
         runSessionsRef.current[next.id] = next.session_id;
         const nextTrace = buildRunTrace(nextEvents);
+        const nextDisplay = attemptDisplay(nextEvents);
         setRunTraces((current) => ({ ...current, [next.id]: nextTrace }));
         updateLive(id, (session) => ({
           ...session,
           activeRun: next,
           events: nextEvents,
-          streamText: attemptText(nextEvents, "assistant_delta"),
+          streamText: nextDisplay.text,
+          revisionText: nextDisplay.revision,
+          revising: nextDisplay.revising,
           streamReasoning: attemptText(nextEvents, "reasoning_delta"),
           trace: nextTrace,
           activity: activityFromEvents(nextEvents),
@@ -1084,9 +1113,11 @@ export default function App() {
     rememberEvents(runEvents);
     const reasoning = attemptText(runEvents, "reasoning_delta");
     const text = attemptText(runEvents, "assistant_delta");
+    const display = attemptDisplay(runEvents);
     const trace = buildRunTrace(runEvents);
     const running = isActiveRun(run);
-    const streamText = run.status === "completed" ? "" : text;
+    const streamText =
+      run.status === "completed" ? "" : running ? display.text : text;
     const streamReasoning = run.status === "completed" ? "" : reasoning;
     setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
     setRunTraces((current) => ({ ...current, [run.id]: trace }));
@@ -1107,6 +1138,8 @@ export default function App() {
           activeRun: run,
           events: runEvents,
           streamText,
+          revisionText: running ? display.revision : "",
+          revising: running && display.revising,
           streamReasoning,
           trace,
           activity: running ? activityFromEvents(runEvents) : "",
@@ -1165,6 +1198,7 @@ export default function App() {
       rememberEvents(runEvents);
       const reasoning = attemptText(runEvents, "reasoning_delta");
       const text = attemptText(runEvents, "assistant_delta");
+      const display = attemptDisplay(runEvents);
       const trace = buildRunTrace(runEvents);
       const running = isActiveRun(run);
       setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
@@ -1172,7 +1206,9 @@ export default function App() {
       updateLive(id, () => ({
         activeRun: run,
         events: runEvents,
-        streamText: run.status === "completed" ? "" : text,
+        streamText: run.status === "completed" ? "" : running ? display.text : text,
+        revisionText: running ? display.revision : "",
+        revising: running && display.revising,
         streamReasoning: run.status === "completed" ? "" : reasoning,
         trace,
         activity: running ? activityFromEvents(runEvents) : "",

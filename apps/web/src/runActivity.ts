@@ -25,6 +25,41 @@ export function attemptText(
   return text;
 }
 
+export type AttemptDisplay = {
+  /** Text on screen while the run streams: the draft even while a revision streams. */
+  text: string;
+  /** Revision text buffered behind the draft; shown when the run finishes. */
+  revision: string;
+  revising: boolean;
+};
+
+/** Split one attempt into the draft on screen and the revision behind it. */
+export function attemptDisplay(events: RunEvent[]): AttemptDisplay {
+  let draft = "";
+  let revision = "";
+  let revising = false;
+  for (const event of attemptEvents(events)) {
+    if (event.type === "assistant_delta") {
+      const delta = String(event.payload.delta ?? "");
+      if (revising) revision += delta;
+      else draft += delta;
+    } else if (event.type === "assistant_replace") {
+      const text = String(event.payload.text ?? "");
+      if (text) {
+        draft = text;
+        revision = "";
+        revising = false;
+      } else {
+        // The draft stays on screen; the revision is buffered until the
+        // finished answer replaces it.
+        revising = true;
+        revision = "";
+      }
+    }
+  }
+  return { text: draft, revision, revising };
+}
+
 export type RunTraceStep =
   | { kind: "reasoning"; id: number; text: string }
   | { kind: "tool"; id: number; tool: string; agent: string; label: string }
@@ -88,12 +123,14 @@ export function rubricTraceStep(event: RunEvent): RunTraceStep {
   };
 }
 
+export const RUBRIC_REVISING_ACTIVITY = "质检未通过，正在修订";
+
 /** Live activity line while the reply passes (or fails) the quality gate. */
 export function rubricActivity(event: RunEvent): string {
   if (event.type === "rubric_start") return "质检中";
   const result = String(event.payload.result ?? "");
   if (result === "satisfied") return "质检通过";
-  if (result === "needs_revision") return "质检未通过，正在修订";
+  if (result === "needs_revision") return RUBRIC_REVISING_ACTIVITY;
   if (result === "grader_error" || result === "failed") return "质检失败";
   return "质检未通过";
 }
@@ -205,17 +242,20 @@ export function describeToolStep(payload: Record<string, unknown>): string {
 /** Latest tool activity in the current attempt; cleared when the model speaks. */
 export function activityFromEvents(events: RunEvent[]): string {
   let activity = "";
+  let revising = false;
   for (const event of attemptEvents(events)) {
     if (event.type === "tool_call") {
       activity = describeToolCall(event.payload);
     } else if (event.type === "rubric_start" || event.type === "rubric_result") {
       activity = rubricActivity(event);
-    } else if (
-      event.type === "browser_action" ||
-      event.type === "assistant_delta" ||
-      event.type === "reasoning_delta"
-    ) {
+    } else if (event.type === "assistant_replace") {
+      // The draft is kept on screen while the revision streams, so the
+      // "质检未通过，正在修订" line stays visible for the whole revision.
+      revising = String(event.payload.text ?? "") === "";
+    } else if (event.type === "browser_action" || event.type === "reasoning_delta") {
       activity = "";
+    } else if (event.type === "assistant_delta") {
+      activity = revising ? RUBRIC_REVISING_ACTIVITY : "";
     }
   }
   return activity;
