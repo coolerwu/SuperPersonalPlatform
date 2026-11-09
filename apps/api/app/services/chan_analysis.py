@@ -245,9 +245,9 @@ def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     reported, because the structure is still unfinished at the sample end.
     After a zone the next candidate starts two strokes later, so the leaving
     stroke becomes the entry of the next zone instead of turning two zones
-    into one continuous block. ``start_time`` is the entering stroke's start
-    so the drawn box covers the structure's entry, while ZG/ZD still come from
-    the three center strokes.
+    into one continuous block. The drawn box runs from the first center
+    stroke's start to the leaving stroke's end, so the zone's lifetime covers
+    the departure itself; consecutive boxes share that boundary.
     """
     zones: list[dict[str, Any]] = []
     index = 1  # strokes[index - 1] is the entering stroke
@@ -275,8 +275,8 @@ def find_zones(strokes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             break
         zones.append(
             {
-                "start_time": int(strokes[index - 1]["start_time"]),
-                "end_time": int(strokes[end]["end_time"]),
+                "start_time": int(strokes[index]["start_time"]),
+                "end_time": int(strokes[exit_index]["end_time"]),
                 "zg": zg,
                 "zd": zd,
                 "entry_stroke": index - 1,
@@ -570,7 +570,7 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
                 "离开段要收在 ZG 上方或 ZD 下方，且下一笔不回到中枢；"
                 "刺穿后回到中枢的笔算延伸；"
                 "ZG=三笔高点最小值，ZD=三笔低点最大值；"
-                "中枢框从进入段起点画到最后一笔中枢终点"
+                "中枢框从第一笔中枢笔的起点画到离开段终点"
             ),
             "point_rule": (
                 "笔级别近似：1 买卖用 MACD 面积背驰，2 买卖回踩不破，"

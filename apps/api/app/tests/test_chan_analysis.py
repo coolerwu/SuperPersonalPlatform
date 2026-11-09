@@ -222,9 +222,10 @@ def test_find_zones_and_extension() -> None:
     assert zones[0]["start_stroke"] == 1
     assert zones[0]["end_stroke"] == 4
     assert zones[0]["exit_stroke"] == 5
-    # The box starts at the entering stroke so the structure entry is covered.
-    assert zones[0]["start_time"] == strokes[0]["start_time"]
-    assert zones[0]["end_time"] == strokes[4]["end_time"]
+    # The box runs from the first center stroke's start to the leaving
+    # stroke's end.
+    assert zones[0]["start_time"] == strokes[1]["start_time"]
+    assert zones[0]["end_time"] == strokes[5]["end_time"]
 
 
 def test_zones_need_an_entry_stroke() -> None:
@@ -263,7 +264,7 @@ def test_zones_need_a_confirmed_exit() -> None:
 
 def test_breakdown_stroke_is_the_exit_not_an_extension() -> None:
     # A stroke can start inside the zone and end below ZD. That is the leaving
-    # stroke, not another center stroke; the box must stop before it.
+    # stroke, not another center stroke; the box covers it up to its end.
     strokes = [
         _stroke(1, 2, 30, 10),
         _stroke(2, 3, 10, 20),
@@ -278,7 +279,7 @@ def test_breakdown_stroke_is_the_exit_not_an_extension() -> None:
     assert len(zones) == 1
     assert zones[0]["end_stroke"] == 5
     assert zones[0]["exit_stroke"] == 6
-    assert zones[0]["end_time"] == strokes[5]["end_time"]
+    assert zones[0]["end_time"] == strokes[6]["end_time"]
 
 
 def test_fake_breakout_extends_the_zone() -> None:
@@ -322,7 +323,9 @@ def test_adjacent_zones_each_have_their_own_entry() -> None:
     assert zones[1]["entry_stroke"] == 5
     assert zones[1]["start_stroke"] == 6
     assert zones[1]["start_stroke"] > zones[0]["end_stroke"]
-    assert zones[1]["start_time"] == strokes[zones[1]["entry_stroke"]]["start_time"]
+    assert zones[1]["start_time"] == strokes[zones[1]["start_stroke"]]["start_time"]
+    # The leaving stroke closes one box and opens the next: no gaps.
+    assert zones[0]["end_time"] == zones[1]["start_time"]
     assert zones[1]["zg"] == pytest.approx(25)
     assert zones[1]["zd"] == pytest.approx(24)
 
