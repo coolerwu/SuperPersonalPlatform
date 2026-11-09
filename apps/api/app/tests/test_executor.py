@@ -612,7 +612,7 @@ async def test_executor_drops_messages_emitted_while_grading(tmp_path, monkeypat
     class FakeAgent:
         async def astream(self, _state, config=None, *, stream_mode=None, subgraphs=False):
             yield ((), "messages", (AIMessageChunk(content="answer"), {}))
-            yield ((), "custom", {"type": "rubric_evaluation_start"})
+            yield ((), "custom", {"type": "rubric_evaluation_start", "iteration": 0})
             yield ((), "messages", (AIMessageChunk(content="GRADER"), {}))
             yield (
                 (),
@@ -642,6 +642,9 @@ async def test_executor_drops_messages_emitted_while_grading(tmp_path, monkeypat
     assert [
         event.payload["delta"] for event in events if event.type == "assistant_delta"
     ] == ["answer"]
+    assert [
+        event.payload for event in events if event.type == "rubric_start"
+    ] == [{"iteration": 0}]
     completed = [event for event in events if event.type == "run_completed"]
     assert completed[0].payload["output"] == "answer"
 

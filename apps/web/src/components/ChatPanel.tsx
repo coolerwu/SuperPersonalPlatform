@@ -251,12 +251,10 @@ function RunTrace({
             const failedCheck =
               step.result === "grader_error" || step.result === "failed";
             const label = step.passed
-              ? `校验 ${step.iteration + 1} 通过`
+              ? "质检通过"
               : failedCheck
-                ? `校验 ${step.iteration + 1} 失败`
-                : step.result === "max_iterations_reached"
-                  ? `校验 ${step.iteration + 1} 仍未通过`
-                  : `校验 ${step.iteration + 1} 未通过`;
+                ? "质检失败"
+                : "质检未通过";
             const count = failedCheck
               ? "评分器未返回结果"
               : `${step.failed}/${step.total} 项未通过`;

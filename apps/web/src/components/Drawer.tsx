@@ -54,8 +54,9 @@ function eventText(event: RunEvent): string {
         ? `达到执行步骤上限（${limit}），已自动续跑`
         : `达到执行步骤上限（${limit}），已生成进展总结`;
     }
+    case "rubric_start":
+      return "质检中：正在核对回复";
     case "rubric_result": {
-      const iteration = Number(payload.iteration ?? 0) + 1;
       const result = String(payload.result ?? "");
       const total = Number(payload.total ?? 0);
       const failed = Number(payload.failed ?? 0);
@@ -65,16 +66,14 @@ function eventText(event: RunEvent): string {
           ? "通过"
           : result === "needs_revision"
             ? "未通过，将修订"
-            : result === "max_iterations_reached"
-              ? "修订后仍未通过"
-              : failedCheck
-                ? "评分失败"
-                : result || "未知";
+            : failedCheck
+              ? "评分失败"
+              : "未通过";
       const suffix = failedCheck ? "" : `（${failed}/${total} 项未通过）`;
-      return `第 ${iteration} 次校验：${label}${suffix}`;
+      return `质检：${label}${suffix}`;
     }
     case "assistant_replace":
-      return "校验未通过，开始输出修订版";
+      return "质检未通过，开始输出修订版";
     case "run_completed":
       return `completed: ${truncate(String(payload.output ?? ""), 180)}`;
     case "run_failed": {

@@ -21,6 +21,7 @@ import {
   attemptText,
   buildRunTrace,
   describeToolCall,
+  rubricActivity,
   rubricTraceStep,
   toolTraceStep,
   type RunTraceStep,
@@ -839,9 +840,11 @@ export default function App() {
         next.activity = "";
         if (session.notice === RECONNECT_NOTICE) next.notice = "";
       } else if (event.type === "assistant_replace") {
-        // A rubric revision replaces everything streamed for this run.
-        next.streamText = String(event.payload.text ?? "");
-        next.activity = "";
+        // A rubric revision replaces everything streamed for this run. The
+        // empty replacement keeps the "质检未通过，正在修订" activity line.
+        const text = String(event.payload.text ?? "");
+        next.streamText = text;
+        if (text) next.activity = "";
         if (session.notice === RECONNECT_NOTICE) next.notice = "";
       } else if (event.type === "reasoning_delta") {
         const delta = String(event.payload.delta ?? "");
@@ -852,8 +855,11 @@ export default function App() {
       } else if (event.type === "tool_call") {
         next.trace = [...session.trace, toolTraceStep(event)];
         next.activity = describeToolCall(event.payload);
+      } else if (event.type === "rubric_start") {
+        next.activity = rubricActivity(event);
       } else if (event.type === "rubric_result") {
         next.trace = [...session.trace, rubricTraceStep(event)];
+        next.activity = rubricActivity(event);
       } else if (event.type === "browser_action") {
         // The tool finished; the next model step decides the next activity.
         next.activity = "";

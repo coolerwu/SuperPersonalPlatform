@@ -389,12 +389,13 @@ class DeepAgentExecutor:
 
     async def run(self, *, instructions: str, session_id: str, content: RunContent) -> AsyncIterator[ExecutorEvent]:
         try:
-            from deepagents import RubricMiddleware, create_deep_agent
+            from deepagents import create_deep_agent
             from langchain_openai import ChatOpenAI
             from langchain_quickjs import CodeInterpreterMiddleware
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             from langgraph.errors import GraphRecursionError
 
+            from app.services.rubric import RUBRIC_MAX_ITERATIONS, build_rubric_middleware
             from app.services.skill_middleware import AgentSkillsMiddleware
 
             class ReasoningChatOpenAI(ModelRetryMixin, ChatOpenAI):
@@ -502,7 +503,7 @@ class DeepAgentExecutor:
                     # The grader forces tool use for structured output, which
                     # this provider rejects while thinking mode is on.
                     middleware.append(
-                        RubricMiddleware(
+                        build_rubric_middleware(
                             model=ChatOpenAI(
                                 api_key=self.provider.api_key,
                                 base_url=self.provider.base_url,
@@ -512,7 +513,7 @@ class DeepAgentExecutor:
                                 extra_body={"thinking": {"type": "disabled"}},
                             ),
                             tools=grader_tools,
-                            max_iterations=2,
+                            max_iterations=RUBRIC_MAX_ITERATIONS,
                         )
                     )
                 # The model class owns retries (including subagents and the
@@ -692,6 +693,9 @@ class DeepAgentExecutor:
                 if isinstance(data, dict):
                     if data.get("type") == "rubric_evaluation_start":
                         grading = True
+                        yield ExecutorEvent(
+                            "rubric_start", {"iteration": data.get("iteration")}
+                        )
                     elif data.get("type") == "rubric_evaluation_end":
                         grading = False
                         criteria = data.get("criteria")

@@ -88,6 +88,16 @@ export function rubricTraceStep(event: RunEvent): RunTraceStep {
   };
 }
 
+/** Live activity line while the reply passes (or fails) the quality gate. */
+export function rubricActivity(event: RunEvent): string {
+  if (event.type === "rubric_start") return "质检中";
+  const result = String(event.payload.result ?? "");
+  if (result === "satisfied") return "质检通过";
+  if (result === "needs_revision") return "质检未通过，正在修订";
+  if (result === "grader_error" || result === "failed") return "质检失败";
+  return "质检未通过";
+}
+
 /** Reasoning and tool calls in the order they were emitted for one attempt. */
 export function buildRunTrace(events: RunEvent[]): RunTraceStep[] {
   let trace: RunTraceStep[] = [];
@@ -198,6 +208,8 @@ export function activityFromEvents(events: RunEvent[]): string {
   for (const event of attemptEvents(events)) {
     if (event.type === "tool_call") {
       activity = describeToolCall(event.payload);
+    } else if (event.type === "rubric_start" || event.type === "rubric_result") {
+      activity = rubricActivity(event);
     } else if (
       event.type === "browser_action" ||
       event.type === "assistant_delta" ||

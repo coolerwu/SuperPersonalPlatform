@@ -3090,16 +3090,17 @@ F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际�
 #### 功能点
 
 1. 网页聊天（`source=manual|retry`）在有 user memory 时，`RunWorker` 用当前 Agent 的 instructions 和全部 user scope 记忆（不截断，不含 agent 记忆）拼成 rubric，通过 `input_state["rubric"]` 传给 deepagents 的 `RubricMiddleware`；没有 user memory 时不挂载。
-2. 中间件使用独立的评分模型（`temperature=0`，关闭 thinking，因为 provider 在 thinking 模式下拒绝强制 `tool_choice`），并挂 `session_search` / `session_read` 供评分器核对被截断的历史对话；`max_iterations=2`：首次不通过时注入一次修订，修订版替换草稿并作为最终 output，修订后再评分确认，不启动第二次修订。
-3. 评分器运行期间产生的 `messages` 流用 `rubric_evaluation_start` / `rubric_evaluation_end` 夹住过滤，不进入聊天。
-4. 每次评分写成 `rubric_result` 事件（iteration、result、通过/未通过数、未通过项和 gap），前端在助手消息的「执行过程」里按顺序展示两次校验，未通过项可展开。
+2. 中间件使用独立的评分模型（`temperature=0`，关闭 thinking，因为 provider 在 thinking 模式下拒绝强制 `tool_choice`），并挂 `session_search` / `session_read` 供评分器核对被截断的历史对话。平台在 `app/services/rubric.py` 中构造 `RubricMiddleware` 子类并保持 `max_iterations=2`：草稿结束评分一次，首次不通过时注入一次修订，修订版直接作为最终 output，不再二次评分；修订后自然停止时子类跳过评分并把评分状态标为终结（上游按评分次数计数，否则每条回复都会评分两次，最后仍被标成 `max_iterations_reached`）。
+3. 评分器运行期间产生的 `messages` 流用 `rubric_evaluation_start` / `rubric_evaluation_end` 夹住过滤，不进入聊天；开始评分时另写 `rubric_start` 事件（iteration），前端据此显示「质检中」。
+4. 每次评分写成 `rubric_result` 事件（iteration、result、通过/未通过数、未通过项和 gap），前端在助手消息的「执行过程」里展示质检结果，未通过项可展开；聊天活动行在评分期间显示「质检中」，未通过后显示「质检未通过，正在修订」，修订版替换草稿后直接输出。
 
 #### 验收标准
 
 - 有用户记忆时每条网页聊天最终回复都会校验一次；没有用户记忆时不挂载。
 - rubric 包含 instructions 和全部 user 记忆，agent 记忆不进入 rubric。
-- 评分未通过时先显示一次修订版，持久化消息与 Run output 一致。
-- 第一次和第二次评分都出现在「执行过程」里，未通过项可以展开。
+- 评分未通过时只评分一次：注入一次修订，修订版直接作为最终 output，不再二次评分，也不在最后标记 `max_iterations_reached`。
+- 评分期间聊天活动行显示「质检中」；未通过时显示「质检未通过，正在修订」，修订版替换草稿后输出。
+- 评分结果出现在「执行过程」里，未通过项可以展开。
 - 评分器的输出不出现在聊天流里。
 - 后端测试与前端构建通过。
 
