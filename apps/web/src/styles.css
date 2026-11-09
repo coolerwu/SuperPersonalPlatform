@@ -6031,6 +6031,8 @@ body:has(.app-shell.pearl) .select-empty {
 .chan-legend .dot.top { background: #b91c1c; }
 .chan-legend .dot.bottom { background: #0f766e; }
 .chan-legend .dot.stroke { background: #5b4bf0; }
+.chan-legend .dot.pending { background: transparent; border: 1px dashed rgba(91, 75, 240, 0.55); }
+.chan-legend .dot.broken { background: #9ca3af; }
 .chan-legend .dot.zone { background: transparent; border: 1px dashed #5b4bf0; }
 
 .chan-chart {

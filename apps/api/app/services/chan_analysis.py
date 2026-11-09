@@ -216,6 +216,77 @@ def build_strokes(
     return strokes
 
 
+def _segment(
+    start_time: int,
+    start_price: float,
+    end_time: int,
+    end_price: float,
+    direction: str,
+) -> dict[str, Any]:
+    return {
+        "start_time": int(start_time),
+        "start_price": float(start_price),
+        "end_time": int(end_time),
+        "end_price": float(end_price),
+        "direction": direction,
+        "high": max(float(start_price), float(end_price)),
+        "low": min(float(start_price), float(end_price)),
+    }
+
+
+def build_pending_strokes(
+    strokes: list[dict[str, Any]],
+    bars: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the unconfirmed strokes after the last confirmed one.
+
+    The first segment extends the last stroke to a same-direction extreme that
+    has no confirmed fractal yet; the second follows the reversal from that
+    effective end. Both are display-only: they never feed zones, divergence or
+    buy/sell points, and they do not change ``stroke_count``.
+    """
+    if not strokes:
+        return []
+    pending: list[dict[str, Any]] = []
+    start_time = int(strokes[-1]["end_time"])
+    start_price = float(strokes[-1]["end_price"])
+    direction = strokes[-1]["direction"]
+    tail = [bar for bar in bars if int(bar["time"]) > start_time]
+    if not tail:
+        return []
+    if direction == "up":
+        high_bar = max(tail, key=lambda bar: (float(bar["high"]), int(bar["time"])))
+        if float(high_bar["high"]) > start_price:
+            pending.append(
+                _segment(start_time, start_price, int(high_bar["time"]), float(high_bar["high"]), "up")
+            )
+            start_time = int(high_bar["time"])
+            start_price = float(high_bar["high"])
+        rest = [bar for bar in tail if int(bar["time"]) > start_time]
+        if rest:
+            low_bar = min(rest, key=lambda bar: (float(bar["low"]), -int(bar["time"])))
+            if float(low_bar["low"]) < start_price:
+                pending.append(
+                    _segment(start_time, start_price, int(low_bar["time"]), float(low_bar["low"]), "down")
+                )
+    else:
+        low_bar = min(tail, key=lambda bar: (float(bar["low"]), -int(bar["time"])))
+        if float(low_bar["low"]) < start_price:
+            pending.append(
+                _segment(start_time, start_price, int(low_bar["time"]), float(low_bar["low"]), "down")
+            )
+            start_time = int(low_bar["time"])
+            start_price = float(low_bar["low"])
+        rest = [bar for bar in tail if int(bar["time"]) > start_time]
+        if rest:
+            high_bar = max(rest, key=lambda bar: (float(bar["high"]), int(bar["time"])))
+            if float(high_bar["high"]) > start_price:
+                pending.append(
+                    _segment(start_time, start_price, int(high_bar["time"]), float(high_bar["high"]), "up")
+                )
+    return pending
+
+
 def _leaves_zone(stroke: dict[str, Any], zg: float, zd: float) -> str | None:
     """Return the side a stroke ends outside the zone, if it does."""
     end = float(stroke["end_price"])
@@ -399,21 +470,22 @@ def find_buy_sell_points(
     points: list[dict[str, Any]] = []
     used: set[tuple[int, float]] = set()
 
-    def add(kind: str, index: int, reason: str) -> None:
+    def add(kind: str, index: int, reason: str, *, ref_price: float | None = None) -> None:
         stroke = strokes[index]
         key = (int(stroke["end_time"]), round(float(stroke["end_price"]), 10))
         if key in used:
             return
         used.add(key)
-        points.append(
-            {
-                "type": kind,
-                "time": int(stroke["end_time"]),
-                "price": float(stroke["end_price"]),
-                "stroke_index": index,
-                "reason": reason,
-            }
-        )
+        entry: dict[str, Any] = {
+            "type": kind,
+            "time": int(stroke["end_time"]),
+            "price": float(stroke["end_price"]),
+            "stroke_index": index,
+            "reason": reason,
+        }
+        if ref_price is not None:
+            entry["ref_price"] = float(ref_price)
+        points.append(entry)
 
     if divergences is None:
         divergences = find_divergences(strokes, macd_areas)
@@ -431,7 +503,7 @@ def find_buy_sell_points(
             if stroke["direction"] != "down":
                 continue
             if float(stroke["end_price"]) > float(point["price"]):
-                add("2buy", index, f"1 买后回踩不破 {point['price']}")
+                add("2buy", index, f"1 买后回踩不破 {point['price']}", ref_price=float(point["price"]))
                 break
 
     for point in [item for item in points if item["type"] == "1sell"]:
@@ -440,7 +512,7 @@ def find_buy_sell_points(
             if stroke["direction"] != "up":
                 continue
             if float(stroke["end_price"]) < float(point["price"]):
-                add("2sell", index, f"1 卖后反抽不破 {point['price']}")
+                add("2sell", index, f"1 卖后反抽不破 {point['price']}", ref_price=float(point["price"]))
                 break
 
     for zone in zones:
@@ -458,17 +530,56 @@ def find_buy_sell_points(
                 and following["direction"] == "down"
                 and float(following["end_price"]) > float(zone["zg"])
             ):
-                add("3buy", exit_index + 1, "离开中枢后回踩不进入 ZG")
+                add("3buy", exit_index + 1, "离开中枢后回踩不进入 ZG", ref_price=float(zone["zg"]))
         elif exit_stroke["direction"] == "down":
             if (
                 float(exit_stroke["end_price"]) < float(zone["zd"])
                 and following["direction"] == "up"
                 and float(following["end_price"]) < float(zone["zd"])
             ):
-                add("3sell", exit_index + 1, "离开中枢后反抽不进入 ZD")
+                add("3sell", exit_index + 1, "离开中枢后反抽不进入 ZD", ref_price=float(zone["zd"]))
 
     points.sort(key=lambda item: int(item["time"]))
     return points[:40]
+
+
+def mark_broken_points(
+    points: list[dict[str, Any]],
+    bars: list[dict[str, Any]],
+) -> None:
+    """Flag buy/sell points that later price action invalidated.
+
+    A buy point breaks when a later low prints below its reference price (its
+    own price, the first buy it trails, or the zone's ZG); a sell point breaks
+    when a later high prints above the matching reference. The point stays in
+    the list so the history is visible, but ``broken`` tells the page to grey
+    it out.
+    """
+    for point in points:
+        later = [bar for bar in bars if int(bar["time"]) > int(point["time"])]
+        if not later:
+            point["broken"] = False
+            continue
+        threshold = float(point.get("ref_price", point["price"]))
+        if str(point["type"]).endswith("buy"):
+            bar = min(later, key=lambda item: float(item["low"]))
+            if float(bar["low"]) < threshold:
+                point.update(
+                    broken=True,
+                    broken_time=int(bar["time"]),
+                    broken_price=float(bar["low"]),
+                )
+                continue
+        else:
+            bar = max(later, key=lambda item: float(item["high"]))
+            if float(bar["high"]) > threshold:
+                point.update(
+                    broken=True,
+                    broken_time=int(bar["time"]),
+                    broken_price=float(bar["high"]),
+                )
+                continue
+        point["broken"] = False
 
 
 def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
@@ -506,6 +617,8 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
         dict(zip(macd_times, dif_values)),
     )
     points = find_buy_sell_points(strokes, zones, macd_areas, divergences)
+    mark_broken_points(points, bars)
+    pending_strokes = build_pending_strokes(strokes, bars)
     used_fractals = {
         (int(stroke["start_time"]), float(stroke["start_price"])) for stroke in strokes
     } | {
@@ -544,6 +657,7 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
         ],
         "fractals": fractals,
         "strokes": strokes,
+        "pending_strokes": pending_strokes,
         "zones": zones,
         "points": points,
         "macd": {
@@ -565,6 +679,10 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
                 "只有最后一笔会延伸到更极端的同向分型；未成笔分型不标注"
             ),
             "fractal_rule": "三根合并 K 线严格顶/底",
+            "pending_rule": (
+                "最后一笔之后尚未确认的走势用虚线显示：先延伸到最后同向极值，"
+                "再连到随后反向极值；不计入笔数，不参与中枢、背离和买卖点"
+            ),
             "zone_rule": (
                 "进入段 + 连续三笔重叠 + 确认离开段；"
                 "离开段要收在 ZG 上方或 ZD 下方，且下一笔不回到中枢；"
@@ -574,7 +692,8 @@ def analyze_frame(frame: pd.DataFrame) -> dict[str, Any]:
             ),
             "point_rule": (
                 "笔级别近似：1 买卖用 MACD 面积背驰，2 买卖回踩不破，"
-                "3 买卖取离开中枢后的第一笔回抽且不重新进入 ZG/ZD"
+                "3 买卖取离开中枢后的第一笔回抽且不重新进入 ZG/ZD；"
+                "后续价格跌破/突破参照价后标记为已失效"
             ),
             "divergence_rule": (
                 f"同向笔（间隔一笔）比较：价格创新低/高但 MACD 柱面积收缩到前一同向笔的 "

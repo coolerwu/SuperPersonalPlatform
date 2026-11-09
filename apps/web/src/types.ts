@@ -558,6 +558,10 @@ export type ChanPoint = {
   price: number;
   stroke_index: number;
   reason: string;
+  ref_price?: number;
+  broken?: boolean;
+  broken_time?: number;
+  broken_price?: number;
 };
 
 export type ChanMacdPoint = {
@@ -591,6 +595,7 @@ export type ChanRules = {
   bi_min_span: number;
   bi_rule: string;
   fractal_rule: string;
+  pending_rule?: string;
   zone_rule: string;
   point_rule: string;
   divergence_rule?: string;
@@ -614,6 +619,7 @@ export type ChanAnalysis = {
   merged: ChanMergedBar[];
   fractals: ChanFractal[];
   strokes: ChanStroke[];
+  pending_strokes?: ChanStroke[];
   zones: ChanZone[];
   points: ChanPoint[];
   macd: ChanMacd;

@@ -6,11 +6,13 @@ import pytest
 from app.services.chan_analysis import (
     ChanError,
     analyze_frame,
+    build_pending_strokes,
     build_strokes,
     find_buy_sell_points,
     find_divergences,
     find_fractals,
     find_zones,
+    mark_broken_points,
     merge_inclusions,
 )
 
@@ -330,6 +332,50 @@ def test_adjacent_zones_each_have_their_own_entry() -> None:
     assert zones[1]["zd"] == pytest.approx(24)
 
 
+def test_build_pending_strokes_follows_the_unconfirmed_move() -> None:
+    strokes = [
+        {
+            "start_time": 1,
+            "start_price": 10,
+            "end_time": 5,
+            "end_price": 20,
+            "direction": "up",
+            "high": 20,
+            "low": 10,
+        }
+    ]
+    reverse = build_pending_strokes(strokes, [_bar(6, 18, 15), _bar(7, 17, 10)])
+    assert len(reverse) == 1
+    assert reverse[0]["direction"] == "down"
+    assert reverse[0]["end_price"] == pytest.approx(10)
+
+    extended = build_pending_strokes(strokes, [_bar(6, 25, 19), _bar(7, 22, 18)])
+    assert [(item["direction"], item["end_price"]) for item in extended] == [
+        ("up", 25),
+        ("down", 18),
+    ]
+    assert build_pending_strokes(strokes, [_bar(5, 30, 1)]) == []
+
+
+def test_mark_broken_points_uses_the_reference_price() -> None:
+    bars = [_bar(1, 105, 95), _bar(2, 108, 98), _bar(3, 107, 97), _bar(4, 112, 90), _bar(5, 106, 94)]
+    points = [
+        {"type": "1buy", "time": 2, "price": 100},
+        {"type": "1sell", "time": 2, "price": 110},
+        {"type": "2buy", "time": 2, "price": 105, "ref_price": 100},
+        {"type": "2sell", "time": 2, "price": 108, "ref_price": 112},
+        {"type": "3buy", "time": 1, "price": 104, "ref_price": 103},
+    ]
+    mark_broken_points(points, bars)
+    assert points[0]["broken"] is True
+    assert points[0]["broken_price"] == pytest.approx(90)
+    assert points[1]["broken"] is True
+    assert points[1]["broken_price"] == pytest.approx(112)
+    assert points[2]["broken"] is True
+    assert points[3]["broken"] is False
+    assert points[4]["broken"] is True
+
+
 def test_analyze_frame_shape_and_rules() -> None:
     times = pd.date_range("2026-01-01", periods=80, freq="h", tz="UTC")
     rows = []
@@ -353,8 +399,10 @@ def test_analyze_frame_shape_and_rules() -> None:
     assert isinstance(result["fractals"], list)
     assert all("used" in fractal for fractal in result["fractals"])
     assert isinstance(result["strokes"], list)
+    assert isinstance(result["pending_strokes"], list)
     assert isinstance(result["zones"], list)
     assert isinstance(result["points"], list)
+    assert all("broken" in point for point in result["points"])
     assert result["rules"]["buy_sell_points"] is True
     assert result["macd"]["params"] == {"fast": 12, "slow": 26, "signal": 9}
     assert len(result["macd"]["series"]) == result["bars"]

@@ -84,13 +84,24 @@ def _format(result: dict) -> str:
                 f"{_time(stroke.get('end_time'))} {_price(stroke.get('end_price'))}"
             )
 
+    pending = result.get("pending_strokes") or []
+    if pending:
+        lines.append("\n### 未完成走势（虚线，未确认）")
+        for stroke in pending:
+            direction = "向上" if stroke.get("direction") == "up" else "向下"
+            lines.append(
+                f"- {direction}：{_time(stroke.get('start_time'))} {_price(stroke.get('start_price'))} → "
+                f"{_time(stroke.get('end_time'))} {_price(stroke.get('end_price'))}"
+            )
+
     points = result.get("points") or []
     if points:
         lines.append("\n### 买卖点")
         for point in points[:MAX_POINTS]:
+            broken = "；已失效" if point.get("broken") else ""
             lines.append(
                 f"- {POINT_LABELS.get(str(point.get('type')), point.get('type'))}："
-                f"{_time(point.get('time'))} {_price(point.get('price'))}；{point.get('reason')}"
+                f"{_time(point.get('time'))} {_price(point.get('price'))}；{point.get('reason')}{broken}"
             )
         if len(points) > MAX_POINTS:
             lines.append(f"- 还有 {len(points) - MAX_POINTS} 个买卖点未列出")

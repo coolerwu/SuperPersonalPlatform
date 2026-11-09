@@ -247,8 +247,12 @@ export function ChanPage() {
                     <p>
                       {formatUtc(analysis.start_ms)} → {formatUtc(analysis.end_ms)} ·{" "}
                       {analysis.bars} 根原始 K 线 · {analysis.merged_bars} 根合并 K 线 ·{" "}
-                      {analysis.fractals.length} 个分型 · {analysis.strokes.length} 笔 ·{" "}
-                      {analysis.zones.length} 个中枢 · {analysis.points.length} 个买卖点 ·{" "}
+                      {analysis.fractals.length} 个分型 · {analysis.strokes.length} 笔
+                      {(analysis.pending_strokes?.length ?? 0) > 0 ? "（含未完成）" : ""} ·{" "}
+                      {analysis.zones.length} 个中枢 ·{" "}
+                      {analysis.points.filter((point) => point.broken).length > 0
+                        ? `${analysis.points.length} 个买卖点（${analysis.points.filter((point) => point.broken).length} 个已失效）`
+                        : `${analysis.points.length} 个买卖点`} ·{" "}
                       {analysis.divergence_count ?? analysis.divergences?.length ?? 0} 个 MACD 背离
                     </p>
                   </div>
@@ -259,9 +263,11 @@ export function ChanPage() {
                   <span><i className="dot merged" />合并 K 线</span>
                   <span><i className="dot top" />笔端点分型</span>
                   <span><i className="dot stroke" />笔</span>
+                  <span><i className="dot pending" />未完成走势</span>
                   <span><i className="dot zone" />中枢</span>
                   <span><i className="dot buy" />买点</span>
                   <span><i className="dot sell" />卖点</span>
+                  <span><i className="dot broken" />已失效</span>
                   <span><i className="dot dif" />DIF</span>
                   <span><i className="dot dea" />DEA</span>
                   <span><i className="dot hist-up" />MACD 柱</span>
@@ -299,6 +305,7 @@ export function ChanPage() {
                   <div><dt>包含处理</dt><dd>按当前方向合并，向上取高高，向下取低低。</dd></div>
                   <div><dt>分型</dt><dd>{analysis.rules.fractal_rule}</dd></div>
                   <div><dt>笔</dt><dd>{analysis.rules.bi_rule}</dd></div>
+                  <div><dt>未完成走势</dt><dd>{analysis.rules.pending_rule ?? "最后一笔之后的未确认走势用虚线显示，不计入笔数，不参与中枢、背离和买卖点。"}</dd></div>
                   <div><dt>中枢</dt><dd>{analysis.rules.zone_rule}</dd></div>
                   <div><dt>买卖点</dt><dd>{analysis.rules.point_rule}</dd></div>
                   <div><dt>MACD 背离</dt><dd>{analysis.rules.divergence_rule ?? "同向笔比较 MACD 柱面积，价格创新高/低但面积收缩记为顶/底背离。"}</dd></div>

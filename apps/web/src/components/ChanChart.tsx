@@ -179,6 +179,31 @@ export function ChanChart({
       strokeSeries.setData(points);
     }
 
+    if (showStrokes && (analysis.pending_strokes?.length ?? 0) > 0) {
+      const pendingSeries = chart.addLineSeries({
+        color: "rgba(91, 75, 240, 0.55)",
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      const pendingPoints: { time: UTCTimestamp; value: number }[] = [];
+      const seenPending = new Set<number>();
+      for (const stroke of analysis.pending_strokes ?? []) {
+        for (const [time, value] of [
+          [stroke.start_time, stroke.start_price],
+          [stroke.end_time, stroke.end_price],
+        ] as const) {
+          if (seenPending.has(time)) continue;
+          seenPending.add(time);
+          pendingPoints.push({ time: seconds(time), value });
+        }
+      }
+      pendingPoints.sort((left, right) => Number(left.time) - Number(right.time));
+      pendingSeries.setData(pendingPoints);
+    }
+
     const drawZones = () => {
       const rect = container.getBoundingClientRect();
       const ratio = window.devicePixelRatio || 1;
@@ -226,7 +251,7 @@ export function ChanChart({
         markers.push({
           time: seconds(point.time),
           position: style.buy ? "belowBar" : "aboveBar",
-          color: style.color,
+          color: point.broken ? "#9ca3af" : style.color,
           shape: style.buy ? "arrowUp" : "arrowDown",
           text: style.text,
         });
