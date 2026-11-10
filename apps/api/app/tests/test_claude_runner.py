@@ -357,6 +357,63 @@ async def test_failure_evicts_client_for_next_turn(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_failed_result_evicts_client_for_next_turn(tmp_path):
+    await init_db()
+    first = FakeClient(
+        [
+            ResultMessage(
+                subtype="error",
+                terminal_reason="error",
+                result="boom",
+                is_error=True,
+            )
+        ]
+    )
+    second = FakeClient([ResultMessage(result="hello")])
+    clients = [first, second]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: clients.pop(0),
+    )
+    turn = make_turn(session_id="cccccccc-cccc-cccc-cccc-cccccccccccc")
+    failed = await runner.run(turn, TurnStream())
+    assert failed.status == "failed"
+    assert failed.error == "boom"
+    assert first.disconnected is True
+
+    completed = await runner.run(turn, TurnStream())
+    assert completed.status == "completed"
+    assert second.queries == ["hi"]
+    assert clients == []
+
+
+@pytest.mark.asyncio
+async def test_close_all_disconnects_cached_clients(tmp_path):
+    await init_db()
+    first = FakeClient([ResultMessage()])
+    second = FakeClient([ResultMessage()])
+    clients = [first, second]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: clients.pop(0),
+    )
+    await runner.run(
+        make_turn(session_id="dddddddd-dddd-dddd-dddd-dddddddddddd"), TurnStream()
+    )
+    await runner.run(
+        make_turn(session_id="eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"), TurnStream()
+    )
+    assert len(runner._clients) == 2
+
+    await runner.close_all()
+    assert first.disconnected is True
+    assert second.disconnected is True
+    assert runner._clients == {}
+
+
+@pytest.mark.asyncio
 async def test_cancellation_evicts_and_publishes_cancelled_end(tmp_path):
     await init_db()
     client = HangingClient()

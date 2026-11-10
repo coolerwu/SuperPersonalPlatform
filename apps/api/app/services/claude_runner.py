@@ -162,6 +162,10 @@ class ClaudeTurnRunner:
                         message, fallback_text="".join(text_parts)
                     )
                     result_received = True
+                    # The CLI exits after an error result, so a cached client
+                    # would only fail again on the next turn.
+                    if outcome.status != "completed":
+                        evict = True
                     break
         except TimeoutError:
             outcome = TurnOutcome(
@@ -185,7 +189,7 @@ class ClaudeTurnRunner:
             )
             evict = True
         finally:
-            if not result_received and not evict:
+            if not result_received:
                 evict = True
             # Publish teardown synchronously first: a later await must not be
             # able to delay or suppress the terminal event for subscribers.
@@ -202,21 +206,31 @@ class ClaudeTurnRunner:
             if evict:
                 try:
                     await asyncio.shield(self._evict(turn.session_id))
-                except BaseException:
-                    logger.warning(
-                        "client eviction failed session=%s",
-                        turn.session_id,
-                        exc_info=True,
-                    )
+                except BaseException as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        logger.warning(
+                            "client eviction cancelled session=%s", turn.session_id
+                        )
+                    else:
+                        logger.warning(
+                            "client eviction failed session=%s",
+                            turn.session_id,
+                            exc_info=True,
+                        )
             if lease_added:
                 try:
                     await turn_lease.remove(turn.session_id)
-                except BaseException:
-                    logger.warning(
-                        "failed to remove turn lease session=%s",
-                        turn.session_id,
-                        exc_info=True,
-                    )
+                except BaseException as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        logger.warning(
+                            "turn lease removal cancelled session=%s", turn.session_id
+                        )
+                    else:
+                        logger.warning(
+                            "failed to remove turn lease session=%s",
+                            turn.session_id,
+                            exc_info=True,
+                        )
         return outcome
 
     async def interrupt(self, session_id: str) -> bool:
