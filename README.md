@@ -8,7 +8,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`
 - 会话与消息由 SDK transcript 管理；平台配置在 `data/settings.json`；新库的 `app.db` 只创建 `audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions` 六张表（从旧版升级的库会保留未使用的旧表）
 
-本版明确不包含：工具层迁移（技能工具、`add_dirs`、MCP、浏览器/搜索/回测等工具接入 Agent）、rubric 质检、QuickJS eval、会话全文搜索、多 Agent 协作、刷新后继续看当前输出、消息时间戳、Run 历史。`langchain-core` 暂留，待工具层迁移后删除。
+本版明确不包含：工具层迁移（技能工具、`add_dirs`、MCP、浏览器/搜索/回测等工具接入 Agent）、rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、刷新后继续看当前输出、消息时间戳、Run 历史。`langchain-core` 暂留，待工具层迁移后删除。
 
 ## 运行时目录
 
@@ -93,7 +93,7 @@ npm run dev
 侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、渠道、定时、记忆；「平台」组放配置和退出登录。功能工作区放回测、交易记录、资产配置、缠论图，不显示 Agent 选择器和会话。
 
 - **技能**：列出全局技能库，按「系统技能」和「交互创建」分组，按当前 Agent 勾选/取消启用（立即保存）；启用列表本版只保存偏好，不门控工具。展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（删除技能目录并从所有 Agent 的启用列表移除）。
-- **工具**：如实展示当前接入状态。runner 未显式限制 `tools`，Agent 使用 Claude Code 默认工具集：Task、Bash、CronCreate/CronDelete/CronList、Edit、EnterWorktree/ExitWorktree、ListAgents、Monitor、NotebookEdit、Read、ReportFindings、ScheduleWakeup、SendMessage、Skill、TaskStop、WebFetch、WebSearch、Workflow、Write；平台工具与技能工具标记为未接入，等待工具层迁移。本版 Agent 不能调用平台注册表中的搜索、浏览器、回测、定时、交易记录、资产配置、缠论或知识库工具。
+- **工具**：如实展示当前接入状态。runner 未显式限制 `tools`，Agent 使用 Claude Code 默认工具集（以工具页/运行时 init frame 为准，随 bundled CLI 版本和插件环境变化；例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。WebFetch/WebSearch 是 Claude Code 自带工具，不代表平台注册表中的搜索/浏览器工具已接入；平台工具与技能工具标记为未接入，等待工具层迁移。本版 Agent 不能调用平台注册表中的搜索、浏览器、回测、定时、交易记录、资产配置、缠论或知识库工具。
 - 内置技能在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
 
 ### Skills 文件格式

@@ -69,8 +69,12 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
               <div>
                 <h2>Claude Code 默认工具集</h2>
                 <p>
-                  runner 未显式限制 tools，以下为 bundled CLI 实际默认启用的工具；
-                  文件类工具作用于当前 Agent 的工作区，Bash 没有沙箱。
+                  {data?.claude_code_note ??
+                    "Claude Code 默认工具集，随 bundled CLI 版本和插件环境变化，以运行时 init frame 为准。"}
+                </p>
+                <p>
+                  默认以工作区为起点，但没有沙箱或权限边界（Bash 同理）；
+                  访问工作区外路径可能触发授权。
                 </p>
               </div>
             </div>
@@ -102,7 +106,8 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
 
             <div className="hint">
               搜索、浏览器、回测、交易记录、资产配置、缠论和知识库工具都未接入 SDK；
-              本版 Agent 不会调用这些工具。
+              本版 Agent 不会调用这些工具。列表中的 Skill 是 Claude Code 自带工具，
+              不读取平台 skills/ 目录。
             </div>
             {error && <div className="error-banner">{error}</div>}
             {!data && !error && <div className="empty-note">读取中…</div>}

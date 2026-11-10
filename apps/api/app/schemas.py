@@ -127,6 +127,7 @@ class ToolsOut(BaseModel):
     platform_tools: list[ToolOut] = Field(default_factory=list)
     filesystem_tools: list[ToolOut] = Field(default_factory=list)
     skill_tools: list[ToolOut] = Field(default_factory=list)
+    claude_code_note: str = ""
 
 
 class CronJobCreate(BaseModel):

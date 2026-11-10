@@ -184,8 +184,9 @@ export function SkillsPage({
               <>
                 <div className="hint">
                   技能库：~/.super-personal-platform/skills。技能是文件说明，启用列表仅为后续工具层
-                  准备并保存到当前 Agent；本版技能工具与 skill_save 尚未接入 SDK，启用不会改变当前
-                  可用工具。Agent 可以在对话中用文件工具查看或修改 skills/ 下的 SKILL.md。
+                  准备并保存到当前 Agent；本版平台技能工具与 skill_save 尚未接入 SDK，启用不会改变
+                  当前可用工具。Claude Code 自带的 Skill 工具可用，但它不读取这里的平台技能库。
+                  Agent 可以在对话中用文件工具查看或修改 skills/ 下的 SKILL.md。
                 </div>
 
                 <div className="skill-group">

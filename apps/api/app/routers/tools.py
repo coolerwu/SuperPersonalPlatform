@@ -15,14 +15,18 @@ from app.services.skills import scan_skills
 router = APIRouter(prefix="/api/tools", tags=["tools"], dependencies=[Depends(require_auth)])
 
 # Claude Code's default built-in tool set. The runner does not set ``tools``,
-# so the bundled CLI enables this exact set (verified from the CLI init frame,
-# Claude Code 2.1.321). Skill/platform tools are not wired yet.
+# so the bundled CLI enables its own default set. The exact names drift with
+# the bundled CLI version and plugin environment (a local 2.1.321 init frame
+# returned 21 names, another environment returned DesignSync/ToolSearch too);
+# this constant is the known superset used for display, and the runtime init
+# frame is authoritative.
 CLAUDE_CODE_TOOLS = (
     ("Task", "派生子 Agent 执行任务"),
     ("Bash", "在宿主机执行命令；没有沙箱，工作目录是当前 Agent 工作区"),
     ("CronCreate", "Claude Code 自带的定时任务创建（与平台「定时」页面无关）"),
     ("CronDelete", "Claude Code 自带的定时任务删除"),
     ("CronList", "Claude Code 自带的定时任务列表"),
+    ("DesignSync", "Claude Code 内置工具（随 CLI 版本/插件环境提供）"),
     ("Edit", "精确替换文件片段"),
     ("EnterWorktree", "进入 git worktree"),
     ("ExitWorktree", "退出 git worktree"),
@@ -33,12 +37,18 @@ CLAUDE_CODE_TOOLS = (
     ("ReportFindings", "报告代码审查发现"),
     ("ScheduleWakeup", "安排稍后唤醒"),
     ("SendMessage", "向其他 Agent 或会话发送消息"),
-    ("Skill", "调用 Claude Code 技能"),
+    ("Skill", "调用 Claude Code 技能（不读取平台 skills/ 目录）"),
     ("TaskStop", "停止后台任务"),
+    ("ToolSearch", "搜索可用工具（Claude Code 内置）"),
     ("WebFetch", "抓取网页内容"),
     ("WebSearch", "搜索网页"),
     ("Workflow", "运行工作流"),
     ("Write", "创建或覆盖工作区文件"),
+)
+
+CLAUDE_CODE_TOOLS_NOTE = (
+    "Claude Code 默认工具集，随 bundled CLI 版本和插件环境变化，"
+    "以运行时 init frame 为准。"
 )
 
 # Static declaration: the SDK runtime does not expose platform tools yet.
@@ -93,4 +103,5 @@ async def list_tools() -> ToolsOut:
             for name, description in CLAUDE_CODE_TOOLS
         ],
         skill_tools=skill_tools,
+        claude_code_note=CLAUDE_CODE_TOOLS_NOTE,
     )

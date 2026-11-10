@@ -57,6 +57,7 @@ export type ToolsCatalog = {
   platform_tools: ToolInfo[];
   filesystem_tools: ToolInfo[];
   skill_tools: ToolInfo[];
+  claude_code_note: string;
 };
 
 export type Provider = {

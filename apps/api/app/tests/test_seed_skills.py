@@ -182,3 +182,40 @@ def test_seed_corrupt_state_keeps_retired_directory(tmp_path, monkeypatch) -> No
 
     assert target.read_text(encoding="utf-8") == original
     assert name not in _state(tmp_path)["skills"]
+
+
+def test_seed_retired_symlinked_directory_is_left_untouched(tmp_path, monkeypatch) -> None:
+    seed_default_skills(tmp_path)
+    name = "web-browser"
+    directory = tmp_path / name
+    real = tmp_path / "real-web-browser"
+    directory.rename(real)
+    directory.symlink_to(real, target_is_directory=True)
+    monkeypatch.delitem(DEFAULT_SKILLS, name)
+
+    seed_default_skills(tmp_path)
+
+    assert directory.is_symlink()
+    assert (real / "SKILL.md").is_file()
+    assert name not in _state(tmp_path)["skills"]
+
+
+def test_seed_retired_skill_md_symlink_is_unlinked_not_followed(
+    tmp_path, monkeypatch
+) -> None:
+    seed_default_skills(tmp_path)
+    name = "web-browser"
+    directory = tmp_path / name
+    target = directory / "SKILL.md"
+    external = tmp_path / "external.md"
+    external.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+    target.unlink()
+    target.symlink_to(external)
+    monkeypatch.delitem(DEFAULT_SKILLS, name)
+
+    seed_default_skills(tmp_path)
+
+    assert not target.exists()
+    assert external.is_file()
+    assert not directory.exists()
+    assert name not in _state(tmp_path)["skills"]

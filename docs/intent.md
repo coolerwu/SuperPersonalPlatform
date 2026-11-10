@@ -56,12 +56,12 @@
 
 - 单用户、自托管，不做多租户/RBAC。
 - 单进程部署；cron 与微信运行时都在 API 进程内，多 worker 会重复触发。
-- 不提供刷新后继续看当前输出、消息时间戳、会话全文搜索、Run 历史、rubric 质检、QuickJS eval、多 Agent 协作。
+- 不提供刷新后继续看当前输出、消息时间戳、会话全文搜索、Run 历史、rubric 质检、QuickJS eval、平台级多 Agent 编排或自定义子 Agent 配置；SDK 内置 Task 子 Agent 可用。
 - 平台写入的密钥存 `data/settings.json`（权限 0600）；`.env` 提供的密钥只读、不再回写。密钥不写日志、不返回前端。
 
 #### 非目标
 
-- 多 Agent 协作、自定义子 Agent 编排。
+- 平台级多 Agent 编排、自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）。
 - 事件触发、Webhook、主动推送。
 - 工具层迁移（技能工具、add_dirs、MCP、浏览器/搜索/回测工具接入 Agent）——下一版本。
 
@@ -217,7 +217,7 @@
 1. 技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `builtin` / `ai` / `manual`。
 2. 内置技能 seed：`web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。`.seed_state.json` 记录内置内容哈希：未修改的内置技能随版本更新；用户改过的保留；已从默认列表移除且未被修改的内置技能在启动 seed 时只删除被跟踪的 `SKILL.md`，目录内用户附加文件保留，只有目录为空时才移除目录；用户改过的保留并停止跟踪（例如旧 home 的 `memory-organizer`）。
 3. 技能页按「系统技能 / 交互创建」分组，可查看和编辑 SKILL.md、启用/停用；启用列表本版只保存偏好，不门控工具；非系统技能可删除（同时从所有 Agent 的启用列表移除）。
-4. 本版工具层未迁移：技能、`add_dirs`、MCP、平台工具、技能工具（搜索/浏览器/回测/定时/交易/资产/缠论/知识库）都没有接入 SDK；runner 未显式设置 `tools`，Claude Code 默认工具集为 Task、Bash、CronCreate/CronDelete/CronList、Edit、EnterWorktree/ExitWorktree、ListAgents、Monitor、NotebookEdit、Read、ReportFindings、ScheduleWakeup、SendMessage、Skill、TaskStop、WebFetch、WebSearch、Workflow、Write。工具页按此如实展示，平台工具与技能工具标记为未接入。
+4. 本版工具层未迁移：平台注册表中的技能、`add_dirs`、MCP、平台工具、搜索/浏览器/回测/定时/交易/资产/缠论/知识库工具都没有接入 SDK；WebFetch/WebSearch 等只是 Claude Code 默认工具集的一部分。runner 未显式设置 `tools`，默认工具集随 bundled CLI 版本和插件环境变化，以工具页/运行时 init frame 为准（例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。工具页按 API 展示，平台工具与技能工具标记为未接入。
 5. `langchain-core` 依赖暂留，等工具层迁移完成后删除。
 
 #### 验收标准
@@ -373,7 +373,7 @@
 2. rubric 质检。
 3. QuickJS eval 代码解释器。
 4. 会话全文搜索。
-5. 多 Agent 协作/编排。
+5. 平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）。
 6. 刷新后继续看当前流式输出（刷新丢当前输出）。
 7. 消息时间戳。
 8. Run 历史。

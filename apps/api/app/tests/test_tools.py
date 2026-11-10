@@ -14,31 +14,24 @@ def test_tools_api_declares_claude_code_and_unwired_tools(client) -> None:
     body = client.get("/api/tools").json()
 
     filesystem = {tool["name"]: tool for tool in body["filesystem_tools"]}
-    assert set(filesystem) == {
-        "Task",
-        "Bash",
-        "CronCreate",
-        "CronDelete",
-        "CronList",
-        "Edit",
-        "EnterWorktree",
-        "ExitWorktree",
-        "ListAgents",
-        "Monitor",
-        "NotebookEdit",
+    known = {
         "Read",
-        "ReportFindings",
-        "ScheduleWakeup",
-        "SendMessage",
-        "Skill",
-        "TaskStop",
+        "Write",
+        "Edit",
+        "Bash",
+        "Task",
         "WebFetch",
         "WebSearch",
-        "Workflow",
-        "Write",
+        "Skill",
+        "ToolSearch",
+        "DesignSync",
     }
+    assert known <= set(filesystem)
+    names = [tool["name"] for tool in body["filesystem_tools"]]
+    assert len(names) == len(set(names))
     assert all(tool["source"] == "claude-code" for tool in filesystem.values())
     assert all(tool["wired"] and tool["registered"] for tool in filesystem.values())
+    assert "随 bundled CLI 版本" in body["claude_code_note"]
 
     platform = {tool["name"]: tool for tool in body["platform_tools"]}
     assert set(platform) == {"skill_save"}
