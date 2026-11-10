@@ -1370,6 +1370,10 @@ git commit -m "Remove deepagents/LangGraph stack and legacy tables"
 ```
 
 > **质量审查修订：** `ChannelInbound` 保留，但必须去掉指向 `channels` 的 FK 以及 `conversation_id/message_id/run_id` 旧列（`create_all` 在删除 `Channel` 模型后会因悬空 FK 抛 `NoReferencedTableError`）；`session_id` 使用 `String(36)`。`channel_deliveries` 同样不再引用旧表。
+>
+> **质量审查修订（执行时已落实）：** `channel_inbounds` 增加 stale-schema 检测与重建（旧库缺 `text`/`external_id` 时自愈）；`agents[].instructions` 以 `{"type":"preset","preset":"claude_code","append":...}` 注入 SDK 系统提示词；`close_agent_clients` 在 Agent/Provider 更新后淘汰空闲会话 client；`/api/tools` 如实声明 SDK 内置工具与未接入工具；默认提示词同步当前能力并恢复 shell 安全提醒；删除整理记忆残留（seed、`/memory` 命令、前端入口）。全量 571 passed / 3 skipped。
+>
+> **遗留（Task 9 / 工具层）：** 升级后旧 home 的 `memory-organizer` 技能不会被 seed 清理（Task 9 处理）；`close_agent_clients` 无超时预算、busy 会话要等下次设置变更；`_session_agents` 条目持续到会话删除；提示词仍提到 `/skills/<name>/SKILL.md` 路径；少量死样式。
 
 ---
 
