@@ -193,7 +193,10 @@ class ClaudeTurnRunner:
                 # reply it owes, or vice versa.
                 async with SessionLocal() as db:
                     await turn_lease.add_in(db, turn.session_id)
-                    if turn.delivery is not None:
+                    # A resumed turn must attach to an obligation created before
+                    # the crash, never create another one (that would double
+                    # reply); the lookup below is its only source.
+                    if turn.delivery is not None and turn.source != "resume":
                         delivery_id = await channel_delivery.create_pending(
                             db,
                             channel_id=turn.delivery.channel_id,

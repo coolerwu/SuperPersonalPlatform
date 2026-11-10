@@ -23,6 +23,7 @@ FILLED_SESSION_ID = "eeeeeeee-1111-2222-3333-444444444444"
 EMPTY_REPLY_SESSION_ID = "ffffffff-1111-2222-3333-444444444444"
 INTERRUPT_SESSION_ID = "abcdabcd-1111-2222-3333-444444444444"
 NO_DELIVERY_SESSION_ID = "abcdeeee-1111-2222-3333-444444444444"
+RESUME_REQUEST_SESSION_ID = "abcdffff-1111-2222-3333-444444444444"
 
 
 class FakeClient:
@@ -539,3 +540,37 @@ async def test_turn_without_delivery_creates_no_row_or_callback(tmp_path):
         assert not await turn_lease.is_running(NO_DELIVERY_SESSION_ID)
     finally:
         await _cleanup(NO_DELIVERY_SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_resume_never_creates_delivery_even_when_requested(tmp_path):
+    await init_db()
+    delivered: list[int] = []
+
+    async def deliver(delivery_id: int) -> None:
+        delivered.append(delivery_id)
+
+    client = FakeClient([ResultMessage(result="resumed answer")])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        deliver_callback=deliver,
+    )
+    # A resumed turn must attach to an obligation created before the crash;
+    # creating another one here would double reply.
+    turn = Turn(
+        session_id=RESUME_REQUEST_SESSION_ID,
+        agent_id="default",
+        prompt="hi",
+        source="resume",
+        delivery=DeliveryRequest(channel_id="ch1", external_id="wx-1"),
+    )
+    try:
+        outcome = await runner.run(turn, TurnStream())
+
+        assert outcome.status == "completed"
+        assert await _rows(RESUME_REQUEST_SESSION_ID) == []
+        assert delivered == []
+    finally:
+        await _cleanup(RESUME_REQUEST_SESSION_ID)

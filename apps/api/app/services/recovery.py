@@ -9,8 +9,9 @@ its lease untouched, so re-enabling the agent resumes it on a later startup
 a "continue after restart" prompt: the SDK conversation is kept, and the model
 is told not to repeat steps that already completed. A lease without a
 transcript (the lease was written but the SDK had not written its transcript
-yet, or the session was deleted) is dropped, as is a lease whose session id is
-not a canonical UUID, because the id becomes a path component.
+yet, or the session was deleted) is dropped together with any empty delivery
+obligation it left behind, as is a lease whose session id is not a canonical
+UUID, because the id becomes a path component.
 
 The lease table has no ``agent_id``, so ownership is inferred from which
 agent's project directory holds the transcript; the first match in settings
@@ -28,11 +29,27 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.services import turn_lease
+from app.services import channel_delivery, turn_lease
 from app.services.claude_runner import Turn, transcript_path
 from app.services.identifiers import is_canonical_uuid, valid_agent_id
 
 logger = logging.getLogger(__name__)
+
+
+async def _drop_lease(session_id: str) -> None:
+    """Remove a lease and any empty delivery obligation it left behind.
+
+    A crash between lease removal and completion leaves an unfilled row with
+    no turn to finish it; dropping the lease is the point where recovery can
+    safely discard it. Filled rows are left to the sender.
+    """
+    try:
+        await channel_delivery.discard_unfilled_for_session(session_id)
+    except Exception:
+        logger.exception(
+            "recovery could not discard deliveries session=%s", session_id
+        )
+    await turn_lease.remove(session_id)
 
 
 async def _recover_session(
@@ -40,7 +57,7 @@ async def _recover_session(
 ) -> None:
     if not is_canonical_uuid(session_id):
         logger.warning("dropping lease with invalid session id %r", session_id)
-        await turn_lease.remove(session_id)
+        await _drop_lease(session_id)
         return
     found = None
     inactive_owner = None
@@ -66,7 +83,7 @@ async def _recover_session(
             )
             return
         logger.info("dropping lease without transcript session=%s", session_id)
-        await turn_lease.remove(session_id)
+        await _drop_lease(session_id)
         return
     await registry.submit(
         Turn(

@@ -1,7 +1,9 @@
 import pytest
+from sqlalchemy import delete
 
-from app.db import init_db
-from app.services import recovery, turn_lease
+from app.db import SessionLocal, init_db
+from app.models import ChannelDelivery
+from app.services import channel_delivery, recovery, turn_lease
 from app.services.claude_runner import transcript_path
 
 
@@ -241,3 +243,62 @@ async def test_recovery_drops_invalid_session_ids(tmp_path):
         assert await turn_lease.is_running("not-a-uuid") is False
     finally:
         await turn_lease.remove("not-a-uuid")
+
+
+async def _create_delivery(session_id: str) -> int:
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_pending(
+            db, channel_id="ch1", external_id="wx-1", session_id=session_id
+        )
+        await db.commit()
+    return delivery_id
+
+
+async def _cleanup_deliveries(session_id: str) -> None:
+    async with SessionLocal() as db:
+        await db.execute(
+            delete(ChannelDelivery).where(ChannelDelivery.session_id == session_id)
+        )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_recovery_drops_orphan_deliveries_with_dropped_lease(tmp_path):
+    await init_db()
+    session_id = "bbbbbbbb-cccc-cccc-cccc-cccccccccccc"
+    await turn_lease.add(session_id)
+    empty_id = await _create_delivery(session_id)
+    filled_id = await _create_delivery(session_id)
+    await channel_delivery.complete(filled_id, "already owed")
+    try:
+        # No transcript, so recovery drops the lease.
+        await recovery.recover_running_sessions(
+            FakeRegistry(), FakeStore(), home=tmp_path
+        )
+        assert await turn_lease.is_running(session_id) is False
+        assert await channel_delivery.get(empty_id) is None
+        # A filled row is already owed to the sender; recovery keeps it.
+        assert await channel_delivery.get(filled_id) is not None
+    finally:
+        await _cleanup_deliveries(session_id)
+        await turn_lease.remove(session_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_keeps_orphan_deliveries_when_lease_is_kept(tmp_path):
+    await init_db()
+    session_id = "bbbbbbbb-dddd-dddd-dddd-dddddddddddd"
+    _write_transcript(session_id, "default", tmp_path)
+    await turn_lease.add(session_id)
+    empty_id = await _create_delivery(session_id)
+    try:
+        # A paused agent keeps its lease for a later startup, so the empty
+        # obligation must survive too.
+        await recovery.recover_running_sessions(
+            FakeRegistry(), PausedAgentStore(), home=tmp_path
+        )
+        assert await turn_lease.is_running(session_id) is True
+        assert await channel_delivery.get(empty_id) is not None
+    finally:
+        await _cleanup_deliveries(session_id)
+        await turn_lease.remove(session_id)

@@ -4,6 +4,10 @@ Rows are created with empty content at turn start. An empty row is only
 claimed by a resumed turn (``find_unfilled_for_session``); a row that already
 holds content is only sent by the delivery worker/sweep. ``sent`` and
 ``failed`` are terminal and never rewritten.
+
+Known limitation: a hard crash between lease removal and ``complete`` can
+leave an unfilled row with no owning lease. Recovery deletes those rows when
+it drops the lease (``discard_unfilled_for_session``).
 """
 
 from __future__ import annotations
@@ -34,26 +38,6 @@ async def create_pending(
 async def get(delivery_id: int) -> ChannelDelivery | None:
     async with SessionLocal() as db:
         return await db.get(ChannelDelivery, delivery_id)
-
-
-async def find_pending_for_session(session_id: str) -> ChannelDelivery | None:
-    """Return the latest live delivery for a session as a read-only snapshot.
-
-    Rows with empty content are included on purpose: callers that need a
-    recovery candidate must use ``find_unfilled_for_session`` instead, so a
-    filled row already owed to the sender is never reloaded. The returned
-    instance is detached; callers must not mutate it.
-    """
-    async with SessionLocal() as db:
-        return await db.scalar(
-            select(ChannelDelivery)
-            .where(
-                ChannelDelivery.session_id == session_id,
-                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
-            )
-            .order_by(ChannelDelivery.id.desc())
-            .limit(1)
-        )
 
 
 async def find_unfilled_for_session(session_id: str) -> ChannelDelivery | None:
@@ -110,6 +94,24 @@ async def discard(delivery_id: int) -> bool:
         )
         await db.commit()
         return (result.rowcount or 0) > 0
+
+
+async def discard_unfilled_for_session(session_id: str) -> int:
+    """Delete empty live obligations left behind when a lease is dropped.
+
+    Recovery only removes empty rows: a filled row already belongs to the
+    sender, and terminal rows are delivery history.
+    """
+    async with SessionLocal() as db:
+        result = await db.execute(
+            delete(ChannelDelivery).where(
+                ChannelDelivery.session_id == session_id,
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+                ChannelDelivery.content == "",
+            )
+        )
+        await db.commit()
+        return int(result.rowcount or 0)
 
 
 async def mark_attempting(delivery_id: int) -> bool:

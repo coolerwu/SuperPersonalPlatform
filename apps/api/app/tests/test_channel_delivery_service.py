@@ -208,22 +208,29 @@ async def test_list_pending_skips_empty_content_and_terminal_rows():
 
 
 @pytest.mark.asyncio
-async def test_find_pending_for_session_returns_live_row():
+async def test_discard_unfilled_for_session_only_removes_empty_live_rows():
     await init_db()
-    pending_id = None
+    empty_id = None
+    filled_id = None
     sent_id = None
     try:
-        pending_id = await _create(session_id="s-find")
-        sent_id = await _create(session_id="s-find")
-        await channel_delivery.complete(sent_id, "sent content")
+        empty_id = await _create(session_id="s-orphan")
+        filled_id = await _create(session_id="s-orphan")
+        await channel_delivery.complete(filled_id, "answer")
+        sent_id = await _create(session_id="s-orphan")
+        await channel_delivery.complete(sent_id, "answer")
         await channel_delivery.mark_attempting(sent_id)
         await channel_delivery.mark_sent(sent_id)
 
-        row = await channel_delivery.find_pending_for_session("s-find")
-        assert row is not None and row.id == pending_id and row.content == ""
-        assert await channel_delivery.find_pending_for_session("s-missing") is None
+        assert await channel_delivery.discard_unfilled_for_session("s-orphan") == 1
+        assert await channel_delivery.get(empty_id) is None
+        assert await channel_delivery.get(filled_id) is not None
+        assert await channel_delivery.get(sent_id) is not None
+        assert (
+            await channel_delivery.discard_unfilled_for_session("s-missing") == 0
+        )
     finally:
-        await _cleanup(pending_id, sent_id)
+        await _cleanup(empty_id, filled_id, sent_id)
 
 
 @pytest.mark.asyncio
