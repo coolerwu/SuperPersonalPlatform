@@ -157,6 +157,7 @@ export default function App() {
   const streamsRef = useRef<Map<string, EventSource>>(new Map());
   const retryTimersRef = useRef<Map<string, number>>(new Map());
   const deferredRefreshRef = useRef<Map<string, number>>(new Map());
+  const transcriptRetryRef = useRef<Map<string, number>>(new Map());
   const sessionsRef = useRef<SessionSummary[]>([]);
   const sessionAgentRef = useRef<Record<string, string>>({});
   const transcriptRequestRef = useRef<Record<string, number>>({});
@@ -366,6 +367,7 @@ export default function App() {
     dropPendingUsers(id);
     forgetQueuedTurns(id);
     unmarkSessionLoaded(id);
+    clearTranscriptRetry(id);
   }
 
   function markSessionLoaded(id: string) {
@@ -559,6 +561,13 @@ export default function App() {
     retryTimersRef.current.delete(id);
   }
 
+  function clearTranscriptRetry(id: string) {
+    const timer = transcriptRetryRef.current.get(id);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    transcriptRetryRef.current.delete(id);
+  }
+
   function closeStream(id: string) {
     clearRetryTimer(id);
     const deferred = deferredRefreshRef.current.get(id);
@@ -579,8 +588,12 @@ export default function App() {
       ...streamsRef.current.keys(),
       ...retryTimersRef.current.keys(),
       ...deferredRefreshRef.current.keys(),
+      ...transcriptRetryRef.current.keys(),
     ]);
-    for (const id of Array.from(ids)) closeStream(id);
+    for (const id of Array.from(ids)) {
+      closeStream(id);
+      clearTranscriptRetry(id);
+    }
   }
 
   function attachIfBusy(id: string) {
@@ -723,12 +736,8 @@ export default function App() {
 
   async function refreshTranscript(forSession: string, attempt = 0): Promise<void> {
     if (!forSession) return;
-    // A manual reload supersedes any pending automatic retry.
-    const pendingRefresh = deferredRefreshRef.current.get(forSession);
-    if (pendingRefresh !== undefined) {
-      window.clearTimeout(pendingRefresh);
-      deferredRefreshRef.current.delete(forSession);
-    }
+    // A manual reload supersedes any pending automatic transcript retry.
+    clearTranscriptRetry(forSession);
     const requestId = (transcriptRequestRef.current[forSession] ?? 0) + 1;
     transcriptRequestRef.current[forSession] = requestId;
     setLoadingFor(forSession, true);
@@ -747,9 +756,13 @@ export default function App() {
       settlePendingUsers(forSession, list);
       setMessagesFor(forSession, list);
       setLoadErrorFor(forSession, "");
-      // Only a session in this agent's list (or a freshly created one, marked
-      // at send time) counts as loaded; an unknown deep link is not.
-      if (sessionsRef.current.some((item) => item.id === forSession)) {
+      // Only a session owned by this agent (new, opened from its list, or
+      // confirmed by that list) counts as loaded; an unknown deep link is not.
+      const recordedOwner = sessionAgentRef.current[forSession];
+      if (
+        recordedOwner === agentIdRef.current ||
+        sessionsRef.current.some((item) => item.id === forSession)
+      ) {
         markSessionLoaded(forSession);
       }
     } catch (exc) {
@@ -757,10 +770,10 @@ export default function App() {
         // One quick automatic retry; a persistent failure exposes a manual
         // reload action instead of leaving the composer locked forever.
         const timer = window.setTimeout(() => {
-          deferredRefreshRef.current.delete(forSession);
+          transcriptRetryRef.current.delete(forSession);
           void refreshTranscript(forSession, 1);
         }, 1000);
-        deferredRefreshRef.current.set(forSession, timer);
+        transcriptRetryRef.current.set(forSession, timer);
       } else {
         failure = describeApiError(exc);
         setLoadErrorFor(forSession, failure);
@@ -803,6 +816,8 @@ export default function App() {
       // The turn never wrote a transcript row, so its optimistic question is
       // a ghost; the error itself stays in the notice.
       dropPendingForTurn(forSession, endedTurnId);
+      // Known edge: a no-turn-id fallback attach cannot attribute its pending
+      // rows here; they are reconciled by a later transcript refresh.
     }
     if (status === "cancelled") {
       // Interrupt drains queued turns too, so their ids will never run.
@@ -970,7 +985,14 @@ export default function App() {
   function openSession(id: string) {
     setFocus(null);
     setCommandReply(null);
-    if (id && id === sessionIdRef.current) {
+    if (!id) {
+      navigate("chat", "");
+      void refreshSessions();
+      return;
+    }
+    // The cron page can open a session the sidebar has not listed yet.
+    sessionAgentRef.current[id] = agentId;
+    if (id === sessionIdRef.current && view === "chat") {
       // Clicking the current session is the retry affordance for a transcript
       // that failed to load (setSessionId would be a no-op).
       reloadSession(id);
