@@ -64,6 +64,7 @@ def outcome_from_result(message: Any, *, fallback_text: str) -> TurnOutcome:
     result = getattr(message, "result", None)
     errors = getattr(message, "errors", None) or []
     usage = getattr(message, "usage", None)
+    is_error = bool(getattr(message, "is_error", False))
     if terminal in ("aborted_streaming", "aborted_tools"):
         return TurnOutcome(
             status="cancelled",
@@ -71,7 +72,7 @@ def outcome_from_result(message: Any, *, fallback_text: str) -> TurnOutcome:
             terminal_reason=terminal,
             usage=usage,
         )
-    if subtype == "success" and terminal in (None, "completed"):
+    if subtype == "success" and terminal in (None, "completed") and not is_error:
         return TurnOutcome(
             status="completed",
             output=str(result or fallback_text),

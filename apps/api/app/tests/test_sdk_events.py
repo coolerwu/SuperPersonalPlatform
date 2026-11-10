@@ -58,6 +58,21 @@ def test_outcome_completed():
     assert outcome.output == "done"
 
 
+def test_success_with_is_error_is_failed():
+    message = SimpleNamespace(
+        subtype="success",
+        terminal_reason=None,
+        result="API Error: 401 unauthorized",
+        usage=None,
+        errors=None,
+        api_error_status=401,
+        is_error=True,
+    )
+    outcome = outcome_from_result(message, fallback_text="x")
+    assert outcome.status == "failed"
+    assert "API Error" in (outcome.error or "")
+
+
 def test_outcome_cancelled_and_failed():
     cancelled = SimpleNamespace(
         subtype="success",
