@@ -47,12 +47,19 @@ async def test_lease_remove_is_idempotent():
 @pytest.mark.asyncio
 async def test_add_in_joins_caller_transaction():
     await init_db()
-    session_id = "session-add-in"
+    committed_id = "session-add-in-commit"
+    rolled_back_id = "session-add-in-rollback"
     try:
         async with SessionLocal() as db:
-            await turn_lease.add_in(db, session_id)
-            await turn_lease.add_in(db, session_id)
+            await turn_lease.add_in(db, committed_id)
+            await turn_lease.add_in(db, committed_id)
             await db.commit()
-        assert await turn_lease.is_running(session_id)
+        assert await turn_lease.is_running(committed_id)
+
+        async with SessionLocal() as db:
+            await turn_lease.add_in(db, rolled_back_id)
+            await db.rollback()
+        assert not await turn_lease.is_running(rolled_back_id)
     finally:
-        await turn_lease.remove(session_id)
+        await turn_lease.remove(committed_id)
+        await turn_lease.remove(rolled_back_id)

@@ -22,9 +22,10 @@ logger = logging.getLogger(__name__)
 async def add_in(db: AsyncSession, session_id: str) -> None:
     """Insert a lease row inside the caller's transaction.
 
-    Idempotent: an existing lease for the same session is accepted silently, so
-    a repeated insert does not abort the surrounding transaction. Callers that
-    commit their own transaction can combine the lease with other writes.
+    Idempotent for a lease that is already committed/visible. A concurrent
+    insert for the same session raises ``IntegrityError`` from the flush; the
+    caller must roll back its own transaction. The executor relies on the
+    one-turn-per-session invariant to avoid this.
     """
     existing = await db.get(RunningSession, session_id)
     if existing is not None:
@@ -54,9 +55,8 @@ async def add(session_id: str) -> None:
 async def remove(session_id: str) -> None:
     """Remove the lease row for a session (idempotent).
 
-    Callers must ensure removal cannot break this turn's teardown (for example
-    publishing the frontend ``turn_end`` event); the executor wraps this call in
-    try/except so a failure here never aborts the rest of teardown.
+    Callers must wrap this call in try/except so a lease-cleanup failure cannot
+    interrupt turn teardown (for example publishing ``turn_end``).
     """
     async with SessionLocal() as db:
         await db.execute(
