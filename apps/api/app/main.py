@@ -268,7 +268,10 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                         except Exception:
                             logger.exception("run worker shutdown failed")
             finally:
-                await market_service.close()
+                try:
+                    await market_service.close()
+                except Exception:
+                    logger.exception("market close failed")
 
     app = FastAPI(title="Agent Command Center", version=APP_VERSION, lifespan=lifespan)
     app.add_middleware(

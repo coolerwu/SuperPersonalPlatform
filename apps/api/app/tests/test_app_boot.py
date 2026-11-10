@@ -1,12 +1,14 @@
 import asyncio
+import os
 import stat
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main as main_module
 from app.config import APP_HOME, settings as app_settings
 from app.main import create_app
-from app.services import claude_runner, session_registry
+from app.services import claude_runner, recovery, session_registry
 from app.services.backtest_worker import BacktestWorker
 from app.services.cron_service import CronRuntime
 from app.services.knowledge_sync import KnowledgeSyncRuntime
@@ -38,6 +40,30 @@ def quiet_background_workers(monkeypatch):
         monkeypatch.setattr(worker_class, "start", noop)
 
 
+def _patch_runtime_classes(monkeypatch, order):
+    class FakeRunner:
+        def __init__(self, store):
+            self.store = store
+
+        async def close_all(self):
+            order.append("runner.close_all")
+
+    class FakeRegistry:
+        def __init__(self, runner, *, concurrency=5):
+            self.runner = runner
+            self.concurrency = concurrency
+
+        async def submit(self, turn):
+            return turn.id
+
+        async def close(self):
+            order.append("registry.close")
+
+    monkeypatch.setattr(claude_runner, "ClaudeTurnRunner", FakeRunner)
+    monkeypatch.setattr(session_registry, "SessionRegistry", FakeRegistry)
+    return FakeRunner, FakeRegistry
+
+
 def test_app_boots_with_settings_store(client):
     assert client.get("/api/health").json() == {"ok": True}
     assert client.app.state.settings_store is not None
@@ -59,6 +85,7 @@ def test_settings_file_and_claude_dirs_seeded(client):
 def test_worker_app_wires_runtime_state(quiet_background_workers):
     with TestClient(create_app(start_worker=True)) as client:
         assert client.get("/api/health").json() == {"ok": True}
+        assert os.environ["CLAUDE_CONFIG_DIR"] == str(APP_HOME / "claude")
         state = client.app.state
         assert state.settings_store is not None
         assert state.runner is not None
@@ -70,31 +97,34 @@ def test_shutdown_closes_registry_before_runner(
     quiet_background_workers, monkeypatch
 ):
     order = []
-
-    class FakeRunner:
-        def __init__(self, store):
-            self.store = store
-
-        async def close_all(self):
-            order.append("runner.close_all")
-
-    class FakeRegistry:
-        def __init__(self, runner, *, concurrency=5):
-            self.runner = runner
-            self.concurrency = concurrency
-
-        async def submit(self, turn):
-            return turn.id
-
-        async def close(self):
-            order.append("registry.close")
-
-    monkeypatch.setattr(claude_runner, "ClaudeTurnRunner", FakeRunner)
-    monkeypatch.setattr(session_registry, "SessionRegistry", FakeRegistry)
+    _, registry_class = _patch_runtime_classes(monkeypatch, order)
 
     with TestClient(create_app(start_worker=True)) as client:
         assert client.get("/api/health").json() == {"ok": True}
-        assert isinstance(client.app.state.registry, FakeRegistry)
-        assert isinstance(client.app.state.runner, FakeRunner)
+        assert isinstance(client.app.state.registry, registry_class)
 
     assert order == ["registry.close", "runner.close_all"]
+
+
+def test_startup_failure_still_tears_down_runtime(
+    quiet_background_workers, monkeypatch
+):
+    order = []
+    market_closed = []
+    _patch_runtime_classes(monkeypatch, order)
+
+    async def boom_recovery(registry, store):
+        raise RuntimeError("recovery boom")
+
+    async def fake_market_close():
+        market_closed.append(True)
+
+    monkeypatch.setattr(recovery, "recover_running_sessions", boom_recovery)
+    monkeypatch.setattr(main_module.market_service, "close", fake_market_close)
+
+    with pytest.raises(RuntimeError, match="recovery boom"):
+        with TestClient(create_app(start_worker=True)):
+            raise AssertionError("startup should have failed")
+
+    assert order == ["registry.close", "runner.close_all"]
+    assert market_closed == [True]

@@ -428,27 +428,40 @@ async def test_close_all_disconnects_cached_clients(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_close_all_bounds_each_disconnect(tmp_path, monkeypatch):
+async def test_close_all_uses_one_shared_disconnect_budget(tmp_path, monkeypatch):
     await init_db()
     monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 0.01)
 
     class SlowDisconnectClient(FakeClient):
+        def __init__(self, messages=None, *, fail=False):
+            super().__init__(messages, fail=fail)
+            self.disconnect_started = asyncio.Event()
+
         async def disconnect(self):
+            self.disconnect_started.set()
             await asyncio.Event().wait()
 
-    client = SlowDisconnectClient([ResultMessage()])
+    first = SlowDisconnectClient([ResultMessage()])
+    second = SlowDisconnectClient([ResultMessage()])
+    clients = [first, second]
     runner = ClaudeTurnRunner(
         store=FakeStore(make_agent()),
         home=tmp_path,
-        client_factory=lambda options: client,
+        client_factory=lambda options: clients.pop(0),
     )
     await runner.run(
         make_turn(session_id="dddddddd-ffff-ffff-ffff-ffffffffffff"), TurnStream()
     )
-    assert runner._clients != {}
+    await runner.run(
+        make_turn(session_id="dddddddd-eeee-eeee-eeee-eeeeeeeeeeee"), TurnStream()
+    )
+    assert len(runner._clients) == 2
 
-    # A wedged disconnect must not hold shutdown past the timeout.
+    # One wedged disconnect exhausts the shared budget; the remaining client is
+    # dropped from the cache instead of being awaited for its own 10 seconds.
     await asyncio.wait_for(runner.close_all(), 1)
+    assert first.disconnect_started.is_set()
+    assert second.disconnect_started.is_set() is False
     assert runner._clients == {}
 
 

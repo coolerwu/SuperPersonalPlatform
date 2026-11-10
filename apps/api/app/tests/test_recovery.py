@@ -177,7 +177,7 @@ async def test_recovery_skips_invalid_agent_ids(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_recovery_skips_inactive_agents_and_drops_their_leases(tmp_path):
+async def test_recovery_keeps_leases_owned_by_inactive_agents(tmp_path):
     await init_db()
     session_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     _write_transcript(session_id, "default", tmp_path)
@@ -187,9 +187,10 @@ async def test_recovery_skips_inactive_agents_and_drops_their_leases(tmp_path):
         await recovery.recover_running_sessions(
             registry, PausedAgentStore(), home=tmp_path
         )
-        # A paused agent is not woken by startup, so its lease is dropped.
+        # A paused agent is not woken now, but re-enabling it must still be
+        # able to resume the session, so the lease stays.
         assert registry.turns == []
-        assert await turn_lease.is_running(session_id) is False
+        assert await turn_lease.is_running(session_id) is True
     finally:
         await turn_lease.remove(session_id)
 

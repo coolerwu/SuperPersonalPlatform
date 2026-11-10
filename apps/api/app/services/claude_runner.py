@@ -28,8 +28,7 @@ from app.services.turn_stream import TurnStream
 
 logger = logging.getLogger(__name__)
 
-# Bounds shutdown so a wedged CLI subprocess cannot exceed systemd's
-# ``TimeoutStopSec``; the lease stays behind for startup recovery.
+# Shared shutdown budget; bounds systemd ``TimeoutStopSec`` exposure.
 _DISCONNECT_TIMEOUT_SECONDS = 10
 
 
@@ -294,12 +293,10 @@ class ClaudeTurnRunner:
         await self._evict(session_id)
 
     async def close_all(self) -> None:
-        for session_id in list(self._clients):
-            try:
-                await asyncio.wait_for(
-                    self.close(session_id), _DISCONNECT_TIMEOUT_SECONDS
-                )
-            except TimeoutError:
-                logger.warning(
-                    "client disconnect timed out session=%s", session_id
-                )
+        try:
+            async with asyncio.timeout(_DISCONNECT_TIMEOUT_SECONDS):
+                for session_id in list(self._clients):
+                    await self.close(session_id)
+        except TimeoutError:
+            logger.warning("client close budget exceeded; dropping cached clients")
+            self._clients.clear()
