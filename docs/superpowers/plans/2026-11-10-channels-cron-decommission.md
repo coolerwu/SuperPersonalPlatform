@@ -672,6 +672,8 @@ git add apps/api/app/services/channel_intake.py apps/api/app/tests/test_channel_
 git commit -m "Add settings-backed WeChat intake"
 ```
 
+> **质量审查修订（执行时已落实）：** 入站校验（文本、external_id、消息 id 列表、channel/agent active、会话 UUID 与 transcript 存在）全部前置于幂等占位；占位后任何异常删除本次占位行再抛出，保证运行时重试。`ingest` 接收 `external_message_ids: list[str]` 并在同一事务批量占位（打包窗口的其余 id 也被吸收）。`channel_conversations` 的 key 改为 `f"{channel_id}:{external_id}"`，跨渠道不复用绑定。**绑定有效性 = canonical UUID + 本渠道 +（`registry.is_busy(session_id)` 或 transcript 存在）**，保证排队窗口内追问/`/stop`/`/status` 不换会话。复用前要求 canonical UUID；`/new` 的 context_token 回退到旧值；`IntegrityError` 复查行存在才算重复；`ChannelInbound.session_id` 用 `String(36)`；`_record_inbound` 在 submit 之后 best-effort（失败只 warning，不补偿、不丢消息）。Task 4 传 `batch.ids`、命令拦截前先 flush、保留 `_handle_message` 的逐条 `inbound_seen` 检查；Task 5/7 读取绑定使用新 key。
+
 ---
 
 ### Task 4: 微信运行时改造
@@ -865,7 +867,7 @@ git add apps/api/app/services/weixin_runtime.py apps/api/app/main.py apps/api/ap
 git commit -m "Move WeChat runtime to SDK sessions"
 ```
 
-> **质量审查修订：** `mark_attempting` 允许对 `attempting` 行重抢（重启 sweep 需要），发送方必须在进程内用 `_delivering: set[int]` 按 delivery_id 去重，保证同一行同一进程内至多一个发送者；启动/渠道激活 sweep 与轮次结束回调共享该集合。
+> **质量审查修订：** `mark_attempting` 允许对 `attempting` 行重抢（重启 sweep 需要），发送方必须在进程内用 `_delivering: set[int]` 按 delivery_id 去重，保证同一行同一进程内至多一个发送者；启动/渠道激活 sweep 与轮次结束回调共享该集合。**接入入站服务时：** `flush_pending` 传 `batch.ids`（列表）；命令拦截前先 `flush_pending(key)`，避免命令前缓冲的文本进入新会话；读取联系人绑定用 `f"{channel_id}:{external_id}"`。
 
 ---
 
@@ -1041,6 +1043,8 @@ Expected: PASS（按新语义重写断言）
 git add apps/api/app/models.py apps/api/app/services/cron_service.py apps/api/app/routers/cron.py apps/api/app/tests/test_cron_service.py apps/api/app/tests/test_cron_api.py
 git commit -m "Move cron jobs to SDK turns"
 ```
+
+> **质量审查修订：** `cron_jobs.push_conversation_id` 存联系人 `external_id`；读取绑定时用 `f"{channel_id}:{external_id}"`，并校验 `conversation.channel_id == channel.id` 与 Agent 归属。触发时用 `DeliveryRequest(channel_id, external_id)` 交给 runner 建投递行。
 
 ---
 
@@ -1252,6 +1256,8 @@ git add apps/api/app/routers apps/api/app/services/knowledge_sync.py apps/api/ap
 git commit -m "Move settings, knowledge and memory APIs to files"
 ```
 
+> **质量审查修订：** 渠道联系人接口读取 `settings.channel_conversations` 时使用 `f"{channel_id}:{external_id}"` 新 key，并返回 `external_id`（`push_conversation_id` 用它）；不要假设 key 就是 external_id。
+
 ---
 
 ### Task 8: 旧栈下线
@@ -1352,6 +1358,8 @@ Expected: PASS
 git add -A
 git commit -m "Remove deepagents/LangGraph stack and legacy tables"
 ```
+
+> **质量审查修订：** `ChannelInbound` 保留，但必须去掉指向 `channels` 的 FK 以及 `conversation_id/message_id/run_id` 旧列（`create_all` 在删除 `Channel` 模型后会因悬空 FK 抛 `NoReferencedTableError`）；`session_id` 使用 `String(36)`。`channel_deliveries` 同样不再引用旧表。
 
 ---
 
