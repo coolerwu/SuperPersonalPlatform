@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-v4-flash"
     llm_temperature: float = 0.7
 
+    # The SDK runs unattended inside the API process, so it must not wait for
+    # interactive permission prompts. Tool access is bounded by the Agent's
+    # skill/tool configuration instead.
+    claude_permission_mode: str = "bypassPermissions"
+
     # A browser login (QR scan) may legitimately take several minutes in the
     # same Run, so the wall-clock cap leaves room for a 5-minute wait plus the
     # actual task after login.
