@@ -56,15 +56,33 @@ def _normalize_message_ids(values: Any) -> list[str]:
     return list(dict.fromkeys(message_ids))
 
 
+async def inbound_seen(channel_id: str, message_ids: list[str]) -> set[str]:
+    """Return the ids in this channel that are already claimed."""
+    ids = [message_id for message_id in message_ids if message_id]
+    if not ids:
+        return set()
+    async with SessionLocal() as db:
+        rows = await db.scalars(
+            select(ChannelInbound.external_message_id).where(
+                ChannelInbound.channel_id == channel_id,
+                ChannelInbound.external_message_id.in_(ids),
+            )
+        )
+        return set(rows.all())
+
+
 async def claim_inbound(
-    channel_id: str, message_ids: list[str], text: str = ""
+    channel_id: str,
+    message_ids: list[str],
+    text: str = "",
+    external_id: str = "",
 ) -> bool:
     """Claim every message id in one transaction.
 
     ``False`` means the batch was already claimed (duplicate). A unique
     violation that turns out not to be one of these rows is re-raised. The
-    inbound text is stored on each row so quote-replies can recover the quoted
-    message later; a duplicate claim keeps the first stored copy.
+    inbound text and contact id are stored on each row so quote-replies can
+    recover the quoted message later; a duplicate claim keeps the first copy.
     """
     async with SessionLocal() as db:
         db.add_all(
@@ -73,6 +91,7 @@ async def claim_inbound(
                     channel_id=channel_id,
                     external_message_id=message_id,
                     text=text,
+                    external_id=external_id,
                 )
                 for message_id in message_ids
             ]
@@ -97,14 +116,15 @@ async def claim_inbound(
 
 async def resolve_quoted_text(
     channel_id: str,
+    external_id: str,
     msg_id: str | None,
     create_time_ms: int | None,
 ) -> str | None:
     """Recover the text of a quoted message iLink omitted from the payload.
 
-    Tries the exact message id first, then the inbound rows inside the quote
-    time window, and finally the bot's own replies in that window. Returns
-    ``None`` when nothing usable is stored.
+    Tries the exact message id first, then this contact's inbound rows inside
+    the quote time window, and finally this contact's bot replies in that
+    window. Returns ``None`` when nothing usable is stored.
     """
     async with SessionLocal() as db:
         if msg_id:
@@ -112,6 +132,7 @@ async def resolve_quoted_text(
                 select(ChannelInbound.text)
                 .where(
                     ChannelInbound.channel_id == channel_id,
+                    ChannelInbound.external_id == external_id,
                     ChannelInbound.external_message_id == msg_id,
                 )
                 .limit(1)
@@ -134,6 +155,7 @@ async def resolve_quoted_text(
             select(ChannelInbound.text)
             .where(
                 ChannelInbound.channel_id == channel_id,
+                ChannelInbound.external_id == external_id,
                 ChannelInbound.created_at >= start,
                 ChannelInbound.created_at <= end,
                 ChannelInbound.text != "",
@@ -148,6 +170,7 @@ async def resolve_quoted_text(
             select(ChannelDelivery.content)
             .where(
                 ChannelDelivery.channel_id == channel_id,
+                ChannelDelivery.external_id == external_id,
                 ChannelDelivery.created_at >= start,
                 ChannelDelivery.created_at <= end,
                 ChannelDelivery.content != "",
@@ -267,7 +290,7 @@ async def ingest(
     if agent is None or agent.status != "active":
         raise ValueError("agent is not available")
 
-    if not await claim_inbound(channel_id, message_ids, text):
+    if not await claim_inbound(channel_id, message_ids, text, external_id):
         return IngestResult(duplicate=True)
 
     try:

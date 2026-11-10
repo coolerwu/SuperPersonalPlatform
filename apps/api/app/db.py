@@ -244,21 +244,35 @@ async def _ensure_cron_job_columns(conn) -> None:  # noqa: ANN001
         await _ensure_cron_job_column(conn, column)
 
 
-async def _ensure_channel_inbound_text(conn) -> None:  # noqa: ANN001
+async def _ensure_channel_inbound_columns(conn) -> None:  # noqa: ANN001
     result = await conn.exec_driver_sql("PRAGMA table_info(channel_inbounds)")
     columns = {row[1] for row in result.fetchall()}
-    if not columns or "text" in columns:
+    if not columns:
         return
-    try:
-        await conn.exec_driver_sql(
-            "ALTER TABLE channel_inbounds ADD COLUMN text TEXT NOT NULL DEFAULT ''"
-        )
-    except Exception:
-        # Another process may have added the column concurrently; only re-raise
-        # when it is genuinely still missing.
-        result = await conn.exec_driver_sql("PRAGMA table_info(channel_inbounds)")
-        if "text" not in {row[1] for row in result.fetchall()}:
-            raise
+    additions = (
+        ("text", "TEXT NOT NULL DEFAULT ''"),
+        ("external_id", "VARCHAR(200) NOT NULL DEFAULT ''"),
+    )
+    for column, ddl in additions:
+        if column in columns:
+            continue
+        try:
+            await conn.exec_driver_sql(
+                f"ALTER TABLE channel_inbounds ADD COLUMN {column} {ddl}"
+            )
+        except Exception:
+            # Another process may have added the column concurrently; only
+            # re-raise when it is genuinely still missing.
+            result = await conn.exec_driver_sql(
+                "PRAGMA table_info(channel_inbounds)"
+            )
+            if column not in {row[1] for row in result.fetchall()}:
+                raise
+        columns.add(column)
+    await conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_channel_inbounds_external_id "
+        "ON channel_inbounds (external_id)"
+    )
 
 
 async def _drop_stale_channel_deliveries(conn) -> None:  # noqa: ANN001
@@ -286,7 +300,7 @@ async def init_db() -> None:
             await _ensure_session_origin(conn)
             await _ensure_cron_job_columns(conn)
             await _ensure_memory_item_columns(conn)
-            await _ensure_channel_inbound_text(conn)
+            await _ensure_channel_inbound_columns(conn)
 
     if settings.app_database_url.startswith("sqlite"):
         try:

@@ -242,6 +242,36 @@ async def test_flush_pending_submits_one_turn_for_the_batch():
 
 
 @pytest.mark.asyncio
+async def test_already_claimed_id_does_not_drop_the_new_message_in_the_batch():
+    channel = _channel()
+    store = FakeStore([channel])
+    registry = FakeRegistry()
+    client = FakeClient()
+    runtime = _runtime(store, registry, client=client)
+    credentials = _credentials(channel)
+    try:
+        assert await channel_intake.claim_inbound(
+            channel.id, ["old-1"], text="旧消息", external_id="wx-1"
+        )
+        # A replay of the old id must not enter the batch, or the atomic
+        # batch claim would treat the whole packet as a duplicate and swallow
+        # the new message bundled with it.
+        await runtime._handle_message(
+            credentials, _text_message("old-1", "旧消息")
+        )
+        await runtime._handle_message(
+            credentials, _text_message("new-1", "新消息")
+        )
+        await runtime.flush_pending((channel.id, "wx-1"))
+
+        assert len(registry.turns) == 1
+        assert registry.turns[0].prompt == "新消息"
+    finally:
+        await runtime.stop()
+        await _cleanup_inbound(channel.id, ["old-1", "new-1"])
+
+
+@pytest.mark.asyncio
 async def test_command_flushes_pending_and_sends_reply_without_a_turn(monkeypatch):
     channel = _channel()
     store = FakeStore([channel])
@@ -401,6 +431,7 @@ async def test_handle_message_renders_resolved_quote():
                 channel_id=channel.id,
                 external_message_id="orig-quote",
                 text="原来的问题",
+                external_id="wx-1",
             )
         )
         await db.commit()

@@ -325,6 +325,14 @@ class WeixinRuntime:
         if not content.strip():
             await self._save_sync_if_idle(channel_id)
             return
+        # Defensive re-check: a batch claim is atomic, so an id already claimed
+        # elsewhere must not drag its new neighbours into a duplicate drop.
+        seen = await channel_intake.inbound_seen(channel_id, batch.ids)
+        if seen:
+            batch.ids = [item for item in batch.ids if item not in seen]
+            if not batch.ids:
+                await self._save_sync_if_idle(channel_id)
+                return
         self._inflight.add(key)
         try:
             result = await channel_intake.ingest(
@@ -616,6 +624,21 @@ class WeixinRuntime:
             await self._save_sync_if_idle(credentials.channel_id)
             return
 
+        # Drop ids already claimed by a previous delivery before they enter a
+        # new batch: a batch claim is atomic, so one stale id would otherwise
+        # swallow the new messages bundled with it.
+        pending = self._pending.get(key)
+        candidate_ids = list(pending.ids) if pending is not None else []
+        if message_id not in candidate_ids:
+            candidate_ids.append(message_id)
+        seen = await channel_intake.inbound_seen(
+            credentials.channel_id, candidate_ids
+        )
+        if pending is not None and seen:
+            pending.ids = [item for item in pending.ids if item not in seen]
+        if message_id in seen:
+            return
+
         if any(message_id in batch.ids for batch in self._pending.values()):
             return
 
@@ -623,7 +646,9 @@ class WeixinRuntime:
             # Unsupported-only messages create no turn, so claim their ids here
             # to keep an iLink replay after a restart from replying twice.
             if not await channel_intake.claim_inbound(
-                credentials.channel_id, [message_id]
+                credentials.channel_id,
+                [message_id],
+                external_id=sender_id,
             ):
                 return
             await self._send_unsupported(
@@ -673,7 +698,7 @@ class WeixinRuntime:
             labels = "、".join(dict.fromkeys(parsed.unsupported))
             notes.append(f"（已忽略一条{labels}消息）")
         quote = await self._render_quote(
-            credentials.channel_id, parsed, message_id
+            credentials.channel_id, sender_id, parsed, message_id
         )
         parts = [quote, text, *notes]
         content = "\n\n".join(part.strip() for part in parts if part.strip())
@@ -694,6 +719,7 @@ class WeixinRuntime:
     async def _render_quote(
         self,
         channel_id: str,
+        external_id: str,
         parsed: weixin_media.ParsedInbound,
         message_id: str,
     ) -> str:
@@ -706,6 +732,7 @@ class WeixinRuntime:
                     resolved = (
                         await channel_intake.resolve_quoted_text(
                             channel_id,
+                            external_id,
                             quote.msg_id or None,
                             quote.create_time_ms,
                         )

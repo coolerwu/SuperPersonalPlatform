@@ -7,7 +7,11 @@ from sqlalchemy import delete, select
 from app.db import SessionLocal, init_db
 from app.models import ChannelDelivery, ChannelInbound
 from app.services import commands
-from app.services.channel_intake import ingest, resolve_quoted_text
+from app.services.channel_intake import (
+    inbound_seen,
+    ingest,
+    resolve_quoted_text,
+)
 from app.services.claude_runner import transcript_path
 from app.services.settings_store import (
     AgentSection,
@@ -604,6 +608,19 @@ async def _cleanup_quote_rows(channel_id: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_inbound_seen_returns_already_claimed_ids():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    try:
+        await _ingest(store, registry, message_ids=["seen-1"], text="旧消息")
+        assert await inbound_seen("ch1", ["seen-1", "missing"]) == {"seen-1"}
+        assert await inbound_seen("ch1", []) == set()
+    finally:
+        await _cleanup("ch1", ["seen-1"])
+
+
+@pytest.mark.asyncio
 async def test_resolve_quoted_text_by_message_id():
     await init_db()
     store = FakeStore()
@@ -611,9 +628,16 @@ async def test_resolve_quoted_text_by_message_id():
     try:
         await _ingest(store, registry, message_ids=["orig-1"], text="原来的问题")
         assert (
-            await resolve_quoted_text("ch1", "orig-1", None) == "原来的问题"
+            await resolve_quoted_text("ch1", "wx-1", "orig-1", None)
+            == "原来的问题"
         )
-        assert await resolve_quoted_text("ch1", "missing", None) is None
+        # The exact id must still belong to the asking contact.
+        assert (
+            await resolve_quoted_text("ch1", "wx-2", "orig-1", None) is None
+        )
+        assert (
+            await resolve_quoted_text("ch1", "wx-1", "missing", None) is None
+        )
     finally:
         await _cleanup("ch1", ["orig-1"])
 
@@ -629,6 +653,7 @@ async def test_resolve_quoted_text_by_inbound_time_window():
                 channel_id=channel_id,
                 external_message_id="window-1",
                 text="窗口内的原文",
+                external_id="wx-1",
                 created_at=target - timedelta(seconds=1),
             )
         )
@@ -636,7 +661,10 @@ async def test_resolve_quoted_text_by_inbound_time_window():
     try:
         assert (
             await resolve_quoted_text(
-                channel_id, None, int(target.timestamp() * 1000)
+                channel_id,
+                "wx-1",
+                None,
+                int(target.timestamp() * 1000),
             )
             == "窗口内的原文"
         )
@@ -664,9 +692,60 @@ async def test_resolve_quoted_text_by_bot_reply_time_window():
     try:
         assert (
             await resolve_quoted_text(
-                channel_id, None, int(target.timestamp() * 1000)
+                channel_id,
+                "wx-1",
+                None,
+                int(target.timestamp() * 1000),
             )
             == "昨天的日报正文"
+        )
+    finally:
+        await _cleanup_quote_rows(channel_id)
+
+
+@pytest.mark.asyncio
+async def test_resolve_quoted_text_is_scoped_per_contact():
+    await init_db()
+    channel_id = f"q{uuid.uuid4().hex[:12]}"
+    target = datetime.now(timezone.utc).replace(microsecond=0)
+    async with SessionLocal() as db:
+        db.add_all(
+            [
+                ChannelInbound(
+                    channel_id=channel_id,
+                    external_message_id="overlap-a",
+                    text="联系人 A 的原文",
+                    external_id="wx-a",
+                    created_at=target - timedelta(seconds=1),
+                ),
+                ChannelInbound(
+                    channel_id=channel_id,
+                    external_message_id="overlap-b",
+                    text="联系人 B 的原文",
+                    external_id="wx-b",
+                    created_at=target - timedelta(seconds=1),
+                ),
+            ]
+        )
+        await db.commit()
+    try:
+        assert (
+            await resolve_quoted_text(
+                channel_id,
+                "wx-b",
+                None,
+                int(target.timestamp() * 1000),
+            )
+            == "联系人 B 的原文"
+        )
+        assert (
+            await resolve_quoted_text(
+                channel_id,
+                "wx-a",
+                None,
+                int(target.timestamp() * 1000),
+            )
+            == "联系人 A 的原文"
         )
     finally:
         await _cleanup_quote_rows(channel_id)
