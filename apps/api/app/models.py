@@ -186,13 +186,6 @@ class MemoryItem(Base):
     tags: Mapped[list] = mapped_column(JSON, default=list)
     source_message_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    source_session_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    # explicit: user said "记住…"; manual: added/edited in the memory page;
-    # agent: written by the Agent itself through memory_save; legacy: rows that
-    # predate this model and have no verified provenance.
-    source_kind: Mapped[str] = mapped_column(String(20), default="manual")
-    snapshot_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    snapshot_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
