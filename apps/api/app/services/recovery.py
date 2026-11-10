@@ -5,43 +5,46 @@ Claude SDK transcript under one of the configured agents' project directories
 and, when one exists, submit a ``Turn`` with ``source="resume"``. The runner
 turns that into a "continue after restart" prompt: the SDK conversation is
 kept, and the model is told not to repeat steps that already completed. A
-lease without a transcript (the process crashed before dispatch, or the
-session was deleted) is dropped, as is a lease whose session id is not a
-canonical UUID, because the id becomes a path component. Recovery is
-best-effort: a bad row is logged and skipped so the remaining leases still
-resume, and a failure to load settings or leases, or a settings file that
-yields no agents, aborts only this pass without deleting leases.
+lease without a transcript (the lease was written but the SDK had not written
+its transcript yet, or the session was deleted) is dropped, as is a lease
+whose session id is not a canonical UUID, because the id becomes a path
+component.
+
+The lease table has no ``agent_id``, so ownership is inferred from which
+agent's project directory holds the transcript; the first match in settings
+order wins, which is unambiguous for the current single-Agent deployment.
+Agents whose id is not filesystem-safe are skipped before that id is spliced
+into a path. Recovery is best-effort: a bad row is logged and skipped so the
+remaining leases still resume, and a failure to load settings or leases, or a
+settings file that yields no agents, aborts only this pass without deleting
+leases.
 """
 
 from __future__ import annotations
 
 import logging
-import uuid
 from pathlib import Path
 from typing import Any
 
 from app.services import turn_lease
 from app.services.claude_runner import Turn, transcript_path
+from app.services.identifiers import is_canonical_uuid, valid_agent_id
 
 logger = logging.getLogger(__name__)
-
-
-def _is_canonical_uuid(value: str) -> bool:
-    try:
-        return str(uuid.UUID(value)) == value
-    except (AttributeError, TypeError, ValueError):
-        return False
 
 
 async def _recover_session(
     registry: Any, agents: dict[str, Any], session_id: str, home: Path | None
 ) -> None:
-    if not _is_canonical_uuid(session_id):
-        logger.warning("dropping lease with invalid session id")
+    if not is_canonical_uuid(session_id):
+        logger.warning("dropping lease with invalid session id %r", session_id)
         await turn_lease.remove(session_id)
         return
     found = None
     for agent in agents.values():
+        if not valid_agent_id(agent.id):
+            logger.warning("skipping agent with invalid id %r", agent.id)
+            continue
         if transcript_path(session_id, agent.id, home=home).is_file():
             found = agent
             break

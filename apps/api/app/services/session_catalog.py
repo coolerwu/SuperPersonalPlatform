@@ -10,19 +10,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import shutil
-import uuid
 from pathlib import Path
 from typing import Any
 
 from app.services import sdk_bridge
 from app.services.claude_env import workspace_for
 from app.services.claude_runner import transcript_path
+from app.services.identifiers import is_canonical_uuid, valid_agent_id
 
 logger = logging.getLogger(__name__)
 
-_AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _TITLE_LIMIT = 80
 
 
@@ -51,14 +49,6 @@ def _session_title(summary: Any) -> str:
     return title
 
 
-def _is_canonical_uuid(value: str) -> bool:
-    try:
-        parsed = uuid.UUID(value)
-    except (AttributeError, TypeError, ValueError):
-        return False
-    return str(parsed) == value
-
-
 class SessionCatalog:
     def __init__(self, store: Any, *, home: Path | None = None) -> None:
         self._store = store
@@ -66,9 +56,9 @@ class SessionCatalog:
 
     def _owns(self, agent_id: str, session_id: str) -> bool:
         # Validate both ids before splicing them into a filesystem path.
-        if not _AGENT_ID_RE.fullmatch(agent_id or ""):
+        if not valid_agent_id(agent_id):
             return False
-        if not _is_canonical_uuid(session_id or ""):
+        if not is_canonical_uuid(session_id):
             return False
         return transcript_path(session_id, agent_id, home=self._home).is_file()
 
@@ -149,7 +139,7 @@ class SessionCatalog:
     async def rename(
         self, session_id: str, title: str, *, agent_id: str | None = None
     ) -> None:
-        if not _is_canonical_uuid(session_id):
+        if not is_canonical_uuid(session_id):
             raise ValueError(f"invalid session id {session_id!r}")
         if agent_id is not None and not self._owns(agent_id, session_id):
             raise FileNotFoundError(
