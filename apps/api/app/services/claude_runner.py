@@ -102,27 +102,31 @@ class ClaudeTurnRunner:
             return client
 
     async def run(self, turn: Turn, stream: TurnStream) -> TurnOutcome:
-        settings = await self._store.get()
-        agent = next((item for item in settings.agents if item.id == turn.agent_id), None)
-        if agent is None:
-            stream.publish({"type": "turn_error", "error": "agent not found"})
-            stream.close()
-            return TurnOutcome(status="failed", error="agent not found")
-        await turn_lease.add(turn.session_id)
         mapper = StreamMapper()
         text_parts: list[str] = []
         outcome = TurnOutcome(status="failed", error="run ended without result")
+        lease_added = False
         try:
-            client = await self._client(turn, agent)
-            if turn.source == "resume":
-                prompt = (
-                    "上次任务因服务重启被中断。请先检查当前状态，"
-                    "继续完成原任务；已经完成的步骤不要重复执行。"
-                )
-            else:
-                prompt = turn.prompt
-            await client.query(prompt)
             async with asyncio.timeout(app_settings.run_timeout_seconds):
+                settings = await self._store.get()
+                agent = next(
+                    (item for item in settings.agents if item.id == turn.agent_id),
+                    None,
+                )
+                if agent is None:
+                    outcome = TurnOutcome(status="failed", error="agent not found")
+                    return outcome
+                await turn_lease.add(turn.session_id)
+                lease_added = True
+                client = await self._client(turn, agent)
+                if turn.source == "resume":
+                    prompt = (
+                        "上次任务因服务重启被中断。请先检查当前状态，"
+                        "继续完成原任务；已经完成的步骤不要重复执行。"
+                    )
+                else:
+                    prompt = turn.prompt
+                await client.query(prompt)
                 async for message in client.receive_response():
                     if getattr(message, "parent_tool_use_id", None):
                         continue
@@ -136,27 +140,56 @@ class ClaudeTurnRunner:
                     # SystemMessage also carries .subtype; match the class name so
                     # the init frame is not mistaken for a result.
                     if type(message).__name__ == "ResultMessage":
+                        # Background task notifications can surface as result
+                        # messages too; only this turn's own result is terminal.
+                        origin = getattr(message, "origin", None)
+                        kind = (
+                            origin.get("kind")
+                            if isinstance(origin, dict)
+                            else getattr(origin, "kind", None)
+                        )
+                        if kind not in (None, "human"):
+                            continue
                         outcome = outcome_from_result(
                             message, fallback_text="".join(text_parts)
                         )
                         break
         except TimeoutError:
-            outcome = TurnOutcome(status="failed", error="run exceeded the execution timeout")
+            outcome = TurnOutcome(
+                status="failed",
+                output="".join(text_parts),
+                error="run exceeded the execution timeout",
+            )
             try:
-                await self.interrupt(turn.session_id)
+                await asyncio.wait_for(self.interrupt(turn.session_id), 5)
             except Exception:
-                logger.exception("interrupt after timeout failed")
+                logger.exception(
+                    "interrupt after timeout failed session=%s", turn.session_id
+                )
+            await self.close(turn.session_id)
         except asyncio.CancelledError:
             outcome = TurnOutcome(status="cancelled", output="".join(text_parts))
+            try:
+                await asyncio.shield(self.close(turn.session_id))
+            except BaseException:
+                logger.exception(
+                    "client close after cancellation failed session=%s",
+                    turn.session_id,
+                )
             raise
         except Exception as exc:
-            logger.exception("claude turn failed")
-            outcome = TurnOutcome(status="failed", error=str(exc))
+            outcome = TurnOutcome(
+                status="failed", output="".join(text_parts), error=str(exc)
+            )
+            logger.exception(
+                "claude turn failed session=%s agent=%s",
+                turn.session_id,
+                turn.agent_id,
+            )
+            await self.close(turn.session_id)
         finally:
-            try:
-                await turn_lease.remove(turn.session_id)
-            except Exception:
-                logger.exception("failed to remove turn lease session=%s", turn.session_id)
+            # Publish teardown synchronously first: a later await must not be
+            # able to delay or suppress the terminal event for subscribers.
             stream.publish(
                 {
                     "type": "turn_end",
@@ -167,6 +200,13 @@ class ClaudeTurnRunner:
                 }
             )
             stream.close()
+            if lease_added:
+                try:
+                    await turn_lease.remove(turn.session_id)
+                except BaseException:
+                    logger.exception(
+                        "failed to remove turn lease session=%s", turn.session_id
+                    )
         return outcome
 
     async def interrupt(self, session_id: str) -> bool:
@@ -177,9 +217,11 @@ class ClaudeTurnRunner:
         return True
 
     async def close(self, session_id: str) -> None:
-        client = self._clients.pop(session_id, None)
+        lock = self._client_lock(session_id)
+        async with lock:
+            client = self._clients.pop(session_id, None)
         if client is not None:
             try:
                 await client.disconnect()
             except Exception:
-                logger.exception("client disconnect failed")
+                logger.exception("client disconnect failed session=%s", session_id)

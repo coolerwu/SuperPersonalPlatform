@@ -1,9 +1,14 @@
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_HOME = Path(os.environ.get("APP_HOME", Path.home() / ".super-personal-platform"))
+
+ClaudePermissionMode = Literal[
+    "default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto"
+]
 
 
 class Settings(BaseSettings):
@@ -33,10 +38,10 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-v4-flash"
     llm_temperature: float = 0.7
 
-    # The SDK runs unattended inside the API process, so it must not wait for
-    # interactive permission prompts. Tool access is bounded by the Agent's
-    # skill/tool configuration instead.
-    claude_permission_mode: str = "bypassPermissions"
+    # The runner currently sets neither ``tools`` nor ``allowed_tools``, so the
+    # full built-in toolset runs under bypassPermissions. This is not a
+    # security boundary; tool restrictions belong to the tool layer.
+    claude_permission_mode: ClaudePermissionMode = "bypassPermissions"
 
     # A browser login (QR scan) may legitimately take several minutes in the
     # same Run, so the wall-clock cap leaves room for a 5-minute wait plus the
