@@ -16,6 +16,9 @@ from app.services.turn_stream import TurnStream
 
 SESSION_ID = "11111111-2222-3333-4444-555555555555"
 RESUME_SESSION_ID = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+FAILED_SESSION_ID = "bbbbbbbb-1111-2222-3333-444444444444"
+CANCELLED_SESSION_ID = "cccccccc-1111-2222-3333-444444444444"
+SHUTDOWN_SESSION_ID = "dddddddd-1111-2222-3333-444444444444"
 
 
 class FakeClient:
@@ -23,6 +26,7 @@ class FakeClient:
         self._messages = list(messages or [])
         self.queries = []
         self.disconnected = False
+        self.queried = asyncio.Event()
 
     async def connect(self):
         pass
@@ -32,10 +36,17 @@ class FakeClient:
 
     async def query(self, prompt):
         self.queries.append(prompt)
+        self.queried.set()
 
     async def receive_messages(self):
         for message in self._messages:
             yield message
+
+
+class HangingClient(FakeClient):
+    async def receive_messages(self):
+        await asyncio.Event().wait()
+        yield  # pragma: no cover - never reached
 
 
 class FakeStore:
@@ -49,14 +60,22 @@ class FakeStore:
 
 
 class ResultMessage:
-    def __init__(self, *, result="hello"):
-        self.subtype = "success"
-        self.terminal_reason = "completed"
+    def __init__(
+        self,
+        *,
+        subtype="success",
+        terminal_reason="completed",
+        result="hello",
+        errors=None,
+        is_error=False,
+    ):
+        self.subtype = subtype
+        self.terminal_reason = terminal_reason
         self.result = result
         self.usage = {"input_tokens": 1, "output_tokens": 1}
-        self.errors = None
+        self.errors = errors
         self.api_error_status = None
-        self.is_error = False
+        self.is_error = is_error
         self.origin = None
 
 
@@ -222,3 +241,124 @@ async def test_deliver_failure_does_not_mask_terminal_event_or_lease(tmp_path):
         assert not await turn_lease.is_running(turn.session_id)
     finally:
         await _cleanup(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_without_output_delivers_fixed_error_text(tmp_path):
+    await init_db()
+    delivered: list[int] = []
+
+    async def deliver(delivery_id: int) -> None:
+        delivered.append(delivery_id)
+
+    client = FakeClient(
+        [
+            ResultMessage(
+                subtype="error",
+                terminal_reason="error",
+                result="boom",
+                is_error=True,
+            )
+        ]
+    )
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        deliver_callback=deliver,
+    )
+    turn = Turn(
+        session_id=FAILED_SESSION_ID,
+        agent_id="default",
+        prompt="hi",
+        delivery=DeliveryRequest(channel_id="ch1", external_id="wx-1"),
+    )
+    try:
+        outcome = await runner.run(turn, TurnStream())
+
+        assert outcome.status == "failed"
+        assert outcome.output == ""
+        rows = await _rows(FAILED_SESSION_ID)
+        assert len(rows) == 1
+        # A channel turn must still answer, so the empty output is replaced.
+        assert rows[0].status == "pending"
+        assert rows[0].content == "（任务执行失败，请稍后重试。）"
+        assert delivered == [rows[0].id]
+        assert not await turn_lease.is_running(FAILED_SESSION_ID)
+    finally:
+        await _cleanup(FAILED_SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_user_cancelled_turn_drops_delivery_without_sending(tmp_path):
+    await init_db()
+    delivered: list[int] = []
+
+    async def deliver(delivery_id: int) -> None:
+        delivered.append(delivery_id)
+
+    client = FakeClient([ResultMessage(terminal_reason="aborted_streaming")])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        deliver_callback=deliver,
+    )
+    turn = Turn(
+        session_id=CANCELLED_SESSION_ID,
+        agent_id="default",
+        prompt="hi",
+        delivery=DeliveryRequest(channel_id="ch1", external_id="wx-1"),
+    )
+    try:
+        outcome = await runner.run(turn, TurnStream())
+
+        assert outcome.status == "cancelled"
+        # /stop owes no reply: the obligation is removed, not left pending.
+        assert await _rows(CANCELLED_SESSION_ID) == []
+        assert delivered == []
+        assert not await turn_lease.is_running(CANCELLED_SESSION_ID)
+    finally:
+        await _cleanup(CANCELLED_SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_keeps_delivery_pending_for_resume(tmp_path):
+    await init_db()
+    delivered: list[int] = []
+
+    async def deliver(delivery_id: int) -> None:
+        delivered.append(delivery_id)
+
+    client = HangingClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        deliver_callback=deliver,
+    )
+    turn = Turn(
+        session_id=SHUTDOWN_SESSION_ID,
+        agent_id="default",
+        prompt="hi",
+        delivery=DeliveryRequest(channel_id="ch1", external_id="wx-1"),
+    )
+    task = asyncio.create_task(runner.run(turn, TurnStream()))
+    try:
+        await asyncio.wait_for(client.queried.wait(), 1)
+        # registry.close() cancels the worker task during shutdown.
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        rows = await _rows(SHUTDOWN_SESSION_ID)
+        assert len(rows) == 1
+        # Empty and pending so the resumed turn can reattach and send it.
+        assert rows[0].status == "pending"
+        assert rows[0].content == ""
+        assert delivered == []
+        assert await turn_lease.is_running(SHUTDOWN_SESSION_ID) is True
+    finally:
+        if not task.done():
+            task.cancel()
+        await _cleanup(SHUTDOWN_SESSION_ID)

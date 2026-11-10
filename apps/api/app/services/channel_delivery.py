@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import case, select, update
+from sqlalchemy import case, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionLocal
@@ -61,6 +61,23 @@ async def complete(delivery_id: int, content: str) -> bool:
                 ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
             )
             .values(content=content, updated_at=utcnow())
+        )
+        await db.commit()
+        return (result.rowcount or 0) > 0
+
+
+async def discard(delivery_id: int) -> bool:
+    """Drop an obligation that will never be sent (the user stopped the turn).
+
+    Only live rows are removed; a row the sender already claimed or finished
+    is left as delivery history.
+    """
+    async with SessionLocal() as db:
+        result = await db.execute(
+            delete(ChannelDelivery).where(
+                ChannelDelivery.id == delivery_id,
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+            )
         )
         await db.commit()
         return (result.rowcount or 0) > 0

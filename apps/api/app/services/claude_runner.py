@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 # Shared shutdown budget; bounds systemd ``TimeoutStopSec`` exposure.
 _DISCONNECT_TIMEOUT_SECONDS = 10
 
+# Channel users get a reply even when the turn produced no text at all.
+_FAILED_DELIVERY_TEXT = "（任务执行失败，请稍后重试。）"
+
 
 @dataclass
 class DeliveryRequest:
@@ -296,22 +299,39 @@ class ClaudeTurnRunner:
                             turn.session_id,
                             exc_info=True,
                         )
-            # Persist the answer before notifying the sender; failures here
-            # must never mask the terminal event or break lease cleanup.
-            if delivery_id is not None:
-                try:
-                    await channel_delivery.complete(delivery_id, outcome.output)
-                except Exception:
-                    logger.exception(
-                        "delivery completion failed delivery=%s", delivery_id
-                    )
-            if delivery_id is not None and self._deliver_callback is not None:
-                try:
-                    await self._deliver_callback(delivery_id)
-                except Exception:
-                    logger.exception(
-                        "delivery send failed delivery=%s", delivery_id
-                    )
+            # Delivery teardown. Shutdown cancellation keeps the lease for
+            # recovery, so the obligation stays empty and pending there and the
+            # resumed turn reattaches it; sending now could double reply or mark
+            # it sent and lose the answer. Failures here must never mask the
+            # terminal event or break lease cleanup.
+            if delivery_id is not None and not keep_lease:
+                if outcome.status == "cancelled":
+                    # The user stopped the turn, so no reply is owed; drop the
+                    # empty obligation instead of leaving a stale row behind.
+                    try:
+                        await channel_delivery.discard(delivery_id)
+                    except Exception:
+                        logger.exception(
+                            "delivery discard failed delivery=%s", delivery_id
+                        )
+                else:
+                    content = outcome.output
+                    if outcome.status == "failed" and not content.strip():
+                        content = _FAILED_DELIVERY_TEXT
+                    try:
+                        await channel_delivery.complete(delivery_id, content)
+                    except Exception:
+                        logger.exception(
+                            "delivery completion failed delivery=%s", delivery_id
+                        )
+                    else:
+                        if self._deliver_callback is not None:
+                            try:
+                                await self._deliver_callback(delivery_id)
+                            except Exception:
+                                logger.exception(
+                                    "delivery send failed delivery=%s", delivery_id
+                                )
         return outcome
 
     async def interrupt(self, session_id: str) -> bool:
