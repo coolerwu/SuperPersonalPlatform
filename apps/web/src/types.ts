@@ -82,6 +82,35 @@ export type Session = {
   last_message_at: string;
 };
 
+export type SessionSummary = {
+  id: string;
+  title: string;
+  last_modified: number;
+  channel_type: string | null;
+  channel_name: string | null;
+  busy: boolean;
+};
+
+export type TranscriptMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  blocks: Array<{ type: string; [key: string]: unknown }>;
+};
+
+export type TurnStreamEvent =
+  | { type: "assistant_delta"; delta: string }
+  | { type: "reasoning_delta"; delta: string }
+  | { type: "tool_call"; name: string; input: Record<string, unknown> }
+  | {
+      type: "turn_end";
+      status?: string;
+      error?: string | null;
+      terminal_reason?: string | null;
+      usage?: Record<string, number> | null;
+    }
+  | { type: "turn_error"; error: string };
+
 export type CronJob = {
   id: string;
   agent_id: string;

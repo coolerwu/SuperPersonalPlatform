@@ -28,14 +28,10 @@ import type {
   MarketStatus,
   MemoryItem,
   MemoryScope,
-  Message,
-  MessagePage,
   Provider,
-  Run,
-  RunEvent,
   ScreenshotInfo,
-  Session,
   SessionSearchHit,
+  SessionSummary,
   SkillCatalog,
   SkillDetail,
   SystemInfo,
@@ -46,6 +42,7 @@ import type {
   TradeJournalRecord,
   TradeJournalStats,
   TradeJournalUpdatePayload,
+  TranscriptMessage,
 } from "./types";
 
 export class ApiError extends Error {
@@ -197,26 +194,26 @@ export const api = {
     payload: Partial<Pick<Provider, "name" | "base_url" | "model">> & { api_key?: string },
   ) => request<Provider>(`/api/providers/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
 
-  listSessions: (agentId: string) => request<Session[]>(`/api/agents/${agentId}/sessions`),
-  createSession: (agentId: string, title = "新会话") =>
-    request<Session>(`/api/agents/${agentId}/sessions`, { method: "POST", body: JSON.stringify({ title }) }),
-  getSessionActiveRun: (sessionId: string) =>
-    request<Run | null>(`/api/sessions/${sessionId}/active-run`),
-  deleteSession: (sessionId: string) =>
-    request<{ deleted: boolean }>(`/api/sessions/${sessionId}`, { method: "DELETE" }),
-  listMessages: (sessionId: string) => request<Message[]>(`/api/sessions/${sessionId}/messages`),
-  listMessagePage: (
-    sessionId: string,
-    params: { limit?: number; before?: string | null } = {},
-  ) => {
-    const search = new URLSearchParams();
-    if (params.limit) search.set("limit", String(params.limit));
-    if (params.before) search.set("before", params.before);
-    const query = search.toString();
-    return request<MessagePage>(
-      `/api/sessions/${sessionId}/messages/page${query ? `?${query}` : ""}`,
-    );
-  },
+  listSessions: (agentId: string) =>
+    request<SessionSummary[]>(`/api/agents/${agentId}/sessions`),
+  listSessionMessages: (sessionId: string, agentId: string) =>
+    request<TranscriptMessage[]>(
+      `/api/sessions/${sessionId}/messages?agent_id=${encodeURIComponent(agentId)}`,
+    ),
+  interruptSession: (sessionId: string) =>
+    request<{ interrupted: boolean }>(`/api/sessions/${sessionId}/interrupt`, { method: "POST" }),
+  deleteSession: (sessionId: string, agentId: string) =>
+    request<{ deleted: boolean }>(
+      `/api/sessions/${sessionId}?agent_id=${encodeURIComponent(agentId)}`,
+      { method: "DELETE" },
+    ),
+  renameSession: (sessionId: string, title: string, agentId: string) =>
+    request<{ renamed: boolean }>(
+      `/api/sessions/${sessionId}/rename?agent_id=${encodeURIComponent(agentId)}`,
+      { method: "POST", body: JSON.stringify({ title }) },
+    ),
+  sessionStreamUrl: (sessionId: string, turnId: string) =>
+    `/api/sessions/${sessionId}/stream?turn_id=${encodeURIComponent(turnId)}`,
   listScreenshots: (sessionId: string) =>
     request<ScreenshotInfo[]>(`/api/sessions/${sessionId}/screenshots`),
   screenshotUrl: (sessionId: string, runId: string, screenshotId: string) =>
@@ -276,10 +273,10 @@ export const api = {
       method: "POST",
     }),
 
-  sendMessage: (sessionId: string, content: string) =>
-    request<{ run_id: string; session_id: string; message_id: string }>("/api/chat/messages", {
+  sendMessage: (input: { agent_id: string; session_id: string; content: string }) =>
+    request<{ session_id: string; turn_id: string; accepted: boolean }>("/api/chat/messages", {
       method: "POST",
-      body: JSON.stringify({ session_id: sessionId, content }),
+      body: JSON.stringify(input),
     }),
 
   runChatCommand: (payload: { agent_id: string; session_id: string | null; command: string }) =>
@@ -287,12 +284,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-
-  getRun: (runId: string) => request<Run>(`/api/runs/${runId}`),
-  getRunEvents: (runId: string, after = 0) => request<RunEvent[]>(`/api/runs/${runId}/events?after=${after}`),
-  cancelRun: (runId: string) => request<{ cancelled: boolean }>(`/api/runs/${runId}/cancel`, { method: "POST" }),
-  retryRun: (runId: string) => request<{ run_id: string }>(`/api/runs/${runId}/retry`, { method: "POST" }),
-  streamUrl: (runId: string, after = 0) => `/api/runs/${runId}/stream?after=${after}`,
 
   getSystem: () => request<SystemInfo>("/api/system"),
   getSettings: () => request<AppSettings>("/api/settings"),
