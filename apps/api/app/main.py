@@ -228,6 +228,22 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             # market client is always released.
             try:
                 if start_worker:
+                    # Stop turn producers first. Cron marks a job as run before
+                    # its turn is queued, so letting registry close first could
+                    # cancel that turn while leaving next_run_at advanced. The
+                    # same applies to the WeChat inbound/delivery runtime.
+                    cron = getattr(app.state, "cron", None)
+                    if cron is not None:
+                        try:
+                            await cron.stop()
+                        except Exception:
+                            logger.exception("cron shutdown failed")
+                    weixin = getattr(app.state, "weixin", None)
+                    if weixin is not None:
+                        try:
+                            await weixin.stop()
+                        except Exception:
+                            logger.exception("weixin shutdown failed")
                     registry = getattr(app.state, "registry", None)
                     if registry is not None:
                         try:
@@ -262,18 +278,6 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                         set_active_worker(None)
                     except Exception:
                         logger.exception("backtest worker cleanup failed")
-                    cron = getattr(app.state, "cron", None)
-                    if cron is not None:
-                        try:
-                            await cron.stop()
-                        except Exception:
-                            logger.exception("cron shutdown failed")
-                    weixin = getattr(app.state, "weixin", None)
-                    if weixin is not None:
-                        try:
-                            await weixin.stop()
-                        except Exception:
-                            logger.exception("weixin shutdown failed")
                     worker = getattr(app.state, "worker", None)
                     if worker is not None:
                         try:

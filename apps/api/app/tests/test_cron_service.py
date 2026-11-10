@@ -18,6 +18,7 @@ from app.services.cron_service import (
     next_run,
     run_due_jobs,
     run_job_now,
+    update_job,
 )
 from app.services.identifiers import is_canonical_uuid
 from app.services.settings_store import (
@@ -409,6 +410,57 @@ async def test_create_job_requires_active_settings_agent(client) -> None:
                 prompt="不应该创建",
                 schedule="0 8 * * *",
             )
+
+
+async def test_update_job_sets_and_clears_push_target(client) -> None:
+    store = _store(
+        channels=[
+            ChannelSection(
+                id="ch1", agent_id="default", type="wechat", name="微信"
+            )
+        ],
+        conversations={
+            "ch1:wx-1": ConversationSection(
+                session_id=str(uuid.uuid4()),
+                channel_id="ch1",
+                display_name="Alice",
+            )
+        },
+    )
+    async with SessionLocal() as db:
+        job = await create_job(
+            db,
+            store=store,
+            agent_id="default",
+            name=f"推送-{uuid.uuid4().hex[:8]}",
+            prompt="检查推送目标",
+            schedule="0 8 * * *",
+        )
+        await db.commit()
+        await db.refresh(job)
+
+        job = await update_job(
+            db,
+            job.id,
+            store=store,
+            agent_id="default",
+            push_channel_id="ch1",
+            push_conversation_id="wx-1",
+        )
+        assert job.push_channel_id == "ch1"
+        assert job.push_conversation_id == "wx-1"
+
+        job = await update_job(
+            db,
+            job.id,
+            store=store,
+            agent_id="default",
+            push_channel_id="",
+            push_conversation_id="",
+        )
+        assert job.push_channel_id is None
+        assert job.push_conversation_id is None
+        await db.commit()
 
 
 async def test_detach_session_is_a_noop(client) -> None:

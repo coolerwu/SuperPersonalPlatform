@@ -3,8 +3,20 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from app.db import SessionLocal
+from app.models import CronJob
 from app.services.identifiers import is_canonical_uuid
-from app.services.settings_store import ChannelSection, ConversationSection
+from app.services.settings_store import (
+    AgentSection,
+    ChannelSection,
+    ConversationSection,
+)
+
+
+async def _set_agent_status(store, agent_id: str, status: str) -> None:
+    settings = await store.get()
+    agent = next(item for item in settings.agents if item.id == agent_id)
+    await store.update_agent(agent.model_copy(update={"status": status}))
 
 
 class FakeRegistry:
@@ -175,3 +187,116 @@ async def test_push_target_uses_settings_conversation(client) -> None:
 
     partial = _create_job(client, push_channel_id="ch-api")
     assert partial.status_code == 400
+
+
+async def test_update_push_target_sets_and_clears(client) -> None:
+    store = client.app.state.settings_store
+    suffix = uuid.uuid4().hex[:8]
+    channel_id = f"ch-upd-{suffix}"
+    external_id = f"wx-upd-{suffix}"
+    await store.update_channel(
+        ChannelSection(
+            id=channel_id, agent_id="default", type="wechat", name="更新微信"
+        )
+    )
+    await store.update_conversation(
+        f"{channel_id}:{external_id}",
+        ConversationSection(
+            session_id=str(uuid.uuid4()),
+            channel_id=channel_id,
+            display_name="Bob",
+        ),
+    )
+
+    job = _create_job(client).json()
+    updated = client.put(
+        f"/api/cron-jobs/{job['id']}",
+        json={
+            "push_channel_id": channel_id,
+            "push_conversation_id": external_id,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["push_channel_id"] == channel_id
+    assert body["push_conversation_id"] == external_id
+    assert body["push_channel_name"] == "更新微信"
+    assert body["push_conversation_name"] == "Bob"
+
+    partial = client.put(
+        f"/api/cron-jobs/{job['id']}", json={"push_channel_id": channel_id}
+    )
+    assert partial.status_code == 400
+
+    cleared = client.put(
+        f"/api/cron-jobs/{job['id']}",
+        json={"push_channel_id": "", "push_conversation_id": ""},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["push_channel_id"] is None
+    assert cleared.json()["push_conversation_id"] is None
+
+
+async def test_paused_agent_can_view_edit_and_delete_jobs(client) -> None:
+    store = client.app.state.settings_store
+    job = _create_job(client).json()
+    await _set_agent_status(store, "default", "paused")
+    try:
+        assert _create_job(client).status_code == 404
+
+        listed = client.get("/api/cron-jobs?agent_id=default")
+        assert listed.status_code == 200
+        assert any(item["id"] == job["id"] for item in listed.json())
+
+        updated = client.put(f"/api/cron-jobs/{job['id']}", json={"enabled": False})
+        assert updated.status_code == 200
+
+        assert client.post(f"/api/cron-jobs/{job['id']}/run").status_code == 404
+
+        assert client.delete(f"/api/cron-jobs/{job['id']}").status_code == 200
+    finally:
+        await _set_agent_status(store, "default", "active")
+
+
+async def test_archived_agent_jobs_are_hidden(client) -> None:
+    store = client.app.state.settings_store
+    job = _create_job(client).json()
+    await _set_agent_status(store, "default", "archived")
+    try:
+        assert client.get("/api/cron-jobs?agent_id=default").status_code == 404
+        assert (
+            client.put(f"/api/cron-jobs/{job['id']}", json={"enabled": False}).status_code
+            == 404
+        )
+        assert client.delete(f"/api/cron-jobs/{job['id']}").status_code == 404
+    finally:
+        await _set_agent_status(store, "default", "active")
+
+
+async def test_permanent_agent_delete_cascades_cron_jobs(client) -> None:
+    store = client.app.state.settings_store
+    suffix = uuid.uuid4().hex[:8]
+    agent = client.post(
+        "/api/agents", json={"name": f"CronAgent-{suffix}"}
+    ).json()
+    agent_id = agent["id"]
+    await store.update_agent(
+        AgentSection(id=agent_id, name=f"CronAgent-{suffix}", status="active")
+    )
+    try:
+        job = _create_job(client, agent_id=agent_id).json()
+        assert client.delete(f"/api/agents/{agent_id}/permanent").status_code == 200
+        async with SessionLocal() as db:
+            assert await db.get(CronJob, job["id"]) is None
+    finally:
+        await store.mutate_raw(
+            lambda data: data.update(
+                {
+                    "agents": [
+                        item
+                        for item in data.get("agents", [])
+                        if item.get("id") != agent_id
+                    ]
+                }
+            )
+        )

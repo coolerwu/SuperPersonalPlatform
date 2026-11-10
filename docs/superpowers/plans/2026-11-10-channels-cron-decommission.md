@@ -1367,6 +1367,7 @@ git commit -m "Remove deepagents/LangGraph stack and legacy tables"
 
 **Files:**
 - Modify: `docs/intent.md`、`CLAUDE.md`、`README.md`
+- Modify: `apps/web/src/types.ts`（CronJob 去掉 `last_run_id`/`last_run_status`）、`apps/web/src/api.ts`（cron 创建/删除/手动运行的新响应类型）、`apps/web/src/components/CronPage.tsx`（去掉 `last_run_status` 展示，按新字段适配）
 
 - [ ] **Step 1: 同步文档**
 

@@ -107,6 +107,29 @@ def test_shutdown_closes_registry_before_runner(
     assert order == ["registry.close", "runner.close_all"]
 
 
+def test_shutdown_stops_turn_producers_before_registry(
+    quiet_background_workers, monkeypatch
+):
+    order = []
+    _patch_runtime_classes(monkeypatch, order)
+
+    async def fake_cron_stop(self):
+        order.append("cron.stop")
+
+    async def fake_weixin_stop(self):
+        order.append("weixin.stop")
+
+    monkeypatch.setattr(CronRuntime, "stop", fake_cron_stop)
+    monkeypatch.setattr(WeixinRuntime, "stop", fake_weixin_stop)
+
+    with TestClient(create_app(start_worker=True)) as client:
+        assert client.get("/api/health").json() == {"ok": True}
+
+    assert order[:2] == ["cron.stop", "weixin.stop"]
+    assert order.index("registry.close") > order.index("weixin.stop")
+    assert order.index("registry.close") < order.index("runner.close_all")
+
+
 def test_startup_failure_still_tears_down_runtime(
     quiet_background_workers, monkeypatch
 ):

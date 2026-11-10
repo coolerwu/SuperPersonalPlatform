@@ -44,11 +44,20 @@ def _registry(request: Request) -> Any:
     return registry
 
 
-def _active_agent(settings: Any, agent_id: str) -> Any:
+def _available_agent(settings: Any, agent_id: str) -> Any:
+    """An Agent that may still own cron jobs (paused is fine, archived is not)."""
     if not valid_agent_id(agent_id):
         raise HTTPException(status_code=404, detail="agent not found")
     agent = next((item for item in settings.agents if item.id == agent_id), None)
-    if agent is None or agent.status != "active":
+    if agent is None or agent.status == "archived":
+        raise HTTPException(status_code=404, detail="agent not found")
+    return agent
+
+
+def _active_agent(settings: Any, agent_id: str) -> Any:
+    """An Agent that may create or run jobs right now."""
+    agent = _available_agent(settings, agent_id)
+    if agent.status != "active":
         raise HTTPException(status_code=404, detail="agent not found")
     return agent
 
@@ -96,7 +105,7 @@ async def list_cron_jobs(
     db: AsyncSession = Depends(get_db),
 ) -> list[CronJobOut]:
     settings = await _store(request).get()
-    _active_agent(settings, agent_id)
+    _available_agent(settings, agent_id)
     jobs = await cron_service.list_jobs(db, agent_id)
     return [_job_out(job, settings) for job in jobs]
 
@@ -141,7 +150,7 @@ async def update_cron_job(
         raise HTTPException(status_code=404, detail="cron job not found")
     store = _store(request)
     settings = await store.get()
-    _active_agent(settings, job.agent_id)
+    _available_agent(settings, job.agent_id)
     try:
         job = await cron_service.update_job(
             db,
@@ -175,6 +184,7 @@ async def delete_cron_job(
     if job is None:
         raise HTTPException(status_code=404, detail="cron job not found")
     settings = await _store(request).get()
+    _available_agent(settings, job.agent_id)
     try:
         job = await cron_service.delete_job(db, job_id, agent_id=job.agent_id)
     except CronNotFound as exc:
@@ -185,14 +195,22 @@ async def delete_cron_job(
 
 
 @router.post("/{job_id}/run", response_model=CronJobOut, status_code=201)
-async def run_cron_job_now(job_id: str, request: Request) -> CronJobOut:
+async def run_cron_job_now(
+    job_id: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> CronJobOut:
+    job = await db.get(CronJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="cron job not found")
     store = _store(request)
+    settings = await store.get()
+    _active_agent(settings, job.agent_id)
     registry = _registry(request)
     try:
         job = await run_job_now(job_id, store=store, registry=registry)
     except CronNotFound as exc:
         raise HTTPException(status_code=404, detail="cron job not found") from exc
     except CronInactiveAgent as exc:
+        # The Agent may have been paused between the check above and the trigger.
         raise HTTPException(status_code=400, detail="Agent 已归档或暂停，无法运行") from exc
     except CronBusy as exc:
         raise HTTPException(
@@ -202,5 +220,4 @@ async def run_cron_job_now(job_id: str, request: Request) -> CronJobOut:
                 "status": exc.status,
             },
         ) from exc
-    settings = await store.get()
     return _job_out(job, settings)
