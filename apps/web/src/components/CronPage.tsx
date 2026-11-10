@@ -13,14 +13,6 @@ type CronPageProps = {
   onClose: () => void;
 };
 
-const RUN_STATUS_TEXT: Record<string, string> = {
-  queued: "排队中",
-  running: "运行中",
-  completed: "已完成",
-  failed: "失败",
-  cancelled: "已取消",
-};
-
 const CHANNEL_STATUS_TEXT: Record<string, string> = {
   pairing: "待登录",
   active: "已连接",
@@ -274,7 +266,7 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
     setNotice("");
     try {
       await api.runCronJob(job.id);
-      setNotice("已在任务会话中创建运行");
+      setNotice("已在任务会话中发起一轮对话");
       await loadJobs(agentId, true);
     } catch (exc) {
       setError(errorText(exc));
@@ -315,7 +307,7 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
             <div className="settings-card-head">
               <div>
                 <h2>当前 Agent：{agent?.name ?? "—"}</h2>
-                <p>到点后自动在任务会话里发起一轮 Run；上一次还没结束时会跳过本次触发。</p>
+                <p>到点后自动在任务会话里发起一轮对话；上一次还没结束时会跳过本次触发。</p>
               </div>
               <div className="settings-card-actions">
                 <button className="primary" onClick={openCreate} disabled={!agentId}>
@@ -358,9 +350,6 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
                     </div>
                     <div className="channel-meta">
                       最近运行 {formatInZone(job.last_run_at, job.timezone) || "—"}
-                      {job.last_run_status
-                        ? ` · ${RUN_STATUS_TEXT[job.last_run_status] ?? job.last_run_status}`
-                        : ""}
                       {job.last_skipped_at ? " · 上次触发因会话忙被跳过" : ""}
                     </div>
                     <div className="channel-meta">

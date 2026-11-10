@@ -109,8 +109,6 @@ export type CronJob = {
   session_id: string | null;
   next_run_at: string | null;
   last_run_at: string | null;
-  last_run_id: string | null;
-  last_run_status: string | null;
   last_skipped_at: string | null;
   push_channel_id: string | null;
   push_conversation_id: string | null;

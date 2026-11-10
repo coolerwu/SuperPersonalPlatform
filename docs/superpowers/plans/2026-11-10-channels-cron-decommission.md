@@ -200,7 +200,7 @@ async def list_pending() -> list[ChannelDelivery]:
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_channel_delivery_service.py -q`
 Expected: PASS
 
-- [ ] **Step 5: 三次自查并提交**
+- [x] **Step 5: 三次自查并提交**
 
 ```bash
 git add apps/api/app/models.py apps/api/app/services/channel_delivery.py apps/api/app/tests/test_channel_delivery_service.py
@@ -377,7 +377,7 @@ class Turn:
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_claude_runner_delivery.py apps/api/app/tests/test_claude_runner.py -q`
 Expected: PASS
 
-- [ ] **Step 5: 三次自查并提交**
+- [x] **Step 5: 三次自查并提交**
 
 ```bash
 git add apps/api/app/services/claude_runner.py apps/api/app/tests/test_claude_runner_delivery.py
@@ -665,7 +665,7 @@ async def ingest(
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_channel_intake.py -q`
 Expected: PASS
 
-- [ ] **Step 5: 三次自查并提交**
+- [x] **Step 5: 三次自查并提交**
 
 ```bash
 git add apps/api/app/services/channel_intake.py apps/api/app/tests/test_channel_intake.py
@@ -860,7 +860,7 @@ Expected: FAIL
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_weixin_runtime_sdk.py apps/api/app/tests/test_channel_images.py -q`
 Expected: PASS
 
-- [ ] **Step 5: 三次自查并提交**
+- [x] **Step 5: 三次自查并提交**
 
 ```bash
 git add apps/api/app/services/weixin_runtime.py apps/api/app/main.py apps/api/app/tests/test_weixin_runtime_sdk.py
@@ -1037,7 +1037,7 @@ async def trigger_job(
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_cron_service.py apps/api/app/tests/test_cron_api.py -q`
 Expected: PASS（按新语义重写断言）
 
-- [ ] **Step 5: 三次自查并提交**
+- [x] **Step 5: 三次自查并提交**
 
 ```bash
 git add apps/api/app/models.py apps/api/app/services/cron_service.py apps/api/app/routers/cron.py apps/api/app/tests/test_cron_service.py apps/api/app/tests/test_cron_api.py
@@ -1168,7 +1168,7 @@ def transcript_path(session_id: str, agent_id: str, *, home: Path | None = None)
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_session_cleanup.py -q`
 Expected: PASS
 
-- [ ] **Step 5: 三次自查并提交**
+- [x] **Step 5: 三次自查并提交**
 
 ```bash
 git add apps/api/app/services/session_service.py apps/api/app/tests/test_session_cleanup.py
@@ -1253,7 +1253,7 @@ async def write_memory(payload: dict, request: Request) -> dict:
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_app_settings.py apps/api/app/tests/test_knowledge_api.py apps/api/app/tests/test_api.py -q`
 Expected: PASS（按新语义调整断言）
 
-- [ ] **Step 5: 三次自查并提交**
+- [x] **Step 5: 三次自查并提交**
 
 ```bash
 git add apps/api/app/routers apps/api/app/services/knowledge_sync.py apps/api/app/tests
@@ -1383,30 +1383,37 @@ git commit -m "Remove deepagents/LangGraph stack and legacy tables"
 - Modify: `docs/intent.md`、`CLAUDE.md`、`README.md`
 - Modify: `apps/web/src/types.ts`（CronJob 去掉 `last_run_id`/`last_run_status`）、`apps/web/src/api.ts`（cron 创建/删除/手动运行的新响应类型）、`apps/web/src/components/CronPage.tsx`（去掉 `last_run_status` 展示，按新字段适配）
 
-- [ ] **Step 1: 同步文档**
+- [x] **Step 1: 同步文档**
 
 写明渠道、定时、清理、配置接口的新形态；删除记忆系统、Run 历史、搜索、rubric、eval 的描述；更新数据表清单与运行时目录。
 
-- [ ] **Step 2: 后端全量测试**
+- [x] **Step 2: 后端全量测试**
 
 Run: `.venv/bin/python -m pytest apps/api/app/tests -q`
 Expected: PASS
 
-- [ ] **Step 3: 前端构建**
+- [x] **Step 3: 前端构建**
 
 Run: `cd apps/web && npm run build`
 Expected: PASS
 
-- [ ] **Step 4: 验收清单**
+- [x] **Step 4: 验收清单**
 
 逐条执行核心 spec 第 13 节 10 条验收项，记录结果。
 
-- [ ] **Step 5: 三次自查并提交**
+- [x] **Step 5: 三次自查并提交**
 
 ```bash
 git add docs/intent.md CLAUDE.md README.md apps/web/dist
 git commit -m "Document SDK-native channels and cron"
 ```
+
+> **质量审查结果（Task 9）：**
+> - 文档按当前实现重写：`docs/intent.md` 重新编号为 F1–F16（旧 F1–F82 归档在 git 历史），`CLAUDE.md`、`README.md` 与 `deploy/.env.example` 同步渠道、定时、清理、配置接口、六张表与运行时目录；删除记忆系统、Run 历史、搜索、rubric、eval 描述，写明本版不包含项与升级损失。
+> - 代码小修：`seed_default_skills` 清理已移除且未被用户修改的内置技能（`memory-organizer`），用户改过的保留并停止跟踪；默认提示词不再提 `/skills/<name>/SKILL.md`；删除 `.message-command-*` 死样式；前端 CronJob 去掉 `last_run_id`/`last_run_status`，`api.ts` 的删除/立即运行响应改为 `CronJob`；顺带删除未使用的 `session_title` 常量与函数。
+> - 三次自查发现并修正：提示词测试断言、删除 Agent 会连工作区一起删除（原文档误写“保留”）、前端没有单条消息重试按钮（改为“重新发送”）、`/api/settings` 与 `/api/cron-jobs` 的存储位置表述、CronPage 的 Run 措辞。
+> - 验证：后端 573 passed / 3 skipped；前端构建通过；`grep -r "deepagents\|langgraph\|langchain_openai" apps/api` 无结果（editable 元数据已刷新）。真实 DeepSeek 流式/resume/auto memory 与微信投递、定时推送需生产验证。
+> - 遗留（下一版/工具层）：`data/checkpoints` 空目录仍由 `main.py` 创建；`detach_session` 兼容桩仅测试使用；技能正文仍描述未接入的工具；`langchain-core` 暂留；`close_agent_clients` 无超时预算。
 
 ---
 

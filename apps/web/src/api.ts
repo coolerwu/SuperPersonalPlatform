@@ -249,19 +249,32 @@ export const api = {
     schedule: string;
     timezone: string;
     enabled: boolean;
+    push_channel_id?: string;
+    push_conversation_id?: string;
   }) => request<CronJob>("/api/cron-jobs", { method: "POST", body: JSON.stringify(payload) }),
   updateCronJob: (
     jobId: string,
-    payload: Partial<Pick<CronJob, "name" | "prompt" | "schedule" | "timezone" | "enabled">>,
+    payload: Partial<
+      Pick<
+        CronJob,
+        | "name"
+        | "prompt"
+        | "schedule"
+        | "timezone"
+        | "enabled"
+        | "push_channel_id"
+        | "push_conversation_id"
+      >
+    >,
   ) =>
     request<CronJob>(`/api/cron-jobs/${jobId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
   deleteCronJob: (jobId: string) =>
-    request<{ deleted: boolean }>(`/api/cron-jobs/${jobId}`, { method: "DELETE" }),
+    request<CronJob>(`/api/cron-jobs/${jobId}`, { method: "DELETE" }),
   runCronJob: (jobId: string) =>
-    request<{ run_id: string; session_id: string }>(`/api/cron-jobs/${jobId}/run`, {
+    request<CronJob>(`/api/cron-jobs/${jobId}/run`, {
       method: "POST",
     }),
 

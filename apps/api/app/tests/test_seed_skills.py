@@ -74,3 +74,32 @@ def test_seed_survives_corrupt_state_file(tmp_path) -> None:
 
     assert target.read_text(encoding="utf-8") == original
     assert _state(tmp_path)["skills"]["web-browser"] == _hash(original)
+
+
+def test_seed_removes_unmodified_retired_builtin_skill(tmp_path, monkeypatch) -> None:
+    seed_default_skills(tmp_path)
+    name = "web-browser"
+    monkeypatch.delitem(DEFAULT_SKILLS, name)
+
+    seed_default_skills(tmp_path)
+
+    assert not (tmp_path / name).exists()
+    assert name not in _state(tmp_path)["skills"]
+
+
+def test_seed_keeps_user_edited_retired_builtin_skill(tmp_path, monkeypatch) -> None:
+    seed_default_skills(tmp_path)
+    name = "web-browser"
+    target = tmp_path / name / "SKILL.md"
+    edited = "user customized retired skill"
+    target.write_text(edited, encoding="utf-8")
+    monkeypatch.delitem(DEFAULT_SKILLS, name)
+
+    seed_default_skills(tmp_path)
+
+    assert target.read_text(encoding="utf-8") == edited
+    assert name not in _state(tmp_path)["skills"]
+    # Once tracking is dropped, later seeds never delete or rewrite the copy.
+    seed_default_skills(tmp_path)
+    assert target.read_text(encoding="utf-8") == edited
+    assert name not in _state(tmp_path)["skills"]

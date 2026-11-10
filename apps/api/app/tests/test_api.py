@@ -28,7 +28,8 @@ def test_default_agent_and_provider(client) -> None:
     assert "工作区" in payload[0]["instructions"]
     assert "保持直接" in payload[0]["instructions"]
     assert "简体中文" in payload[0]["instructions"]
-    assert "SKILL.md" in payload[0]["instructions"]
+    assert "尚未接入" in payload[0]["instructions"]
+    assert "SKILL.md" not in payload[0]["instructions"]
     assert "技能创作" in payload[0]["instructions"]
 
     providers = client.get("/api/providers").json()

@@ -1,10 +1,10 @@
 # Intent
 
 - 状态：现行
-- 最后更新：2026-11-08
-- 编号水位：F82
+- 最后更新：2026-11-11
+- 编号水位：F16
 
-本文件是新项目的需求唯一来源。v1 从 0 到 1 重建，旧代码与旧数据模型已废弃；旧需求不再作为实现依据。
+本文件是新项目的需求唯一来源。2026-11-11 已按 Claude Agent SDK 迁移后的实现重写；旧的 F1–F82 需求记录（deepagents/LangGraph、记忆系统、rubric、eval、会话全文搜索、Run 历史）随迁移废止，历史文本见 git 历史（cf67560 及之前）。编号从 F1 重新起算。
 
 ## 怎么用
 
@@ -13,3335 +13,371 @@
 - 没有本文件覆盖的改动不进入实现。
 - 方案先定后做；涉及新依赖、破坏性接口、数据迁移时先确认。
 
-## 迁移进行中（2026-11-11）
-
-执行核已切换为 Claude Agent SDK（`ClaudeSDKClient`），模型走 DeepSeek 的 Anthropic 兼容端点；会话与消息由 SDK transcript 管理，平台只保留 `running_sessions` 运行时租约。平台配置写入 `data/settings.json`。
-
-网页聊天阶段已下线：rubric 质检、QuickJS eval、会话全文搜索、Run 历史与旧的记忆系统（用户画像改用 `CLAUDE.md`，Agent 笔记用 auto memory）；渠道与定时任务仍在旧执行栈上，随第二份计划切换。
-
-渠道、定时任务、配置接口与旧数据库表的切换仍在第二份迁移计划中执行；最终行为以两份计划完成后的文档为准。设计与计划见 `docs/superpowers/specs/2026-11-10-claude-agent-sdk-migration-design.md` 与 `docs/superpowers/plans/`。
-
 ## 需求记录
 
-### F1 Agent Command Center v1
+### F1 单用户自托管 Agent Command Center（现行基线）
 
-- 状态：进行中
-- 日期：2026-10-19
-- 范围：网页 Chat + 多 Agent + 默认 general-purpose Subagent + Checkpoint/Runs
-- 前置依赖：无（旧系统已废弃）
+- 状态：现行
+- 日期：2026-11-11
+- 范围：网页 Chat、多 Agent 配置、微信个人号渠道、定时任务、技能库、知识库镜像、量化回测、交易记录、资产配置、缠论图
 
 #### 背景与目标
 
-旧平台整体推翻，从 0 到 1 重建一个单用户、自托管的 Agent 指挥中心。v1 只做最小闭环：能稳定聊天、能切换多个 Agent、能派给子 Agent、每次消息落 Run、刷新/重启后能恢复。
+单用户、自托管的 Agent 指挥中心。执行核使用 Claude Agent SDK（Python，`ClaudeSDKClient`），模型走 DeepSeek 的 Anthropic 兼容端点。平台只保留调度与业务能力：会话与消息由 SDK transcript 管理，平台配置在 `data/settings.json`，运行时租约在 `running_sessions`。
 
-#### 用户故事
-
-- 作为用户，我打开网页就能选一个 Agent 开始聊天，回答是流式输出的。
-- 作为用户，我可以创建多个 Agent，每个 Agent 有独立的人格提示词、模型和会话。
-- 作为用户，主 Agent 可以把一个子任务派给 general-purpose 子 Agent，并能在 Run trace 里看到。
-- 作为用户，我刷新页面或重启服务后，会话历史和 Run 状态还在。
-- 作为用户，我可以取消一个正在运行的 Run。
+成功标准：网页、微信、定时三条入口都跑在同一执行核上；重启后正在执行的会话能自动续跑；回测、缠论、资产配置、交易记录、知识库页面行为不变；不依赖 deepagents / LangGraph / langchain-openai。
 
 #### 功能点清单
 
-1. 单用户 token 登录。
-2. Provider 配置：OpenAI-compatible（DeepSeek），可配置 base_url、model、api_key。
-3. Agent CRUD：名称、instructions、provider/model、status。
-4. 每个 Agent 独立会话列表；新建/切换会话。
-5. Chat：流式输出、历史消息、错误展示。
-6. 每次用户消息或手动运行创建一个 Run；Run 状态、事件、usage/cost 落盘。
-7. 默认 general-purpose 子 Agent；主 Agent 可委派任务；子 Agent 响应进入 Run trace。
-8. Checkpoint：每个 session 一个 thread；刷新/重启后可继续同一会话。
-9. 取消 Run：queued/running 都能取消并落终态。
-10. 右侧抽屉：Run 时间线/事件/usage、Agent 配置。
-11. 不同 session 的 Run 可并发执行，最多 `BROWSER_CONCURRENCY` 个（默认 5）；同一 session 仍最多一个活动 Run。并发数与浏览器标签页上限绑定，避免多个 Run 叠加出更多 Chromium 实例。
-12. Provider 模型调用失败时按可重试错误（429/5xx/超时/连接）做最多 3 次指数退避 + jitter；4xx 立即失败。`ChatOpenAI` 的 SDK 自身重试关闭，避免与中间件叠加。可重试失败写入 warning 日志（agent/session/异常类型）。（F17 起改为模型层重试，并补充子 Agent 与流式语义。）
-13. 单个 Run 的 LangGraph 递归上限由 `RUN_RECURSION_LIMIT` 控制（默认 500，主 Agent 与 general-purpose 子 Agent 共用；原实现写死 50）。真的撞上上限时，执行器先在同一 checkpoint 上带「继续完成原任务」提示自动续跑一次（`step_limit` 事件 `action=continue`），续跑仍撞上限才用同一模型、带上 checkpoint 里的完整对话（不带工具）生成最终答复（`action=summary`）；Run 仍以 `completed` 收尾，输出前标注「已达到执行步骤上限」。
-14. deepagents 的上下文压缩（summarization）是内部模型调用，其流式片段（`metadata.lc_source=summarization`）必须过滤，不进入 assistant 输出、思考过程或 Run 事件。
+1. 单用户 token 登录（cookie）。
+2. 网页 Chat：流式输出、历史会话、停止、运行中排队追问、Markdown/公式渲染、附件、引用；失败或停止后重新发送即可，不提供单条消息重试。
+3. 多 Agent：名称、instructions、Provider、状态；每个 Agent 独立工作区与会话目录；左上角 Agent 选择器是全站 per-agent 配置的唯一来源。
+4. 执行核：`ClaudeSDKClient`；会话 UUID 即 SDK `session_id`；transcript 存 `claude/projects/<agent_id>/<uuid>.jsonl`；会话列表/历史/重命名/删除走 SDK。
+5. 重启恢复：`running_sessions` 运行时租约 + SDK `resume`；启动时自动续跑，恢复提示要求不重复已完成步骤。
+6. 微信个人号渠道：扫码登录、iLink 长轮询、5 秒打包、命令、引用找回、图片/文件、回复投递与补发。
+7. 定时任务：5 字段 cron、IANA 时区、专属会话、忙时跳过并审计、可选推送到微信联系人、停机后最多补跑一次。
+8. 会话保留清理：按 transcript mtime 与保留天数删除，跳过运行中会话，保留 auto memory。
+9. 记忆：用户画像 = `claude/CLAUDE.md`（记忆页单文档编辑）；Agent 指令 = `settings.json`；Agent 笔记由 Claude auto memory 管理。
+10. 配置页：Provider、Agent、知识库、运行环境；所有平台配置写入 `data/settings.json`，密钥只返回 `has_api_key` / `has_password`。
+11. 技能库：全局 `skills/` 目录，内置技能 seed 与哈希跟踪；本版技能工具尚未接入 Agent。
+12. 知识库：WebDAV 双向镜像到 `knowledge/`，配置与同步状态在设置接口；本版尚未挂载给 Agent。
+13. 业务页面：回测、交易记录、资产配置、缠论图，均不绑定 Agent。
+14. 前端路由自建（History API），刷新/直达/前进后退可用。
 
 #### 验收标准
 
-- 能创建/切换多个 Agent；每个 Agent 的会话、checkpoint 隔离。
-- Chat 流式输出；刷新后会话历史与 Run 状态可恢复。
-- 主 Agent 能把任务派给 general-purpose 子 Agent；trace 可见。
-- 每次用户消息创建 Run；Run 详情展示事件、usage/cost。
-- 重启 api/worker 后 queued/running 能恢复：优雅停止和进程崩溃都会把 running 重新排队，启动后继续；用户主动取消的 Run 保持 cancelled，不会被重启复活。仍打开的前端页面刷新后重新接上该 Run。
-- 两个不同 session 的 Run 可同时处于 running；第三个 session 的 Run 排队，直到有空位；同一 session 的第二个 Run 仍被拒绝。
-- 撞上上限时先在原会话上自动续跑一次，仍超限才输出进展总结并记录 `step_limit` 事件，Run 不直接失败。
-- 服务重启时正在运行的 Run 变为 queued 并在启动后继续；用户主动取消的 Run 不会被重启复活；仍打开的前端页面刷新后重新接上该 Run。
-- 429/5xx/超时/连接错误会退避重试；401/400 等 4xx 立即失败。
-- 取消 Run 能停止并落终态。
-- 不暴露文件、Shell、浏览器、skills、memory 工具。
+- 能创建/切换多个 Agent；每个 Agent 的会话、transcript、工作区隔离。
+- Chat 流式输出；刷新后历史从 transcript 读回；刷新会丢失当前正在流式输出的内容（已知损失）。
+- 执行中可停止；租约删除；重启后正在执行的会话自动续跑。
+- 微信、定时入口与网页共用执行核与会话队列。
 - 后端测试与前端构建通过。
 
 #### 约束边界
 
-- 单用户、自托管；不做多租户/RBAC。
-- v1 不接入微信/Telegram、WebDAV、行情、事件/触发器/定时/Webhook。（F18 起支持个人微信 channel；F26 起支持加密货币历史行情回测，仍不做实时行情与实盘交易；F31 起支持定时任务，仍不做事件触发与 Webhook；群聊、媒体与主动推送仍不在范围。）
-- v1 不做审批/HITL（无副作用工具）。
-- 不做自定义子 Agent、Agent 间协作。
-- 不做技能市场、技能版本/eval、向量记忆。
-- 旧 workspace 数据不迁移、不双写；`.super-personal-platform/` 仅保留，不作为 v1 数据源。
+- 单用户、自托管，不做多租户/RBAC。
+- 单进程部署；cron 与微信运行时都在 API 进程内，多 worker 会重复触发。
+- 不提供刷新后继续看当前输出、消息时间戳、会话全文搜索、Run 历史、rubric 质检、QuickJS eval、多 Agent 协作。
+- 密钥只存 `data/settings.json`（权限 0600），不写日志、不返回前端。
 
 #### 非目标
 
-- 交互式浏览器、文件系统、Shell、Skills、Memory；
-- 移动端 App；
-- 独立 Command Center 首页和事件流大盘；
-- 旧 API/页面/执行面的兼容层。
+- 多 Agent 协作、自定义子 Agent 编排。
+- 事件触发、Webhook、主动推送。
+- 工具层迁移（技能工具、add_dirs、MCP、浏览器/搜索/回测工具接入 Agent）——下一版本。
 
-#### 开放问题
+### F2 执行核与网页聊天
 
-- v2 先加 Skills/Memory 还是文件/Shell？
+- 状态：现行
+- 日期：2026-11-11
+- 来源：Claude Agent SDK 迁移
 
-### F2 配置页与事件可读性
-
-- 状态：进行中
-- 日期：2026-10-19
-- 来源：F1 使用反馈
-
-#### 背景
-
-右侧抽屉只覆盖 Run 和 Agent，Provider 与运行环境分散；Run 事件把每个流式片段原样铺开，噪音大；宽屏下消息列左右跨度过宽。
-
-#### 功能点
-
-1. 新增独立配置页：侧栏入口；集中新增/编辑 Provider，编辑 Agent，并查看运行环境。
-2. Agent tab 列出全部 Agent 的摘要（Provider/model、启用技能数、自动记忆开关、状态）；点击行切换全局选中的 Agent（与侧边栏选择器同步），下方编辑区只编辑当前 Agent，不持有第二套选择状态。
-3. 运行环境展示：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关。
-4. Run 事件默认隐藏 `assistant_delta` 原始片段，可展开查看；事件仍完整落库。
-5. Chat 内容列统一宽度，标题、消息和输入框对齐。
-
-#### 验收标准
-
-- 配置页能新增/编辑 Provider、编辑 Agent、查看运行环境。
-- Agent tab 显示全部 Agent 的摘要；点击非当前 Agent 后，侧边栏选择器与编辑区同步切换，会话列表跟随切换。
-- 原始流式片段默认折叠，展开后可见。
-- 消息与输入框左右边界对齐，宽屏下不出现过宽横向跨度。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- Provider 删除、密钥轮换审计；
-- 多用户/RBAC；
-- 事件保留策略与自动清理。
-
-### F3 生产改为宿主机 systemd + SQLite
-
-- 状态：进行中
-- 日期：2026-10-19
-- 来源：F2 部署反馈
-
-#### 背景
-
-v1 生产使用 Docker Compose（Postgres + API + Web）。容器层增加了构建、日志、卷备份和端口映射的运维成本；用户希望回到可直接改代码、直接重启的宿主机运行方式。
-
-#### 功能点
-
-1. 生产改为用户级 systemd 服务 + 仓库内 venv，单进程监听 8888。
-2. 数据库改为 SQLite，文件位于部署目录 `data/app.db`；checkpoint 在 `data/checkpoints/`。
-3. FastAPI 直接托管 `apps/web/dist`，提供 SPA fallback；生产不再使用 nginx。
-4. 时间列使用 UTC-aware 类型，SQLite 读回仍带时区。
-5. SQLite 开启 WAL 与 busy timeout。
-6. 现有 Postgres 数据一次性迁移到 SQLite，保留 Provider、Agent、Session、Message、Run、RunEvent。
-
-#### 验收标准
-
-- 生产只有一个 systemd 服务在 8888 监听，Docker 容器全部停止。
-- 原有数据条数与迁移前一致，前端能正常登录、看会话和 Run。
-- 刷新/重启服务后会话与 Run 可恢复。
-- `/api/health` 200；`/api/system` 返回 sqlite。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 多实例/高可用；
-- Postgres 与 SQLite 双写；
-- 容器回滚路径；
-- Agent 工具能力（文件/Shell/浏览器）。
-
-### F4 彻底删除 Agent 与 Chat 体验升级
-
-- 状态：进行中
-- 日期：2026-10-19
-- 来源：F2/F3 使用反馈
-
-#### 背景
-
-Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Markdown、消息操作和产品化的视觉层次。
-
-#### 功能点
-
-1. Agent 彻底删除：级联删除该 Agent 的 sessions、messages、runs、run_events 和 checkpoint；有活动 Run 时拒绝；二次确认要求输入 Agent 名称。
-2. Chat 视觉方向 B：浅色画布、浅色侧栏、悬浮输入卡片、assistant 消息行 + user 气泡。
-3. Markdown 渲染：用户消息和 assistant 消息都支持 GFM（表格、列表、任务列表）、代码高亮、代码块复制、链接和图片。
-4. 消息操作：复制消息、引用到输入框、失败 Run 重试。
-5. 交互：流式 Markdown、停止生成、自动增高输入框、靠近底部才自动滚动、空状态建议；详情抽屉默认关闭，关闭时内容列加宽。
-6. 新对话懒创建：点击「新对话」只进入空白草稿状态，首次发送消息时才创建 Session。
-7. 失败 Run 在刷新后仍展示错误和重试入口。
-8. 多 Agent 切换连续性：输入草稿按 Agent 保留（当前页面内）；切换时立即清空旧 Agent 的会话与消息视图，避免在新 Agent 标题下闪现旧内容；并发会话列表请求以最后一次切换为准。
-9. 运行态与错误作用域：每个会话独立跟踪自己的 Run；另一个会话的 Run 运行中时，当前会话不受影响，可以直接发送（并发未满时立即运行，已满时排队）；异步失败只在所属 Agent/会话仍是当前视图时显示错误，切回后失败 Run 的错误和重试从 Run 恢复。
-10. 模型思考：捕获 Provider 返回的 `reasoning_content` 流为 `reasoning_delta` 事件；聊天中以可折叠「思考过程」展示，思考阶段展开、开始输出答案后自动折叠，完成后默认折叠。刷新后恢复当前会话最后一个 Run 的思考；更早 Run 的思考保留在 `run_events`，暂不在聊天中回溯。
-
-#### 验收标准
-
-- 配置页可彻底删除 Agent，删除后会话、Run、事件和 checkpoint 一并消失。
-- 有活动 Run 的 Agent 无法删除。
-- Chat 为浅色主题；assistant 消息按 Markdown 渲染，代码块可复制。
-- 用户消息可复制和引用；失败 Run 可重试。
-- 刷新页面后失败 Run 的错误和重试按钮仍然可见。
-- 切换 Agent 时输入草稿按 Agent 恢复，旧 Agent 的消息不会在新 Agent 下短暂显示。
-- 另一个会话的 Run 运行中时，当前会话仍可发送；并发未满时立即运行，已满时进入排队并显示「排队中，等待其他会话完成」。
-- 切换 Agent/会话后，旧视图的异步错误不再显示在新视图；切回旧会话时失败 Run 的错误与重试仍在。
-- 模型返回 `reasoning_content` 时，生成阶段显示「思考过程」，答案开始后自动折叠；完成后保留可展开。
-- 刷新当前会话后，最后一个 Run 的思考过程仍可见（默认折叠）。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 图片/附件上传（下一阶段）；
-- 编辑消息、重新生成、删除单条消息（需要 checkpoint 分支/回滚方案）；
-- 会话搜索、重命名、导出；
-- 移动端导航改造。
-
-### F5 默认 Agent 提示词对齐 Hermes
-
-- 状态：进行中
-- 日期：2026-10-19
-- 来源：用户反馈默认 Assistant 的 instructions 过于泛化
-
-#### 背景
-
-默认 Agent 的提示词是 “You are a helpful personal assistant. Answer clearly and concisely.”，缺少 Hermes Agent 默认身份中的直接、长度匹配、无 filler、反谄媚和“深度按需”行为规范。
-
-#### 功能点
-
-1. 默认 seed 提示词是中文个人助手说明：介绍自己是个人助手并列出可做的事（对话、工作区文件、子 Agent、记忆注入、会话 checkpoint），行为规范参考 Hermes Agent 的 behavior spec；不宣称 Hermes 身份。
-2. 适配 Agent Command Center：明确当前只有 Chat，没有文件、Shell、浏览器、skills、memory；默认用简体中文回复，用户明确要求其他语言时再切换。
-3. 生产已有默认 Agent 一次性更新 instructions，不改名称、Provider、会话或 checkpoint。
-
-#### 验收标准
-
-- 新装环境的默认 Assistant 使用新提示词。
-- 生产 `default` Agent 的 instructions 更新为新版本，其他 Agent 不受影响。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 不引入 Hermes 的 SOUL.md 体系、记忆、工具或平台提示；
-- 不改变模型、Provider、Agent 数量或会话数据。
-
-### F6 长期记忆（user + agent）
-
-- 状态：进行中
-- 日期：2026-10-19
-- 来源：F5 后的记忆设计讨论
-
-#### 功能点
-
-1. `memory_items` 表，`scope=user|agent`；不设 status，写入即生效，删除即删除。
-2. user memory 对所有 Agent 生效；agent memory 只对指定 Agent 生效；session 工作记忆继续由 checkpoint 负责。
-3. 配置页独立「记忆」页面：用户/Agent 两个 tab，支持新增、编辑、删除、搜索。
-4. 对话里以“记住……”开头的内容，立即写入 user memory。
-5. 每个 Agent 有「自动学习记忆」开关；Run 完成后先用 FTS5（trigram）召回相关历史记忆（user memory + 当前 Agent memory），再让模型返回 add/update/delete 并为新增条目选择 `scope=user|agent`，合并或删除旧记忆，最多 12 个操作；带来源、去重、200 条上限。提取在 Run 落 completed 之后作为后台任务执行，不占用 Run 并发槽；同一 Agent 的提取在进程内串行，后一次能看到前一次刚写入的记忆，避免并发写入语义重复但措辞不同的记忆。（已由 F87 取代：删除后台自动抽取；user 记忆只在显式动作时写入并保存快照，agent 记忆由 Agent 自己写。）
-6. 每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入系统提示词，标注为数据而非指令；记录 `run_memories` 用量。（由 F88 调整：user 记忆全量注入，Agent 记忆只注入索引，由 Agent 自己用工具读取全文。）
-7. 记忆内容不自动修改 Agent instructions。
-8. 记忆页面提供「整理记忆」按钮：对当前 scope 的记忆分批交给模型，只允许 update/delete，合并重复、删除失效项，不新增事实。（已由 F15 取代：移到聊天输入区「＋」菜单，改为 `memory-organizer` 技能触发。）
-
-#### 验收标准
-
-- 记忆页面可管理 user/agent 两种记忆，并按 Agent 隔离。
-- 说“记住：……”后用户记忆立即可见。
-- 开启自动学习的 Agent 在 Run 完成后能新增 Agent 记忆；关闭后不再提取。
-- 下一次 Run 能注入相关记忆；删除记忆后不再注入。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 向量/语义检索、embedding；
-- Agent 自主修改 instructions；
-- 记忆审核状态、版本历史或自动遗忘；
-- 跨设备同步。
-
-### F7 移除 Docker 部署路径
-
-- 状态：已完成
-- 日期：2026-10-19
-- 来源：用户确认 Docker 部署已废弃
-
-#### 功能点
-
-1. 删除 `deploy/docker-compose.yml`、`deploy/Dockerfile.api`、`deploy/Dockerfile.web`、`deploy/nginx.conf`；`deploy/` 只保留 systemd unit 与 `.env` 模板。
-2. 移除仅为 Postgres 服务的 `asyncpg` 依赖。
-3. 同步 README、CLAUDE.md 与 project-commit 技能：生产只保留 systemd + venv + SQLite。
-
-#### 验收标准
-
-- 仓库内不再有 Docker、nginx 或 Postgres 的部署文件与依赖。
-- 文档不再把 Docker 描述为可选运行方式。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 恢复容器化部署；
-- 改动 SQLite 数据或部署目录结构。
-
-
-### F8 Agent Workspace（真实目录 + 文件工具）
-
-- 状态：进行中
-- 日期：2026-10-19
-- 来源：workspace 设计讨论
-
-#### 功能点
-
-1. 每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/` 作为工作区，不支持自定义目录、工作区模式或路径配置。
-2. 工作区根目录可用 `APP_WORKSPACES_DIR` 覆盖；目录在 Agent 创建时自动创建，已有 Agent 在服务启动时补齐。
-3. 工作区只在配置页 Agent 编辑区只读展示，跟随左上角选中的 Agent；不在侧边栏或 API 提供工作区选择。
-4. 执行器使用 `FilesystemBackend(virtual_mode=True)` 作为 backend，并通过默认 `FilesystemMiddleware` 向 Agent 开放工作区文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）。
-5. 删除 Agent 不删除 workspace 目录；不开放 shell / browser / skills。
-
-#### 验收标准
-
-- 配置页显示当前 Agent 的机器目录 `workspaces/<agent_id>`，切换左上角 Agent 时跟随变化。
-- 新建 Agent 后对应目录自动存在；Agent API 不暴露 workspace 配置字段。
-- Agent 能在工作区内列出、读取、创建和修改文件，无法越出工作区根目录。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 自定义工作区路径或多工作区；
-- 每 Agent 的 shell / skills / 细粒度工具开关（后续需求）；
-- deepagents 升级；
-- 多用户或跨机器 workspace 隔离；
-- 删除 Agent 时级联删除 workspace 文件。
-
-### F9 统一 home 数据目录
-
-- 状态：进行中
-- 日期：2026-10-19
-- 来源：workspace 讨论中的目录统一要求
-
-#### 功能点
-
-1. 运行时目录统一到 `~/.super-personal-platform/`（`APP_HOME` 可覆盖）：配置 `.env`、数据库 `data/app.db`、checkpoint `data/checkpoints/`、工作区 `workspaces/`。
-2. 配置读取顺序：`$APP_HOME/.env` → 启动目录 `.env`（后者覆盖）；生产继续由 systemd `EnvironmentFile` 注入。
-3. systemd unit 改为 home 下的环境文件与数据库/数据目录。
-4. 启用前清空旧 `~/.super-personal-platform` 历史数据；生产按“停服务 → 备份 → 迁移 data 与 .env → 更新 unit → 启动验证”执行。
-
-#### 验收标准
-
-- 新环境首次启动自动创建 `data/`、`data/checkpoints/`、`workspaces/`。
-- 生产迁移后会话、消息、Run 与记忆数量与迁移前一致；`/api/health` 200，`/api/system` 返回 sqlite。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 迁移或保留旧 `.super-personal-platform` 历史数据；
-- 多实例 / 多用户目录隔离；
-- 改变 workspace 的虚拟 / 真实目录语义。
-
-### F10 Skill 中间件（技能/工具库 + 每 Agent 启用 + 技能工具解锁）
-
-- 状态：进行中
-- 日期：2026-10-19
-- 来源：用户要求接入 skill middleware，做到“用 skill 才解锁 tool”
-
-#### 功能点
-
-1. 全局技能库：技能放在 `~/.super-personal-platform/skills/<name>/SKILL.md`；`APP_SKILLS_DIR` 可覆盖。技能通过文件系统维护，不做 CRUD 表单；用户可以让 Agent 在对话中创建/编辑。内置技能在启动时 seed（`web-search`、`web-fetch`、`web-browser`），并在技能库根目录的 `.seed_state.json` 记录写入内容的哈希：内容未被用户修改的内置技能随版本更新，用户改过的保持不动。
-2. 每个 Agent 有 `enabled_skills` 启用列表；侧边栏左上角的「技能」页面按当前 Agent 勾选启用并立即保存，系统提示只列出当前 Agent 启用的技能。不新增 Agent 选择器。「工具」页面只展示注册/声明情况，不单独启停工具。
-3. FileMiddleware 提供的文件工具（ls / read_file / write_file / edit_file / delete / glob / grep）始终可用，不参与解锁，也不需要启用。
-4. 技能工具来自平台代码注册表（`apps/api/app/services/skill_tools.py`）；`SKILL.md` 的 `metadata.include_tools` 是空格分隔的工具名。工具必须同时满足：注册表存在、被已启用技能声明、SKILL.md 已读取。
-5. 注册表提供两个联网工具：
-   - `web_search`：调用 DeepSeek Search API（`POST {base_url}/v1/tools/search`），请求 `query`（1-128 字）、`count`（1-50）、`need_content`，返回标题、链接、摘要、来源和权威性评分。
-   - `web_fetch`：调用 DeepSeek Fetch API（`POST {base_url}/v1/tools/fetch`），请求 `{url}`，返回 `{title, content}`（Markdown）。
-   两者均使用 Agent Provider 的 key，按成功请求计费，受 DeepSeek QPS 限制。
-6. 模型必须先用 `read_file` 读取 `/skills/<name>/SKILL.md`，该技能声明的已启用工具才会在当次模型调用中披露并允许执行；读取之前工具不可见，调用会失败。
-7. 解锁在会话内保持：读取记录随 checkpoint 保留；上下文被摘要压缩后，启用且声明了 `include_tools` 的技能会以 `pinned_skill` 消息自动重新注入正文，技能内容与工具解锁不会因压缩丢失。
-8. 每次 Run 重新扫描技能目录并应用最新的技能启用列表。
-9. Agent 可以在对话中通过文件工具创建/修改 `/skills/<name>/SKILL.md`，不需要表单；技能声明不是安全边界，工具是否可用由每 Agent 启用的技能控制。
-10. `GET /api/skills` 返回扫描到的技能与解析错误；「技能」页面展示并启停技能。
-11. `GET /api/tools` 返回文件工具与技能工具；「工具」页面展示文件工具（始终可用）、技能工具的注册状态和声明技能，不提供工具级启停。
-
-#### 验收标准
-
-- 左侧「技能」页面能看到全局技能库，并为当前 Agent 勾选/取消技能；保存后下一轮 Run 生效。
-- 左侧「工具」页面能看到文件工具与技能工具的注册/声明情况；工具不单独启停。
-- 未启用的技能不出现在系统提示中，读取它的 SKILL.md 不会解锁工具。
-- 技能工具在读取 SKILL.md 前不可见且不可调用，读取后在同一会话内可用；上下文压缩后仍保持解锁。
-- `web_search` 和 `web_fetch` 能按 DeepSeek Search/Fetch 协议返回结构化结果与页面正文；错误码能回传给模型。
-- 用户可以让 Agent 在对话中创建/修改技能；创建后能在「技能」页面为当前 Agent 启用。
-- Agent 无法绕过技能启用限制：只有已启用技能声明的已注册工具才可能解锁。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 技能 CRUD UI/API、技能市场、版本管理、eval；
-- 技能目录内的 Python 插件动态加载；
-- 每 session 的技能/工具启用、工具级细粒度权限；
-- 禁用技能的读取拦截（只做提示过滤与解锁门控）；
-- Shell / 浏览器工具、多用户隔离、技能沙箱。
-
-### F11 Playwright 无头浏览器工具（技能门控）
-
-- 状态：进行中
-- 日期：2026-10-20
-- 来源：用户确认浏览器并发数 2、保留 web_fetch/web_search；截图仅在用户明确要求时返回
-
-#### 功能点
-
-1. 新增 seed 技能 `web-browser`，声明并解锁 7 个浏览器工具：`browser_open`、`browser_snapshot`、`browser_click`、`browser_fill`、`browser_press`、`browser_screenshot`、`browser_close`；沿用 F10 的「已注册 + 被已启用技能声明 + SKILL.md 已读取」三条件。
-2. 每次 Run 懒启动一个无头 Chromium 和一个浏览器 context；同一 Run 最多 `BROWSER_CONCURRENCY=5` 个标签页，工具用 `tab` 参数区分，默认 `main`；Run 结束、失败、超时或取消时自动关闭。
-3. 默认只返回页面文字：标题、URL、可见正文和可交互元素 ref；ref 只对最近一次快照有效，动作后返回新快照。
-4. 支持打开网页、读取快照、点击、填写（含 select）、按键和关闭标签页。
-5. `browser_screenshot` 按需返回当前页面的 PNG 图片（可整页），仅在用户明确要求查看截图/外观/布局时调用；Provider 模型必须支持图片输入，图片大小受 `BROWSER_SCREENSHOT_MAX_BYTES` 限制。PNG 同时保存到 `workspaces/<agent_id>/screenshots/<session_id>/<run_id>/`，前端在对应 assistant 消息下方展示；Agent 文件工具可访问。
-6. 安全边界：只允许公开 http/https 地址，拒绝 localhost、内网/回环/链路本地/保留地址、带凭据 URL、`file://` 和下载；导航请求进入页面前做 DNS 校验。
-7. Playwright 或 Chromium 不可用时，工具向模型返回可读错误并提示安装命令，不中断 Run。
-8. Run 事件新增 `browser_action`（工具名 + 紧凑摘要，截图事件带 `screenshot_id`）；截图文件保存到 Agent 工作区，前端在对应 assistant 消息下方展示。
-9. `BROWSER_*` 配置控制标签页上限、导航/动作超时、快照元素与文字上限、截图大小上限，以及 Chromium sandbox 逃生开关。
-10. 搜索类浏览优先尝试移动版/轻量入口；遇到验证码、安全验证、HTTP 403/429 或其他拦截页时，工具返回明确错误并提示换入口或交给用户，不尝试绕过验证。
-
-#### 验收标准
-
-- 「技能」页面能启用 `web-browser`；未读取 SKILL.md 前工具不可见且不可调用。
-- Agent 能打开 example.com，读取标题与正文，点击链接后拿到新快照，并用 `browser_close` 释放标签页。
-- 用户明确要求截图时，`browser_screenshot` 返回 PNG 图片内容块；截图出现在对应 assistant 消息下方，文件位于 Agent 工作区 `screenshots/<session>/<run>/`；未要求时不自动截图。
-- 删除会话时清理该会话的截图目录；删除 Agent 时清理其所有会话的截图目录，保留工作区其他文件。
-- 同一 Run 打开第 3 个标签页返回上限错误，不阻塞其他工具调用。
-- `http://127.0.0.1`、`http://localhost`、`http://169.254.169.254`、`file:///etc/passwd`、带凭据 URL 均返回 `Error:` 且不发生导航。
-- 遇到验证码、安全验证或 HTTP 403/429 时返回明确错误并提示换入口，不自动尝试绕过。
-- Run 完成、失败或取消后没有残留 Chromium 进程。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 自动截图或持续视觉输入（截图只由用户明确要求触发）；
-- 验证码识别或绕过、反检测/stealth；
-- iframe/shadow DOM 穿透、弹窗接管；
-- 持久登录态、Cookie/Profile 管理、下载/上传、任意 JS 执行；
-- 反检测/stealth、代理配置、用浏览器替代 web_search；
-- 多用户隔离、每 session 的浏览器状态。
-
-### F12 主题统一与移动端适配
-
-- 状态：进行中
-- 日期：2026-10-20
-- 来源：用户要求前端视觉更贴合既定主题，并适配移动端
-
-#### 背景
-
-界面在窄屏下直接隐藏侧栏和详情抽屉，手机上无法切换 Agent、会话和页面；颜色、间距与控件状态存在零散硬编码，观感与“浅色画布 + 悬浮输入卡片”的既定方向不够统一。
-
-#### 功能点
-
-1. 统一视觉基线：色板、状态色、阴影、圆角与焦点态收敛为设计 token；保持浅色暖底、青绿主色、assistant 消息 Markdown 和悬浮输入卡片。
-2. Chat 增加轻量顶栏：显示当前 Agent 和会话标题，并作为详情抽屉的开关；移除原浮动按钮。
-3. 移动端（≤860px）使用顶部栏 + 汉堡菜单：侧栏变为带遮罩的抽屉，切换会话、Agent 或页面后自动收起；详情抽屉变为全屏面板。
-4. 输入区适配软键盘与安全区：移动端外壳保持整屏高度（100dvh），键盘弹起时由浏览器平移可视视口露出 composer，不再用 JS 改外壳高度；点输入框外可收起键盘；底部使用 safe-area；移动端输入字号不小于 16px。
-5. 配置、记忆、技能、工具页面在移动端改为单列卡片，标签页等宽，弹窗改为底部面板；表格和代码块在自身容器内横向滚动。
-6. 支持 `prefers-reduced-motion`。
-7. assistant 消息使用左侧气泡卡片，与右侧 user 气泡形成左右对话；窄屏下气泡不超过内容列。
-8. 输入卡片按内容自适应：单行时「＋」菜单在左、输入居中、发送在右；换行或多行时输入在上，菜单与发送位于底部两侧。
-9. 会话删除和记忆删除使用应用内确认弹窗，不使用浏览器原生 confirm。
-
-#### 验收标准
-
-- 桌面端保持侧栏 + 对话 + 详情三栏；Chat 顶栏可打开/收起详情。
-- ≤860px 时可通过汉堡菜单访问 Agent、会话、技能、工具、记忆、配置和退出登录；选中后抽屉收起。
-- 手机视口下消息、表格、代码块不产生页面级横向滚动；软键盘弹起时输入框保持可见，composer 与键盘之间不留空白。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 移动端原生 App、PWA 离线能力；
-- 深色主题或主题切换；
-- 手势（滑动返回、滑动关闭抽屉）；
-- 重做品牌视觉与插画。
-
-### F13 输入区附件上传（保存到工作区）
-
-- 状态：进行中
-- 日期：2026-10-20
-- 来源：用户要求输入区左侧改为「＋」菜单，包含上传附件
-
-#### 功能点
-
-1. Chat 输入卡片左侧为「＋」菜单：上传附件、清空输入；单行/多行布局沿用 F12。
-2. 附件通过 `POST /api/agents/{agent_id}/attachments?filename=...` 以原始字节上传，保存到 `workspaces/<agent_id>/uploads/`，单文件上限 10 MB；文件名去掉路径和控制字符，加随机前缀防冲突。
-3. 上传成功后在输入卡片内显示文件名 chip，可单独移除；发送时把文件名和工作区路径作为附件清单写入用户消息，Agent 用文件工具读取。
-4. 附件不写入数据库、不进入 checkpoint，只作为当前 Agent 工作区里的文件存在。
-5. 发送成功后清空附件 chip；发送失败保留草稿与已上传附件。
-6. 不做图片理解或文档解析；图片、PDF 等二进制文件只保存，能否读取取决于模型能力和文件工具。（F42 起图片在聊天中预览并作为模型图片输入；PDF 等仍只保存。）
-
-#### 验收标准
-
-- 「＋」菜单可上传文件；工作区出现对应文件，发送后的用户消息包含文件名与路径。
-- 空文件、超过 10 MB、未知 Agent 返回明确错误；文件名中的路径穿越被拒绝。
-- 单行/多行输入布局正常，移动端菜单不溢出。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 图片理解、PDF 解析、OCR、向量化（F42 起支持图片作为模型输入，仍不做 PDF/OCR）；
-- 附件元数据入库、历史附件列表、下载入口；
-- 拖拽上传、粘贴图片、多用户配额。
-
-### F14 技能查看与编辑（现有 SKILL.md）
-
-- 状态：进行中
-- 日期：2026-10-20
-- 来源：用户确认技能应能在界面中查看和编辑
-
-#### 功能点
-
-1. `GET /api/skills/{directory}` 返回 SKILL.md 全文、路径和解析警告；`PUT` 保存编辑后的全文。
-2. 「技能」页面每个技能提供「查看」入口，打开模态编辑器；可直接编辑 SKILL.md 并保存，保存后重新扫描技能库。
-3. 保存前校验 frontmatter：必须包含 name 和 description，YAML 可解析；写入使用临时文件原子替换；单个文件上限 10 MB。
-4. 只允许编辑技能根目录下的现有 `<directory>/SKILL.md`；拒绝路径穿越、隐藏目录和符号链接。
-5. 新建技能仍通过对话让 Agent 创建，不提供创建表单；编辑器只修改现有文件。
-6. 技能启用状态不受编辑影响；保存后的 description 和工具声明在下一轮 Run 生效。
-
-#### 验收标准
-
-- 技能页可打开任一技能查看全文并保存修改；磁盘文件更新，列表描述刷新。
-- 非法 frontmatter 返回 422 且不覆盖原文件；未知技能 404；未登录 401。
-- 移动端编辑器可用。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 技能创建表单、重命名/删除技能、版本历史或 diff；
-- 多人并发编辑与冲突合并；
-- 编辑器语法高亮或 Markdown 预览。
-
-### F15 整理记忆迁移为聊天指令与技能
-
-- 状态：进行中
-- 日期：2026-10-20
-- 来源：用户要求「整理记忆」不再放在记忆页，移到聊天输入区「＋」菜单，作为一个指令触发技能
-
-#### 背景
-
-原「整理记忆」是记忆页面的按钮，由后端单独组装 prompt 并批量调用模型；入口与对话割裂，也无法复用技能体系里的工具解锁、可编辑说明和上下文压缩重注入能力。
-
-#### 功能点
-
-1. 移除记忆页面的「整理记忆」按钮、`POST /api/memories/consolidate` 及相关解析/批处理代码；记忆页只保留手动 CRUD 和搜索。
-2. 聊天输入区「＋」菜单新增「整理记忆」指令，点击后直接发起一个 Run；不覆盖输入框里已有的草稿。
-3. 新增内置技能 `memory-organizer`，声明 `include_tools: memory_list memory_update memory_delete memory_move`；正文规定先列出记忆，再按批合并语义重复项、删除失效/矛盾/被否定项，并把属于用户偏好/个人事实的 Agent 记忆归位到用户级；只更新、删除和归位，不新增事实。（由 F87 调整：只整理当前 Agent 的 agent 记忆，移除 `memory_move`，不碰 user 记忆。）
-4. 新增技能工具 `memory_list` / `memory_update` / `memory_delete` / `memory_move`：列表可指定 `scope=user|agent|all`（默认 all，含当前 Agent），支持 `offset` 翻页，返回 id、scope、标签和正文；更新/删除只允许作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；`memory_move` 只允许把当前 Agent 的 agent memory 归位到 user memory（已有相同内容则合并），不注册新增工具。
-5. 首次点击「整理记忆」时，如果当前 Agent 未启用该技能，前端自动把 `memory-organizer` 加入 `enabled_skills` 再发送；菜单项会提示这一点。
-6. 技能随启动 seed，并遵循现有内置技能规则：用户未修改的随版本更新，改过的保持不动。
-7. `DeepAgentExecutor` 把 `agent_id` 传入 `SkillToolContext`，供记忆工具做 scope 授权。
-
-#### 验收标准
-
-- 记忆页面不再有「整理记忆」入口；`POST /api/memories/consolidate` 返回 404。
-- 聊天输入区「＋」菜单可看到「整理记忆」，点击后产生一个 Run，Agent 读取 `memory-organizer` 技能并调用记忆工具完成整理。
-- 当前 Agent 首次点击时技能被自动启用，后续点击不重复修改配置。
-- 记忆工具只能读取/修改 user memory 和当前 Agent 记忆；其他 Agent 的记忆 id 返回 not found。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 保留旧的后端批量整理接口或兼容入口；
-- 在技能里执行任意 Python 或新增记忆；
-- 改变自动学习记忆（Run 完成后提取）的现有行为。
-
-### F16 重启中断后的 Run 恢复语义与前端重连
-
-- 状态：进行中
-- 日期：2026-10-20
-- 来源：用户指出 requeue 后执行器重复追加原始 input，且前端轮询在服务重启时直接停止
-
-#### 背景
-
-服务重启会把 `running` 的 Run 改回 `queued`，但 checkpoint thread 里已经写入了本轮用户消息和部分 assistant/tool 消息。恢复时执行器再次把同一条 input 作为新的 `HumanMessage` 追加，导致用户消息重复、模型可能重复执行已经发生的副作用。前端轮询遇到重启窗口的连接错误会停止并把 `sending` 置为 false，必须手动刷新；跨过重启窗口时旧的 `assistant_delta` 也不会被重置。
-
-#### 功能点
-
-1. 执行器用 run_id 作为本轮 `HumanMessage` 的稳定 id；恢复前读取 checkpoint，如果本轮输入已存在，则保留中断前的 assistant/tool 消息，追加一条「服务重启中断，继续完成上一条用户消息中的任务，不要重复已完成步骤或副作用」的提示，不再追加原始 input。
-2. 对中断前没有返回结果的 tool call，恢复输入中补一条 `status=error` 的 `ToolMessage`，说明结果未知、不要重复执行。
-3. checkpoint 中没有本轮输入（例如重启发生在首次写入前）时，仍按原始 input 开始执行，行为与普通新 Run 一致。
-4. 前端轮询改为 `setTimeout` 驱动；网络错误和 5xx 按指数退避重试（800ms 起，最多 5s，最多约 120 次），保持 `sending` 状态，恢复后继续追踪；401/404 等不可重试错误仍停止并显示错误。
-5. 前端收到 `payload.reason=service_restart` 的 `run_queued` 时，清空当前 `streamText` 和思考内容，并显示「服务重启，Run 已重新排队」；新的 delta 或 Run 结束后清除提示。
-6. 文档明确恢复不是事务回滚：副作用仍然保留，只能通过恢复提示避免重复执行。
-
-#### 验收标准
-
-- 同一 Run 在 checkpoint 中只保留一条原始用户消息；恢复输入是继续提示而不是重复 input。
-- 中断处未完成的 tool call 在恢复输入中有对应的 error `ToolMessage`。
-- 真实 `AsyncSqliteSaver` 上的恢复测试覆盖「一次用户消息 + 继续提示」的最终状态。
-- 服务重启期间已打开页面会自动恢复轮询并继续显示该 Run，无需刷新；旧流式文本不会与新一次尝试拼接。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 回滚 checkpoint、撤销已经发生的文件/浏览器副作用；
-- 记录每次 Run 的 checkpoint id 或做分支管理；
-- 断线期间离线缓存或 Service Worker。
-
-### F17 模型重试下沉到模型层（覆盖子 Agent 与流式）
-
-- 状态：进行中
-- 日期：2026-10-20
-- 来源：用户指出子 Agent 不继承 `ModelRetryMiddleware`、流式重试会重复文本、step-limit 总结绕过重试
-
-#### 背景
-
-`ModelRetryMiddleware` 只挂在主 Agent 的 middleware 列表里。deepagents 0.7.28 给默认 general-purpose 子 Agent 只传递与默认槽位同名的中间件（Filesystem / Summarization / PatchToolCalls / Skills），重试中间件不会进入子 Agent。同时，如果重试包装的是整个流式模型调用，失败前已经流出的 `assistant_delta` / `reasoning_delta` 会在重试时再流一遍，前端会拼接出重复文本；`_answer_after_step_limit` 直接调用 `chat_model.ainvoke`，也不经过中间件。
-
-#### 功能点
-
-1. 新增 `apps/api/app/services/model_retry.py` 的 `ModelRetryMixin`，把重试放到模型类上；`ReasoningChatOpenAI` 同时继承该 mixin 和 `ChatOpenAI`。
-2. `create_deep_agent(model=...)` 传入同一个模型实例，因此主 Agent、general-purpose 子 Agent 和 summarization 都使用同一套重试；移除 `ModelRetryMiddleware`，SDK 重试继续保持关闭，只有一层重试。
-3. `_agenerate` 对非流式调用整体重试；`_astream` 只在本次尝试还没有输出任何 chunk 时重试，已经输出片段后失败立即抛出，避免重复文本。
-4. step-limit 的最终总结仍复用同一个 `chat_model`，因此 `ainvoke` 也获得重试。
-5. 可重试失败继续记录 warning 日志（agent/session/异常类型）；流式已输出后不重试时额外记录原因。
-6. 测试覆盖：无输出时流式重试、部分输出后不重试、4xx 不重试、`_agenerate` 重试与重试上限、执行器把重试配置放在模型上而不是 middleware。
-
-#### 验收标准
-
-- general-purpose 子 Agent 的模型实例带 `ModelRetryMixin`（同一模型对象传入 deepagents）。
-- 流式调用在输出前缀后失败不会重试，前端不会出现重复文本。
-- 非流式调用（包括 step-limit 总结）遇到可重试错误仍会退避重试。
-- 401/400 等 4xx 不重试。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 流式断流后的“本次尝试重置”事件或自动续写；
-- 在 checkpoint 层重试整个 Run；
-- 修改 Provider 或模型 SDK 自身的重试策略。
-
-### F18 多渠道与个人微信接入
-
-- 状态：进行中
-- 日期：2026-10-20
-- 来源：用户要求每个 Agent 支持多个 channel，目前 channel 只支持微信
-
-#### 背景与目标
-
-平台此前只有网页 Chat 一个入口。用户希望每个 Agent 可以绑定多个外部渠道，当前先支持个人微信：微信联系人发来的消息进入对应 Agent 的独立会话，Agent 的最终答复回到微信。个人微信号没有官方 API，采用腾讯 iLink Bot API（扫码登录 + `getupdates` 长轮询 + `sendmessage`），运行时内置于 API 进程，不需要公网回调、Webhook、Node 或第三方 puppet。
-
-#### 功能点
-
-1. 每个 Agent 可绑定多个渠道；`channels.type` 当前固定为 `wechat`，为后续渠道保留扩展位。
-2. 渠道页跟随左上角选中的 Agent：新建、查看状态、暂停/启用、重新扫码、删除；新建后展示二维码并轮询扫码状态。
-3. 扫码登录使用 `ilink/bot/get_bot_qrcode` / `get_qrcode_status`，确认后保存 `account_id`、`bot_token`、`base_url`、`ilink_user_id`；`bot_token` 不返回前端、不写日志。
-4. 每个外部 1:1 联系人映射一个独立 Session（标题 `微信 · <联系人>`），网页端会话列表可见并可继续；群聊忽略；非文本消息在 F43 起支持图片、文件和文本引用，语音/视频仍忽略；不做主动推送（F38 起定时任务可显式推送到指定 1:1 会话）。
-5. 入站按 `external_message_id` 幂等；同一微信会话连续发消息时创建多个 queued Run，由 worker 按 Session 串行执行，不丢消息。（F44 起 5 秒窗口内的连续消息合并成一个 Run，再进入同一队列。）
-6. Run 终态后立即发送最终答复；每个 Run 的发送记录与终态在同一事务写入 `channel_deliveries`，进程崩溃后启动时补发 `pending`/`attempting` 记录（`attempting` 补发带「可能重复」标记）。失败 Run 回固定错误文案，取消/requeue 不回信。
-7. 回复按长度在段落/代码围栏边界切块；发送带回该联系人最新的 `context_token`；token 过期先去掉 token 重试一次，仍失败则把渠道置 `expired` 并停止轮询，UI 提示重新扫码。
-8. 网页端在渠道会话里手打的消息不推回微信；`POST /api/runs/{id}/retry` 复制渠道 link，重试后的微信 Run 仍会回信。
-9. 删除渠道保留 Session/Message/Run；删除 Session 解绑 conversation 和发送记录；永久删除 Agent 级联删除其渠道及渠道表。
-10. 新增 `GET /api/sessions/{id}/active-run`，会话摘要返回 `active_run_id` / `active_run_status`；网页端据此跟踪排队 Run，并在一个 Run 结束后自动接上下一个。
-
-#### 验收标准
-
-- 渠道页可为当前 Agent 新建多个微信渠道；扫码确认后状态变为已连接，渠道卡片显示最近轮询时间和错误。
-- 微信私聊进入平台生成独立 Session/Run，Run 完成后最终答复立即回到该微信；连续消息按顺序回复；群聊被忽略；F43 起图片、文件和文本引用会被处理，语音/视频仍忽略；F44 起 5 秒窗口内连续消息合并成一个 Run。
-- 同一微信会话有活动 Run 时新消息不返回 409，而是排队；网页端手动消息仍遵守同一 Session 一个活动 Run 的约束（F41 起网页端也改为排队，不再返回 409）。
-- 网页端能看到并继续微信会话；网页里手打消息不推回微信；重试的微信 Run 会回信。
-- 暂停渠道停止收发；登录过期后状态变为登录过期并可重新扫码。
-- 服务重启后 active 渠道自动恢复长轮询；崩溃前未发出的回复在启动时补发，正常回复不会重复。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 微信群聊、语音/视频理解、出站图片/文件、主动推送/定时通知；
-- 公众号、企业微信、Telegram 等其他渠道类型；外部 HTTP 网关契约；
-- 打字指示器、媒体 CDN 加密上传、出站媒体、消息编辑/撤回（F43 只做图片/文件入站下载）；
-- 多用户/渠道级权限、渠道会话浏览器、未读计数、手动绑定/解绑；
-- 对模型输出做 Markdown 清理（iLink 客户端支持 Markdown）。
-
-#### 风险与边界
-
-- iLink Bot API 是腾讯侧接口，可能变更或受限；扫码连接的是 iLink bot 身份，不是可完全脚本化的普通个人号。
-- 发送为至少一次：崩溃发生在发送中途时，启动补发可能重复整条回复，并带有明确标记。
-- 长轮询连接长期占用；连续失败会退避并重建客户端。
-
-### F19 会话切换、Run 展示与消息降噪
-
-- 状态：进行中
-- 日期：2026-10-20
-- 来源：用户指出切换会话时流式文本会串到另一个会话、失败/取消后已流出的内容消失、409 只显示错误、失败气泡缺少状态与重试、附件和「整理记忆」在用户气泡里显示内部文本
-
-#### 背景
-
-F18 让一个会话可能出现多个 queued Run，网页端也可能同时有多个会话在跑。此前前端只有一套全局 `activeRun / streamText / events`：切走 A 再去加载 B 时，A 的流式状态可能被 B 覆盖；加载 B 的瞬间仍会渲染 A 的旧消息；失败或取消的 Run 没有 assistant message，`finishRun` 清空流式文本后只剩一条 error banner；网页发送撞上其他标签页/微信入站的 Run 时，409 只显示错误信息，用户不知道发生了什么。
-
-#### 功能点
-
-1. 前端按 session 保存 `{activeRun, events, streamText, streamReasoning, activity, notice, tracking}`，SSE/轮询订阅也按 session 管理。切走时保留该会话的跟踪，切回时立即恢复文本、思考、附件截图与 Run 状态；任何会话的文本都不会渲染到另一个会话。
-2. 切换会话时同步清空旧消息并可立即显示骨架屏，等该会话的消息加载完成后再渲染；由发送新会话触发的切换不闪烁。
-3. Run 失败或被取消时，用 `run_events` 重建最后一次尝试（最后一个 `run_queued` 之后）已流出的 `assistant_delta` / `reasoning_delta`，渲染为带「失败」/「已停止」状态的气泡，附错误摘要、耗时（≥10 秒）和重试按钮；刷新页面后同样恢复。失败不再只依赖 error banner。
-4. 网页发送或重试返回 409 时读取 `detail.active_run_id`，直接接入该 Run 的实时进度并提示「刚才的消息没有发送」，同时恢复草稿；不再把 409 当成普通错误。（F41 起网页 Chat 改为排队；此条保留给 retry 和极端竞态。）
-5. `finishRun` 先等持久化的 assistant message 进入消息列表，再清除流式文本；消息列表里已有该 Run 的 assistant message 时隐藏流式气泡，避免完成瞬间文本消失或重复。
-6. 流式气泡显示活动状态：后端新增 `tool_call` 事件（工具名 + 解析后的参数），前端映射为「正在读取 uploads/a.pdf」「正在浏览 example.com」等；运行超过 10 秒显示「已用 X」；queued 显示「排队中，等待其他会话完成」，不显示英文 `running` / `queued`。
-7. 发送时强制滚到底部；用户上滑离开底部且 Run 仍在输出时，显示浮动的「回到最新」按钮。
-8. 用户消息仍以纯文本保存（模型继续看到完整路径和指令），前端识别附件块与「整理记忆」指令：附件渲染为文件名/大小 chip，「整理记忆」渲染为命令卡片，原始指令收进可展开区域。附件上传显示单文件进度和大小；消息里的附件块增加字节数。
-
-#### 验收标准
-
-- A 会话流式中切到 B：B 不出现 A 的任何文本；可以在 B 里继续发送，Run 按并发上限立即运行或排队；切回 A 时已有文本、思考、截图和停止按钮都在，并继续追加。
-- 切换会话时旧消息立即消失并显示骨架，加载完成后只出现目标会话的消息。
-- 失败和取消的 Run 在聊天里显示状态气泡、保留已流出文本、给出错误/停止说明和重试；刷新后仍存在；取消的 Run 也能重试。
-- 网页发送撞上活动 Run 时不显示红色错误，而是接入该 Run、恢复草稿并给出提示。
-- 完成瞬间不出现答案消失后重现，也不出现流式与持久化消息同时显示。
-- 工具执行时能看到中文活动行；运行 10 秒后能看到已用时间；queued 不再显示英文状态。
-- 发送后视图滚到最新；上滑后出现「回到最新」按钮并可回到底部。
-- 带附件的用户消息显示文件 chip 与大小；「整理记忆」显示命令卡片；模型消息内容不变。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 为 Message 增加结构化 metadata 字段或数据迁移（当前由前端解析固定文本格式）；
-- 为每个 session 缓存完整消息列表或做离线缓存；
-- 多标签页之间同步读数/未读状态；
-- 回溯显示更早失败 Run 的部分输出（只恢复当前会话最后跟踪的 Run）。
-
-### F20 宿主机 Shell 与代码解释器
-
-- 状态：进行中
-- 日期：2026-10-25
-- 来源：用户要求直接接入 `LocalShellBackend` 与 `CodeInterpreterMiddleware`
-
-#### 背景与目标
-
-平台此前不暴露 shell。用户希望所有 Agent 直接具备宿主机命令执行和隔离计算能力，不再用技能做开关或补充描述；工具本身的 schema 与库自带提示词负责用法说明。
-
-#### 功能点
-
-1. 执行核的默认 backend 固定为 `LocalShellBackend`（`virtual_mode=True`，工作目录为 Agent 工作区），不再按技能切换 backend。
-2. 每次 Run 都挂载 `CodeInterpreterMiddleware`（QuickJS、`mode=thread`、无文件与网络、PTC 只暴露文件工具、`subagents=True`）。
-3. 不新增 `local-shell` / `code-interpreter` 技能，也不做读取门控：`execute` / `eval` 对所有 Agent 直接可见、可调用。general-purpose 子 Agent 使用同一 backend，因此也有 `execute`；`eval` 中间件不继承到子 Agent，子 Agent 可由 REPL 里的 `task(...)` 调度。
-4. shell 子进程只注入 `PATH`、`HOME`、`LANG`，不继承 `LLM_API_KEY`、`APP_AUTH_TOKEN` 等 systemd 环境。
-5. 默认提示词直接说明 execute（宿主机命令、无沙箱）与 eval（QuickJS、无文件网络、PTC 文件工具）的可用性和约束；既有默认 Agent 通过 LEGACY 标记一次性更新。
-6. README、CLAUDE.md 明确安全边界：以服务账号权限运行、没有沙箱、没有审批。
-
-#### 验收标准
-
-- 任意 Agent 不需要启用任何技能就能看到并调用 `execute` 和 `eval`。
-- `execute` 的工作目录是 Agent 工作区，但可以访问服务账号可见的宿主机路径。
-- `eval` 可执行 JavaScript，能通过 PTC 调用文件工具，并可用 `task(...)` 调度子 Agent；不能直接访问文件系统或网络。
-- 不存在 locked 错误或技能门控分支。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 命令审批 / HITL、命令白名单或容器隔离；
-- 每 Agent 的 shell / 解释器开关；
-- 让 shell 或解释器直接读取平台密钥、数据库或 systemd 配置；
-- 在技能目录内执行任意 Python。
-
-#### 风险与边界
-
-- `LocalShellBackend` 明确不做沙箱：命令以服务账号权限运行，`virtual_mode` 不约束 shell；所有 Agent（包括微信入站会话）都能执行宿主机命令。
-- 微信入站和网页内容都是外部输入，提示注入可以直接转化为宿主机操作；该能力默认对所有渠道生效。
-- 平台没有审批链路，门控已移除；模型在用户请求或注入内容驱动下可以读取 `.env`、`app.db` 等敏感文件。
-- 安全边界只剩操作系统账号权限与 systemd 沙箱配置。
-
-### F21 会话级草稿与附件、渠道会话实时刷新、流式渲染与错误文案
-
-- 状态：进行中
-- 日期：2026-10-25
-- 来源：F19 之后剩余的 chat 打磨项
-
-#### 背景
-
-F19 解决了 Run 状态串台、失败/取消气泡和活动反馈，但聊天输入仍有三个摩擦：草稿按 Agent 保存而附件按会话重置，切换会话容易把草稿发错地方；渠道会话的入站消息/运行中 Run 不会自动出现在网页端；每个 token 都触发整段 Markdown 重解析，长回答和思考过程会卡，错误仍以原始异常文本展示。
-
-#### 功能点
-
-1. 草稿和附件按会话隔离，key 为 `agent_id + session_id`（未创建会话时用 `__new__`）。切换会话保存/恢复各自的草稿和附件；「新对话」使用独立的未发送草稿；发送失败时把草稿和附件恢复到发起发送的会话；「整理记忆」命令不消费草稿，创建新会话时把草稿/附件带到该会话。
-2. 前端在页面可见时每 5 秒刷新当前 Agent 的会话列表；渠道入站产生的新会话、运行中/排队 Run 和消息数会更新侧栏徽标。若当前会话出现活动 Run 或消息数增加且本地没有订阅，自动通过 `active-run` 和消息接口接上该 Run。
-3. 会话摘要新增 `channel_type` / `channel_name`；侧栏对微信会话显示徽标，输入区提示「网页里发送的消息不会发回微信」。
-4. 流式 `assistant` / `reasoning` 文本按约 80ms 节流渲染，Markdown 组件 memo 化；流结束、重试或重置时立即应用最新文本。
-5. Run 失败和 API 错误按类别转为中文提示（认证、限流、上下文超限、超时、连接、配置缺失等），原始错误保留在失败气泡的 title 和抽屉中。
-6. 会话标题/消息数/活动 Run 的刷新不改变当前选中的会话，也不覆盖用户正在编辑的草稿。
-
-#### 验收标准
-
-- 在 A 会话输入草稿/上传附件后切到 B，B 显示自己的草稿和附件；切回 A 恢复 A 的内容；A 的草稿不会出现在 B。
-- 没有会话时输入的草稿在创建会话后仍可见（普通发送消费草稿；整理记忆命令不消费）。
-- 发送失败后草稿和附件仍在原会话，可直接重试。
-- 页面可见时微信入站消息在 5 秒内出现在侧栏；当前会话的活动 Run 自动接入；微信会话有徽标和「不会发回微信」提示。
-- 长回答/思考过程的 Markdown 更新频率明显降低，最终文本完整；重试/重置不残留旧文本。
-- 失败气泡和错误提示为中文类别文案，原始错误仍可查看。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 未读计数、跨标签页同步草稿/附件；
-- 为 Message 增加结构化 metadata 或数据迁移；
-- 将聊天改成 WebSocket/SSE 推送会话列表（当前为可见时轮询）；
-- 修改渠道出站语义（网页回复仍不回微信）。
-
-### F22 AI 自主创建技能与技能来源区分
-
-- 状态：进行中
-- 日期：2026-11-01
-- 来源：用户要求 AI 能在交互中自己沉淀技能，并区分系统自带与交互创建
-
-#### 背景与目标
-
-此前技能只能由用户明确要求后，Agent 用文件工具写入；技能页不区分平台内置与交互创建，也没有删除入口。用户希望 AI 能主动把可复用的流程沉淀成技能，并在界面上把「系统自带」和「交互中创建」分开管理。
-
-#### 功能点
-
-1. 新增始终可用的平台工具 `skill_save`（不受技能启用/读取门控）：参数 `name`、`description`、`instructions`、`include_tools`；创建新的 `/skills/<name>/SKILL.md`，frontmatter 写入 `metadata.source: ai`；拒绝非法名称、空内容和已存在的技能，不覆盖任何现有技能。
-2. 每次 Run 通过 `skill_save` 最多创建 3 个技能。
-3. 技能来源 `source`：`builtin`（由 `.seed_state.json` 跟踪的系统技能）、`ai`（`metadata.source=ai`）、`manual`（其余）；`GET /api/skills` 与技能详情返回 `source`。
-4. 技能页按「系统技能」和「交互创建」分组；交互创建显示「AI 创建」或「手动创建」徽标。非系统技能提供删除入口，删除整个技能目录并从所有 Agent 的 `enabled_skills` 移除；系统技能拒绝删除。
-5. 「工具」页新增「平台工具」分组，展示 `skill_save` 始终可用。
-6. 默认提示词允许 Agent 在形成可复用流程时主动调用 `skill_save`；创建后自动加入当前 Agent 的 `enabled_skills`，同一会话的下一轮 Run 生效（当前 Run 不加载新技能），不跨 Agent 启用。
-
-#### 验收标准
-
-- Agent 在对话中无需用户点名即可调用 `skill_save` 创建技能；文件写入正确，`source=ai`。
-- 非法名称、重复技能、超过单次 Run 上限返回可读错误，不产生半成品目录。
-- 创建成功后当前 Agent 的 `enabled_skills` 包含新技能；同一会话下一条消息的 Run 能列出该技能；当前 Run 不加载。
-- 技能页能看到系统技能与交互创建两组；AI 创建技能显示对应徽标；非系统技能可删除，删除后从所有 Agent 的启用列表移除；系统技能删除返回 409。
-- 工具页显示 `skill_save` 为始终可用的平台工具。
-- 默认 Agent 的旧提示词一次性升级；自定义 instructions 不受影响。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 当前 Run 内立即生效（技能在下一轮 Run 才加载）；
-- 跨 Agent 自动启用；
-- 覆盖或删除系统技能；
-- Run 完成后后台自动抽取技能（当前只在对话中由模型主动创建）；
-- 技能版本/eval/市场、多人协作、技能重命名。
-
-#### 风险与边界
-
-- 提示注入可能诱导 Agent 创建技能，并自动加入当前 Agent 的启用列表；模型可在下一轮读取该技能并解锁其声明的工具，因此 `enabled_skills` 对 AI 创建技能不再充当人工审核点。
-- AI 创建技能不能覆盖已有技能；手动创建/放入的技能仍需用户启用。
-
-### F23 会话检索与历史召回
-
-- 状态：进行中
-- 日期：2026-11-01
-- 来源：用户要求解决“记不住以前聊过什么”，并在侧栏搜索历史消息定位到具体消息
-
-#### 背景与目标
-
-平台已有 `messages` 表全文历史，但 Agent 只能拿到注入的长期记忆条目，无法检索历史对话；侧栏也没有搜索。目标：让 Agent 能按关键词搜索当前 Agent 的历史会话并读取命中上下文；网页侧栏能搜索并跳转到具体消息。
-
-#### 功能点
-
-1. SQLite 新增 `messages_fts` FTS5 虚拟表（trigram，`content='messages'`、`content_rowid='rowid'`），并建 `messages_ai` / `messages_ad` / `messages_au` 触发器；首次创建或索引为空时执行 `rebuild` 回填历史消息。FTS 不可用时搜索降级为 `LIKE`。
-2. 新增服务 `search_messages`：限定当前 Agent 的 sessions，按关键词匹配 `messages.content`，`bm25` 排序，返回 message_id、session_id、会话标题、角色、片段和时间；trigram 词长小于 3 或 FTS 无结果时走 `LIKE`。
-3. 新增服务 `read_session_context`：校验 session 属于当前 Agent；按 `created_at` / `id` 取命中消息前后各 N 条（默认各 5 条，最大 10 条），不传 message_id 时返回最近消息。
-4. 新增始终可用的平台工具 `session_search`（关键词、limit 1-20）和 `session_read`（session_id、message_id、before/after）；不参与技能门控；`SkillToolContext` 增加 `session_id`。
-5. 默认提示词增加会话检索说明；旧默认 Agent 一次性升级，自定义 instructions 不动。
-6. 新增 `GET /api/sessions/search?agent_id=&q=&limit=`，认证并按 Agent 隔离，返回命中消息。
-7. 侧栏会话列表上方增加搜索框（至少 2 个字符，300ms 防抖）；结果显示会话标题、片段、角色和时间；点击结果切换到对应会话，滚动到目标消息并短暂高亮。
-8. 「工具」页平台工具分组展示两个新工具。
-
-#### 验收标准
-
-- Agent 在对话中可调用 `session_search` 搜索当前 Agent 的历史消息，再用 `session_read` 读取上下文；不能读取其他 Agent 的会话。
-- 中文子串、英文关键词、短词（`LIKE` 降级）都能命中；删除消息后不再命中。
-- 生产升级后首次启动能回填历史消息；FTS 失败时搜索仍可用。
-- 侧栏搜索可命中历史消息，点击后打开正确会话、滚动到目标消息并高亮。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 语义/向量检索、embedding、跨 Agent 搜索；
-- 消息分页或懒加载（消息接口仍一次返回整个会话）；
-- 搜索高亮关键词、搜索历史记录、跨标签页同步；
-- 主动把历史对话注入系统提示（仍按需检索）。
-
-#### 风险与边界
-
-- 搜索会把历史对话内容交给模型；只限当前 Agent 的会话。
-- trigram 对 1-2 字查询不生效，走 `LIKE`；单用户数据量可接受。
-- 生产首次启动会回填一次 messages FTS，数据量大时启动稍慢。
-- 侧栏搜索定位依赖消息已加载（当前消息接口返回全量）。
-
-### F24 web-search 同时解锁 web_fetch
-
-- 状态：进行中
-- 日期：2026-11-01
-- 来源：用户发现 `web-search` 技能只声明 `web_search`，按其正文使用 `web_fetch` 时工具未解锁
-
-#### 功能点
-
-1. 内置 `web-search` 技能的 `metadata.include_tools` 改为 `web_search web_fetch`，description 和正文说明本技能同时解锁抓取工具。
-2. 保留独立的 `web-fetch` 技能，用于只需要抓取网页、不需要搜索的场景。
-3. 未修改的内置技能随启动更新；用户改过的保持不动，需要手动补 `web_fetch`。
-
-#### 验收标准
-
-- 启用并读取 `web-search` 后，`web_search` 和 `web_fetch` 都解锁。
-- `web-fetch` 技能仍可单独启用并解锁 `web_fetch`。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 合并或删除 `web-fetch` 技能；
-- 改变 Search/Fetch 的计费或 QPS 限制。
-
-### F25 思考与工具调用交错展示
-
-- 状态：进行中
-- 日期：2026-11-01
-- 来源：用户指出当前思考链把所有思考聚合到一块，应与工具调用按发生顺序交错为「思考1 + 工具1、思考2 + 工具2」
-
-#### 功能点
-
-1. 按 `run_events` 的 event id 顺序构建执行过程：连续 `reasoning_delta` 合并为一段思考，`tool_call` 作为一步工具，工具之后的新 `reasoning_delta` 另起一段思考。
-2. 流式 Run、失败/停止 Run，以及当前/最近一次完成的 assistant 消息显示「执行过程」时间线：思考段和工具行交错；流式期间展开，开始输出答案后自动折叠，完成后默认折叠、可展开。
-3. 工具行显示 `describeToolCall` 的说明和工具名；子 Agent 的工具调用显示 agent 标签。
-4. 没有事件时回退到已有的聚合思考文本，保持旧数据兼容。
-
-#### 验收标准
-
-- 事件顺序为思考→工具→思考→工具→思考时，界面按同样顺序展示，不再把所有思考集中到一块。
-- 刷新页面后，当前/最近一次 Run 的执行过程仍从 `run_events` 恢复可见。
-- 失败或取消的 Run 保留已发生的思考段与工具步骤。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 展示工具返回结果或输出正文（仍只显示调用与思考）；
-- 回放当前会话之外或更早 Run 的执行过程（当前只恢复当前/最近一次 Run；更早的仍在 Run 抽屉的原始事件里）；
-- 修改 `run_events` 表结构或 `reasoning_content` 的采集方式。
-
-#### 风险与边界
-
-- 子 Agent 的 `reasoning_delta` 目前没有单独的 agent 标记，可能与主 Agent 的思考合并显示；工具行有 agent 标记。
-
-### F26 加密货币量化回测
-
-- 状态：进行中
-- 日期：2026-11-01
-- 来源：用户希望在平台内用 Python 编写策略，对加密货币历史行情做回测；独立模块，不与 Agent 集成
-
-#### 背景与目标
-
-平台已有单用户 Web 界面与后台任务基础设施，但没有行情与回测能力。目标：在不引入实时交易的前提下，提供可编辑 Python 策略、按需抓取并缓存 Bitget 公共行情、异步执行并展示指标/净值/回撤/价格与交易明细的量化回测模块。
-
-#### 功能点
-
-1. 新增「回测」页面与侧栏入口，独立于 Chat/Agent；首版单标的、现货、历史回测，不接实盘。
-2. 行情来自 Bitget 公共 REST，按需抓取到本地缓存并增量更新；周期支持 `1min`、`5min`、`15min`、`1h`、`4h`、`1day`、`1week`、`1M`，按 UTC 对齐；不做实时行情/WebSocket。
-3. 策略用 Python 编写并在页面内编辑；接口为 `strategy(df) -> pd.Series`，`df` 为 UTC `DatetimeIndex`，列 `open/high/low/close/volume`，返回 [-1,1] 目标仓位。
-4. 回测任务异步执行，状态 `queued/fetching/running/completed/failed/cancelled`；支持取消；服务重启后未完成任务重新排队；同一时间默认只跑 1 个回测。
-5. 结果展示总收益、年化、最大回撤、Sharpe、Sortino、胜率、交易次数、盈亏比、基准买入持有；展示净值、回撤、价格 K 线与买卖点、交易明细。
-6. 行情缓存状态可见；抓取失败、代理不可用、数据不足、策略异常、超时都有明确中文提示。
-7. 结果按回测持久化，历史列表可回看；净值/回撤/价格曲线下采样，交易明细有上限并标注截断。
-8. 配置支持 Bitget base URL、HTTP 代理、回测并发/超时/内存/数据上限；不把回测暴露为 Agent 工具。
-
-#### 验收标准
-
-- 在回测页选择 BTCUSDT、1h、一个过去区间，使用示例策略能创建任务；任务经历抓取/执行并完成，页面展示指标、净值/回撤、价格与买卖点、交易明细。
-- 同一 (symbol, granularity) 第二次回测只抓取缺失的首尾区间；缓存状态显示已有范围与最早可用时间。
-- 1min 与 1M 明确区分；日/周/月 K 线按 UTC 对齐；回测不使用未完成的当前 K 线。
-- 取消排队/执行中的任务后状态为 `cancelled`，不再产生结果；服务重启后 `fetching/running` 任务回到 `queued`。
-- 代理不可用、Bitget 返回错误、数据源没有该区间、策略抛异常、执行超时都返回中文错误，页面可见，不静默失败。
-- 数据不足或缺失 K 线时结果中明确提示实际使用区间与缺失数量，不把缺失数据伪装成完整数据。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 实时行情、WebSocket、实盘交易、下单/账户/资金/持仓；
-- 多标的组合、杠杆、保证金、借币成本、盘中止损/止盈、撮合与流动性建模；
-- 与 Agent 集成、Agent 工具、自然语言生成策略、参数优化/批量扫描/策略版本管理；（F28 起提供 backtest_* 工具与 quant-backtest 技能，仍不做参数优化/批量扫描/策略版本管理。）
-- 真正的安全沙箱（策略代码是受信任的本地代码）；
-- 保证 1min 超长历史（受 Bitget 数据保留与抓取成本限制）。
-
-#### 风险与边界
-
-- Bitget 公共接口可能需要代理，且可能限流/调整保留范围；生产机网络需单独验证。
-- 策略代码是任意 Python，能访问本机文件与网络；子进程只隔离崩溃、超时与内存，不是安全边界。
-- 首尾增量之外，F32 起会扫描并按预算尝试补齐中间缺口；补不齐的部分按空仓处理并在结果中告警。缺失 K 线、未完成 K 线、时区对齐仍会直接影响结果。
-- 现货数据上的负仓位是模拟做空，不含借币成本/强平；结果不构成投资建议。
-- 1min 长区间抓取请求多、耗时长、缓存大；首版用最大 K 线数上限保护。
-
-### F27 全局珠光玻璃视觉改造
-
-- 状态：进行中
-- 日期：2026-11-01
-- 来源：用户要求按「珠光玻璃」方向重做界面；初版只改 Chat 后，用户明确要求登录页与所有功能页统一珠光
-
-#### 背景
-
-原主题是暖米色 + 青绿点缀的常规卡片界面，元素层级接近、执行过程被折叠，缺少「Agent 正在做什么」的现场感。选定方向：珍珠冷光画布 + 极光弥散 + 悬浮玻璃面板，彩虹渐变只用于运行态与主操作。
-
-#### 功能点
-
-1. 全局主题：`:root` 使用珍珠冷光色板（冷白面板、浅紫主色、冷色边框）；`body` 提供全局极光背景；登录页同样使用珠光卡片与渐变球标。
-2. 所有已登录页面共享 `.app-shell.pearl` 外壳：珍珠画布、青绿/紫/暖橙三色极光、悬浮玻璃侧栏和移动端顶部栏。
-3. Chat 输入卡片为悬浮玻璃并带 1px 彩虹描边；assistant 消息为整列玻璃卡片、头部渐变球标；user 消息为右对齐深色气泡。
-4. 执行过程改为「执行过程 N 步」胶囊 + 工具调用胶囊，思考作为一行说明；运行中实时展开，完成后默认折叠。
-5. 发送/停止改为圆形渐变按钮，仅保留图标与 `aria-label`。
-6. 配置、记忆、技能、工具、渠道、回测页统一使用玻璃页头、玻璃卡片与胶囊标签页；详情抽屉、空状态、会话搜索与选中态同步切换。
-7. 不改后端、接口、数据模型；不引入新依赖或外部字体。
-
-#### 验收标准
-
-- 登录页、Chat 和配置/记忆/技能/工具/渠道/回测页都显示珠光画布、极光、玻璃侧栏/页头/卡片。
-- Chat 显示深色 user 气泡、玻璃 assistant 卡片、工具调用胶囊与运行态。
-- 切换页面时主题保持一致，不再残留暖米色页面。
-- 移动端侧栏抽屉、详情全屏面板和输入区安全区正常。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 不为不同功能页保留独立主题；
-- 不引入外部字体、图标库或动画库；
-- 不改变消息、Run、事件、技能与渠道的数据行为。
-
-### F28 Agent 回测工具与技能
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：用户要求把回测模块以 tools + skill 的形式提供给 Agent
-
-#### 背景与目标
-
-F26 的回测模块只对网页开放。目标：注册回测/行情工具并提供内置技能，使启用该技能的 Agent 能在对话里检查行情连接、编写 Python 策略、创建/查询/取消回测并解读结果，与网页共用同一套回测任务、worker 和行情缓存。
-
-#### 功能点
-
-1. 新增技能工具 `backtest_run`、`backtest_status`、`backtest_result`、`backtest_cancel`、`market_probe`、`market_cache_status`，注册到技能工具注册表；只在 Agent 读取 `quant-backtest/SKILL.md` 后解锁，未启用或未读取时不可见。
-2. `backtest_run` 接受交易对、周期、UTC 日期、策略代码、初始资金、手续费、滑点和预热 K 线（默认 200）；创建 `Backtest` 并最多等待 `BACKTEST_TOOL_WAIT_SECONDS`（默认 90 秒）；完成返回指标摘要，未完成返回任务 id 与当前阶段。
-3. `backtest_status` 返回状态、进度、错误和已完成指标；`backtest_result` 返回指标、告警和最近交易明细（默认 30 笔、上限 200 笔），不返回净值/价格大数组；`backtest_cancel` 取消排队或执行中的任务。
-4. `market_probe` 返回 Bitget 连接延迟或中文错误；`market_cache_status` 返回本地缓存范围、最早可用时间和上次抓取错误。
-5. 新增内置技能 `quant-backtest`（`metadata.include_tools` 声明上述工具），说明策略接口、无未来函数、费用假设、模拟做空和样本限制；不自动启用，按 Agent 在技能页启用。
-6. 「工具」页展示新工具及声明技能；「技能」页显示内置技能。
-7. Agent 创建的回测与网页共用 `backtests` 表、`BacktestWorker` 和 `market.db` 缓存。
-
-#### 验收标准
-
-- 启用 `quant-backtest` 的 Agent 读取 SKILL.md 后能调用六个工具；未启用或未读取时工具不可见、不可调用。
-- 在对话中可以让 Agent 写一个均线策略并跑 BTCUSDT 1h 回测，返回收益、回撤、Sharpe、交易次数和 warnings。
-- 长任务返回任务 id，之后 `backtest_status` 能查到终态；`backtest_cancel` 能取消排队或执行中的任务。
-- 未配置代理、交易对错误或数据不足时，工具返回中文错误，不伪造行情或结果。
-- 工具结果不包含完整净值/价格数组，完整曲线仍在网页查看。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 参数优化、批量扫描、多策略对比、策略版本管理、组合回测；
-- 自动交易、实盘下单、账户与持仓；
-- 自动启用技能或绕过技能门控；
-- 把完整净值、价格 K 线和全部交易数组塞进工具结果。
-
-#### 风险与边界
-
-- Agent 可以执行任意策略 Python；平台本来就向 Agent 开放宿主机 shell，工具不引入新的安全边界，子进程只隔离崩溃、超时和内存。
-- `backtest_run` 等待期间占用一次 Run；长任务应返回任务 id，由用户稍后查看。
-- 工具结果是压缩摘要，不能替代对费用、滑点、过拟合和样本不足的判断。
-- Bitget 连接依赖统一代理；失败时工具返回错误，不缓存伪造数据。
-
-### F29 侧栏信息架构：Agent 工作台 / 能力 / 独立工具
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：回测页上线后，独立工具与 Agent 能力混在同一导航层，用户无法判断页面归属
-
-#### 背景与目标
-
-回测不绑定 Agent，却与技能、工具、渠道并排；进入回测后 Agent 选择器和会话列表仍然可见，容易被理解为当前 Agent 的功能。目标：用语义分组讲清「谁拥有这个页面」，不引入第二套导航、工作区切换或路由改造。
-
-#### 功能点
-
-1. 侧栏分为四组：Agent 工作台（Agent 选择器、新对话、会话搜索与列表）、Agent 能力（技能/工具/渠道/记忆）、独立工具（回测）、平台（配置/退出登录）。
-2. Agent 工作台置顶并占据剩余高度，会话列表在组内滚动；其余分组固定在下方。
-3. 回测入口标注「不绑定 Agent」，回测页标题旁显示「独立工具」标记；页面保留「返回对话」快捷退出。
-4. 配置/技能/工具/渠道/记忆仍以当前 Agent 为配置对象；侧栏的 Agent 选择器保持唯一来源。
-5. 不改路由、接口、数据模型。
-
-#### 验收标准
-
-- 侧栏显示四个语义分组；回测只出现在「独立工具」组并带标记。
-- 回测页与聊天/配置切换、移动端抽屉、会话滚动与删除都正常。
-- 配置/技能/工具/渠道/记忆仍跟随当前 Agent。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 双工作区切换与跨工作区状态保持（已由 F30 实现：顶层 Agent / 量化 两个工作区 tab；F47 起更名为 Agent / 功能）；
-- 把回测绑定到 Agent 或做成 Agent 工具（见 F28）；
-- 改动后端接口与数据模型。
-
-### F30 顶层 Agent / 量化 工作区切换
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：用户要求顶层只保留 Agent 与量化两个工作区，控制台属于 Agent
-
-#### 背景与目标
-
-回测是不绑定 Agent 的独立工作区，但之前只作为 Agent 侧栏里的一个分组。用户希望用工作区级别的切换把两者分开：Agent 工作区保留聊天、会话、能力与配置，量化工作区只负责回测。（F47 起该工作区更名为「功能」，回测作为其中的手动工具保留。）
-
-#### 功能点
-
-1. 侧栏顶部品牌区改为 Agent / 量化 两段 tab，默认 Agent；Agent 内部保留 F29 的 Agent 工作台 / Agent 能力 / 平台，不再显示回测入口。
-2. 量化工作区只显示「独立工具 → 回测」，不显示 Agent 选择器和会话列表；底部只保留退出登录。
-3. 回测只从量化工作区进入；回测页保留「返回对话」。
-4. 切换 tab 不改变全局 Agent 和当前会话；刷新默认回到 Agent / 聊天。
-5. 不改路由、后端接口或数据模型。
-
-#### 验收标准
-
-- 顶部只有 Agent / 量化 两个 tab，默认 Agent；量化工作区不出现 Agent 选择器与会话。
-- Agent 工作区的三组侧栏与 F29 一致（不含回测入口）；量化工作区的回测正常。
-- 从量化切回 Agent 仍停留在原会话；移动端抽屉显示同样的 tab。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 把控制台做成独立顶层 tab；
-- 控制台内部重排或新增首页；
-- 会话置顶、重命名、归档（需要新的 schema/API）。
-
-### F31 定时任务（Cron）
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：用户希望在 Agent 工作区按 cron 表达式定时触发对话；每个任务拥有独立会话，可持续追问
-
-#### 背景与目标
-
-平台已有 Run 队列、每会话 checkpoint 和会话列表，但 Run 只能由用户消息、渠道入站或重试触发。目标：让用户为当前 Agent 配置定时任务，到点自动在任务专属的会话里发起一轮 Run；用户可以在同一会话里查看结果并继续追问，新建任务使用新的会话。首版不做主动推送（F38 起任务可显式配置微信推送目标）。
-
-#### 用户故事
-
-- 作为用户，我可以为当前 Agent 新建定时任务：名称、prompt、cron 表达式、时区、启用状态。
-- 作为用户，到点后任务在自己的会话里自动运行，我在侧栏看到这个会话并打开查看结果。
-- 作为用户，我可以在这个会话里继续追问，下一轮定时触发会带着这段上下文。
-- 作为用户，我可以暂停、恢复、立即运行、编辑或删除任务。
-- 作为用户，新建另一个定时任务会得到另一条独立会话，两者互不共享上下文。
-
-#### 功能点
-
-1. Agent 工作区的「Agent 能力」组新增「定时」页面，只管理当前 Agent 的任务；沿用全局 Agent 选择为唯一来源。
-2. 创建任务时同时创建专属会话，标题为「定时 · <任务名>」；一个任务同一时间只对应一条专属会话，任务改名时同步会话标题。这是「一任务一会话」的例外，不改变普通「新对话」的懒创建规则。
-3. 任务配置包含：名称、prompt、cron 表达式（5 字段）、时区（默认 `Asia/Shanghai`，可按任务覆盖）、启用/暂停。名称、prompt、表达式为空、表达式非法或无法计算出下一次触发时间时，给出中文错误，不创建/不保存任务；同一 Agent 下任务名不允许重复。
-4. 到点触发时，在任务会话里按普通对话创建用户消息（内容为任务 prompt）和 Run，来源标记为定时；流式输出、思考、工具调用、用量与失败原因与普通 Run 一致，失败不自动重试。
-5. 用户在定时会话里的追问与普通聊天一致；这些消息进入同一 checkpoint，成为后续定时触发的上下文。
-6. 任务会话里已有 queued/running 的 Run（无论来自上一次定时触发还是用户追问）时，本次触发跳过并记录，不排队堆积。
-7. 错过的触发（服务停机期间）在恢复后最多补跑一次，不补跑全部历史；恢复后按表达式继续计算下一次触发。
-8. 定时 Run 与普通 Run 共用并发上限，不单独开执行池；不同任务之间受同一并发限制约束。
-9. 服务重启后，未执行的 Run 按现有恢复语义续跑；同一个计划时间点不会重复触发。
-10. 暂停后不再触发；恢复后从下一个匹配时间开始，不补暂停期间的计划。编辑表达式、时区或名称后重新计算下一次触发时间。暂停或删除任务不影响已经 queued/running 的 Run，用户仍可在会话里手动取消。
-11. 任务页显示下次触发时间、最近一次触发时间、最近一次 Run 状态和进入会话的入口；支持「立即运行」，立即运行遵循与定时触发相同的跳过规则，且不改变原计划。
-12. 删除任务只删除配置，保留会话及其历史；会话被删除后（会话存在活动 Run 时本就不允许删除），任务在下一次触发时自动创建新的专属会话并继续，不因会话被删而失效；原会话的历史与 checkpoint 已随删除丢失，新会话从空上下文开始。
-13. Agent 归档（`status=archived`）或永久删除后，其任务不再触发；永久删除 Agent 时任务一并级联删除。
-14. 会话列表用「定时」徽标区分定时会话；定时会话可像普通会话一样打开、检索、追问和删除。
-
-#### 验收标准
-
-- 创建任务后立即出现对应的定时会话；未到触发时间前会话为空，用户可先进入追问。
-- 到点后任务自动生成 Run 并完成，输出出现在该会话与 Run 详情中；侧栏会话的消息数/活动徽标正常更新。
-- 在定时会话里追问后，下一次触发能看到此前内容，上下文连续。
-- 新建第二个任务得到第二条独立会话，两个任务的消息与上下文互不影响。
-- 名称为空、prompt 为空、表达式非法或同 Agent 下重名时，创建/保存被拒绝并显示中文错误。
-- 任务会话里已有 queued/running 的 Run 时，本次触发被跳过并记录，不产生排队积压；「立即运行」同样被跳过或提示。
-- 服务停机跨过多个触发点后恢复，最多补跑一次，随后按原计划继续。
-- 暂停/恢复、编辑表达式、立即运行、删除任务的行为符合上述约定；暂停或删除任务不会取消已经 queued/running 的 Run；删除任务后会话仍可见。
-- 表达式按配置的时区解释，跨日、跨月与月末触发时间正确。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 默认不做主动推送（微信、邮件、系统通知）；结果只落在会话里，由用户打开查看（F38 起任务可显式配置微信推送目标）。
-- 不做多 Agent 共享任务、任务间依赖/串联、条件触发或事件触发。
-- 不做秒级/6 字段表达式，也不做自然语言自动转 cron。
-- 不做每个任务独立的记忆/知识库；上下文仍由 session checkpoint 与现有记忆机制承担。
-- 不新增定时任务专用的执行器或并发通道。
-
-#### 非目标
-
-- 定时任务历史运行列表单独成页；通过会话与 Run 查看；
-- 任务分组、标签、批量管理；
-- 定时结果的摘要推送或未读提醒（会话列表的既有徽标除外）。
-
-### F32 回测数据完整性：缺口、预热与未来函数
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：回测上线后，用户要求先补数据完整性，避免缺口、冷启动指标和未来函数让结论失真
-
-#### 背景与目标
-
-F26/F28 的回测能跑通，但存在三类影响结论可信度的问题：行情缓存只做首尾增量，中间缺口只告警不修复，跨缺口收益会被合并；策略只看到评估区间，长周期指标在开头用残缺数据计算；策略可以读取整段行情，全样本统计或负向 shift 等未来函数不会被发现。目标：在不改变单标的、现货、历史回测范围的前提下，让缺口、预热和未来函数三类问题可见、可处理，并明确告诉用户结果何时不可信。
-
-#### 功能点
-
-1. 每次回测前扫描请求区间内的中间缺口，按预算从 Bitget 补齐；补不齐的缺口在策略输入中保留为 NaN 行，缺口期间强制空仓，跨缺口收益不计入。
-2. 回测请求新增可配置的预热 K 线（默认 200，0–5000）。预热数据在评估区间之前额外加载，策略在包含预热的完整数据上运行，因此可以用预热段建立初始仓位；指标、净值、回撤、交易和价格图只从用户选择的开始时间计算。
-3. 预热不足时明确告警实际预热根数；预热参数随任务持久化，服务重启重排后仍使用同一数值。
-4. 策略在截断前缀上再运行一次，并比较重叠区间的信号；不一致时返回「疑似使用未来数据」告警和差异根数，不把该结果当作有效结论。
-5. 策略代码包含负向 shift 等明显未来引用时给出静态告警；无法完成未来函数检测时也要给出明确说明，而不是静默跳过。
-6. 结果中展示实际 K 线数、缺失 K 线数、缺口段数、预热根数和未来函数检测结果；网页、Agent 工具返回和 warnings 使用同一套信息。
-7. 缺口修复有行数与段数预算，避免单次回测因补齐历史缺口产生不可控的请求量；未来函数检测可配置关闭，默认开启。
-8. 不改变现有的 200000 根上限、单进程回测、子进程隔离和结果截断规则。
-
-#### 验收标准
-
-- 缓存中间删除一根 K 线后再次回测，平台能自动补回；补不回时结果明确显示缺失根数与缺口段数，且缺口期间的仓位为 0、跨缺口涨跌不计入收益。
-- 设置预热 200 根的回测会加载开始日期之前的 200 根 K 线；指标区间从开始日期算起，预热不足时结果告警。
-- 使用全样本均值/标准差或负向 shift 的策略会触发「疑似使用未来数据」告警；因果的 rolling 策略不误报。
-- 同样的策略和区间在服务重启后重新排队，仍使用原来的预热参数。
-- 网页、Agent `backtest_run` 摘要和 `backtest_result` 都能看到预热、缺失和未来函数信息。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 不在缺口上做插值或伪造价格；不保证 Bitget 一定提供缺失历史。
-- 不做逐 bar 流式策略接口、walk-forward、样本外切分或参数优化（仍属后续研究闭环）。
-- 不改变成交模型（收盘价成交、固定手续费/滑点）和做空成本假设。
-
-### F33 定时任务的 Agent 技能与工具
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：F31 只提供网页管理，Agent 不知道定时任务存在；用户要求把 cron 通过技能交给 Agent 管理
-
-#### 背景与目标
-
-F31 的定时任务只能在网页「定时」页管理，Agent 无法在对话里查看、创建或调整任务。目标：提供一个内置技能和一组已注册工具，让 Agent 在用户明确要求时管理当前 Agent 的定时任务；网页和 Agent 共用同一套校验、调度和会话语义，不新增执行通道。
-
-#### 用户故事
-
-- 作为用户，我可以在对话里说“每天 8 点总结昨天的工作区变化”，Agent 读取技能后创建定时任务，并告诉我它的专属会话。
-- 作为用户，我可以在对话里询问“我有哪些定时任务”，Agent 返回名称、表达式、下次触发和最近状态。
-- 作为用户，我可以让 Agent 暂停、恢复、修改或删除任务。
-- 作为用户，我可以让 Agent 立即运行一次任务，而不改变原计划。
-- 作为用户，未启用该技能时，Agent 不会自行创建定时任务。
-
-#### 功能点
-
-1. 新增内置技能 `cron-scheduler`，`metadata.include_tools` 声明 `cron_list`、`cron_create`、`cron_update`、`cron_delete`、`cron_run`；与 `quant-backtest` 一样不自动启用，只有 Agent 启用了技能并读取 `SKILL.md` 后工具才可见。
-2. `cron_list`：只列出当前 Agent 的任务，返回任务 id、名称、5 字段表达式、时区、启用/暂停、下次触发、最近一次运行状态和专属会话标题/id。
-3. `cron_create`：创建任务并沿用 F31 语义——同时创建一条专属 Session（`定时 · <任务名>`），prompt 必须自包含，因为任务会话不继承当前对话；返回任务 id、下次触发时间和会话标题。
-4. `cron_update`：按任务 id 修改名称、prompt、表达式、时区或启用状态；只能操作当前 Agent 的任务。
-5. `cron_delete`：删除任务配置，保留专属会话和历史；只能操作当前 Agent 的任务。
-6. `cron_run`：立即运行一次，不改变原计划；任务会话已有 queued/running Run 时返回明确提示，不排队。
-7. 输入校验与 F31 一致：名称、prompt、表达式为空、表达式非法或无法计算下一次触发时间、同一 Agent 重名都返回中文错误；工具把错误作为可读文本返回，不抛异常给模型。
-8. 工具只从当前 Run 的 Agent 上下文取 `agent_id`，不能创建或操作其他 Agent 的任务。
-9. 网页「定时」页与 Agent 工具共用同一套 service、校验和调度逻辑；F31 的网页与 API 行为不变。
-10. 工具结果保持精简，适合模型直接转述；创建/更新后提醒用户到专属会话查看结果，不承诺主动推送。
-
-#### 验收标准
-
-- 启用 `cron-scheduler` 并读取 SKILL.md 前，五个 cron 工具不可见；读取后可见且可调用。
-- 通过 `cron_create` 创建任务后，数据库出现任务和新的 `origin='cron'` 会话；`cron_list` 能列出该任务及下次触发时间。
-- `cron_update` 可以改名、改表达式、暂停/恢复；暂停后下次触发为空，恢复后重新计算。
-- `cron_delete` 删除任务后会话与历史仍存在。
-- `cron_run` 在空闲会话中创建 `source='cron'` 的 Run；会话忙时返回中文提示，不创建排队 Run。
-- 另一个 Agent 的上下文无法列出、修改、删除或运行目标任务。
-- 空名称、空 prompt、非法表达式、重复名称都返回中文错误文本，不产生半成品任务。
-- 「技能」页出现 `cron-scheduler`（系统技能，未默认启用）；「工具」页显示五个 cron 工具及其技能声明。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 不自动启用 `cron-scheduler`；用户必须在技能页启用并让 Agent 读取 SKILL.md 后工具才解锁。
-- 不做跨 Agent 任务共享或代为管理；不做任务间依赖、事件触发或主动推送。
-- 不把当前对话上下文自动带入任务会话；Agent 必须把 prompt 写成自包含指令。
-- 不做自然语言到 cron 的独立解析器；由 Agent 在对话里确认时间并生成表达式。
-- 定时 Run 与普通 Run 权限相同（含 `execute` / `eval`），没有额外审批。
-- 不新增定时任务专用的执行器、并发通道或新的网页页面。
-
-#### 非目标
-
-- 任务模板市场、批量创建、任务分组或标签；
-- 定时结果的摘要推送、未读提醒或微信回信；
-- 在工具里直接取消正在运行的定时 Run（仍到会话里手动取消）。
-
-### F34 坚果云知识库同步与 /knowledge/ 挂载
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：用户希望 Agent 能访问坚果云上的个人知识库目录，读懂现有笔记并帮忙写新笔记
-
-#### 背景与目标
-
-用户的知识库放在坚果云，日常由自己在多台设备上维护。目标：在配置页填写 WebDAV 信息后，生产机维护一份本地镜像，由平台每 5 分钟与坚果云 WebDAV 双向同步；Agent 通过一个独立的 `/knowledge/` 目录直接读写镜像，不需要学习新的知识库专用工具，也不需要接触 WebDAV 凭据。
-
-#### 用户故事
-
-- 作为用户，我在「配置」页的「知识库」tab 填写 WebDAV 地址、账号、应用密码和根目录，保存后立即生效，不需要改服务器上的 `.env` 或重启服务。
-- 作为用户，我可以暂停或恢复同步，也可以点「立即同步」手动触发一次。
-- 作为用户，我启用 `knowledge-base` 技能后，可以让 Agent 查看、检索我的知识库并据此回答。
-- 作为用户，我可以让 Agent 把整理好的内容写成新笔记或修改现有笔记，几分钟内同步回坚果云。
-- 作为用户，我在手机或其他设备上改过的笔记，最多 5 分钟后出现在生产机镜像里。
-- 作为用户，未启用该技能的 Agent 看不到 `/knowledge/`，也不会主动去翻知识库。
-- 作为用户，同步失败不会影响聊天和已有笔记，下一轮同步会继续重试。
-
-#### 功能点
-
-1. 配置页新增「知识库」tab，管理启用开关、WebDAV 地址、账号、应用密码、根目录和同步间隔；配置保存在 `knowledge_configs` 单行表。密码只写库、接口只返回 `has_password`，不写日志。`KB_WEBDAV_*` 只在数据库尚无配置时作为首次启动的初始值；`APP_KNOWLEDGE_DIR` 仍由环境变量控制本地镜像目录（默认 `~/.super-personal-platform/knowledge`）。
-2. 生产机维护本地镜像目录；同步状态写入 `data/knowledge_sync_state.json`，不放进知识库目录。启动后按配置立即同步一次，之后按配置的间隔轮询；配置保存或手动同步会立即唤醒任务，不需要重启服务；同一进程内同步任务串行，不叠跑。
-3. 增量同步：用 WebDAV `PROPFIND` 递归列出远端文件，按 etag（缺失时用修改时间 + 大小）判断远端是否变化，按文件哈希判断本地是否变化；只传输变化的文件。遵守坚果云限流：客户端按 `KB_REQUEST_INTERVAL_SECONDS`（默认 4.5 秒）限制请求频率，默认跳过 `KB_EXCLUDE_DIRS` 中的配置目录，收到 `BlockedTemporarily` 或 HTTP 503 时暂停 `KB_BLOCKED_RETRY_SECONDS`（默认 1800 秒）；`PROPFIND` 条目达到 `KB_MAX_LISTING_ENTRIES`（默认 750）或子目录读取失败时，本轮视为列表不完整，不做本地删除判断。
-4. 冲突处理：远端和本地都改过同一文件时，远端内容保留在原文件名，本地版本另存为 `<name>.conflict-local-<时间戳>`，随后作为新文件上传；日志记录冲突数量。
-5. 远端删除且本地未修改时删除本地；本地修改过则重新上传，避免丢失内容。本地删除不传播到远端，远端文件会在下一轮重新下载。
-6. 只读写配置根目录限定的范围；拒绝包含 `..`、反斜杠或越界的路径，跳过符号链接；单文件默认上限 50 MB，超出的文件跳过并告警。
-7. 执行器在 Agent 启用 `knowledge-base` 技能时把本地镜像挂到 `/knowledge/`（`FilesystemBackend`，`virtual_mode`），Agent 用现有 `ls` / `read_file` / `write_file` / `edit_file` / `glob` / `grep` 读写；未启用时不挂载该路由。
-8. 新增内置技能 `knowledge-base`（不自动启用）：说明 `/knowledge/` 的语义、先读根目录 README、检索方式、写笔记的默认位置和命名、不删除文件、写入是异步同步。
-9. 接口：`GET /api/knowledge` 返回配置和同步状态，`PUT /api/knowledge` 保存配置并唤醒同步，`POST /api/knowledge/sync` 立即触发一次；保存空密码保持原值，`clear_password` 显式清除。
-10. `GET /api/system` 增加知识库状态：是否启用、是否已配置、本地目录、轮询间隔、上次同步时间和结果；不返回 URL、用户名或密码。
-11. 同步行为、配置和目录结构写入 `docs/intent.md`、`CLAUDE.md` 和 `README.md`。
-
-#### 验收标准
-
-- 在配置页保存并启用知识库后，生产机出现本地镜像目录，并立即完成一次同步；之后按配置的间隔增量同步，不需要重启服务。
-- 远端新增或修改的文件会出现在本地镜像；本地新增或修改的文件会出现在 WebDAV。
-- 两端同时修改同一文件时，远端版本保留原名，本地版本生成 `.conflict-local-<时间戳>` 文件。
-- 远端删除的文件在本地未修改时被移除；本地删除的文件会在下一轮从远端恢复。
-- 密码保存后接口只返回 `has_password`；留空保存不覆盖原值，显式清除后变为未配置密码。
-- 「立即同步」按钮和「停用同步」开关生效，停用后不再访问 WebDAV，保留本地镜像和配置。
-- 启用 `knowledge-base` 技能后，Agent 能通过文件工具列出、读取、检索和写入 `/knowledge/`；未启用时该路径不可用。
-- 同步失败只记录日志和状态，不阻塞 API、Run 或日志中的凭据泄露。
-- 坚果云返回 `BlockedTemporarily` 时，状态显示限流、暂停约 30 分钟后自动重试，期间手动触发不会绕过退避；列表达到 750 项、被截断或子目录读取失败时，本轮不删除本地文件。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 首发只支持 WebDAV（坚果云），不做坚果云原生 API、OAuth 或桌面客户端集成。
-- 不做实时文件监听，按配置间隔轮询；配置页提供「立即同步」按钮和启停开关，但不做独立的知识库页面。
-- 不传播本地删除；Agent 要求删除知识库文件时，应提示用户在坚果云或 WebDAV 客户端操作。
-- 不做向量检索、PDF/Office 解析、在线预览或多知识库；检索依赖 Agent 现有文件工具。
-- 不自动启用 `knowledge-base`；每个 Agent 在技能页自行启用。
-- 知识库是用户级共享目录，不按 Agent 隔离；技能启停只控制该 Agent 是否挂载 `/knowledge/`。
-- 遵守坚果云 WebDAV 的账号级限流，不尝试绕过；限流严重时只能降低同步频率或缩小根目录。首次同步大目录会持续较长时间，文档中明确提示优先使用笔记子目录。更改 WebDAV 地址、账号或根目录时，旧本地镜像和状态移到 `.old-<时间戳>` 备份后重建，避免旧文件被上传到新根目录。
-
-#### 非目标
-
-- 多知识库、按知识库授权、团队共享；
-- 笔记的版本历史、回收站或冲突合并 UI；
-- 语义搜索、全文索引服务或向量数据库；
-- 把知识库内容自动注入系统提示或长期记忆。
-
-### F35 跨会话并发发送
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：用户反馈另一个会话的 Run 运行中时，当前会话的输入区被禁用并提示「另一个会话的 Run 正在运行，完成后再发送」
-
-#### 背景
-
-后端从 F1 起就支持不同 session 的 Run 并发执行（最多 `BROWSER_CONCURRENCY` 个，当前默认 5），但前端沿用早期的单 Run 假设：只要任意会话有活动 Run，`busyElsewhere` 就禁用当前输入区。结果用户无法利用并发槽，与后端能力矛盾。发送请求的 pending 状态也只有一个全局字符串，无法同时服务两个会话。
-
-#### 功能点
-
-1. 移除跨会话发送阻塞：输入区和发送按钮只受当前会话的发送请求或活动 Run 影响，其他会话的 Run 不再禁用当前输入区。
-2. 发送/重试的 pending 状态按 session 记录（未创建的会话使用 `__new__` 键），两个会话可以同时发起发送请求，完成或失败时各自清除，不会互相覆盖。
-3. 并发槽未满时 Run 立即进入 `running`；达到 `BROWSER_CONCURRENCY` 上限时 Run 保持 `queued`，聊天里显示「排队中，等待其他会话完成」。
-4. 失败/取消 Run 的重试按钮只随当前会话的发送状态禁用；同一会话已有活动 Run 时仍由后端返回 409，前端接入该 Run 并恢复草稿。（F41 起网页 Chat 改为排队；retry/cron 仍 409。）
-5. 删除不再使用的 `composer-busy-hint` 提示与样式。
-
-#### 验收标准
-
-- A 会话运行中切到 B，B 的输入区可以发送；并发槽充足时 B 的 Run 立即进入 running，两个会话的输出互不串扰。
-- 已有两个 running Run 时从第三个会话发送，新 Run 进入 queued 并显示排队提示，输入区不再被禁用。
-- 同一会话已有活动 Run 时发送仍返回 409，前端接入该 Run、提示消息未发送并恢复草稿。（F41 起网页 Chat 改为排队。）
-- 两个会话几乎同时发送时，两个 Run 都正常创建，各自的 pending 状态互不清除。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 不新增前端并发配置；并发上限仍由 `BROWSER_CONCURRENCY` 决定，超出的 Run 由 worker 排队。
-- 不做跨会话统一队列页、批量停止或全局运行面板。
-
-### F36 并发上限默认改为 5
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：用户在 F35 之后要求把跨会话 Run 并发默认上限从 2 改为 5
-
-#### 功能点
-
-1. `BROWSER_CONCURRENCY` 默认值由 2 改为 5；`run_concurrency` 继续跟随该值，因此默认最多 5 个不同 session 的 Run 并发执行，同一 session 仍最多一个活动 Run。
-2. 单个 Run 的浏览器标签页上限同步变为 5；生产机仍可在 `.env` 中用 `BROWSER_CONCURRENCY` 覆盖，不需要改代码。
-3. 第 6 个及以后的活动 Run 保持 `queued`，前端继续显示「排队中，等待其他会话完成」，有空位后由 worker 自动开始。
-4. 定时任务与普通 Run 共用同一并发上限，默认也随之为 5。
-
-#### 验收标准
-
-- 默认配置下，5 个不同 session 的 Run 可以同时处于 `running`。
-- 第 6 个 Run 进入 `queued`，前一个 Run 结束后自动开始。
-- `.env` 设置 `BROWSER_CONCURRENCY=2` 时行为恢复为最多 2 个并发 Run、每 Run 最多 2 个标签页。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 仍保持 Run 并发数与浏览器标签页上限绑定，不新增独立的并发环境变量。
-- 默认值提高后同时运行的 Chromium 数量增加；资源紧张时由部署方通过 `BROWSER_CONCURRENCY` 调低。
-
-### F37 消息历史按需分页加载
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：用户反馈聊天消息一次性全量加载，长会话首屏和 DOM 过重，希望向上滚动时动态加载更早消息
-
-#### 背景与目标
-
-`GET /api/sessions/{id}/messages` 返回整个会话的消息，前端一次性替换并渲染。长会话的初始响应、解析和 DOM 都会越来越重。目标：首屏只加载最新一页，向上滚动按页加载更早消息，并保持当前阅读位置。
-
-#### 功能点
-
-1. 新增 `GET /api/sessions/{id}/messages/page?limit=50&before=<message_id>`，返回 `items / has_more / next_before`；不传 `before` 取最新一页，传 `before` 取更早一页；按 `(created_at, id)` 游标排序，`limit` 默认 50、最大 100。保留原全量接口用于兼容和搜索兜底。
-2. Chat 首屏加载最新 50 条并滚到底部；滚动到距顶部约 80px 时加载上一页，按 id 去重合并，并用布局测量调整 `scrollTop`，保持阅读位置不跳动。
-3. 顶部显示加载状态；失败可点击重试；没有更多后不再请求。
-4. 运行完成或轮询刷新只拉最新一页并与已加载的更早消息合并，不整表替换；用户不在底部时不强制滚动。
-5. 搜索命中不在当前窗口时，从最新页向前翻页直到目标出现（最多 20 页，找不到回退全量接口），再定位并高亮。
-6. 不新增数据库结构；现有单列索引先用，单会话超大时再评估复合索引。
-
-#### 验收标准
-
-- 120 条消息的会话首屏显示 50 条；滑到顶部依次加载到 100、120 条，滚动位置保持；没有更多后顶部提示消失。
-- 搜索旧消息能自动翻页定位并高亮。
-- 发送、运行完成后的消息合并不产生重复；乐观消息被服务端消息替换。
-- 旧的全量接口仍然可用；后端测试与前端构建通过。
-
-#### 非目标
-
-- 虚拟列表/只渲染可视区域；
-- 为 `messages` 增加复合索引或数据库迁移；
-- 改造按消息全文搜索的分页。
-
-### F38 定时任务推送到指定渠道会话
-
-- 状态：进行中
-- 日期：2026-11-02
-- 来源：F31 明确不做主动推送；用户希望定时任务在指定渠道和联系人会话里推送结果
-
-#### 背景与目标
-
-定时任务的结果目前只落在专属会话里，用户需要主动打开网页查看。目标：允许每个任务显式选择一个微信渠道下的 1:1 联系人会话，任务完成后把最终答复（或失败文案）通过现有渠道投递链路发到这个会话；未配置推送的任务保持现状，不做主动推送。
-
-#### 用户故事
-
-- 作为用户，我可以在新建/编辑定时任务时选择「推送到微信」，再选择具体渠道和联系人。
-- 作为用户，任务完成后结果自动发送到选定的微信联系人；长回复按现有规则分块。
-- 作为用户，我可以在任务列表里看到它推送到了哪个渠道和联系人。
-- 作为用户，我可以随时清除推送目标，任务结果只留在网页会话里。
-- 作为用户，我可以在对话里让 Agent 列出可选渠道/联系人，并创建或修改推送目标。
-
-#### 功能点
-
-1. `cron_jobs` 增加可选字段 `push_channel_id`、`push_conversation_id`；两者必须同时为空或同时有值。目标渠道必须是当前 Agent 下的 `wechat` 渠道，目标会话必须是该渠道下的 1:1 联系人会话。
-2. 网页「定时」页的新建/编辑表单增加「推送到微信」开关和渠道、联系人选择器；没有渠道或联系人时给出说明。任务列表显示推送目标或「不推送」。
-3. 新增 `GET /api/channels/{channel_id}/conversations`，返回该渠道的联系人会话 id、显示名、绑定的网页 Session 标题与更新时间；不返回 `context_token` 或外部账号 id。
-4. Agent 技能增加 `cron_targets` 工具，列出当前 Agent 的微信渠道和联系人会话；`cron_create` / `cron_update` 接受推送渠道和联系人 id，更新时可以同时传空值清除目标。
-5. 触发定时任务（含 `cron_run` 立即运行）时，如果任务配置了推送目标，在创建 Run 的同一事务里写入 `ChannelRunLink`；Run 正常完成时发送最终答复，失败时发送现有渠道失败文案，取消不发送。
-6. 发送复用现有 `ChannelDelivery` / `WeixinRuntime` 链路：1800 字分块、`context_token`、失败留 pending、渠道恢复或服务重启后补发；不新增发送循环。
-7. 渠道或联系人会话被删除时，自动清空引用它的定时任务推送目标，任务继续运行但不推送；删除定时会话时同时清理它产生的 Run 的渠道 link 和 delivery，避免孤儿投递。
-8. 未配置推送目标的任务行为不变；推送目标不改变 F31 的专属会话语义，定时 Run 仍在自己的会话里执行和留存，网页/微信回复不会自动进入定时会话。
-
-#### 验收标准
-
-- 通过网页创建带推送目标的定时任务，任务列表显示渠道和联系人；`GET /api/channels/{id}/conversations` 能返回该联系人。
-- 到点触发后，Run 带有指向目标会话的 `ChannelRunLink`；Run 完成时生成 `ChannelDelivery`，渠道 active 时会发送，暂停时保持 pending 并在恢复后发送。
-- 未配置推送目标的定时 Run 不生成 `ChannelDelivery`。
-- 只指定渠道或只指定联系人、渠道不属于当前 Agent、联系人不属于该渠道时，页面/API/工具都返回中文错误，不保存半成品目标。
-- 渠道或联系人被删除后，任务推送目标变为空，任务本身仍保留。
-- 删除定时会话后，它的 Run 对应的 `ChannelRunLink` / `ChannelDelivery` 一并删除，不会在之后发送。
-- Agent 在对话里可以先用 `cron_targets` 查看目标，再创建/修改任务；不能指定其他 Agent 的渠道或会话。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 只支持同一 Agent 下的微信 `wechat` 渠道和已有 1:1 联系人会话；不支持群聊、其他渠道类型或直接输入微信号创建新会话。
-- 推送目标只影响结果投递，不改变定时会话、记忆和执行流程；微信里的回复进入渠道会话，与定时会话上下文分开。
-- 失败 Run 按现有渠道规则发送固定失败文案；取消的 Run 不发送。
-- 不新增独立的推送定时器、发送队列或重试循环，全部复用 `ChannelDelivery` / `WeixinRuntime`。
-- 不自动把定时结果转发给渠道默认联系人或全部联系人；必须显式选择。
-- 不提供按任务单独配置分块大小、失败重试次数或“只推送成功结果”的开关。
-
-#### 非目标
-
-- 群聊推送、图片/文件/语音等非文本消息；
-- 为企业微信/Telegram 等其他渠道抽象推送目标；
-- 把定时会话与渠道会话合并或自动延续上下文；
-- 任务级别的推送重试策略、发送时间窗口或静默时段。
-
-### F39 消息操作与引用位置、执行过程对齐
-
-- 状态：已完成
-- 日期：2026-11-03
-- 来源：用户反馈消息的复制/引用位置不统一，引用内容被写进输入框，执行过程折叠条靠右且过窄
-
-#### 背景与目标
-
-消息的复制/引用按钮此前位置不一致：用户消息的操作在气泡内的底部，assistant 消息的操作在气泡顶部的标题行；点击引用会把 `> ` 引用块直接插入输入框，和用户正在写的草稿混在一起。珍珠主题的「执行过程」折叠条又使用了右对齐 + 内容宽度，视觉上缩在消息右侧。目标是让两类消息的操作统一到气泡下方外侧，引用独立显示在输入框上方，执行过程回到左侧并占满消息宽度。
-
-#### 用户故事
-
-- 作为用户，我能在任何一条消息下方找到复制和引用，而不是在气泡里或标题行里找。
-- 作为用户，我点引用后能在输入框上方看到引用内容，并可以单独取消它，不会被塞进草稿。
-- 作为用户，我展开执行过程时，折叠条和内容从消息左侧开始、占满可用宽度，不再挤在右侧。
-
-#### 功能点
-
-1. 用户消息和 assistant 消息都改成纵向排列：气泡在上，操作行在下且位于气泡外；用户消息的时间也从气泡内移到操作行。
-2. 引用状态按 `agent_id + session_id` 保存，与草稿/附件使用同一 key；点击引用只更新引用预览，不改写草稿。
-3. 引用预览显示在输入框上方，最多预览 3 行，提供取消按钮；发送成功后清除，发送失败保留。
-4. 发送时把引用内容转成 `> ` 引用块并写入消息：无附件时在消息开头；有附件时放在「附件已上传到工作区」文件清单之后，保证刷新后仍能解析出附件 chip。
-5. 「执行过程」折叠条在珍珠主题下左对齐并占满消息宽度，展开箭头放在最右侧；思考/工具面板继续使用整行宽度。
-6. 「整理记忆」等带 `overrideText` 的命令不消费引用。
-
-#### 验收标准
-
-- 用户消息和 assistant 消息的复制/引用都在气泡下方、气泡外；用户消息时间同样在气泡外。
-- 点击助手回复的引用后，输入框上方出现引用预览，输入框本身仍为空；点取消后预览消失。
-- 有引用时发送，消息内容以引用块开头（有附件时在附件头之后），发送成功后引用预览消失。
-- 执行过程折叠条左对齐、宽度与 assistant 气泡一致，展开后的思考与工具内容从左侧开始。
-- 前端构建通过；后端测试不受影响。
-
-#### 约束边界
-
-- 引用只支持整条消息，不支持选择部分文字或引用多条消息。
-- 引用预览不渲染 Markdown，只显示原始文本前 3 行。
-- 不新增 Message 字段，不改变消息存储结构；引用仍只是消息正文的一部分。
-
-#### 非目标
-
-- 结构化引用（保存被引用消息 id、渲染成可点击卡片）；
-- 多选引用、引用片段或跨消息引用；
-- 修改 Markdown 渲染、代码块复制或 Run 事件协议。
-
-### F40 微信会话命令
-
-- 状态：进行中
-- 日期：2026-11-03
-- 来源：微信联系人固定绑定一个 Session，微信侧没有换会话或重置上下文的入口，只能到网页端删除会话
-
-#### 背景与目标
-
-F18 让每个微信 1:1 联系人固定映射一个 Session，入站文本全部作为 Run 输入交给 Agent。联系人想开启一段新对话时，微信侧没有任何入口：必须打开网页、删除或新建会话，再等它发下一条消息。目标：让微信用户用斜杠命令直接管理当前会话与任务，命令由平台确定性处理，不经过模型。
-
-#### 用户故事
-
-- 作为微信用户，我发 `/new` 就能开始一段不携带旧上下文的新对话，旧会话仍可在网页端查看。
-- 作为微信用户，我发 `/status` 能知道当前会话是哪一个、有没有任务在跑。
-- 作为微信用户，我发 `/stop` 能停掉我正在等待的任务，不用打开网页。
-- 作为微信用户，我发错命令时能看到命令说明，而不是被当成普通提问。
-
-#### 功能点
-
-1. 入站文本整条匹配 `^/[A-Za-z][A-Za-z0-9_-]{0,15}$`（不区分大小写）时按命令处理；拦截位置在 `external_message_id` 幂等记录之后、创建 Run 之前。命令不创建 Run、不写 Message、不进入 Agent。
-2. 命令集合：`/new`、`/clear`（与 `/new` 相同）、`/status`、`/stop`、`/help`；未知斜杠命令回复 `/help` 文本。包含空格或不符合命令形态的文本（如 `/etc/passwd 是什么`）照常进入 Agent。
-3. `/new`：为当前联系人新建 Session 并重新绑定 `channel_conversations.session_id`；旧 Session、消息和 Run 原样保留在网页端。若旧会话仍有 queued/running Run，确认回复里提示这些任务完成后仍会回信。
-4. `/status`：返回当前 Agent 名称、会话标题、运行中与排队 Run 数量；还没有会话时给出提示。
-5. `/stop`：取消当前联系人会话中 queued/running 的 Run，语义与网页取消一致（取消不回信），回复停止数量；没有任务时给出提示。
-6. 命令确认消息由 `WeixinRuntime` 在轮询任务里直接通过 iLink `sendmessage` 发送，带当前消息的 `context_token`；不写 `channel_deliveries`，发送失败只记录日志，用户重发命令即可。
-7. 命令仍按 `external_message_id` 幂等；文本级内容去重（同一联系人 5 分钟内相同文本抑制）不作用于命令，避免连续 `/new` 被吞掉。
-8. 命令不改变网页会话列表结构：`/new` 后网页端立即多出一条渠道会话，旧会话保留。
-
-#### 验收标准
-
-- 微信发 `/new` 后收到确认；网页端出现新会话，旧会话历史保留；下一条普通消息进入新会话。
-- `/clear` 行为与 `/new` 相同，不删除任何历史。
-- `/status` 返回 Agent、会话标题与任务数量；没有会话时返回提示。
-- 会话有 queued/running Run 时 `/stop` 取消它们，网页端显示已停止；没有任务时返回提示。
-- `/help` 与未知命令返回命令说明；`/etc/passwd 是什么` 这类文本仍进入 Agent。
-- 命令不产生 Run、Message 或 `ChannelDelivery`；同一个 `external_message_id` 重投不重复执行。
-- 连续发送两次 `/new`（不同 `external_message_id`）两次都生效。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 确认消息即时发送、不持久化：进程崩溃时可能丢失一条确认，不新增 outbox 表。
-- `/clear` 等同 `/new`，不删除旧会话历史；平台不支持清空单个会话的消息。
-- 命令只作用于该微信渠道绑定 Agent 的 1:1 联系人会话；群聊仍忽略。
-- 不支持中文别名、带参数命令（如 `/new 标题`）或用户自定义命令。
-- `/new` 立即生效，旧会话中排队/运行的任务仍会完成并回信，回复顺序可能与发送顺序交错，与现有排队行为一致。
-
-#### 非目标
-
-- 命令菜单、按钮或 iLink 富文本交互。
-
-### F41 运行中排队追问
-
-- 状态：已完成
-- 日期：2026-11-03
-- 来源：用户反馈 Run 运行中发送键变成停止键，无法先把下一条追问排队
-
-#### 背景与目标
-
-F18/F35 为同一 Session 建立了一个 running 加若干 queued Run 的队列，渠道入站和定时任务一直按这个队列工作；但网页 Chat 在已有 queued/running Run 时直接返回 409，前端也在有活动 Run 时把发送键换成停止键。用户必须等当前回复结束才能发下一条。目标：运行中也能发送追问，消息进入同一会话队列，当前 Run 结束后按创建顺序自动执行；保留停止当前 Run 的能力，跨会话并发语义不变。
-
-#### 用户故事
-
-- 作为用户，Agent 还在回答时我可以继续输入并发送下一条追问，不用等它结束。
-- 作为用户，我能看到追问已排队，当前 Run 结束后它会自动开始。
-- 作为用户，我仍然可以停止当前 Run；已经排队的追问不会被一起取消。
-- 作为用户，排队追问的显示顺序是「我的提问 → 它的回答 → 下一条提问 → 下一条回答」。
-
-#### 功能点
-
-1. 网页 `POST /api/chat/messages` 调用 `create_run(..., allow_queue=True)`：会话已有 queued/running Run 时创建 queued Run，不再返回 409；retry 与定时任务「立即运行」的忙检查仍返回 409。
-2. 前端区分 `pendingSend`（当前会话的发送请求还没返回）与 `runActive`（会话有活动 Run）；输入区只受 `pendingSend` 限制，运行中可以提交。
-3. 运行中同时显示停止键和发送键；发送键标题为「排队追问」，输入框 placeholder 提示发送后会排队。停止键只取消当前 Run，已排队的追问继续执行。
-4. 发送成功后查询 `GET /api/sessions/{id}/active-run`：新 Run 已是当前 active Run 时正常接入；否则保留当前 Run 的流式文本和执行过程，显示「已排队，前面的任务完成后会自动执行」，并清除本次发送的 pending 状态。
-5. `finishRun` 已有的「当前 Run 结束后接入下一条 active Run」逻辑负责自动开始 queued Run；拉取终态失败时把 `tracking` 置为 false，避免输入区被永久锁住。
-6. queued Run 没有单独的 started 事件：第一条 `assistant_delta` / `reasoning_delta` / `tool_call` 到达时把当前 active Run 标记为 running，避免整个执行期都显示「排队中」。
-7. assistant Message 的 `created_at` 使用所属 Run 的创建时间，保证运行中追问的显示顺序是「提问 → 回答 → 追问 → 回答」。
-8. 引用内容也算可发送内容：只点引用、不输入文字时发送键可用（修复 F39 的回归）。
-
-#### 验收标准
-
-- Run 运行中输入框可填写，停止键和发送键同时存在；发送后当前 Run 的流式文本、思考过程和截图不被清空。
-- 追问创建一个 queued Run，页面显示「已排队，前面的任务完成后会自动执行」；当前 Run 完成后 queued Run 自动开始，执行过程正常显示。
-- 连续排队多条追问时按创建顺序执行；每条回答排在对应提问之后。
-- 停止当前 Run 后，已排队的追问仍会开始；停止只影响当前 Run。
-- 只点引用、不输入文字时发送键可用并发送引用内容。
-- 渠道入站、定时任务和 retry 的排队/409 语义不变。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 同一 Session 仍最多一个 running Run；queued 可以有多条，没有队列长度上限或优先级。
-- 停止只取消当前 Run；要单独取消某条排队中的追问，需要等它成为当前 active Run 后再停止。
-- 多标签页仍可能各自排队一条消息，本轮不做 `client_message_id` 幂等去重。
-- worker 心跳、孤儿 running Run 的周期性清理不在本次范围。
-- 队列中的追问在流式期间可能显示在当前实时回复气泡上方；当前 Run 完成后按 `run.created_at` 重新排序为提问/回答配对顺序。
-- 当前 Run 失败或取消且后面还有排队追问时，界面会直接接入下一条；失败/停止气泡只在没有后续 queued Run 时保留（失败 Run 不写 assistant Message）。
-
-#### 非目标
-
-- 打断或 steer 正在执行的 Run；
-- 队列位置、预计等待时间或单独取消某条排队追问的 UI；
-- 队列上限、优先级、过期时间；
-- 修改 SSE/轮询协议或 Run 事件类型。
-
-### F42 聊天图片发送与模型图片输入
-
-- 状态：已完成
-- 日期：2026-11-03
-- 来源：用户要求聊天里支持发送图片、附件
-
-#### 背景与目标
-
-F13 已经支持附件上传和文件名 chip，但图片在聊天里没有缩略图，也没有鉴权读取入口；模型只拿到工作区路径，看不到图片内容。目标：图片在输入区和消息气泡里可直接预览，并在当前 Run 中作为模型图片输入发送；普通附件保持原有工作区文件语义。
-
-#### 功能点
-
-1. 输入区支持选择、粘贴和拖拽图片；图片上传前显示本地缩略图，上传中显示进度，发送后可单独移除。
-2. 浏览器端对大于约 2 MB 的图片先缩放：最长边 1600 px、JPEG 0.85，再上传，避免原图把 checkpoint 撑大。
-3. 新增鉴权接口 `GET /api/agents/{agent_id}/uploads/{filename}`，只允许该 Agent `uploads/` 根目录下的单文件名，拒绝 `..`、路径分隔符和符号链接；图片以 `image/*` 返回，其他文件按扩展名返回。
-4. 用户消息的附件块按扩展名识别图片，渲染缩略图网格，点击在新标签页打开原图；非图片仍显示文件 chip；输入区的已上传图片显示小缩略图。
-5. Worker 在创建 Run 时解析用户消息的附件路径，把当前消息里的图片按魔数识别后构造成 OpenAI 兼容的 `image_url` content block，和原文本一起作为本轮 `HumanMessage`；最多 4 张、单张 4 MB。
-6. 不增加 Provider 视觉开关：图片总是随当前消息发送；如果模型不支持图片输入，deepagents 会按模型 profile 用文字占位替换，或该 Run 直接失败。历史 checkpoint 里的图片块在换用纯文本模型后可能继续触发同样的降级或失败，需要换会话。
-7. 数据库和 `Message.content` 仍只保存文本与附件路径，不保存 base64；图片块只在当前 Run 的模型输入中生成。
-8. 只有附件、没有文字时，会话标题从文件名或正文派生，不再使用「附件已上传到工作区：」。
-
-#### 验收标准
-
-- 上传或粘贴图片后，输入区出现缩略图；发送后用户气泡显示图片，点击可看原图；普通文件仍显示 chip。
-- 只发图片也能创建会话和 Run，标题可读。
-- 开启图片的能力正常的模型能回答图片内容；图片超过 4 张或 4 MB 时只发送前 4 张/跳过大图，不阻塞 Run。
-- 上传接口未登录返回 401；路径穿越、缺失文件和未知 Agent 返回 404。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 不做服务端缩略图、图片编辑、OCR、PDF 解析或向量化。
-- 图片识别使用魔数，扩展名只用于 UI；无法识别的二进制文件按普通附件处理。
-- 历史图片会留在 checkpoint；本轮不做历史图片占位清理。
-- 附件文件仍不写数据库、不做配额和定期清理。
-
-#### 非目标
-
-- 图片理解以外的文档解析、语音/视频理解；
-- 服务端图片压缩、裁剪、水印；
-- 附件历史列表、下载管理页、多用户配额。
-
-### F43 微信引用与图片/文件入站
-
-- 状态：已完成
-- 日期：2026-11-03
-- 来源：用户要求微信里识别引用、附件等回复；明确语音/视频不落盘
-
-#### 背景与目标
-
-F18 只处理文本，`extract_text` 对文本引用只返回 `[引用: 标题]`，引用正文不完整；图片、文件和引用中的媒体会被直接丢弃。目标：微信入站能识别文本引用、引用中的图片/文件和直接发来的图片/文件，保存到当前 Agent 工作区并进入会话；语音/视频不下载、不落盘。
-
-#### 功能点
-
-1. 入站 item 类型按 iLink SDK 区分：1 文本、2 图片、3 语音、4 文件、5 视频；出站消息类型编号与入站不同，代码中分开定义。
-2. 解析当前消息和 `ref_msg.message_item`：收集回复正文、被引用消息的标题/发送人/正文、当前图片/文件、引用中的图片/文件。
-3. 文本引用格式化为 `[引用 标题]` 加 `> 原文` 引用块；引用中的图片/文件在正文注明，并加入附件清单。
-4. 图片/文件从 CDN 下载：优先 `full_url`/`url`，否则用 `cdn_base` + `encrypt_query_param`；AES key 兼容 hex、base64(hex)、base64(raw 16 bytes)，AES-128-ECB 解密并去 PKCS7。
-5. 下载只允许 http/https、拒绝 localhost 和私网地址；单文件上限 `CHANNEL_MEDIA_MAX_BYTES`（默认 20 MB），单条消息最多 `CHANNEL_MEDIA_MAX_ITEMS`（默认 4）个媒体。
-6. 图片/文件保存到 `workspaces/<agent_id>/uploads/wx-<hash>-<safe-name>`；文件名清洗、按魔数校正图片扩展名；同一消息重放使用确定性文件名，已存在则跳过。
-7. 消息进入会话时复用 F13 附件头格式，图片在网页端显示缩略图，文件显示 chip；引用正文显示为引用块。
-8. 语音/视频不下载、不落盘：纯语音/视频消息直接回复「暂不支持语音/视频，请发文字、图片或文件」，不创建 Run；混合消息只处理文字/图片/文件并注明已忽略语音/视频；引用中的语音/视频同样忽略。
-9. 媒体下载失败不丢整条消息：在正文注明「图片/文件下载失败」，继续创建 Run。
-
-#### 验收标准
-
-- 微信发图片 + 文字，Agent 拿到图片路径并在网页端看到缩略图；开启图片输入能力的模型能看到图片。
-- 引用一张图片再回复文字，Agent 同时拿到引用说明和图片路径。
-- 发 PDF 文件可落盘并在消息附件清单中出现。
-- 纯语音/视频得到固定提示且不创建 Run；文字 + 语音只处理文字并注明忽略。
-- 下载失败仍有 Agent 回复；同一 `external_message_id` 重投不重复建 Run。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 只做入站图片/文件；出站图片/文件、语音转写、视频理解不在本次范围。
-- iLink 媒体字段以真实入站 payload 为准；字段缺失或解密失败按下载失败处理，不猜测格式。
-- 不把媒体 URL 发给模型，只发本地工作区路径；日志不打印签名 URL 和 token。
-- 媒体文件不写数据库；删除会话/Agent 不自动清理 uploads 目录。
-
-#### 非目标
-
-- 微信群聊、语音转文字、视频抽帧/理解；
-- Agent 主动发送图片/文件回微信；
-- OCR、PDF 正文解析、图片内容审核。
-
-### F44 微信入站 5 秒打包与延迟 sync_buf
-
-- 状态：已完成
-- 日期：2026-11-03
-- 来源：用户要求微信按 packet 合并连续消息，窗口定为 5 秒；不做忙碌打断策略
-
-#### 背景与目标
-
-F18/F41 中每条微信消息立即创建一个 queued Run，用户连续发几条会排多个 Run、回多次，每次还重复携带上下文。目标：同一联系人 5 秒内的连续消息合并成一个 Run；不增加数据库字段，不做打断/abort；通过延迟保存 iLink `sync_buf` 让 5 秒窗口内的消息在进程重启后可被重放。
-
-#### 功能点
-
-1. `WeixinRuntime` 按「渠道 + 联系人」在内存中聚合消息，窗口 `CHANNEL_INBOUND_BATCH_SECONDS`（默认 5 秒）；连续消息不断刷新窗口，但最长 `CHANNEL_INBOUND_BATCH_MAX_SECONDS`（默认 15 秒）后强制 flush。
-2. flush 时把多条消息正文用空行连接，图片/文件合并成一个附件头，调用一次 `ingest_inbound` 创建 user Message + queued Run；超过 `CHANNEL_INBOUND_MAX_CHARS` 时提前 flush。
-3. 窗口内的消息只在内存里；`sync_buf` 暂不写数据库。只有该渠道没有 pending 或正在 flush 的包时，才把最新 `sync_buf` 写入；服务在窗口内重启时使用旧游标重放，已落库的消息由 `channel_inbounds.external_message_id` 幂等吸收。
-4. flush 成功后把本批所有 `external_message_id` 记录到 `channel_inbounds`，共享同一个 Run/Message；重放的非首条消息也不会再建 Run。
-5. 命令不参与打包：`/new`、`/clear` 先把当前联系人的待打包消息 flush 到旧会话，再切换；`/stop` 丢弃待打包消息，再取消当前会话的 queued/running Run；其他命令即时处理，不影响待打包窗口。
-6. 纯语音/视频消息仍即时直接回复且不进入窗口；带文字/图片/文件的消息按 F43 处理后进入窗口。
-7. 不新增 `channel_inbounds` 字段，不引入忙碌策略、打断模式或队列优先级；打包后的 Run 仍按现有「同一 Session 一个 running、多个 queued」语义排队。
-8. 进程优雅停止时取消待打包任务、保留旧 `sync_buf`，下次启动由 iLink 重放；待打包内容不做持久化。
-
-#### 验收标准
-
-- 3 秒内连续发三条文字，只收到一次回答，Run 输入包含三条消息。
-- 两条消息间隔超过 5 秒，形成两次回答。
-- 运行中继续发消息，当前 Run 不被打断，打包后的新 Run 排队并在结束后执行。
-- 窗口内重启服务，消息由 iLink 重放后仍能被处理；不产生重复 Run（正常重启与网络重试场景）。
-- `/new` 前未打包的消息进入旧会话；`/stop` 丢弃待打包消息并取消当前任务。
-- 图片 + 文字的多条消息合并成一个 Run，附件清单完整。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 待打包消息只在内存；如果 iLink 不再重放（例如服务端回收或已保存 `sync_buf` 后崩溃），这 5 秒内的消息可能丢失。
-- 如果 flush 已创建 Run 但进程在记录其余 message id 前崩溃，重放可能重复其中一条消息；不额外建 outbox 表。
-- 不做打断、abort、最新消息优先或按联系人配置不同策略；所有渠道共用全局窗口配置。
-- 微信没有打字指示器或禁止用户发送的接口，不能阻止用户在回答期间继续发消息。
-
-#### 非目标
-
-- 忙碌策略、打断当前 Run、队列优先级；
-- 待打包消息的数据库持久化、outbox 表；
-- 按渠道/联系人设置不同打包窗口；
-- 语音/视频转写或媒体出站。
-
-### F46 浏览器普通身份与登录态持久化
-
-- 状态：已完成
-- 日期：2026-11-03
-- 来源：用户要求访问小红书等反爬站点时"像一个正常人"，不要一打开就被识别为机器人，并能复用登录态
-
-#### 背景与目标
-
-F11 的浏览器使用 Playwright 默认无头 Chromium：UA 含 `HeadlessChrome`、`navigator.webdriver` 为 true，小红书等站点会直接跳到「安全限制」（300012）；同时每次 Run 都新建 context，登录态用完即弃，连正常登录都无法保持。目标：让平台内浏览器以普通桌面 Chrome 身份访问站点，登录一次后跨 Run 复用 cookies/localStorage；遇到验证码仍停止，不自动破解。
-
-#### 功能点
-
-1. 默认启用普通浏览器身份（`BROWSER_NORMAL_IDENTITY=true`）：UA 使用普通桌面 Chrome 格式（版本取实际 Chromium 版本），`locale=zh-CN`、`timezone=Asia/Shanghai`、`Accept-Language=zh-CN,zh;q=0.9,en;q=0.8`；启动参数增加 `--disable-blink-features=AutomationControlled`，并通过 init script 隐藏 `navigator.webdriver`。
-2. 登录态持久化（`BROWSER_PERSIST_STATE=true`）：创建 context 时加载 `data/browser_state.json`（Playwright storage_state：cookies + localStorage）；Run 结束（完成、失败、取消、超时）在关闭浏览器前写回。文件原子写入，权限 0600，不返回前端、不写日志。
-3. 并发安全：如果运行期间另一个 Run 改过状态文件（文件摘要与加载时不同），保存时按 cookie `(name, domain, path)` 和 origin/localStorage `name` 合并，新值优先；文件未被其他 Run 改过时整体覆盖，保证登出也能传播。
-4. `browser_snapshot` 增加 `wait_seconds`（0–60）：先等待再返回快照，用于引导用户扫码登录或等待异步渲染；扫码时按 60 秒一段循环等待，方便在二维码过期后重新截图。
-5. 扫码登录流程由 `web-browser` 技能驱动，并且必须在同一个 Run 内完成：打开登录页 → `browser_screenshot` 展示二维码（截图实时显示在当前 Run 的消息下方）→ 提示用户用手机扫码并确认 → 循环 `browser_snapshot(wait_seconds=60)` 检查是否已登录；页面提示二维码过期时重新 `browser_screenshot` 展示新二维码；最多等待 5 分钟。明确禁止"结束 Run 等用户回复「扫了」"：Run 结束浏览器立即关闭，二维码随之失效。登录成功后继续原任务，登录态随后落盘，后续 Run 自动复用。
-6. 验证页检测补充「安全限制」、`/website-login/error` 和 `error_code=300012`；验证码、滑块等人工验证仍立即停止，不自动识别或绕过。
-7. 新增配置：`BROWSER_NORMAL_IDENTITY`、`BROWSER_USER_AGENT`、`BROWSER_LOCALE`、`BROWSER_TIMEZONE`、`BROWSER_ACCEPT_LANGUAGE`、`BROWSER_PERSIST_STATE`、`BROWSER_STATE_PATH`。
-8. `RUN_TIMEOUT_SECONDS` 默认从 300 秒提高到 900 秒，保证"展示二维码 + 最多 5 分钟等待 + 登录后的实际任务"能在同一个 Run 内完成。
-
-#### 验收标准
-
-- 平台内打开 `https://www.xiaohongshu.com/explore` 不再跳转 300012 安全限制，返回正常页面和登录入口。
-- 展示二维码后，Agent 在同一个 Run 内持续等待最多 5 分钟；用户扫码并确认后无需再发一条消息，Agent 立即继续原任务。
-- 二维码过期时 Agent 重新截图展示新二维码，不要求用户回复。
-- 完成一次扫码登录后，后续 Run 打开同一站点仍保持登录态。
-- 关闭 `BROWSER_NORMAL_IDENTITY` 或 `BROWSER_PERSIST_STATE` 后行为回到旧版（默认 UA、每次全新 context）。
-- 验证码/安全验证页面仍返回明确错误并停止，不自动破解。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 仍是无头 Chromium；不引入指纹随机化、代理轮换、验证码识别或账号池。
-- 登录态文件包含 cookies，只存在本机 `data/`，权限 0600；删除 `data/browser_state.json` 即可强制退出所有网站登录。
-- 站点仍可能按 IP、行为或其他信号拦截；本能力不保证所有站点可访问。
-- 登录二维码需要用户自己用手机扫码；平台不代填密码、不接收或记录短信验证码。二维码有效期由站点决定，过期后只能重新截图；用户需要在 Run 等待期间完成扫码，Run 结束后页面关闭。
-- 存储状态按站点全局共享，不区分 Agent/Session。
-
-#### 非目标
-
-- 绕过验证码、滑块、风控验证；
-- 多账号/账号池、代理池、指纹随机化；
-- 浏览器远程可视（noVNC）或接管用户本机浏览器。
-
-### F47 顶层工作区改为 Agent / 功能
-
-- 状态：已完成
-- 日期：2026-11-03
-- 来源：用户要求把侧栏顶部的 Agent / 量化 改成 Agent / 功能，功能工作区放手动的、传统界面
-
-#### 背景与目标
-
-量化只是功能工作区里的一个工具；后续还会加入知识库浏览等不绑定 Agent 的手动界面。把顶层 tab 命名为「功能」，工作区定位为不绑定 Agent 的手动工具集合。
-
-#### 功能点
-
-1. 侧栏顶部 tab 由 Agent / 量化 改为 Agent / 功能，内部状态从 `quant` 改为 `features`；默认仍为 Agent。
-2. 功能工作区保留「独立工具 → 回测」（不绑定 Agent），分组提示改为「手动操作 · 不绑定 Agent」；不显示 Agent 选择器和会话列表。
-3. 不改路由、后端接口或数据模型；回测页行为不变。
-
-#### 验收标准
-
-- 顶部显示 Agent / 功能，默认 Agent；功能工作区显示回测入口，不出现 Agent 选择器与会话。
-- 切换工作区仍保持全局 Agent 与当前会话；移动端抽屉一致。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 本次不改回测页面内容或新增其他功能页面；
-- 不改变「平台」组或 Agent 工作区结构。
-
-### F48 微信渠道实时发送浏览器截图
-
-- 状态：已完成
-- 日期：2026-11-03
-- 来源：用户发现浏览器截图（尤其是登录二维码）只显示在网页端，微信渠道收不到，微信会话里无法完成扫码登录
-
-#### 背景与目标
-
-F46 的扫码登录依赖 `browser_screenshot` 把二维码展示给用户，但截图只保存在 Agent 工作区并显示在网页端；微信渠道的 Run 只在终态发送文本。微信用户既看不到二维码，也无法在 Run 运行期间完成扫码。目标：渠道来源的 Run 在 `browser_screenshot` 产生截图时，立即把图片发送到该联系人所在的微信会话。
-
-#### 功能点
-
-1. 执行器保存 `browser_screenshot` 截图后，如果该 Run 有 `ChannelRunLink`，立即调用 `channel_images.send_run_image`；没有渠道关联（网页 Run、网页在渠道会话里的手动发言、定时任务未配置推送）时直接跳过。
-2. 图片发送复用 iLink 媒体协议：`POST ilink/bot/getuploadurl` 获取上传地址（当前服务端返回 `upload_full_url`，保留旧版 `upload_param` 的兼容回退；请求字段 filekey、media_type=1、rawsize、rawfilemd5、filesize、aeskey）→ AES-128-ECB + PKCS#7 加密后 `POST {cdn}/upload?encrypted_query_param=...`（`application/octet-stream`，读响应头 `x-encrypted-param`）→ `sendmessage` 携带 `image_item`（`media.encrypt_query_param`、`media.aes_key=base64(hex key)`、`encrypt_type=1`、`mid_size`）和最新 `context_token`。
-3. 发送失败按 3 次、1.5 秒递增退避重试；仍失败只记 warning，不影响 Run 和文本回复。图片超过 `BROWSER_SCREENSHOT_MAX_BYTES` 时跳过（截图保存阶段已限制）。
-4. Run 终态的 `ChannelDelivery` 仍只发送文本，不重复发送已实时发出的截图；崩溃恢复只补发文本。
-5. 微信会话中的扫码登录流程不变：截图在运行期间到达微信，用户扫码后 Agent 在同一 Run 内继续等待/确认，登录态落盘。
-
-#### 验收标准
-
-- 微信发起的会话里让 Agent 打开需要登录的站点，二维码截图在 Run 运行期间出现在微信里；用户扫码后 Agent 在同一 Run 内继续。
-- 网页会话里做同样的操作，网页显示截图，微信不收到任何图片。
-- 微信渠道来源的 Run 里，用户要求查看页面截图时，截图能作为图片消息到达微信。
-- 图片发送失败（渠道暂停、网络错误、token 过期）时 Run 仍正常完成，文本回复照常送达。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 只发 `browser_screenshot` 产生的 PNG 截图；不发送工作区任意文件，也不发视频/语音。
-- 图片在 Run 运行期间实时发送；终态不补发截图，图片失败只重试 3 次。
-- 微信图片消息不带文字说明；回答文本仍在 Run 终态统一发送。
-- 依赖 iLink 图片上传协议；协议或 CDN 行为变化时返回明确错误并只记日志。
-
-#### 非目标
-
-- 出站文件/语音/视频、图片编辑或压缩；
-- 运行期间的文本流式推送；
-- 网页截图消息的单独管理页或重发按钮。
-
-### F50 记忆注入改为相关性优先
-
-- 状态：已完成
-- 日期：2026-11-03
-- 来源：现有注入按弱关键词匹配 + 更新时间排序后固定取 12 条/1500 字，无关记忆也占提示词；用户明确不要 user 记忆全量注入
-
-#### 背景与目标
-
-`retrieve_for_prompt` 把 user 和当前 Agent 的记忆放进一个池子，用整句切出的词做子串匹配、再按更新时间排序，固定取前 12 条、1500 字。中文长句经常整句匹配不到任何记忆，最后注入的其实是一批“最近更新但无关”的条目；一旦记忆变多，真正相关但较早的条目会被挤掉。目标：只注入与本轮输入相关的记忆，user 和 agent 同池按相关度竞争，不做 scope 配额、不做 user 全量注入。
-
-#### 功能点
-
-1. 查询信号：中文用双字组（CJK bigram）并按停用双字组过滤（“这个”“可以”“什么”等）；英文用长度 ≥3 的词元并过滤常见停用词。解决中文整句、词序不同导致的子串匹配失败。
-2. 相关性门槛：至少命中 1 个双字组，或至少命中 1 个英文词；查询双字组较多时门槛提高到 2 个（不按总组数线性放大）。没有相关记忆时返回空记忆块，不再用最近条目填满 12 条。
-3. 排序：相关度（命中数 + 英文词加权）> 更新时间 > 最近使用时间；纯新的无关条目不再挤掉相关旧条目。
-4. 选择：最多 12 条、总内容 1500 字；单条注入正文最多 320 字（超出截断加“…”）；某条超出剩余预算时跳过并继续尝试后面的小条目，不直接中断。
-5. 去重：正文完全相同的条目只保留一条；user 与 agent 重复时保留 user。
-6. user 与 agent 记忆同池竞争，不做 scope 配额或全量注入；`last_used_at` 只更新实际注入的条目，`run_memories` 继续记录实际使用的 id。
-7. 不新增模型调用、不新增依赖、不改数据库结构。
-
-#### 验收标准
-
-- 与输入无关的记忆不会进入提示词；没有相关记忆时本轮不注入记忆块。
-- 中文词序不同但语义相关的记忆能命中（例如记忆“喜欢简短回答”，输入“以后回答简短一点”）。
-- user 记忆不会被全量注入；只有相关的 user 条目与相关 agent 条目一起进入，且总数不超过 12 条 / 1500 字。
-- 完全重复的 user/agent 记忆只注入一条并标记为用户。
-- 单条超过 320 字时截断；超出总预算的条目被跳过时，后面的小条目仍能进入。
-- `run_memories` 记录的 id 与注入条目一致；未注入条目的 `last_used_at` 不变。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 只做词面相关，不做语义/向量检索；同义改写可能匹配不到。
-- 与本轮无关的长期偏好不会注入；需要常驻的规则应写进 Agent instructions，而不是依赖记忆注入。
-- 不引入 `core`/置顶标签、scope 配额或模型 rerank。
-- 记忆提取、合并和存储逻辑不变。
-
-#### 非目标
-
-- embedding、语义重排或 LLM 打分；
-- 用户在记忆页手动置顶/设为核心记忆；
-- 按 Agent 调整注入预算或条数。
-
-### F51 交易记录（Agent 版）
-
-- 状态：进行中
-- 日期：2026-11-03
-- 来源：用户希望平台能提升交易认知，认为最直接的抓手是交易记录；先做 Agent 可用、简简单单的记录，不做复杂页面
-
-#### 背景与目标
-
-用户需要把真实或模拟交易的理由、风险、结果和复盘记下来，之后让 Agent 基于历史记录找出重复错误和有效打法。目标：提供一个低摩擦、可长期追加、Agent 能查询和统计的交易记录；不接交易所、不做实时持仓、不做复杂仪表盘。第一版以 Agent 对话为主要入口，记录用本地 JSONL 保存。
-
-#### 功能点
-
-1. 新增 `data/trade-journal.jsonl`，一行一笔交易；记录包含 `id`、`market`、`instrument_type`、`symbol`、`direction`、`currency`、`entry_at`、`entry_price`、`exit_at`、`exit_price`、`stop_loss`、`quantity`、`fees`、`followed_plan`、`thesis`、`review`、`tags`、`source`、`meta`、`created_at`、`updated_at`。
-2. 必填字段：`symbol`、`entry_at`、`entry_price`、`thesis`；开仓记录不要求出场字段，平仓时 `exit_at`、`exit_price` 必须同时提供。
-3. 支持 `crypto` 与 `a_share`：crypto 默认 `USDT`/`spot`，A 股默认 `CNY`/`stock`；`market` 可从代码后缀或 6 位数字推断。A 股对 T+1、数量整数和止损方向做提示；涨跌停、费用和交易日历不在第一版精确计算。
-4. `tags` 是数组，约定 `setup:`、`mistake:`、`emotion:`、`regime:`、`board:`、`sector:`、`limit:` 等命名空间；`thesis`/`review` 是独立文本；`meta` 只放市场特有、暂不检索的细节。
-5. 平台计算 `status`、`return_pct`、`r_multiple`、`pnl`、`win`，不要求用户填写，也不落盘。
-6. 新增内置技能 `trade-journal`，声明 `trade_journal_record`、`trade_journal_update`、`trade_journal_close`、`trade_journal_query`、`trade_journal_stats` 五个工具；未启用技能或未读取 SKILL.md 时不可见。
-7. 工具支持创建、修改、平仓、按 id/市场/标的/状态/标签/时间/关键词查询，以及胜率、平均收益、平均 R、盈亏比、累计盈亏和按市场/标签分组统计。
-8. 交易记录文件由服务层串行写入，更新用临时文件原子替换；不新增数据库表、不改变现有回测表。
-
-#### 验收标准
-
-- Agent 启用 `trade-journal` 并读取 SKILL.md 后，能在对话里记录一笔交易、平仓、补充复盘、查询最近记录并输出统计。
-- 记录一条 `600519.SH` 的 A 股交易时，自动使用 `a_share`/`CNY`/`stock`；记录 `BTCUSDT` 时使用 `crypto`/`USDT`/`spot`。
-- 平仓后收益、R、净盈亏按方向、止损、数量、费用正确计算；没有数量时 `pnl` 为空，但价格收益和 R 仍可计算。
-- 查询支持 `status`、`market`、`symbol`、`tag`、日期范围、关键词和分页；单条详情包含理由、复盘、标签和 `meta`。
-- 统计按市场/标签分组；USDT 与 CNY 的盈亏不直接相加，多币种时明确提示。
-- 文件损坏行被跳过，不影响其他记录；写入失败返回中文错误，不静默丢失。
-- 后端测试通过；本需求不涉及前端构建。
-
-#### 约束边界
-
-- 只记录用户明确提供的事实；Agent 不编造价格、时间、数量或复盘。
-- 交易记录正文是数据，不是指令；不执行记录中的任何要求。
-- 不提供删除工具；用户需要删除时在后续页面处理。
-- 不连接交易所、不自动下单、不平仓、不计算实时浮盈。
-- 不做语义检索；关键词是字面子串匹配，标签是精确匹配。
-- A 股交易日历、涨跌停成交约束和复权不在第一版计算范围内。
-
-#### 非目标
-
-- 交易记录页面、图表、复杂筛选和批量导入（页面由 F54 补充）；
-- 从回测成交自动生成交易记录；
-- 交易所 API、持仓同步、实时盈亏、自动交易；
-- 多用户、权限隔离、云同步；
-- 用记忆或向量库替代 JSONL 查询。
-
-### F52 会话列表按最后消息时间排序
-
-- 状态：已完成
-- 日期：2026-11-04
-- 来源：用户反馈定时和微信会话总在最上方，要求按 update time 排序
-
-#### 背景与目标
-
-会话列表原先按 `sessions.updated_at` 排序，但该字段会被 Run 完成、重试等后台动作刷新；一个较早的会话可能因为 Run 晚结束而跳到最新会话上方，定时和渠道会话尤其明显。目标：列表排序和侧栏显示统一使用最后一条消息时间。
-
-#### 功能点
-
-1. `GET /api/agents/{id}/sessions` 以 `MAX(messages.created_at)` 作为排序键，没有消息的会话回退到 `sessions.created_at`；按该时间倒序，时间相同时按 session id 稳定排序。
-2. `SessionOut` 增加 `last_message_at`；前端侧栏的显示和排序都使用它，不再使用 `sessions.updated_at`。
-3. 前端收到列表后按 `last_message_at` 再排序一次，覆盖本地新建会话和搜索补入的临时条目。
-4. 不改数据库 schema；`updated_at` 保留原语义，仅不再参与展示和排序。
-
-#### 验收标准
-
-- 一个较早的会话即使 Run 刚刚完成，也不会排在最后消息更新的会话上方。
-- 没有消息的会话显示创建时间，并按创建时间参与排序。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 会话置顶、收藏或按未读排序；
-- 修改 Run 完成时对 `updated_at` 的写入；
-- 调整自动选中的会话（仍为列表第一条）。
-
-### F53 网页聊天支持会话命令
-
-- 状态：已完成
-- 日期：2026-11-04
-- 来源：F40 只让微信侧支持 `/new` 等命令，网页聊天输入仍然把命令当普通提问发给 Agent
-
-#### 背景与目标
-
-F40 让微信联系人在渠道内用斜杠命令管理会话与任务，但网页端没有对应入口：用户在聊天框输入 `/new`、`/stop` 会被当成普通文本交给 Agent。目标：网页聊天输入支持同一套命令（`/new`、`/clear`、`/help`、`/status`、`/stop`），命令同样由平台确定性处理，不创建 Run/Message；网页与微信共享命令解析、帮助文本和停止语义，只有 `/new` 按网页“懒创建会话”的约定切换到空的未落库视图。
-
-#### 功能点
-
-1. 聊天框内容整条匹配 `^/[A-Za-z][A-Za-z0-9_-]{0,15}$`（不区分大小写）时拦截；有附件或引用时命令仍优先；含空格或不是单个命令 token 的文本（如 `/etc/passwd 是什么`）照常发给 Agent。
-2. 新增 `POST /api/chat/commands`，请求 `agent_id`、可选 `session_id`、`command`；返回 `command`、`reply`、`cancelled_count`；命令不创建 Run/Message，也不触发自动记忆。
-3. 命令语义与 F40 一致：`/new`/`/clear` 开始新会话，旧会话保留；`/status` 返回 Agent、会话标题与运行/排队数量；`/stop` 取消当前会话 queued/running Run 并回复停止数量；`/help` 与未知命令返回命令说明。
-4. 网页 `/new` 不立即创建 Session：前端清空当前视图（等价于「新对话」），下一条普通消息才创建会话；旧会话中的 queued/running Run 继续在后台执行，可在旧会话查看。
-5. 命令确认显示在当前聊天流末尾的临时系统卡片（标签 + 命令文本），不写入消息历史；发送普通消息、切换会话、切换 Agent 或点击「新对话」时清除。
-6. 命令成功后清空输入框；失败时把命令恢复到输入框并显示错误。
-7. `/stop` 成功后前端刷新会话列表，运行中的 Run 通过现有 SSE `run_cancelled` 事件结束展示。
-8. 命令解析与帮助/错误文案抽到 `app/services/chat_commands.py`，微信渠道与网页共用。
-
-#### 验收标准
-
-- 网页输入 `/help` 显示命令说明；输入 `/new` 清空当前视图并提示旧会话保留，不创建 Run/Message。
-- `/status` 显示当前 Agent、会话标题、运行中与排队数量；没有会话时提示直接发消息即可开始。
-- 有 queued/running Run 时 `/stop` 取消当前会话全部任务并提示数量；没有任务时提示没有任务；worker 不可用时提示失败。
-- 未知命令显示“未知命令”和命令说明；`/etc/passwd 是什么` 仍作为普通消息发给 Agent。
-- 命令不产生 Run、Message 或会话（`/new` 在网页也不立即建会话），刷新后不会被误当成历史消息。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 网页 `/new` 不立即落库 Session，和微信“立即新建并重绑”的行为不同；这是网页懒创建的既有约定。
-- 临时命令卡片不持久化，刷新或重新进入会话后不可见。
-- `/stop` 只停止当前会话，不跨会话。
-- 网页 `/new` 不改动微信渠道的会话绑定：从网页对微信会话执行 `/new` 只切换网页视图，该联系人后续消息仍进入原来的绑定会话。
-- 命令只认单个斜杠 token；带空格、中文别名、参数命令仍交给 Agent。
-
-#### 非目标
-
-- 命令历史；
-- 把命令回复写入消息历史或参与模型上下文；
-- 跨会话 `/stop` 或 `/status`；
-- 修改微信渠道 F40 的会话创建语义。
-
-### F54 交易记录页面
-
-- 状态：进行中
-- 日期：2026-11-04
-- 来源：F51 只提供了 Agent 工具，用户询问页面在哪里；需要补一个极简的交易记录页面
-
-#### 背景与目标
-
-F51 已经能把交易记录写入 `data/trade-journal.jsonl` 并通过 Agent 工具查询，但用户在功能工作区看不到记录。目标：在不改变 JSONL 存储和 Agent 工具的前提下，增加一个极简页面，用于浏览、筛选、新建、编辑和平仓；不做图表、附件和复杂分析。
-
-#### 功能点
-
-1. 功能工作区「交易」分组增加「交易记录」，与「回测」并列，不绑定 Agent。
-2. 页面顶部显示已平仓数、持仓中数、胜率、平均收益、平均 R、累计盈亏；数据来自 `/api/trade-journal/stats`。
-3. 列表支持按状态、市场、关键词筛选，展示时间、标的/方向、标签、入场→出场、收益、R、盈亏和状态。
-4. 新建/编辑弹窗支持交易对、市场、方向、状态、入场/出场时间与价格、止损、数量、手续费、标签、交易理由、复盘、是否按计划；状态由出场字段决定。
-5. 页面通过新增的 `GET/POST/PUT /api/trade-journal`、`GET /api/trade-journal/stats`、`GET /api/trade-journal/{id}`、`POST /api/trade-journal/{id}/close` 读写同一 JSONL；不新增数据库表。
-6. Agent 工具、`trade-journal` 技能和 JSONL 字段保持不变；页面与 Agent 看到同一份记录。
-7. 页面不提供删除；需要删除时后续单独设计。
-
-#### 验收标准
-
-- 功能工作区显示「交易记录」，点击进入页面；重启服务后可见。
-- 新建一条 crypto 或 A 股记录后列表出现该记录，统计随之更新；编辑和平仓后收益、R、净盈亏按服务端口径更新。
-- 按状态、市场、关键词筛选能缩小列表；空列表有明确提示。
-- 页面显示的记录与 Agent 通过 `trade_journal_query` 查到的是同一份 JSONL。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 页面只读写交易记录，不连接交易所、不自动下单、不显示实时浮盈。
-- 不做删除、批量导入、图表、附件或回测联动。
-- 时间按浏览器本地时间输入和展示，服务端仍按 ISO 8601 / UTC 存储。
-- 多币种盈亏在统计中不直接相加，页面显示「多币种」。
-
-#### 非目标
-
-- 交易记录图表、日历、批量编辑；
-- 从回测成交导入；
-- 交易所持仓同步；
-- 按 Agent 隔离交易记录。
-
-### F55 网页输入框命令面板
-
-- 状态：已完成
-- 日期：2026-11-04
-- 来源：F53 让网页支持了会话命令，但用户需要记住命令名；用户要求在输入 `/` 时弹出可用指令
-
-#### 背景与目标
-
-F53 让网页聊天支持 `/new`、`/stop` 等命令，但输入框没有任何提示，用户只能靠记忆输入完整命令。目标：输入框以 `/` 开头时弹出命令面板，展示命令名称、用途和说明，支持键盘与鼠标选择，降低发现和使用成本。
-
-#### 功能点
-
-1. 输入内容（去掉前导空白）匹配 `^/[A-Za-z0-9_-]*$` 时，在输入框上方弹出命令面板；列出 `/new`、`/clear`、`/stop`、`/status`、`/help` 的名称、中文标签和一句话说明。
-2. 面板按已输入的命令前缀过滤；例如 `/st` 只显示 `/stop` 和 `/status`，没有匹配时面板关闭；含空格或普通文本不弹面板。
-3. 键盘：`↑` / `↓` 移动高亮，`Enter` / `Tab` 填入选中命令，`Esc` 关闭面板；若输入已经是完整命令，`Enter` 直接发送，不要求再按一次。
-4. 鼠标：悬停高亮（只有鼠标实际移动时才改变高亮），点击填入命令；打开面板时自动收起输入区的「＋」菜单。
-5. 选择命令只填入输入框并关闭面板，不自动执行；命令仍由 `POST /api/chat/commands` 处理，确认以临时系统卡片显示。
-6. 面板浮在输入框上方，不参与输入区布局、不改变输入框高度；窄屏下限制最大高度并可滚动。
-7. 命令列表与前端提示文案集中在前端 `messageContent.ts`，与实际命令集合保持一致。
-
-#### 验收标准
-
-- 输入 `/` 时立即弹出 5 个命令，含名称、标签和说明；输入 `/st` 只显示 `/stop` 与 `/status`。
-- `↑` / `↓` 能移动高亮；`Enter` 或 `Tab` 填入高亮命令并关闭面板；`Esc` 关闭面板且保留输入。
-- 输入完整命令（如 `/help`）后按 `Enter` 直接执行，与手动输入行为一致。
-- 点击某条建议会填入命令；输入含空格的普通文本不弹面板。
-- 面板打开时输入区高度不变，移动端不超出视口。
-- 前端构建通过；后端测试不受影响。
-
-#### 约束边界
-
-- 只做命令名称前缀匹配，不做说明文字搜索、拼音或模糊匹配。
-- 不自动执行选中的命令，不支持命令历史和参数补全。
-- 命令集合仍以平台支持的 5 个为准，不支持用户自定义命令。
-
-#### 非目标
-
-- 命令历史、最近使用排序；
-- 自然语言建议或模型生成的快捷指令；
-- 带参数命令、自定义命令或命令别名管理。
-
-### F56 自动学习区分用户与 Agent 记忆
-
-- 状态：已完成
-- 日期：2026-11-04
-- 来源：用户发现生产环境只有 agent 记忆、0 条 user 记忆；原设计只自动提取 agent memory
-
-#### 背景与目标
-
-F6 规定 user memory 只由“记住……”或记忆页手动新增写入，自动学习只写 agent memory；长期使用后 user 记忆一直为空。目标：自动学习在提取时区分“关于用户的长期偏好/事实”和“当前 Agent 的工作方式/项目知识”，前者写 user memory，后者写 agent memory；不新增表、依赖或前端页面。
-
-#### 功能点
-
-1. 提取提示要求每条 add 返回 `scope=user|agent`：user 用于用户本人的长期偏好、习惯、身份或背景事实，以及用户明确要求长期记住的个人信息；agent 用于 Agent 工作方式、项目/领域知识和只与当前 Agent 相关的约定；不确定时用 agent。
-2. 合并候选改为 user memory + 当前 Agent memory（FTS 命中与最近更新回退），候选行带上 scope；模型可以 update/delete 两类记忆。
-3. 新增按 scope 写入：user 条目不绑定 agent，agent 条目仍绑定当前 Agent；单 scope 上限 200 不变。
-4. update/delete 以已有记忆的 scope 为准，不接受模型通过 update 迁移 scope；`memory_saved` 事件记录实际 scope。
-5. 显式“记住……”的 Run 仍跳过自动提取，避免重复写入；微信入站没有显式立即写入路径，但这类内容仍可能在 Run 完成后被自动学习命中。
-6. 已存在的 agent 记忆不迁移；后续 Run 的新提取才会产生 user 记忆。
-
-#### 验收标准
-
-- 一段同时包含“用户偏好先给结论”和“Agent 用中文回答”的对话，自动提取后分别落在 user / agent scope。
-- 更新一条 user 记忆时即使模型返回 `scope=agent`，仍保持 user scope。
-- 合并候选包含相关 user 记忆。
-- `memory_saved` 事件的 scope 与实际写入一致；后端测试与前端构建通过（前端无改动）。
-
-#### 约束边界
-
-- scope 由模型判断，不做规则分类；不确定时偏向 agent，避免把项目细节写进全局 user memory。
-- 不做历史记忆重分类或迁移。
-- 微信入站的“记住……”仍不会立即写入 user memory，显式入口目前只在网页聊天 `POST /api/chat/messages`。
-- user memory 对所有 Agent 生效，写入需要克制。
-
-#### 非目标
-
-- 向量/语义检索、记忆审核、版本历史；
-- 手动选择 scope 之外的记忆页面改动；
-- 自动批量迁移或重分类历史记忆（存量归位由 F57 的整理记忆完成）。
-
-### F57 整理记忆支持跨 scope 归位
-
-- 状态：已完成
-- 日期：2026-11-04
-- 来源：用户发现现有记忆全在 Agent 级，整理记忆时模型明确说工具只能 update/delete，无法新建或跨层级移动
-
-#### 背景与目标
-
-F56 让新提取的记忆可以写 user scope，但历史记忆仍全在 agent scope；`memory-organizer` 只有 update/delete，无法把明显属于用户偏好的条目归位，用户只能手动处理。目标：给 organizer 增加 Agent→用户 的单向归位能力，让一次「整理记忆」就能修复存量错位；不新增事实、不改表结构。
-
-#### 功能点
-
-1. 新增服务 `move_memory_to_user(memory_id, agent_id)`：只允许当前 Agent 的 agent memory；移动到 user scope 时清空 `agent_id`；如果已存在完全相同内容的 user memory，则合并标签、删除原 agent 条目，避免重复。
-2. 新增工具 `memory_move(memory_id)`，加入 `memory-organizer` 的 `include_tools`；只支持 Agent→用户，不接受其他方向或跨 Agent 移动。
-3. organizer 技能正文新增第三类操作：把明显属于用户长期偏好/个人事实的 Agent 记忆归位；项目/Agent 知识不移动，拿不准时保留。
-4. 整理完成后的汇报增加“归位多少条”。
-5. 不改表结构、不做自动批量迁移；存量数据由用户再次触发「整理记忆」修复。
-
-#### 验收标准
-
-- 当前 Agent 的 Agent 记忆可以通过 `memory_move` 变为 user memory，`agent_id` 为空。
-- 另一 Agent 的记忆返回 not found；已经是 user 的记忆返回错误。
-- 目标 user scope 已有相同内容时合并并删除原 agent 条目，标签合并。
-- `memory-organizer` 声明并解锁 `memory_move`；后端测试与前端构建通过。
-
-#### 约束边界
-
-- 只做 Agent→用户，不做用户→Agent、跨 Agent 移动或批量迁移。
-- `memory_move` 只改 scope，不改正文；需要改内容时由 organizer 另行 update。
-- user scope 200 条上限仍然生效。（由 F90 调整：user scope 不再限制条数；`memory_move` 已在 F87 移除。）
-
-#### 非目标
-
-- 记忆页面上的手动“移动到用户级”按钮；
-- 自动批量重分类所有历史记忆；
-- 新增记忆或改变自动学习流程。
-
-### F59 微信大图不再静默丢弃
-
-- 状态：已完成
-- 日期：2026-11-04
-- 来源：用户指出微信大图会静默丢弃；排查后确认模型输入层超限时既没有图片 block，也没有任何提示
-
-#### 背景与目标
-
-微信入站图片原图保存（`CHANNEL_MEDIA_MAX_BYTES` 默认 20 MB），但发给模型受 `VISION_MAX_IMAGES`（默认 4 张）和 `VISION_MAX_IMAGE_BYTES`（默认 4 MB）限制；超限时 `build_model_content` 直接跳过，模型和用户都不知道本轮有图片。网页上传前会在浏览器缩到最长边 1600 px，通常不会触发；微信原图经常超过 4 MB。目标：不再静默——被跳过的图片和原因明确告知模型，由模型在回复里向用户说明并请其压缩重发；不改图片上限本身。
-
-#### 功能点
-
-1. `build_model_content` 收集未能加入模型输入的图片及原因：超过单张大小、超过单轮张数、图片格式无法识别、读取失败。
-2. 在文本内容末尾追加系统提示，列出文件（最多 5 个，其余汇总数量）、`/uploads/` 路径和原因，明确说明“你看不到这些图片”，并建议请用户压缩后重新发送；不声称文件工具能查看图片内容。
-3. 原图继续保存在工作区，不压缩、不删除、不改名；本轮正常图片仍按原逻辑作为 image block。
-4. 非图片附件不触发图片提示；没有跳过项时不追加任何文本，保持现有模型输入完全不变。
-5. 提示只进入本轮模型输入，不写入数据库消息、不改变聊天显示；`run.input` 保持原样。
-6. 不新增依赖；服务端自动压缩/缩放不在本次范围（需要图片处理库，另行确认）。
-
-#### 验收标准
-
-- 超过单张上限的 PNG 附件不产生 image block，文本中包含提示、文件名、路径和“超过”原因。
-- 4 张正常图片加第 5 张图片时，提示“超过单轮数量”；1–4 张正常图片时输出与现在完全一致。
-- PDF 等非图片附件不触发图片提示；提示不写入消息历史。
-- 现有附件测试与后端测试通过，前端构建通过。
-
-#### 约束边界
-
-- 只修复“静默”，不改变视觉上限和模型能力；超限图片仍然不可见。
-- 不修改微信媒体下载、保存和 `uploads/` 清理逻辑。
-- 不向渠道联系人主动发送额外提示；是否压缩重发由模型在最终回复中说明。
-
-#### 非目标
-
-- 服务端压缩或缩放图片（需要新依赖，另行确认）；
-- 提高 `VISION_MAX_IMAGE_BYTES` / `VISION_MAX_IMAGES` 默认值；
-- OCR、PDF/Office 解析、视频或语音。
-
-### F60 微信引用原文的本地找回
-
-- 状态：已完成
-- 日期：2026-11-05
-- 来源：用户引用一条微信里的机器人回复并追问，Agent 回答“引用是空占位”；生产库中该用户消息只有 `[引用]` 前缀，没有原文
-
-#### 背景与目标
-
-F43 按 `ref_msg.message_item.text_item` 读取引用正文，但 iLink 实际回包通常把 `text_item` 去掉，只保留 `msg_id`、`create_time_ms` 等占位字段，因此引用原文永远读不到（对照多个 iLink 实现，属于平台限制）。平台自己拥有会话历史，目标：用这两个信号在本地反查被引用的消息，把原文补回引用块；查不到时明确标注「引用原文不可用」，不再让模型猜测。
-
-#### 功能点
-
-1. 解析 `ref_msg.message_item` 时保留 `msg_id` 与 `create_time_ms`（同时兼容它们出现在 `ref_msg` 本身），与标题、正文、媒体信息一起放进 `QuoteRef`。
-2. 引用没有正文、媒体或“暂不支持”说明但有 `msg_id` / `create_time_ms` 时，运行时在创建 Run 前调用 `channel_service.resolve_quoted_text` 反查。
-3. `msg_id` 先按 `channel_inbounds.external_message_id` 精确匹配用户消息，命中后取对应 `messages.content`。
-4. 没命中时按 `create_time_ms` 在同一个 `channel_conversation` 内匹配：用户消息查 `channel_inbounds.created_at`，机器人回复查 `channel_deliveries` 的 `delivered_at`（没有则 `created_at`），窗口为 `[目标时间 - 2 秒, 目标时间 + 30 秒]`，取时间最接近的一条；+30 秒用于覆盖入站 5–15 秒打包带来的落库延迟。
-5. 反查只读本地数据库，不请求 iLink，不改变发送、幂等和投递逻辑；查询失败只记日志，消息照常进入 Run。
-6. 找回的原文仍按 F43 的 `[引用]` + `> 原文` 格式渲染，并沿用 1200 字截断；完全没有原文时引用块追加「（引用原文不可用）」，让模型知道这是平台缺失而不是用户没写。
-7. 不做 schema 变更，不保存 iLink 出站消息 id；跨会话、跨渠道的历史不在反查范围。
-
-#### 验收标准
-
-- 引用一条机器人已投递的回复，Agent 的 `run.input` 中出现 `> ` 引用块和该回复正文。
-- 引用一条历史用户消息且 `msg_id` 能对上 `channel_inbounds.external_message_id` 时，直接返回该消息内容。
-- 时间或 id 都对不上时，引用块为 `[引用]` +「（引用原文不可用）」，Run 正常创建。
-- 反查异常不阻断入站；后端测试与前端构建通过。
-
-#### 约束边界
-
-- 只处理文本文引用；引用图片/文件仍按 F43 的说明处理，不反查媒体内容。
-- 不为反查新增表或列；不引入新依赖。
-- 反查范围限于当前渠道、当前 1:1 联系人的历史。
-
-#### 非目标
-
-- 通过 iLink 获取引用原文（平台不提供）；
-- 引用消息的重新发送、编辑或撤回；
-- 跨联系人/跨渠道的引用解析。
-
-### F61 服务端图片压缩（Pillow）
-
-- 状态：已完成
-- 日期：2026-11-05
-- 来源：用户确认引入 Pillow；F59 只把超大图片告知模型，微信原图仍然不可见
-
-#### 背景与目标
-
-微信入站图片按原图保存，超过 `VISION_MAX_IMAGE_BYTES`（默认 4 MB）时不会进入模型输入，只能让模型提示用户重发。目标：在服务端把超大图片压缩到限制以内再发给模型，原图保持不变；不改变图片数量上限和模型能力。
-
-#### 功能点
-
-1. 新增依赖 Pillow（`apps/api/pyproject.toml`），部署时需要重新安装依赖。
-2. `build_model_content` 对超过单张大小上限的图片在内存中压缩：应用 EXIF 方向、透明通道铺白底、最长边缩到 `VISION_MAX_IMAGE_EDGE`（默认 1600，最小 320）以内，按 JPEG 质量 85→75→65 编码，仍超限就继续缩小边长（最低 640），直到不超过单张上限。
-3. 压缩结果只用于本轮模型输入（`image/jpeg` data URL），工作区原图不改名、不覆盖、不删除；网页缩略图和下载仍是原图。
-4. 压缩成功后继续受 `VISION_MAX_IMAGES` 限制；超过张数的图片仍走 F59 的提示。
-5. Pillow 无法解码（例如没有 HEIC 插件）、压缩后仍超限或读取失败时，退回 F59 的提示并写明原因，不再静默。
-6. 新增配置 `VISION_MAX_IMAGE_EDGE`；压缩日志只记录路径、原大小和压缩后大小，不记录图片内容。
-7. 动画 GIF/WEBP 只取第一帧；不保留动画。
-
-#### 验收标准
-
-- 超过 4 MB 的 JPEG/PNG 能压缩到单张上限以内，并以 `image/jpeg` block 进入模型输入。
-- 原图文件字节数不变；小图行为与现在完全一致。
-- Pillow 无法解码的图片仍返回提示，提示包含文件名、路径和失败原因。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 只处理当前轮附件里的图片；不批量压缩历史图片。
-- 单张超过 5000 万像素的图片不做压缩解码，直接退回提示，避免内存峰值。
-- 不引入 pillow-heif 或其他解码插件；HEIC 等格式压缩失败时退回提示。
-- 不改变 `CHANNEL_MEDIA_MAX_BYTES`、图片保存路径或上传上限。
-- 不向渠道主动发送压缩后的图片。
-
-#### 非目标
-
-- OCR、PDF/Office 解析、视频或语音处理；
-- 提高模型图片单张/单轮上限；
-- 后台图像处理队列或多进程压缩。
-
-### F62 会话 30 天自动清理
-
-- 状态：已完成
-- 日期：2026-11-05
-- 来源：用户要求 session 超过 30 天删除
-
-#### 背景与目标
-
-会话、消息、Run 事件和 checkpoint 会持续累积，长期不用的会话没有自动回收。目标：默认删除最后活动超过 30 天的会话及其关联数据；删除语义与手动「删除会话」完全一致。
-
-#### 功能点
-
-1. 把 `DELETE /api/sessions/{session_id}` 的级联删除逻辑抽到服务层（`apps/api/app/services/session_service.py`），接口与后台清理共用；接口行为不变（存在活动 Run 返回 409）。
-2. 保留天数可在配置页「运行环境」tab 修改（默认 30，0 表示关闭），存 `app_configs` 单行表；新增 `GET/PUT /api/settings`，保存后下一轮清理生效。`SESSION_RETENTION_DAYS`（默认 30）只在首次创建配置时作为种子，`SESSION_CLEANUP_INTERVAL_SECONDS`（默认 3600，最小 60）继续由环境变量控制。
-3. 后台 `SessionCleanupRuntime` 在 API 进程内运行：启动后立即执行首轮，之后按间隔扫描，每轮读取配置页的保留天数；每批最多 200 个会话、单轮最多 10 批，避免长时间占用。
-4. 判定「超过 30 天」以最后一条消息时间为准，没有消息时回退会话创建时间；有 `queued`/`running` Run 的会话跳过。
-5. 清理范围与手动删除一致：messages、runs、run_events、run_memories、channel_run_links、channel_deliveries、该会话的 checkpoint sqlite 和 `screenshots/<session_id>/`；同时解绑微信会话（下次入站新建会话）和定时任务（下次触发重建会话）。
-6. 单个会话删除失败记录日志并继续；删除不可恢复，不提供回收站。
-7. 不删除 Agent、workspace 上传文件、长期记忆、交易记录或回测数据。
-
-#### 验收标准
-
-- 最后消息在 31 天前的会话被删除，29 天前的保留；没有消息、创建于 31 天前的会话被删除。
-- 有 queued/running Run 的会话不被删除。
-- 删除后 messages/runs/run_events 消失，checkpoint 文件和截图目录被清理，微信绑定与定时任务解绑。
-- 配置页「运行环境」tab 显示并保存保留天数；`GET /api/settings` 默认返回 30，`PUT` 接受 0–3650，越界返回 422。
-- `SESSION_RETENTION_DAYS=0`（或配置页填 0）时不删除任何会话；后端测试与前端构建通过。
-
-#### 约束边界
-
-- 删除按最后消息时间判断，不按 Agent 或渠道区分；归档 Agent 的会话同样会被清理。
-- 单进程部署下只有一个清理任务；多进程部署时清理是幂等的，但可能重复扫描。
-- 清理与用户恰好向旧会话新建 Run 之间存在极小的竞态窗口，未额外加锁（与手动删除接口一致）。
-- 保留天数是全局配置，不支持按 Agent 区分，也没有手动批量删除页面。
-
-#### 非目标
-
-- 会话导出、归档、回收站或恢复；
-- 清理上传文件、长期记忆、交易记录、回测结果；
-- 会话置顶/收藏（置顶会话的保留策略不在本轮）。
-
-### F63 缠论图页面
-
-- 状态：进行中
-- 日期：2026-11-05
-- 来源：用户希望有一个缠论画图页面，并询问 AI 还是程序实现、能否从 Bitget 实时取行情
-
-#### 背景与目标
-
-用户想直接在交易工作区看到缠论结构，而不是只看 K 线。目标：用确定性程序计算包含处理、分型、笔和中枢，在网页上叠加到 K 线；AI 不参与几何计算，只用于后续解释和复盘。第一版只做 crypto、单周期、老笔；线段不做，1/2/3 买卖点用笔级别近似规则计算并明确标注。
-
-#### 功能点
-
-1. 功能工作区「交易」组新增「缠论图」，与回测、交易记录并列，不绑定 Agent。
-2. 行情复用现有 Bitget 公共 REST 和 `market.db` 缓存；只使用已收盘 K 线，按需增量拉取，不引入 WebSocket。
-3. 支持 `BTCUSDT/ETHUSDT`（可输入其他 Bitget 现货交易对）、`15min/1h/4h/1day/1week`、最近 200/300/500/800 根 K 线。
-4. 程序计算：包含处理（向上取高高、向下取低低）、严格三根顶/底分型、老笔（顶底交替，至少 5 根合并 K 线含两端分型）、连续三笔重叠中枢（ZG/ZD）。
-5. 页面叠加原始 K 线、合并 K 线、笔端点分型、笔折线、中枢色块和 1/2/3 买卖点标记；提供显示开关、规则说明和 warnings。
-6. 新增只读接口 `POST /api/chan/analyze`，入参 `symbol/granularity/bars`，返回 candles、merged、fractals、strokes、zones、points、rules、warnings；不建新表、不落库。
-7. 第一版明确标注“程序化缠论 / 老笔”；1/2/3 买卖点是笔级别近似，不声称是唯一标准；线段和多级别联立不在范围内。
-
-#### 验收标准
-
-- 从「交易」组进入「缠论图」，选择 BTCUSDT 1h 300 根后能看到 K 线、合并 K 线、分型、笔、中枢色块和买卖点标记。
-- 切换 15min/4h/1day/1w 或显示开关后图随之更新；刷新只增量拉取 Bitget 缺失的最近 K 线。
-- 笔按老笔规则连接，顶底交替；不足 3 笔时页面提示没有中枢。
-- 数据缺口或样本不足时显示 warnings，不把缺口当成连续结构。
-- 后端测试与前端构建通过；生产需配置 Bitget 代理。
-
-#### 约束边界
-
-- 只做 crypto 现货、单周期；不做 A 股行情、实时 WebSocket、逐笔推送。
-- 只使用已收盘 K 线；当前未完成 K 线不参与结构，避免盘中重绘。
-- 缠论口径固定为本页规则；不同流派的画法可能不同。
-- 买卖点只是结构标记，不是交易建议；页面不提供自动交易或收益承诺。
-
-#### 非目标
-
-- 线段、多级别联立、严格背驰判断（F73 只增加笔级别 MACD 面积背离展示）；
-- 实时 WebSocket、Tick 级刷新；
-- 自动交易或把缠论结构接入回测信号；
-- A 股数据源。
-
-### F64 前端页面路由
-
-- 状态：已完成
-- 日期：2026-11-05
-- 来源：用户反馈页面没有路径，刷新后总是回到聊天页，之前打开的页面丢失
-
-#### 背景与目标
-
-前端页面切换只存在内存 state（chat / settings / memory / skills / tools / channels / cron / backtest / journal / chan），刷新、直达链接和浏览器前进后退都无法保持，选中的 Agent 也会回到列表第一个。目标：给每个页面可读路径，刷新和直达能恢复页面与会话，且不引入路由库。
-
-#### 功能点
-
-1. 新增 `apps/web/src/routes.ts`：`View` ↔ 路径映射、`pathForView`、`parsePath`；路径为 `/chat`、`/config`、`/memory`、`/skills`、`/tools`、`/channels`、`/cron`、`/backtest`、`/journal`。
-2. 聊天页把当前会话写进路径 `/chat/<session_id>`；「新对话」为 `/chat`。
-3. 用户导航（侧栏切页、返回对话、选中会话、定时页打开会话、新对话）pushState；刷新、会话自动切换、编辑 URL 后的回退等派生状态用 replaceState，不堆积历史。
-4. 监听 `popstate`：浏览器前进/后退同步页面与会话；未知路径回到聊天页，随后按会话自动选择落到当前 Agent 的第一个会话。
-5. 直达 `/chat/<id>` 时等当前 Agent 的会话列表加载完再选中该会话；不在列表里则回退到第一个会话并同步 URL。
-6. 选中的 Agent 写入 `localStorage`（`acc.selectedAgent`），加载时优先当前值、其次本地记录、最后第一个 Agent。
-7. 不引入新依赖；登录态仍由 cookie 判断，登录页不作为路由，登录后回到原路径。
-
-#### 验收标准
-
-- 在技能、配置等页面刷新，仍停留在该页面，URL 与页面一致。
-- 直接打开 `/skills` 或 `/chat/<session_id>` 能进入对应页面/会话。
-- 浏览器后退/前进在页面与会话之间切换正确。
-- 未知路径落到聊天页。
-- 类型检查与前端构建通过。
-
-#### 约束边界
-
-- Agent 不写进 URL；会话只在当前选中的 Agent 会话列表内恢复。
-- 不新增页面、不改变页面内部状态管理；深链只恢复页面与会话，不恢复滚动位置或未发送草稿。
-- 不引入 react-router 等路由依赖。
-
-#### 非目标
-
-- 服务端路由、SEO 与分享链接权限；
-- 登录页路径与未登录跳转策略。
-
-### F65 缠论 Agent 技能
-
-- 状态：进行中
-- 日期：2026-11-05
-- 来源：F63 只提供缠论页面，Agent 无法直接查询结构；用户要求做一个 chanlun skill
-
-#### 背景与目标
-
-缠论页已经能计算并展示结构，但 Agent 只能看到页面结果，不能主动查询。目标：新增内置技能 `chanlun` 和工具 `chan_analyze`，让 Agent 用同一套 `chan_analysis.py` 获取结构摘要，在交易复盘里解释、质疑和追问；不复制算法，也不返回完整 K 线数组。
-
-#### 功能点
-
-1. 新增内置技能 `chanlun`，默认不启用；声明 `include_tools: chan_analyze`。
-2. `chan_analyze(symbol, granularity="1h", bars=300)` 复用 `chan_analysis.analyze_symbol`，返回数据区间、合并 K 线数、笔/中枢/买卖点摘要、最近几笔、中枢 ZG/ZD、买卖点原因、rules 和 warnings。
-3. 只支持 crypto、`15min/1h/4h/1day/1week`（接受 `15m`/`1w` 别名）、20–1000 根；只使用已收盘 K 线；失败返回中文 Error。
-4. 技能正文写明程序化老笔口径、买卖点为笔级别近似、不做线段/多级别/严格背驰；允许否定用户，但必须指出具体结构位置。
-5. 工具结果限制长度，不返回完整 candles/merged 数组；页面与 Agent 共用同一服务。
-6. 技能 seed 后需用户在 Agent 技能页启用；未启用或未读取 SKILL.md 时工具不可见。
-
-#### 验收标准
-
-- 启用 `chanlun` 并读取 SKILL.md 后，Agent 能调用 `chan_analyze` 返回 BTCUSDT 1h 300 根的结构摘要。
-- 摘要包含中枢、最近笔、1/2/3 买卖点和 warnings；不包含完整 K 线数组。
-- 非法周期/交易对/根数返回中文错误，不假装分析成功。
-- 技能页能看到 `chanlun`，工具页能看到 `chan_analyze`；页面功能不变。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 只做 crypto 现货、单周期；不做 A 股、实时 WebSocket。
-- 买卖点和中枢是程序化规则，不是唯一缠论标准；不构成交易建议。
-- Agent 不得用 AI 重新画结构或编造未返回的分型/笔/中枢。
-
-#### 非目标
-
-- 线段、多级别联立、严格背驰判断；
-- 自动交易或收益承诺；
-- 把完整 K 线数组塞进模型上下文。
-
-### F66 浏览器走代理与 DNS 校验
-
-- 状态：已完成
-- 日期：2026-11-05
-- 来源：生产环境浏览器打不开 YouTube；排查发现本地 DNS 被污染，且 Chromium 启动时完全没有使用 `.env` 里的 HTTP 代理
-
-#### 背景与目标
-
-`.env` 配置了可用的 `HTTP_PROXY`/`HTTPS_PROXY`，curl 走代理可以访问 YouTube，但浏览器工具的 `browser_open` 在发请求前先用本地 `getaddrinfo` 校验域名必须解析到公网地址，被污染到 `2001::1` 的 DNS 直接拦下；同时 Chromium 启动参数里没有代理配置，即使 DNS 正常也会直连超时。目标：让浏览器复用统一出站代理，代理场景下不被本地 DNS 阻断；不改生产机器的系统 DNS。
-
-#### 功能点
-
-1. `BrowserSession` 读取 `HTTPS_PROXY` / `HTTP_PROXY`（`BrowserSession(proxy_url=...)` 可覆盖）与 `NO_PROXY`（`proxy_bypass=...` 可覆盖），`BrowserSession.__init__` 之后即确定。
-2. 启动 Chromium 时把这组配置传给 Playwright `chromium.launch(proxy=...)`：`server` 自动补 `http://` 前缀，URL 中的用户名/密码拆到 `username`/`password` 字段，IPv6 地址保留方括号；`NO_PROXY` 条目转成 `bypass`（同时给出裸后缀与 `.后缀` 两种形式）。
-3. `_check_host` 在代理生效且该主机不在 `NO_PROXY` 中时跳过本地「必须解析到公网地址」校验（域名由代理解析）；仍执行字面量检查，拒绝 localhost、私网/保留地址、`file://` 和带凭据 URL；`NO_PROXY` 命中（实际直连）的主机继续做本地解析校验。
-4. 没有配置代理时行为完全不变（`proxy_url` 为空则不传 `proxy` 参数，DNS 校验照旧）。
-5. 不新增依赖、不改数据库；代理地址与凭据不写日志。
-
-#### 验收标准
-
-- 配置代理后 `browser_open("https://www.youtube.com/")` 能打开页面并返回快照，不再报「resolves to a private or reserved address」。
-- 未配置代理时，私网/回环域名仍被拒绝，行为与之前一致。
-- `NO_PROXY` 中列出的域名在配置代理时仍走本地解析校验。
-- 浏览器启动参数包含正确的 `proxy.server` 与 `bypass`；后端测试与前端构建通过。
-
-#### 约束边界
-
-- 有代理时 SSRF 防护退化为「只拦字面量私网地址与 localhost」，域名解析交给代理；这是单用户私有平台在代理可信前提下的取舍。
-- 代理不可达时表现为导航失败，不在浏览器内部重试或切换直连。
-- 不改系统 DNS、hosts 或网络配置；不引入 socks5 专用组件。
-
-#### 非目标
-
-- 自动探测或切换代理、按站点分流；
-- 浏览器内的证书固定、代理认证弹窗；
-- 修改 `web_fetch` / `web_search` 的现有代理行为（它们已经跟随环境变量）。
-
-### F67 缠论信号回测与交易计划
-
-- 状态：进行中
-- 日期：2026-11-06
-- 来源：用户问“既然能识别，为什么赚不了钱”，要求把缠论买卖点做成可验证的交易计划
-
-#### 背景与目标
-
-页面上的买卖点是拿完整历史算出来的事后标注：分型、笔和买卖点都要等后面的 K 线确认。直接拿图上的点当收益会引入未来函数。目标：做一个因果前缀回放，只在当时已确认的结构上进下一根开盘，配合固定止损、R 倍目标、时间止损、仓位和费用，输出胜率、平均 R、回撤和按信号类型的统计；明确告诉用户样本是否足够，不承诺收益。
-
-#### 功能点
-
-1. 后端新增 `chan_backtest.py`：对每个前缀重新计算缠论结构，记录每个买卖点第一次出现的 K 线，作为确认时间。
-2. 信号在确认 K 线收盘后成立，下一根开盘进场；同一时间只持一笔，固定止损百分比、R 倍目标、最大持仓 K 线和单笔风险百分比。
-3. 计入手续费、滑点和做空模拟；同一根 K 线止损和目标都触发时按止损处理。
-4. 输出总收益、最大回撤、胜率、平均 R、盈亏比、暴露、按 1/2/3 买卖点分组的统计、交易明细、权益曲线和 warnings。
-5. 新增 `POST /api/chan/backtest`，参数包含 `symbol/granularity/bars/initial_capital/fee_rate/slippage_rate/stop_pct/risk_pct/r_multiple/max_hold_bars`；bars 60–500。
-6. 页面「缠论图」增加「结构图 / 信号回测」切换；回测面板可调止损、风险、R 倍、持仓时间和费用，展示指标、权益曲线、按类型统计和交易明细。
-7. `chanlun` 技能增加 `chan_backtest`，Agent 能回答“这套买卖点历史上扣费后值不值得做”，样本少或没有交易时明确说不足以判断。
-8. 页面、API、Agent 共用同一 `chan_backtest.py`；不建新表。
-
-#### 验收标准
-
-- 选择 BTCUSDT 1h 300 根运行回测，能看到信号数、实际交易数、总收益、最大回撤、胜率、平均 R 和交易明细。
-- 信号在确认后的下一根开盘进场；不会使用确认 K 线之后的数据来提前进场。
-- 止损、目标、时间止损和费用都影响最终盈亏；同一根 K 线止损/目标同时触发时按止损。
-- 样本少于 20 笔或没有交易时显示警告，不把结果包装成稳定策略。
-- Agent 启用 `chanlun` 后可调用 `chan_analyze` 和 `chan_backtest`；工具页能看到两个工具。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 因果前缀回放是近似，不是逐笔实盘成交；确认滞后和结构变化会导致结果与图上“事后标注”不同。
-- 做空为现货模拟，不含借币成本、资金费率和强平。
-- 一次只持一笔，不做组合、加仓、移动止损、多级别联立或参数优化。
-- 回测收益不构成收益承诺或投资建议。
-
-#### 非目标
-
-- 实盘下单、交易所 API、自动交易；
-- 多级别联立、线段/严格背驰；
-- 参数网格搜索、批量扫描、策略版本管理；
-- 保证样本外收益。
-
-### F68 中枢需要进入段与离开段
-
-- 状态：已完成
-- 日期：2026-11-06
-- 来源：用户审查缠论图时指出：中枢识别把所有三笔重叠都当中枢，且相邻中枢首尾相接、没有独立进入段
-
-#### 背景与目标
-
-旧版 `find_zones` 从任意三笔开始，只要有交集（`ZG > ZD`）就记为中枢，从不引用 `strokes[index-1]`，扩展后从 `end+1` 继续扫描，导致下一个中枢的起始时间正好等于上一个中枢的结束时间——那只是上一段遗留的未完成结构。目标：按缠论口径要求中枢由「进入段 + 连续三笔重叠 + 离开段」（共 5 段）构成，并保证两个中枢之间各有独立进入段。
-
-#### 功能点
-
-1. `find_zones` 从第 2 笔开始扫描，`strokes[index-1]` 作为进入段；第一笔不能充当某中枢三段中的第一段。
-2. 三笔重叠且 `ZG > ZD` 只作为候选；必须存在离开段（第一根不与 `[ZD, ZG]` 相交的笔）。样本在重叠区结束、没有离开段的结构不输出。
-3. 中枢输出新增 `entry_stroke` / `exit_stroke`；`start_stroke` 仍是三段中的第一段，`end_stroke` 是最后一段；`start_time` 取进入段的起点，使页面上的中枢框向左覆盖进入段（`ZG/ZD` 仍只由三笔重叠决定）。
-4. 一个中枢结束后从 `exit_stroke + 1` 开始找下一个候选，使上一个中枢的离开段成为下一个中枢的进入段；下一个中枢的三段中枢必然从上一个中枢之后开始（`start_stroke > 上一个 end_stroke`），不会再共用同一段中枢。
-5. `rules.zone_rule`、`chanlun` 技能口径、页面规则说明同步更新；笔不足 5 条时提示「没有完整中枢」。
-6. 不改 ZG/ZD 定义、买卖点规则和接口字段（只新增中枢字段）；前端仍按 `start_time`–`end_time` 绘制，因此中枢框会随 `start_time` 左移到进入段起点。
-
-#### 验收标准
-
-- 三笔重叠但没有前置笔时不产生中枢；有进入段但数据在重叠区结束时也不产生中枢。
-- 进入段 + 三笔 + 离开段的样本产生 1 个中枢，`entry_stroke/start_stroke/end_stroke/exit_stroke` 正确。
-- 两个相邻中枢各自有进入段（`zones[1].entry_stroke == zones[0].exit_stroke`），且 `zones[1].start_stroke > zones[0].end_stroke`；每个中枢的 `start_time` 等于其进入段的起点。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 仍是笔级别近似、老笔口径；不做线段级别中枢和多级别联立。
-- 不改变买卖点识别规则；中枢变少会相应减少 3 买/3 卖标记，这是口径修正的结果。
-- 不新增依赖、不改数据库和接口结构。
-
-#### 非目标
-
-- 线段级别中枢、中枢延伸/扩展/升级的完整分类；
-- 用 AI 重新绘制结构或调整规则。
-
-### F69 资产配置页（长期组合账本）
-
-- 状态：进行中
-- 日期：2026-11-06
-- 来源：用户希望把长期价值组合和短期交易记录分开管理；交易记录里也能看到未平仓持仓，但不适合管理长期配置
-
-#### 背景与目标
-
-平台已有交易记录，用于记录单笔短线交易的入场、出场、理由和复盘。用户需要一个独立的长期资产配置页面：维护一个或多个命名组合，记录入金、出金、初始持仓、买入、卖出、分红和费用，按目标权重检查偏离并给出再平衡建议；长期指标看投入本金、总资产、总收益和 XIRR。资产配置与交易记录完全分开，不自动同步。
-
-#### 功能点
-
-1. 功能工作区「交易」组新增「资产配置」，路由 `/allocation`，不绑定 Agent。
-2. 支持多个命名组合，每个组合一个基础币种和独立账本；页面顶部切换组合。
-3. 组合配置：名称、基础币种、备注、现金目标占比、再平衡带宽、标的目标占比、手动价。
-4. 流水类型：入金、出金、初始持仓、买入、卖出、分红、费用；支持新增、编辑和删除，修改后整本重放校验。
-5. 从流水推导现金、持仓数量、移动加权成本、已实现和未实现盈亏；卖出数量超过当时持仓时拒绝。
-6. 长期指标：投入本金、当前总资产、总收益、总收益率、XIRR。
-7. 目标与实际：实际权重、目标权重、偏离百分点、是否超出再平衡带宽、再平衡金额建议；目标合计不等于 100 只提示，不阻止保存。
-8. 价格：加密货币按需从 Bitget 刷新，美股按需从东方财富刷新（Yahoo 兜底），A 股使用手动价；失败时回退本地行情缓存和成本价，并标注价格来源和时间。裸加密 ticker（如 `ETH`）映射为 `ETHUSDT` 再请求，非加密 ticker（如 `SPY`）不送 Bitget；页面顶部「刷新全部账本」一次性拉取所有组合的最新加密和美股行情，A 股、手动价和利息不会自动更新。
-9. 页面展示组合摘要、实际/目标条形图、持仓与现金、再平衡提示、流水表和口径说明。
-10. 与交易记录完全分开：不自动导入、不互相读取。
-
-#### 验收标准
-
-- 创建组合，记录入金和买入后能看到现金、持仓、市值和权重。
-- 多笔买入按移动加权成本合并；部分卖出正确结转已实现盈亏；超卖被拒绝。
-- 补记历史流水后整本重放，成本和收益随之更新。
-- 初始持仓不改变现金；初始入金可以单独记录。
-- 目标合计 80% 或 120% 只提示；偏离超过带宽时出现再平衡建议。
-- A 股手动价改变市值；刷新加密货币行情后价格来源变为实时。
-- 多组合切换互不影响；重启服务后配置和流水保留。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 一个组合一个基础币种，不做组合内汇率换算；多币种请建多个组合。
-- 流水准确性依赖记录习惯；漏记会让现金、成本和收益失真。
-- 初始持仓成本由用户填写，不代表真实历史成本；XIRR 从账本起点开始计算。
-- 使用移动加权成本，不做税务批次；不做空、保证金、借币成本、分红税和送转股。
-- 没有每日估值快照，不做净值曲线、最大回撤和收益归因。
-- 不接券商或交易所账户，不自动下单、不自动再平衡。
-
-#### 非目标
-
-- 从交易记录自动导入或双向同步；
-- Agent 自动删除流水或自动再平衡（F70 起提供读取、记录和修改工具）；
-- 组合内多币种和汇率换算；
-- 历史净值和回撤曲线；
-- 自动再平衡和实盘交易。
-
-### F70 资产配置 Agent 技能
-
-- 状态：已完成
-- 日期：2026-11-06
-- 来源：用户询问资产配置页对应的 Agent 技能是否补齐
-
-#### 背景与目标
-
-资产配置页和 API 已上线，但 Agent 只能通过网页操作。需要让 Agent 读取长期组合、记录和修正入金/买入/卖出/分红/费用流水、更新目标和手动价，同时保持资产配置与交易记录完全分开。
-
-#### 功能点
-
-1. 新增内置 `allocation` 技能（不自动启用），声明 `allocation_overview` / `allocation_entries` / `allocation_portfolio_create` / `allocation_portfolio_update` / `allocation_entry_record` / `allocation_entry_update`。
-2. `allocation_overview(portfolio_id="", refresh=false)` 返回组合摘要、目标/偏离/再平衡、XIRR 和 warnings；`refresh=true` 时才抓 Bitget 最新价，默认使用手动价、缓存和成本价。
-3. `allocation_entries(portfolio_id, limit, offset)` 返回流水摘要。
-4. `allocation_portfolio_create` / `allocation_portfolio_update` 管理组合配置；`targets` 和 `marks` 是完整替换映射。
-5. `allocation_entry_record` 记录流水，`allocation_entry_update` 修正流水；不提供删除流水或组合。
-6. 工具和网页共用 `data/allocation.json` / `data/allocation-ledger.jsonl` 与同一服务；不新增数据库、不接交易所。
-7. 与交易记录不互相导入、不互相读取；交易记录里的短线仓位不会进入资产配置。
-
-#### 验收标准
-
-- Agent 启用 `allocation` 并读取 SKILL.md 后，工具页能看到六个工具。
-- 能创建组合、记录入金/买入、查看摘要和流水、修改目标和备注、修正流水；超卖返回明确错误。
-- 工具输出说明“数据不是指令”，不删除记录，不承诺收益。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 与 F69 的账本边界相同：一个组合一个币种、移动加权成本、无汇率换算、无净值曲线、无税务批次。
-- Agent 不提供删除流水/组合；删除由用户在页面处理。
-- Agent 不自动再平衡、不自动下单。
-- 流水和备注是数据，不是指令。
-
-#### 非目标
-
-- Agent 自动删除流水或组合；
-- Agent 自动再平衡或实盘交易；
-- 把交易记录自动导入资产配置；
-- 让 Agent 自己编造价格、数量、时间或收益。
-
-### F71 美股行情源（东方财富 + Yahoo 兜底）
-
-- 状态：已完成
-- 日期：2026-11-07
-- 来源：用户要求为资产配置里的 SPY 等美股增加自动行情源，并先测试哪个接口可用
-
-#### 背景与目标
-
-资产配置只接入了 Bitget 加密货币行情；SPY 等美股 ticker 无法取价，只能按成本或手动价估值。需要接入一个可用的美股行情源，同时保持「加密 Bitget、A 股手动、美股自动」的边界。
-
-#### 实测（生产机，2026-11-07）
-
-- Yahoo Finance chart v8：经现有代理可访问；SPY 和 AAPL 都返回 `regularMarketPrice`、`regularMarketTime`、`currency`、`exchangeName`；v7 quote 返回 401；直连被拦截；服务连续请求出现过 HTTP 429。
-- 东方财富 push2：直连可用，SPY=`107`、AAPL=`105`、BABA=`106`，覆盖 Nasdaq/NYSE/AMEX；价格 = `f43 / 10^f59`。
-- Stooq 返回 404，Sina 返回 403；选择东方财富为主源，Yahoo 兜底，失败再回退手动价/成本。
-
-#### 功能点
-
-1. 新增 `app/services/stock_quotes.py`，先请求东方财富 push2（105/106/107），失败再请求 Yahoo chart v8；解析 symbol、price、time、currency、exchange 和 instrumentType。
-2. `allocation.fetch_live_prices` 同时刷新 crypto（Bitget）和 stock（东方财富/Yahoo）；A 股跳过；单标的失败写入 `price_errors`，不阻塞其他标的。
-3. `_live_items` 包含有数量的 stock 持仓；`load_cached_prices` 仍只查 crypto 缓存。
-4. 价格来源新增 `stock`，页面显示「行情」；美股以 USD 计价，USDT 组合近似 1:1，其他币种不换汇并提示。
-5. 「刷新全部账本」一次性刷新所有组合的 crypto 和 stock；A 股、手动价和利息不自动更新。
-6. 失败回退手动价/成本，不阻塞其他标的。
-
-#### 验收标准
-
-- SPY 刷新后 `price_source=stock`，价格来自东方财富（或 Yahoo 兜底），`price_errors` 为空。
-- ETH 仍按 `ETHUSDT` 取价；A 股不请求外部行情。
-- 东方财富/Yahoo 429、网络失败或解析失败时显示中文错误并回退，不影响其他标的。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 东方财富 push2 和 Yahoo chart 都是非官方接口，可能限流或变更；东方财富直连，Yahoo 需要可用的 HTTP 代理。
-- 东方财富美股 `secid` 用 105/106/107 逐个尝试；不同交易所可能变化。
-- 美股 USD 与组合币种不做汇率换算；USDT 近似 1:1。
-- 只取最新价，不做逐笔、盘前盘后或实时 WebSocket。
-
-#### 非目标
-
-- 美股下单或实时推送；
-- A 股自动行情；
-- 汇率换算；
-- 依赖需要 API Key 的商业行情源。
-
-### F72 功能工作区移动端适配
-
-- 状态：已完成
-- 日期：2026-11-07
-- 来源：用户要求功能工作区适配手机
-
-#### 背景与目标
-
-功能工作区的回测、交易记录、资产配置页面共用 `settings-header`：≤860px 时标题被视觉隐藏，描述文字左侧只剩很窄的宽度，右侧操作按钮越多描述越被挤成单字一列，页头高度可达整屏，正文被推到屏幕外。交易记录列表和回测「交易明细」是 920px / 760px 起的宽表，手机上只能横向滚动。目标：功能工作区在手机视口下页头正常换行、核心表格改为卡片式阅读，不产生页面级横向滚动。
-
-#### 功能点
-
-1. ≤860px 时 `.settings-header` 改为纵向排列：描述占满整行，操作按钮换行后右对齐；`settings-card-actions` 允许换行，多个按钮不再互相挤压。桌面布局不变。
-2. 交易记录列表在 ≤860px 改为卡片：每笔记录显示标的、方向、市场、标签、时间、入场→出场、收益、R、盈亏和状态，指标带中文小标签，「编辑」改为描边小按钮；空状态保持整行提示。
-3. 回测「交易明细」在 ≤860px 改为卡片：每笔交易显示方向、状态、开仓/平仓时间和价格、收益、持有 K 线数，字段带中文小标签。
-4. 移动端 `.app-shell` 使用 `overflow: clip`，珍珠背景层超出容器的部分不再让外壳变成可滚动容器；聚焦输入或点击控件不会把顶部栏和整页推出屏幕。
-5. 资产配置的「持仓」「流水」和缠论「按信号类型」「交易明细」在 ≤860px 同样改为卡片：字段带中文小标签，类型/状态芯片保留，编辑/删除按钮独占一行右对齐，备注完整换行。
-6. 缠论图、资产配置的其余结构不变；桌面端（>860px）表格样式不变。
-
-#### 验收标准
-
-- 375px 与 320px 视口下，功能工作区各页面无页面级横向滚动，页头描述正常成行、操作按钮完整可见。
-- 交易记录、回测与缠论回测的交易明细、资产配置持仓与流水均以卡片展示，字段可读，空状态正常，点击整卡或按钮仍可编辑/查看。
-- 桌面端（>860px）布局与表格样式不变。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 重做资产配置与缠论图的页面结构；
-- 新增移动端手势、原生 App 或 PWA 能力；
-- 修改接口、数据模型或桌面端交互。
-
-### F73 缠论 MACD 副图与背离标记
-
-- 状态：已完成
-- 日期：2026-11-07
-- 来源：用户要求在缠论图新增背离指标 MACD
-
-#### 背景与目标
-
-缠论图只有分型、笔、中枢和买卖点，看不到动量的强弱变化。目标：复用已有 MACD 计算，在 K 线下方增加 MACD(12,26,9) 副图，并把笔级别 MACD 面积背离画出来；1 买/1 卖复用这份背离结果，2/3 买卖、中枢和笔的规则不变。
-
-#### 功能点
-
-1. `chan_analysis.py` 统一计算 MACD：`DIF = EMA12 - EMA26`、`DEA = EMA9(DIF)`、柱 `hist = DIF - DEA`（`adjust=False`）；笔面积按 `start_time < time <= end_time` 累加柱值。
-2. `POST /api/chan/analyze` 新增返回 `macd.params`、`macd.series`（与 candles 对齐的 `time/dif/dea/hist`）、`divergences`、`divergence_count`，并在 `rules` 中给出 `divergence_rule` 和 `macd_params`。
-3. 背离判定：间隔一笔的两个同向笔比较，价格创新低/高且 MACD 柱面积绝对值小于前一同向笔的 90%，记为底/顶背离；返回当前与前一背的笔端点时间、价格、面积、面积比以及可用时的端点 DIF。1 买/1 卖直接从背离列表生成，原因里带面积比例。
-4. 页面显示「MACD」「背离」两个开关：MACD 副图与主图双向同步可见区间和十字线，柱按正负着色，DIF/DEA 为折线，零轴虚线；背离在 MACD 副图用「底背 / 顶背」箭头标记，主图不重复标记（与 1 买卖同源）。
-5. `chan_analyze` 摘要增加背离数量和最近背离列表，`chanlun` 技能说明同步；页面摘要和规则说明展示背离条数。
-6. 不新增依赖、不建表、不落库；MACD 面积改用前缀和计算，因果前缀回测不再对每条笔重复扫描 K 线。
-
-#### 验收标准
-
-- BTCUSDT 1h 300 根分析后，K 线下方出现 MACD 副图；拖动或缩放任一图，另一图跟随；关闭「背离」只隐藏标记，关闭「MACD」隐藏整个副图。
-- 摘要中的背离数量与 `divergences` 列表一致；没有背离时显示 0，Agent 摘要明确写“当前样本没有触发”。
-- 1 买/1 卖与底/顶背离在同一时间点一致；2/3 买卖规则不变。
-- 后端测试与前端构建通过。
-
-#### 约束边界
-
-- 这是简化的同向笔 MACD 柱面积判断，不是严格缠论背驰证明，也不做区间套、多级别或线段；
-- 背离只是结构标记，不是交易建议；不改变回测的下单规则；
-- 顶/底背离允许 MACD 柱面积符号变化，使用绝对值比较面积强弱。
-
-#### 非目标
-
-- 线段、多级别联立、严格背驰判断；
-- MACD 金叉/死叉策略、背离自动交易或新回测信号；
-- 修改 2/3 买卖点、中枢或笔的既有规则。
-
-### F74 缠论页参数写入 URL
-
-- 状态：已完成
-- 日期：2026-11-07
-- 来源：用户刷新缠论页后希望保留当前交易对、周期、K 线根数和显示开关
-
-#### 背景与目标
-
-缠论页的配置只保存在组件 state 里，刷新或重新打开 `/chan` 会回到 `BTCUSDT / 1h / 300` 和默认显示项。目标：把当前配置写入 `/chan` 的查询串，刷新、收藏或从浏览器历史返回时恢复同一套视图，不引入路由库。
-
-#### 功能点
-
-1. `/chan` 查询参数：`symbol`、`granularity`、`bars`、`mode`（`chart`/`backtest`）以及显示开关 `merged`、`fractals`、`strokes`、`zones`、`points`、`macd`、`divergence`（`1`/`0`）。
-2. 页面首次挂载时解析查询串：交易对转大写，周期只接受 `15min/1h/4h/1day/1week`，K 线根数只接受 `200/300/500/800`，开关接受 `0`/`false` 为关闭；非法或缺失值回退到默认配置。
-3. 任一参数变化时用 `history.replaceState` 更新当前历史项的 URL，不新增历史记录、不触发导航；切到其他页面时查询串自然丢弃。
-4. 刷新后按 URL 参数初始化表单并自动执行一次分析；切换到「信号回测」模式后再刷新仍停留在回测 tab，并使用恢复后的交易对/周期/根数。
-5. 路径路由仍由 `apps/web/src/routes.ts` 处理，只按 pathname 匹配页面，不引入路由库或改后端。
-
-#### 验收标准
-
-- 在缠论页选择 ETHUSDT / 4h / 300、关闭部分显示项后，地址栏出现对应查询串；刷新后表单、显示项和图表配置一致。
-- 修改交易对或周期后地址栏立即更新；浏览器后退不会在缠论页内部逐个参数回退。
-- 直接打开带参数的 `/chan?...` 能恢复配置；参数非法时回到默认值。
-- 前端类型检查与构建通过。
-
-#### 约束边界
-
-- 查询串只保存页面配置，不保存分析结果、回测参数或图表缩放位置；
-- 不在 URL 中保存 Agent 或会话；其他页面的查询串行为不变。
-
-#### 非目标
-
-- 引入 react-router 等路由依赖；
-- 为回测表单、图表缩放或滚动位置做深链；
-- 服务端读取或校验这些参数。
-
-### F75 按用户回合自动整理记忆
-
-- 状态：已完成
-- 日期：2026-11-07
-- 来源：用户要求每 10 个用户 turn 自动触发一次「整理记忆」，并希望阈值可配置
-
-#### 功能点
-
-1. `agents` 增加 `memory_turn_count`。只统计网页聊天（`source=manual`）和微信入站（`source=wechat`）的用户 Run；定时任务（`cron`）、重试（`retry`）和自动整理本身（`memory`）不计数。发送即计数，失败或超时也算一次 turn。
-2. 阈值是全局设置，存 `app_configs.memory_consolidate_every_turns`，默认 10，0 关闭；配置页「运行环境」tab 可修改，读写沿用 `GET/PUT /api/settings`。环境变量 `MEMORY_CONSOLIDATE_EVERY_TURNS` 只在首次创建配置行时作为种子。
-3. 计数达到阈值时在同一事务内归零，并新建「记忆整理」Session（`origin=memory`）和一条 `source=memory` 的 queued Run；其用户消息与手动「整理记忆」指令完全一致，由现有 `RunWorker` 执行，不需要新调度器。计数与触发包在 SAVEPOINT 中，记账失败不影响用户消息发送；SQL 级自增 + 带条件的归零保证并发时只会创建一个整理 Run。
-4. 只对开启「自动学习记忆」的 Agent 生效；用户手动发送「整理记忆」指令时计数直接归零，不额外计数或触发。
-5. 自动整理 Run 不注入相关记忆、不触发 Run 完成后的自动提取；执行期间持有该 Agent 的记忆锁，与自动提取串行。`memory-organizer` 只注入到本轮的技能列表，不写入 Agent 的 `enabled_skills`。
-6. 整理 Run 不关联渠道，不会推送到微信；侧栏会话列表会显示「记忆整理」会话。
-
-#### 验收标准
-
-- 阈值设为 N 时，第 N 个用户 turn 恰好创建一个整理 Run，计数归零；未满不触发，再满再次触发。
-- `cron` / `retry` 不计数，`wechat` 计数；阈值 0 或 `auto_memory=False` 不触发。
-- 手动「整理记忆」把计数归零且不额外创建整理 Run。
-- 运行环境页可读写阈值，`GET/PUT /api/settings` 返回并校验新字段。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 按钟表时间定时整理（不修改 cron 机制）；
-- 每个 Agent 独立阈值或开关；
-- 整理 Run 失败后自动重试或补跑；
-- 前端为 `origin=memory` 的会话新增徽标。
-
-### F76 资产配置页打开时自动刷新行情
-
-- 状态：已完成
-- 日期：2026-11-07
-- 来源：用户反馈每次打开资产配置页都要手动点「刷新全部账本」才能看到现价
-
-#### 功能点
-
-1. `AllocationPage` 首次加载完成后自动调用一次现有的 `POST /api/allocation/refresh`，无需用户点击；刷新期间复用现有的加载态和错误提示，失败时保留页面已有价格。
-2. 用模块级时间戳做 60 秒节流：同一浏览器页面会话内反复切页/重新挂载不会重复请求 Bitget、东方财富或 Yahoo；刷新浏览器或超过 60 秒再打开会重新刷新。每次挂载最多自动刷新一次，不因响应更新而循环。
-3. 手动「刷新全部账本」按钮保持原有行为；不保存刷新结果（用户明确选择只刷新、不落盘），`GET /api/allocation` 仍然不发网络请求。
-4. 后端、接口和数据文件不变。
-
-#### 验收标准
-
-- 打开资产配置页后无需点击即可看到「实时 / 行情」现价；60 秒内切走再切回不重复请求。
-- 自动刷新失败时页面保留原价格并显示错误，手动刷新仍可用。
-- 前端构建通过，后端测试无回归。
-
-#### 非目标
-
-- 持久化刷新后的价格或新增价格缓存文件；
-- 服务端在 `GET /api/allocation` 中自动抓取行情；
-- 定时轮询刷新（页面停留期间不重复请求）。
-
-### F77 资产配置跨组合总览与 USD/CNY 汇率
-
-- 状态：已完成
-- 日期：2026-11-07
-- 来源：用户希望把 USDT 和 CNY 组合折算后一起看总额，并要求自动抓取汇率
-
 #### 功能点
 
-1. `refresh_snapshot()` 在刷新行情时同时抓 USD/CNY 汇率：主源东方财富 push2 `secid=133.USDCNH`（USD/CNH 近似 USD/CNY，约等于），失败用 Yahoo Finance `CNY=X` 兜底；成功后写入 `data/allocation.json` 的 `fx`（`usd_cny`、`at`、`source`），失败保留上次值并在响应里返回 `fx_error`。`GET /api/allocation` 仍然不发网络请求。
-2. 汇率初始默认 7.2（`source=default`）；旧 `allocation.json` 没有 `fx` 时按默认加载。
-3. `GET /api/allocation` 的快照新增 `overview`：USD 与 USDT 按 1:1、CNY 按 `1 / usd_cny` 折算，汇总所有组合的总资产、现金、持仓市值、投入本金、浮盈、已实现、分红、费用、总收益和总收益率；组合明细返回原币总额、USD 折算和占比。
-4. 总览 XIRR 为近似值：把各组合 `external_flows` 和期末总资产按当前汇率折算后合并计算，响应标注 `xirr_approximate` 并提示仅供参考；估值不完整时不算 XIRR。
-5. 不支持的币种不计入总览并给出 warning；汇率超过 24 小时未更新或仍为默认值时提示。
-6. 页面顶部第一个 tab 改为「总览」（默认打开），显示汇总指标、汇率来源/时间和组合明细；其余组合 tab、持仓、再平衡和流水行为不变。打开页面已有的自动刷新会顺带更新汇率。
-7. Agent 的 `allocation_overview(refresh=true)` 同样会刷新汇率；工具说明同步更新。
+1. 每条用户消息创建一个 turn，在 `SessionRegistry` 中按 session 串行执行；不同 session 并发，上限为 `BROWSER_CONCURRENCY`（默认 5）。同一会话在运行中可继续发送，新 turn 排队。
+2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`、`turn_end`、`turn_error`）。
+3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。
+4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示已停止。
+5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约直接丢弃；暂停/归档 Agent 的租约保留到 Agent 恢复。
+6. 命令：`/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示；`/memory` 与「整理记忆」已删除。
+7. 输入框 `/` 前缀弹出命令面板：↑/↓ 选择，Enter/Tab 填入，Esc 关闭；面板只填入不执行。
+8. 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片支持选择、粘贴、拖拽，浏览器端缩到最长边 1600 px；发送时把文件名、工作区路径和字节数写入用户消息，Agent 用文件工具读取。图片作为文件由 Agent 的 Read 工具查看；本版不再单独构造 `image_url` 模型输入。
+9. 消息操作：复制、引用；失败或停止后显示提示，用户重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成、删除单条消息。
+10. assistant 消息按 Markdown 渲染（GFM、代码高亮、KaTeX `$$...$$`）；流式文本约 80ms 节流。
+11. 消息不显示时间戳；刷新或断线后无法续看当前输出。
 
 #### 验收标准
-
-- 打开资产配置页默认显示「总览」；USDT 组合按 1:1、CNY 组合按抓取汇率折算后相加。
-- 刷新后 `allocation.json` 写入 `fx`，重新加载页面不联网即可看到总览；汇率抓取失败保留上次值并显示提示。
-- 旧配置文件无 `fx` 时按 7.2 加载并提示尚未获取实时汇率。
-- 后端测试与前端构建通过。
-
-#### 非目标
 
-- 逐历史日期的汇率折算（XIRR 和总收益按当前汇率近似）；
-- 支持 CNY/USD 以外的汇率换算；
-- 自动交易或自动再平衡；
-- 在组合内部混用多种币种。
+- 新建会话 → 发消息 → 流式回复 → 会话出现在列表；刷新后历史可读。
+- 执行中停止 → 状态为已停止，租约删除。
+- 执行中重启服务 → 会话自动 resume 并完成，`running_sessions` 清空。
+- 同一会话第二个 turn 排队，不同会话可并发。
+- 附件上传后可被 Agent 读取；引用以 `> ` 块进入消息。
 
-### F78 资产配置改为单页统一明细（取消 tab 与组合分块）
+### F3 会话目录与保留清理
 
-- 状态：已完成
-- 日期：2026-11-08
-- 来源：用户明确不要按组合分 tab，也不要按 USDT/CNY 分块，要求直接一份合并明细
-- 关系：取代 F77 功能点 6 中的 tab 切换方式，其余行为不变
+- 状态：现行
+- 日期：2026-11-11
 
 #### 功能点
 
-1. 移除资产配置页的 tab 切换、选中组合状态和按组合平铺的详情区块。
-2. 总览快照新增 `positions`：把所有组合的持仓按 symbol 合并，成本、市值、已实现/未实现盈亏、分红和费用按各组合汇率折算成 USD；数量相加，均价 = 合并成本 / 合并数量，现价 = 合并市值 / 合并数量，价格来源不同时标记「混合」。市值和占比相对合并后的总资产计算。
-3. 页面顺序：总览统计与汇率 → 合并持仓明细（现金一行 + 合并后的标的行，全部 USD）→ 所有组合合并的流水（可按组合和标的筛选；金额、价格、手续费按组合汇率折算成 USD，时间列下标注所属组合）→ 组合设置（每个组合单独显示原币总额、USD 折算、目标合计与再平衡建议，提供编辑配置和记一笔）→ 口径说明。
-4. 记一笔时在流水工具栏选择目标组合；编辑/删除流水按 entry 的 portfolio_id 定位组合。持仓明细里的「流水」按钮会跳到流水并筛选该标的。
-5. 各组合流水在页面加载后并行拉取（每个组合最近 50 笔），保存/删除后只刷新对应组合；新建或删除组合后重新加载列表。
+1. 会话只存在于 SDK transcript：`claude/projects/<agent_id>/<uuid>.jsonl`；平台不建 sessions/messages/runs 表。
+2. 会话列表由 SDK `list_sessions()` 扫描全部项目目录，再按 `cwd == workspaces/<agent>` 过滤；标题取 SDK summary（最多 80 字），`last_modified` 用于排序和展示。
+3. 会话历史由 `get_session_messages(session_id)` 读取；重命名、删除走 SDK（删除同时移除 transcript 与子 Agent transcript 目录）。
+4. 删除会话前拒绝正在执行的会话（409）；删除时清理 `workspaces/<agent>/screenshots/<session_id>/`、该会话的 `channel_deliveries` 行和 `channel_conversations` 绑定。
+5. 后台清理 `SessionCleanupRuntime`：启动后立即执行首轮，之后每 `SESSION_CLEANUP_INTERVAL_SECONDS`（默认 3600，最小 60）扫描；按 transcript mtime 早于保留天数（`settings.runtime.session_retention_days`，默认 30，0 关闭）删除。
+6. 清理跳过：有租约的会话、registry 中忙碌的会话、非 UUID 文件名；先清产物再删 transcript；`claude/` 下的 auto memory 不清理。
+7. 微信绑定指向已删除会话时，下一条入站消息自动生成新 UUID 重新绑定；定时任务在 transcript 不存在时下次触发重新生成 session id。
 
 #### 验收标准
 
-- 页面没有 tab，也没有按组合分开的持仓区块；持仓只有一张合并明细表，全部按 USD。
-- 同一标的出现在多个组合时合并为一行，数量和成本相加，价格与市值按 USD 折算。
-- 流水为一张合并表，可筛选组合和标的，编辑/删除落到正确组合。
-- 前端构建通过，后端测试无回归。
+- 超过保留天数的会话被清理，运行中的不被清理，`claude/projects/*/memory/` 保留。
+- 删除会话后，对应截图、投递记录与渠道绑定一并清理。
+- 渠道/定时任务不会因会话删除而报错，而是自动重建会话。
 
-#### 非目标
-
-- 跨组合合并目标权重或再平衡建议（目标仍按组合单独计算）；
-- 组合折叠/展开；
-- 历史汇率折算。
+### F4 配置、Provider 与 Agent
 
-### F79 聊天公式渲染（KaTeX）
+- 状态：现行
+- 日期：2026-11-11
 
-- 状态：已完成
-- 日期：2026-11-08
-- 来源：用户反馈 assistant 回复里的 `$$\rho = \frac{...}$$` 直接显示成 LaTeX 源码
-
 #### 功能点
 
-1. 前端新增 `remark-math`、`rehype-katex`、`katex` 依赖，在 `Markdown` 渲染器里启用 `$$...$$` 数学公式，样式来自 `katex/dist/katex.min.css`，公式过宽时横向滚动。
-2. `singleDollarTextMath` 关闭：只识别 `$$...$$`，单个 `$` 仍按普通文本处理，避免“成本 $100，现价 $120”被误判成公式。
-3. 流式输出期间也渲染已闭合的公式；代码高亮仍只在流式结束后启用。
-4. 默认助手提示词增加约定：需要公式时用 `$$...$$` 包裹，不要用单个 `$` 做行内公式。
+1. 平台配置单文件 `data/settings.json`：`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`。单 `asyncio.Lock`；写临时文件 → fsync → `os.replace`；写前保留 `.bak`；主文件损坏时回退 `.bak`，仍失败按节回退默认值。
+2. 环境变量只做首次种子（默认 Agent 与提示词、`SESSION_RETENTION_DAYS`、`KB_WEBDAV_*`）；文件存在后不再读取。旧库 `app_configs.session_retention_days` 在首次启动迁移一次，用 `runtime.legacy_import_done` 标记。
+3. Provider 为单例（id=`default`），编辑的是 default Agent 的 Provider；`base_url` 自动补 `/anthropic`；接口只返回 `has_api_key`。
+4. Agent：id、名称、instructions、状态（active/paused/archived）、`enabled_skills`、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。
+5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，下一个 turn 生效；忙碌会话等当前 turn 结束后的下一次设置变更或重建。
+6. Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区与 transcript，彻底删除会同时删除工作区目录和 transcript 目录，并级联删除渠道、渠道绑定、投递/入站记录与定时任务；有活动 turn 时 409。
+7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers`、`/api/memories` 读写 `settings.json` / `claude/CLAUDE.md`；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；密钥只返回 `has_api_key` / `has_password`。
 
 #### 验收标准
-
-- assistant 回复里的 `$$...$$` 显示为排版后的公式，不再是 LaTeX 源码。
-- 含美元金额的普通段落不发生变化。
-- 前端构建通过，后端测试无回归。
 
-#### 非目标
-
-- 行内单 `$` 公式；
-- 服务端预渲染或公式图片导出；
-- 在用户消息编辑器中提供公式预览。
+- 新会话使用当前 Agent 的最新 instructions 与 Provider。
+- 配置文件写入原子、损坏可回退；密钥不出现在接口响应和日志。
+- 彻底删除 Agent 后其会话、工作区、渠道、定时任务被清理；归档只改状态，不删文件。
 
-### F80 固定收益计息与 A 股基金净值
+### F5 记忆与用户画像
 
-- 状态：已完成
-- 日期：2026-11-08
-- 来源：用户持有固定收益标的 UST4，要求每次刷新累计收益；A 股基金（如 000307）需要自动净值
+- 状态：现行
+- 日期：2026-11-11
 
 #### 功能点
-
-1. 组合配置新增 `accruals`：每个标的可设年化利率（0-100%）、起息日（YYYY-MM-DD）和是否复投。配置在 `data/allocation.json`，接口随 `POST/PUT /api/allocation/portfolios` 读写。
-2. 生成组合快照时，配置了计息的持仓按天累计：单利 `成本 × (1 + 年化 × 天数/365)`，复投 `成本 × (1 + 年化)^(天数/365)`；用累计后的价值反推现价，`price_source=accrual`，利息体现在持仓市值和浮盈里。计息标的跳过行情抓取，也不会产生行情错误。
-3. A 股 6 位基金代码在刷新时通过东方财富基金接口（`fundmobapi` 的 `FundMNFInfo`）抓最新公布净值，`price_source=fund`；失败回退手动价、缓存或成本。A 股股票仍没有自动行情。
-4. 前端组合配置的目标表格新增「年化 %」「起息日」「复投」三列；持仓明细的现价徽标新增「计息」「净值」；刷新提示与口径说明同步更新。
-5. 计息按当前持仓成本从起息日累计，后续加减仓不按时间分段计算，作为已说明的近似。
-
-#### 验收标准
-
-- 配置年化与起息日后，UST4 的市值和浮盈随日期增加；复投与非复投在跨年时结果不同。
-- 000307 刷新后现价来源显示「净值」，金额按基金净值计算。
-- 非法年化或起息日返回 422；组合配置保存后重新打开能回填。
-- 后端测试与前端构建通过。
-
-#### 非目标
-
-- 按历史加仓时间分段计息；
-- 自动把利息结转到现金或生成利息流水；
-- A 股股票的自动行情；
-- 基金盘中估值优先（当前取最新公布净值）。
-
-### F76 老笔口径说明：未成笔分型不标注
-
-- 状态：已完成
-- 日期：2026-11-07
-- 来源：用户查看 4h ETHUSDT 时发现红框里的「顶」低于随后的冲高（2449.82），询问是否画错
-
-#### 背景与目标
-
-用户质疑 4h 图上红框区域的顶分型：标注的顶在 11-02 08:00 的 2317.12，但 11-04 价格冲到 2449.82，图上没有对应的顶。排查后确认这是老笔跨度的正常结果，不是绘制错误。目标：把口径写进规则说明、技能和文档，避免再被当成 bug；本次不改算法。
-
-#### 结论
-
-1. 图上只标注 `used=true` 的笔端点分型。4h 数据里 11-04 16:00 的 2449.82 顶分型与 11-04 00:00 的 2226.50 底分型只隔 4 根合并 K 线，达不到老笔「至少 5 根合并 K 线（含两端）」的跨度，因此不成笔、不标注。
-2. 当前笔顶仍是 11-02 08:00 的 2317.12；紫色笔从它画到 11-06 04:00 的 2206.40，期间价格短暂突破 2317 不会改变已确认的笔。
-3. 只在 `rules.bi_rule`、`chanlun` 技能口径、README 和 CLAUDE.md 补充「未满足跨度的分型不成笔、不标注」，算法输出保持不变。
-
-#### 备选（本次未采纳）
 
-- 新笔口径（最小跨度放宽到 4 根合并 K 线）：红框会多出 2449.82 的顶，4h 笔数 23→31。
-- 笔破坏规则（反向分型越过当前笔起点即作废该笔）：顶移到 2449.82，但笔数 23→17，10-21～10-30 等多段笔会被合并。
-- 两种口径都会改变全站的结构输出，需要单独确认后再实施。
+1. 用户画像 = `claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent；记忆页只编辑这一个 Markdown 文档，保存时保留 `CLAUDE.md.bak`，原子写入，权限 0600。
+2. Agent 指令在 `settings.json` 的 `agents[].instructions`，通过 preset+append 注入系统提示词。
+3. Agent 笔记由 Claude auto memory 管理（`claude/projects/<project>/memory/`），平台不注入、不整理、不提供记忆工具；`agents[].auto_memory` 仅为兼容保留，运行时不再读取。
+4. 平台记忆系统（user/agent memory 表、`/memory` 指令、整理记忆技能与工具、`memory_save` / `memory_search` / `memory_read`）全部删除。
 
 #### 验收标准
 
-- 页面「规则」中的笔说明和 `chanlun` 技能口径包含「未满足跨度的分型不成笔、不标注」。
-- 接口 `rules.bi_rule` 文本同步；笔、中枢、买卖点的数值输出不变。
-### F81 中枢离开段与 3 买卖确认
+- `claude/CLAUDE.md` 的内容在新会话中生效。
+- 记忆页保存后下一会话生效，旧版本保留为 `.bak`。
+- 平台不存在记忆表、记忆工具或整理记忆入口。
 
-- 状态：已完成
-- 日期：2026-11-08
-- 来源：用户对比 TradingView 专业缠论指标，发现中枢框把跌破段吞进去、3 卖标晚
+### F6 微信个人号渠道
 
-#### 背景与目标
+- 状态：现行
+- 日期：2026-11-11
 
-旧版 `find_zones` 只用「这一笔与 [ZD, ZG] 有没有交集」判断是否还在中枢内。跌破中枢的那一笔从 ZD 上方出发、收在 ZD 下方，仍然与中枢有交集，于是被当成中枢延伸；中枢框一直画到跌破低点，3 买卖又从错误的 `end_stroke` 往后找，导致 3 卖跳过第一次反抽、标在更晚的一次反抽上。目标：按「离开段收在 ZG 上方/ZD 下方，且下一笔不回到中枢」确认离开，中枢在离开段之前的最后一笔结束；3 买卖取离开后的第一笔回抽。
-
 #### 功能点
 
-1. `find_zones` 的离开段判定改为：后续笔端点收在 `ZG` 上方或 `ZD` 下方，且下一笔没有回到中枢。刺穿后回到中枢的笔算延伸，不结束中枢。
-2. 数据末端没有下一笔确认的结构不输出；两个中枢之间仍各有自己的进入段，不会首尾相接。
-3. 中枢的 `end_stroke` 是最后一笔仍属于中枢的笔，`exit_stroke` 是确认离开的笔；中枢框仍从进入段起点画到 `end_stroke` 终点，不再覆盖跌破段；`ZG/ZD` 仍取初始三笔重叠。
-4. 3 买/3 卖改为从中枢的 `exit_stroke` 出发：向上离开看第一笔向下回抽是否收在 `ZG` 上方；向下离开看第一笔向上反抽是否收在 `ZD` 下方。不再先找一笔反方向再找回抽，避免跳过第一次反抽。
-5. `rules.zone_rule` / `rules.point_rule`、`chanlun` 技能、页面规则说明、`README.md` 和 `CLAUDE.md` 同步。
-6. 新增回归测试：跌破笔是离开段而不是延伸；刺穿后回到中枢算延伸；离开后的第一笔回抽生成 3 买卖；未确认离开段不输出中枢。
+1. 渠道配置在 `settings.json` 的 `channels`（含 `bot_token`、`base_url`、`sync_buf`、状态、最近错误），联系人绑定在 `channel_conversations`，key 为 `"{channel_id}:{external_id}"`，存 `session_id`、`display_name`、`context_token`、`updated_at`。
+2. 新建渠道后扫码登录；iLink 二维码在页面展示，登录成功后 `WeixinRuntime` 在 API 进程内为每个 active 渠道跑一个 `getupdates` 长轮询任务。
+3. 入站：
+   - 群聊忽略；语音/视频不下载、不落盘；纯语音/视频直接回提示且不创建 turn；混合消息只处理文字/图片/文件。
+   - 图片/文件从 iLink CDN 下载、AES-128-ECB 解密后保存到 `workspaces/<agent_id>/uploads/wx-<hash>-<name>`，以附件清单写入用户消息。
+   - 同一联系人连续消息在 `CHANNEL_INBOUND_BATCH_SECONDS`（默认 5 秒，最长 15 秒）内打包成一个 turn。
+   - 入站按 `(channel_id, external_message_id)` 幂等；打包窗口内不保存 `sync_buf`，崩溃后由 iLink 重放、幂等表吸收。
+   - 引用回包通常只有 `msg_id` / `create_time_ms`：先按消息 id 查 `channel_inbounds`，再在目标时间前 2 秒、后 30 秒窗口内查入站文本与机器人回复；查不到写「引用原文不可用」。
+   - 命令 `/new`、`/clear`、`/stop`、`/status`、`/help`：`/new` 先 flush 待打包消息再新建 UUID 并重绑；`/stop` 丢弃待打包消息并中断当前会话；`/status` 返回 Agent、会话 UUID、忙闲；命令不进 Agent、不建 turn，确认消息直接 `sendmessage`。
+4. 出站：
+   - turn 开始时在同一事务写 `running_sessions` 租约与 `channel_deliveries` pending 行；结束时回填最终答复并发送；取消的 turn 不发送并删除空投递行。
+   - 回复按 1800 字在段落/代码围栏边界切块，最多 10 块，超出截断并标注。
+   - 崩溃重启后按 pending/attempting 行补发；attempting 补发加「可能重复」标记；渠道暂停/登录过期时保留 pending，恢复后继续。
+   - 网页里在渠道会话中手动发消息不推回微信；定时推送复用同一投递机制。
+5. 运行期截图推送：工具层未接入，`channel_images.send_session_image` 已保留但当前没有调用方；下一版本接入浏览器工具后启用。
+6. 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；重新扫码后补发未发送回复。
+7. 删除渠道：停止轮询、清空登录态、删除投递/入站记录、清理定时任务推送目标、移除渠道与联系人绑定；已产生的会话与 transcript 保留。
 
 #### 验收标准
-
-- 同一段 ETHUSDT 4h 300 根，中枢框在跌破前的最后一笔结束，`exit_stroke` 是跌破笔；3 卖出现在离开后的第一笔反抽。
-- 既有笔、1/2 买卖、MACD 背离、回测接口和返回字段不变；后端测试与前端构建通过。
-
-#### 约束边界
-
-- 仍是笔级别近似，不做线段、多级别、中枢延伸/扩展/升级的完整分类。
-- 不改变 `ZG/ZD` 定义，不改变中枢框起点，不改变 1/2 买卖规则。
-- 不新增依赖、不建表、不改接口字段。
-
-#### 非目标
-
-- 线段级中枢、多级别联立、区间套；
-- 买卖点失效状态、批量扫描或自动交易；
-- 用 AI 重新画结构。
-
-### F82 老笔笔破坏与右侧高点成笔
 
-- 状态：已完成
-- 日期：2026-11-08
-- 来源：用户指出 ETHUSDT 4h 右侧 2449.82 的更高顶没有被选为笔端点，质疑“更高顶/更低底选后者”没有生效
+- 微信入站 → 5 秒打包 → 回复发回同一联系人；断网重放不重复处理。
+- 微信会话 `/new`、`/stop`、`/status` 正常。
+- 命令不创建 turn 或消息；确认消息可丢失但不影响会话状态。
+- 服务重启后未发送回复补发；已取消的 turn 不回信。
 
-#### 背景与目标
+### F7 定时任务
 
-旧版 `build_strokes` 只在同类型分型上做“更极端替换”；2449.82 是当前向下笔中的反类型顶，和前一底只隔 3 个合并 K 线索引，被老笔最小跨度直接跳过，所以既不成笔也不显示。用户期望：后面出现更高的顶或更低的底时，应该用后面的极值。目标：引入笔破坏规则，反向分型越过当前笔起点时作废当前笔，上一笔延伸到新极值，让 2449.82 成为向上笔终点，同时保留后续 2206.40 的 2 买。
+- 状态：现行
+- 日期：2026-11-11
 
 #### 功能点
 
-1. `build_strokes` 增加笔破坏：向下笔遇到更高的顶、向上笔遇到更低的底，且该分型越过当前笔的起点价格时，作废当前笔。
-2. 作废后，上一笔延伸到新极值；新极值成为 `selected`。如果已经没有任何笔，就从新极值重新开始。
-3. 破笔后的第一笔不受 `min_span` 限制，只放宽一次；之后恢复老笔最小跨度。未破坏的反向分型仍按老笔跨度过滤。
-4. 同类型分型“更极端替换”保持不变；破笔后同类型更高/更低仍更新端点。
-5. `rules.bi_rule`、`chanlun` 技能、页面规则说明、`README.md` 和 `CLAUDE.md` 同步；F76 中“未成笔分型不标注”的口径在破笔场景下由本规则取代。
-6. 回归测试覆盖：向下笔被更高顶破坏、向上笔被更低底破坏、反向未越过起点不破坏、破笔后第一笔成笔。
+1. `cron_jobs` 表保存名称、prompt、5 字段 cron、IANA 时区、启用状态、`session_id`（UUID 字符串）、`next_run_at`（UTC）、`last_run_at`、`last_skipped_at`、推送目标 `push_channel_id` / `push_conversation_id`；不保存 `last_run_id` / `last_run_status`。
+2. 新建任务生成一个 UUID 作为专属 SDK 会话；每次触发在同一 transcript 上入队一个 turn（`source=cron`），用户在该会话的追问共享上下文。transcript 不存在时下次触发重新生成 session id。
+3. `CronRuntime` 在 API 进程内每 `CRON_TICK_SECONDS`（默认 20 秒）扫描到期任务，复用 `SessionRegistry` 与并发上限；单进程部署，多 worker 会重复触发。
+4. 会话忙时跳过本次触发并写 `audit_log`（`cron_skipped`），不排队堆积；手动「立即运行」遇到忙返回 409。
+5. 调度在提交 turn 前先提交数据库（消费本次计划）；提交失败写 `cron_trigger_failed` 审计，不重试。停机跨过多个触发点后每个任务最多补跑一次。
+6. 暂停/归档 Agent 时不触发；恢复后从下一个匹配时间继续。暂停/删除任务不取消已产生的 turn；删除任务保留会话与 transcript。
+7. 推送目标必须是当前 Agent 的 active `wechat` 渠道下已有 1:1 联系人；触发时与租约同一事务写 pending 投递，复用渠道分块、重试、补发；未配置不推送。渠道或联系人删除时清空目标。
+8. 接口：`GET/POST /api/cron-jobs`、`PUT/DELETE /api/cron-jobs/{id}`、`POST /api/cron-jobs/{id}/run`；响应为任务对象（不含 `last_run_id` / `last_run_status`）。
 
 #### 验收标准
 
-- ETHUSDT 4h 300 根：2449.82 成为顶，最后一段为 2449.82 → 2206.40；2 买仍在 2206.40；笔数约 15。
-- 破坏规则只在越过笔起点时触发，普通回踩不会误伤。
-- 既有笔/中枢/买卖点测试更新后全部通过；中枢和买卖点随笔结构变化，属于预期。
+- 定时任务按时触发，会话忙时跳过并写审计；配置推送目标时送达微信。
+- 立即运行不改变原计划；忙时返回 409。
+- 删除会话后任务下次触发自动重建会话；删除任务保留历史。
 
-#### 约束边界
+### F8 技能库与工具现状
 
-- 仍是笔级别，不做线段、多级别、区间套。
-- 破笔后的第一笔只放宽一次，不是全局放宽；不会把每个小分型都变成笔。
-- 不改变中枢、3 买卖和 1/2 买卖的判定规则，只改变传给它们的笔。
+- 状态：现行
+- 日期：2026-11-11
 
-#### 非目标
-
-- 线段级别中枢、多级别联立；
-- 全局新笔口径或参数化笔规则；
-- 自动交易或收益承诺。
-
-### F82 最终回复校验（RubricMiddleware）
-
-- 状态：已完成
-- 日期：2026-11-08
-- 来源：用户要求新增 rubric middleware，rubric 依据为当前 Agent 的 prompt 和全部用户记忆
-
 #### 功能点
 
-1. 网页聊天（`source=manual|retry`）在有 user memory 时，`RunWorker` 用当前 Agent 的 instructions 和全部 user scope 记忆（不截断，不含 agent 记忆）拼成 rubric，通过 `input_state["rubric"]` 传给 deepagents 的 `RubricMiddleware`；没有 user memory 时不挂载。
-2. 中间件使用独立的评分模型（`temperature=0`，关闭 thinking，因为 provider 在 thinking 模式下拒绝强制 `tool_choice`），并挂 `session_search` / `session_read` 供评分器核对被截断的历史对话。平台在 `app/services/rubric.py` 中构造 `RubricMiddleware` 子类并保持 `max_iterations=2`：草稿结束评分一次，首次不通过时注入一次修订，修订版直接作为最终 output，不再二次评分；修订后自然停止时子类跳过评分并把评分状态标为终结（上游按评分次数计数，否则每条回复都会评分两次，最后仍被标成 `max_iterations_reached`）。
-3. 评分器运行期间产生的 `messages` 流用 `rubric_evaluation_start` / `rubric_evaluation_end` 夹住过滤，不进入聊天；开始评分时另写 `rubric_start` 事件（iteration），前端据此显示「质检中」。
-4. 每次评分写成 `rubric_result` 事件（iteration、result、通过/未通过数、未通过项和 gap），前端在助手消息的「执行过程」里展示质检结果，未通过项可展开；聊天活动行在评分期间显示「质检中」，未通过后显示「质检未通过，正在修订」。
-5. 质检未通过时不立即清空已经流式输出的草稿：草稿继续显示在聊天里，修订文本单独缓冲，Run 完成后用修订版整段替换（持久化消息即修订版）。活动行在整个修订期间保持「质检未通过，正在修订」，不再出现正文消失后等待「正在生成…」的空窗；刷新或重连时按 `assistant_replace` 事件重建同样的「草稿可见、修订在后台生成」状态。
+1. 技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `builtin` / `ai` / `manual`。
+2. 内置技能 seed：`web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。`.seed_state.json` 记录内置内容哈希：未修改的内置技能随版本更新；用户改过的保留；已从默认列表移除且未被修改的内置技能在启动 seed 时删除，用户改过的保留并停止跟踪（例如旧 home 的 `memory-organizer`）。
+3. 技能页按「系统技能 / 交互创建」分组，可查看和编辑 SKILL.md、启用/停用；非系统技能可删除（同时从所有 Agent 的启用列表移除）。
+4. 本版工具层未迁移：技能、`add_dirs`、MCP、平台工具、技能工具（搜索/浏览器/回测/定时/交易/资产/缠论/知识库）都没有接入 SDK；工具页如实显示 Claude Code 内置工具（Read/Write/Edit/Bash/Glob/Grep）为已接入，平台工具与技能工具标记为未接入。
+5. `langchain-core` 依赖暂留，等工具层迁移完成后删除。
 
 #### 验收标准
-
-- 有用户记忆时每条网页聊天最终回复都会校验一次；没有用户记忆时不挂载。
-- rubric 包含 instructions 和全部 user 记忆，agent 记忆不进入 rubric。
-- 评分未通过时只评分一次：注入一次修订，修订版直接作为最终 output，不再二次评分，也不在最后标记 `max_iterations_reached`。
-- 评分期间聊天活动行显示「质检中」；未通过时显示「质检未通过，正在修订」。
-- 质检未通过时草稿保持可见，修订版在 Run 完成后整段替换草稿；过程中不出现正文被清空、等待「正在生成…」的空窗。
-- 评分结果出现在「执行过程」里，未通过项可以展开。
-- 评分器的输出不出现在聊天流里。
-- 后端测试与前端构建通过。
 
-### F83 老笔不回滚：取消笔破坏规则
+- 启动 seed 不覆盖用户修改的技能；被移除的内置技能在未修改时自动删除。
+- 技能页可查看、编辑、启用、删除；工具页状态与实际一致。
+- Agent 不会声称调用了未接入的工具。
 
-- 状态：已完成
-- 日期：2026-11-09
-- 来源：用户查看 BTCUSDT 4h 时指出 10-21→11-05 的下跌被画成一条直线，要求按多次笔绘制
+### F9 知识库镜像
 
-#### 背景与目标
+- 状态：现行
+- 日期：2026-11-11
 
-F82 引入的笔破坏规则（反向分型越过当前笔起点就作废当前笔、上一笔延伸到新极值）在连续快速反转时会连环触发：10-27～11-05 之间多个只隔 1–3 个合并 K 线的顶/底依次越过前一笔起点，逐笔作废后把 10-21 84899.99 → 11-05 75203.83 整段合并成一根 15 天的直线笔，Nov 2–4 反弹到 81190.40 的摆动也一并消失。目标：笔一旦按分型和跨度成立就不再回滚，只保留「最后一笔随更极端的同向分型延伸」。
-
 #### 功能点
-
-1. `build_strokes` 删除笔破坏分支和 `_breaks_stroke`；反向分型只有在 `merged_index` 跨度满足 `OLD_BI_MIN_SPAN` 时才成笔，不再有「破笔后第一笔免跨度」。
-2. 同类型分型「更极端替换」保持不变：更极端的同向分型仍会把最后一笔的端点移到新极值。
-3. `rules.bi_rule`、`chanlun` 技能口径、`README.md` 和 `CLAUDE.md` 同步。
-4. 回归测试：向下笔/向上笔越过起点后不回滚；价格跌破反弹起点时保留多笔；跨度不足的分型不成笔。
 
-#### 影响
+1. `KnowledgeSyncRuntime` 在 API 进程内把配置页保存的 WebDAV 目录双向同步到 `knowledge/`（`APP_KNOWLEDGE_DIR` 可覆盖）；启动后立即同步一次，之后按配置间隔（默认 300 秒）增量同步。
+2. 状态存 `data/knowledge_sync_state.json`（etag + 本地哈希），只传变化文件；配置存 `settings.json` 的 `knowledge` 节，密码只写文件、接口只返回 `has_password`。
+3. 冲突规则：两边都改时远端保留原名，本地另存 `<name>.conflict-local-<时间戳>` 后上传；远端删除且本地未修改时删本地；本地删除不传播；路径限制在 root 内，拒绝 `..` 与符号链接；单文件上限 50 MB。
+4. 坚果云限流：按 `KB_REQUEST_INTERVAL_SECONDS`（默认 4.5 秒）限速；默认跳过 `.obsidian`、`.git` 等目录；收到 `BlockedTemporarily` / 503 时暂停约 30 分钟；列表截断或子目录读取失败时本轮跳过删除判断。
+5. 远端身份（URL + 账号 + 根目录）变化时，本地镜像与状态移到 `.old-<时间戳>` 后重建。
+6. 本版知识库不挂载给 Agent（技能工具层未迁移）；页面与同步正常运行。
 
-- 同一段 BTCUSDT 4h 300 根（2026-09-20 04:00 → 11-09 00:00 UTC）：笔 13→27，中枢 1→4，买卖点 4→8，MACD 背离 2→1；1 买/2 买/3 卖的位置随笔结构变化。
-- `chan_backtest` 复用同一套算法，信号口径同步变化。
-- F82 的 ETHUSDT 场景回到 F76 口径：跨度不足的 2449.82 顶不再成为笔端点，已确认的笔不因后续越过起点而改写。
-
 #### 验收标准
-
-- 同一窗口的下跌段由多笔组成，不再出现跨越整段反弹的直线笔。
-- `rules.bi_rule` 与文档描述一致；后端测试与前端构建通过。
 
-### F84 中枢框覆盖离开段
+- 配置保存后无需重启即可触发同步；同步状态可见且不泄露凭据。
+- 冲突、删除、限流按上述规则处理，不误删本地文件。
 
-- 状态：已完成
-- 日期：2026-11-09
-- 来源：用户查看 BTCUSDT 4h 新笔结构，指出红框处（10-21～10-24）左侧中枢应更长，要求完全按中枢玩法画
+### F10 量化回测
 
-#### 背景与目标
+- 状态：现行（页面与后端保留，Agent 工具未接入）
+- 日期：2026-11-11
+- 来源：沿用旧需求，行为不变
 
-F81 之后中枢框在离开段起点结束：zone2 画成 10-12 04:00 → 10-21 16:00，10-21～10-24 的跌破笔被排除在框外，3 卖（10-25）落在下一个中枢框内。目标：中枢框覆盖到离开段终点，相邻中枢框首尾相接；中枢结构判定、`ZG/ZD`、1/2/3 买卖点不变。
-
 #### 功能点
-
-1. `find_zones` 的 `start_time` 改为第一笔中枢笔的起点（进入段的终点），`end_time` 改为离开段的终点；`entry_stroke` / `start_stroke` / `end_stroke` / `exit_stroke` 不变。
-2. 同一窗口 zone2 由 10-12 04:00 → 10-21 16:00 变为 10-15 12:00 → 10-24 16:00，zone3 为 10-24 16:00 → 10-30 20:00，zone4 为 10-30 20:00 → 11-06 04:00；每个 3 卖都落在所属中枢框之外。
-3. `rules.zone_rule`、`chanlun` 技能、`README.md`、`CLAUDE.md` 同步。
-4. 回归测试：框起点取第一笔中枢笔、终点取离开段终点；相邻中枢框时间上首尾相接。
 
-#### 影响
+1. 功能工作区「回测」独立页面，不绑定 Agent；Bitget 现货、单标的、历史回测。
+2. 行情按需抓取到 `data/market.db`（`market_candles` / `market_sync_state`），首尾增量更新，回测前修补区间缺口；补不齐的缺口保留 NaN 行，缺口期间强制空仓、跨缺口收益不计入并告警。
+3. 周期 `1min` 到 `1M`；日/周/月使用 Bitget UTC 变体；只用完整 K 线。
+4. 策略为页面内 Python `def strategy(df) -> pd.Series`（UTC DatetimeIndex，列 open/high/low/close/volume，返回 [-1,1] 目标仓位），在独立子进程中执行（超时/内存/进程组隔离，不是安全沙箱）。
+5. `warmup_bars` 预热；截断前缀重跑检测未来函数，不一致时告警（`BACKTEST_FUTURE_CHECK` 默认开启）。
+6. `BacktestWorker` 进程内串行执行；状态 `queued/fetching/running/completed/failed/cancelled`；启动时重新排队未完成任务；结果存 `backtests` 表，曲线/交易按上限截断。
+7. 接口：`POST/GET /api/backtests`、`GET /api/backtests/meta`、`GET /api/backtests/{id}`、`GET /api/backtests/{id}/result`、`POST /api/backtests/{id}/cancel`、`GET /api/market/candles/status`、`GET /api/market/probe`。
+8. Agent 的 `quant-backtest` 技能与 `backtest_*` 工具已注册但本版未接入 SDK。
 
-- 只影响中枢框的绘制时间范围；中枢数量、`ZG/ZD`、1/2/3 买卖点、MACD 背离和 `chan_backtest` 信号不变。
-- 与 F81「中枢框不覆盖跌破段」的口径相反，以本需求为准。
-
 #### 验收标准
-
-- 页面中枢框画到离开段终点，相邻中枢框首尾相接。
-- 后端测试与前端构建通过。
 
-### F85 未完成走势与买卖点失效标记
+- 页面可提交回测、查看进度/结果/取消，重启后任务恢复。
+- 缺口与未来函数检测按规则告警。
 
-- 状态：已完成
-- 日期：2026-11-09
-- 来源：用户选择先做「未完成笔 + 失效标记」，解决页面最右端「价格已经跌了但笔没画」和过期买卖点仍显示的问题
+### F11 交易记录
 
-#### 背景与目标
+- 状态：现行（页面保留，Agent 工具未接入）
+- 日期：2026-11-11
 
-笔只在两端分型确认后才画，数据末端最新的一段走势永远缺失；买卖点在后续价格破坏后仍原样显示，容易被当成有效信号。目标：把最后一笔之后的未确认走势用虚线画出，并给买卖点加失效标记；不改变笔、中枢、背离和买卖点自身的判定。
-
 #### 功能点
 
-1. `build_pending_strokes(strokes, bars)`：从最后一笔终点出发，若之后出现同向极值则先画延伸段，再从有效终点连到随后反向极值；最多两段，均为未确认走势。
-2. `analyze_frame` 返回 `pending_strokes`，不计入 `stroke_count`，不参与中枢、MACD 面积、背离和买卖点；`rules.pending_rule` 同步说明。
-3. `mark_broken_points(points, bars)`：买卖点后出现更低低点（买点）/更高高点（卖点）即标记 `broken`、`broken_time`、`broken_price`；参照价为 1 买卖点自身价格、2 买卖对应的 1 买卖点价格、3 买卖对应的 `ZG`/`ZD`（新增 `ref_price` 字段）。
-4. 页面：未完成走势用虚线（图例「未完成走势」），失效买卖点置灰（图例「已失效」），页头统计显示「含未完成」「N 个已失效」，规则说明增加未完成走势一条；`chan_analyze` 摘要列出未完成走势和已失效买卖点。
-5. 测试：未完成走势反向/延伸/无后续 K 线；失效标记的参照价；`analyze_frame` 输出字段。
+1. 独立 JSONL `data/trade-journal.jsonl`（一行一笔，0600，原子替换，进程内串行写入）。
+2. 支持 `crypto` / `a_share`；`status`、`return_pct`、`r_multiple`、`pnl`、`win` 由服务层计算，不落盘。
+3. 页面支持筛选、新建/编辑、平仓和统计；不提供删除、图表、附件或回测导入。
+4. 接口：`GET/POST /api/trade-journal`、`GET /api/trade-journal/stats`、`GET/PUT /api/trade-journal/{id}`、`POST /api/trade-journal/{id}/close`。
+5. `trade-journal` 技能与五个工具已注册但本版未接入 SDK。
 
 #### 验收标准
-
-- BTCUSDT 4h 300 根：最后一笔（11-07 08:00 76245.85）之后出现 11-08 20:00 73481.30 的虚线下行段。
-- 1 买/2 买等被后续价格跌破的买卖点显示为灰色并带失效时间价格。
-- 笔数、中枢、背离口径不变；后端测试与前端构建通过。
 
+- 页面记录、平仓、统计正确；文件损坏行被跳过；不建数据库表。
 
-### F86 缠论分析改为 UTC 时间窗口
+### F12 资产配置
 
-- 状态：已完成
-- 日期：2026-11-09
-- 来源：用户指出 AI 工具不能按需要给 K 线根数，K 线应该是一个时间窗口、由 Agent 选择；前端默认最近 500 根对应的时间窗口
+- 状态：现行（页面保留，Agent 工具未接入）
+- 日期：2026-11-11
 
-#### 背景与目标
-
-`chan_analyze` / `chan_backtest` 和缠论页原来只接受 K 线根数（默认 300），对话里无法按日期区间分析，前端也只能选固定根数。目标：分析范围统一改为 UTC 时间窗口（`start_date` / `end_date`，结束日包含），Agent 自己选择窗口并直接返回；前端用开始/结束日期选择窗口，默认最近 500 根对应的时间窗口。
-
 #### 功能点
 
-1. `chan_analysis.parse_date_window(start_date, end_date)`：接受 `YYYY-MM-DD`（覆盖当天）或 ISO 时间（可精确到所选周期，例如 1h 可选到小时）；结束时间包含在内，解析为当天的 23:59:59.999 或给定时刻；非法格式报错。
-2. `analyze_symbol` / `run_backtest` 增加 `start_ms` / `end_ms`，上界取包含 `end` 的那根 K 线（`floor` 后取下一根开盘作为排他上界）；窗口内根数校验（分析 20–1000，回测 60–1000），超限或没有已完成 K 线返回明确错误；`requested_bars` 记录窗口实际根数。
-3. `POST /api/chan/analyze`、`POST /api/chan/backtest` 增加可选 `start_date` / `end_date`（仍兼容 `bars`）。
-4. Agent 工具 `chan_analyze` / `chan_backtest` 参数改为 `start_date` / `end_date`，不传时默认最近 500 根；工具描述和 `chanlun` 技能口径同步。
-5. 缠论页用贴着工具栏按钮的「时间窗口」局部浮层选择开始/结束（独立组件 `TimeRangePicker` + `timeRange` 工具函数；`datetime-local`，步长跟随周期，点外部或 Esc 关闭）；按钮标签显示具体开始时间 → 最新（或具体结束时间）。打开浮层时开始预填「结束往前 500 根」的具体时间，结束留空 = 最新已收盘 K 线；开始保持预填值或清空时窗口继续跟随最新，改动后才固定。点「应用并分析」直接重新分析；URL 只在显式设置了起止时保存 `start` / `end`，旧版本链接里写死的默认窗口（结束≈最新且跨度 500 根）会还原为留空。
+1. 独立于交易记录：组合配置在 `data/allocation.json`（0600），流水在 `data/allocation-ledger.jsonl`（一行一笔，0600）。
+2. 按时间重放流水，推导现金、移动加权成本、已实现/未实现盈亏、投入本金、总收益与 XIRR；目标合计不等于 100 只提示；超卖返回 422；有流水的组合不能改基础币种或删除。
+3. `GET /api/allocation` 不联网；`POST /api/allocation/refresh` 抓 Bitget 1min 最新价、东方财富/Yahoo 美股与基金净值、USD/CNY 汇率；价格优先级 `live/stock/fund > mark > cache > cost`；刷新失败保留旧值。
+4. 支持固定收益计息（年化、起息日、复投），计息标的跳过行情抓取。
+5. 顶栏「总览」按 USD 折算合并全部组合（USD≈USDT），显示合并持仓与近似 XIRR。
+6. 接口：`GET /api/allocation`、`POST /api/allocation/refresh`、`POST/PUT/DELETE /api/allocation/portfolios...`、`GET/POST /api/allocation/portfolios/{id}/entries`、`PUT/DELETE /api/allocation/portfolios/{id}/entries/{entry_id}`。
+7. `allocation` 技能与六个工具已注册但本版未接入 SDK。
 
 #### 验收标准
-
-- 打开缠论页默认分析最近 500 根对应的时间窗口，页头显示实际数据区间。
-- 选择任意起止日期后点「分析」按该窗口返回；窗口过大/过小给出明确错误。
-- Agent 指定日期区间时按区间返回，未指定时用默认窗口。
-- 后端测试与前端构建通过。
-
 
-### F87 记忆来源快照与 Agent 自写记忆
+- 页面可维护组合与流水、刷新行情、查看总览与再平衡建议；失败不破坏已有价格。
+- 不读取交易记录，不建数据库表。
 
-- 状态：已完成
-- 日期：2026-11-10
-- 来源：用户指出自动抽取会把一次提问写成长期记忆（「faker失败了？」→「关注英雄联盟职业赛事」），整理器凭感觉合并、丢失原文；要求每条用户记忆对应当时的 snapshot，每条 agent 记忆由 Agent 自己写
+### F13 缠论图
 
-#### 背景与目标
+- 状态：现行（页面保留，Agent 工具未接入）
+- 日期：2026-11-11
 
-旧的自动抽取在 Run 完成后让另一个模型读一轮对话并 add/update/delete 记忆，候选不足时用「最近更新」补位，导致一次提问被写成用户长期画像，且会改写与本轮无关的条目。整理器又会把主题相邻的条目重写成更长的摘要并硬删除原文，无法核对、无法回退。目标：用户记忆只在用户显式要求时产生，并持久保存当时的用户消息原文；agent 记忆由 Agent 在 Run 中通过工具自己写；不再有后台影子作者和按轮次的自动整理。
-
 #### 功能点
 
-1. 删除 Run 完成后的后台自动抽取（`extract_memories`、`parse_extraction`、`find_merge_candidates`、`has_explicit_memory_event` 及 worker 调度）；普通对话不再产生任何记忆。
-2. user 记忆只有三个入口：网页聊天「记住…」、微信 1:1「记住…」、记忆页手动新增。Agent 工具不能写 user scope。显式写入带 `source_kind=explicit`、`source_message_id`、`source_run_id`、`source_session_id`、`snapshot_text`（用户消息原文）和 `snapshot_at`；手动新增 `source_kind=manual`、无快照。编辑正文会降级为 manual 并清空快照，仅改 tags 保留快照。（由 F89 调整：网页/微信「记住…」改为 `/memory <内容>` 指令，`source_kind=command`；`explicit` 仅保留旧数据。）
-3. 新增平台工具 `memory_save`（始终可用，Agent 的 `auto_memory` 开启且不是整理 Run 时注入）：只写当前 Agent 的 agent 记忆，正文 2–320 字，每次 Run 最多 5 条，自动带 run/session/message 来源，`source_kind=agent`。
-4. `memory_items` 增加 `source_session_id`、`source_kind`、`snapshot_text`、`snapshot_at`；已有行回填 `source_kind='legacy'`。`GET /api/memories` 返回 `source_message_exists`、`source_session_exists`、`source_agent_id`。
-5. 删除按轮次的自动整理（`note_user_turn` 与 `memory_consolidate_every_turns` 的运行时、API 和 UI；DB 列与环境变量保留）；保留手动「整理记忆」，`memory-organizer` 只处理当前 Agent 的 agent 记忆，移除 `memory_move` 和所有用户记忆操作；合并必须保留原始事实，单条不超过 320 字。
-6. 前端记忆页展示来源徽标、用户消息快照（可展开）和「查看原消息」（复用会话搜索的定位与高亮链路）；旧记忆显示「旧记忆（无快照）」；Agent 开关文案改为「允许 Agent 写入记忆」；设置页移除「记忆整理间隔」。
-7. 会话/Agent 删除逻辑不变：不删除记忆、不清来源；快照原文持久保存在记忆行内。
+1. 功能工作区「缠论图」，不绑定 Agent；复用 Bitget 行情缓存，只用已收盘 K 线。
+2. 周期 `15min/1h/4h/1day/1week`；UTC 时间窗口，20–1000 根，默认最近 500 根。
+3. 确定性算法：包含处理、严格三根分型、老笔、完整中枢、1/2/3 买卖点（带失效标记）、MACD 与简化背离；未确认走势用虚线，不计入笔数/中枢/背离/买卖点。
+4. `POST /api/chan/analyze` 返回 candles/merged/fractals/strokes/pending_strokes/zones/points/macd/divergences/rules/warnings，不建表。
+5. `POST /api/chan/backtest` 因果前缀回放、下一根开盘进场、固定止损/R 目标/时间止损与费用。
+6. 页面参数写入 `/chan` 查询串（`replaceState`），刷新/直达恢复并自动分析。
+7. `chanlun` 技能与 `chan_analyze` / `chan_backtest` 已注册但本版未接入 SDK。
 
 #### 验收标准
-
-- 发送「faker失败了？」（不带「记住」）后 user 记忆条数不变，Run 无 `memory_saved` 事件。
-- 网页或微信发送「记住：…」产生带快照的 user 记忆；记忆页可展开原文并跳回原消息高亮。
-- 记忆页手动新增标记为「手动添加」、无快照；编辑正文后快照清空并降级为手动。
-- 开启 `auto_memory` 的 Agent 可调用 `memory_save` 写 agent 记忆；关闭后工具不可见。
-- 删除产生显式记忆的会话后，记忆仍在并显示「原会话已删除，快照仍保留」。
-- 手动「整理记忆」只能列出、更新、删除 agent 记忆；对 user 记忆 id 操作返回 not found。
-- 连续超过原阈值多轮不再自动创建 `source='memory'` 的 Run；设置页无整理间隔输入。
-- 后端测试与前端构建通过。
-
-#### 非目标
 
-- 向量/语义检索或 embedding；
-- agent 记忆的版本历史、回滚或自动遗忘；
-- 自动清理或重新分类旧记忆；
-- 让 Agent 写 user scope。
+- 页面可切换周期/时间窗口/显示项，MACD 与主图同步；回测输出胜率、平均 R、回撤与按信号类型统计。
 
+### F14 前端界面、路由与响应式
 
-### F88 记忆注入：用户全量 + Agent 索引
+- 状态：现行
+- 日期：2026-11-11
 
-- 状态：已完成
-- 日期：2026-11-10
-- 来源：用户要求 user 记忆全部加入系统提示词；Agent 记忆不应由平台按关键词挑，应由 AI 自己决定读哪些，平台只预先注入索引
-
-#### 背景与目标
-
-旧 `retrieve_for_prompt` 让 user 与 agent 记忆同池按关键词/双字组竞争，短问题可能一条用户规则都不注入；而回复校验的 rubric 使用全部 user 记忆，两边口径不一致。目标：用户记忆作为全局规则全量注入；Agent 记忆只给索引，由模型用工具自行读取。
-
 #### 功能点
 
-1. `retrieve_for_prompt` 改为两段：全部 user 记忆按 `created_at` / `id` 稳定排序注入，不限制条数和字数，全部原文注入；当前 Agent 的 agent 记忆只注入索引（id + tags + 60 字摘要），最多 40 条，不做总字数限制，超出提示用 `memory_search` 查找。
-2. 正文完全相同的 user/agent 条目只保留 user，不再重复出现在 Agent 索引。
-3. 新增平台工具 `memory_search` / `memory_read`（始终可用，不参与技能门控）：`memory_search` 按关键词搜索当前 Agent 的 Agent 记忆；`memory_read` 按 id 返回全文，更新 `last_used_at` 并记录 `run_memories`；两者都不能读取 user 记忆或其他 Agent 记忆。
-4. 记忆块附加到系统提示词末尾；user 记忆不再写 `last_used_at` 或 `run_memories`（全量注入，避免随条数增长的写放大）。
-5. 默认提示词说明：用户记忆全量注入；Agent 记忆只有索引，需要细节时用 `memory_read` / `memory_search`，不要只凭摘要猜测。
+1. 视觉：珍珠冷光画布 + 极光弥散 + 悬浮玻璃；主色浅紫，运行态青绿到紫渐变；assistant 整列玻璃卡片，user 右对齐深色气泡。
+2. 路由：自建轻量 History API（不引入路由库）；`/chat`（可选 `/chat/<session_id>`）、`/config`、`/memory`、`/skills`、`/tools`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；未知路径回聊天页。选中的 Agent 记在 `localStorage`。
+3. 侧栏顶部「Agent / 功能」两个工作区：Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组；功能工作区放回测、交易记录、资产配置、缠论图，不显示 Agent 选择器与会话。
+4. ≤860px 使用顶部栏 + 汉堡菜单；侧栏变抽屉、详情变全屏面板；输入区适配 `visualViewport` 与安全区；功能页表格改卡片。
+5. 会话列表由 SDK transcript 生成，显示忙碌徽标和最后修改时间；微信会话带「微信」徽标；输入区提示网页回复不会发回微信。
+6. Chat 内容列（header、消息流、composer）统一 `--chat-lane` 宽度；发送时滚到底部，输出期间上滑显示「回到最新」。
 
 #### 验收标准
-
-- 任意 query 下，所有 user 记忆都出现在注入块（受预算约束）。
-- Agent 记忆正文不直接出现在提示词，只出现 id、标签和摘要；`memory_read` 能取到全文。
-- 用户记忆超预算、Agent 索引超上限时，块尾有明确提示。
-- `memory_search` / `memory_read` 只能操作当前 Agent 的 Agent 记忆。
-- 后端测试与前端构建通过。
 
-#### 非目标
-
-- 向量/语义检索或 embedding；
-- 按相关度对 user 记忆排序或筛选；
-- 让 Agent 读取其他 Agent 的记忆。
+- 刷新/直达/前进后退恢复页面与会话；非法 `/chan` 参数回退默认。
+- 移动端可用，键盘弹起时输入框可见。
 
+### F15 部署、升级与运维
 
-### F89 用户记忆改为 /memory 指令
+- 状态：现行
+- 日期：2026-11-11
 
-- 状态：已完成
-- 日期：2026-11-10
-- 来源：用户要求不要用「记住…」开头写记忆，改为 `/memory <内容>` 指令
-
 #### 功能点
 
-1. 新增聊天命令 `/memory <内容>`（网页和微信 1:1 共用 `chat_commands`）：不创建 Run 或 Message，直接写一条 user memory；保存 `source_kind=command`、完整指令原文 `snapshot_text` 和 `snapshot_at`；空内容返回用法，重复内容复用已有条目。
-2. 移除网页 `POST /api/chat/messages` 和微信入站的「记住…」前缀写入；删除 `explicit_memory_content`；`source_kind=explicit` 仅保留给旧数据。
-3. 记忆页手动新增保持 `source_kind=manual`、无快照；编辑正文降级为 manual 并清空快照。
-4. 前端命令面板增加 `/memory`，选中后填入 `/memory `；带内容的 `/memory …` 走命令接口，不再作为普通消息发送。
-5. 默认提示词、`/help` 文案、记忆页说明和文档同步。
+1. 生产：宿主机 systemd 用户服务 + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`（SPA fallback），没有 nginx/Postgres 容器。
+2. 运行时目录 `~/.super-personal-platform/`：`claude/`、`workspaces/<agent>/`、`skills/`、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
+3. 新库的 `app.db` 只创建六张表：`audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留旧表，平台不再读写。
+4. 升级：先备份 `data/app.db` 与 `data/settings.json`；旧库可直接沿用，启动时检测并重建旧结构 `channel_deliveries` / `channel_inbounds`（旧待投递与入站去重记录丢失，iLink 可能重放一次）；旧 `sessions/messages/runs/...` 表留在库中但不再使用；旧微信渠道配置不在 settings.json，需重新扫码绑定；旧定时任务列结构不兼容时会在启动/触发报错，先备份再决定删除重建；回测历史保留。
+5. 彻底重建：删除 `data/app.db` 后重启，会丢失回测历史、定时任务、审计与未完成投递，并需重新绑定微信。
+6. 备份：`data/app.db`、`data/settings.json`、`claude/`、`workspaces/`、`data/trade-journal.jsonl`、`data/allocation*.json*`、`skills/`、`knowledge/`。
+7. 旧 home 的 `memory-organizer` 技能由启动 seed 清理（未修改时删除，用户改过的保留但停止跟踪）。
 
 #### 验收标准
-
-- 发送 `/memory 内容` 产生 user memory，带完整指令快照，不产生新 Run 或 Message。
-- 「记住…」开头的普通消息不再写 user memory，只作为正常对话。
-- 微信 1:1 的 `/memory 内容` 同样生效。
-- `/memory` 无内容返回用法；内容长度和用户记忆条数都不限制。
-- 后端测试与前端构建通过。
 
-#### 非目标
-
-- 删除已有的 `explicit` 旧记忆；
-- 向量/语义检索。
-
-
-### F90 用户记忆取消条数和字数限制
+- 新机器按 README 可完成安装、登录、配置 Provider、扫码绑定微信。
+- 旧版本升级按 README 步骤完成，数据损失范围与文档一致。
 
-- 状态：已完成
-- 日期：2026-11-10
-- 来源：用户要求用户记忆不限制字数和条数
+### F16 本版不包含与已知损失
 
-#### 功能点
-
-1. `retrieve_for_prompt` 注入全部 user 记忆，不设总字数、条数或单条裁剪；仍按 `created_at` / `id` 稳定排序；不再写 `last_used_at` 或 `run_memories`，避免条数增长导致每轮写放大。
-2. `create_memory` 的 200 条上限只作用于 agent scope；user memory 不限制条数。
-3. 删除 `/memory` 命令的 320 字上限；`ChatCommandRequest`、`MemoryCreate`、`MemoryUpdate` 不再限制用户记忆正文长度；记忆页手动新增同样不限长度。
-4. Agent 记忆限制保持不变：`memory_save` 2–320 字、每次 Run 最多 5 条、每个 Agent 最多 200 条；索引最多 40 条、不设总字数。
-5. 默认提示词去掉「受总预算约束」，改为用户长期记忆全部注入。
+- 状态：现行
+- 日期：2026-11-11
 
-#### 验收标准
+本版明确不包含：
 
-- 长于 320 字的用户记忆通过 `/memory` 和记忆页都能完整写入并完整注入。
-- 超过 200 条的 user memory 仍可继续创建。
-- agent memory 的 320 字 / 5 条 / 200 条限制不变。
-- 后端测试与前端构建通过。
-
-#### 非目标
+1. 工具层迁移：技能工具、`add_dirs`、MCP、浏览器/搜索/回测/定时/交易/资产/缠论/知识库工具接入 Agent。
+2. rubric 质检。
+3. QuickJS eval 代码解释器。
+4. 会话全文搜索。
+5. 多 Agent 协作/编排。
+6. 刷新后继续看当前流式输出（刷新丢当前输出）。
+7. 消息时间戳。
+8. Run 历史。
+9. 渠道运行期截图实时推送（等工具层）。
+10. `/memory` 指令与整理记忆。
 
-- 取消 agent memory 的条数和字数限制；
-- 向量/语义检索。
+已知能力损失（已接受）：刷新丢流式输出、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失；`langchain-core` 暂留。

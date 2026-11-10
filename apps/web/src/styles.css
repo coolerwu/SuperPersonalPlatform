@@ -4296,29 +4296,6 @@ body:has(.app-shell.pearl) .select-empty {
   color: rgba(255, 255, 255, 0.55);
 }
 
-.pearl .message-bubble.user .message-command-mark {
-  border-color: rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.1);
-  color: #c9c3ff;
-}
-
-.pearl .message-bubble.user .message-command-text small {
-  color: rgba(255, 255, 255, 0.62);
-}
-
-.pearl .message-bubble.user .message-command-raw {
-  color: rgba(255, 255, 255, 0.62);
-}
-
-.pearl .message-bubble.user .message-command-raw summary {
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.pearl .message-bubble.user .message-command-raw pre {
-  border-color: rgba(255, 255, 255, 0.14);
-  background: rgba(0, 0, 0, 0.25);
-}
-
 .pearl .message-bubble.streaming .muted {
   display: inline-block;
   margin-right: 4px;

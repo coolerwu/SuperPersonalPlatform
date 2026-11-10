@@ -29,8 +29,6 @@ from app.services.identifiers import is_canonical_uuid
 
 logger = logging.getLogger(__name__)
 
-SESSION_TITLE_PREFIX = "定时 · "
-
 
 class CronValidationError(ValueError):
     """Invalid user input for a cron job."""
@@ -76,10 +74,6 @@ class CronInactiveAgent(Exception):
     def __init__(self, status: str = "inactive") -> None:
         self.status = status
         super().__init__(inactive_agent_message(status))
-
-
-def session_title(name: str) -> str:
-    return f"{SESSION_TITLE_PREFIX}{name}".strip()
 
 
 def normalize_schedule(value: str) -> str:

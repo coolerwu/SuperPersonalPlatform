@@ -837,13 +837,19 @@ def delete_skill(directory: str, root: Path | None = None) -> str:
 
 
 def seed_default_skills(root: Path | None = None) -> None:
-    """Create missing built-in skills and update ones the user has not edited.
+    """Create missing built-in skills, update unedited ones, remove retired ones.
 
     `.seed_state.json` records the hash of the content last written by the
     platform. A file is only overwritten when its current hash still matches
     that record, so user edits are preserved. Files without a record are left
     alone until they match a built-in default (for example after a manual
     refresh), then they start tracking normally.
+
+    A tracked skill that no longer appears in ``DEFAULT_SKILLS`` was removed
+    from the platform (for example ``memory-organizer`` after the SDK
+    migration). It is deleted only when the content still matches the record;
+    an edited copy is kept and only its seed tracking is dropped, so it is
+    never judged again.
     """
     base = (root or settings.skills_dir).expanduser()
     base.mkdir(parents=True, exist_ok=True)
@@ -885,8 +891,57 @@ def seed_default_skills(root: Path | None = None) -> None:
             state[name] = default_hash
             changed = True
 
+    if _remove_retired_builtin_skills(base, state):
+        changed = True
+
     if changed:
         _write_seed_state(base, state)
+
+
+def _remove_retired_builtin_skills(base: Path, state: dict[str, str]) -> bool:
+    """Delete unedited built-ins that were removed from ``DEFAULT_SKILLS``.
+
+    Returns whether ``state`` changed. A directory whose SKILL.md cannot be
+    read keeps its state entry so a later boot can retry; an entry without a
+    file is simply dropped. Invalid or path-like names are dropped without
+    touching the filesystem.
+    """
+    changed = False
+    for name in [item for item in state if item not in DEFAULT_SKILLS]:
+        if not is_valid_skill_name(name):
+            state.pop(name, None)
+            changed = True
+            logger.warning("dropping invalid seed state entry %r", name)
+            continue
+        directory = base / name
+        target = directory / "SKILL.md"
+        try:
+            current = target.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            state.pop(name, None)
+            changed = True
+            continue
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.warning("cannot read retired skill %s: %s", target, exc)
+            continue
+        if _content_hash(current) != state[name]:
+            state.pop(name, None)
+            changed = True
+            logger.info(
+                "retired built-in skill %s has user edits; keeping it", name
+            )
+            continue
+        try:
+            shutil.rmtree(directory)
+        except OSError as exc:
+            logger.warning(
+                "cannot remove retired built-in skill %s: %s", directory, exc
+            )
+            continue
+        state.pop(name, None)
+        changed = True
+        logger.info("removed retired built-in skill %s", name)
+    return changed
 
 
 def _content_hash(content: str) -> str:
