@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -49,6 +50,8 @@ from app.services.skills import seed_default_skills
 from app.services.weixin_runtime import WeixinRuntime
 from app.services.worker import RunWorker
 from app.services.workspace import ensure_agent_workspaces, resolve_workspace_path
+
+logger = logging.getLogger(__name__)
 
 
 async def seed_default_agent() -> None:
@@ -203,29 +206,37 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             app.state.session_catalog = SessionCatalog(store)
             await recover_running_sessions(registry, store)
         yield
-        if start_worker:
-            registry = getattr(app.state, "registry", None)
-            if registry is not None:
-                await registry.close()
-            runner = getattr(app.state, "runner", None)
-            if runner is not None:
-                await runner.close_all()
-            session_cleanup = getattr(app.state, "session_cleanup", None)
-            if session_cleanup is not None:
-                await session_cleanup.stop()
-            await knowledge.stop()
-            backtest_worker = getattr(app.state, "backtest_worker", None)
-            if backtest_worker is not None:
-                await backtest_worker.stop()
-            set_active_worker(None)
-            cron = getattr(app.state, "cron", None)
-            if cron is not None:
-                await cron.stop()
-            await weixin.stop()
-            worker = getattr(app.state, "worker", None)
-            if worker is not None:
-                await worker.stop()
-        await market_service.close()
+        try:
+            if start_worker:
+                registry = getattr(app.state, "registry", None)
+                if registry is not None:
+                    try:
+                        await registry.close()
+                    except Exception:
+                        logger.exception("registry shutdown failed")
+                runner = getattr(app.state, "runner", None)
+                if runner is not None:
+                    try:
+                        await runner.close_all()
+                    except Exception:
+                        logger.exception("runner shutdown failed")
+                session_cleanup = getattr(app.state, "session_cleanup", None)
+                if session_cleanup is not None:
+                    await session_cleanup.stop()
+                await knowledge.stop()
+                backtest_worker = getattr(app.state, "backtest_worker", None)
+                if backtest_worker is not None:
+                    await backtest_worker.stop()
+                set_active_worker(None)
+                cron = getattr(app.state, "cron", None)
+                if cron is not None:
+                    await cron.stop()
+                await weixin.stop()
+                worker = getattr(app.state, "worker", None)
+                if worker is not None:
+                    await worker.stop()
+        finally:
+            await market_service.close()
 
     app = FastAPI(title="Agent Command Center", version=APP_VERSION, lifespan=lifespan)
     app.add_middleware(
