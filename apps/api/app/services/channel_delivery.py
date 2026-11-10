@@ -114,6 +114,20 @@ async def discard_unfilled_for_session(session_id: str) -> int:
         return int(result.rowcount or 0)
 
 
+async def delete_for_session(session_id: str) -> int:
+    """Delete every delivery row owned by ``session_id``.
+
+    Used when the session itself is gone (manual delete or retention cleanup);
+    its delivery history can no longer be referenced.
+    """
+    async with SessionLocal() as db:
+        result = await db.execute(
+            delete(ChannelDelivery).where(ChannelDelivery.session_id == session_id)
+        )
+        await db.commit()
+        return int(result.rowcount or 0)
+
+
 async def mark_attempting(delivery_id: int) -> bool:
     """Atomically claim a delivery for one send attempt.
 

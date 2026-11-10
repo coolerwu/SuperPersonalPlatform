@@ -217,7 +217,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 set_active_worker(backtest_worker)
                 await backtest_worker.start()
                 await knowledge.start()
-                session_cleanup = SessionCleanupRuntime()
+                session_cleanup = SessionCleanupRuntime(store=store)
                 app.state.session_cleanup = session_cleanup
                 await session_cleanup.start()
             yield

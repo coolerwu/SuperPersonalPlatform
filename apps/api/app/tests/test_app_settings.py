@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
+import time
 import uuid
-from datetime import datetime, timedelta
 
 from app.db import SessionLocal
-from app.models import AppConfig, Session, utcnow
-from app.services.session_service import cleanup_inactive_sessions
+from app.models import AppConfig
+from app.services import sdk_bridge
+from app.services.claude_runner import transcript_dir
+from app.services.session_service import SessionCleanupRuntime
 
 
 async def _reset_config() -> None:
@@ -14,20 +17,6 @@ async def _reset_config() -> None:
         if row is not None:
             await db.delete(row)
             await db.commit()
-
-
-async def _make_session(last_message_at: datetime) -> str:
-    async with SessionLocal() as db:
-        session = Session(
-            agent_id="default",
-            title=f"settings-{uuid.uuid4().hex[:8]}",
-            created_at=last_message_at,
-            updated_at=last_message_at,
-        )
-        db.add(session)
-        await db.commit()
-        await db.refresh(session)
-        return session.id
 
 
 async def test_settings_api_default_and_update(client) -> None:
@@ -54,18 +43,37 @@ async def test_settings_api_default_and_update(client) -> None:
     client.put("/api/settings", json={"session_retention_days": 30})
 
 
-async def test_cleanup_reads_configured_retention(client) -> None:
-    await _reset_config()
-    client.put("/api/settings", json={"session_retention_days": 1})
+async def test_cleanup_reads_configured_retention(client, monkeypatch) -> None:
+    store = client.app.state.settings_store
+    original = (await store.get()).runtime.session_retention_days
+    old_id = f"settings-{uuid.uuid4().hex}"
+    fresh_id = f"settings-{uuid.uuid4().hex}"
+    directory = transcript_dir("default")
+    directory.mkdir(parents=True, exist_ok=True)
+    old_path = directory / f"{old_id}.jsonl"
+    fresh_path = directory / f"{fresh_id}.jsonl"
+    old_path.write_text("{}", "utf-8")
+    fresh_path.write_text("{}", "utf-8")
+    stamp = time.time() - 400 * 86400
+    os.utime(old_path, (stamp, stamp))
+    deleted: list[str] = []
 
-    now = utcnow()
-    old_id = await _make_session(now - timedelta(days=2))
-    recent_id = await _make_session(now)
+    def fake_delete(session_id: str) -> None:
+        deleted.append(session_id)
+        (directory / f"{session_id}.jsonl").unlink(missing_ok=True)
 
-    removed = await cleanup_inactive_sessions(None, now=now)
+    monkeypatch.setattr(sdk_bridge, "delete_session", fake_delete)
+    await store.update_runtime(session_retention_days=1)
+    try:
+        runtime = SessionCleanupRuntime(store=store, interval_seconds=60)
+        removed = await runtime.run_once()
 
-    assert removed >= 1
-    async with SessionLocal() as db:
-        assert await db.get(Session, old_id) is None
-        assert await db.get(Session, recent_id) is not None
-    client.put("/api/settings", json={"session_retention_days": 30})
+        assert removed >= 1
+        assert old_id in deleted
+        assert fresh_id not in deleted
+        assert not old_path.exists()
+        assert fresh_path.exists()
+    finally:
+        await store.update_runtime(session_retention_days=original)
+        old_path.unlink(missing_ok=True)
+        fresh_path.unlink(missing_ok=True)

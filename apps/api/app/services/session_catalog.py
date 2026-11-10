@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from app.services import sdk_bridge
+from app.services import channel_delivery, sdk_bridge
 from app.services.claude_env import workspace_for
 from app.services.claude_runner import transcript_path
 from app.services.identifiers import is_canonical_uuid, valid_agent_id
@@ -161,6 +161,17 @@ class SessionCatalog:
 
     async def _cleanup(self, agent_id: str, session_id: str) -> None:
         """Remove per-session artifacts nothing else will reference again."""
+        try:
+            await channel_delivery.delete_for_session(session_id)
+        except Exception:
+            # The transcript is already gone; a failed row cleanup must not
+            # turn a successful delete into a 500.
+            logger.warning(
+                "failed to delete channel deliveries session=%s",
+                session_id,
+                exc_info=True,
+            )
+
         screenshots = workspace_for(agent_id, self._home) / "screenshots" / session_id
         await asyncio.to_thread(shutil.rmtree, screenshots, ignore_errors=True)
 
