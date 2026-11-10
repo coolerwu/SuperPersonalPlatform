@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.config import settings as app_settings
-from app.services import sdk_bridge, turn_lease
+from app.db import SessionLocal
+from app.services import channel_delivery, sdk_bridge, turn_lease
 from app.services.claude_env import build_claude_env, claude_paths, workspace_for
 from app.services.sdk_events import StreamMapper, TurnOutcome, outcome_from_result
 from app.services.settings_store import SettingsStore
@@ -33,12 +34,25 @@ _DISCONNECT_TIMEOUT_SECONDS = 10
 
 
 @dataclass
+class DeliveryRequest:
+    """Channel obligation to create when this turn starts.
+
+    ``session_id`` comes from the turn; the row is filled with the final
+    answer and handed to ``deliver_callback`` at teardown.
+    """
+
+    channel_id: str
+    external_id: str
+
+
+@dataclass
 class Turn:
     session_id: str
     agent_id: str
     prompt: str
     source: str = "manual"
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    delivery: DeliveryRequest | None = None
 
 
 def transcript_dir(agent_id: str, *, home: Path | None = None) -> Path:
@@ -56,11 +70,13 @@ class ClaudeTurnRunner:
         *,
         home: Path | None = None,
         client_factory: Callable[[Any], Any] | None = None,
+        deliver_callback: Callable[[int], Any] | None = None,
     ) -> None:
         self._store = store
         self._home = home
         self._clients: dict[str, Any] = {}
         self._factory = client_factory
+        self._deliver_callback = deliver_callback
         self._locks: dict[str, asyncio.Lock] = {}
         self._active: set[str] = set()
         self._cancel_requested: set[str] = set()
@@ -116,6 +132,7 @@ class ClaudeTurnRunner:
         text_parts: list[str] = []
         outcome = TurnOutcome(status="failed", error="run ended without result")
         lease_added = False
+        delivery_id: int | None = None
         result_received = False
         evict = False
         # Cancellation is shutdown, not failure: keep the lease so startup
@@ -132,7 +149,27 @@ class ClaudeTurnRunner:
                     outcome = TurnOutcome(status="failed", error="agent not found")
                     return outcome
                 lease_added = True
-                await turn_lease.add(turn.session_id)
+                # Lease and delivery obligation are written together so a
+                # crash can never leave a turn marked running without the
+                # reply it owes, or vice versa.
+                async with SessionLocal() as db:
+                    await turn_lease.add_in(db, turn.session_id)
+                    if turn.delivery is not None:
+                        delivery_id = await channel_delivery.create_pending(
+                            db,
+                            channel_id=turn.delivery.channel_id,
+                            external_id=turn.delivery.external_id,
+                            session_id=turn.session_id,
+                        )
+                    await db.commit()
+                # A resumed turn reuses the empty obligation created by the
+                # interrupted turn instead of creating a duplicate.
+                if delivery_id is None and turn.source == "resume":
+                    existing = await channel_delivery.find_pending_for_session(
+                        turn.session_id
+                    )
+                    if existing is not None:
+                        delivery_id = existing.id
                 # Abort before spawning/connecting a client if /stop arrived
                 # while settings were loading.
                 if turn.session_id in self._cancel_requested:
@@ -259,6 +296,22 @@ class ClaudeTurnRunner:
                             turn.session_id,
                             exc_info=True,
                         )
+            # Persist the answer before notifying the sender; failures here
+            # must never mask the terminal event or break lease cleanup.
+            if delivery_id is not None:
+                try:
+                    await channel_delivery.complete(delivery_id, outcome.output)
+                except Exception:
+                    logger.exception(
+                        "delivery completion failed delivery=%s", delivery_id
+                    )
+            if delivery_id is not None and self._deliver_callback is not None:
+                try:
+                    await self._deliver_callback(delivery_id)
+                except Exception:
+                    logger.exception(
+                        "delivery send failed delivery=%s", delivery_id
+                    )
         return outcome
 
     async def interrupt(self, session_id: str) -> bool:
