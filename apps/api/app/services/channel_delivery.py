@@ -28,6 +28,25 @@ async def get(delivery_id: int) -> ChannelDelivery | None:
         return await db.get(ChannelDelivery, delivery_id)
 
 
+async def find_pending_for_session(session_id: str) -> ChannelDelivery | None:
+    """Return the latest live delivery for a session as a read-only snapshot.
+
+    Rows with empty content are included on purpose: recovery reattaches an
+    obligation created at turn start before the process crashed to the resumed
+    turn. The returned instance is detached; callers must not mutate it.
+    """
+    async with SessionLocal() as db:
+        return await db.scalar(
+            select(ChannelDelivery)
+            .where(
+                ChannelDelivery.session_id == session_id,
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+            )
+            .order_by(ChannelDelivery.id.desc())
+            .limit(1)
+        )
+
+
 async def complete(delivery_id: int, content: str) -> bool:
     """Fill the final answer while keeping the row deliverable.
 
@@ -108,7 +127,7 @@ async def mark_pending(delivery_id: int, error: str, *, max_attempts: int) -> bo
                 ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
             )
             .values(
-                last_error=error[:2000],
+                last_error=str(error)[:2000],
                 status=next_status,
                 updated_at=utcnow(),
             )

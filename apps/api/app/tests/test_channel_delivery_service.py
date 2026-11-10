@@ -208,6 +208,59 @@ async def test_list_pending_skips_empty_content_and_terminal_rows():
 
 
 @pytest.mark.asyncio
+async def test_find_pending_for_session_returns_live_row():
+    await init_db()
+    pending_id = None
+    sent_id = None
+    try:
+        pending_id = await _create(session_id="s-find")
+        sent_id = await _create(session_id="s-find")
+        await channel_delivery.complete(sent_id, "sent content")
+        await channel_delivery.mark_attempting(sent_id)
+        await channel_delivery.mark_sent(sent_id)
+
+        row = await channel_delivery.find_pending_for_session("s-find")
+        assert row is not None and row.id == pending_id and row.content == ""
+        assert await channel_delivery.find_pending_for_session("s-missing") is None
+    finally:
+        await _cleanup(pending_id, sent_id)
+
+
+@pytest.mark.asyncio
+async def test_mark_pending_retries_until_limit_and_truncates_error():
+    await init_db()
+    delivery_id = None
+    try:
+        delivery_id = await _create()
+        await channel_delivery.complete(delivery_id, "hello")
+        error = RuntimeError("x" * 2100)
+
+        assert await channel_delivery.mark_attempting(delivery_id) is True
+        assert (
+            await channel_delivery.mark_pending(
+                delivery_id, error, max_attempts=2
+            )
+            is True
+        )
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None and row.status == "pending"
+        assert row.last_error == "x" * 2000
+
+        assert await channel_delivery.mark_attempting(delivery_id) is True
+        assert (
+            await channel_delivery.mark_pending(
+                delivery_id, error, max_attempts=2
+            )
+            is True
+        )
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None and row.status == "failed"
+        assert row.last_error == "x" * 2000
+    finally:
+        await _cleanup(delivery_id)
+
+
+@pytest.mark.asyncio
 async def test_init_db_rebuilds_stale_channel_deliveries_table():
     async with engine.begin() as conn:
         await conn.exec_driver_sql("DROP TABLE IF EXISTS channel_deliveries")
