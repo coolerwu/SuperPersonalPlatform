@@ -141,6 +141,7 @@ export default function App() {
     Record<string, PendingUser[]>
   >({});
   const [loadedSessions, setLoadedSessions] = useState<Record<string, true>>({});
+  const [loadErrorBySession, setLoadErrorBySession] = useState<Record<string, string>>({});
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
@@ -155,6 +156,7 @@ export default function App() {
 
   const streamsRef = useRef<Map<string, EventSource>>(new Map());
   const retryTimersRef = useRef<Map<string, number>>(new Map());
+  const deferredRefreshRef = useRef<Map<string, number>>(new Map());
   const sessionsRef = useRef<SessionSummary[]>([]);
   const sessionAgentRef = useRef<Record<string, string>>({});
   const transcriptRequestRef = useRef<Record<string, number>>({});
@@ -371,6 +373,19 @@ export default function App() {
     setLoadedSessions((current) => (current[id] ? current : { ...current, [id]: true }));
   }
 
+  function setLoadErrorFor(id: string, message: string) {
+    setLoadErrorBySession((current) => {
+      if (!message) {
+        if (!(id in current)) return current;
+        const next = { ...current };
+        delete next[id];
+        return next;
+      }
+      if (current[id] === message) return current;
+      return { ...current, [id]: message };
+    });
+  }
+
   function unmarkSessionLoaded(id: string) {
     loadedSessionsRef.current.delete(id);
     setLoadedSessions((current) => {
@@ -546,16 +561,24 @@ export default function App() {
 
   function closeStream(id: string) {
     clearRetryTimer(id);
+    const deferred = deferredRefreshRef.current.get(id);
+    if (deferred !== undefined) {
+      window.clearTimeout(deferred);
+      deferredRefreshRef.current.delete(id);
+    }
     const source = streamsRef.current.get(id);
     if (!source) return;
     streamsRef.current.delete(id);
     source.close();
+    // The live stream was this session's active turn.
+    delete activeTurnRef.current[id];
   }
 
   function closeAllStreams() {
     const ids = new Set([
       ...streamsRef.current.keys(),
       ...retryTimersRef.current.keys(),
+      ...deferredRefreshRef.current.keys(),
     ]);
     for (const id of Array.from(ids)) closeStream(id);
   }
@@ -698,8 +721,14 @@ export default function App() {
     connect();
   }
 
-  async function refreshTranscript(forSession: string) {
+  async function refreshTranscript(forSession: string, attempt = 0): Promise<void> {
     if (!forSession) return;
+    // A manual reload supersedes any pending automatic retry.
+    const pendingRefresh = deferredRefreshRef.current.get(forSession);
+    if (pendingRefresh !== undefined) {
+      window.clearTimeout(pendingRefresh);
+      deferredRefreshRef.current.delete(forSession);
+    }
     const requestId = (transcriptRequestRef.current[forSession] ?? 0) + 1;
     transcriptRequestRef.current[forSession] = requestId;
     setLoadingFor(forSession, true);
@@ -717,9 +746,25 @@ export default function App() {
       transcriptUserCountsRef.current[forSession] = counts;
       settlePendingUsers(forSession, list);
       setMessagesFor(forSession, list);
-      markSessionLoaded(forSession);
+      setLoadErrorFor(forSession, "");
+      // Only a session in this agent's list (or a freshly created one, marked
+      // at send time) counts as loaded; an unknown deep link is not.
+      if (sessionsRef.current.some((item) => item.id === forSession)) {
+        markSessionLoaded(forSession);
+      }
     } catch (exc) {
-      failure = describeApiError(exc);
+      if (transcriptRequestRef.current[forSession] === requestId && attempt === 0) {
+        // One quick automatic retry; a persistent failure exposes a manual
+        // reload action instead of leaving the composer locked forever.
+        const timer = window.setTimeout(() => {
+          deferredRefreshRef.current.delete(forSession);
+          void refreshTranscript(forSession, 1);
+        }, 1000);
+        deferredRefreshRef.current.set(forSession, timer);
+      } else {
+        failure = describeApiError(exc);
+        setLoadErrorFor(forSession, failure);
+      }
     } finally {
       if (transcriptRequestRef.current[forSession] !== requestId) return;
       setLoadingFor(forSession, false);
@@ -781,7 +826,11 @@ export default function App() {
       openStreamWithRetry(forSession);
       return;
     }
-    updateLive(forSession, (current) => ({ ...current, tracking: false }));
+    if (!streamsRef.current.has(forSession)) {
+      // A poll/attach may have opened the next stream while this function was
+      // awaiting; never mark that live lane as not tracking.
+      updateLive(forSession, (current) => ({ ...current, tracking: false }));
+    }
     if (forSession === sessionIdRef.current) attachIfBusy(forSession);
   }
 
@@ -911,10 +960,23 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
+  function reloadSession(id: string) {
+    if (!id) return;
+    void refreshTranscript(id).then(() => {
+      if (sessionIdRef.current === id) attachIfBusy(id);
+    });
+  }
+
   function openSession(id: string) {
     setFocus(null);
     setCommandReply(null);
-    navigate("chat", id);
+    if (id && id === sessionIdRef.current) {
+      // Clicking the current session is the retry affordance for a transcript
+      // that failed to load (setSessionId would be a no-op).
+      reloadSession(id);
+    } else {
+      navigate("chat", id);
+    }
     void refreshSessions();
   }
 
@@ -1197,6 +1259,17 @@ export default function App() {
     if (overrideText === undefined && isSlashCommand(text)) {
       return runCommand(text, sendKey);
     }
+    if (overrideText === undefined && /^\/memory\s/i.test(text)) {
+      // User memory is no longer written by a chat command; do not send this
+      // text to the model as an ordinary prompt.
+      setCommandReply({
+        key: sendKey,
+        command: "/memory",
+        text: "用户记忆已迁移到 CLAUDE.md / 记忆页，请直接在记忆页维护。",
+      });
+      setDraftFor(sendKey, "");
+      return true;
+    }
     const wasNew = !sessionIdRef.current;
     if (!wasNew && !loadedSessionsRef.current.has(sessionIdRef.current)) {
       // A send before the first transcript load would baseline at 0 and let a
@@ -1362,6 +1435,7 @@ export default function App() {
     try {
       const result = await api.interruptSession(id);
       closeStream(id);
+      delete activeTurnRef.current[id];
       if (result.interrupted) {
         dropPendingUsers(id);
         clearQueuedTurns(id);
@@ -1374,9 +1448,16 @@ export default function App() {
       void refreshSessions();
       // Let the server publish the terminal event and flush the transcript
       // before the lane is rebuilt from history.
-      window.setTimeout(() => {
-        if (sessionIdRef.current === id) void refreshTranscript(id);
+      const timer = window.setTimeout(() => {
+        deferredRefreshRef.current.delete(id);
+        if (
+          sessionIdRef.current === id &&
+          sessionsRef.current.some((item) => item.id === id)
+        ) {
+          void refreshTranscript(id);
+        }
       }, 600);
+      deferredRefreshRef.current.set(id, timer);
     } catch (exc) {
       setSessionError(describeApiError(exc), id);
     }
@@ -1408,6 +1489,7 @@ export default function App() {
       if (owner !== id) continue;
       closeStream(session);
       forgetPendingUsers(session);
+      setLoadErrorFor(session, "");
       delete sessionAgentRef.current[session];
     }
     setAttachmentsByKey((current) => {
@@ -1450,6 +1532,7 @@ export default function App() {
       delete draftsRef.current[key];
       delete sessionAgentRef.current[id];
       forgetPendingUsers(id);
+      setLoadErrorFor(id, "");
       setAttachmentsByKey((current) => {
         if (!current[key]) return current;
         const next = { ...current };
@@ -1555,6 +1638,7 @@ export default function App() {
     activeTurnRef.current = {};
     loadedSessionsRef.current.clear();
     setLoadedSessions({});
+    setLoadErrorBySession({});
     setPendingUserBySession({});
     followUpRef.current.clear();
     draftsRef.current = {};
@@ -1770,6 +1854,8 @@ export default function App() {
               key={sessionId}
               messages={messages}
               loading={messagesLoading}
+              loadError={loadErrorBySession[sessionId] ?? ""}
+              onReload={() => reloadSession(sessionId)}
               streamText={live.streamText}
               streamReasoning={live.streamReasoning}
               activity={live.activity}

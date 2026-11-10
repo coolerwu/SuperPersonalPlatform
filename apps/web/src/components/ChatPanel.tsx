@@ -28,6 +28,8 @@ type ChatPanelProps = {
   messages: TranscriptMessage[];
   queuedMessages: TranscriptMessage[];
   loading: boolean;
+  loadError: string;
+  onReload: () => void;
   streamText: string;
   streamReasoning: string;
   activity: string[];
@@ -625,9 +627,18 @@ export function ChatPanel(props: ChatPanelProps) {
     <section className="chat-panel">
       <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
         <div className="message-flow" ref={contentRef}>
+        {props.loadError && (
+          <div className="error-banner in-chat" role="alert">
+            <span>{props.loadError}</span>
+            <button type="button" className="ghost-button" onClick={props.onReload}>
+              重新加载
+            </button>
+          </div>
+        )}
+
         {props.loading && props.messages.length === 0 && <MessageSkeleton />}
 
-        {!props.loading && props.messages.length === 0 && !props.sending && !props.commandReply && (
+        {!props.loading && props.messages.length === 0 && !props.sending && !props.commandReply && !props.loadError && (
           <div className="chat-empty">
             <div className="chat-empty-mark">ACC</div>
             <h2>和 {props.agentName || "Agent"} 开始对话</h2>
@@ -1001,9 +1012,11 @@ export function ChatPanel(props: ChatPanelProps) {
             aria-controls={commandMenuOpen ? "composer-command-list" : undefined}
             placeholder={
               !props.canSend
-                ? props.loading
-                  ? "会话加载中，请稍候"
-                  : "先选择一个 Agent 和会话"
+                ? props.loadError
+                  ? "会话加载失败，点击重试"
+                  : props.loading
+                    ? "会话加载中，请稍候"
+                    : "先选择一个 Agent 和会话"
                 : props.tracking
                   ? "继续追问，发送后会排队…"
                   : "给 Agent 发消息…"
