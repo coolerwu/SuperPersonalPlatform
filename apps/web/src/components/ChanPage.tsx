@@ -26,13 +26,6 @@ const POPULAR_SYMBOLS = [
 ];
 
 const CHAN_GRANULARITIES = ["15min", "1h", "4h", "1day", "1week"] as const;
-const GRANULARITY_MS: Record<(typeof CHAN_GRANULARITIES)[number], number> = {
-  "15min": 15 * 60_000,
-  "1h": 60 * 60_000,
-  "4h": 4 * 60 * 60_000,
-  "1day": 24 * 60 * 60_000,
-  "1week": 7 * 24 * 60 * 60_000,
-};
 const GRANULARITY_STEP_SECONDS: Record<(typeof CHAN_GRANULARITIES)[number], number> = {
   "15min": 900,
   "1h": 3600,
@@ -45,29 +38,18 @@ const DEFAULT_WINDOW_BARS = 500;
 type ChanGranularity = (typeof CHAN_GRANULARITIES)[number];
 type ChanMode = "chart" | "backtest";
 
-function toUtcInput(ms: number): string {
-  const date = new Date(ms);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
-}
-
 function parseUtcInput(value: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return null;
   const ms = Date.parse(`${value}Z`);
   return Number.isFinite(ms) ? ms : null;
 }
 
-function snapUtc(ms: number, granularity: ChanGranularity): number {
-  const step = GRANULARITY_MS[granularity];
-  return Math.floor(ms / step) * step;
-}
-
-function defaultWindow(granularity: ChanGranularity): { start: string; end: string } {
-  const end = snapUtc(Date.now(), granularity);
-  return {
-    start: toUtcInput(end - DEFAULT_WINDOW_BARS * GRANULARITY_MS[granularity]),
-    end: toUtcInput(end),
-  };
+function shortTime(value: string): string {
+  const ms = parseUtcInput(value);
+  if (ms === null) return "";
+  const date = new Date(ms);
+  const pad = (item: number) => String(item).padStart(2, "0");
+  return `${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 }
 
 type ChanConfig = {
@@ -97,19 +79,13 @@ function readChanConfig(search: string): ChanConfig {
   const nextGranularity = (CHAN_GRANULARITIES as readonly string[]).includes(granularity)
     ? (granularity as ChanGranularity)
     : "1h";
-  const defaults = defaultWindow(nextGranularity);
-  const endMs = parseUtcInput((params.get("end") ?? "").trim()) ?? parseUtcInput(defaults.end) ?? Date.now();
-  const legacyBars = Number(params.get("bars"));
-  const windowBars = Number.isFinite(legacyBars) && legacyBars >= 20 && legacyBars <= 1000
-    ? legacyBars
-    : DEFAULT_WINDOW_BARS;
-  const startMs = parseUtcInput((params.get("start") ?? "").trim())
-    ?? endMs - windowBars * GRANULARITY_MS[nextGranularity];
+  const startParam = (params.get("start") ?? "").trim();
+  const endParam = (params.get("end") ?? "").trim();
   return {
     symbol: symbol || "BTCUSDT",
     granularity: nextGranularity,
-    start: toUtcInput(startMs),
-    end: toUtcInput(endMs),
+    start: parseUtcInput(startParam) === null ? "" : startParam,
+    end: parseUtcInput(endParam) === null ? "" : endParam,
     mode: params.get("mode") === "backtest" ? "backtest" : "chart",
     showMerged: flag("merged"),
     showFractals: flag("fractals"),
@@ -125,8 +101,8 @@ function chanSearch(config: ChanConfig): string {
   const params = new URLSearchParams();
   params.set("symbol", config.symbol);
   params.set("granularity", config.granularity);
-  params.set("start", config.start);
-  params.set("end", config.end);
+  if (config.start) params.set("start", config.start);
+  if (config.end) params.set("end", config.end);
   params.set("mode", config.mode);
   params.set("merged", config.showMerged ? "1" : "0");
   params.set("fractals", config.showFractals ? "1" : "0");
@@ -155,30 +131,73 @@ export function ChanPage() {
   const [showMacd, setShowMacd] = useState(initial.showMacd);
   const [showDivergence, setShowDivergence] = useState(initial.showDivergence);
   const [mode, setMode] = useState<ChanMode>(initial.mode);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const [draftStart, setDraftStart] = useState("");
+  const [draftEnd, setDraftEnd] = useState("");
+  const [rangeError, setRangeError] = useState("");
 
-  const analyze = useCallback(async () => {
-    const startMs = parseUtcInput(start);
-    const endMs = parseUtcInput(end);
-    if (startMs === null || endMs === null || startMs >= endMs) {
-      setError("请选择有效的时间窗口：开始时间早于结束时间（UTC，精确到所选周期）");
+  const analyze = useCallback(
+    async (override?: { start?: string; end?: string }) => {
+      const nextStart = (override?.start ?? start).trim();
+      const nextEnd = (override?.end ?? end).trim();
+      const startMs = nextStart ? parseUtcInput(nextStart) : null;
+      const endMs = nextEnd ? parseUtcInput(nextEnd) : null;
+      if ((nextStart && startMs === null) || (nextEnd && endMs === null)) {
+        setError("时间格式无效，请重新选择时间窗口");
+        return;
+      }
+      if (startMs !== null && endMs !== null && startMs >= endMs) {
+        setError("开始时间必须早于结束时间");
+        return;
+      }
+      setLoading(true);
+      setError("");
+      try {
+        const result = await api.analyzeChan({
+          symbol: symbol.trim().toUpperCase(),
+          granularity,
+          ...(nextStart ? { start_date: nextStart } : {}),
+          ...(nextEnd ? { end_date: nextEnd } : {}),
+        });
+        setAnalysis(result);
+      } catch (exc) {
+        setError(errorText(exc));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [symbol, granularity, start, end],
+  );
+
+  function openRange() {
+    setDraftStart(start);
+    setDraftEnd(end);
+    setRangeError("");
+    setRangeOpen(true);
+  }
+
+  function applyRange() {
+    const nextStart = draftStart.trim();
+    const nextEnd = draftEnd.trim();
+    const startMs = nextStart ? parseUtcInput(nextStart) : null;
+    const endMs = nextEnd ? parseUtcInput(nextEnd) : null;
+    if ((nextStart && startMs === null) || (nextEnd && endMs === null)) {
+      setRangeError("时间格式无效，请重新选择");
       return;
     }
-    setLoading(true);
-    setError("");
-    try {
-      const result = await api.analyzeChan({
-        symbol: symbol.trim().toUpperCase(),
-        granularity,
-        start_date: start,
-        end_date: end,
-      });
-      setAnalysis(result);
-    } catch (exc) {
-      setError(errorText(exc));
-    } finally {
-      setLoading(false);
+    if (startMs !== null && endMs !== null && startMs >= endMs) {
+      setRangeError("开始时间必须早于结束时间");
+      return;
     }
-  }, [symbol, granularity, start, end]);
+    setStart(nextStart);
+    setEnd(nextEnd);
+    setRangeOpen(false);
+    void analyze({ start: nextStart, end: nextEnd });
+  }
+
+  const rangeLabel = `${start ? shortTime(start) : `最近 ${DEFAULT_WINDOW_BARS} 根`} → ${
+    end ? shortTime(end) : "最新"
+  }`;
 
   useEffect(() => {
     void analyze();
@@ -241,13 +260,7 @@ export function ChanPage() {
           <span>周期</span>
           <select
             value={granularity}
-            onChange={(event) => {
-              const next = event.target.value as ChanGranularity;
-              setGranularity(next);
-              const endMs = snapUtc(parseUtcInput(end) ?? Date.now(), next);
-              setEnd(toUtcInput(endMs));
-              setStart(toUtcInput(endMs - DEFAULT_WINDOW_BARS * GRANULARITY_MS[next]));
-            }}
+            onChange={(event) => setGranularity(event.target.value as ChanGranularity)}
           >
             <option value="15min">15min</option>
             <option value="1h">1h</option>
@@ -256,41 +269,10 @@ export function ChanPage() {
             <option value="1week">1w</option>
           </select>
         </label>
-        <label className="chan-control">
-          <span>开始 (UTC)</span>
-          <input
-            type="datetime-local"
-            step={GRANULARITY_STEP_SECONDS[granularity]}
-            value={start}
-            max={end}
-            onChange={(event) => setStart(event.target.value)}
-          />
-        </label>
-        <label className="chan-control">
-          <span>结束 (UTC)</span>
-          <input
-            type="datetime-local"
-            step={GRANULARITY_STEP_SECONDS[granularity]}
-            value={end}
-            min={start}
-            onChange={(event) => setEnd(event.target.value)}
-          />
-          <button
-            type="button"
-            className="chan-latest"
-            title="设为当前时间，分析到最近一根已收盘 K 线"
-            onClick={() => {
-              const endMs = snapUtc(Date.now(), granularity);
-              setEnd(toUtcInput(endMs));
-              const startMs = parseUtcInput(start);
-              if (startMs !== null && startMs >= endMs) {
-                setStart(toUtcInput(endMs - DEFAULT_WINDOW_BARS * GRANULARITY_MS[granularity]));
-              }
-            }}
-          >
-            最新
-          </button>
-        </label>
+        <button type="button" className="chan-range-trigger" onClick={openRange}>
+          <span>时间窗口</span>
+          <strong>{rangeLabel}</strong>
+        </button>
         <div className="chan-mode-tabs">
           <button className={mode === "chart" ? "active" : ""} onClick={() => setMode("chart")}>结构图</button>
           <button className={mode === "backtest" ? "active" : ""} onClick={() => setMode("backtest")}>信号回测</button>
@@ -322,6 +304,58 @@ export function ChanPage() {
           </div>
         )}
       </header>
+
+      {rangeOpen && (
+        <div className="modal-backdrop" onClick={() => setRangeOpen(false)}>
+          <div
+            className="modal confirm-dialog chan-range-dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-heading">
+              <h2>选择时间窗口</h2>
+            </div>
+            <p className="confirm-copy">
+              UTC 时间，步长跟随周期（{granularity}）。结束时间留空表示最新已收盘 K 线；
+              开始时间留空表示从结束往前 {DEFAULT_WINDOW_BARS} 根。
+            </p>
+            <div className="backtest-form-grid">
+              <label className="backtest-field">
+                <span>开始 (UTC)</span>
+                <input
+                  type="datetime-local"
+                  step={GRANULARITY_STEP_SECONDS[granularity]}
+                  value={draftStart}
+                  onChange={(event) => setDraftStart(event.target.value)}
+                />
+              </label>
+              <label className="backtest-field">
+                <span>结束 (UTC)</span>
+                <input
+                  type="datetime-local"
+                  step={GRANULARITY_STEP_SECONDS[granularity]}
+                  value={draftEnd}
+                  onChange={(event) => setDraftEnd(event.target.value)}
+                />
+              </label>
+            </div>
+            {rangeError && <div className="error-banner">{rangeError}</div>}
+            <div className="modal-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftStart("");
+                  setDraftEnd("");
+                }}
+              >
+                清空
+              </button>
+              <button type="button" className="primary" onClick={applyRange}>
+                应用并分析
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="settings-scroll">
         <div className="settings-lane">

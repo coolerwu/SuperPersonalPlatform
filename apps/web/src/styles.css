@@ -6324,19 +6324,37 @@ body:has(.app-shell.pearl) .select-empty {
   width: 132px;
 }
 
-.chan-control .chan-latest {
+.chan-range-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   height: 34px;
-  padding: 0 10px;
-  border: 1px solid rgba(91, 75, 240, 0.35);
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
   border-radius: 10px;
-  background: rgba(91, 75, 240, 0.08);
-  color: #5b4bf0;
+  background: var(--panel);
+  color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.chan-control .chan-latest:hover {
-  background: rgba(91, 75, 240, 0.16);
+.chan-range-trigger strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.chan-range-trigger:hover {
+  border-color: rgba(91, 75, 240, 0.45);
+  color: #5b4bf0;
+}
+
+.chan-range-dialog {
+  width: min(520px, 100%);
+}
+
+.chan-range-dialog .confirm-copy {
+  margin-top: 10px;
 }
 
 .chan-toolbar-toggles {

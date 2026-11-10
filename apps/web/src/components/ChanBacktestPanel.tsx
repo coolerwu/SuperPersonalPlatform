@@ -160,7 +160,7 @@ export function ChanBacktestPanel({
             <h2>信号回测 / 交易计划</h2>
             <p>
               因果前缀回放：信号收盘确认，下一根开盘进场；一次一笔，固定止损、R 倍目标和时间止损。
-              时间窗口 {startDate} → {endDate}（UTC，含结束日，最多 1000 根）。
+              时间窗口 {startDate || "最近 500 根"} → {endDate || "最新"}（UTC，结束时间包含，最多 1000 根）。
             </p>
           </div>
           <div className="settings-card-actions">
