@@ -35,25 +35,20 @@ def _enable_lock() -> asyncio.Lock:
     return lock
 
 
-# These tools are always exposed by deepagents; a skill tool with the same name
-# would be treated as already visible and never gated.
+# Tool names the runtime already exposes to the model. A skill tool with the
+# same name would be ambiguous, so the registry refuses to register it.
 RESERVED_TOOL_NAMES = frozenset(
     {
-        "ls",
-        "read_file",
-        "write_file",
-        "edit_file",
-        "delete",
-        "glob",
-        "grep",
-        "execute",
-        "task",
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "WebSearch",
+        "Task",
         "skill_save",
-        "session_search",
-        "session_read",
-        "memory_save",
-        "memory_search",
-        "memory_read",
     }
 )
 
@@ -98,8 +93,6 @@ class SkillToolContext:
     browser: BrowserSession | None = None
     agent_id: str = ""
     session_id: str = ""
-    run_id: str = ""
-    allow_memory_save: bool = False
     skills_dir: Path | None = None
     created_skills: list[str] = field(default_factory=list)
 

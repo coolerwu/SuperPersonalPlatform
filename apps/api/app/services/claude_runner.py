@@ -150,6 +150,17 @@ class ClaudeTurnRunner:
                 "setting_sources": ["user", "project"],
                 "permission_mode": app_settings.claude_permission_mode,
             }
+            # Keep Claude Code's default system prompt and append the Agent's
+            # own instructions. The preset without ``append`` adds no CLI flag,
+            # so an empty instruction set leaves the default prompt untouched.
+            instructions = (agent.instructions or "").strip()
+            system_prompt: dict[str, Any] = {
+                "type": "preset",
+                "preset": "claude_code",
+            }
+            if instructions:
+                system_prompt["append"] = instructions
+            kwargs["system_prompt"] = system_prompt
             if exists:
                 kwargs["resume"] = turn.session_id
             else:

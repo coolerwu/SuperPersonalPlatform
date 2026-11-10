@@ -104,7 +104,6 @@ class WeixinRuntime:
         *,
         store: Any,
         registry: Any = None,
-        worker: Any = None,
         client_factory: Callable[..., WeixinClient] | None = None,
         batch_seconds: float | None = None,
         batch_max_seconds: float | None = None,
@@ -113,8 +112,6 @@ class WeixinRuntime:
         # Assigned by ``main`` right after the registry exists; the runtime must
         # not be started before that.
         self.registry = registry
-        # Kept only for the legacy stack during the migration.
-        self.worker = worker
         self._client_factory = client_factory or WeixinClient
         self.batch_seconds = (
             settings.channel_inbound_batch_seconds

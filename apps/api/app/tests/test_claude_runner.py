@@ -5,6 +5,7 @@ import pytest
 
 from app.config import settings as app_settings
 from app.db import init_db
+from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.services import claude_runner, turn_lease
 from app.services.claude_runner import (
     ClaudeTurnRunner,
@@ -563,3 +564,57 @@ async def test_interrupt_during_store_wait_cancels_before_query(tmp_path):
     assert runner._active == set()
     assert runner._cancel_requested == set()
     assert not await turn_lease.is_running(turn.session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "instructions",
+    [DEFAULT_AGENT_INSTRUCTIONS, "自定义指令：只回答中文。"],
+)
+async def test_agent_instructions_append_to_preset_system_prompt(
+    tmp_path, instructions
+):
+    await init_db()
+    captured = []
+    client = FakeClient([ResultMessage()])
+
+    def factory(options):
+        captured.append(options)
+        return client
+
+    agent = make_agent()
+    agent.instructions = instructions
+    runner = ClaudeTurnRunner(
+        store=FakeStore(agent), home=tmp_path, client_factory=factory
+    )
+    await runner.run(make_turn(), TurnStream())
+
+    assert captured[0].system_prompt == {
+        "type": "preset",
+        "preset": "claude_code",
+        "append": instructions,
+    }
+
+
+@pytest.mark.asyncio
+async def test_empty_instructions_keep_preset_without_append(tmp_path):
+    await init_db()
+    captured = []
+    client = FakeClient([ResultMessage()])
+    agent = make_agent()
+    assert agent.instructions == ""
+
+    def factory(options):
+        captured.append(options)
+        return client
+
+    runner = ClaudeTurnRunner(
+        store=FakeStore(agent), home=tmp_path, client_factory=factory
+    )
+    await runner.run(make_turn(), TurnStream())
+
+    assert captured[0].system_prompt == {
+        "type": "preset",
+        "preset": "claude_code",
+    }
+    assert "append" not in captured[0].system_prompt
