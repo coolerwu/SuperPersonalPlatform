@@ -127,6 +127,14 @@ class ClaudeTurnRunner:
                     return outcome
                 lease_added = True
                 await turn_lease.add(turn.session_id)
+                # Abort before spawning/connecting a client if /stop arrived
+                # while settings were loading.
+                if turn.session_id in self._cancel_requested:
+                    self._cancel_requested.discard(turn.session_id)
+                    outcome = TurnOutcome(
+                        status="cancelled", output="".join(text_parts)
+                    )
+                    return outcome
                 client = await self._client(turn, agent)
                 if turn.source == "resume":
                     prompt = (

@@ -99,10 +99,10 @@ class SessionRegistry:
             try:
                 async with self._semaphore:
                     self._started.add(session_id)
-                    if turn.id in self._cancelled:
-                        self._cancelled.discard(turn.id)
-                        continue
-                    await self._runner.run(turn, stream)
+                    skip = turn.id in self._cancelled
+                    self._cancelled.discard(turn.id)
+                    if not skip:
+                        await self._runner.run(turn, stream)
             except asyncio.CancelledError:
                 raise
             except Exception:

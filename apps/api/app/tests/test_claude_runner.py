@@ -511,6 +511,7 @@ async def test_interrupt_during_store_wait_cancels_before_query(tmp_path):
 
     assert outcome.status == "cancelled"
     assert client.queries == []
+    assert client.connected is False
     assert runner._active == set()
     assert runner._cancel_requested == set()
     assert not await turn_lease.is_running(turn.session_id)

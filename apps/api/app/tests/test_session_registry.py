@@ -247,7 +247,13 @@ async def test_interrupt_cancels_turn_waiting_for_concurrency_permit():
 
     runner.release("a")
     await wait_until(lambda: runner.finished == ["a"])
-    await wait_until(lambda: "s2" not in registry._pending)
+    await wait_until(
+        lambda: "s2" not in registry._pending
+        and "s2" not in registry._workers
+        and "s2" not in registry._queues
+    )
+    assert "s2" not in registry._workers
+    assert "s2" not in registry._queues
     assert "b" not in runner.started
     await registry.close()
 
