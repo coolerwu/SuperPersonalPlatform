@@ -291,27 +291,20 @@ class ChannelRunLink(Base):
 
 
 class ChannelDelivery(Base):
-    """Durable delivery obligation for a channel Run's final answer.
-
-    The row is written in the same transaction as the Run's terminal status;
-    the worker sends immediately afterwards. Pending/attempting rows are swept
-    once on startup (and when a channel becomes active) -- there is no polling
-    send loop.
-    """
-
     __tablename__ = "channel_deliveries"
 
-    run_id: Mapped[str] = mapped_column(String(32), ForeignKey("runs.id"), primary_key=True)
-    channel_id: Mapped[str] = mapped_column(String(32), ForeignKey("channels.id"), index=True)
-    conversation_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("channel_conversations.id"), index=True
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel_id: Mapped[str] = mapped_column(String(32), index=True)
+    external_id: Mapped[str] = mapped_column(String(200), index=True)
+    session_id: Mapped[str] = mapped_column(String(36), index=True)
     content: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=utcnow, onupdate=utcnow
+    )
     delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
