@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { api, errorText } from "../api";
+import { parseUtcInput } from "../timeRange";
 import type { ChanAnalysis } from "../types";
 import { ChanBacktestPanel } from "./ChanBacktestPanel";
 import { ChanChart } from "./ChanChart";
+import { TimeRangePicker } from "./TimeRangePicker";
 
 function formatUtc(ms: number): string {
   if (!ms) return "—";
@@ -37,32 +39,6 @@ const DEFAULT_WINDOW_BARS = 500;
 
 type ChanGranularity = (typeof CHAN_GRANULARITIES)[number];
 type ChanMode = "chart" | "backtest";
-
-function parseUtcInput(value: string): number | null {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return null;
-  const ms = Date.parse(`${value}Z`);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-function toUtcInput(ms: number): string {
-  const date = new Date(ms);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
-}
-
-function defaultWindowStart(endValue: string, granularity: ChanGranularity): number {
-  const endMs = endValue ? parseUtcInput(endValue) ?? Date.now() : Date.now();
-  const step = GRANULARITY_STEP_SECONDS[granularity] * 1000;
-  return Math.floor(endMs / step) * step - DEFAULT_WINDOW_BARS * step;
-}
-
-function shortTime(value: string): string {
-  const ms = parseUtcInput(value);
-  if (ms === null) return "";
-  const date = new Date(ms);
-  const pad = (item: number) => String(item).padStart(2, "0");
-  return `${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
-}
 
 type ChanConfig = {
   symbol: string;
@@ -153,29 +129,6 @@ export function ChanPage() {
   const [showMacd, setShowMacd] = useState(initial.showMacd);
   const [showDivergence, setShowDivergence] = useState(initial.showDivergence);
   const [mode, setMode] = useState<ChanMode>(initial.mode);
-  const [rangeOpen, setRangeOpen] = useState(false);
-  const [draftStart, setDraftStart] = useState("");
-  const [draftEnd, setDraftEnd] = useState("");
-  const [rangeError, setRangeError] = useState("");
-  const rangeWrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!rangeOpen) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (rangeWrapRef.current && !rangeWrapRef.current.contains(event.target as Node)) {
-        setRangeOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setRangeOpen(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [rangeOpen]);
 
   const analyze = useCallback(
     async (override?: { start?: string; end?: string }) => {
@@ -209,44 +162,6 @@ export function ChanPage() {
     },
     [symbol, granularity, start, end],
   );
-
-  function openRange() {
-    setDraftStart(start || toUtcInput(defaultWindowStart(end, granularity)));
-    setDraftEnd(end);
-    setRangeError("");
-    setRangeOpen(true);
-  }
-
-  function applyRange() {
-    const nextStart = draftStart.trim();
-    const nextEnd = draftEnd.trim();
-    const startMs = nextStart ? parseUtcInput(nextStart) : null;
-    const endMs = nextEnd ? parseUtcInput(nextEnd) : null;
-    if ((nextStart && startMs === null) || (nextEnd && endMs === null)) {
-      setRangeError("时间格式无效，请重新选择");
-      return;
-    }
-    if (startMs !== null && endMs !== null && startMs >= endMs) {
-      setRangeError("开始时间必须早于结束时间");
-      return;
-    }
-    // Leaving the prefilled default start untouched keeps the window sliding
-    // with the latest bar instead of freezing that timestamp in the URL.
-    const step = GRANULARITY_STEP_SECONDS[granularity] * 1000;
-    const fallbackStart = defaultWindowStart(nextEnd, granularity);
-    const keepDefaultStart =
-      startMs !== null && Math.abs(startMs - fallbackStart) <= step;
-    const storedStart = nextStart === "" || keepDefaultStart ? "" : nextStart;
-    setStart(storedStart);
-    setEnd(nextEnd);
-    setRangeOpen(false);
-    void analyze({ start: storedStart, end: nextEnd });
-  }
-
-  const resolvedStartLabel = start
-    ? shortTime(start)
-    : shortTime(toUtcInput(defaultWindowStart(end, granularity)));
-  const rangeLabel = `${resolvedStartLabel} → ${end ? shortTime(end) : "最新"}`;
 
   useEffect(() => {
     void analyze();
@@ -318,59 +233,17 @@ export function ChanPage() {
             <option value="1week">1w</option>
           </select>
         </label>
-        <div className="chan-range-wrap" ref={rangeWrapRef}>
-          <button
-            type="button"
-            className="chan-range-trigger"
-            onClick={() => (rangeOpen ? setRangeOpen(false) : openRange())}
-          >
-            <span>时间窗口</span>
-            <strong>{rangeLabel}</strong>
-          </button>
-          {rangeOpen && (
-            <div className="chan-range-popover" role="dialog" aria-label="选择时间窗口">
-              <p className="chan-range-hint">
-                UTC 时间，步长跟随周期（{granularity}）。结束留空 = 最新已收盘 K 线；
-                开始默认是结束往前 {DEFAULT_WINDOW_BARS} 根，留空表示跟随最新。
-              </p>
-              <label className="chan-range-field">
-                <span>开始 (UTC)</span>
-                <input
-                  type="datetime-local"
-                  step={GRANULARITY_STEP_SECONDS[granularity]}
-                  value={draftStart}
-                  onChange={(event) => setDraftStart(event.target.value)}
-                  autoFocus
-                />
-              </label>
-              <label className="chan-range-field">
-                <span>结束 (UTC)</span>
-                <input
-                  type="datetime-local"
-                  step={GRANULARITY_STEP_SECONDS[granularity]}
-                  value={draftEnd}
-                  onChange={(event) => setDraftEnd(event.target.value)}
-                />
-              </label>
-              {rangeError && <div className="chan-range-error">{rangeError}</div>}
-              <div className="chan-range-actions">
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => {
-                    setDraftStart("");
-                    setDraftEnd("");
-                  }}
-                >
-                  清空
-                </button>
-                <button type="button" className="primary" onClick={applyRange}>
-                  应用并分析
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        <TimeRangePicker
+          value={{ start, end }}
+          stepSeconds={GRANULARITY_STEP_SECONDS[granularity]}
+          granularityLabel={granularity}
+          defaultBars={DEFAULT_WINDOW_BARS}
+          onApply={(next) => {
+            setStart(next.start);
+            setEnd(next.end);
+            void analyze({ start: next.start, end: next.end });
+          }}
+        />
         <div className="chan-mode-tabs">
           <button className={mode === "chart" ? "active" : ""} onClick={() => setMode("chart")}>结构图</button>
           <button className={mode === "backtest" ? "active" : ""} onClick={() => setMode("backtest")}>信号回测</button>
