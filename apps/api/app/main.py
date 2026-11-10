@@ -44,7 +44,6 @@ from app.services.backtest_worker import BacktestWorker, set_active_worker
 from app.services import allocation_tools  # noqa: F401 - registers Agent allocation tools
 from app.services import backtest_tools  # noqa: F401 - registers Agent backtest tools
 from app.services import chan_tools  # noqa: F401 - registers Agent Chan tools
-from app.services import cron_tools  # noqa: F401 - registers Agent cron tools
 from app.services import trade_journal_tools  # noqa: F401 - registers Agent journal tools
 from app.services.skills import seed_default_skills
 from app.services.weixin_runtime import WeixinRuntime
@@ -228,10 +227,13 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             # market client is always released.
             try:
                 if start_worker:
-                    # Stop turn producers first. Cron marks a job as run before
-                    # its turn is queued, so letting registry close first could
-                    # cancel that turn while leaving next_run_at advanced. The
-                    # same applies to the WeChat inbound/delivery runtime.
+                    # Stop turn producers first. Cron commits the schedule
+                    # before dispatching, so a shutdown between commit and
+                    # execution can cancel that turn and lose one occurrence;
+                    # that is an accepted trade-off. Closing the registry first
+                    # would instead make cron ticks hit a closed runtime. The
+                    # same producer-first order applies to WeChat intake and
+                    # delivery.
                     cron = getattr(app.state, "cron", None)
                     if cron is not None:
                         try:

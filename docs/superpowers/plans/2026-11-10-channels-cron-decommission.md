@@ -1044,7 +1044,7 @@ git add apps/api/app/models.py apps/api/app/services/cron_service.py apps/api/ap
 git commit -m "Move cron jobs to SDK turns"
 ```
 
-> **质量审查修订：** `cron_jobs.push_conversation_id` 存联系人 `external_id`；读取绑定时用 `f"{channel_id}:{external_id}"`，并校验 `conversation.channel_id == channel.id` 与 Agent 归属。触发时用 `DeliveryRequest(channel_id, external_id)` 交给 runner 建投递行。
+> **质量审查修订：** `cron_jobs.push_conversation_id` 存联系人 `external_id`；读取绑定时用 `f"{channel_id}:{external_id}"`，并校验 `conversation.channel_id == channel.id` 与 Agent 归属。触发时用 `DeliveryRequest(channel_id, external_id)` 交给 runner 建投递行。**质量审查修订（执行时已落实）：** 调度状态先 commit 再 `registry.submit`，submit 失败写 `cron_trigger_failed` 审计且不重试（避免重复推送）；暂停 Agent 的 create/run 返回 400/409 而非 404；推送目标要求 `status == "active"` 且 `type == "wechat"`；`push_conversation_id` 迁移 DDL 用 VARCHAR(200)；inactive-agent 分支清空 `last_skipped_at`；`main.py` 暂时不注册 `cron_tools`（工具层在 Task 8 下线）。停机顺序：cron/weixin 先停，再关 registry。
 
 ---
 

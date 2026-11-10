@@ -10,7 +10,11 @@ from app.models import Channel, ChannelConversation, CronJob, Run, Session
 from app.services.cron_tools import (  # noqa: F401 - import registers the tools
     register_cron_tools,
 )
-from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolContext
+from app.services.skill_tools import (
+    SKILL_TOOL_REGISTRY,
+    SkillToolContext,
+    SkillToolRegistry,
+)
 
 CRON_TOOL_NAMES = (
     "cron_list",
@@ -74,9 +78,13 @@ async def _channel_target(
 
 
 def test_registry_has_cron_tools() -> None:
-    register_cron_tools()
+    # Cron tools are deliberately not auto-registered until Task 8 removes the
+    # tool layer, so this test uses an isolated registry and does not pollute
+    # the process-wide one used by the tools page.
+    registry = SkillToolRegistry()
+    register_cron_tools(registry)
     for name in CRON_TOOL_NAMES:
-        assert SKILL_TOOL_REGISTRY.has(name)
+        assert registry.has(name)
 
 
 async def test_create_list_update_delete_via_tools(client) -> None:

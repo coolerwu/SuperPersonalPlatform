@@ -20,14 +20,19 @@ async def _set_agent_status(store, agent_id: str, status: str) -> None:
 
 
 class FakeRegistry:
-    def __init__(self, *, busy: bool = False) -> None:
+    def __init__(
+        self, *, busy: bool = False, submit_error: Exception | None = None
+    ) -> None:
         self.turns = []
         self.busy = busy
+        self.submit_error = submit_error
 
     def is_busy(self, session_id: str) -> bool:
         return self.busy
 
     async def submit(self, turn):
+        if self.submit_error is not None:
+            raise self.submit_error
         self.turns.append(turn)
         return turn.id
 
@@ -154,11 +159,28 @@ def test_manual_run_requires_runtime(client) -> None:
     assert response.status_code == 503
 
 
+def test_manual_run_submit_failure_returns_503_and_consumes_run(client) -> None:
+    client.app.state.registry = FakeRegistry(
+        submit_error=RuntimeError("registry closed")
+    )
+    job = _create_job(client).json()
+    response = client.post(f"/api/cron-jobs/{job['id']}/run")
+    assert response.status_code == 503
+
+    listed = client.get("/api/cron-jobs?agent_id=default").json()
+    row = next(item for item in listed if item["id"] == job["id"])
+    assert row["last_run_at"] is not None
+
+
 async def test_push_target_uses_settings_conversation(client) -> None:
     store = client.app.state.settings_store
     await store.update_channel(
         ChannelSection(
-            id="ch-api", agent_id="default", type="wechat", name="测试微信"
+            id="ch-api",
+            agent_id="default",
+            type="wechat",
+            name="测试微信",
+            status="active",
         )
     )
     await store.update_conversation(
@@ -189,6 +211,36 @@ async def test_push_target_uses_settings_conversation(client) -> None:
     assert partial.status_code == 400
 
 
+async def test_push_target_rejects_inactive_channel(client) -> None:
+    store = client.app.state.settings_store
+    suffix = uuid.uuid4().hex[:8]
+    channel_id = f"ch-paused-{suffix}"
+    external_id = f"wx-paused-{suffix}"
+    await store.update_channel(
+        ChannelSection(
+            id=channel_id,
+            agent_id="default",
+            type="wechat",
+            name="已暂停微信",
+            status="paused",
+        )
+    )
+    await store.update_conversation(
+        f"{channel_id}:{external_id}",
+        ConversationSection(
+            session_id=str(uuid.uuid4()),
+            channel_id=channel_id,
+            display_name="Alice",
+        ),
+    )
+
+    response = _create_job(
+        client, push_channel_id=channel_id, push_conversation_id=external_id
+    )
+    assert response.status_code == 400
+    assert "未启用" in response.json()["detail"]
+
+
 async def test_update_push_target_sets_and_clears(client) -> None:
     store = client.app.state.settings_store
     suffix = uuid.uuid4().hex[:8]
@@ -196,7 +248,11 @@ async def test_update_push_target_sets_and_clears(client) -> None:
     external_id = f"wx-upd-{suffix}"
     await store.update_channel(
         ChannelSection(
-            id=channel_id, agent_id="default", type="wechat", name="更新微信"
+            id=channel_id,
+            agent_id="default",
+            type="wechat",
+            name="更新微信",
+            status="active",
         )
     )
     await store.update_conversation(
@@ -238,11 +294,14 @@ async def test_update_push_target_sets_and_clears(client) -> None:
 
 
 async def test_paused_agent_can_view_edit_and_delete_jobs(client) -> None:
+    client.app.state.registry = FakeRegistry()
     store = client.app.state.settings_store
     job = _create_job(client).json()
     await _set_agent_status(store, "default", "paused")
     try:
-        assert _create_job(client).status_code == 404
+        created = _create_job(client)
+        assert created.status_code == 400
+        assert created.json()["detail"] == "agent is paused"
 
         listed = client.get("/api/cron-jobs?agent_id=default")
         assert listed.status_code == 200
@@ -251,7 +310,9 @@ async def test_paused_agent_can_view_edit_and_delete_jobs(client) -> None:
         updated = client.put(f"/api/cron-jobs/{job['id']}", json={"enabled": False})
         assert updated.status_code == 200
 
-        assert client.post(f"/api/cron-jobs/{job['id']}/run").status_code == 404
+        run = client.post(f"/api/cron-jobs/{job['id']}/run")
+        assert run.status_code == 400
+        assert run.json()["detail"] == "agent is paused"
 
         assert client.delete(f"/api/cron-jobs/{job['id']}").status_code == 200
     finally:
@@ -263,6 +324,7 @@ async def test_archived_agent_jobs_are_hidden(client) -> None:
     job = _create_job(client).json()
     await _set_agent_status(store, "default", "archived")
     try:
+        assert _create_job(client).status_code == 404
         assert client.get("/api/cron-jobs?agent_id=default").status_code == 404
         assert (
             client.put(f"/api/cron-jobs/{job['id']}", json={"enabled": False}).status_code

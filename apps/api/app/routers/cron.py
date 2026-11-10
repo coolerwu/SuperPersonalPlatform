@@ -22,6 +22,7 @@ from app.services.cron_service import (
     CronConflict,
     CronInactiveAgent,
     CronNotFound,
+    CronTriggerFailed,
     CronValidationError,
     run_job_now,
 )
@@ -55,10 +56,10 @@ def _available_agent(settings: Any, agent_id: str) -> Any:
 
 
 def _active_agent(settings: Any, agent_id: str) -> Any:
-    """An Agent that may create or run jobs right now."""
+    """An Agent that may create jobs right now (paused is a 400, not hidden)."""
     agent = _available_agent(settings, agent_id)
     if agent.status != "active":
-        raise HTTPException(status_code=404, detail="agent not found")
+        raise HTTPException(status_code=400, detail=f"agent is {agent.status}")
     return agent
 
 
@@ -132,6 +133,8 @@ async def create_cron_job(
         )
     except CronNotFound as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
+    except CronInactiveAgent as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CronValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CronConflict as exc:
@@ -203,15 +206,15 @@ async def run_cron_job_now(
         raise HTTPException(status_code=404, detail="cron job not found")
     store = _store(request)
     settings = await store.get()
-    _active_agent(settings, job.agent_id)
     registry = _registry(request)
     try:
+        # The service is the single source of truth for Agent state: paused
+        # Agents raise CronInactiveAgent here.
         job = await run_job_now(job_id, store=store, registry=registry)
     except CronNotFound as exc:
         raise HTTPException(status_code=404, detail="cron job not found") from exc
     except CronInactiveAgent as exc:
-        # The Agent may have been paused between the check above and the trigger.
-        raise HTTPException(status_code=400, detail="Agent 已归档或暂停，无法运行") from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CronBusy as exc:
         raise HTTPException(
             status_code=409,
@@ -219,5 +222,9 @@ async def run_cron_job_now(
                 "message": "任务会话已有运行中的任务，请稍后再试",
                 "status": exc.status,
             },
+        ) from exc
+    except CronTriggerFailed as exc:
+        raise HTTPException(
+            status_code=503, detail="任务触发失败，请稍后重试"
         ) from exc
     return _job_out(job, settings)

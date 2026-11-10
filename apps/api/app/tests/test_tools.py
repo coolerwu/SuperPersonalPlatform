@@ -50,6 +50,8 @@ def test_tools_api_includes_builtin_web_tools(client) -> None:
     ):
         assert tools[name]["registered"] is True
         assert tools[name]["skills"] == ["quant-backtest"]
+    # Cron tools are intentionally unregistered until Task 8 removes the tool
+    # layer; the skill still declares them so the page shows why they are absent.
     for name in (
         "cron_list",
         "cron_create",
@@ -58,7 +60,7 @@ def test_tools_api_includes_builtin_web_tools(client) -> None:
         "cron_run",
         "cron_targets",
     ):
-        assert tools[name]["registered"] is True
+        assert tools[name]["registered"] is False
         assert tools[name]["skills"] == ["cron-scheduler"]
 
 

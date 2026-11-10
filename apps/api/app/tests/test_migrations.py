@@ -139,8 +139,10 @@ async def test_ensure_cron_job_columns_is_idempotent(tmp_path: Path) -> None:
         await _ensure_cron_job_columns(conn)
 
         result = await conn.exec_driver_sql("PRAGMA table_info(cron_jobs)")
-        columns = {row[1] for row in result.fetchall()}
-        assert {"push_channel_id", "push_conversation_id"} <= columns
+        columns = {row[1]: row[2] for row in result.fetchall()}
+        assert {"push_channel_id", "push_conversation_id"} <= columns.keys()
+        assert columns["push_channel_id"] == "VARCHAR(32)"
+        assert columns["push_conversation_id"] == "VARCHAR(200)"
 
         row = (
             await conn.exec_driver_sql(

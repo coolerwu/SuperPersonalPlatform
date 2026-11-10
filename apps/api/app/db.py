@@ -227,12 +227,12 @@ async def _ensure_memory_item_columns(conn) -> None:  # noqa: ANN001
     )
 
 
-async def _ensure_cron_job_column(conn, column: str) -> None:  # noqa: ANN001
+async def _ensure_cron_job_column(conn, column: str, ddl: str = "VARCHAR(32)") -> None:  # noqa: ANN001
     result = await conn.exec_driver_sql("PRAGMA table_info(cron_jobs)")
     if column in {row[1] for row in result.fetchall()}:
         return
     try:
-        await conn.exec_driver_sql(f"ALTER TABLE cron_jobs ADD COLUMN {column} VARCHAR(32)")
+        await conn.exec_driver_sql(f"ALTER TABLE cron_jobs ADD COLUMN {column} {ddl}")
     except Exception:
         result = await conn.exec_driver_sql("PRAGMA table_info(cron_jobs)")
         if column not in {row[1] for row in result.fetchall()}:
@@ -240,8 +240,11 @@ async def _ensure_cron_job_column(conn, column: str) -> None:  # noqa: ANN001
 
 
 async def _ensure_cron_job_columns(conn) -> None:  # noqa: ANN001
-    for column in ("push_channel_id", "push_conversation_id"):
-        await _ensure_cron_job_column(conn, column)
+    for column, ddl in (
+        ("push_channel_id", "VARCHAR(32)"),
+        ("push_conversation_id", "VARCHAR(200)"),
+    ):
+        await _ensure_cron_job_column(conn, column, ddl)
 
 
 async def _ensure_channel_inbound_columns(conn) -> None:  # noqa: ANN001

@@ -405,4 +405,6 @@ def register_cron_tools(registry: SkillToolRegistry = SKILL_TOOL_REGISTRY) -> No
         registry.register_factory(name, factory, description=description)
 
 
-register_cron_tools()
+# Intentionally not auto-registered: the tool layer still uses the retired
+# Run/Session flow and is scheduled for removal. Nothing may register these
+# globally until Task 8 replaces the cron tool contract.

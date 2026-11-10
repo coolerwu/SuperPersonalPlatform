@@ -56,7 +56,11 @@ class CronBusy(Exception):
 
 
 class CronInactiveAgent(Exception):
-    pass
+    """The Agent cannot run a turn; ``status`` is paused, archived or missing."""
+
+    def __init__(self, status: str = "inactive") -> None:
+        self.status = status
+        super().__init__(f"agent is {status}")
 
 
 def session_title(name: str) -> str:
@@ -185,6 +189,8 @@ async def resolve_push_target(
         or section.agent_id != agent_id
     ):
         raise CronValidationError("推送渠道不存在或不属于当前 Agent")
+    if section.status != "active":
+        raise CronValidationError("推送渠道未启用")
     binding = snapshot.channel_conversations.get(f"{channel}:{conversation}")
     if binding is None or binding.channel_id != channel:
         raise CronValidationError("推送联系人不存在或不属于该渠道")
@@ -234,8 +240,10 @@ async def create_job(
     """
     snapshot = await store.get()
     agent = next((item for item in snapshot.agents if item.id == agent_id), None)
-    if agent is None or agent.status != "active":
+    if agent is None:
         raise CronNotFound("agent not found")
+    if agent.status != "active":
+        raise CronInactiveAgent(agent.status)
 
     name = clean_name(name)
     prompt = clean_prompt(prompt)
@@ -379,6 +387,13 @@ def _delivery_for(
             job.id,
         )
         return None
+    if channel.type != "wechat" or channel.status != "active":
+        logger.warning(
+            "cron job %s push channel is not an active WeChat channel; "
+            "turn will not be delivered",
+            job.id,
+        )
+        return None
     conversation = settings.channel_conversations.get(
         f"{job.push_channel_id}:{job.push_conversation_id}"
     )
@@ -394,7 +409,30 @@ def _delivery_for(
     )
 
 
-async def trigger_job(
+class CronTriggerFailed(RuntimeError):
+    """The schedule was consumed but the turn could not be handed to the registry."""
+
+
+async def _record_trigger_failure(job_id: str) -> None:
+    """Audit a consumed trigger whose turn could not be submitted."""
+    try:
+        async with SessionLocal() as db:
+            db.add(
+                AuditLog(
+                    actor="system",
+                    action="cron_trigger_failed",
+                    entity="cron_job",
+                    entity_id=job_id,
+                )
+            )
+            await db.commit()
+    except Exception:
+        logger.exception(
+            "cron job %s failed to record trigger failure", job_id
+        )
+
+
+async def prepare_trigger(
     db: AsyncSession,
     job: CronJob,
     *,
@@ -402,11 +440,14 @@ async def trigger_job(
     registry: Any,
     now: datetime | None = None,
     immediate: bool = False,
-) -> bool:
-    """Submit one turn for ``job`` inside the caller's transaction.
+) -> Turn | None:
+    """Apply trigger state and return the turn that should be submitted.
 
-    Scheduled triggers with a busy session are skipped (and audited); manual
-    triggers raise :class:`CronBusy` instead.
+    The caller must commit ``db`` before submitting the returned turn. This
+    keeps the schedule consumed exactly once: a crash between commit and
+    submission loses one occurrence instead of replaying it, which would
+    duplicate a channel push. Scheduled triggers with a busy session are
+    skipped (and audited); manual triggers raise :class:`CronBusy` instead.
     """
     moment = now or utcnow()
     snapshot = await store.get()
@@ -414,9 +455,11 @@ async def trigger_job(
         (item for item in snapshot.agents if item.id == job.agent_id), None
     )
     if agent is None or agent.status != "active":
-        if not immediate:
-            _advance(job, moment)
-        return False
+        if immediate:
+            raise CronInactiveAgent(agent.status if agent is not None else "missing")
+        _advance(job, moment)
+        job.last_skipped_at = None
+        return None
 
     _ensure_session_id(job, registry)
 
@@ -433,22 +476,51 @@ async def trigger_job(
         if immediate:
             raise CronBusy(job.session_id, "busy")
         _advance(job, moment)
-        return False
+        return None
 
     delivery = _delivery_for(snapshot, job)
-    await registry.submit(
-        Turn(
-            session_id=job.session_id,
-            agent_id=job.agent_id,
-            prompt=job.prompt,
-            source="cron",
-            delivery=delivery,
-        )
-    )
     job.last_run_at = moment
     job.last_skipped_at = None
     if not immediate:
         _advance(job, moment)
+    return Turn(
+        session_id=job.session_id,
+        agent_id=job.agent_id,
+        prompt=job.prompt,
+        source="cron",
+        delivery=delivery,
+    )
+
+
+async def trigger_job(
+    db: AsyncSession,
+    job: CronJob,
+    *,
+    store: Any,
+    registry: Any,
+    now: datetime | None = None,
+    immediate: bool = False,
+) -> bool:
+    """Thin compatibility wrapper: prepare, commit, then submit.
+
+    The scheduler and manual API use :func:`prepare_trigger` directly so they
+    own the commit boundary; this helper keeps the old bool contract for tests
+    and callers that do not need to observe the turn.
+    """
+    turn = await prepare_trigger(
+        db, job, store=store, registry=registry, now=now, immediate=immediate
+    )
+    if turn is None:
+        return False
+    await db.commit()
+    try:
+        await registry.submit(turn)
+    except Exception:
+        await _record_trigger_failure(job.id)
+        logger.warning(
+            "cron job %s failed to submit turn", job.id, exc_info=True
+        )
+        return False
     return True
 
 
@@ -499,16 +571,27 @@ async def run_due_jobs(
                 ):
                     continue
                 try:
-                    triggered = await trigger_job(
+                    turn = await prepare_trigger(
                         db, job, store=store, registry=registry, now=moment
                     )
+                    # Consume the schedule before handing the turn to the
+                    # registry so a crash cannot replay it and duplicate a push.
                     await db.commit()
                 except Exception:
                     await db.rollback()
                     logger.exception("cron job %s failed to trigger", job_id)
                     continue
-                if triggered:
-                    fired.append(job_id)
+                if turn is None:
+                    continue
+                try:
+                    await registry.submit(turn)
+                except Exception:
+                    await _record_trigger_failure(job_id)
+                    logger.warning(
+                        "cron job %s failed to submit turn", job_id, exc_info=True
+                    )
+                    continue
+                fired.append(job_id)
     return fired
 
 
@@ -526,7 +609,7 @@ async def run_job_now(
             job = await db.get(CronJob, job_id)
             if job is None or (agent_id is not None and job.agent_id != agent_id):
                 raise CronNotFound("cron job not found")
-            triggered = await trigger_job(
+            turn = await prepare_trigger(
                 db,
                 job,
                 store=store,
@@ -534,10 +617,20 @@ async def run_job_now(
                 now=now,
                 immediate=True,
             )
-            if not triggered:
-                raise CronInactiveAgent("agent is archived or paused")
+            if turn is None:
+                raise CronInactiveAgent("inactive")
+            # Consume the run before dispatch. A later submit failure is audited
+            # and reported but never retried, matching the scheduler.
             await db.commit()
             await db.refresh(job)
+            try:
+                await registry.submit(turn)
+            except Exception as exc:
+                await _record_trigger_failure(job.id)
+                logger.warning(
+                    "cron job %s failed to submit turn", job.id, exc_info=True
+                )
+                raise CronTriggerFailed("failed to submit cron turn") from exc
             return job
 
 

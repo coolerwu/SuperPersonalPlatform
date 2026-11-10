@@ -8,11 +8,13 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models import AuditLog, CronJob, Session, utcnow
-from app.services.claude_runner import DeliveryRequest
+from app.services.claude_runner import DeliveryRequest, transcript_path
 from app.services.cron_service import (
     CronBusy,
+    CronInactiveAgent,
     CronNotFound,
     CronScheduleError,
+    CronValidationError,
     create_job,
     detach_session,
     next_run,
@@ -40,15 +42,18 @@ class FakeStore:
 
 
 class FakeRegistry:
-    def __init__(self, *, busy: bool = False) -> None:
+    def __init__(self, *, busy: bool = False, submit_error: Exception | None = None) -> None:
         self.turns = []
         self.busy = busy
         self.busy_sessions: set[str] = set()
+        self.submit_error = submit_error
 
     def is_busy(self, session_id: str) -> bool:
         return self.busy or session_id in self.busy_sessions
 
     async def submit(self, turn):
+        if self.submit_error is not None:
+            raise self.submit_error
         self.turns.append(turn)
         return turn.id
 
@@ -77,6 +82,7 @@ async def _make_job(
     next_run_at: datetime | None = None,
     session_id: str | None = None,
     last_run_at: datetime | None = None,
+    last_skipped_at: datetime | None = None,
     push_channel_id: str | None = None,
     push_conversation_id: str | None = None,
     agent_id: str = "default",
@@ -92,6 +98,7 @@ async def _make_job(
             session_id=session_id or str(uuid.uuid4()),
             next_run_at=next_run_at,
             last_run_at=last_run_at,
+            last_skipped_at=last_skipped_at,
             push_channel_id=push_channel_id,
             push_conversation_id=push_conversation_id,
         )
@@ -235,6 +242,67 @@ async def test_missing_transcript_regenerates_session_id(client) -> None:
     assert len(submitted) == 1
 
 
+async def test_existing_transcript_keeps_session_id(client) -> None:
+    now = utcnow()
+    session_id = str(uuid.uuid4())
+    transcript = transcript_path(session_id, "default")
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text("{}\n", encoding="utf-8")
+    job_id = await _make_job(
+        next_run_at=now + timedelta(days=1),
+        session_id=session_id,
+        last_run_at=now - timedelta(hours=1),
+    )
+    store, registry = _store(), FakeRegistry()
+
+    job = await run_job_now(job_id, store=store, registry=registry)
+    assert job.session_id == session_id
+    assert registry.turns[0].session_id == session_id
+
+
+async def test_submit_failure_consumes_schedule_and_audits(client) -> None:
+    now = utcnow()
+    session_id = str(uuid.uuid4())
+    job_id = await _make_job(
+        next_run_at=now - timedelta(minutes=1), session_id=session_id
+    )
+    store = _store()
+    registry = FakeRegistry(submit_error=RuntimeError("registry closed"))
+
+    fired = await run_due_jobs(now, store=store, registry=registry)
+    assert job_id not in fired
+    assert registry.turns == []
+
+    job = await _job(job_id)
+    assert job.last_run_at is not None
+    assert job.next_run_at is not None and job.next_run_at > now
+
+    async with SessionLocal() as db:
+        audits = (
+            await db.scalars(
+                select(AuditLog).where(
+                    AuditLog.action == "cron_trigger_failed",
+                    AuditLog.entity_id == job_id,
+                )
+            )
+        ).all()
+        assert len(audits) == 1
+
+    # The schedule was consumed, so the same tick cannot retry (and duplicate
+    # a channel push).
+    await run_due_jobs(now, store=store, registry=registry)
+    async with SessionLocal() as db:
+        audits = (
+            await db.scalars(
+                select(AuditLog).where(
+                    AuditLog.action == "cron_trigger_failed",
+                    AuditLog.entity_id == job_id,
+                )
+            )
+        ).all()
+        assert len(audits) == 1
+
+
 async def test_non_uuid_session_id_is_replaced(client) -> None:
     now = utcnow()
     job_id = await _make_job(
@@ -277,7 +345,11 @@ async def test_push_target_creates_delivery(client) -> None:
     store = _store(
         channels=[
             ChannelSection(
-                id="ch1", agent_id="default", type="wechat", name="微信"
+                id="ch1",
+                agent_id="default",
+                type="wechat",
+                name="微信",
+                status="active",
             )
         ],
         conversations={
@@ -315,41 +387,65 @@ async def test_unavailable_push_target_submits_without_delivery(client) -> None:
         push_channel_id="ch2",
         push_conversation_id="wx-2",
     )
+    inactive_channel = await _make_job(
+        next_run_at=now - timedelta(minutes=1),
+        push_channel_id="ch3",
+        push_conversation_id="wx-3",
+    )
     store = _store(
         channels=[
             ChannelSection(
-                id="ch1", agent_id="default", type="wechat", name="微信"
+                id="ch1",
+                agent_id="default",
+                type="wechat",
+                name="微信",
+                status="active",
             ),
             ChannelSection(
-                id="ch2", agent_id="other", type="wechat", name="别人的微信"
+                id="ch2",
+                agent_id="other",
+                type="wechat",
+                name="别人的微信",
+                status="active",
+            ),
+            ChannelSection(
+                id="ch3",
+                agent_id="default",
+                type="wechat",
+                name="已暂停微信",
+                status="paused",
             ),
         ],
         conversations={
             "ch2:wx-2": ConversationSection(
                 session_id=str(uuid.uuid4()), channel_id="ch2"
-            )
+            ),
+            "ch3:wx-3": ConversationSection(
+                session_id=str(uuid.uuid4()), channel_id="ch3"
+            ),
         },
     )
     registry = FakeRegistry()
 
     fired = await run_due_jobs(now, store=store, registry=registry)
-    assert {missing_conversation, foreign_channel} <= set(fired)
+    expected = {missing_conversation, foreign_channel, inactive_channel}
+    assert expected <= set(fired)
+    expected_sessions = set()
+    for job_id in expected:
+        expected_sessions.add((await _job(job_id)).session_id)
     produced = [
-        turn
-        for turn in registry.turns
-        if turn.session_id
-        in {
-            (await _job(missing_conversation)).session_id,
-            (await _job(foreign_channel)).session_id,
-        }
+        turn for turn in registry.turns if turn.session_id in expected_sessions
     ]
-    assert len(produced) == 2
-    assert [turn.delivery for turn in produced] == [None, None]
+    assert len(produced) == 3
+    assert [turn.delivery for turn in produced] == [None, None, None]
 
 
 async def test_inactive_agent_advances_without_turn(client) -> None:
     now = utcnow()
-    job_id = await _make_job(next_run_at=now - timedelta(minutes=1))
+    job_id = await _make_job(
+        next_run_at=now - timedelta(minutes=1),
+        last_skipped_at=now - timedelta(hours=1),
+    )
     store, registry = _store(agent_status="paused"), FakeRegistry()
 
     fired = await run_due_jobs(now, store=store, registry=registry)
@@ -358,6 +454,7 @@ async def test_inactive_agent_advances_without_turn(client) -> None:
     assert [turn for turn in registry.turns if turn.session_id == job.session_id] == []
 
     assert job.last_run_at is None
+    assert job.last_skipped_at is None
     assert job.next_run_at is not None and job.next_run_at > now
 
 
@@ -366,10 +463,9 @@ async def test_inactive_agent_manual_run_fails(client) -> None:
     job_id = await _make_job(next_run_at=now + timedelta(days=1))
     store, registry = _store(agent_status="archived"), FakeRegistry()
 
-    from app.services.cron_service import CronInactiveAgent
-
-    with pytest.raises(CronInactiveAgent):
+    with pytest.raises(CronInactiveAgent) as caught:
         await run_job_now(job_id, store=store, registry=registry)
+    assert caught.value.status == "archived"
     assert registry.turns == []
 
 
@@ -392,7 +488,7 @@ async def test_create_job_uses_transcript_session_id(client) -> None:
 
 async def test_create_job_requires_active_settings_agent(client) -> None:
     async with SessionLocal() as db:
-        with pytest.raises(CronNotFound):
+        with pytest.raises(CronInactiveAgent) as paused:
             await create_job(
                 db,
                 store=_store(agent_status="paused"),
@@ -401,6 +497,19 @@ async def test_create_job_requires_active_settings_agent(client) -> None:
                 prompt="不应该创建",
                 schedule="0 8 * * *",
             )
+        assert paused.value.status == "paused"
+
+        with pytest.raises(CronInactiveAgent) as archived:
+            await create_job(
+                db,
+                store=_store(agent_status="archived"),
+                agent_id="default",
+                name=f"归档-{uuid.uuid4().hex[:8]}",
+                prompt="不应该创建",
+                schedule="0 8 * * *",
+            )
+        assert archived.value.status == "archived"
+
         with pytest.raises(CronNotFound):
             await create_job(
                 db,
@@ -412,11 +521,59 @@ async def test_create_job_requires_active_settings_agent(client) -> None:
             )
 
 
+async def test_create_job_rejects_inactive_or_foreign_push_channel(client) -> None:
+    async with SessionLocal() as db:
+        for section in (
+            ChannelSection(
+                id="paused-ch",
+                agent_id="default",
+                type="wechat",
+                status="paused",
+            ),
+            ChannelSection(
+                id="foreign-ch",
+                agent_id="other",
+                type="wechat",
+                status="active",
+            ),
+            ChannelSection(
+                id="not-wechat",
+                agent_id="default",
+                type="other",
+                status="active",
+            ),
+        ):
+            store = _store(
+                channels=[section],
+                conversations={
+                    f"{section.id}:wx-1": ConversationSection(
+                        session_id=str(uuid.uuid4()),
+                        channel_id=section.id,
+                    )
+                },
+            )
+            with pytest.raises(CronValidationError):
+                await create_job(
+                    db,
+                    store=store,
+                    agent_id="default",
+                    name=f"渠道-{section.id}-{uuid.uuid4().hex[:6]}",
+                    prompt="检查推送渠道",
+                    schedule="0 8 * * *",
+                    push_channel_id=section.id,
+                    push_conversation_id="wx-1",
+                )
+
+
 async def test_update_job_sets_and_clears_push_target(client) -> None:
     store = _store(
         channels=[
             ChannelSection(
-                id="ch1", agent_id="default", type="wechat", name="微信"
+                id="ch1",
+                agent_id="default",
+                type="wechat",
+                name="微信",
+                status="active",
             )
         ],
         conversations={
