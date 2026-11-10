@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -5,6 +6,8 @@ import pytest
 from app.services import sdk_bridge, session_catalog
 from app.services.claude_runner import transcript_path
 from app.services.settings_store import PlatformSettings
+
+SESSION_ID = "12345678-1234-5678-1234-567812345678"
 
 
 class FakeStore:
@@ -14,25 +17,63 @@ class FakeStore:
         })
 
 
+def _session(session_id="s1", summary="hi", last_modified=10, cwd=None):
+    return SimpleNamespace(
+        session_id=session_id,
+        summary=summary,
+        last_modified=last_modified,
+        first_prompt=summary,
+        cwd=str(cwd) if cwd is not None else None,
+    )
+
+
 @pytest.mark.asyncio
 async def test_list_sessions_maps_channel_labels(tmp_path, monkeypatch):
     monkeypatch.setattr(
         sdk_bridge,
         "list_sessions",
         lambda directory=None: [
-            SimpleNamespace(
-                session_id="s1",
-                summary="hi",
-                last_modified=10,
-                first_prompt="hi",
-                cwd=str(tmp_path / "workspaces" / "default"),
-            )
+            _session(cwd=tmp_path / "workspaces" / "default"),
         ],
     )
     catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
     rows = await catalog.list_sessions("default")
     assert rows[0]["id"] == "s1"
     assert rows[0]["channel_name"] == "张三"
+    assert rows[0]["channel_type"] == "wechat"
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_filters_sorts_and_falls_back(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspaces" / "default"
+    monkeypatch.setattr(
+        sdk_bridge,
+        "list_sessions",
+        lambda directory=None: [
+            _session("s1", "first", 10, workspace),
+            _session("s2", "", 30, workspace),
+            _session("other", "elsewhere", 99, tmp_path / "workspaces" / "other"),
+            _session("", "no id", 50, workspace),
+            _session("s3", "no cwd", 60, None),
+        ],
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    rows = await catalog.list_sessions("default")
+    assert [row["id"] for row in rows] == ["s2", "s1"]
+    assert rows[0]["title"] == "新会话"
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_truncates_long_titles(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspaces" / "default"
+    monkeypatch.setattr(
+        sdk_bridge,
+        "list_sessions",
+        lambda directory=None: [_session("s1", "标" * 100, 10, workspace)],
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    rows = await catalog.list_sessions("default")
+    assert rows[0]["title"] == "标" * 80 + "…"
 
 
 @pytest.mark.asyncio
@@ -61,7 +102,7 @@ async def test_messages_extract_text_and_blocks(monkeypatch):
             ),
         ],
     )
-    catalog = session_catalog.SessionCatalog(FakeStore(), home=__import__("pathlib").Path("/tmp"))
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=Path("/tmp"))
     rows = await catalog.messages("s1")
     assert rows[0] == {"id": "u1", "role": "user", "content": "hi", "blocks": []}
     assert rows[1]["content"] == "hello"
@@ -69,10 +110,144 @@ async def test_messages_extract_text_and_blocks(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delete_removes_transcript(tmp_path):
-    path = transcript_path("s1", "default", home=tmp_path)
+async def test_messages_skips_tool_results_and_subagents(monkeypatch):
+    monkeypatch.setattr(
+        sdk_bridge,
+        "get_session_messages",
+        lambda session_id: [
+            SimpleNamespace(
+                type="user",
+                uuid="u-tool",
+                message={
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t", "content": "x"}
+                    ],
+                },
+                parent_tool_use_id=None,
+            ),
+            SimpleNamespace(
+                type="user",
+                uuid="u-text",
+                message={
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "a"},
+                        {"type": "text", "text": "b"},
+                    ],
+                },
+                parent_tool_use_id=None,
+            ),
+            SimpleNamespace(
+                type="assistant",
+                uuid="a-sub",
+                message={
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "sub"}],
+                },
+                parent_tool_use_id="t1",
+            ),
+            SimpleNamespace(
+                type="assistant",
+                uuid="a-ok",
+                message={
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "ok"}],
+                },
+                parent_tool_use_id=None,
+            ),
+        ],
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=Path("/tmp"))
+    rows = await catalog.messages("s1")
+    assert [row["id"] for row in rows] == ["u-text", "a-ok"]
+    assert rows[0]["content"] == "a\nb"
+
+
+@pytest.mark.asyncio
+async def test_messages_scope_to_agent_rejects_missing_transcript(
+    tmp_path, monkeypatch
+):
+    called = []
+    monkeypatch.setattr(
+        sdk_bridge,
+        "get_session_messages",
+        lambda session_id: called.append(session_id) or [],
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    assert await catalog.messages("s1", agent_id="default") == []
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_rename_scope_to_agent(tmp_path, monkeypatch):
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    with pytest.raises(FileNotFoundError):
+        await catalog.rename(SESSION_ID, "title", agent_id="default")
+
+    path = transcript_path(SESSION_ID, "default", home=tmp_path)
     path.parent.mkdir(parents=True)
     path.write_text("{}", "utf-8")
+    calls = []
+    monkeypatch.setattr(
+        sdk_bridge,
+        "rename_session",
+        lambda session_id, title: calls.append((session_id, title)),
+    )
+    await catalog.rename(SESSION_ID, "title", agent_id="default")
+    assert calls == [(SESSION_ID, "title")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_id", "session_id"),
+    [
+        ("../x", SESSION_ID),
+        ("/etc", SESSION_ID),
+        ("default", "../../x"),
+        ("default", SESSION_ID.upper()),
+    ],
+)
+async def test_delete_rejects_unsafe_ids(
+    tmp_path, monkeypatch, agent_id, session_id
+):
+    calls = []
+    monkeypatch.setattr(
+        sdk_bridge,
+        "delete_session",
+        lambda *args, **kwargs: calls.append(args),
+    )
     catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
-    assert await catalog.delete("default", "s1") is True
+    assert await catalog.delete(agent_id, session_id) is False
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_missing_transcript_returns_false(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sdk_bridge,
+        "delete_session",
+        lambda session_id: calls.append(session_id),
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    assert await catalog.delete("default", SESSION_ID) is False
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_transcript(tmp_path, monkeypatch):
+    path = transcript_path(SESSION_ID, "default", home=tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("{}", "utf-8")
+    calls = []
+
+    def fake_delete(session_id):
+        calls.append(session_id)
+        path.unlink()
+
+    monkeypatch.setattr(sdk_bridge, "delete_session", fake_delete)
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    assert await catalog.delete("default", SESSION_ID) is True
+    assert calls == [SESSION_ID]
     assert not path.exists()

@@ -1,19 +1,25 @@
 """Session directory backed by SDK transcripts.
 
 Session metadata and history come straight from the Claude Agent SDK
-transcripts (``list_sessions`` / ``get_session_messages``); deletion removes
-the transcript file. Nothing here touches a database.
+transcripts (``list_sessions`` / ``get_session_messages``); deletion goes
+through the SDK so the transcript and its subagent transcript directory are
+removed together. Nothing here touches a database.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
+import uuid
 from pathlib import Path
 from typing import Any
 
 from app.services import sdk_bridge
 from app.services.claude_env import workspace_for
 from app.services.claude_runner import transcript_path
+
+_AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_TITLE_LIMIT = 80
 
 
 def _text_from_message(message: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -34,10 +40,28 @@ def _text_from_message(message: dict[str, Any]) -> tuple[str, list[dict[str, Any
     return "\n".join(part for part in texts if part), blocks
 
 
+def _session_title(summary: Any) -> str:
+    title = str(summary or "") or "新会话"
+    if len(title) > _TITLE_LIMIT:
+        return title[:_TITLE_LIMIT] + "…"
+    return title
+
+
+def _is_canonical_uuid(value: str) -> bool:
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return str(parsed) == value
+
+
 class SessionCatalog:
     def __init__(self, store: Any, *, home: Path | None = None) -> None:
         self._store = store
         self._home = home
+
+    def _owns(self, agent_id: str, session_id: str) -> bool:
+        return transcript_path(session_id, agent_id, home=self._home).is_file()
 
     async def list_sessions(self, agent_id: str) -> list[dict[str, Any]]:
         settings = await self._store.get()
@@ -59,7 +83,7 @@ class SessionCatalog:
             rows.append(
                 {
                     "id": session_id,
-                    "title": str(getattr(session, "summary", "") or "新会话"),
+                    "title": _session_title(getattr(session, "summary", "")),
                     "last_modified": int(getattr(session, "last_modified", 0) or 0),
                     "channel_name": conversation.display_name if conversation else None,
                     "channel_type": "wechat" if conversation else None,
@@ -68,7 +92,11 @@ class SessionCatalog:
         rows.sort(key=lambda item: item["last_modified"], reverse=True)
         return rows
 
-    async def messages(self, session_id: str) -> list[dict[str, Any]]:
+    async def messages(
+        self, session_id: str, *, agent_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        if agent_id is not None and not self._owns(agent_id, session_id):
+            return []
         rows: list[dict[str, Any]] = []
         raw_messages = await asyncio.to_thread(
             sdk_bridge.get_session_messages, session_id
@@ -104,22 +132,23 @@ class SessionCatalog:
                 )
         return rows
 
-    async def rename(self, session_id: str, title: str) -> None:
+    async def rename(
+        self, session_id: str, title: str, *, agent_id: str | None = None
+    ) -> None:
+        if agent_id is not None and not self._owns(agent_id, session_id):
+            raise FileNotFoundError(
+                f"session {session_id} not found for agent {agent_id}"
+            )
         await asyncio.to_thread(sdk_bridge.rename_session, session_id, title)
 
     async def delete(self, agent_id: str, session_id: str) -> bool:
-        # The id is spliced into a file name, so never let a caller-supplied
-        # value escape the agent's project directory.
-        if (
-            not session_id
-            or "/" in session_id
-            or "\\" in session_id
-            or session_id in {".", ".."}
-        ):
+        # The agent scopes the transcript path and the session id is spliced
+        # into a file name, so both must be validated before touching disk.
+        if not _AGENT_ID_RE.fullmatch(agent_id or ""):
             return False
-        path = transcript_path(session_id, agent_id, home=self._home)
-        try:
-            path.unlink()
-        except FileNotFoundError:
+        if not _is_canonical_uuid(session_id or ""):
             return False
+        if not self._owns(agent_id, session_id):
+            return False
+        await asyncio.to_thread(sdk_bridge.delete_session, session_id)
         return True

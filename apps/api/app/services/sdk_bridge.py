@@ -40,3 +40,11 @@ def rename_session(session_id: str, title: str) -> None:
     from claude_agent_sdk import rename_session as _rename
 
     _rename(session_id, title)
+
+
+def delete_session(session_id: str, directory: str | None = None) -> None:
+    # The SDK validates the UUID and removes both the transcript and its
+    # sibling subagent transcript directory.
+    from claude_agent_sdk import delete_session as _delete
+
+    _delete(session_id, directory=directory)
