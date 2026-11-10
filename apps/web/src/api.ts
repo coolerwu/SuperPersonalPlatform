@@ -30,7 +30,6 @@ import type {
   MemoryScope,
   Provider,
   ScreenshotInfo,
-  SessionSearchHit,
   SessionSummary,
   SkillCatalog,
   SkillDetail,
@@ -198,22 +197,27 @@ export const api = {
     request<SessionSummary[]>(`/api/agents/${agentId}/sessions`),
   listSessionMessages: (sessionId: string, agentId: string) =>
     request<TranscriptMessage[]>(
-      `/api/sessions/${sessionId}/messages?agent_id=${encodeURIComponent(agentId)}`,
+      `/api/sessions/${encodeURIComponent(sessionId)}/messages?agent_id=${encodeURIComponent(agentId)}`,
     ),
   interruptSession: (sessionId: string) =>
-    request<{ interrupted: boolean }>(`/api/sessions/${sessionId}/interrupt`, { method: "POST" }),
+    request<{ interrupted: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+      { method: "POST" },
+    ),
   deleteSession: (sessionId: string, agentId: string) =>
     request<{ deleted: boolean }>(
-      `/api/sessions/${sessionId}?agent_id=${encodeURIComponent(agentId)}`,
+      `/api/sessions/${encodeURIComponent(sessionId)}?agent_id=${encodeURIComponent(agentId)}`,
       { method: "DELETE" },
     ),
   renameSession: (sessionId: string, title: string, agentId: string) =>
     request<{ renamed: boolean }>(
-      `/api/sessions/${sessionId}/rename?agent_id=${encodeURIComponent(agentId)}`,
+      `/api/sessions/${encodeURIComponent(sessionId)}/rename?agent_id=${encodeURIComponent(agentId)}`,
       { method: "POST", body: JSON.stringify({ title }) },
     ),
-  sessionStreamUrl: (sessionId: string, turnId: string) =>
-    `/api/sessions/${sessionId}/stream?turn_id=${encodeURIComponent(turnId)}`,
+  sessionStreamUrl: (sessionId: string, turnId?: string) =>
+    `/api/sessions/${encodeURIComponent(sessionId)}/stream${
+      turnId ? `?turn_id=${encodeURIComponent(turnId)}` : ""
+    }`,
   listScreenshots: (sessionId: string) =>
     request<ScreenshotInfo[]>(`/api/sessions/${sessionId}/screenshots`),
   screenshotUrl: (sessionId: string, runId: string, screenshotId: string) =>
@@ -325,14 +329,6 @@ export const api = {
       method: "DELETE",
     }),
   listTools: () => request<ToolsCatalog>("/api/tools"),
-  searchMessages: (agentId: string, q: string, limit = 20) => {
-    const search = new URLSearchParams({
-      agent_id: agentId,
-      q,
-      limit: String(limit),
-    });
-    return request<SessionSearchHit[]>(`/api/sessions/search?${search.toString()}`);
-  },
 
   listMemories: (params: { scope: MemoryScope; agentId?: string; q?: string }) => {
     const search = new URLSearchParams({ scope: params.scope });

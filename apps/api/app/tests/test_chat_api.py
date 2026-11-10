@@ -93,6 +93,20 @@ def test_send_message_rejects_blank_content(client, fake_registry):
     assert fake_registry.turns == []
 
 
+def test_send_message_rejects_invalid_session_id(client, fake_registry):
+    response = client.post(
+        "/api/chat/messages",
+        json={
+            "agent_id": "agent-x",
+            "session_id": "../../../etc/passwd",
+            "content": "hi",
+        },
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": "invalid session id"}
+    assert fake_registry.turns == []
+
+
 def test_send_message_without_registry_is_503(client):
     response = client.post(
         "/api/chat/messages",

@@ -11,6 +11,7 @@ from app.schemas import (
 )
 from app.services import commands
 from app.services.claude_runner import Turn
+from app.services.identifiers import is_canonical_uuid
 
 router = APIRouter(prefix="/api/chat", tags=["chat"], dependencies=[Depends(require_auth)])
 
@@ -27,6 +28,9 @@ async def send_message(payload: ChatRequest, request: Request) -> TurnAcceptedOu
     content = payload.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="content is required")
+    if not is_canonical_uuid(payload.session_id):
+        # Session ids name transcript files inside the agent's project dir.
+        raise HTTPException(status_code=400, detail="invalid session id")
     registry = _registry(request)
     try:
         turn_id = await registry.submit(

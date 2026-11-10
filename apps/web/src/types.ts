@@ -104,10 +104,10 @@ export type TurnStreamEvent =
   | { type: "tool_call"; name: string; input: Record<string, unknown> }
   | {
       type: "turn_end";
-      status?: string;
+      status?: "completed" | "failed" | "cancelled";
       error?: string | null;
       terminal_reason?: string | null;
-      usage?: Record<string, number> | null;
+      usage?: Record<string, unknown> | null;
     }
   | { type: "turn_error"; error: string };
 
