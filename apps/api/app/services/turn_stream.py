@@ -21,6 +21,11 @@ class TurnStream:
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._closed = False
 
+    @property
+    def closed(self) -> bool:
+        """Whether the stream has been closed and will accept no more events."""
+        return self._closed
+
     def _has_end(self) -> bool:
         return bool(self._buffer) and self._buffer[-1].get("type") == "turn_end"
 

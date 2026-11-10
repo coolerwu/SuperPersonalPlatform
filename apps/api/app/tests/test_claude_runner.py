@@ -435,3 +435,42 @@ async def test_cancellation_evicts_and_publishes_cancelled_end(tmp_path):
     assert end["status"] == "cancelled"
     assert client.disconnected is True
     assert not await turn_lease.is_running(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_ignores_idle_cached_client(tmp_path):
+    await init_db()
+    client = FakeClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="99999999-9999-9999-9999-999999999999")
+    await runner.run(turn, TurnStream())
+
+    assert turn.session_id in runner._clients
+    assert await runner.interrupt(turn.session_id) is False
+    assert client.interrupted is False
+
+
+@pytest.mark.asyncio
+async def test_interrupt_reaches_client_only_while_turn_is_active(tmp_path):
+    await init_db()
+    client = HangingClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="aaaaaaaa-1111-1111-1111-111111111111")
+    task = asyncio.create_task(runner.run(turn, TurnStream()))
+    await asyncio.wait_for(client.queried.wait(), 1)
+
+    assert await runner.interrupt(turn.session_id) is True
+    assert client.interrupted is True
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not await turn_lease.is_running(turn.session_id)

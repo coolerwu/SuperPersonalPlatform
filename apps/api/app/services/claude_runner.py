@@ -59,6 +59,7 @@ class ClaudeTurnRunner:
         self._clients: dict[str, Any] = {}
         self._factory = client_factory
         self._locks: dict[str, asyncio.Lock] = {}
+        self._active: set[str] = set()
 
     def _client_lock(self, session_id: str) -> asyncio.Lock:
         lock = self._locks.get(session_id)
@@ -130,6 +131,7 @@ class ClaudeTurnRunner:
                     )
                 else:
                     prompt = turn.prompt
+                self._active.add(turn.session_id)
                 await client.query(prompt)
                 # Drain the full stream: receive_response() would stop at the
                 # first ResultMessage, which may be an injected background
@@ -189,6 +191,7 @@ class ClaudeTurnRunner:
             )
             evict = True
         finally:
+            self._active.discard(turn.session_id)
             if not result_received:
                 evict = True
             # Publish teardown synchronously first: a later await must not be
@@ -234,8 +237,15 @@ class ClaudeTurnRunner:
         return outcome
 
     async def interrupt(self, session_id: str) -> bool:
+        # A cached client can outlive its turn. Only interrupt while a turn is
+        # actually attached, otherwise an idle client would be interrupted.
+        if session_id not in self._active:
+            return False
         lock = self._client_lock(session_id)
         async with lock:
+            # Re-check: the turn may have finished while we waited for the lock.
+            if session_id not in self._active:
+                return False
             client = self._clients.get(session_id)
         if client is None:
             return False
