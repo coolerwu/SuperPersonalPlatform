@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "./api";
 import type {
@@ -61,6 +61,12 @@ type FocusTarget = {
   sessionId: string;
   messageId: string;
   nonce: number;
+};
+
+/** A user message sent by this tab that has not reached the transcript yet. */
+type PendingUser = {
+  id: string;
+  content: string;
 };
 
 const MEMORY_SKILL = "memory-organizer";
@@ -128,6 +134,9 @@ export default function App() {
   const [attachmentsByKey, setAttachmentsByKey] = useState<Record<string, Attachment[]>>({});
   const [quotesByKey, setQuotesByKey] = useState<Record<string, string>>({});
   const [pendingSessions, setPendingSessions] = useState<Record<string, true>>({});
+  const [pendingUserBySession, setPendingUserBySession] = useState<
+    Record<string, PendingUser[]>
+  >({});
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
@@ -141,10 +150,14 @@ export default function App() {
   const [focus, setFocus] = useState<FocusTarget | null>(null);
 
   const streamsRef = useRef<Map<string, EventSource>>(new Map());
+  const retryTimersRef = useRef<Map<string, number>>(new Map());
   const sessionsRef = useRef<SessionSummary[]>([]);
   const sessionAgentRef = useRef<Record<string, string>>({});
   const transcriptRequestRef = useRef<Record<string, number>>({});
   const skipRefreshRef = useRef<Set<string>>(new Set());
+  const followUpRef = useRef<Set<string>>(new Set());
+  const pendingUsersRef = useRef<Record<string, PendingUser[]>>({});
+  const consumedUsersRef = useRef<Record<string, Record<string, number>>>({});
   const sessionIdRef = useRef("");
   const sessionsRequestRef = useRef(0);
   const agentIdRef = useRef("");
@@ -167,10 +180,18 @@ export default function App() {
   const currentSession = sessions.find((item) => item.id === sessionId) ?? null;
   const agent = agents.find((item) => item.id === agentId);
   const live = liveBySession[sessionId] ?? EMPTY_LIVE;
-  const pendingHere = Boolean(pendingSessions[sessionId || NEW_SESSION_KEY]);
+  const pendingHere = Boolean(pendingSessions[activeKey]);
   const tracking = live.tracking;
   const chatSending = pendingHere || tracking;
-  const messages = messagesBySession[sessionId] ?? [];
+  const messages = useMemo(
+    () => [
+      ...(messagesBySession[sessionId] ?? []),
+      ...(pendingUserBySession[sessionId] ?? []).map((item) =>
+        transcriptMessage("user", item.content, item.id),
+      ),
+    ],
+    [messagesBySession, pendingUserBySession, sessionId],
+  );
   const messagesLoading = loadingBySession[sessionId] ?? false;
   const sessionTitle = currentSession?.title || "新对话";
   const viewTitle =
@@ -229,19 +250,70 @@ export default function App() {
     setMessagesBySession((current) => ({ ...current, [id]: list }));
   }
 
-  function appendMessage(id: string, message: TranscriptMessage) {
-    setMessagesBySession((current) => ({
-      ...current,
-      [id]: [...(current[id] ?? []), message],
-    }));
+  function updatePendingUsers(next: Record<string, PendingUser[]>) {
+    pendingUsersRef.current = next;
+    setPendingUserBySession(next);
   }
 
-  function removeMessage(id: string, messageId: string) {
-    setMessagesBySession((current) => {
-      const list = current[id];
-      if (!list) return current;
-      return { ...current, [id]: list.filter((item) => item.id !== messageId) };
+  function pushPendingUser(id: string, item: PendingUser) {
+    updatePendingUsers({
+      ...pendingUsersRef.current,
+      [id]: [...(pendingUsersRef.current[id] ?? []), item],
     });
+  }
+
+  function removePendingUser(id: string, messageId: string) {
+    const list = pendingUsersRef.current[id];
+    if (!list) return;
+    const remaining = list.filter((item) => item.id !== messageId);
+    const next = { ...pendingUsersRef.current };
+    if (remaining.length > 0) next[id] = remaining;
+    else delete next[id];
+    updatePendingUsers(next);
+  }
+
+  function dropPendingUsers(id: string) {
+    if (!pendingUsersRef.current[id]) return;
+    const next = { ...pendingUsersRef.current };
+    delete next[id];
+    updatePendingUsers(next);
+  }
+
+  /** The session is gone; drop both pending rows and the match counters. */
+  function forgetPendingUsers(id: string) {
+    delete consumedUsersRef.current[id];
+    dropPendingUsers(id);
+  }
+
+  /**
+   * A queued turn's user message only reaches the transcript when that turn
+   * starts, so keep unmatched sends visible until their text appears.
+   */
+  function settlePendingUsers(id: string, transcript: TranscriptMessage[]) {
+    const pending = pendingUsersRef.current[id];
+    if (!pending?.length) return;
+    const counts: Record<string, number> = {};
+    for (const message of transcript) {
+      if (message.role === "user") {
+        counts[message.content] = (counts[message.content] ?? 0) + 1;
+      }
+    }
+    const consumed = { ...(consumedUsersRef.current[id] ?? {}) };
+    const remaining: PendingUser[] = [];
+    for (const item of pending) {
+      const total = counts[item.content] ?? 0;
+      const used = consumed[item.content] ?? 0;
+      if (total > used) {
+        consumed[item.content] = used + 1;
+        continue;
+      }
+      remaining.push(item);
+    }
+    consumedUsersRef.current[id] = consumed;
+    const next = { ...pendingUsersRef.current };
+    if (remaining.length > 0) next[id] = remaining;
+    else delete next[id];
+    updatePendingUsers(next);
   }
 
   function setLoadingFor(id: string, value: boolean) {
@@ -283,17 +355,15 @@ export default function App() {
     if (draftKeyRef.current === key) setDraft(value);
   }
 
-  // A send request is pending per session, so turns in other sessions never
-  // lock this session's composer.
-  function markPending(session: string) {
-    const key = session || NEW_SESSION_KEY;
+  // A send request is pending per session, so turns in other sessions (and in
+  // other agents' view of the same "new chat" lane) never lock this composer.
+  function markPending(key: string) {
     if (pendingSessionsRef.current[key]) return;
     pendingSessionsRef.current = { ...pendingSessionsRef.current, [key]: true };
     setPendingSessions(pendingSessionsRef.current);
   }
 
-  function clearPending(session: string) {
-    const key = session || NEW_SESSION_KEY;
+  function clearPending(key: string) {
     if (!pendingSessionsRef.current[key]) return;
     const next = { ...pendingSessionsRef.current };
     delete next[key];
@@ -326,7 +396,15 @@ export default function App() {
     });
   }
 
+  function clearRetryTimer(id: string) {
+    const timer = retryTimersRef.current.get(id);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    retryTimersRef.current.delete(id);
+  }
+
   function closeStream(id: string) {
+    clearRetryTimer(id);
     const source = streamsRef.current.get(id);
     if (!source) return;
     streamsRef.current.delete(id);
@@ -334,13 +412,76 @@ export default function App() {
   }
 
   function closeAllStreams() {
-    for (const id of Array.from(streamsRef.current.keys())) closeStream(id);
+    const ids = new Set([
+      ...streamsRef.current.keys(),
+      ...retryTimersRef.current.keys(),
+    ]);
+    for (const id of Array.from(ids)) closeStream(id);
   }
 
   function attachIfBusy(id: string) {
     if (!id || streamsRef.current.has(id)) return;
     const row = sessionsRef.current.find((item) => item.id === id);
     if (row?.busy) openStream(id);
+  }
+
+  function applyStreamEvent(
+    forSession: string,
+    source: EventSource,
+    event: TurnStreamEvent,
+  ) {
+    switch (event.type) {
+      case "assistant_delta":
+        updateLive(forSession, (current) => ({
+          ...current,
+          streamText: current.streamText + event.delta,
+          notice: "",
+        }));
+        break;
+      case "reasoning_delta":
+        updateLive(forSession, (current) => ({
+          ...current,
+          streamReasoning: current.streamReasoning + event.delta,
+          notice: "",
+        }));
+        break;
+      case "tool_call":
+        updateLive(forSession, (current) => ({
+          ...current,
+          activity: [...current.activity, event.name],
+          notice: "",
+        }));
+        break;
+      case "turn_error":
+        updateLive(forSession, (current) => ({ ...current, notice: event.error }));
+        break;
+      case "turn_end": {
+        if (streamsRef.current.get(forSession) !== source) return;
+        closeStream(forSession);
+        if (event.status === "failed") {
+          updateLive(forSession, (current) => ({
+            ...current,
+            notice: event.error || "本轮执行失败。",
+          }));
+        } else if (event.status === "cancelled") {
+          updateLive(forSession, (current) => ({ ...current, notice: "已停止当前任务。" }));
+        }
+        void finishTurn(forSession);
+        break;
+      }
+    }
+  }
+
+  function bindStreamSource(forSession: string, source: EventSource) {
+    source.onmessage = (message) => {
+      let event: TurnStreamEvent;
+      try {
+        event = JSON.parse(message.data) as TurnStreamEvent;
+      } catch {
+        return;
+      }
+      applyStreamEvent(forSession, source, event);
+    };
   }
 
   function openStream(forSession: string, turnId?: string) {
@@ -351,61 +492,61 @@ export default function App() {
     const source = new EventSource(api.sessionStreamUrl(forSession, turnId));
     streamsRef.current.set(forSession, source);
     updateLive(forSession, (current) => ({ ...current, tracking: true }));
-
-    source.onmessage = (message) => {
-      let event: TurnStreamEvent;
-      try {
-        event = JSON.parse(message.data) as TurnStreamEvent;
-      } catch {
-        return;
-      }
-      switch (event.type) {
-        case "assistant_delta":
-          updateLive(forSession, (current) => ({
-            ...current,
-            streamText: current.streamText + event.delta,
-            notice: "",
-          }));
-          break;
-        case "reasoning_delta":
-          updateLive(forSession, (current) => ({
-            ...current,
-            streamReasoning: current.streamReasoning + event.delta,
-            notice: "",
-          }));
-          break;
-        case "tool_call":
-          updateLive(forSession, (current) => ({
-            ...current,
-            activity: [...current.activity, event.name],
-            notice: "",
-          }));
-          break;
-        case "turn_error":
-          updateLive(forSession, (current) => ({ ...current, notice: event.error }));
-          break;
-        case "turn_end": {
-          if (streamsRef.current.get(forSession) !== source) return;
-          closeStream(forSession);
-          if (event.status === "failed") {
-            updateLive(forSession, (current) => ({
-              ...current,
-              notice: event.error || "本轮执行失败。",
-            }));
-          } else if (event.status === "cancelled") {
-            updateLive(forSession, (current) => ({ ...current, notice: "已停止当前任务。" }));
-          }
-          void finishTurn(forSession);
-          break;
-        }
-      }
-    };
+    bindStreamSource(forSession, source);
 
     source.onerror = () => {
       if (streamsRef.current.get(forSession) !== source) return;
       closeStream(forSession);
       void refreshTranscript(forSession);
     };
+  }
+
+  /**
+   * A queued turn may not be the registry's current turn the instant the
+   * previous one ends, so attaching without a turn id can 409. Retry briefly
+   * while keeping the lane marked as tracking.
+   */
+  function openStreamWithRetry(forSession: string, attempts = 10) {
+    closeStream(forSession);
+    if (!sessionAgentRef.current[forSession]) {
+      sessionAgentRef.current[forSession] = agentIdRef.current;
+    }
+    updateLive(forSession, (current) => ({ ...current, tracking: true }));
+    let remaining = attempts - 1;
+
+    const connect = () => {
+      const source = new EventSource(api.sessionStreamUrl(forSession));
+      streamsRef.current.set(forSession, source);
+      // Keep the lane marked as tracking across retry gaps.
+      updateLive(forSession, (current) => ({ ...current, tracking: true }));
+      let opened = false;
+      source.onopen = () => {
+        opened = true;
+      };
+      bindStreamSource(forSession, source);
+      source.onerror = () => {
+        if (streamsRef.current.get(forSession) !== source) return;
+        closeStream(forSession);
+        if (opened) {
+          void refreshTranscript(forSession);
+          return;
+        }
+        if (remaining <= 0) {
+          updateLive(forSession, (current) => ({ ...current, tracking: false }));
+          void refreshTranscript(forSession);
+          return;
+        }
+        remaining -= 1;
+        updateLive(forSession, (current) => ({ ...current, tracking: true }));
+        const timer = window.setTimeout(() => {
+          retryTimersRef.current.delete(forSession);
+          connect();
+        }, 500);
+        retryTimersRef.current.set(forSession, timer);
+      };
+    };
+
+    connect();
   }
 
   async function refreshTranscript(forSession: string) {
@@ -418,6 +559,7 @@ export default function App() {
       const owner = sessionAgentRef.current[forSession] ?? agentIdRef.current;
       const list = await api.listSessionMessages(forSession, owner);
       if (transcriptRequestRef.current[forSession] !== requestId) return;
+      settlePendingUsers(forSession, list);
       setMessagesFor(forSession, list);
     } catch (exc) {
       failure = describeApiError(exc);
@@ -425,6 +567,7 @@ export default function App() {
       if (transcriptRequestRef.current[forSession] !== requestId) return;
       setLoadingFor(forSession, false);
       const streaming = streamsRef.current.has(forSession);
+      const followUp = followUpRef.current.has(forSession);
       updateLive(forSession, (current) => ({
         ...current,
         // A live stream owns these fields; reopening a busy session must not
@@ -433,15 +576,28 @@ export default function App() {
         streamReasoning: streaming ? current.streamReasoning : "",
         activity: streaming ? current.activity : [],
         notice: failure || current.notice,
-        tracking: streaming,
+        // Keep the lane marked while a queued turn is about to be attached.
+        tracking: streaming || followUp,
       }));
     }
   }
 
   async function finishTurn(forSession: string) {
-    await refreshTranscript(forSession);
-    await refreshSessions();
-    if (forSession === sessionIdRef.current) attachIfBusy(forSession);
+    const queued = (pendingUsersRef.current[forSession] ?? []).length > 0;
+    if (queued) followUpRef.current.add(forSession);
+    try {
+      await refreshTranscript(forSession);
+      await refreshSessions();
+    } finally {
+      followUpRef.current.delete(forSession);
+    }
+    const stillQueued = (pendingUsersRef.current[forSession] ?? []).length > 0;
+    if (stillQueued) {
+      openStreamWithRetry(forSession);
+    } else {
+      updateLive(forSession, (current) => ({ ...current, tracking: false }));
+      if (forSession === sessionIdRef.current) attachIfBusy(forSession);
+    }
   }
 
   useEffect(() => {
@@ -796,7 +952,11 @@ export default function App() {
         command: response.command,
         text: response.reply,
       });
-      if (response.command === "/stop") void refreshSessions();
+      if (response.command === "/stop") {
+        // The runtime drops queued turns; their optimistic user rows must go too.
+        if (targetSessionId) dropPendingUsers(targetSessionId);
+        void refreshSessions();
+      }
       return true;
     } catch (exc) {
       setSessionError(describeApiError(exc), targetSessionId);
@@ -833,15 +993,14 @@ export default function App() {
       : body;
     const wasNew = !sessionIdRef.current;
     const targetSessionId = sessionIdRef.current || newSessionId();
-    const pendingKey = sessionIdRef.current;
     const alreadyStreaming = streamsRef.current.has(targetSessionId);
     sessionAgentRef.current[targetSessionId] = sendAgentId;
     setError("");
     clearLiveNotice(targetSessionId);
-    markPending(pendingKey);
+    markPending(sendKey);
     if (overrideText === undefined) setDraftFor(sendKey, "");
     const optimisticId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    appendMessage(targetSessionId, transcriptMessage("user", content, optimisticId));
+    pushPendingUser(targetSessionId, { id: optimisticId, content });
     if (!alreadyStreaming) {
       updateLive(targetSessionId, () => ({ ...EMPTY_LIVE, tracking: true }));
     }
@@ -856,7 +1015,8 @@ export default function App() {
         clearAttachmentsFor(sendKey);
         clearQuoteFor(sendKey);
       }
-      if (wasNew) {
+      const stillCurrentAgent = sendAgentId === agentIdRef.current;
+      if (wasNew && stillCurrentAgent) {
         sessionIdRef.current = targetSessionId;
         setSessionId(targetSessionId);
         applySessions([
@@ -890,6 +1050,12 @@ export default function App() {
           });
         }
       }
+      if (!stillCurrentAgent) {
+        // The user switched agents while this send was in flight. The turn
+        // belongs to the original agent; never surface it in the new view.
+        skipRefreshRef.current.delete(targetSessionId);
+        return true;
+      }
       if (alreadyStreaming) {
         // Another turn is still streaming in this lane; it will pick up the
         // queued turn when it ends, so keep the current stream attached.
@@ -900,7 +1066,7 @@ export default function App() {
       void refreshSessions();
       return true;
     } catch (exc) {
-      removeMessage(targetSessionId, optimisticId);
+      removePendingUser(targetSessionId, optimisticId);
       if (overrideText === undefined) setDraftFor(sendKey, text);
       skipRefreshRef.current.delete(targetSessionId);
       if (!alreadyStreaming) {
@@ -909,12 +1075,7 @@ export default function App() {
       if (wasNew) {
         // The session never appeared in the URL or sidebar; drop its traces.
         delete sessionAgentRef.current[targetSessionId];
-        setMessagesBySession((current) => {
-          if (!current[targetSessionId]) return current;
-          const next = { ...current };
-          delete next[targetSessionId];
-          return next;
-        });
+        forgetPendingUsers(targetSessionId);
         setLiveBySession((current) => {
           if (!current[targetSessionId]) return current;
           const next = { ...current };
@@ -925,7 +1086,7 @@ export default function App() {
       setAgentError(describeApiError(exc), sendAgentId);
       return false;
     } finally {
-      clearPending(pendingKey);
+      clearPending(sendKey);
     }
   }
 
@@ -954,6 +1115,7 @@ export default function App() {
     try {
       const result = await api.interruptSession(id);
       closeStream(id);
+      if (result.interrupted) dropPendingUsers(id);
       updateLive(id, (current) => ({
         ...current,
         tracking: false,
@@ -995,6 +1157,7 @@ export default function App() {
     for (const [session, owner] of Object.entries(sessionAgentRef.current)) {
       if (owner !== id) continue;
       closeStream(session);
+      forgetPendingUsers(session);
       delete sessionAgentRef.current[session];
     }
     setAttachmentsByKey((current) => {
@@ -1036,6 +1199,7 @@ export default function App() {
       closeStream(id);
       delete draftsRef.current[key];
       delete sessionAgentRef.current[id];
+      forgetPendingUsers(id);
       setAttachmentsByKey((current) => {
         if (!current[key]) return current;
         const next = { ...current };
@@ -1134,6 +1298,10 @@ export default function App() {
     setLiveBySession({});
     pendingSessionsRef.current = {};
     setPendingSessions({});
+    pendingUsersRef.current = {};
+    consumedUsersRef.current = {};
+    setPendingUserBySession({});
+    followUpRef.current.clear();
     draftsRef.current = {};
     sessionAgentRef.current = {};
     setAttachmentsByKey({});
@@ -1347,7 +1515,6 @@ export default function App() {
               key={sessionId}
               messages={messages}
               loading={messagesLoading}
-              sessionId={sessionId}
               streamText={live.streamText}
               streamReasoning={live.streamReasoning}
               activity={live.activity}

@@ -29,7 +29,6 @@ import type {
   MemoryItem,
   MemoryScope,
   Provider,
-  ScreenshotInfo,
   SessionSummary,
   SkillCatalog,
   SkillDetail,
@@ -209,19 +208,10 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}?agent_id=${encodeURIComponent(agentId)}`,
       { method: "DELETE" },
     ),
-  renameSession: (sessionId: string, title: string, agentId: string) =>
-    request<{ renamed: boolean }>(
-      `/api/sessions/${encodeURIComponent(sessionId)}/rename?agent_id=${encodeURIComponent(agentId)}`,
-      { method: "POST", body: JSON.stringify({ title }) },
-    ),
   sessionStreamUrl: (sessionId: string, turnId?: string) =>
     `/api/sessions/${encodeURIComponent(sessionId)}/stream${
       turnId ? `?turn_id=${encodeURIComponent(turnId)}` : ""
     }`,
-  listScreenshots: (sessionId: string) =>
-    request<ScreenshotInfo[]>(`/api/sessions/${sessionId}/screenshots`),
-  screenshotUrl: (sessionId: string, runId: string, screenshotId: string) =>
-    `/api/sessions/${sessionId}/screenshots/${runId}/${screenshotId}.png`,
   uploadUrl: (agentId: string, path: string) => {
     const name = path.startsWith("/uploads/") ? path.slice("/uploads/".length) : path;
     return `/api/agents/${encodeURIComponent(agentId)}/uploads/${encodeURIComponent(name)}`;

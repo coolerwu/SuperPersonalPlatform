@@ -156,7 +156,7 @@ export function Sidebar(props: SidebarProps) {
                   </div>
                   <div className="session-meta">
                     {session.busy && (
-                      <span className="session-activity running">运行中</span>
+                      <span className="session-activity running">忙碌</span>
                     )}
                     {sessionTime(session.last_modified)}
                   </div>

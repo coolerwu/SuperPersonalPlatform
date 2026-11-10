@@ -27,7 +27,6 @@ import { Markdown } from "./Markdown";
 type ChatPanelProps = {
   messages: TranscriptMessage[];
   loading: boolean;
-  sessionId: string;
   streamText: string;
   streamReasoning: string;
   activity: string[];

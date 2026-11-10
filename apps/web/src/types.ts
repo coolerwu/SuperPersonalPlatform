@@ -67,21 +67,6 @@ export type Provider = {
   updated_at: string;
 };
 
-export type Session = {
-  id: string;
-  agent_id: string;
-  title: string;
-  origin: "chat" | "cron" | string;
-  message_count: number;
-  active_run_id: string | null;
-  active_run_status: string | null;
-  channel_type: string | null;
-  channel_name: string | null;
-  created_at: string;
-  updated_at: string;
-  last_message_at: string;
-};
-
 export type SessionSummary = {
   id: string;
   title: string;
@@ -172,66 +157,10 @@ export type ChannelConversation = {
   updated_at: string;
 };
 
-export type Message = {
-  id: string;
-  session_id: string;
-  role: "user" | "assistant" | string;
-  content: string;
-  run_id: string | null;
-  created_at: string;
-};
-
-export type MessagePage = {
-  items: Message[];
-  has_more: boolean;
-  next_before: string | null;
-};
-
-export type SessionSearchHit = {
-  message_id: string;
-  session_id: string;
-  session_title: string;
-  role: "user" | "assistant" | string;
-  snippet: string;
-  created_at: string;
-};
-
 export type Attachment = {
   name: string;
   path: string;
   size: number;
-};
-
-export type ScreenshotInfo = {
-  id: string;
-  run_id: string;
-  created_at: string;
-};
-
-export type Run = {
-  id: string;
-  agent_id: string;
-  session_id: string;
-  source: string;
-  status: string;
-  input: string;
-  output: string | null;
-  error: string | null;
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-  cost: number | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-};
-
-export type RunEvent = {
-  id: number;
-  run_id: string;
-  type: string;
-  payload: Record<string, unknown>;
-  created_at: string;
 };
 
 export type SystemInfo = {

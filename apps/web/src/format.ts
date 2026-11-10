@@ -14,11 +14,3 @@ export function truncate(value: string, length = 120): string {
   const text = value.replace(/\s+/g, " ").trim();
   return text.length > length ? `${text.slice(0, length)}…` : text;
 }
-
-export function previewPayload(payload: Record<string, unknown>): string {
-  try {
-    return truncate(JSON.stringify(payload), 220);
-  } catch {
-    return String(payload);
-  }
-}
