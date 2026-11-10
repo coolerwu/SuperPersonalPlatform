@@ -301,7 +301,7 @@ async def test_paused_agent_can_view_edit_and_delete_jobs(client) -> None:
     try:
         created = _create_job(client)
         assert created.status_code == 400
-        assert created.json()["detail"] == "agent is paused"
+        assert "Agent 已暂停" in created.json()["detail"]
 
         listed = client.get("/api/cron-jobs?agent_id=default")
         assert listed.status_code == 200
@@ -312,7 +312,7 @@ async def test_paused_agent_can_view_edit_and_delete_jobs(client) -> None:
 
         run = client.post(f"/api/cron-jobs/{job['id']}/run")
         assert run.status_code == 400
-        assert run.json()["detail"] == "agent is paused"
+        assert "Agent 已暂停" in run.json()["detail"]
 
         assert client.delete(f"/api/cron-jobs/{job['id']}").status_code == 200
     finally:
@@ -326,6 +326,7 @@ async def test_archived_agent_jobs_are_hidden(client) -> None:
     try:
         assert _create_job(client).status_code == 404
         assert client.get("/api/cron-jobs?agent_id=default").status_code == 404
+        assert client.post(f"/api/cron-jobs/{job['id']}/run").status_code == 404
         assert (
             client.put(f"/api/cron-jobs/{job['id']}", json={"enabled": False}).status_code
             == 404

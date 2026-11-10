@@ -59,7 +59,10 @@ def _active_agent(settings: Any, agent_id: str) -> Any:
     """An Agent that may create jobs right now (paused is a 400, not hidden)."""
     agent = _available_agent(settings, agent_id)
     if agent.status != "active":
-        raise HTTPException(status_code=400, detail=f"agent is {agent.status}")
+        raise HTTPException(
+            status_code=400,
+            detail=cron_service.inactive_agent_message(agent.status),
+        )
     return agent
 
 
@@ -206,6 +209,9 @@ async def run_cron_job_now(
         raise HTTPException(status_code=404, detail="cron job not found")
     store = _store(request)
     settings = await store.get()
+    # Archived Agents hide their jobs everywhere; paused Agents still reach the
+    # service, which returns the shared "Agent 已暂停" 400.
+    _available_agent(settings, job.agent_id)
     registry = _registry(request)
     try:
         # The service is the single source of truth for Agent state: paused

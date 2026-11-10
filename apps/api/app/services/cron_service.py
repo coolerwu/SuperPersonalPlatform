@@ -55,12 +55,27 @@ class CronBusy(Exception):
         super().__init__(f"session is busy ({status})")
 
 
+INACTIVE_AGENT_MESSAGES = {
+    "paused": "Agent 已暂停，无法创建或运行定时任务",
+    "archived": "Agent 已归档，无法运行定时任务",
+    "missing": "Agent 不存在",
+    "inactive": "Agent 不可用",
+}
+
+
+def inactive_agent_message(status: str) -> str:
+    """User-visible text for an Agent that cannot create or run cron jobs."""
+    return INACTIVE_AGENT_MESSAGES.get(
+        status, f"Agent 状态为 {status}，无法运行定时任务"
+    )
+
+
 class CronInactiveAgent(Exception):
     """The Agent cannot run a turn; ``status`` is paused, archived or missing."""
 
     def __init__(self, status: str = "inactive") -> None:
         self.status = status
-        super().__init__(f"agent is {status}")
+        super().__init__(inactive_agent_message(status))
 
 
 def session_title(name: str) -> str:
@@ -492,38 +507,6 @@ async def prepare_trigger(
     )
 
 
-async def trigger_job(
-    db: AsyncSession,
-    job: CronJob,
-    *,
-    store: Any,
-    registry: Any,
-    now: datetime | None = None,
-    immediate: bool = False,
-) -> bool:
-    """Thin compatibility wrapper: prepare, commit, then submit.
-
-    The scheduler and manual API use :func:`prepare_trigger` directly so they
-    own the commit boundary; this helper keeps the old bool contract for tests
-    and callers that do not need to observe the turn.
-    """
-    turn = await prepare_trigger(
-        db, job, store=store, registry=registry, now=now, immediate=immediate
-    )
-    if turn is None:
-        return False
-    await db.commit()
-    try:
-        await registry.submit(turn)
-    except Exception:
-        await _record_trigger_failure(job.id)
-        logger.warning(
-            "cron job %s failed to submit turn", job.id, exc_info=True
-        )
-        return False
-    return True
-
-
 _locks: dict[str, asyncio.Lock] = {}
 
 
@@ -617,8 +600,6 @@ async def run_job_now(
                 now=now,
                 immediate=True,
             )
-            if turn is None:
-                raise CronInactiveAgent("inactive")
             # Consume the run before dispatch. A later submit failure is audited
             # and reported but never retried, matching the scheduler.
             await db.commit()

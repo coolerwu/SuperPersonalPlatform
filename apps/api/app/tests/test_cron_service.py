@@ -248,16 +248,19 @@ async def test_existing_transcript_keeps_session_id(client) -> None:
     transcript = transcript_path(session_id, "default")
     transcript.parent.mkdir(parents=True, exist_ok=True)
     transcript.write_text("{}\n", encoding="utf-8")
-    job_id = await _make_job(
-        next_run_at=now + timedelta(days=1),
-        session_id=session_id,
-        last_run_at=now - timedelta(hours=1),
-    )
-    store, registry = _store(), FakeRegistry()
+    try:
+        job_id = await _make_job(
+            next_run_at=now + timedelta(days=1),
+            session_id=session_id,
+            last_run_at=now - timedelta(hours=1),
+        )
+        store, registry = _store(), FakeRegistry()
 
-    job = await run_job_now(job_id, store=store, registry=registry)
-    assert job.session_id == session_id
-    assert registry.turns[0].session_id == session_id
+        job = await run_job_now(job_id, store=store, registry=registry)
+        assert job.session_id == session_id
+        assert registry.turns[0].session_id == session_id
+    finally:
+        transcript.unlink(missing_ok=True)
 
 
 async def test_submit_failure_consumes_schedule_and_audits(client) -> None:
@@ -466,6 +469,7 @@ async def test_inactive_agent_manual_run_fails(client) -> None:
     with pytest.raises(CronInactiveAgent) as caught:
         await run_job_now(job_id, store=store, registry=registry)
     assert caught.value.status == "archived"
+    assert "Agent 已归档" in str(caught.value)
     assert registry.turns == []
 
 
