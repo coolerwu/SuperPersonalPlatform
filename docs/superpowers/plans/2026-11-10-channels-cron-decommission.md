@@ -1175,9 +1175,13 @@ git add apps/api/app/services/session_service.py apps/api/app/tests/test_session
 git commit -m "Clean up SDK transcripts by retention"
 ```
 
+> **质量审查修订（执行时已落实）：** `purge_expired_transcripts` 校验 agent id；先清理产物（截图/投递/解绑，共用 `cleanup_session_artifacts`，每步独立保护）再删 transcript，删除失败可下轮重试；FileNotFound 回退包 try 并清子 Agent 目录；非 UUID 文件名跳过；绕过 `registry.is_busy` 的会话，成功后 `registry.close_session` 释放缓存 client。测试用真实 UUID，并有一条指向临时 `CLAUDE_CONFIG_DIR` 的真实 `delete_session` 集成测试。
+
 ---
 
 ### Task 7: 配置与记忆接口
+
+> **前置（Task 6 遗留）：** 把旧 `app_configs.session_retention_days` 的值迁移进 `settings.json` 的 `runtime.session_retention_days`（尤其是 0），再切换 `GET/PUT /api/settings` 到 settings store；否则用户此前设置的 0 会静默变成 30。
 
 **Files:**
 - Modify: `apps/api/app/routers/app_settings.py`
