@@ -1074,7 +1074,11 @@ class WeixinRuntime:
         ``mark_pending`` path applies.
         """
         if sent_chunks > 0:
-            await channel_delivery.mark_attempting_error(delivery_id, error)
+            await channel_delivery.mark_attempting_error(
+                delivery_id,
+                error,
+                max_attempts=settings.channel_delivery_max_attempts,
+            )
             return
         await channel_delivery.mark_pending(
             delivery_id,

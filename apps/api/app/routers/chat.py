@@ -92,7 +92,8 @@ async def send_message(payload: ChatRequest, request: Request) -> TurnAcceptedOu
         )
     except SessionDeletingError as exc:
         raise HTTPException(
-            status_code=409, detail="session is being deleted; retry after it finishes"
+            status_code=409,
+            detail="session or agent is being deleted; retry after it finishes",
         ) from exc
     except RuntimeError as exc:
         # The registry rejects work once the application is shutting down.

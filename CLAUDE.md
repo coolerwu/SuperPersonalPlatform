@@ -18,7 +18,7 @@
 - 新库的 `app.db` 只创建六张表：`audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留未使用的旧表。`market.db` 行情缓存不变。
 - `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 注入；修改 Agent/Provider 后关闭该 Agent 的空闲缓存 client；忙碌会话在下一次 turn 开始时按配置指纹（instructions + provider base_url/model/api_key）检测并重建。
 - 重启恢复：`running_sessions` 租约 + `resume`；恢复提示要求先检查状态、继续原任务、不重复已完成步骤；没有 transcript 的租约删除，但渠道空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并交由启动补发，网页来源写 `audit_log`；暂停/归档 Agent 的租约保留。
-- Agent 状态：`active` 正常接收网页/渠道/定时；`paused` 与 `archived` 都拒绝网页新消息（409）、暂停该 Agent 的渠道轮询（保留 cursor）并跳过定时任务；非 active Agent 的渠道仍可在渠道页查看、编辑和删除。
+- Agent 状态：`active` 正常接收网页/渠道/定时；`paused` 与 `archived` 都拒绝网页新消息（409）、暂停该 Agent 的渠道轮询（保留 cursor）并跳过定时任务；非 active Agent 的渠道仍可在渠道页查看、编辑和删除；配置页把状态改回 `active` 即恢复（archived 也在 `GET /api/agents` 列表中），微信轮询随状态变更自动重启。
 - 网页聊天：`POST /api/chat/messages` → `{session_id, turn_id, accepted}`；SSE `GET /api/sessions/{uuid}/stream?turn_id=...`；历史 `GET /api/sessions/{uuid}/messages?agent_id=...`；中断 `POST /api/sessions/{uuid}/interrupt`；命令 `POST /api/chat/commands`（`/new` `/clear` `/stop` `/status` `/help`）。网页提交校验 Agent 为 active 且 session 属于该 Agent。同进程刷新会在数秒内通过 `current_turn_id` 重放当前轮缓冲；进程重启或断线才丢失，历史从 transcript 重建。
 - 渠道：配置与 `channel_conversations`（key `"{channel_id}:{external_id}"`，含 `context_token`）在 `settings.json`；`channel_inbounds` 幂等去重；`channel_deliveries` 在 turn 开始写 pending、结束回填并发送，重启补发；同一联系人 5 秒打包；文本/图片/文件、引用找回与渠道命令都保留；运行期截图实时推送等工具层接入（当前 `channel_images` 无调用方）。
 - 定时：`cron_jobs.session_id` 是 SDK 会话 UUID；每次触发在专属会话入队一个 turn；会话忙时跳过并写 `audit_log`；启动补跑最多一次；推送目标是当前 Agent 的 active 微信渠道下已有 1:1 联系人，复用渠道投递。

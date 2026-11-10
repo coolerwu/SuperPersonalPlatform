@@ -1052,7 +1052,7 @@ async def test_partial_delivery_failure_stays_attempting_for_prefix_retry(monkey
         # Keeping "attempting" is what makes the next sweep prepend the
         # "possibly partially delivered" notice.
         assert row.status == "attempting"
-        assert row.attempts == 1
+        assert row.attempts == 2
         assert "second chunk failed" in (row.last_error or "")
     finally:
         await _cleanup_deliveries(delivery_id)
@@ -1232,4 +1232,47 @@ async def test_poll_loop_pauses_when_agent_becomes_inactive():
         )
         assert runtime.running_channels() == []
     finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_partial_delivery_reaches_terminal_failed_at_attempt_limit(monkeypatch):
+    monkeypatch.setattr(weixin_runtime_module, "RETRY_DELAY_SECONDS", 0)
+    monkeypatch.setattr(
+        weixin_runtime_module.settings, "channel_delivery_max_attempts", 2
+    )
+    channel = _channel()
+    conversation = _conversation(channel, context_token="ctx")
+    store = FakeStore([channel], {f"{channel.id}:wx-1": conversation})
+    client = PartialSendClient(error=RuntimeError("second chunk failed"))
+    runtime = _runtime(store, FakeRegistry(), client=client)
+    delivery_id = await _create_delivery(channel.id, content="a" * 4000)
+    try:
+        await runtime.deliver(delivery_id)
+
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        assert row.status == "failed"
+        assert row.attempts == 2
+        assert "second chunk failed" in (row.last_error or "")
+        # Terminal rows are no longer retried by the startup sweep.
+        pending = await channel_delivery.list_pending()
+        assert all(item.id != delivery_id for item in pending)
+    finally:
+        await _cleanup_deliveries(delivery_id)
+
+
+@pytest.mark.asyncio
+async def test_wait_inflight_times_out_and_returns_false(monkeypatch):
+    channel = _channel()
+    store = FakeStore([channel])
+    runtime = _runtime(store, FakeRegistry(), client=FakeClient())
+    key = (channel.id, "wx-1")
+    event = asyncio.Event()
+    runtime._inflight_events[key] = event
+    monkeypatch.setattr(weixin_runtime_module, "INFLIGHT_WAIT_SECONDS", 0.01)
+    try:
+        assert await runtime._wait_inflight(key) is False
+    finally:
+        runtime._inflight_events.pop(key, None)
         await runtime.stop()

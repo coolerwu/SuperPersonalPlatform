@@ -640,9 +640,9 @@ class ClaudeTurnRunner:
     async def _disconnect(self, client: Any, session_id: str) -> bool:
         """Disconnect one client within the shared timeout.
 
-        Returns False when the timeout expired (the caller may keep the
-        reference for the shutdown report); exceptions are logged and treated
-        as a completed teardown.
+        A timed-out client is retained in ``_orphaned_clients`` (the SDK has no
+        process-termination API) so the reference is never silently dropped;
+        exceptions are logged and treated as a completed teardown.
         """
         try:
             async with asyncio.timeout(_DISCONNECT_TIMEOUT_SECONDS):
@@ -650,8 +650,10 @@ class ClaudeTurnRunner:
             return True
         except TimeoutError:
             logger.warning(
-                "client disconnect timed out session=%s", session_id
+                "client disconnect timed out session=%s; keeping reference",
+                session_id,
             )
+            self._orphaned_clients.append(client)
             return False
         except Exception:
             logger.exception("client disconnect failed session=%s", session_id)

@@ -17,6 +17,7 @@ export type AgentSavePayload = {
   instructions: string;
   provider_id: string;
   auto_memory: boolean;
+  status?: "active" | "paused";
 };
 
 export type SkillInfo = {

@@ -16,6 +16,7 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
   const [instructions, setInstructions] = useState("");
   const [providerId, setProviderId] = useState("");
   const [autoMemory, setAutoMemory] = useState(true);
+  const [status, setStatus] = useState<string>("active");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -23,8 +24,9 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
     setInstructions(agent?.instructions ?? "");
     setProviderId(agent?.provider_id ?? providers[0]?.id ?? "");
     setAutoMemory(agent?.auto_memory ?? true);
+    setStatus(agent?.status ?? "active");
     setError("");
-  }, [agent?.id, agent?.name, agent?.instructions, agent?.provider_id, agent?.auto_memory, providers]);
+  }, [agent?.id, agent?.name, agent?.instructions, agent?.provider_id, agent?.auto_memory, agent?.status, providers]);
 
   if (!agent) {
     return <div className="empty-note">选择一个 Agent 后编辑。</div>;
@@ -40,6 +42,7 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
         instructions,
         provider_id: providerId,
         auto_memory: autoMemory,
+        ...(status === "active" || status === "paused" ? { status } : {}),
       });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -62,6 +65,19 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
         onChange={setProviderId}
         ariaLabel="Provider"
       />
+
+      <label className="field-label" htmlFor="agent-status">状态</label>
+      <select
+        id="agent-status"
+        value={status}
+        onChange={(event) => setStatus(event.target.value)}
+      >
+        <option value="active">active（正常运行）</option>
+        <option value="paused">paused（暂停）</option>
+        {status === "archived" && (
+          <option value="archived" disabled>archived（已归档，可改为 active 恢复）</option>
+        )}
+      </select>
 
       <div className="field-label">工作区</div>
       <div className="hint workspace-path-preview">

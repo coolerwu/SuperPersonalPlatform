@@ -325,7 +325,13 @@ export function SettingsPage(props: SettingsPageProps) {
                     </span>
                     <span className="agent-row-badges">
                       <span className="agent-status">记忆 {item.auto_memory ? "开" : "关"}</span>
-                      <span className="agent-status">{item.status}</span>
+                      <span className="agent-status">
+                        {item.status === "archived"
+                          ? "已归档"
+                          : item.status === "paused"
+                            ? "已暂停"
+                            : item.status}
+                      </span>
                     </span>
                   </button>
                 );

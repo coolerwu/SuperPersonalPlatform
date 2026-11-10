@@ -938,3 +938,57 @@ async def test_interrupt_marks_turn_active_under_timeout(tmp_path, monkeypatch):
                 await task
         finally:
             await turn_lease.remove(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_lock_timeout_still_marks_the_active_turn(tmp_path, monkeypatch):
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_INTERRUPT_LOCK_TIMEOUT_SECONDS", 0.01)
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient([ResultMessage()]),
+    )
+    turn = make_turn(session_id="23232323-2323-2323-2323-232323232323")
+    key = (turn.agent_id, turn.session_id)
+    lock = runner._client_lock(turn.session_id)
+    await lock.acquire()
+    runner._active.add(key)
+    try:
+        assert await runner.interrupt(turn.session_id) is True
+        assert key in runner._cancel_requested
+    finally:
+        runner._active.discard(key)
+        runner._cancel_requested.discard(key)
+        lock.release()
+
+
+@pytest.mark.asyncio
+async def test_idle_eviction_timeout_retains_an_orphan_reference(
+    tmp_path, monkeypatch, caplog
+):
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 0.01)
+
+    class SlowDisconnectClient(FakeClient):
+        async def disconnect(self):
+            await asyncio.Event().wait()
+
+    client = SlowDisconnectClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        client_ttl_seconds=0.01,
+        sweep_seconds=3600,
+    )
+    turn = make_turn(session_id="24242424-2424-2424-2424-242424242424")
+    await runner.run(turn, TurnStream())
+    await asyncio.sleep(0.02)
+
+    assert await runner.sweep_idle_clients() == 1
+    assert runner._clients == {}
+    assert runner._orphaned_clients == [client]
+    assert any(
+        "keeping reference" in record.getMessage() for record in caplog.records
+    )

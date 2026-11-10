@@ -30,9 +30,17 @@ from app.services.turn_stream import TurnStream
 
 logger = logging.getLogger(__name__)
 
+# Saving an Agent setting closes every idle client for that Agent. Bound the
+# whole loop because a wedged CLI disconnect already has its own timeout.
+_AGENT_CLOSE_BUDGET_SECONDS = 20.0
+
 
 class SessionDeletingError(RuntimeError):
     """A turn was submitted while its session was being deleted."""
+
+
+class AgentDeletingError(SessionDeletingError):
+    """A turn was submitted while its Agent was being deleted."""
 
 
 class SessionRegistry:
@@ -64,12 +72,17 @@ class SessionRegistry:
         # the marker are set without an await, so a turn cannot slip into the
         # queue between the check and the transcript delete.
         self._deleting: set[str] = set()
+        # Agent-level delete marker; also blocks channel/cron turns for the
+        # Agent while its workspace/transcripts are being removed.
+        self._deleting_agents: set[str] = set()
         self._max_streams = max(1, max_streams)
         self._closed = False
 
     async def submit(self, turn: Turn) -> str:
         if self._closed:
             raise RuntimeError("registry is closed")
+        if turn.agent_id in self._deleting_agents:
+            raise AgentDeletingError("agent is being deleted")
         if turn.session_id in self._deleting:
             raise SessionDeletingError("session is being deleted")
         # This method intentionally has no awaits: queue creation, stream
@@ -187,6 +200,21 @@ class SessionRegistry:
     def finish_delete(self, session_id: str) -> None:
         self._deleting.discard(session_id)
 
+    def begin_agent_delete(self, agent_id: str) -> bool:
+        """Atomically mark an Agent for permanent deletion.
+
+        Returns False when any of its sessions has a queued/running turn.
+        While set, every submit for the Agent is rejected, closing the window
+        between the busy check and workspace/transcript removal.
+        """
+        if self.is_agent_busy(agent_id):
+            return False
+        self._deleting_agents.add(agent_id)
+        return True
+
+    def finish_agent_delete(self, agent_id: str) -> None:
+        self._deleting_agents.discard(agent_id)
+
     def session_agent(self, session_id: str) -> str | None:
         return self._session_agents.get(session_id)
 
@@ -199,10 +227,27 @@ class SessionRegistry:
         until it finishes and the settings change can be retried.
         """
         closed = 0
+        deadline = asyncio.get_running_loop().time() + _AGENT_CLOSE_BUDGET_SECONDS
         for session_id, owner in list(self._session_agents.items()):
             if owner != agent_id or self.is_busy(session_id):
                 continue
-            await self._runner.close(session_id)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                logger.warning(
+                    "client close budget exhausted agent=%s; leaving the rest cached",
+                    agent_id,
+                )
+                break
+            try:
+                async with asyncio.timeout(remaining):
+                    await self._runner.close(session_id)
+            except TimeoutError:
+                logger.warning(
+                    "client close budget exceeded agent=%s session=%s",
+                    agent_id,
+                    session_id,
+                )
+                break
             closed += 1
         return closed
 
@@ -297,5 +342,6 @@ class SessionRegistry:
             self._cancelled.clear()
             self._session_agents.clear()
             self._deleting.clear()
+            self._deleting_agents.clear()
             self._streams.clear()
             self._turn_sessions.clear()

@@ -16,8 +16,8 @@ AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 # agent id, which would break transcript-path assumptions.
 _RESERVED_AGENT_IDS = frozenset(
     {"con", "prn", "aux", "nul"}
-    | {f"com{index}" for index in range(1, 10)}
-    | {f"lpt{index}" for index in range(1, 10)}
+    | {f"com{index}" for index in range(0, 10)}
+    | {f"lpt{index}" for index in range(0, 10)}
 )
 
 

@@ -285,3 +285,127 @@ def test_archiving_an_agent_releases_its_cached_clients(client, monkeypatch) -> 
 
     assert client.delete(f"/api/agents/{agent['id']}").status_code == 200
     assert registry.closed_agents == [agent["id"]]
+
+
+def test_pause_and_resume_agent_syncs_channel_polling(client, monkeypatch) -> None:
+    agent = client.post("/api/agents", json={"name": "SyncAgent"}).json()
+    channel = _create_channel(client, agent_id=agent["id"])
+    _call(
+        client,
+        _store(client).update_channel_fields,
+        channel["id"],
+        status="active",
+        account_id="acct@im.bot",
+        bot_token="token",
+    )
+
+    runtime = client.app.state.weixin
+    calls: list[tuple[str, str]] = []
+
+    async def start_channel(channel_id):
+        calls.append(("start", channel_id))
+        return True
+
+    async def stop_channel(channel_id):
+        calls.append(("stop", channel_id))
+
+    async def sweep_deliveries(channel_id=None):
+        calls.append(("sweep", channel_id or ""))
+
+    monkeypatch.setattr(runtime, "start_channel", start_channel)
+    monkeypatch.setattr(runtime, "stop_channel", stop_channel)
+    monkeypatch.setattr(runtime, "sweep_deliveries", sweep_deliveries)
+
+    paused = client.put(f"/api/agents/{agent['id']}", json={"status": "paused"})
+    assert paused.status_code == 200
+    assert calls == [("stop", channel["id"])]
+
+    calls.clear()
+    resumed = client.put(f"/api/agents/{agent['id']}", json={"status": "active"})
+    assert resumed.status_code == 200
+    assert calls == [
+        ("start", channel["id"]),
+        ("sweep", channel["id"]),
+    ]
+
+
+def test_archived_agent_is_listed_and_can_be_restored(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    agent = client.post("/api/agents", json={"name": "Restorable"}).json()
+    channel = _create_channel(client, agent_id=agent["id"])
+
+    assert client.delete(f"/api/agents/{agent['id']}").status_code == 200
+
+    listed = client.get("/api/agents").json()
+    archived_row = next(item for item in listed if item["id"] == agent["id"])
+    assert archived_row["status"] == "archived"
+    assert client.get(f"/api/agents/{agent['id']}").status_code == 200
+
+    restored = client.put(
+        f"/api/agents/{agent['id']}", json={"status": "active"}
+    )
+    assert restored.status_code == 200
+    assert restored.json()["status"] == "active"
+
+    # Channels remain manageable and are still bound to the restored Agent.
+    channels = client.get("/api/channels", params={"agent_id": agent["id"]})
+    assert channels.status_code == 200
+    assert [row["id"] for row in channels.json()] == [channel["id"]]
+
+
+def test_agent_permanent_delete_uses_agent_delete_marker(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    agent = client.post("/api/agents", json={"name": "MarkerAgent"}).json()
+
+    class Registry:
+        def __init__(self) -> None:
+            self.began: list[str] = []
+            self.finished: list[str] = []
+
+        def is_busy(self, session_id):
+            return False
+
+        def is_agent_busy(self, agent_id):
+            return False
+
+        def begin_agent_delete(self, agent_id):
+            self.began.append(agent_id)
+            return True
+
+        def finish_agent_delete(self, agent_id):
+            self.finished.append(agent_id)
+
+        async def close_session(self, session_id):
+            return None
+
+    registry = Registry()
+    client.app.state.registry = registry
+
+    response = client.delete(f"/api/agents/{agent['id']}/permanent")
+    assert response.status_code == 200
+    assert registry.began == [agent["id"]]
+    assert registry.finished == [agent["id"]]
+
+
+def test_agent_permanent_delete_refused_when_marker_is_busy(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    agent = client.post("/api/agents", json={"name": "BusyMarkerAgent"}).json()
+
+    class Registry:
+        def is_busy(self, session_id):
+            return False
+
+        def is_agent_busy(self, agent_id):
+            return True
+
+        def begin_agent_delete(self, agent_id):
+            return False
+
+        async def close_session(self, session_id):
+            return None
+
+    client.app.state.registry = Registry()
+    response = client.delete(f"/api/agents/{agent['id']}/permanent")
+    assert response.status_code == 409
+    listed = client.get("/api/agents").json()
+    assert any(item["id"] == agent["id"] for item in listed)

@@ -47,7 +47,7 @@
 #### 验收标准
 
 - 能创建/切换多个 Agent；每个 Agent 的会话、transcript、工作区隔离。
-- Chat 流式输出；刷新后历史从 transcript 读回；刷新会丢失当前正在流式输出的内容（已知损失）。
+- Chat 流式输出；刷新后历史从 transcript 读回；同进程刷新可在数秒内通过 `current_turn_id` 重放当前轮缓冲，进程重启或断线才丢失当前输出。
 - 执行中可停止；租约删除；重启后正在执行的会话自动续跑。
 - 微信、定时入口与网页共用执行核与会话队列。
 - 后端测试与前端构建通过。
@@ -56,7 +56,7 @@
 
 - 单用户、自托管，不做多租户/RBAC。
 - 单进程部署；cron 与微信运行时都在 API 进程内，多 worker 会重复触发。
-- 不提供刷新后继续看当前输出、消息时间戳、会话全文搜索、Run 历史、rubric 质检、QuickJS eval、平台级多 Agent 编排或自定义子 Agent 配置；SDK 内置 Task 子 Agent 可用。
+- 不提供进程重启或断线后继续看当前输出、消息时间戳、会话全文搜索、Run 历史、rubric 质检、QuickJS eval、平台级多 Agent 编排或自定义子 Agent 配置；SDK 内置 Task 子 Agent 可用。
 - 平台写入的密钥存 `data/settings.json`（权限 0600）；`.env` 提供的密钥仅在首次种子时复制到 settings.json，之后以文件为准，平台不回写 `.env`。密钥不写日志、不返回前端。
 
 #### 非目标
@@ -126,7 +126,7 @@
 1. 平台配置单文件 `data/settings.json`：`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`。单 `asyncio.Lock`；写临时文件 → fsync → `os.replace`；写前保留 `.bak`；主文件损坏时回退 `.bak`。启动种子在主文件不可解析且 `.bak` 也不可用、或文件中没有合法 `agents` 列表时重写默认 sections（保留仍可读的 runtime/knowledge/channels），并记 warning；解析成功且显式 `agents: []` 的文件视为用户主动清空，保留并 warning。
 2. 环境变量只做首次种子（默认 Agent 与提示词、`SESSION_RETENTION_DAYS`、`KB_WEBDAV_*`）；文件存在后不再读取。旧库 `app_configs.session_retention_days` 在首次启动迁移一次，用 `runtime.legacy_import_done` 标记。
 3. Provider 为单例（id=`default`），编辑的是 default Agent 的 Provider；`base_url` 自动补 `/anthropic`；接口只返回 `has_api_key`。
-4. Agent：id、名称、instructions、状态（active/paused/archived）、`enabled_skills`、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。状态语义统一为：`active` 正常接收网页、渠道和定时任务；`paused` 与 `archived` 都拒绝网页新消息（409）、拒绝渠道入站并暂停该 Agent 的渠道轮询（保留 cursor，恢复 active 后继续）、跳过定时任务；两种非 active 状态下渠道页仍可查看/编辑/删除渠道。
+4. Agent：id、名称、instructions、状态（active/paused/archived）、`enabled_skills`、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。状态语义统一为：`active` 正常接收网页、渠道和定时任务；`paused` 与 `archived` 都拒绝网页新消息（409）、拒绝渠道入站并暂停该 Agent 的渠道轮询（保留 cursor，恢复 active 后继续）、跳过定时任务；`GET /api/agents` 包含 archived，配置页可把 archived/paused 改回 active 恢复，恢复后渠道轮询自动重启、定时任务从下一次匹配时间继续；两种非 active 状态下渠道页仍可查看/编辑/删除渠道。
 5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，忙碌会话在下一次 turn 开始时按配置指纹自动重建 client，因此配置变更不会永久丢失。
 6. Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区与 transcript，彻底删除会同时删除工作区目录和 transcript 目录，并级联删除渠道、渠道绑定、投递/入站记录与定时任务；有活动 turn 时 409。
 7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers` 读写 `settings.json`；`/api/memories` 只读写 `claude/CLAUDE.md`；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`。
@@ -174,7 +174,7 @@
 4. 出站：
    - turn 开始时在同一事务写 `running_sessions` 租约与 `channel_deliveries` pending 行；结束时回填最终答复并发送；取消的 turn 不发送并删除空投递行。
    - 回复按 1800 字在段落/代码围栏边界切块，最多 10 块，超出截断并标注。
-   - 崩溃重启后按 pending/attempting 行补发；attempting 行补发文案为「♻️ 上一条回复可能已部分送达，以下为完整内容：」。如果一次发送在至少一块已送达后失败（含登录过期），行保持 attempting，后续补发保留该前缀；只有一块都没发出时才回到 pending。渠道暂停/登录过期时保留 pending，恢复后继续。
+   - 崩溃重启后按 pending/attempting 行补发；attempting 行补发文案为「♻️ 上一条回复可能已部分送达，以下为完整内容：」。如果一次发送在至少一块已送达后失败（含登录过期），行保持 attempting，后续补发保留该前缀；每次失败累加 attempts，达到 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 后标记终态 `failed` 并停止自动补发（已知限制：前缀只在重试期间保留）。只有一块都没发出时才回到 pending。渠道暂停/登录过期时保留 pending，恢复后继续。
    - 网页里在渠道会话中手动发消息不推回微信；定时推送复用同一投递机制。
 5. 运行期截图推送：工具层未接入，`channel_images.send_session_image` 已保留但当前没有调用方；下一版本接入浏览器工具后启用。
 6. 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；重新扫码后补发未发送回复。
@@ -376,7 +376,7 @@
 3. QuickJS eval 代码解释器。
 4. 会话全文搜索。
 5. 平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）。
-6. 刷新后继续看当前流式输出（刷新丢当前输出）。
+6. 进程重启或断线后继续看当前流式输出（同进程刷新会通过 `current_turn_id` 重放当前轮缓冲）。
 7. 消息时间戳。
 8. Run 历史。
 9. 渠道运行期截图实时推送（等工具层）。

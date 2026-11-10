@@ -3,7 +3,11 @@ import asyncio
 import pytest
 
 from app.services.claude_runner import Turn
-from app.services.session_registry import SessionDeletingError, SessionRegistry
+from app.services.session_registry import (
+    AgentDeletingError,
+    SessionDeletingError,
+    SessionRegistry,
+)
 
 
 async def wait_until(predicate, timeout=2.0):
@@ -419,3 +423,77 @@ async def test_session_agent_reports_owner():
     assert registry.session_agent("missing") is None
     await wait_until(lambda: runner.finished == ["a"])
     await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_begin_agent_delete_blocks_its_turns_until_finished():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    try:
+        assert registry.begin_agent_delete("agent-a") is True
+        with pytest.raises(AgentDeletingError):
+            await registry.submit(
+                Turn(session_id="s-a", agent_id="agent-a", prompt="blocked")
+            )
+        # Other Agents are unaffected.
+        runner.release("other")
+        await registry.submit(
+            Turn(session_id="s-b", agent_id="agent-b", prompt="other")
+        )
+        await wait_until(lambda: runner.finished == ["other"])
+
+        registry.finish_agent_delete("agent-a")
+        runner.release("after")
+        await registry.submit(
+            Turn(session_id="s-a", agent_id="agent-a", prompt="after")
+        )
+        await wait_until(lambda: runner.finished == ["other", "after"])
+    finally:
+        await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_begin_agent_delete_refuses_a_busy_agent():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    try:
+        await registry.submit(
+            Turn(session_id="s-a", agent_id="agent-a", prompt="a")
+        )
+        await wait_until(lambda: runner.started == ["a"])
+        assert registry.begin_agent_delete("agent-a") is False
+        runner.release("a")
+        await wait_until(lambda: runner.finished == ["a"])
+    finally:
+        await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_close_agent_clients_has_a_total_budget(monkeypatch):
+    from app.services import session_registry as registry_module
+
+    class BlockingCloseRunner(FakeRunner):
+        async def close(self, session_id):
+            self.closed.append(session_id)
+            await asyncio.Event().wait()
+
+    runner = BlockingCloseRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    monkeypatch.setattr(registry_module, "_AGENT_CLOSE_BUDGET_SECONDS", 0.02)
+    try:
+        runner.release("a")
+        await registry.submit(
+            Turn(session_id="s-a", agent_id="agent-a", prompt="a")
+        )
+        await wait_until(lambda: runner.finished == ["a"])
+        await wait_until(lambda: not registry.is_busy("s-a"))
+
+        started = asyncio.get_running_loop().time()
+        closed = await asyncio.wait_for(
+            registry.close_agent_clients("agent-a"), 1
+        )
+        elapsed = asyncio.get_running_loop().time() - started
+        assert closed == 0
+        assert elapsed < 0.5
+    finally:
+        await registry.close()

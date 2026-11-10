@@ -19,13 +19,16 @@ def _call(client, function, /, *args, **kwargs):
 
 
 class RecordingRegistry:
-    def __init__(self, *, busy=False, interrupted=False, submit_error=None):
+    def __init__(
+        self, *, busy=False, interrupted=False, submit_error=None, session_owner=None
+    ):
         self.turns = []
         self.busy = busy
         self.interrupted = interrupted
         self.interrupt_calls = []
         self.closed = []
         self.submit_error = submit_error
+        self.session_owner = session_owner
 
     async def submit(self, turn):
         if self.submit_error is not None:
@@ -35,6 +38,9 @@ class RecordingRegistry:
 
     def is_busy(self, session_id):
         return self.busy
+
+    def session_agent(self, session_id):
+        return self.session_owner
 
     async def interrupt(self, session_id):
         self.interrupt_calls.append(session_id)
@@ -466,3 +472,24 @@ def test_delete_releases_delete_marker_when_catalog_raises(client):
 
     assert registry.finished == [SESSION_ID]
     assert registry.deleting == set()
+
+
+def test_send_message_rejects_session_claimed_by_another_registry_owner(client):
+    client.app.state.registry = RecordingRegistry(session_owner="another-agent")
+    response = client.post(
+        "/api/chat/messages",
+        json={"agent_id": "default", "session_id": SESSION_ID, "content": "hi"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "session id belongs to another agent"
+
+
+def test_send_message_allows_session_claimed_by_the_same_registry_owner(client):
+    registry = RecordingRegistry(session_owner="default")
+    client.app.state.registry = registry
+    response = client.post(
+        "/api/chat/messages",
+        json={"agent_id": "default", "session_id": SESSION_ID, "content": "hi"},
+    )
+    assert response.status_code == 201
+    assert len(registry.turns) == 1

@@ -362,23 +362,41 @@ async def test_fail_unfilled_for_session_fills_only_empty_live_rows():
 
 
 @pytest.mark.asyncio
-async def test_mark_attempting_error_keeps_partial_send_claimable():
+async def test_mark_attempting_error_counts_failures_and_stops_at_limit():
     await init_db()
     delivery_id = None
     try:
         delivery_id = await _create()
         await channel_delivery.complete(delivery_id, "hello")
         assert await channel_delivery.mark_attempting(delivery_id) is True
-        assert await channel_delivery.mark_attempting_error(delivery_id, "chunk 2 failed")
+        assert (
+            await channel_delivery.mark_attempting_error(
+                delivery_id, "chunk 2 failed", max_attempts=3
+            )
+            is True
+        )
 
         row = await channel_delivery.get(delivery_id)
         assert row is not None
         assert row.status == "attempting"
         assert row.last_error == "chunk 2 failed"
-        assert row.attempts == 1
+        assert row.attempts == 2
 
-        # The next sweep sees attempting and prepends the partial-send prefix.
-        assert await channel_delivery.mark_sent(delivery_id) is True
+        # A second failed attempt reaches the limit and becomes terminal, so
+        # the startup sweep no longer retries it automatically.
+        assert await channel_delivery.mark_attempting(delivery_id) is True
+        assert (
+            await channel_delivery.mark_attempting_error(
+                delivery_id, "chunk 2 failed again", max_attempts=3
+            )
+            is True
+        )
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        assert row.status == "failed"
+        assert row.attempts == 4
+        assert "again" in (row.last_error or "")
+        assert await channel_delivery.mark_sent(delivery_id) is False
     finally:
         await _cleanup(delivery_id)
 

@@ -495,3 +495,37 @@ def test_get_settings_store_rebinds_when_data_dir_changes(tmp_path, monkeypatch)
     assert second.path == tmp_path / "b" / "settings.json"
 
     assert settings_store_module.get_settings_store() is second
+
+
+@pytest.mark.asyncio
+async def test_ensure_seeded_leaves_a_complete_valid_file_unchanged(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        settings_store_module.app_settings,
+        "app_database_url",
+        f"sqlite+aiosqlite:///{tmp_path / 'no-legacy.db'}",
+    )
+    path = tmp_path / "settings.json"
+    original = {
+        "runtime": {"session_retention_days": 12, "legacy_import_done": True},
+        "knowledge": {
+            "enabled": True,
+            "url": "https://dav.example",
+            "username": "u",
+            "password": "p",
+            "root": "/kb",
+            "interval_seconds": 600,
+        },
+        "agents": [{"id": "default", "name": "Assistant", "status": "active"}],
+        "channels": [],
+        "channel_conversations": {},
+    }
+    path.write_text(json.dumps(original, ensure_ascii=False, indent=2), "utf-8")
+    before = path.read_text("utf-8")
+
+    settings = await SettingsStore(path).ensure_seeded()
+
+    assert path.read_text("utf-8") == before
+    assert [agent.id for agent in settings.agents] == ["default"]
+    assert settings.knowledge.root == "/kb"

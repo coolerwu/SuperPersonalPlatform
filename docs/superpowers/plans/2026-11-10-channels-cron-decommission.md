@@ -1449,7 +1449,7 @@ git commit -m "Document SDK-native channels and cron"
 
 ## 合并前最终审查修复（2026-11-11）
 
-在分支 `feature/claude-sdk-migration` 合并前，对整个分支与 SDK 用法做最终审查，落地以下修复；后端测试从 579 passed / 3 skipped 增至 645 passed / 3 skipped。
+在分支 `feature/claude-sdk-migration` 合并前，对整个分支与 SDK 用法做最终审查，落地以下修复；后端测试从 579 passed / 3 skipped 增至 662 passed / 3 skipped。
 
 | 项 | 修复 |
 |---|---|
@@ -1459,12 +1459,12 @@ git commit -m "Document SDK-native channels and cron"
 | P1-4 附件路径 | 新消息写相对工作区路径 `uploads/<name>`；`attachments` 兼容旧 `/uploads/<name>`；前端 `api.uploadUrl` 同时支持两种形式；微信媒体同步。 |
 | P1-5 跨 Agent 会话 | 网页提交校验 session 归属（已有 transcript 或 registry 已知 owner），跨 Agent 返回 409；client 缓存键含 agent id。 |
 | P1-6 忙碌会话配置 | client 记录 instructions + provider 指纹，下一轮开始发现变化即逐出重建；`close_agent_clients` 仍负责空闲会话。 |
-| P1-7 Agent 状态 | `paused`/`archived` 统一拒绝网页消息（409）、暂停渠道轮询（保留 cursor）、跳过定时任务；非 active Agent 的渠道页不再 404；恢复 active 时重新启动轮询。 |
+| P1-7 Agent 状态 | `paused`/`archived` 统一拒绝网页消息（409）、暂停渠道轮询（保留 cursor）、跳过定时任务；非 active Agent 的渠道页不再 404；`GET /api/agents` 包含 archived，配置页可恢复为 active；恢复 active 时重新启动轮询。 |
 | P1-8 无 transcript 恢复 | 渠道空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发；网页来源写 `audit_log`。 |
 | P1-9 帧缓冲 | `ClaudeAgentOptions.max_buffer_size = 16 MB`。 |
-| P1-10 保留名 | `valid_agent_id` 拒绝 `con/prn/aux/nul/com1-9/lpt1-9`（大小写不敏感）。 |
+| P1-10 保留名 | `valid_agent_id` 拒绝 `con/prn/aux/nul/com0-9/lpt0-9`（大小写不敏感）。 |
 | P1-11 权限 | `ensure_claude_dirs` 对 `tmp/` 与 `workspaces/` 根同样设 0700。 |
-| P1-12 部分送达 | 至少一块已发送后失败（含登录过期）保持 `attempting`，补发保留「可能已部分送达」前缀；一块都没发出才 `mark_pending`。 |
+| P1-12 部分送达 | 至少一块已发送后失败（含登录过期）保持 `attempting`，补发保留「可能已部分送达」前缀；每次失败累加 attempts，达到上限后标记 `failed` 并停止自动补发；一块都没发出才 `mark_pending`。 |
 | P1-13 命令竞态 | `/new`、`/stop` 先有界等待在途 batch（`INFLIGHT_WAIT_SECONDS=30`）再重绑/中断；`_send_chunk` 在最后一次尝试时不再吞掉 `WeixinSessionExpired`。 |
 | P1-14 删除竞态 | registry 增加 `begin_delete`/`finish_delete`，删除开始后新提交被拒绝；手动删除与后台清理共用。 |
 | P1-15 settings 损坏 | 主文件不可解析且无 `.bak`、或没有合法 `agents` 列表时重新种子默认 sections（保留可读字段）；解析成功且显式 `agents: []` 保留并 warning。 |

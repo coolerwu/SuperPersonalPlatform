@@ -172,11 +172,9 @@ async def _agent_has_active_turn(
 @router.get("", response_model=list[AgentOut])
 async def list_agents(request: Request) -> list[AgentOut]:
     snapshot = await _store(request).get()
-    return [
-        _agent_out(agent)
-        for agent in snapshot.agents
-        if agent.status != "archived"
-    ]
+    # Archived Agents stay listed so the config page can restore them to
+    # active; the status badge tells the owner why they are idle.
+    return [_agent_out(agent) for agent in snapshot.agents]
 
 
 @router.post("", response_model=AgentOut, status_code=201)
@@ -210,7 +208,7 @@ async def create_agent(payload: AgentCreate, request: Request) -> AgentOut:
 @router.get("/{agent_id}", response_model=AgentOut)
 async def get_agent(agent_id: str, request: Request) -> AgentOut:
     snapshot = await _store(request).get()
-    agent = _find_agent(snapshot.agents, agent_id)
+    agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
     return _agent_out(agent)
@@ -222,7 +220,7 @@ async def update_agent(
 ) -> AgentOut:
     store = _store(request)
     snapshot = await store.get()
-    agent = _find_agent(snapshot.agents, agent_id)
+    agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
 
@@ -266,45 +264,58 @@ async def delete_agent_permanently(
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
     session_ids = await _agent_session_ids(snapshot, agent_id, db)
-    if _registry_is_busy(request, agent_id, session_ids):
-        raise HTTPException(status_code=409, detail="agent has an active run")
-
-    channel_ids = {
-        channel.id for channel in snapshot.channels if channel.agent_id == agent_id
-    }
-    runtime = getattr(request.app.state, "weixin", None)
-    if runtime is not None:
-        for channel_id in channel_ids:
-            await runtime.stop_channel(channel_id)
-            runtime.clear_login(channel_id)
-
-    session_directory = transcript_dir(agent_id) if valid_agent_id(agent_id) else None
-    session_count = (
-        len(list(session_directory.glob("*.jsonl")))
-        if session_directory is not None and session_directory.is_dir()
-        else 0
-    )
-
-    if channel_ids:
-        channel_id_list = list(channel_ids)
-        await db.execute(
-            delete(ChannelDelivery).where(ChannelDelivery.channel_id.in_(channel_id_list))
-        )
-        await db.execute(
-            delete(ChannelInbound).where(ChannelInbound.channel_id.in_(channel_id_list))
-        )
-    await db.execute(delete(CronJob).where(CronJob.agent_id == agent_id))
-    await db.commit()
-
     registry = getattr(request.app.state, "registry", None)
+    agent_delete_started = False
     if registry is not None:
-        for session_id in session_ids:
-            try:
-                await registry.close_session(session_id)
-            except Exception:
-                logger.warning(
-                    "failed to release cached session %s", session_id, exc_info=True
-                )
+        begin_agent = getattr(registry, "begin_agent_delete", None)
+        if begin_agent is not None:
+            agent_delete_started = begin_agent(agent_id)
+            if not agent_delete_started:
+                raise HTTPException(status_code=409, detail="agent has an active run")
+        elif _registry_is_busy(request, agent_id, session_ids):
+            raise HTTPException(status_code=409, detail="agent has an active run")
+
+    try:
+        channel_ids = {
+            channel.id for channel in snapshot.channels if channel.agent_id == agent_id
+        }
+        runtime = getattr(request.app.state, "weixin", None)
+        if runtime is not None:
+            for channel_id in channel_ids:
+                await runtime.stop_channel(channel_id)
+                runtime.clear_login(channel_id)
+
+        session_directory = transcript_dir(agent_id) if valid_agent_id(agent_id) else None
+        session_count = (
+            len(list(session_directory.glob("*.jsonl")))
+            if session_directory is not None and session_directory.is_dir()
+            else 0
+        )
+
+        if channel_ids:
+            channel_id_list = list(channel_ids)
+            await db.execute(
+                delete(ChannelDelivery).where(ChannelDelivery.channel_id.in_(channel_id_list))
+            )
+            await db.execute(
+                delete(ChannelInbound).where(ChannelInbound.channel_id.in_(channel_id_list))
+            )
+        await db.execute(delete(CronJob).where(CronJob.agent_id == agent_id))
+        await db.commit()
+
+        if registry is not None:
+            for session_id in session_ids:
+                try:
+                    await registry.close_session(session_id)
+                except Exception:
+                    logger.warning(
+                        "failed to release cached session %s", session_id, exc_info=True
+                    )
+    finally:
+        if registry is not None and agent_delete_started:
+            finish_agent = getattr(registry, "finish_agent_delete", None)
+            if finish_agent is not None:
+                finish_agent(agent_id)
 
     def remove_from_settings(data: dict) -> None:
         agents = data.get("agents")

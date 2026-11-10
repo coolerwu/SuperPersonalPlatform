@@ -173,13 +173,20 @@ async def mark_attempting(delivery_id: int) -> bool:
         return (result.rowcount or 0) > 0
 
 
-async def mark_attempting_error(delivery_id: int, error: str) -> bool:
-    """Record a failure after at least one chunk was already sent.
+async def mark_attempting_error(
+    delivery_id: int, error: str, *, max_attempts: int
+) -> bool:
+    """Record a failed send after at least one chunk was already sent.
 
-    The row stays ``attempting`` so the next sweep keeps the "possibly
-    partially delivered" prefix instead of presenting the retry as a fresh
-    message. Only live rows are updated.
+    The attempt counter advances on every failed send. Below the limit the
+    row stays ``attempting`` so the next sweep keeps the "possibly partially
+    delivered" prefix; at the limit it becomes terminal ``failed`` and is no
+    longer retried automatically. Only live rows are updated.
     """
+    next_status = case(
+        (ChannelDelivery.attempts + 1 >= max_attempts, "failed"),
+        else_="attempting",
+    )
     async with SessionLocal() as db:
         result = await db.execute(
             update(ChannelDelivery)
@@ -187,7 +194,12 @@ async def mark_attempting_error(delivery_id: int, error: str) -> bool:
                 ChannelDelivery.id == delivery_id,
                 ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
             )
-            .values(last_error=str(error)[:2000], updated_at=utcnow())
+            .values(
+                last_error=str(error)[:2000],
+                status=next_status,
+                attempts=ChannelDelivery.attempts + 1,
+                updated_at=utcnow(),
+            )
         )
         await db.commit()
         return (result.rowcount or 0) > 0
