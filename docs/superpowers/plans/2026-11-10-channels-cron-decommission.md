@@ -1449,7 +1449,7 @@ git commit -m "Document SDK-native channels and cron"
 
 ## 合并前最终审查修复（2026-11-11）
 
-在分支 `feature/claude-sdk-migration` 合并前，对整个分支与 SDK 用法做最终审查，落地以下修复；后端测试从 579 passed / 3 skipped 增至 662 passed / 3 skipped。
+在分支 `feature/claude-sdk-migration` 合并前，对整个分支与 SDK 用法做最终审查，落地以下修复；后端测试从 579 passed / 3 skipped 增至 663 passed / 3 skipped。
 
 | 项 | 修复 |
 |---|---|
@@ -1464,7 +1464,7 @@ git commit -m "Document SDK-native channels and cron"
 | P1-9 帧缓冲 | `ClaudeAgentOptions.max_buffer_size = 16 MB`。 |
 | P1-10 保留名 | `valid_agent_id` 拒绝 `con/prn/aux/nul/com0-9/lpt0-9`（大小写不敏感）。 |
 | P1-11 权限 | `ensure_claude_dirs` 对 `tmp/` 与 `workspaces/` 根同样设 0700。 |
-| P1-12 部分送达 | 至少一块已发送后失败（含登录过期）保持 `attempting`，补发保留「可能已部分送达」前缀；每次失败累加 attempts，达到上限后标记 `failed` 并停止自动补发；一块都没发出才 `mark_pending`。 |
+| P1-12 部分送达 | 至少一块已发送后失败（含登录过期）保持 `attempting`，补发保留「可能已部分送达」前缀；attempts 由发送 claim 计数，达到上限后标记 `failed` 并停止自动补发；一块都没发出才 `mark_pending`。 |
 | P1-13 命令竞态 | `/new`、`/stop` 先有界等待在途 batch（`INFLIGHT_WAIT_SECONDS=30`）再重绑/中断；`_send_chunk` 在最后一次尝试时不再吞掉 `WeixinSessionExpired`。 |
 | P1-14 删除竞态 | registry 增加 `begin_delete`/`finish_delete`，删除开始后新提交被拒绝；手动删除与后台清理共用。 |
 | P1-15 settings 损坏 | 主文件不可解析且无 `.bak`、或没有合法 `agents` 列表时重新种子默认 sections（保留可读字段）；解析成功且显式 `agents: []` 保留并 warning。 |

@@ -174,10 +174,10 @@
 4. 出站：
    - turn 开始时在同一事务写 `running_sessions` 租约与 `channel_deliveries` pending 行；结束时回填最终答复并发送；取消的 turn 不发送并删除空投递行。
    - 回复按 1800 字在段落/代码围栏边界切块，最多 10 块，超出截断并标注。
-   - 崩溃重启后按 pending/attempting 行补发；attempting 行补发文案为「♻️ 上一条回复可能已部分送达，以下为完整内容：」。如果一次发送在至少一块已送达后失败（含登录过期），行保持 attempting，后续补发保留该前缀；每次失败累加 attempts，达到 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 后标记终态 `failed` 并停止自动补发（已知限制：前缀只在重试期间保留）。只有一块都没发出时才回到 pending。渠道暂停/登录过期时保留 pending，恢复后继续。
+   - 崩溃重启后按 pending/attempting 行补发；attempting 行补发文案为「♻️ 上一条回复可能已部分送达，以下为完整内容：」。如果一次发送在至少一块已送达后失败（含登录过期），行保持 attempting，后续补发保留该前缀；发送 claim 已计入 attempts，达到 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 后标记终态 `failed` 并停止自动补发（已知限制：前缀只在重试期间保留）。只有一块都没发出时才回到 pending。渠道暂停/登录过期时保留 pending，恢复后继续；部分送达行仍受尝试上限约束。
    - 网页里在渠道会话中手动发消息不推回微信；定时推送复用同一投递机制。
 5. 运行期截图推送：工具层未接入，`channel_images.send_session_image` 已保留但当前没有调用方；下一版本接入浏览器工具后启用。
-6. 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；重新扫码后补发未发送回复。
+6. 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；重新扫码后未发送任何分块（pending）的回复补发；部分送达行受 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 约束，达上限为 failed，不再自动补发。
 7. 删除渠道：停止轮询、清空登录态、删除投递/入站记录、清理定时任务推送目标、移除渠道与联系人绑定；已产生的会话与 transcript 保留。渠道所属 Agent 非 active 时轮询暂停（保留 `sync_buf`），恢复 active 后重新启动；渠道管理接口不受 Agent 状态限制。
 
 #### 验收标准

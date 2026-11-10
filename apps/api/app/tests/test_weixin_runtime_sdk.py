@@ -1052,7 +1052,7 @@ async def test_partial_delivery_failure_stays_attempting_for_prefix_retry(monkey
         # Keeping "attempting" is what makes the next sweep prepend the
         # "possibly partially delivered" notice.
         assert row.status == "attempting"
-        assert row.attempts == 2
+        assert row.attempts == 1
         assert "second chunk failed" in (row.last_error or "")
     finally:
         await _cleanup_deliveries(delivery_id)
@@ -1248,8 +1248,16 @@ async def test_partial_delivery_reaches_terminal_failed_at_attempt_limit(monkeyp
     runtime = _runtime(store, FakeRegistry(), client=client)
     delivery_id = await _create_delivery(channel.id, content="a" * 4000)
     try:
+        # First failed send: one chunk went out, the claim counted attempt 1.
         await runtime.deliver(delivery_id)
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        assert row.status == "attempting"
+        assert row.attempts == 1
 
+        # Second failed send reaches the limit and becomes terminal.
+        client.sent.clear()
+        await runtime.deliver(delivery_id, recovered=True)
         row = await channel_delivery.get(delivery_id)
         assert row is not None
         assert row.status == "failed"

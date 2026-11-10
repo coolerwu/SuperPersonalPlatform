@@ -4,6 +4,8 @@ import functools
 import uuid
 from datetime import datetime, timezone
 
+import pytest
+
 from app.services.claude_runner import transcript_dir
 from app.services.settings_store import ConversationSection
 
@@ -330,22 +332,52 @@ def test_pause_and_resume_agent_syncs_channel_polling(client, monkeypatch) -> No
 
 
 def test_archived_agent_is_listed_and_can_be_restored(client, monkeypatch) -> None:
-    _patch_runtime(client, monkeypatch)
     agent = client.post("/api/agents", json={"name": "Restorable"}).json()
     channel = _create_channel(client, agent_id=agent["id"])
+    _call(
+        client,
+        _store(client).update_channel_fields,
+        channel["id"],
+        status="active",
+        account_id="acct@im.bot",
+        bot_token="token",
+    )
+
+    runtime = client.app.state.weixin
+    calls: list[tuple[str, str]] = []
+
+    async def start_channel(channel_id):
+        calls.append(("start", channel_id))
+        return True
+
+    async def stop_channel(channel_id):
+        calls.append(("stop", channel_id))
+
+    async def sweep_deliveries(channel_id=None):
+        calls.append(("sweep", channel_id or ""))
+
+    monkeypatch.setattr(runtime, "start_channel", start_channel)
+    monkeypatch.setattr(runtime, "stop_channel", stop_channel)
+    monkeypatch.setattr(runtime, "sweep_deliveries", sweep_deliveries)
 
     assert client.delete(f"/api/agents/{agent['id']}").status_code == 200
+    assert calls == [("stop", channel["id"])]
 
     listed = client.get("/api/agents").json()
     archived_row = next(item for item in listed if item["id"] == agent["id"])
     assert archived_row["status"] == "archived"
     assert client.get(f"/api/agents/{agent['id']}").status_code == 200
 
+    calls.clear()
     restored = client.put(
         f"/api/agents/{agent['id']}", json={"status": "active"}
     )
     assert restored.status_code == 200
     assert restored.json()["status"] == "active"
+    assert calls == [
+        ("start", channel["id"]),
+        ("sweep", channel["id"]),
+    ]
 
     # Channels remain manageable and are still bound to the restored Agent.
     channels = client.get("/api/channels", params={"agent_id": agent["id"]})
@@ -407,5 +439,46 @@ def test_agent_permanent_delete_refused_when_marker_is_busy(client, monkeypatch)
     client.app.state.registry = Registry()
     response = client.delete(f"/api/agents/{agent['id']}/permanent")
     assert response.status_code == 409
+    listed = client.get("/api/agents").json()
+    assert any(item["id"] == agent["id"] for item in listed)
+
+
+def test_agent_delete_releases_marker_when_settings_write_fails(
+    client, monkeypatch
+) -> None:
+    _patch_runtime(client, monkeypatch)
+    agent = client.post("/api/agents", json={"name": "FailMarkerAgent"}).json()
+
+    class Registry:
+        def __init__(self) -> None:
+            self.finished: list[str] = []
+
+        def is_busy(self, session_id):
+            return False
+
+        def is_agent_busy(self, agent_id):
+            return False
+
+        def begin_agent_delete(self, agent_id):
+            return True
+
+        def finish_agent_delete(self, agent_id):
+            self.finished.append(agent_id)
+
+        async def close_session(self, session_id):
+            return None
+
+    registry = Registry()
+    client.app.state.registry = registry
+
+    async def boom(mutate):
+        raise RuntimeError("settings write failed")
+
+    monkeypatch.setattr(client.app.state.settings_store, "mutate_raw", boom)
+
+    with pytest.raises(RuntimeError):
+        client.delete(f"/api/agents/{agent['id']}/permanent")
+
+    assert registry.finished == [agent["id"]]
     listed = client.get("/api/agents").json()
     assert any(item["id"] == agent["id"] for item in listed)

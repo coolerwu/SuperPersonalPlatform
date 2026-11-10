@@ -178,13 +178,14 @@ async def mark_attempting_error(
 ) -> bool:
     """Record a failed send after at least one chunk was already sent.
 
-    The attempt counter advances on every failed send. Below the limit the
-    row stays ``attempting`` so the next sweep keeps the "possibly partially
-    delivered" prefix; at the limit it becomes terminal ``failed`` and is no
-    longer retried automatically. Only live rows are updated.
+    ``mark_attempting`` already counted this send attempt, matching the
+    no-chunk ``mark_pending`` path. Below the limit the row stays
+    ``attempting`` so the next sweep keeps the "possibly partially delivered"
+    prefix; at the limit it becomes terminal ``failed`` and is no longer
+    retried automatically. Only live rows are updated.
     """
     next_status = case(
-        (ChannelDelivery.attempts + 1 >= max_attempts, "failed"),
+        (ChannelDelivery.attempts >= max_attempts, "failed"),
         else_="attempting",
     )
     async with SessionLocal() as db:
@@ -197,7 +198,6 @@ async def mark_attempting_error(
             .values(
                 last_error=str(error)[:2000],
                 status=next_status,
-                attempts=ChannelDelivery.attempts + 1,
                 updated_at=utcnow(),
             )
         )

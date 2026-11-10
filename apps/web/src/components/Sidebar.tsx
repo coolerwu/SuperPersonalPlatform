@@ -117,7 +117,12 @@ export function Sidebar(props: SidebarProps) {
               options={props.agents.map((agent) => ({
                 value: agent.id,
                 label: agent.name,
-                description: agent.model,
+                description:
+                  agent.status === "archived"
+                    ? `${agent.model} · 已归档`
+                    : agent.status === "paused"
+                      ? `${agent.model} · 已暂停`
+                      : agent.model,
               }))}
               onChange={props.onAgentChange}
               ariaLabel="Agent"

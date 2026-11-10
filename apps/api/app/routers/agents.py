@@ -275,6 +275,36 @@ async def delete_agent_permanently(
         elif _registry_is_busy(request, agent_id, session_ids):
             raise HTTPException(status_code=409, detail="agent has an active run")
 
+    def remove_from_settings(data: dict) -> None:
+        agents = data.get("agents")
+        if isinstance(agents, list):
+            data["agents"] = [
+                item
+                for item in agents
+                if not (isinstance(item, dict) and item.get("id") == agent_id)
+            ]
+        channels = data.get("channels")
+        removed_channels: set[str] = set()
+        if isinstance(channels, list):
+            for item in channels:
+                if isinstance(item, dict) and item.get("agent_id") == agent_id:
+                    removed_channels.add(str(item.get("id") or ""))
+            data["channels"] = [
+                item
+                for item in channels
+                if not (
+                    isinstance(item, dict) and item.get("agent_id") == agent_id
+                )
+            ]
+        conversations = data.get("channel_conversations")
+        if isinstance(conversations, dict):
+            for key, value in list(conversations.items()):
+                if (
+                    isinstance(value, dict)
+                    and value.get("channel_id") in removed_channels
+                ):
+                    conversations.pop(key, None)
+
     try:
         channel_ids = {
             channel.id for channel in snapshot.channels if channel.agent_id == agent_id
@@ -311,49 +341,20 @@ async def delete_agent_permanently(
                     logger.warning(
                         "failed to release cached session %s", session_id, exc_info=True
                     )
+        await store.mutate_raw(remove_from_settings)
+
+        if valid_agent_id(agent_id):
+            shutil.rmtree(workspace_for(agent_id), ignore_errors=True)
+            shutil.rmtree(transcript_dir(agent_id), ignore_errors=True)
+        else:
+            logger.warning("not deleting directories for invalid agent id %r", agent_id)
     finally:
+        # Release the Agent delete marker only after settings and directories
+        # are gone, including when any step raises.
         if registry is not None and agent_delete_started:
             finish_agent = getattr(registry, "finish_agent_delete", None)
             if finish_agent is not None:
                 finish_agent(agent_id)
-
-    def remove_from_settings(data: dict) -> None:
-        agents = data.get("agents")
-        if isinstance(agents, list):
-            data["agents"] = [
-                item
-                for item in agents
-                if not (isinstance(item, dict) and item.get("id") == agent_id)
-            ]
-        channels = data.get("channels")
-        removed_channels: set[str] = set()
-        if isinstance(channels, list):
-            for item in channels:
-                if isinstance(item, dict) and item.get("agent_id") == agent_id:
-                    removed_channels.add(str(item.get("id") or ""))
-            data["channels"] = [
-                item
-                for item in channels
-                if not (
-                    isinstance(item, dict) and item.get("agent_id") == agent_id
-                )
-            ]
-        conversations = data.get("channel_conversations")
-        if isinstance(conversations, dict):
-            for key, value in list(conversations.items()):
-                if (
-                    isinstance(value, dict)
-                    and value.get("channel_id") in removed_channels
-                ):
-                    conversations.pop(key, None)
-
-    await store.mutate_raw(remove_from_settings)
-
-    if valid_agent_id(agent_id):
-        shutil.rmtree(workspace_for(agent_id), ignore_errors=True)
-        shutil.rmtree(transcript_dir(agent_id), ignore_errors=True)
-    else:
-        logger.warning("not deleting directories for invalid agent id %r", agent_id)
     return {"deleted": True, "sessions": session_count, "runs": 0}
 
 
