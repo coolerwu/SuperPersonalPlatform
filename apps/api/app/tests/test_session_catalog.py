@@ -7,7 +7,7 @@ from app.services import sdk_bridge, session_catalog
 from app.services.claude_runner import transcript_path
 from app.services.settings_store import PlatformSettings
 
-SESSION_ID = "12345678-1234-5678-1234-567812345678"
+SESSION_ID = "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
 
 
 class FakeStore:
@@ -233,6 +233,20 @@ async def test_delete_missing_transcript_returns_false(tmp_path, monkeypatch):
     catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
     assert await catalog.delete("default", SESSION_ID) is False
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_delete_tolerates_empty_transcript(tmp_path, monkeypatch):
+    path = transcript_path(SESSION_ID, "default", home=tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("", "utf-8")
+
+    def fake_delete(session_id):
+        raise FileNotFoundError(session_id)
+
+    monkeypatch.setattr(sdk_bridge, "delete_session", fake_delete)
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    assert await catalog.delete("default", SESSION_ID) is False
 
 
 @pytest.mark.asyncio

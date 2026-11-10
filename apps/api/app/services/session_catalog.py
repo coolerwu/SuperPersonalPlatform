@@ -61,6 +61,11 @@ class SessionCatalog:
         self._home = home
 
     def _owns(self, agent_id: str, session_id: str) -> bool:
+        # Validate both ids before splicing them into a filesystem path.
+        if not _AGENT_ID_RE.fullmatch(agent_id or ""):
+            return False
+        if not _is_canonical_uuid(session_id or ""):
+            return False
         return transcript_path(session_id, agent_id, home=self._home).is_file()
 
     async def list_sessions(self, agent_id: str) -> list[dict[str, Any]]:
@@ -142,13 +147,12 @@ class SessionCatalog:
         await asyncio.to_thread(sdk_bridge.rename_session, session_id, title)
 
     async def delete(self, agent_id: str, session_id: str) -> bool:
-        # The agent scopes the transcript path and the session id is spliced
-        # into a file name, so both must be validated before touching disk.
-        if not _AGENT_ID_RE.fullmatch(agent_id or ""):
-            return False
-        if not _is_canonical_uuid(session_id or ""):
-            return False
         if not self._owns(agent_id, session_id):
             return False
-        await asyncio.to_thread(sdk_bridge.delete_session, session_id)
+        # The SDK removes the transcript and its subagent directory. An empty
+        # transcript or a concurrent delete surfaces as FileNotFoundError.
+        try:
+            await asyncio.to_thread(sdk_bridge.delete_session, session_id)
+        except FileNotFoundError:
+            return False
         return True
