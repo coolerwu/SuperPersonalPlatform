@@ -3,10 +3,21 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from app.services.identifiers import is_canonical_uuid
+from app.services.settings_store import ChannelSection, ConversationSection
 
-from app.db import SessionLocal
-from app.models import Agent, CronJob, Run, Session
+
+class FakeRegistry:
+    def __init__(self, *, busy: bool = False) -> None:
+        self.turns = []
+        self.busy = busy
+
+    def is_busy(self, session_id: str) -> bool:
+        return self.busy
+
+    async def submit(self, turn):
+        self.turns.append(turn)
+        return turn.id
 
 
 def _name(prefix: str = "任务") -> str:
@@ -31,21 +42,19 @@ def _future(value: str | None) -> bool:
     return datetime.fromisoformat(value) > datetime.now(timezone.utc)
 
 
-def test_create_cron_job_creates_dedicated_session(client) -> None:
+def test_create_cron_job_returns_uuid_session(client) -> None:
     response = _create_job(client)
     assert response.status_code == 201, response.text
     job = response.json()
     assert job["enabled"] is True
-    assert job["session_id"]
+    assert is_canonical_uuid(job["session_id"])
+    assert "last_run_id" not in job
+    assert "last_run_status" not in job
     assert _future(job["next_run_at"])
 
-    sessions = client.get("/api/agents/default/sessions").json()
-    session = next(item for item in sessions if item["id"] == job["session_id"])
-    assert session["origin"] == "cron"
-    assert session["title"] == f"定时 · {job['name']}"
-
     listed = client.get("/api/cron-jobs?agent_id=default").json()
-    assert any(item["id"] == job["id"] for item in listed)
+    row = next(item for item in listed if item["id"] == job["id"])
+    assert row["session_id"] == job["session_id"]
 
 
 def test_cron_validation_and_duplicate_name(client) -> None:
@@ -70,10 +79,7 @@ def test_pause_resume_edit_and_rename(client) -> None:
     assert renamed.status_code == 200, renamed.text
     updated = renamed.json()
     assert updated["next_run_at"] is not None
-
-    sessions = client.get("/api/agents/default/sessions").json()
-    session = next(item for item in sessions if item["id"] == updated["session_id"])
-    assert session["title"] == f"定时 · {updated['name']}"
+    assert updated["session_id"] == job["session_id"]
 
     paused = client.put(f"/api/cron-jobs/{job['id']}", json={"enabled": False})
     assert paused.status_code == 200
@@ -84,73 +90,88 @@ def test_pause_resume_edit_and_rename(client) -> None:
     assert _future(resumed.json()["next_run_at"])
 
 
-def test_manual_run_creates_cron_run_and_conflicts(client) -> None:
-    job = _create_job(client, name=_name("立即")).json()
-    response = client.post(f"/api/cron-jobs/{job['id']}/run")
-    assert response.status_code == 201, response.text
-    run_id = response.json()["run_id"]
-
-    run = client.get(f"/api/runs/{run_id}").json()
-    assert run["source"] == "cron"
-    assert run["status"] == "queued"
-    assert run["input"] == job["prompt"]
-    assert run["session_id"] == job["session_id"]
-
-    conflict = client.post(f"/api/cron-jobs/{job['id']}/run")
-    assert conflict.status_code == 409
-    assert conflict.json()["detail"]["active_run_id"] == run_id
-
-    client.post(f"/api/runs/{run_id}/cancel")
-
-
-def test_delete_job_keeps_session_and_delete_session_detaches_job(client) -> None:
-    job = _create_job(client, name=_name("保留会话")).json()
+def test_delete_job_removes_configuration(client) -> None:
+    job = _create_job(client).json()
     deleted = client.delete(f"/api/cron-jobs/{job['id']}")
     assert deleted.status_code == 200
-
-    sessions = client.get("/api/agents/default/sessions").json()
-    assert any(item["id"] == job["session_id"] for item in sessions)
-
-    detached_job = _create_job(client, name=_name("解绑")).json()
-    assert client.delete(f"/api/sessions/{detached_job['session_id']}").status_code == 200
+    body = deleted.json()
+    assert body["id"] == job["id"]
+    assert body["session_id"] == job["session_id"]
     listed = client.get("/api/cron-jobs?agent_id=default").json()
-    row = next(item for item in listed if item["id"] == detached_job["id"])
-    assert row["session_id"] is None
-    assert row["last_run_id"] is None
+    assert all(item["id"] != job["id"] for item in listed)
+    assert client.delete(f"/api/cron-jobs/{job['id']}").status_code == 404
 
 
-async def test_permanent_agent_delete_cascades_cron_jobs(client) -> None:
-    agent = client.post("/api/agents", json={"name": f"CronAgent-{uuid.uuid4().hex[:6]}"}).json()
-    job = _create_job(client, agent_id=agent["id"], name=_name("级联")).json()
-    assert client.delete(f"/api/agents/{agent['id']}/permanent").status_code == 200
-    async with SessionLocal() as db:
-        assert await db.get(CronJob, job["id"]) is None
-        assert await db.get(Session, job["session_id"]) is None
+def test_manual_run_submits_cron_turn(client) -> None:
+    registry = FakeRegistry()
+    client.app.state.registry = registry
+    job = _create_job(client).json()
+
+    response = client.post(f"/api/cron-jobs/{job['id']}/run")
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["session_id"] == job["session_id"]
+    assert body["last_run_at"] is not None
+
+    assert len(registry.turns) == 1
+    turn = registry.turns[0]
+    assert turn.source == "cron"
+    assert turn.agent_id == "default"
+    assert turn.session_id == job["session_id"]
+    assert turn.prompt == job["prompt"]
+    assert turn.delivery is None
 
 
-async def test_archived_agent_is_not_scheduled(client) -> None:
-    from app.services.cron_service import run_due_jobs
+def test_manual_run_conflicts_when_session_busy(client) -> None:
+    registry = FakeRegistry(busy=True)
+    client.app.state.registry = registry
+    job = _create_job(client).json()
 
-    agent = client.post("/api/agents", json={"name": f"CronArchive-{uuid.uuid4().hex[:6]}"}).json()
-    job = _create_job(client, agent_id=agent["id"], name=_name("归档")).json()
+    response = client.post(f"/api/cron-jobs/{job['id']}/run")
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["status"] == "busy"
+    assert "active_run_id" not in detail
+    assert registry.turns == []
 
-    async with SessionLocal() as db:
-        stored_agent = await db.get(Agent, agent["id"])
-        assert stored_agent is not None
-        stored_agent.status = "archived"
-        row = await db.get(CronJob, job["id"])
-        assert row is not None
-        row.next_run_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
-        await db.commit()
 
-    fired = await run_due_jobs()
-    async with SessionLocal() as db:
-        row = await db.get(CronJob, job["id"])
-        assert row is not None
-        assert row.last_run_at is None
-        assert row.next_run_at is not None
-        runs = (await db.scalars(select(Run).where(Run.session_id == row.session_id))).all()
-        assert runs == []
-    assert job["id"] not in fired
+def test_manual_run_requires_runtime(client) -> None:
+    job = _create_job(client).json()
+    client.app.state.registry = None
+    response = client.post(f"/api/cron-jobs/{job['id']}/run")
+    assert response.status_code == 503
 
-    assert client.delete(f"/api/agents/{agent['id']}/permanent").status_code == 200
+
+async def test_push_target_uses_settings_conversation(client) -> None:
+    store = client.app.state.settings_store
+    await store.update_channel(
+        ChannelSection(
+            id="ch-api", agent_id="default", type="wechat", name="测试微信"
+        )
+    )
+    await store.update_conversation(
+        "ch-api:wx-api",
+        ConversationSection(
+            session_id=str(uuid.uuid4()),
+            channel_id="ch-api",
+            display_name="Alice",
+        ),
+    )
+
+    response = _create_job(
+        client, push_channel_id="ch-api", push_conversation_id="wx-api"
+    )
+    assert response.status_code == 201, response.text
+    job = response.json()
+    assert job["push_channel_id"] == "ch-api"
+    assert job["push_conversation_id"] == "wx-api"
+    assert job["push_channel_name"] == "测试微信"
+    assert job["push_conversation_name"] == "Alice"
+
+    missing = _create_job(
+        client, push_channel_id="ch-api", push_conversation_id="wx-missing"
+    )
+    assert missing.status_code == 400
+
+    partial = _create_job(client, push_channel_id="ch-api")
+    assert partial.status_code == 400

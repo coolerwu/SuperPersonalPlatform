@@ -88,12 +88,12 @@ class Session(Base):
 
 
 class CronJob(Base):
-    """One scheduled prompt bound to an Agent and a dedicated Session.
+    """One scheduled prompt bound to an Agent and a stable SDK session id.
 
-    A job keeps a single long-lived Session so scheduled runs and the user's
-    follow-up messages share one checkpoint. Deleting the job keeps the
-    session; deleting the session detaches the job, which recreates one on the
-    next trigger.
+    The session id is a transcript identity, not a ``sessions`` row: scheduled
+    turns resume the same Claude SDK transcript so they share conversation
+    context. The id is generated when the job is created and regenerated on the
+    next trigger when its transcript no longer exists.
     """
 
     __tablename__ = "cron_jobs"
@@ -108,12 +108,9 @@ class CronJob(Base):
     schedule: Mapped[str] = mapped_column(String(100))
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Shanghai")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    session_id: Mapped[str | None] = mapped_column(
-        String(32), ForeignKey("sessions.id"), nullable=True, index=True
-    )
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    last_run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_skipped_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     push_channel_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     push_conversation_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

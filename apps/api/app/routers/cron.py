@@ -1,15 +1,21 @@
-"""Cron job management endpoints (single-user cookie auth)."""
+"""Cron job management endpoints (single-user cookie auth).
+
+Jobs submit turns to the SDK ``SessionRegistry``; there are no Run or Session
+rows behind them. Agent configuration and channel bindings come from the
+settings store.
+"""
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.db import get_db
-from app.models import Agent, Channel, ChannelConversation, CronJob, Run
-from app.schemas import CronJobCreate, CronJobOut, CronJobUpdate, CronRunOut
+from app.models import CronJob
+from app.schemas import CronJobCreate, CronJobOut, CronJobUpdate
 from app.services import cron_service
 from app.services.cron_service import (
     CronBusy,
@@ -19,52 +25,49 @@ from app.services.cron_service import (
     CronValidationError,
     run_job_now,
 )
-from app.services.run_service import ACTIVE_RUN_STATUSES
+from app.services.identifiers import valid_agent_id
 
 router = APIRouter(prefix="/api/cron-jobs", tags=["cron"], dependencies=[Depends(require_auth)])
 
 
-async def _job_out(
-    db: AsyncSession,
-    job: CronJob,
-    status_by_id: dict[str, str] | None = None,
-    channel_names: dict[str, str] | None = None,
-    conversation_names: dict[str, str] | None = None,
-) -> CronJobOut:
-    last_status = None
-    if job.last_run_id:
-        if status_by_id is not None:
-            last_status = status_by_id.get(job.last_run_id)
-        else:
-            last_status = await db.scalar(
-                select(Run.status).where(Run.id == job.last_run_id)
-            )
+def _store(request: Request) -> Any:
+    store = getattr(request.app.state, "settings_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="settings store is not running")
+    return store
+
+
+def _registry(request: Request) -> Any:
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="agent runtime is not running")
+    return registry
+
+
+def _active_agent(settings: Any, agent_id: str) -> Any:
+    if not valid_agent_id(agent_id):
+        raise HTTPException(status_code=404, detail="agent not found")
+    agent = next((item for item in settings.agents if item.id == agent_id), None)
+    if agent is None or agent.status != "active":
+        raise HTTPException(status_code=404, detail="agent not found")
+    return agent
+
+
+def _job_out(job: CronJob, settings: Any) -> CronJobOut:
     push_channel_name = ""
     if job.push_channel_id:
-        if channel_names is not None:
-            push_channel_name = channel_names.get(job.push_channel_id, "")
-        else:
-            push_channel_name = (
-                await db.scalar(
-                    select(Channel.name).where(Channel.id == job.push_channel_id)
-                )
-                or ""
-            )
+        channel = next(
+            (item for item in settings.channels if item.id == job.push_channel_id),
+            None,
+        )
+        push_channel_name = channel.name if channel is not None else ""
     push_conversation_name = ""
-    if job.push_conversation_id:
-        if conversation_names is not None:
-            push_conversation_name = conversation_names.get(
-                job.push_conversation_id, ""
-            )
-        else:
-            push_conversation_name = (
-                await db.scalar(
-                    select(ChannelConversation.display_name).where(
-                        ChannelConversation.id == job.push_conversation_id
-                    )
-                )
-                or ""
-            )
+    if job.push_channel_id and job.push_conversation_id:
+        conversation = settings.channel_conversations.get(
+            f"{job.push_channel_id}:{job.push_conversation_id}"
+        )
+        if conversation is not None:
+            push_conversation_name = conversation.display_name
     return CronJobOut(
         id=job.id,
         agent_id=job.agent_id,
@@ -76,8 +79,6 @@ async def _job_out(
         session_id=job.session_id,
         next_run_at=job.next_run_at,
         last_run_at=job.last_run_at,
-        last_run_id=job.last_run_id,
-        last_run_status=last_status,
         last_skipped_at=job.last_skipped_at,
         push_channel_id=job.push_channel_id,
         push_conversation_id=job.push_conversation_id,
@@ -90,52 +91,23 @@ async def _job_out(
 
 @router.get("", response_model=list[CronJobOut])
 async def list_cron_jobs(
+    request: Request,
     agent_id: str = Query(..., min_length=1, max_length=32),
     db: AsyncSession = Depends(get_db),
 ) -> list[CronJobOut]:
-    agent = await db.get(Agent, agent_id)
-    if agent is None or agent.status == "archived":
-        raise HTTPException(status_code=404, detail="agent not found")
+    settings = await _store(request).get()
+    _active_agent(settings, agent_id)
     jobs = await cron_service.list_jobs(db, agent_id)
-    run_ids = [job.last_run_id for job in jobs if job.last_run_id]
-    status_by_id: dict[str, str] = {}
-    if run_ids:
-        rows = (
-            await db.execute(select(Run.id, Run.status).where(Run.id.in_(run_ids)))
-        ).all()
-        status_by_id = {str(row[0]): str(row[1]) for row in rows}
-    channel_ids = [job.push_channel_id for job in jobs if job.push_channel_id]
-    channel_names: dict[str, str] = {}
-    if channel_ids:
-        rows = (
-            await db.execute(select(Channel.id, Channel.name).where(Channel.id.in_(channel_ids)))
-        ).all()
-        channel_names = {str(row[0]): str(row[1]) for row in rows}
-    conversation_ids = [
-        job.push_conversation_id for job in jobs if job.push_conversation_id
-    ]
-    conversation_names: dict[str, str] = {}
-    if conversation_ids:
-        rows = (
-            await db.execute(
-                select(ChannelConversation.id, ChannelConversation.display_name).where(
-                    ChannelConversation.id.in_(conversation_ids)
-                )
-            )
-        ).all()
-        conversation_names = {str(row[0]): str(row[1]) for row in rows}
-    return [
-        await _job_out(
-            db, job, status_by_id, channel_names, conversation_names
-        )
-        for job in jobs
-    ]
+    return [_job_out(job, settings) for job in jobs]
 
 
 @router.post("", response_model=CronJobOut, status_code=201)
 async def create_cron_job(
-    payload: CronJobCreate, db: AsyncSession = Depends(get_db)
+    payload: CronJobCreate, request: Request, db: AsyncSession = Depends(get_db)
 ) -> CronJobOut:
+    store = _store(request)
+    settings = await store.get()
+    _active_agent(settings, payload.agent_id)
     try:
         job = await cron_service.create_job(
             db,
@@ -147,6 +119,7 @@ async def create_cron_job(
             enabled=payload.enabled,
             push_channel_id=payload.push_channel_id,
             push_conversation_id=payload.push_conversation_id,
+            store=store,
         )
     except CronNotFound as exc:
         raise HTTPException(status_code=404, detail="agent not found") from exc
@@ -156,19 +129,19 @@ async def create_cron_job(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await db.commit()
     await db.refresh(job)
-    return await _job_out(db, job)
+    return _job_out(job, settings)
 
 
 @router.put("/{job_id}", response_model=CronJobOut)
 async def update_cron_job(
-    job_id: str, payload: CronJobUpdate, db: AsyncSession = Depends(get_db)
+    job_id: str, payload: CronJobUpdate, request: Request, db: AsyncSession = Depends(get_db)
 ) -> CronJobOut:
     job = await db.get(CronJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="cron job not found")
-    agent = await db.get(Agent, job.agent_id)
-    if agent is None or agent.status == "archived":
-        raise HTTPException(status_code=404, detail="agent not found")
+    store = _store(request)
+    settings = await store.get()
+    _active_agent(settings, job.agent_id)
     try:
         job = await cron_service.update_job(
             db,
@@ -181,6 +154,7 @@ async def update_cron_job(
             enabled=payload.enabled,
             push_channel_id=payload.push_channel_id,
             push_conversation_id=payload.push_conversation_id,
+            store=store,
         )
     except CronNotFound as exc:
         raise HTTPException(status_code=404, detail="cron job not found") from exc
@@ -190,55 +164,33 @@ async def update_cron_job(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await db.commit()
     await db.refresh(job)
-    return await _job_out(db, job)
+    return _job_out(job, settings)
 
 
-@router.delete("/{job_id}")
+@router.delete("/{job_id}", response_model=CronJobOut)
 async def delete_cron_job(
-    job_id: str, db: AsyncSession = Depends(get_db)
-) -> dict[str, bool]:
+    job_id: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> CronJobOut:
     job = await db.get(CronJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="cron job not found")
+    settings = await _store(request).get()
     try:
-        await cron_service.delete_job(db, job_id, agent_id=job.agent_id)
+        job = await cron_service.delete_job(db, job_id, agent_id=job.agent_id)
     except CronNotFound as exc:
         raise HTTPException(status_code=404, detail="cron job not found") from exc
+    output = _job_out(job, settings)
     await db.commit()
-    return {"deleted": True}
+    return output
 
 
-@router.post("/{job_id}/run", response_model=CronRunOut, status_code=201)
-async def run_cron_job_now(
-    job_id: str, request: Request, db: AsyncSession = Depends(get_db)
-) -> CronRunOut:
-    job = await db.get(CronJob, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="cron job not found")
-    active = (
-        await db.scalar(
-            select(Run)
-            .where(
-                Run.session_id == job.session_id,
-                Run.status.in_(ACTIVE_RUN_STATUSES),
-            )
-            .limit(1)
-        )
-        if job.session_id
-        else None
-    )
-    if active is not None:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "任务会话里已有运行中的 Run，请稍后再试",
-                "active_run_id": active.id,
-                "status": active.status,
-            },
-        )
+@router.post("/{job_id}/run", response_model=CronJobOut, status_code=201)
+async def run_cron_job_now(job_id: str, request: Request) -> CronJobOut:
+    store = _store(request)
+    registry = _registry(request)
     try:
-        run = await run_job_now(job.id)
-    except LookupError as exc:
+        job = await run_job_now(job_id, store=store, registry=registry)
+    except CronNotFound as exc:
         raise HTTPException(status_code=404, detail="cron job not found") from exc
     except CronInactiveAgent as exc:
         raise HTTPException(status_code=400, detail="Agent 已归档或暂停，无法运行") from exc
@@ -246,12 +198,9 @@ async def run_cron_job_now(
         raise HTTPException(
             status_code=409,
             detail={
-                "message": "任务会话里已有运行中的 Run，请稍后再试",
-                "active_run_id": exc.run_id,
+                "message": "任务会话已有运行中的任务，请稍后再试",
                 "status": exc.status,
             },
         ) from exc
-    worker = getattr(request.app.state, "worker", None)
-    if worker is not None:
-        worker.wake()
-    return CronRunOut(run_id=run.id, session_id=run.session_id)
+    settings = await store.get()
+    return _job_out(job, settings)

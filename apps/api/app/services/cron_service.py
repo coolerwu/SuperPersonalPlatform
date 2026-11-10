@@ -1,15 +1,19 @@
-"""Scheduled prompts (cron) attached to an Agent's dedicated Session.
+"""Scheduled prompts (cron) bound to a stable Claude SDK session.
 
-The scheduler runs in the API process and only writes rows: a due job creates a
-normal user Message + queued Run, then updates its next occurrence. Execution,
-streaming, retries and restart recovery stay in the existing RunWorker.
+The scheduler runs in the API process and submits turns to ``SessionRegistry``.
+A job owns a session id (not a ``sessions`` row) so every trigger resumes the
+same SDK transcript and manual follow-ups in that transcript share context.
+Agent configuration, channel push targets and conversation bindings come from
+the settings store, the same source the rest of the SDK runtime uses.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import CroniterBadDateError, croniter
@@ -19,18 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import (
-    Agent,
-    AuditLog,
-    Channel,
-    ChannelConversation,
-    ChannelRunLink,
-    CronJob,
-    Run,
-    Session,
-    utcnow,
-)
-from app.services.run_service import ACTIVE_RUN_STATUSES, _create_run_in_db
+from app.models import AuditLog, CronJob, utcnow
+from app.services.claude_runner import DeliveryRequest, Turn, transcript_path
+from app.services.identifiers import is_canonical_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +49,10 @@ class CronNotFound(LookupError):
 
 
 class CronBusy(Exception):
-    def __init__(self, run_id: str, status: str) -> None:
-        self.run_id = run_id
+    def __init__(self, session_id: str, status: str) -> None:
+        self.session_id = session_id
         self.status = status
-        super().__init__(f"session already has active run {run_id} ({status})")
+        super().__init__(f"session is busy ({status})")
 
 
 class CronInactiveAgent(Exception):
@@ -157,24 +152,41 @@ async def _ensure_unique_name(
         raise CronConflict("同一 Agent 下已存在同名定时任务")
 
 
+def _normalize_push_target(
+    channel_id: str | None, conversation_id: str | None
+) -> tuple[str | None, str | None]:
+    """Normalize a push target and require the two halves to be paired."""
+    channel = str(channel_id or "").strip() or None
+    conversation = str(conversation_id or "").strip() or None
+    if bool(channel) != bool(conversation):
+        raise CronValidationError("推送目标需要同时指定渠道和联系人")
+    return channel, conversation
+
+
 async def resolve_push_target(
-    db: AsyncSession,
+    store: Any,
     agent_id: str,
     channel_id: str | None,
     conversation_id: str | None,
-) -> tuple[Channel | None, ChannelConversation | None]:
-    """Validate an explicit WeChat 1:1 delivery target."""
-    channel_id = str(channel_id or "").strip()
-    conversation_id = str(conversation_id or "").strip()
-    if not channel_id and not conversation_id:
+) -> tuple[str | None, str | None]:
+    """Validate an explicit WeChat 1:1 delivery target against settings.
+
+    ``conversation_id`` is the contact's external id, not a database row id.
+    The returned values are safe to persist on the job.
+    """
+    channel, conversation = _normalize_push_target(channel_id, conversation_id)
+    if channel is None:
         return None, None
-    if not channel_id or not conversation_id:
-        raise CronValidationError("推送目标需要同时指定渠道和联系人")
-    channel = await db.get(Channel, channel_id)
-    if channel is None or channel.type != "wechat" or channel.agent_id != agent_id:
+    snapshot = await store.get()
+    section = next((item for item in snapshot.channels if item.id == channel), None)
+    if (
+        section is None
+        or section.type != "wechat"
+        or section.agent_id != agent_id
+    ):
         raise CronValidationError("推送渠道不存在或不属于当前 Agent")
-    conversation = await db.get(ChannelConversation, conversation_id)
-    if conversation is None or conversation.channel_id != channel.id:
+    binding = snapshot.channel_conversations.get(f"{channel}:{conversation}")
+    if binding is None or binding.channel_id != channel:
         raise CronValidationError("推送联系人不存在或不属于该渠道")
     return channel, conversation
 
@@ -203,6 +215,7 @@ async def get_job(
 async def create_job(
     db: AsyncSession,
     *,
+    store: Any,
     agent_id: str,
     name: str,
     prompt: str,
@@ -212,9 +225,16 @@ async def create_job(
     push_channel_id: str = "",
     push_conversation_id: str = "",
 ) -> CronJob:
-    """Validate and add a job + its dedicated Session to the caller's transaction."""
-    agent = await db.get(Agent, agent_id)
-    if agent is None or agent.status == "archived":
+    """Validate and add a job to the caller's transaction.
+
+    The Agent must be active in the current settings snapshot, the same source
+    the router and runtime use. The job starts with a freshly generated session
+    id (an SDK transcript identity) so its first trigger resumes nothing yet
+    but later triggers and user follow-ups all share that transcript.
+    """
+    snapshot = await store.get()
+    agent = next((item for item in snapshot.agents if item.id == agent_id), None)
+    if agent is None or agent.status != "active":
         raise CronNotFound("agent not found")
 
     name = clean_name(name)
@@ -224,12 +244,8 @@ async def create_job(
     upcoming = next_run(schedule, tz_name)
     await _ensure_unique_name(db, agent.id, name)
     push_channel, push_conversation = await resolve_push_target(
-        db, agent.id, push_channel_id, push_conversation_id
+        store, agent.id, push_channel_id, push_conversation_id
     )
-
-    session = Session(agent_id=agent.id, title=session_title(name), origin="cron")
-    db.add(session)
-    await db.flush()
 
     job = CronJob(
         agent_id=agent.id,
@@ -238,9 +254,9 @@ async def create_job(
         schedule=schedule,
         timezone=tz_name,
         enabled=bool(enabled),
-        session_id=session.id,
-        push_channel_id=push_channel.id if push_channel else None,
-        push_conversation_id=push_conversation.id if push_conversation else None,
+        session_id=str(uuid.uuid4()),
+        push_channel_id=push_channel,
+        push_conversation_id=push_conversation,
     )
     _compute_next(job, upcoming)
     db.add(job)
@@ -256,6 +272,7 @@ async def update_job(
     db: AsyncSession,
     job_id: str,
     *,
+    store: Any,
     agent_id: str,
     name: str | None = None,
     prompt: str | None = None,
@@ -276,9 +293,6 @@ async def update_job(
         if new_name != job.name:
             job.name = new_name
             schedule_changed = True
-            session = await db.get(Session, job.session_id) if job.session_id else None
-            if session is not None:
-                session.title = session_title(new_name)
     if prompt is not None:
         job.prompt = clean_prompt(prompt)
     if schedule is not None:
@@ -300,11 +314,11 @@ async def update_job(
     if push_channel_id is not None or push_conversation_id is not None:
         if push_channel_id is None or push_conversation_id is None:
             raise CronValidationError("推送目标需要同时指定渠道和联系人")
-        channel, conversation = await resolve_push_target(
-            db, job.agent_id, push_channel_id, push_conversation_id
+        push_channel, push_conversation = await resolve_push_target(
+            store, job.agent_id, push_channel_id, push_conversation_id
         )
-        job.push_channel_id = channel.id if channel else None
-        job.push_conversation_id = conversation.id if conversation else None
+        job.push_channel_id = push_channel
+        job.push_conversation_id = push_conversation
 
     if schedule_changed or (job.enabled and job.next_run_at is None):
         _compute_next(job)
@@ -328,30 +342,55 @@ async def delete_job(db: AsyncSession, job_id: str, *, agent_id: str) -> CronJob
     return job
 
 
-async def _link_push_target(db: AsyncSession, job: CronJob, run: Run) -> None:
-    """Attach the run to the job's explicit WeChat conversation, if configured."""
-    if not job.push_channel_id or not job.push_conversation_id:
+def _ensure_session_id(job: CronJob, registry: Any) -> None:
+    """Give the job a usable transcript session id.
+
+    A missing or non-UUID value cannot name a transcript file. After a first
+    run, a missing transcript means the session was deleted, so the job must
+    start a fresh conversation instead of resuming a dead id. A currently busy
+    session is kept even without a transcript yet: its turn may still be
+    creating the file, and swapping the id here would also bypass the busy
+    guard below.
+    """
+    if not job.session_id or not is_canonical_uuid(job.session_id):
+        job.session_id = str(uuid.uuid4())
         return
-    channel = await db.get(Channel, job.push_channel_id)
-    conversation = await db.get(ChannelConversation, job.push_conversation_id)
-    if (
-        channel is None
-        or channel.type != "wechat"
-        or channel.agent_id != job.agent_id
-        or conversation is None
-        or conversation.channel_id != channel.id
-    ):
+    if job.last_run_at is not None and not transcript_path(
+        job.session_id, job.agent_id
+    ).is_file():
+        if registry.is_busy(job.session_id):
+            return
+        job.session_id = str(uuid.uuid4())
+
+
+def _delivery_for(
+    settings: Any, job: CronJob
+) -> DeliveryRequest | None:
+    """Resolve the job's push target against the current settings snapshot."""
+    if not job.push_channel_id or not job.push_conversation_id:
+        return None
+    channel = next(
+        (item for item in settings.channels if item.id == job.push_channel_id),
+        None,
+    )
+    if channel is None or channel.agent_id != job.agent_id:
         logger.warning(
-            "cron job %s push target is unavailable; run will not be delivered",
+            "cron job %s push channel is unavailable; turn will not be delivered",
             job.id,
         )
-        return
-    db.add(
-        ChannelRunLink(
-            run_id=run.id,
-            channel_id=channel.id,
-            conversation_id=conversation.id,
+        return None
+    conversation = settings.channel_conversations.get(
+        f"{job.push_channel_id}:{job.push_conversation_id}"
+    )
+    if conversation is None or conversation.channel_id != job.push_channel_id:
+        logger.warning(
+            "cron job %s push conversation is unavailable; turn will not be delivered",
+            job.id,
         )
+        return None
+    return DeliveryRequest(
+        channel_id=job.push_channel_id,
+        external_id=job.push_conversation_id,
     )
 
 
@@ -359,41 +398,29 @@ async def trigger_job(
     db: AsyncSession,
     job: CronJob,
     *,
+    store: Any,
+    registry: Any,
     now: datetime | None = None,
     immediate: bool = False,
-) -> Run | None:
-    """Create one Run for ``job`` inside the caller's transaction.
+) -> bool:
+    """Submit one turn for ``job`` inside the caller's transaction.
 
-    Scheduled triggers skip with an audit row when the session already has an
-    active Run; manual triggers raise :class:`CronBusy` instead.
+    Scheduled triggers with a busy session are skipped (and audited); manual
+    triggers raise :class:`CronBusy` instead.
     """
     moment = now or utcnow()
-    agent = await db.get(Agent, job.agent_id)
+    snapshot = await store.get()
+    agent = next(
+        (item for item in snapshot.agents if item.id == job.agent_id), None
+    )
     if agent is None or agent.status != "active":
         if not immediate:
             _advance(job, moment)
-        return None
+        return False
 
-    session = await db.get(Session, job.session_id) if job.session_id else None
-    if session is None or session.agent_id != job.agent_id:
-        session = Session(
-            agent_id=job.agent_id,
-            title=session_title(job.name),
-            origin="cron",
-        )
-        db.add(session)
-        await db.flush()
-        job.session_id = session.id
+    _ensure_session_id(job, registry)
 
-    active = await db.scalar(
-        select(Run)
-        .where(
-            Run.session_id == session.id,
-            Run.status.in_(ACTIVE_RUN_STATUSES),
-        )
-        .limit(1)
-    )
-    if active is not None:
+    if registry.is_busy(job.session_id):
         job.last_skipped_at = moment
         db.add(
             AuditLog(
@@ -404,18 +431,25 @@ async def trigger_job(
             )
         )
         if immediate:
-            raise CronBusy(active.id, active.status)
+            raise CronBusy(job.session_id, "busy")
         _advance(job, moment)
-        return None
+        return False
 
-    run, _message = await _create_run_in_db(db, session, job.prompt, source="cron")
-    await _link_push_target(db, job, run)
+    delivery = _delivery_for(snapshot, job)
+    await registry.submit(
+        Turn(
+            session_id=job.session_id,
+            agent_id=job.agent_id,
+            prompt=job.prompt,
+            source="cron",
+            delivery=delivery,
+        )
+    )
     job.last_run_at = moment
-    job.last_run_id = run.id
     job.last_skipped_at = None
     if not immediate:
         _advance(job, moment)
-    return run
+    return True
 
 
 _locks: dict[str, asyncio.Lock] = {}
@@ -429,11 +463,14 @@ def _job_lock(job_id: str) -> asyncio.Lock:
     return lock
 
 
-async def run_due_jobs(now: datetime | None = None) -> list[str]:
+async def run_due_jobs(
+    now: datetime | None = None, *, store: Any, registry: Any
+) -> list[str]:
     """Fire every enabled job whose next occurrence has passed.
 
     Each job fires at most once per call: the next occurrence is recomputed
-    from ``now``, so a long outage cannot replay all missed slots.
+    from ``now``, so a long outage cannot replay all missed slots. Returns the
+    job ids that submitted a turn.
     """
     moment = now or utcnow()
     async with SessionLocal() as db:
@@ -462,50 +499,69 @@ async def run_due_jobs(now: datetime | None = None) -> list[str]:
                 ):
                     continue
                 try:
-                    run = await trigger_job(db, job, now=moment)
+                    triggered = await trigger_job(
+                        db, job, store=store, registry=registry, now=moment
+                    )
                     await db.commit()
                 except Exception:
                     await db.rollback()
                     logger.exception("cron job %s failed to trigger", job_id)
                     continue
-                if run is not None:
-                    fired.append(run.id)
+                if triggered:
+                    fired.append(job_id)
     return fired
 
 
 async def run_job_now(
-    job_id: str, now: datetime | None = None, *, agent_id: str | None = None
-) -> Run:
+    job_id: str,
+    *,
+    store: Any,
+    registry: Any,
+    now: datetime | None = None,
+    agent_id: str | None = None,
+) -> CronJob:
     """Manual "run now" entry point; does not change the schedule."""
     async with _job_lock(job_id):
         async with SessionLocal() as db:
             job = await db.get(CronJob, job_id)
             if job is None or (agent_id is not None and job.agent_id != agent_id):
-                raise LookupError("cron job not found")
-            agent = await db.get(Agent, job.agent_id)
-            if agent is None or agent.status != "active":
-                raise CronInactiveAgent("agent is archived or paused")
-            run = await trigger_job(db, job, now=now, immediate=True)
-            if run is None:
+                raise CronNotFound("cron job not found")
+            triggered = await trigger_job(
+                db,
+                job,
+                store=store,
+                registry=registry,
+                now=now,
+                immediate=True,
+            )
+            if not triggered:
                 raise CronInactiveAgent("agent is archived or paused")
             await db.commit()
-            await db.refresh(run)
-            return run
+            await db.refresh(job)
+            return job
 
 
 async def detach_session(db: AsyncSession, session_id: str) -> None:
-    """Clear the job's session binding after the session itself is deleted."""
-    jobs = (
-        await db.scalars(select(CronJob).where(CronJob.session_id == session_id))
-    ).all()
-    for job in jobs:
-        job.session_id = None
-        job.last_run_id = None
+    """Compatibility stub; cron jobs no longer bind to ``sessions`` rows.
+
+    ``session_service`` still calls this while deleting a session. Cron session
+    ids are SDK transcript identities, so deleting the database session does
+    not need to touch the job: the next trigger regenerates the id if the
+    transcript is gone.
+    """
+    return None
 
 
 class CronRuntime:
-    def __init__(self, worker=None, tick_seconds: int | None = None) -> None:  # noqa: ANN001
-        self.worker = worker
+    def __init__(
+        self,
+        *,
+        store: Any,
+        registry: Any,
+        tick_seconds: int | None = None,
+    ) -> None:
+        self.store = store
+        self.registry = registry
         self.tick_seconds = max(
             1, tick_seconds if tick_seconds is not None else settings.cron_tick_seconds
         )
@@ -532,9 +588,7 @@ class CronRuntime:
     async def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                fired = await run_due_jobs()
-                if fired and self.worker is not None:
-                    self.worker.wake()
+                await run_due_jobs(store=self.store, registry=self.registry)
             except asyncio.CancelledError:
                 raise
             except Exception:

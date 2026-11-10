@@ -210,7 +210,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 # Legacy stack reference only; the runtime no longer uses it.
                 weixin.worker = worker
                 await worker.start()
-                cron = CronRuntime(worker)
+                cron = CronRuntime(store=store, registry=registry)
                 app.state.cron = cron
                 await cron.start()
                 backtest_worker = BacktestWorker()

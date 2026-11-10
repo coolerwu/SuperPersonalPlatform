@@ -175,8 +175,6 @@ class CronJobOut(BaseModel):
     session_id: str | None = None
     next_run_at: datetime | None = None
     last_run_at: datetime | None = None
-    last_run_id: str | None = None
-    last_run_status: str | None = None
     last_skipped_at: datetime | None = None
     push_channel_id: str | None = None
     push_conversation_id: str | None = None
@@ -184,11 +182,6 @@ class CronJobOut(BaseModel):
     push_conversation_name: str = ""
     created_at: datetime
     updated_at: datetime
-
-
-class CronRunOut(BaseModel):
-    run_id: str
-    session_id: str
 
 
 class ChannelCreate(BaseModel):
