@@ -244,6 +244,23 @@ async def _ensure_cron_job_columns(conn) -> None:  # noqa: ANN001
         await _ensure_cron_job_column(conn, column)
 
 
+async def _ensure_channel_inbound_text(conn) -> None:  # noqa: ANN001
+    result = await conn.exec_driver_sql("PRAGMA table_info(channel_inbounds)")
+    columns = {row[1] for row in result.fetchall()}
+    if not columns or "text" in columns:
+        return
+    try:
+        await conn.exec_driver_sql(
+            "ALTER TABLE channel_inbounds ADD COLUMN text TEXT NOT NULL DEFAULT ''"
+        )
+    except Exception:
+        # Another process may have added the column concurrently; only re-raise
+        # when it is genuinely still missing.
+        result = await conn.exec_driver_sql("PRAGMA table_info(channel_inbounds)")
+        if "text" not in {row[1] for row in result.fetchall()}:
+            raise
+
+
 async def _drop_stale_channel_deliveries(conn) -> None:  # noqa: ANN001
     result = await conn.exec_driver_sql("PRAGMA table_info(channel_deliveries)")
     columns = {row[1] for row in result.fetchall()}
@@ -269,6 +286,7 @@ async def init_db() -> None:
             await _ensure_session_origin(conn)
             await _ensure_cron_job_columns(conn)
             await _ensure_memory_item_columns(conn)
+            await _ensure_channel_inbound_text(conn)
 
     if settings.app_database_url.startswith("sqlite"):
         try:

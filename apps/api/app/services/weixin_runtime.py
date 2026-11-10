@@ -1,9 +1,15 @@
 """In-process WeChat (iLink) channel runtime.
 
-One poll task per active channel receives DMs; the RunWorker calls
-``deliver_run`` right after a channel Run reaches a terminal state. There is no
-send loop: pending deliveries are swept only on startup and when a channel
-becomes active again.
+One poll task per active channel receives DMs. Configuration (channels,
+conversations and their context tokens) lives in ``settings.json``; inbound
+messages are handed to ``channel_intake`` which owns idempotency and turn
+submission, and outbound replies go through the ``channel_delivery``
+obligation rows. The SDK turn runner calls :meth:`deliver` right after a
+channel turn reaches a terminal state; pending rows are also swept on startup
+and when a channel becomes active again.
+
+The legacy ``RunWorker`` still calls :meth:`deliver_run`; that stub is kept only
+for the old stack and never touches the new tables.
 """
 
 from __future__ import annotations
@@ -13,15 +19,15 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy import select
-
 from app.config import settings
-from app.db import SessionLocal
-from app.models import Channel, ChannelConversation, ChannelDelivery, utcnow
-from app.services import channel_service, weixin_media
+from app.services import channel_delivery, channel_intake, weixin_media
 from app.services.attachments import SavedAttachment, build_attachment_header
+from app.services.channel_text import split_reply
+from app.services.commands import is_command_text
+from app.services.settings_store import ChannelSection
 from app.services.weixin_client import (
     WeixinClient,
     WeixinMediaError,
@@ -33,6 +39,7 @@ from app.services.weixin_client import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 RECOVERED_PREFIX = "♻️ 上一条回复可能已部分送达，以下为完整内容：\n\n"
 MAX_CONSECUTIVE_FAILURES = 3
 RETRY_DELAY_SECONDS = 2.0
@@ -40,6 +47,12 @@ BACKOFF_DELAY_SECONDS = 30.0
 CHUNK_DELAY_SECONDS = 0.3
 MAX_ERROR_TEXT = 500
 CONTENT_DEDUP_SECONDS = 300.0
+LAST_SEEN_INTERVAL_SECONDS = 60.0
+
+# A channel that is inactive or whose login expired must not burn through the
+# delivery retry budget: the obligation stays pending until the channel is
+# usable again.
+_UNBOUNDED_ATTEMPTS = 10**9
 
 
 @dataclass(frozen=True)
@@ -67,15 +80,40 @@ def _error_text(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"[:MAX_ERROR_TEXT]
 
 
+def _credentials_from(channel: ChannelSection) -> ChannelCredentials | None:
+    if (
+        channel.type != "wechat"
+        or channel.status != "active"
+        or not channel.bot_token
+        or not channel.account_id
+    ):
+        return None
+    return ChannelCredentials(
+        channel_id=channel.id,
+        account_id=channel.account_id,
+        token=channel.bot_token,
+        base_url=channel.base_url or DEFAULT_BASE_URL,
+        sync_buf=channel.sync_buf or "",
+        agent_id=channel.agent_id,
+    )
+
+
 class WeixinRuntime:
     def __init__(
         self,
         *,
+        store: Any,
+        registry: Any = None,
         worker: Any = None,
         client_factory: Callable[..., WeixinClient] | None = None,
         batch_seconds: float | None = None,
         batch_max_seconds: float | None = None,
     ) -> None:
+        self.store = store
+        # Assigned by ``main`` right after the registry exists; the runtime must
+        # not be started before that.
+        self.registry = registry
+        # Kept only for the legacy stack during the migration.
         self.worker = worker
         self._client_factory = client_factory or WeixinClient
         self.batch_seconds = (
@@ -91,8 +129,9 @@ class WeixinRuntime:
         self._poll_tasks: dict[str, asyncio.Task[Any]] = {}
         self._clients: dict[str, WeixinClient] = {}
         self._login_sessions: dict[str, dict[str, str]] = {}
-        self._delivering: set[str] = set()
+        self._delivering: set[int] = set()
         self._recent_text: dict[str, float] = {}
+        self._last_touch: dict[str, float] = {}
         self._pending: dict[tuple[str, str], PendingBatch] = {}
         self._pending_tasks: dict[tuple[str, str], asyncio.Task[Any]] = {}
         self._inflight: set[tuple[str, str]] = set()
@@ -103,18 +142,10 @@ class WeixinRuntime:
 
     async def start(self) -> None:
         self._stop.clear()
-        async with SessionLocal() as db:
-            channel_ids = list(
-                (
-                    await db.scalars(
-                        select(Channel.id).where(
-                            Channel.type == "wechat", Channel.status == "active"
-                        )
-                    )
-                ).all()
-            )
-        for channel_id in channel_ids:
-            await self.start_channel(channel_id)
+        snapshot = await self.store.get()
+        for channel in snapshot.channels:
+            if channel.type == "wechat" and channel.status == "active":
+                await self.start_channel(channel.id)
         await self.sweep_deliveries()
 
     async def stop(self) -> None:
@@ -160,6 +191,7 @@ class WeixinRuntime:
 
     async def stop_channel(self, channel_id: str) -> None:
         self._drop_channel_buffers(channel_id)
+        self._last_touch.pop(channel_id, None)
         task = self._poll_tasks.pop(channel_id, None)
         if task is not None and task is not asyncio.current_task():
             task.cancel()
@@ -281,7 +313,7 @@ class WeixinRuntime:
         return content
 
     async def flush_pending(self, key: tuple[str, str]) -> None:
-        """Turn one buffered conversation packet into exactly one queued Run."""
+        """Turn one buffered conversation packet into exactly one queued turn."""
         task = self._pending_tasks.pop(key, None)
         if task is not None and task is not asyncio.current_task():
             task.cancel()
@@ -295,12 +327,13 @@ class WeixinRuntime:
             return
         self._inflight.add(key)
         try:
-            result = await channel_service.ingest_inbound(
+            result = await channel_intake.ingest(
+                store=self.store,
+                registry=self.registry,
                 channel_id=channel_id,
-                external_message_id=batch.ids[0],
-                external_conversation_id=sender_id,
-                conversation_name=batch.sender_name,
-                sender_name=batch.sender_name,
+                external_message_ids=batch.ids,
+                external_id=sender_id,
+                display_name=batch.sender_name,
                 text=content,
                 context_token=batch.context_token,
             )
@@ -323,22 +356,21 @@ class WeixinRuntime:
                 current.first_at = min(current.first_at, batch.first_at)
             self._schedule_flush(key, RETRY_DELAY_SECONDS)
             return
+        self._inflight.discard(key)
 
-        try:
-            if result.run_id:
-                if result.message_id and result.conversation_id and result.session_id:
-                    await channel_service.record_inbound_ids(
-                        channel_id=channel_id,
-                        ids=batch.ids,
-                        run_id=result.run_id,
-                        message_id=result.message_id,
-                        conversation_id=result.conversation_id,
-                        session_id=result.session_id,
-                    )
-                if self.worker is not None:
-                    self.worker.wake()
-        finally:
-            self._inflight.discard(key)
+        # A duplicate batch was already claimed (and its turn queued) by an
+        # earlier delivery; advancing the cursor is all that is left to do.
+        if not result.duplicate and result.reply:
+            credentials = await self._load_credentials(channel_id)
+            if credentials is not None:
+                await self._send_text(
+                    credentials,
+                    to_user_id=sender_id,
+                    text=result.reply,
+                    context_token=batch.context_token,
+                    client=self._clients.get(channel_id),
+                    label="batch",
+                )
         await self._save_sync_if_idle(channel_id)
 
     async def flush_all(self) -> None:
@@ -352,15 +384,16 @@ class WeixinRuntime:
         if sync_buf:
             await self._save_sync_buf(channel_id, sync_buf)
 
-    async def _send_unsupported(
+    async def _send_text(
         self,
         credentials: ChannelCredentials,
-        message: dict[str, Any],
-        kinds: list[str],
+        *,
+        to_user_id: str,
+        text: str,
+        context_token: str | None,
         client: WeixinClient | None,
+        label: str,
     ) -> None:
-        to_user_id = str(message.get("from_user_id") or "").strip()
-        context_token = str(message.get("context_token") or "").strip() or None
         if not to_user_id:
             return
         temporary = client is None
@@ -371,14 +404,15 @@ class WeixinRuntime:
                 client,
                 channel_id=credentials.channel_id,
                 to_user_id=to_user_id,
-                text=weixin_media.unsupported_text(kinds),
+                text=text,
                 context_token=context_token,
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning(
-                "weixin unsupported reply failed channel=%s: %s",
+                "weixin %s reply failed channel=%s: %s",
+                label,
                 credentials.channel_id,
                 exc,
             )
@@ -388,6 +422,24 @@ class WeixinRuntime:
                     await client.aclose()
                 except Exception:
                     logger.exception("failed to close temporary weixin client")
+
+    async def _send_unsupported(
+        self,
+        credentials: ChannelCredentials,
+        message: dict[str, Any],
+        kinds: list[str],
+        client: WeixinClient | None,
+    ) -> None:
+        to_user_id = str(message.get("from_user_id") or "").strip()
+        context_token = str(message.get("context_token") or "").strip() or None
+        await self._send_text(
+            credentials,
+            to_user_id=to_user_id,
+            text=weixin_media.unsupported_text(kinds),
+            context_token=context_token,
+            client=client,
+            label="unsupported",
+        )
 
     # ------------------------------------------------------------------ polling
 
@@ -496,7 +548,7 @@ class WeixinRuntime:
 
         parsed = weixin_media.parse_inbound(message.get("item_list"))
         text = parsed.text.strip()
-        is_command = channel_service.is_command_text(text)
+        is_command = is_command_text(text)
         if not is_command and not parsed.has_content and not parsed.unsupported:
             return
 
@@ -516,61 +568,73 @@ class WeixinRuntime:
             # time bucket so identical text is not suppressed forever.
             bucket = message.get("create_time") or message.get("timestamp") or int(time.time() // 60)
             message_id = f"{sender_id}:{bucket}:{digest}"
-        if not is_command:
-            if await channel_service.inbound_seen(credentials.channel_id, message_id):
-                return
-            if any(
-                message_id in batch.ids for batch in self._pending.values()
-            ):
-                return
-
         sender_name = str(
             message.get("from_user_name")
             or message.get("sender_name")
             or message.get("from_nickname")
             or ""
         ).strip()
-        context_token = str(message.get("context_token") or "").strip()
+        context_token = str(message.get("context_token") or "").strip() or None
         key = (credentials.channel_id, sender_id)
 
         if is_command:
-            command = channel_service.parse_command(text)
-            if command in ("/new", "/clear"):
-                await self.flush_pending(key)
-            elif command == "/stop":
-                self._drop_pending(key)
-            result = await channel_service.ingest_inbound(
-                channel_id=credentials.channel_id,
-                external_message_id=message_id,
-                external_conversation_id=sender_id,
-                conversation_name=sender_name or sender_id,
-                sender_name=sender_name,
-                text=text,
-                context_token=context_token or None,
-            )
-            if not result.duplicate and self.worker is not None and result.run_id:
-                self.worker.wake()
-            if not result.duplicate:
-                await self._handle_command_reply(credentials, message, result, client)
-            if command in ("/new", "/clear", "/stop"):
-                await self._save_sync_if_idle(credentials.channel_id)
+            # Flush buffered text first: /new and /clear must not inherit it,
+            # and /stop should stop what was already said.
+            await self.flush_pending(key)
+            try:
+                result = await channel_intake.ingest(
+                    store=self.store,
+                    registry=self.registry,
+                    channel_id=credentials.channel_id,
+                    external_message_ids=[message_id],
+                    external_id=sender_id,
+                    display_name=sender_name or sender_id,
+                    text=text,
+                    context_token=context_token,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "weixin command rejected channel=%s: %s",
+                    credentials.channel_id,
+                    exc,
+                )
+                return
+            except Exception:
+                logger.exception(
+                    "weixin command failed channel=%s", credentials.channel_id
+                )
+                return
+            if not result.duplicate and result.reply:
+                await self._send_text(
+                    credentials,
+                    to_user_id=sender_id,
+                    text=result.reply,
+                    context_token=context_token,
+                    client=client,
+                    label="command",
+                )
+            await self._save_sync_if_idle(credentials.channel_id)
+            return
+
+        if any(message_id in batch.ids for batch in self._pending.values()):
             return
 
         if not parsed.has_content:
-            recorded = await channel_service.record_inbound_event(
-                channel_id=credentials.channel_id,
-                external_message_id=message_id,
+            # Unsupported-only messages create no turn, so claim their ids here
+            # to keep an iLink replay after a restart from replying twice.
+            if not await channel_intake.claim_inbound(
+                credentials.channel_id, [message_id]
+            ):
+                return
+            await self._send_unsupported(
+                credentials, message, parsed.unsupported, client
             )
-            if recorded:
-                await self._send_unsupported(
-                    credentials, message, parsed.unsupported, client
-                )
             return
 
         notes: list[str] = []
         saved: list[SavedAttachment] = []
         if parsed.media:
-            agent_id = credentials.agent_id or await self._agent_id_for(credentials.channel_id)
+            agent_id = credentials.agent_id or "default"
             temporary = client is None
             media_client = client if client is not None else self._build_client(credentials)
             try:
@@ -609,7 +673,7 @@ class WeixinRuntime:
             labels = "、".join(dict.fromkeys(parsed.unsupported))
             notes.append(f"（已忽略一条{labels}消息）")
         quote = await self._render_quote(
-            credentials.channel_id, sender_id, parsed, message_id
+            credentials.channel_id, parsed, message_id
         )
         parts = [quote, text, *notes]
         content = "\n\n".join(part.strip() for part in parts if part.strip())
@@ -621,7 +685,7 @@ class WeixinRuntime:
             message_id=message_id,
             text=content,
             media=saved,
-            context_token=context_token or None,
+            context_token=context_token,
             sender_name=sender_name or sender_id,
         )
         if text:
@@ -630,7 +694,6 @@ class WeixinRuntime:
     async def _render_quote(
         self,
         channel_id: str,
-        sender_id: str,
         parsed: weixin_media.ParsedInbound,
         message_id: str,
     ) -> str:
@@ -640,11 +703,13 @@ class WeixinRuntime:
             resolved = ""
             if quote.unresolved:
                 try:
-                    resolved = await channel_service.resolve_quoted_text(
-                        channel_id=channel_id,
-                        external_conversation_id=sender_id,
-                        msg_id=quote.msg_id,
-                        create_time_ms=quote.create_time_ms,
+                    resolved = (
+                        await channel_intake.resolve_quoted_text(
+                            channel_id,
+                            quote.msg_id or None,
+                            quote.create_time_ms,
+                        )
+                        or ""
                     )
                 except Exception:
                     logger.exception(
@@ -660,72 +725,6 @@ class WeixinRuntime:
                     )
             rendered.append(quote.render(resolved))
         return "\n\n".join(rendered).strip()
-
-    async def _agent_id_for(self, channel_id: str) -> str:
-        async with SessionLocal() as db:
-            channel = await db.get(Channel, channel_id)
-            return channel.agent_id if channel is not None else "default"
-
-    async def _handle_command_reply(
-        self,
-        credentials: ChannelCredentials,
-        message: Any,
-        result: channel_service.InboundResult,
-        client: WeixinClient | None,
-    ) -> None:
-        reply = result.reply
-        if result.cancel_run_ids:
-            reply = await self._cancel_runs(result.cancel_run_ids)
-        if not reply:
-            return
-        to_user_id = str(message.get("from_user_id") or "").strip()
-        context_token = str(message.get("context_token") or "").strip() or None
-        temporary = client is None
-        if client is None:
-            client = self._build_client(credentials)
-        try:
-            await self._send_chunk(
-                client,
-                channel_id=credentials.channel_id,
-                to_user_id=to_user_id,
-                text=reply,
-                context_token=context_token,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning(
-                "weixin command reply failed channel=%s command=%s: %s",
-                credentials.channel_id,
-                result.command,
-                exc,
-            )
-        finally:
-            if temporary:
-                try:
-                    await client.aclose()
-                except Exception:
-                    logger.exception("failed to close temporary weixin client")
-
-    async def _cancel_runs(self, run_ids: tuple[str, ...]) -> str:
-        if self.worker is None:
-            return channel_service.STOP_UNAVAILABLE_TEXT
-        stopped = 0
-        failed = 0
-        for run_id in run_ids:
-            try:
-                if await self.worker.cancel(run_id):
-                    stopped += 1
-            except LookupError:
-                continue
-            except Exception:
-                failed += 1
-                logger.exception("weixin command cancel failed run=%s", run_id)
-        if stopped:
-            return f"已停止 {stopped} 个任务。"
-        if failed:
-            return channel_service.STOP_UNAVAILABLE_TEXT
-        return channel_service.STOP_FINISHED_TEXT
 
     async def _recycle_client(
         self, channel_id: str, client: WeixinClient
@@ -745,75 +744,102 @@ class WeixinRuntime:
 
     # ------------------------------------------------------------------ delivery
 
-    async def deliver_run(self, run_id: str, *, recovered: bool = False) -> None:
-        if run_id in self._delivering:
+    async def deliver(self, delivery_id: int, *, recovered: bool = False) -> None:
+        """Send one filled delivery obligation, if it is still owed."""
+        if delivery_id in self._delivering:
+            # Another in-process send already owns this row.
             return
-        self._delivering.add(run_id)
+        self._delivering.add(delivery_id)
         try:
-            await self._deliver_run_locked(run_id, recovered=recovered)
+            await self._deliver_locked(delivery_id, recovered=recovered)
         finally:
-            self._delivering.discard(run_id)
+            self._delivering.discard(delivery_id)
 
-    async def _deliver_run_locked(self, run_id: str, *, recovered: bool) -> None:
-        async with SessionLocal() as db:
-            delivery = await db.get(ChannelDelivery, run_id)
-            if delivery is None or delivery.status in ("delivered", "failed"):
-                return
-            if delivery.status == "attempting" and not recovered:
-                return
-            channel = await db.get(Channel, delivery.channel_id)
-            conversation = await db.get(ChannelConversation, delivery.conversation_id)
-            if (
-                channel is None
-                or channel.type != "wechat"
-                or channel.status != "active"
-                or conversation is None
-            ):
-                # Leave the obligation pending; a later activation sweeps it.
-                return
-            content = delivery.content or ""
-            external_id = conversation.external_id
-            context_token = conversation.context_token
-            channel_id = channel.id
-            delivery.status = "attempting"
-            delivery.attempts = int(delivery.attempts or 0) + 1
-            delivery.last_error = None
-            await db.commit()
+    async def _deliver_locked(self, delivery_id: int, *, recovered: bool) -> None:
+        row = await channel_delivery.get(delivery_id)
+        if row is None or row.status in ("sent", "failed"):
+            return
+        content = row.content or ""
+        if not content.strip():
+            # Empty rows belong to turns that have not finished yet.
+            return
+        if row.status == "attempting" and not recovered:
+            return
+        if not await channel_delivery.mark_attempting(delivery_id):
+            return
 
-        client = self._clients.get(channel_id)
-        temporary = client is None
+        snapshot = await self.store.get()
+        channel = next(
+            (item for item in snapshot.channels if item.id == row.channel_id), None
+        )
+        conversation = snapshot.channel_conversations.get(
+            f"{row.channel_id}:{row.external_id}"
+        )
+        channel_ok = (
+            channel is not None
+            and channel.type == "wechat"
+            and channel.status == "active"
+        )
+        if not channel_ok or conversation is None:
+            reason = (
+                "conversation is missing" if channel_ok else "channel is not active"
+            )
+            await channel_delivery.mark_pending(
+                delivery_id,
+                reason,
+                max_attempts=settings.channel_delivery_max_attempts,
+            )
+            return
+
+        credentials = _credentials_from(channel)
+        client = self._clients.get(channel.id)
+        temporary = False
+        if credentials is None:
+            await channel_delivery.mark_pending(
+                delivery_id,
+                "channel credentials are missing",
+                max_attempts=settings.channel_delivery_max_attempts,
+            )
+            return
         if client is None:
-            credentials = await self._load_credentials(channel_id)
-            if credentials is None:
-                await self._set_delivery_pending(run_id, "channel credentials are missing", failed=False)
-                return
             client = self._build_client(credentials)
+            temporary = True
 
         try:
-            chunks = channel_service.split_reply(content)
+            chunks = split_reply(content)
             if recovered and chunks:
                 chunks[0] = f"{RECOVERED_PREFIX}{chunks[0]}"
             for index, chunk in enumerate(chunks):
                 await self._send_chunk(
                     client,
-                    channel_id=channel_id,
-                    to_user_id=external_id,
+                    channel_id=channel.id,
+                    to_user_id=row.external_id,
                     text=chunk,
-                    context_token=context_token,
+                    context_token=conversation.context_token,
                 )
                 if index < len(chunks) - 1 and CHUNK_DELAY_SECONDS:
                     await asyncio.sleep(CHUNK_DELAY_SECONDS)
         except asyncio.CancelledError:
             raise
         except WeixinSessionExpired as exc:
-            await self._set_delivery_pending(
-                run_id, _error_text(exc), failed=False, cap_attempts=False
+            # Keep the obligation for after the next login; it must not fail
+            # just because the stored token expired.
+            await channel_delivery.mark_pending(
+                delivery_id,
+                _error_text(exc),
+                max_attempts=_UNBOUNDED_ATTEMPTS,
             )
-            await self._mark_expired(channel_id, _error_text(exc))
+            await self._mark_expired(channel.id, _error_text(exc))
             return
         except Exception as exc:
-            await self._set_delivery_pending(run_id, _error_text(exc), failed=False)
-            logger.warning("weixin delivery failed run=%s: %s", run_id, exc)
+            await channel_delivery.mark_pending(
+                delivery_id,
+                _error_text(exc),
+                max_attempts=settings.channel_delivery_max_attempts,
+            )
+            logger.warning(
+                "weixin delivery failed delivery=%s: %s", delivery_id, exc
+            )
             return
         finally:
             if temporary:
@@ -822,13 +848,32 @@ class WeixinRuntime:
                 except Exception:
                     logger.exception("failed to close temporary weixin client")
 
-        async with SessionLocal() as db:
-            delivery = await db.get(ChannelDelivery, run_id)
-            if delivery is not None:
-                delivery.status = "delivered"
-                delivery.last_error = None
-                delivery.delivered_at = utcnow()
-                await db.commit()
+        await channel_delivery.mark_sent(delivery_id)
+
+    async def deliver_run(self, run_id: str, *, recovered: bool = False) -> None:
+        """Deprecated legacy entry point; the old RunWorker may still call it."""
+        logger.warning(
+            "weixin_runtime.deliver_run is deprecated; ignoring legacy run=%s recovered=%s",
+            run_id,
+            recovered,
+        )
+
+    async def sweep_deliveries(self, channel_id: str | None = None) -> None:
+        snapshot = await self.store.get()
+        active = {
+            channel.id
+            for channel in snapshot.channels
+            if channel.type == "wechat" and channel.status == "active"
+        }
+        if channel_id is not None:
+            active &= {channel_id}
+        for row in await channel_delivery.list_pending():
+            if row.channel_id not in active:
+                continue
+            await self.deliver(
+                row.id,
+                recovered=row.status == "attempting",
+            )
 
     async def _send_chunk(
         self,
@@ -878,26 +923,6 @@ class WeixinRuntime:
                     attempts,
                     exc,
                 )
-    async def sweep_deliveries(self, channel_id: str | None = None) -> None:
-        async with SessionLocal() as db:
-            statement = (
-                select(ChannelDelivery)
-                .where(ChannelDelivery.status.in_(("pending", "attempting")))
-                .order_by(ChannelDelivery.created_at, ChannelDelivery.run_id)
-            )
-            if channel_id is not None:
-                statement = statement.where(ChannelDelivery.channel_id == channel_id)
-            else:
-                active_ids = select(Channel.id).where(
-                    Channel.type == "wechat", Channel.status == "active"
-                )
-                statement = statement.where(ChannelDelivery.channel_id.in_(active_ids))
-            deliveries = list((await db.scalars(statement)).all())
-        for delivery in deliveries:
-            await self.deliver_run(
-                delivery.run_id,
-                recovered=delivery.status == "attempting",
-            )
 
     # ------------------------------------------------------------------ QR login state
 
@@ -917,7 +942,7 @@ class WeixinRuntime:
     def new_client(self, **kwargs: Any) -> WeixinClient:
         return self._client_factory(**kwargs)
 
-    # ------------------------------------------------------------------ DB helpers
+    # ------------------------------------------------------------------ state helpers
 
     def _build_client(self, credentials: ChannelCredentials) -> WeixinClient:
         return self._client_factory(
@@ -927,62 +952,54 @@ class WeixinRuntime:
         )
 
     async def _load_credentials(self, channel_id: str) -> ChannelCredentials | None:
-        async with SessionLocal() as db:
-            channel = await db.get(Channel, channel_id)
-            if (
-                channel is None
-                or channel.type != "wechat"
-                or channel.status != "active"
-                or not channel.bot_token
-                or not channel.account_id
-            ):
-                return None
-            return ChannelCredentials(
-                channel_id=channel.id,
-                account_id=channel.account_id,
-                token=channel.bot_token,
-                base_url=channel.base_url or "https://ilinkai.weixin.qq.com",
-                sync_buf=channel.sync_buf or "",
-                agent_id=channel.agent_id,
-            )
+        snapshot = await self.store.get()
+        channel = next(
+            (item for item in snapshot.channels if item.id == channel_id), None
+        )
+        if channel is None:
+            return None
+        return _credentials_from(channel)
+
+    async def _mutate_channel(
+        self,
+        channel_id: str,
+        mutate: Callable[[ChannelSection], None],
+    ) -> ChannelSection | None:
+        snapshot = await self.store.get()
+        channel = next(
+            (item for item in snapshot.channels if item.id == channel_id), None
+        )
+        if channel is None:
+            return None
+        updated = channel.model_copy(deep=True)
+        mutate(updated)
+        await self.store.update_channel(updated)
+        return updated
 
     async def _save_sync_buf(self, channel_id: str, sync_buf: str) -> None:
-        async with SessionLocal() as db:
-            channel = await db.get(Channel, channel_id)
-            if channel is not None:
-                channel.sync_buf = sync_buf
-                await db.commit()
+        def mutate(channel: ChannelSection) -> None:
+            channel.sync_buf = sync_buf
+
+        await self._mutate_channel(channel_id, mutate)
 
     async def _touch_last_seen(self, channel_id: str) -> None:
-        async with SessionLocal() as db:
-            channel = await db.get(Channel, channel_id)
-            if channel is not None:
-                channel.last_seen_at = utcnow()
-                await db.commit()
+        now = time.monotonic()
+        previous = self._last_touch.get(channel_id)
+        if previous is not None and now - previous < LAST_SEEN_INTERVAL_SECONDS:
+            return
+        self._last_touch[channel_id] = now
+        stamp = datetime.now(timezone.utc).isoformat()
+
+        def mutate(channel: ChannelSection) -> None:
+            channel.last_seen_at = stamp
+
+        await self._mutate_channel(channel_id, mutate)
 
     async def _mark_expired(self, channel_id: str, error: str) -> None:
-        async with SessionLocal() as db:
-            channel = await db.get(Channel, channel_id)
-            if channel is not None:
-                channel.status = "expired"
-                channel.last_error = error
-                await db.commit()
+        def mutate(channel: ChannelSection) -> None:
+            channel.status = "expired"
+            channel.last_error = error
+
+        await self._mutate_channel(channel_id, mutate)
         if self._poll_tasks.get(channel_id) is not asyncio.current_task():
             await self.stop_channel(channel_id)
-
-    async def _set_delivery_pending(
-        self, run_id: str, error: str, *, failed: bool, cap_attempts: bool = True
-    ) -> None:
-        async with SessionLocal() as db:
-            delivery = await db.get(ChannelDelivery, run_id)
-            if delivery is None or delivery.status == "delivered":
-                return
-            delivery.last_error = error[:MAX_ERROR_TEXT]
-            attempts = int(delivery.attempts or 0)
-            if failed or (
-                cap_attempts and attempts >= max(1, settings.channel_delivery_max_attempts)
-            ):
-                delivery.status = "failed"
-            else:
-                delivery.status = "pending"
-            await db.commit()

@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db import SessionLocal
-from app.models import ChannelInbound
+from app.models import ChannelDelivery, ChannelInbound
 from app.services.claude_runner import DeliveryRequest, Turn, transcript_path
 from app.services.commands import (
     HELP_TEXT,
@@ -23,6 +24,10 @@ from app.services.identifiers import is_canonical_uuid, valid_agent_id
 from app.services.settings_store import ConversationSection
 
 logger = logging.getLogger(__name__)
+
+# Quote-replies arrive without text; look the quoted message up by time.
+QUOTE_LOOKUP_WINDOW_SECONDS = 30.0
+QUOTE_LOOKUP_LATE_SECONDS = 2.0
 
 
 @dataclass
@@ -51,16 +56,24 @@ def _normalize_message_ids(values: Any) -> list[str]:
     return list(dict.fromkeys(message_ids))
 
 
-async def _claim_inbound(channel_id: str, message_ids: list[str]) -> bool:
+async def claim_inbound(
+    channel_id: str, message_ids: list[str], text: str = ""
+) -> bool:
     """Claim every message id in one transaction.
 
     ``False`` means the batch was already claimed (duplicate). A unique
-    violation that turns out not to be one of these rows is re-raised.
+    violation that turns out not to be one of these rows is re-raised. The
+    inbound text is stored on each row so quote-replies can recover the quoted
+    message later; a duplicate claim keeps the first stored copy.
     """
     async with SessionLocal() as db:
         db.add_all(
             [
-                ChannelInbound(channel_id=channel_id, external_message_id=message_id)
+                ChannelInbound(
+                    channel_id=channel_id,
+                    external_message_id=message_id,
+                    text=text,
+                )
                 for message_id in message_ids
             ]
         )
@@ -80,6 +93,71 @@ async def _claim_inbound(channel_id: str, message_ids: list[str]) -> bool:
                 return False
             raise
         return True
+
+
+async def resolve_quoted_text(
+    channel_id: str,
+    msg_id: str | None,
+    create_time_ms: int | None,
+) -> str | None:
+    """Recover the text of a quoted message iLink omitted from the payload.
+
+    Tries the exact message id first, then the inbound rows inside the quote
+    time window, and finally the bot's own replies in that window. Returns
+    ``None`` when nothing usable is stored.
+    """
+    async with SessionLocal() as db:
+        if msg_id:
+            exact = await db.scalar(
+                select(ChannelInbound.text)
+                .where(
+                    ChannelInbound.channel_id == channel_id,
+                    ChannelInbound.external_message_id == msg_id,
+                )
+                .limit(1)
+            )
+            if isinstance(exact, str) and exact.strip():
+                return exact
+
+        if create_time_ms is None:
+            return None
+        try:
+            target = datetime.fromtimestamp(
+                int(create_time_ms) / 1000, tz=timezone.utc
+            )
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+        start = target - timedelta(seconds=QUOTE_LOOKUP_LATE_SECONDS)
+        end = target + timedelta(seconds=QUOTE_LOOKUP_WINDOW_SECONDS)
+
+        inbound = await db.scalar(
+            select(ChannelInbound.text)
+            .where(
+                ChannelInbound.channel_id == channel_id,
+                ChannelInbound.created_at >= start,
+                ChannelInbound.created_at <= end,
+                ChannelInbound.text != "",
+            )
+            .order_by(ChannelInbound.created_at.desc())
+            .limit(1)
+        )
+        if isinstance(inbound, str) and inbound.strip():
+            return inbound
+
+        content = await db.scalar(
+            select(ChannelDelivery.content)
+            .where(
+                ChannelDelivery.channel_id == channel_id,
+                ChannelDelivery.created_at >= start,
+                ChannelDelivery.created_at <= end,
+                ChannelDelivery.content != "",
+            )
+            .order_by(ChannelDelivery.created_at.desc())
+            .limit(1)
+        )
+        if isinstance(content, str) and content.strip():
+            return content
+        return None
 
 
 async def _release_inbound(channel_id: str, message_ids: list[str]) -> None:
@@ -189,7 +267,7 @@ async def ingest(
     if agent is None or agent.status != "active":
         raise ValueError("agent is not available")
 
-    if not await _claim_inbound(channel_id, message_ids):
+    if not await claim_inbound(channel_id, message_ids, text):
         return IngestResult(duplicate=True)
 
     try:

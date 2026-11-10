@@ -174,27 +174,29 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             await sync_default_agent_instructions()
             await ensure_agent_workspaces()
             await seed_knowledge_config()
-            weixin = WeixinRuntime()
+            weixin = WeixinRuntime(store=store)
             app.state.weixin = weixin
             knowledge = KnowledgeSyncRuntime()
             app.state.knowledge = knowledge
             if start_worker:
-                worker = RunWorker(weixin_runtime=weixin)
-                app.state.worker = worker
-                weixin.worker = worker
-                await worker.start()
-
                 from app.services.claude_runner import ClaudeTurnRunner
                 from app.services.recovery import recover_running_sessions
                 from app.services.session_catalog import SessionCatalog
                 from app.services.session_registry import SessionRegistry
 
-                runner = ClaudeTurnRunner(store)
+                # The delivery callback must exist before start(), so the
+                # runtime is constructed first and its registry is attached as
+                # soon as the runner/registry pair exists.
+                runner = ClaudeTurnRunner(
+                    store,
+                    deliver_callback=lambda delivery_id: weixin.deliver(delivery_id),
+                )
                 app.state.runner = runner
                 registry = SessionRegistry(
                     runner, concurrency=settings.run_concurrency
                 )
                 app.state.registry = registry
+                weixin.registry = registry
                 app.state.session_catalog = SessionCatalog(store)
                 # Recover interrupted sessions before WeixinRuntime.start()
                 # sweeps pending deliveries: a delivery row created at turn
@@ -202,6 +204,11 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 await recover_running_sessions(registry, store)
 
                 await weixin.start()
+                worker = RunWorker(weixin_runtime=weixin)
+                app.state.worker = worker
+                # Legacy stack reference only; the runtime no longer uses it.
+                weixin.worker = worker
+                await worker.start()
                 cron = CronRuntime(worker)
                 app.state.cron = cron
                 await cron.start()

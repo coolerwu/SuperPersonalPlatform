@@ -266,6 +266,7 @@ class ChannelInbound(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     channel_id: Mapped[str] = mapped_column(String(32), ForeignKey("channels.id"), index=True)
     external_message_id: Mapped[str] = mapped_column(String(200))
+    text: Mapped[str] = mapped_column(Text, default="")
     conversation_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     message_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

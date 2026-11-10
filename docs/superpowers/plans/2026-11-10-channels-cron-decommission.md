@@ -867,7 +867,7 @@ git add apps/api/app/services/weixin_runtime.py apps/api/app/main.py apps/api/ap
 git commit -m "Move WeChat runtime to SDK sessions"
 ```
 
-> **质量审查修订：** `mark_attempting` 允许对 `attempting` 行重抢（重启 sweep 需要），发送方必须在进程内用 `_delivering: set[int]` 按 delivery_id 去重，保证同一行同一进程内至多一个发送者；启动/渠道激活 sweep 与轮次结束回调共享该集合。**接入入站服务时：** `flush_pending` 传 `batch.ids`（列表）；命令拦截前先 `flush_pending(key)`，避免命令前缓冲的文本进入新会话；读取联系人绑定用 `f"{channel_id}:{external_id}"`。
+> **质量审查修订：** `mark_attempting` 允许对 `attempting` 行重抢（重启 sweep 需要），发送方必须在进程内用 `_delivering: set[int]` 按 delivery_id 去重，保证同一行同一进程内至多一个发送者；启动/渠道激活 sweep 与轮次结束回调共享该集合。**接入入站服务时：** `flush_pending` 传 `batch.ids`（列表）；命令拦截前先 `flush_pending(key)`，避免命令前缓冲的文本进入新会话；读取联系人绑定用 `f"{channel_id}:{external_id}"`。**引用找回：** `ChannelInbound` 增加 `text` 列并写入本批正文；`channel_intake.resolve_quoted_text` 按 msg_id、时间窗口（-2s/+30s）依次查入站文本与投递内容；`_render_quote` 调它，查不到保留“（引用原文不可用）”。纯语音/视频等 unsupported 消息在回复前用 `claim_inbound` 占位，防重放。
 
 ---
 

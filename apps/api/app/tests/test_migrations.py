@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.db import (
     _ensure_agent_columns,
     _ensure_app_config_columns,
+    _ensure_channel_inbound_text,
     _ensure_cron_job_columns,
     _ensure_memory_item_columns,
     _ensure_session_origin,
@@ -149,6 +150,34 @@ async def test_ensure_cron_job_columns_is_idempotent(tmp_path: Path) -> None:
         assert row is not None
         assert row[0] is None
         assert row[1] is None
+    await engine.dispose()
+
+
+async def test_ensure_channel_inbound_text_is_idempotent(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy-inbound.db'}")
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            "CREATE TABLE channel_inbounds ("
+            "id INTEGER PRIMARY KEY, channel_id TEXT, external_message_id TEXT)"
+        )
+        await conn.exec_driver_sql(
+            "INSERT INTO channel_inbounds (id, channel_id, external_message_id) "
+            "VALUES (1, 'ch', 'm1')"
+        )
+        await _ensure_channel_inbound_text(conn)
+        await _ensure_channel_inbound_text(conn)
+
+        result = await conn.exec_driver_sql("PRAGMA table_info(channel_inbounds)")
+        columns = {row[1] for row in result.fetchall()}
+        assert "text" in columns
+
+        row = (
+            await conn.exec_driver_sql(
+                "SELECT text FROM channel_inbounds WHERE id=1"
+            )
+        ).fetchone()
+        assert row is not None
+        assert row[0] == ""
     await engine.dispose()
 
 

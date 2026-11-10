@@ -1,12 +1,13 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import delete, select
 
 from app.db import SessionLocal, init_db
-from app.models import ChannelInbound
+from app.models import ChannelDelivery, ChannelInbound
 from app.services import commands
-from app.services.channel_intake import ingest
+from app.services.channel_intake import ingest, resolve_quoted_text
 from app.services.claude_runner import transcript_path
 from app.services.settings_store import (
     AgentSection,
@@ -589,3 +590,83 @@ async def test_record_inbound_failure_keeps_claim(monkeypatch):
         assert rows[0].session_id is None
     finally:
         await _cleanup("ch1", ids)
+
+
+async def _cleanup_quote_rows(channel_id: str) -> None:
+    async with SessionLocal() as db:
+        await db.execute(
+            delete(ChannelInbound).where(ChannelInbound.channel_id == channel_id)
+        )
+        await db.execute(
+            delete(ChannelDelivery).where(ChannelDelivery.channel_id == channel_id)
+        )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_resolve_quoted_text_by_message_id():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    try:
+        await _ingest(store, registry, message_ids=["orig-1"], text="原来的问题")
+        assert (
+            await resolve_quoted_text("ch1", "orig-1", None) == "原来的问题"
+        )
+        assert await resolve_quoted_text("ch1", "missing", None) is None
+    finally:
+        await _cleanup("ch1", ["orig-1"])
+
+
+@pytest.mark.asyncio
+async def test_resolve_quoted_text_by_inbound_time_window():
+    await init_db()
+    channel_id = f"q{uuid.uuid4().hex[:12]}"
+    target = datetime.now(timezone.utc).replace(microsecond=0)
+    async with SessionLocal() as db:
+        db.add(
+            ChannelInbound(
+                channel_id=channel_id,
+                external_message_id="window-1",
+                text="窗口内的原文",
+                created_at=target - timedelta(seconds=1),
+            )
+        )
+        await db.commit()
+    try:
+        assert (
+            await resolve_quoted_text(
+                channel_id, None, int(target.timestamp() * 1000)
+            )
+            == "窗口内的原文"
+        )
+    finally:
+        await _cleanup_quote_rows(channel_id)
+
+
+@pytest.mark.asyncio
+async def test_resolve_quoted_text_by_bot_reply_time_window():
+    await init_db()
+    channel_id = f"q{uuid.uuid4().hex[:12]}"
+    target = datetime.now(timezone.utc).replace(microsecond=0)
+    async with SessionLocal() as db:
+        db.add(
+            ChannelDelivery(
+                channel_id=channel_id,
+                external_id="wx-1",
+                session_id=str(uuid.uuid4()),
+                content="昨天的日报正文",
+                status="sent",
+                created_at=target - timedelta(seconds=1),
+            )
+        )
+        await db.commit()
+    try:
+        assert (
+            await resolve_quoted_text(
+                channel_id, None, int(target.timestamp() * 1000)
+            )
+            == "昨天的日报正文"
+        )
+    finally:
+        await _cleanup_quote_rows(channel_id)
