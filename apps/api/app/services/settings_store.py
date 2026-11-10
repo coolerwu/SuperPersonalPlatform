@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
-import shutil
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class RuntimeSection(BaseModel):
-    session_retention_days: int = 30
+    session_retention_days: int = Field(default=30, ge=0)
 
 
 class KnowledgeSection(BaseModel):
@@ -28,7 +28,7 @@ class KnowledgeSection(BaseModel):
     username: str = ""
     password: str = ""
     root: str = ""
-    interval_seconds: int = 300
+    interval_seconds: int = Field(default=300, gt=0)
 
 
 class ProviderSection(BaseModel):
@@ -84,23 +84,52 @@ class JsonStore:
         self.path = path
         self._lock = asyncio.Lock()
 
-    def _read_raw(self) -> dict[str, Any]:
-        for candidate in (self.path, Path(str(self.path) + ".bak")):
-            try:
-                data = json.loads(candidate.read_text("utf-8"))
-            except FileNotFoundError:
-                continue
-            except (OSError, ValueError):
-                logger.exception("cannot read settings file %s", candidate)
-                continue
-            if isinstance(data, dict):
-                return data
-        return {}
+    @property
+    def backup_path(self) -> Path:
+        return Path(str(self.path) + ".bak")
 
-    def _write_raw(self, data: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+    def _read_file(self, candidate: Path) -> dict[str, Any] | None:
+        try:
+            data = json.loads(candidate.read_text("utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as exc:
+            logger.warning("cannot read settings file %s: %s", candidate, exc)
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _load(self) -> tuple[dict[str, Any], str | None]:
+        """Return the parsed data plus where it came from.
+
+        ``source`` is ``"main"`` for a readable settings file, ``"backup"``
+        when the main file was corrupt and the backup was used, or ``None``
+        when neither file could be read.
+        """
+        data = self._read_file(self.path)
+        if data is not None:
+            return data, "main"
+        data = self._read_file(self.backup_path)
+        if data is not None:
+            return data, "backup"
+        return {}, None
+
+    @staticmethod
+    def _fsync_dir(directory: Path) -> None:
+        try:
+            fd = os.open(directory, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            logger.warning("cannot fsync settings directory %s", directory)
+        finally:
+            os.close(fd)
+
+    def _atomic_write(self, target: Path, data: dict[str, Any]) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(
-            dir=self.path.parent, prefix=self.path.name, suffix=".tmp"
+            dir=target.parent, prefix=target.name, suffix=".tmp"
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -108,24 +137,44 @@ class JsonStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.chmod(tmp_name, 0o600)
-            if self.path.exists():
-                try:
-                    shutil.copy2(self.path, Path(str(self.path) + ".bak"))
-                except OSError:
-                    logger.exception("cannot back up settings file")
-            os.replace(tmp_name, self.path)
+            os.replace(tmp_name, target)
         finally:
             if os.path.exists(tmp_name):
                 os.unlink(tmp_name)
+        self._fsync_dir(target.parent)
+
+    def _write_raw(
+        self, data: dict[str, Any], backup: dict[str, Any] | None = None
+    ) -> None:
+        # Only a parseable previous main file is worth backing up; writing the
+        # corrupt bytes over a good .bak would destroy the only good copy.
+        if backup is not None:
+            try:
+                self._atomic_write(self.backup_path, backup)
+            except OSError:
+                logger.warning("cannot back up settings file %s", self.backup_path)
+        self._atomic_write(self.path, data)
+
+    def _read_raw(self) -> dict[str, Any]:
+        data, source = self._load()
+        if source == "backup":
+            # Self-heal: replace the corrupt main file with the recovered data.
+            try:
+                self._write_raw(data)
+            except OSError:
+                logger.warning("cannot self-heal settings file %s", self.path)
+        return data
 
     async def read(self) -> dict[str, Any]:
-        return await asyncio.to_thread(self._read_raw)
+        async with self._lock:
+            return await asyncio.to_thread(self._read_raw)
 
     async def update(self, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         async with self._lock:
-            data = await asyncio.to_thread(self._read_raw)
+            data, source = await asyncio.to_thread(self._load)
+            backup = copy.deepcopy(data) if source == "main" else None
             mutate(data)
-            await asyncio.to_thread(self._write_raw, data)
+            await asyncio.to_thread(self._write_raw, data, backup)
             return data
 
 
@@ -152,6 +201,27 @@ def _dict_section(data: dict[str, Any], key: str) -> dict[str, Any]:
         section = {}
         data[key] = section
     return section
+
+
+def _validated_update(
+    model: type[BaseModel], values: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate a partial section update and return the coerced values."""
+    unknown = set(values) - set(model.model_fields)
+    if unknown:
+        raise ValueError("unknown settings field(s): " + ", ".join(sorted(unknown)))
+    parsed = model.model_validate(values)
+    return parsed.model_dump(include=set(values))
+
+
+def _anthropic_base_url(base_url: str) -> str:
+    """Point the provider endpoint at the Anthropic-compatible API root."""
+    normalized = base_url.rstrip("/")
+    if not normalized:
+        return ""
+    if not normalized.endswith("/anthropic"):
+        normalized += "/anthropic"
+    return normalized
 
 
 def _parse(raw: dict[str, Any]) -> PlatformSettings:
@@ -194,7 +264,7 @@ def build_default_settings() -> dict[str, Any]:
     current = Settings()
     provider = ProviderSection(
         name="deepseek",
-        base_url=current.llm_base_url,
+        base_url=_anthropic_base_url(current.llm_base_url),
         model=current.llm_model,
         api_key=current.llm_api_key,
     )
@@ -246,14 +316,18 @@ class SettingsStore:
         await self._json.update(mutate)
 
     async def update_runtime(self, **values: Any) -> None:
+        validated = _validated_update(RuntimeSection, values)
+
         def mutate(data: dict[str, Any]) -> None:
-            _dict_section(data, "runtime").update(values)
+            _dict_section(data, "runtime").update(validated)
 
         await self._json.update(mutate)
 
     async def update_knowledge(self, **values: Any) -> None:
+        validated = _validated_update(KnowledgeSection, values)
+
         def mutate(data: dict[str, Any]) -> None:
-            _dict_section(data, "knowledge").update(values)
+            _dict_section(data, "knowledge").update(validated)
 
         await self._json.update(mutate)
 
