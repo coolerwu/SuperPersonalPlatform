@@ -115,49 +115,69 @@ async def purge_expired_transcripts(
             continue
         if registry is not None and registry.is_busy(session_id):
             continue
+        # The cleanup sweep must not delete a transcript while a new turn can
+        # still slip into the queue between this check and the unlink.
+        begin = getattr(registry, "begin_delete", None) if registry is not None else None
+        if begin is not None and not begin(session_id):
+            continue
         try:
             mtime = path.stat().st_mtime
         except OSError:
+            if begin is not None:
+                finish = getattr(registry, "finish_delete", None)
+                if finish is not None:
+                    finish(session_id)
             continue
         if mtime >= cutoff:
+            if begin is not None:
+                finish = getattr(registry, "finish_delete", None)
+                if finish is not None:
+                    finish(session_id)
             continue
-        # Artifacts first: a cancelled or failed sweep leaves the transcript so
-        # the next run repeats the idempotent cleanup.
-        await cleanup_session_artifacts(
-            agent_id, session_id, home=home, store=store
-        )
         try:
-            # The SDK removes the transcript and its subagent directory.
-            await asyncio.to_thread(sdk_bridge.delete_session, session_id)
-        except FileNotFoundError:
-            # The SDK only accepts non-empty transcripts, so an empty file (or
-            # one removed concurrently) reports not-found; finish the delete
-            # ourselves, including the subagent directory.
-            try:
-                path.unlink(missing_ok=True)
-                await asyncio.to_thread(shutil.rmtree, directory / session_id, True)
-            except OSError:
-                logger.warning(
-                    "failed to remove orphan transcript session=%s",
-                    session_id,
-                    exc_info=True,
-                )
-                continue
-        except Exception:
-            logger.warning(
-                "failed to delete transcript session=%s", session_id, exc_info=True
+            # Artifacts first: a cancelled or failed sweep leaves the transcript so
+            # the next run repeats the idempotent cleanup.
+            await cleanup_session_artifacts(
+                agent_id, session_id, home=home, store=store
             )
-            continue
-        if registry is not None:
             try:
-                await registry.close_session(session_id)
+                # The SDK removes the transcript and its subagent directory.
+                await asyncio.to_thread(sdk_bridge.delete_session, session_id)
+            except FileNotFoundError:
+                # The SDK only accepts non-empty transcripts, so an empty file (or
+                # one removed concurrently) reports not-found; finish the delete
+                # ourselves, including the subagent directory.
+                try:
+                    path.unlink(missing_ok=True)
+                    await asyncio.to_thread(shutil.rmtree, directory / session_id, True)
+                except OSError:
+                    logger.warning(
+                        "failed to remove orphan transcript session=%s",
+                        session_id,
+                        exc_info=True,
+                    )
+                    continue
             except Exception:
                 logger.warning(
-                    "failed to release cached client session=%s",
-                    session_id,
-                    exc_info=True,
+                    "failed to delete transcript session=%s", session_id, exc_info=True
                 )
-        removed += 1
+                continue
+            if registry is not None:
+                try:
+                    await registry.close_session(session_id)
+                except Exception:
+                    logger.warning(
+                        "failed to release cached client session=%s",
+                        session_id,
+                        exc_info=True,
+                    )
+            removed += 1
+        finally:
+            # Keep the delete marker until the cached client is released.
+            if begin is not None:
+                finish = getattr(registry, "finish_delete", None)
+                if finish is not None:
+                    finish(session_id)
     if skipped_invalid:
         logger.warning(
             "skipped %d non-UUID transcript file(s) under %s",

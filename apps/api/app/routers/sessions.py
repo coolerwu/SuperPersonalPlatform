@@ -88,14 +88,29 @@ async def interrupt_session(session_id: str, request: Request) -> dict[str, bool
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, agent_id: str, request: Request) -> dict[str, bool]:
     registry = getattr(request.app.state, "registry", None)
-    if registry is not None and registry.is_busy(session_id):
-        raise HTTPException(status_code=409, detail="session has an active turn")
-    catalog = _catalog(request)
-    deleted = await catalog.delete(agent_id, session_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="session not found")
+    started = False
     if registry is not None:
-        await registry.close_session(session_id)
+        begin = getattr(registry, "begin_delete", None)
+        if begin is not None:
+            started = begin(session_id)
+            if not started:
+                raise HTTPException(status_code=409, detail="session has an active turn")
+        elif registry.is_busy(session_id):
+            raise HTTPException(status_code=409, detail="session has an active turn")
+    catalog = _catalog(request)
+    try:
+        deleted = await catalog.delete(agent_id, session_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="session not found")
+        if registry is not None:
+            await registry.close_session(session_id)
+    finally:
+        # Keep the delete marker until the cached client is released, so a
+        # submit cannot slip in between the unlink and close_session.
+        if registry is not None and started:
+            finish = getattr(registry, "finish_delete", None)
+            if finish is not None:
+                finish(session_id)
     return {"deleted": True}
 
 

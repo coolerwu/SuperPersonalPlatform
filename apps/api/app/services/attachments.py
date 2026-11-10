@@ -189,7 +189,10 @@ def save_attachment_bytes(
             pass
     return SavedAttachment(
         name=display_name or target.name,
-        path=f"/uploads/{target.name}",
+        # Relative to the Agent workspace, which is the SDK's cwd. The model
+        # resolves paths against the real filesystem, so a leading "/" would
+        # point at the host root and never match the uploaded file.
+        path=f"uploads/{target.name}",
         size=target.stat().st_size,
     )
 
@@ -221,9 +224,16 @@ def resolve_upload_file(agent_id: str, filename: str) -> Path | None:
 
 def _attachment_file(workspace: Path, workspace_path: str) -> Path | None:
     value = (workspace_path or "").strip()
-    if not value.startswith("/uploads/"):
+    # New messages carry a path relative to the Agent workspace ("uploads/x");
+    # old transcripts may still hold the previous absolute form ("/uploads/x").
+    # Accept both so history remains readable, but resolve only inside the
+    # workspace uploads directory.
+    if value.startswith("/uploads/"):
+        name = value[len("/uploads/") :]
+    elif value.startswith("uploads/"):
+        name = value[len("uploads/") :]
+    else:
         return None
-    name = value[len("/uploads/") :]
     if "/" in name or "\\" in name or not name:
         return None
     target = workspace / "uploads" / name

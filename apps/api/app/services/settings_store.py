@@ -180,6 +180,22 @@ class JsonStore:
         async with self._lock:
             return await asyncio.to_thread(self._read_raw)
 
+    async def load_state(self) -> tuple[dict[str, Any], str | None]:
+        """Return the readable data and its source (``main``/``backup``/None).
+
+        A corrupt main file is healed from the backup, matching ``read``.
+        Startup seeding uses the source to tell "no usable file" apart from a
+        parseable file whose owner deliberately emptied a section.
+        """
+        async with self._lock:
+            data, source = await asyncio.to_thread(self._load)
+            if source == "backup":
+                try:
+                    await asyncio.to_thread(self._write_raw, data)
+                except OSError:
+                    logger.warning("cannot self-heal settings file %s", self.path)
+            return data, source
+
     async def update(self, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         async with self._lock:
             data, source = await asyncio.to_thread(self._load)
@@ -335,6 +351,33 @@ def _legacy_session_retention_days() -> int | None:
     return max(0, min(value, 3650))
 
 
+def _merge_with_defaults(raw: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild sections that cannot be read while keeping what still can.
+
+    Used when a settings file is unreadable or has no ``agents`` list. A file
+    that parses and explicitly holds ``agents: []`` is treated as the owner's
+    deliberate choice and is never passed through here.
+    """
+    defaults = build_default_settings()
+    for key, model in (("runtime", RuntimeSection), ("knowledge", KnowledgeSection)):
+        current = raw.get(key)
+        if isinstance(current, dict):
+            try:
+                defaults[key] = model.model_validate(
+                    {**defaults[key], **current}
+                ).model_dump()
+            except ValidationError:
+                logger.warning(
+                    "invalid settings section %s while re-seeding; using defaults",
+                    key,
+                )
+    if isinstance(raw.get("channels"), list):
+        defaults["channels"] = raw["channels"]
+    if isinstance(raw.get("channel_conversations"), dict):
+        defaults["channel_conversations"] = raw["channel_conversations"]
+    return defaults
+
+
 class SettingsStore:
     def __init__(self, path: Path) -> None:
         self._json = JsonStore(path)
@@ -353,10 +396,45 @@ class SettingsStore:
         return await self._json.update(mutate)
 
     async def ensure_seeded(self) -> PlatformSettings:
-        if not self.path.exists():
-            await self._json.update(
-                lambda data: data.update(build_default_settings())
+        data, source = await self._json.load_state()
+        if source is None:
+            # The file is missing, unreadable, or corrupt with no usable
+            # backup. Write defaults so the platform does not boot with no
+            # Agents; ``get()`` would otherwise stay empty forever.
+            logger.warning(
+                "settings file %s is unreadable or missing; re-seeding defaults",
+                self.path,
             )
+            await self._json.update(
+                lambda raw: raw.update(build_default_settings())
+            )
+        elif not isinstance(data.get("agents"), list):
+            # Parseable but the agents section is absent/corrupt (for example
+            # a legacy partial file). Fill in defaults while preserving the
+            # readable runtime/knowledge/channels sections.
+            merged = _merge_with_defaults(data)
+            logger.warning(
+                "settings file %s has no agents section; re-seeding defaults",
+                self.path,
+            )
+            await self._json.update(lambda raw: raw.update(merged))
+        elif not data.get("agents"):
+            # A parseable, deliberately empty agents list is valid: keep it
+            # and warn, because re-seeding an Agent could surprise its owner.
+            logger.warning(
+                "settings file %s has an empty agents list; leaving it as-is",
+                self.path,
+            )
+        elif not _parse(data).agents:
+            # A non-empty list whose entries all fail validation leaves the
+            # platform with no usable Agent, the same permanent-empty state as
+            # a corrupt file.
+            merged = _merge_with_defaults(data)
+            logger.warning(
+                "settings file %s has no valid agent entries; re-seeding defaults",
+                self.path,
+            )
+            await self._json.update(lambda raw: raw.update(merged))
 
         settings = await self.get()
         if not settings.runtime.legacy_import_done:

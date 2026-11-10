@@ -8,7 +8,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`
 - 会话与消息由 SDK transcript 管理；平台配置在 `data/settings.json`；新库的 `app.db` 只创建 `audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions` 六张表（从旧版升级的库会保留未使用的旧表）
 
-本版明确不包含：工具层迁移（技能工具、`add_dirs`、MCP、浏览器/搜索/回测等工具接入 Agent）、rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、刷新后继续看当前输出、消息时间戳、Run 历史。`langchain-core` 暂留，待工具层迁移后删除。
+本版明确不包含：工具层迁移（技能工具、`add_dirs`、MCP、浏览器/搜索/回测等工具接入 Agent）、rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、进程重启后继续看当前输出、消息时间戳、Run 历史。同一进程内刷新会在数秒内重放当前轮缓冲；进程重启或断线才丢失。`langchain-core` 暂留，待工具层迁移后删除。
 
 ## 运行时目录
 
@@ -63,14 +63,14 @@ npm run dev
 
 - 执行核为 `ClaudeSDKClient`：每个平台会话一个 UUID，直接作为 SDK `session_id`；transcript 在 `claude/projects/<agent_id>/<uuid>.jsonl`。同一会话的 turn 串行，不同会话并发（上限 `BROWSER_CONCURRENCY`，默认 5）。
 - 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。
-- 刷新或断线会丢失当前正在流式输出的内容（已知损失）；历史消息从 transcript 读回，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
+- 刷新或断线后当前流式输出可能丢失：同一进程内前端会在数秒内通过 `current_turn_id` 重新订阅并重放当前轮缓冲；进程重启或 SSE 断开且错过缓冲时只能从 transcript 读回历史，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
 - `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示「已停止」。
-- 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约直接丢弃；暂停/归档 Agent 的租约保留到 Agent 恢复。
+- 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，网页来源写 `audit_log`。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
 - 命令：`/new`（或 `/clear`）、`/stop`、`/status`、`/help`，不区分大小写。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾的临时卡片显示；输入框以 `/` 开头时弹出命令面板，支持前缀过滤、↑/↓ 选择、Enter/Tab 填入、Esc 关闭。
 - `CLAUDE.md` 用户画像由 SDK 作为用户级说明加载；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
 - assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、链接、`$$...$$` 数学公式（KaTeX；单 `$` 按普通文本处理）。
 - 消息操作：复制、引用；按钮位于气泡下方，引用内容显示在输入框上方并可单独取消，发送时以 `> ` 引用块写入消息；失败或停止后显示提示，重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成或删除单条消息。
-- 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；支持选择、粘贴、拖拽图片，大图在浏览器端缩到最长边 1600 px。发送时把文件名、工作区路径和字节数写入用户消息，Agent 用文件工具读取；图片由 Agent 用 Read 工具查看。上传文件通过 `GET /api/agents/{agent_id}/uploads/{filename}` 读取。
+- 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；支持选择、粘贴、拖拽图片，大图在浏览器端缩到最长边 1600 px。发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 仍兼容解析。图片由 Agent 用 Read 工具查看。上传文件通过 `GET /api/agents/{agent_id}/uploads/{filename}` 读取。
 - 草稿、附件和引用按会话隔离（key 为 `agent_id + session_id`，未创建会话时用 `__new__`）；切换会话恢复各自内容。发送时强制滚到底部，输出期间上滑显示「回到最新」。
 - 会话列表由 SDK `list_sessions()` 生成：标题取 SDK summary，按最后修改时间倒序；微信会话带「微信」徽标，忙碌会话显示「忙碌」。删除会话前会拒绝正在执行的会话。
 - 空状态提供建议提示词；顶部轻量栏显示当前 Agent 和会话标题。
@@ -81,7 +81,7 @@ npm run dev
 侧栏「平台 → 配置」进入配置页，顶部用 `Provider / Agent / 知识库 / 运行环境` 四个 tab 切换。
 
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
-- **Agent**：列出全部 Agent 摘要（Provider/model、启用技能数、状态），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。
+- **Agent**：列出全部 Agent 摘要（Provider/model、启用技能数、状态），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道。
 - **知识库**：启用开关、WebDAV 地址、账号、应用密码、根目录、同步间隔；密码只写入 `settings.json`，接口只返回 `has_password`。
 - **运行环境**：版本、执行核、数据库类型、单轮执行超时（`RUN_TIMEOUT_SECONDS`）、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 关闭，`GET/PUT /api/settings`）。
 - Agent 彻底删除：有活动 turn 时 409；确认后删除该 Agent 的 transcript、工作区目录、渠道与绑定、定时任务、投递/入站记录和渠道登录态。归档只改状态，不删文件。
@@ -137,9 +137,9 @@ metadata:
 
 - 新建渠道后立即显示 iLink 二维码；用微信扫码并在手机上确认，状态变为「已连接」。登录成功后，平台在 API 进程内为该渠道启动一个 `getupdates` 长轮询任务；不需要公网入口、Webhook、Node 或第三方网关。
 - 每个与 bot 私聊的联系人映射为一个独立 SDK 会话（侧栏带「微信」徽标），在网页端可见并可继续对话；群聊忽略。
-- 入站支持文字、图片、文件与文本引用：图片/文件从 iLink CDN 下载、AES-128-ECB 解密后保存到该 Agent 的 `uploads/`，并以附件清单进入会话；引用回包通常不含原文，平台按 `msg_id` / `create_time_ms` 在本地入站记录与机器人回复中反查，查不到时标注「引用原文不可用」。语音/视频不下载、不落盘；纯语音/视频直接回固定提示且不创建对话，混合消息只处理文字/图片/文件。
+- 入站支持文字、图片、文件与文本引用：图片/文件从 iLink CDN 下载、AES-128-ECB 解密后保存到该 Agent 的 `uploads/`，并以附件清单进入会话（消息里是相对路径 `uploads/<name>`）；引用回包通常不含原文，平台按 `msg_id` / `create_time_ms` 在本地入站记录与机器人回复中反查，查不到时标注「引用原文不可用」。语音/视频不下载、不落盘；纯语音/视频直接回固定提示且不创建对话，混合消息只处理文字/图片/文件。Agent 为 paused/archived 时该 Agent 的渠道轮询暂停并保留 `sync_buf`，恢复 active 后继续；渠道页仍可查看、编辑和删除这些渠道。
 - 同一联系人的连续消息在 5 秒窗口内合并成一个 turn（最长 15 秒）；打包窗口内不保存 `sync_buf`，服务重启时由 iLink 重放消息，重复消息按 `external_message_id` 幂等吸收。
-- 回复在 turn 结束时立即发送，按 1800 字在段落/代码围栏边界切块（最多 10 块，超出截断并标注）；发送失败按 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 重试。服务崩溃后启动时补发未完成回复；`attempting` 行补发时加「♻️ 上一条回复可能已部分送达，以下为完整内容：」前缀。取消的 turn 不回信。
+- 回复在 turn 结束时立即发送，按 1800 字在段落/代码围栏边界切块（最多 10 块，超出截断并标注）；发送失败按 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 重试。服务崩溃后启动时补发未完成回复；`attempting` 行补发时加「♻️ 上一条回复可能已部分送达，以下为完整内容：」前缀。一次发送在至少一块已送达后失败（含登录过期）也保持 `attempting`，后续补发同样带前缀；只有一块都没发出才回到 pending。取消的 turn 不回信。
 - 微信里可以发命令：`/new`（或 `/clear`）为当前联系人开始新会话（旧会话保留）、`/stop` 取消并丢弃待打包消息、`/status` 查看 Agent/会话/忙闲、`/help`。命令不经过 Agent、不产生消息或 turn，确认回复直接通过 iLink 发送（进程崩溃时可能丢失确认）。
 - 网页聊天框支持同一套命令；网页里在渠道会话中手动发消息不会推回微信。
 - 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；点「重新扫码」重新登录，未发送的回复在恢复后补发。
@@ -269,6 +269,10 @@ metadata:
 | `LLM_MODEL` | 首次种子：模型名 | `deepseek-v4-flash` |
 | `CLAUDE_PERMISSION_MODE` | SDK 权限模式（本版 `bypassPermissions`，不是安全边界） | `bypassPermissions` |
 | `RUN_TIMEOUT_SECONDS` | 单个 turn 的总超时 | `900` |
+| `CLAUDE_CLIENT_TTL_SECONDS` | 缓存 SDK client 的空闲 TTL（秒） | `300` |
+| `CLAUDE_CLIENT_MAX_CLIENTS` | 缓存 SDK client 上限（LRU 淘汰空闲项） | `8` |
+| `CLAUDE_CLIENT_SWEEP_SECONDS` | 空闲 client 清扫间隔（秒） | `60` |
+| `CLAUDE_CONNECT_TIMEOUT_SECONDS` | 连接 SDK CLI 的超时（秒） | `60` |
 | `BROWSER_CONCURRENCY` | 跨 session 并发上限（同时是浏览器标签页上限，供工具层使用） | `5` |
 | `SESSION_RETENTION_DAYS` | 首次种子：会话保留天数；之后由配置页管理，0 关闭 | `30` |
 | `SESSION_CLEANUP_INTERVAL_SECONDS` | 会话清理扫描间隔（秒，最小 60） | `3600` |
@@ -322,7 +326,7 @@ cd apps/web && npm install && npm run build
 
 ## V1 生产部署（宿主机 systemd + SQLite）
 
-生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。
+生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。systemd unit 设置 `TimeoutStopSec=60`，用于覆盖停机时逐个缓存 client 的限时断开；不要在 unit 里改回 20 秒，否则 CLI 子进程可能被 SIGKILL。
 
 ### 首次准备
 
@@ -364,7 +368,7 @@ curl --noproxy '*' http://127.0.0.1:8888/api/health
 - 旧 `app.db` 可以直接沿用。启动时会检测旧结构的 `channel_deliveries`、`channel_inbounds` 并重建：旧待投递和入站去重记录会丢失，iLink 可能重放一次已处理的消息。
 - 旧 `providers`/`agents`/`channels`/`sessions`/`messages`/`runs`/`run_events`/`memory_items` 等表会留在库里但不再读写；`app_configs` 仅在首次启动读取一次保留天数后不再使用；可以在备份后手动删除旧表。
 - 旧版本把微信渠道凭据和联系人绑定存在 `app.db`，它们不会迁移到 `settings.json`，升级后需要在「渠道」页重新扫码绑定。
-- 旧定时任务如果 `cron_jobs` 列结构与新模型不兼容，会在启动或触发时报错；先备份数据库，再决定删除重建（任务配置会丢失）。
+- 旧定时任务如果 `cron_jobs` 列结构与新模型不兼容，ORM 查询会因缺列失败：定时 tick 持续记录 `cron tick failed`，任务列表接口也可能 500。先备份数据库，再决定删除重建（任务配置会丢失）。
 - 回测历史保留（`backtests` 表结构兼容）。
 - 旧 home 里遗留的 `memory-organizer` 技能会在启动 seed 时清理：未修改的直接删除，用户改过的保留但停止跟踪。
 

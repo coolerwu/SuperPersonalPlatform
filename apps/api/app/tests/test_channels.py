@@ -225,3 +225,63 @@ def test_channel_requires_agent(client) -> None:
     assert (
         client.get("/api/channels", params={"agent_id": "missing"}).status_code == 404
     )
+
+
+def test_archived_agent_channels_remain_manageable(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    agent = client.post("/api/agents", json={"name": "ArchivedAgent"}).json()
+    channel = _create_channel(client, agent_id=agent["id"])
+
+    archived = client.delete(f"/api/agents/{agent['id']}")
+    assert archived.status_code == 200
+
+    listed = client.get("/api/channels", params={"agent_id": agent["id"]})
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()] == [channel["id"]]
+
+    renamed = client.put(f"/api/channels/{channel['id']}", json={"name": "改名"})
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "改名"
+
+    assert client.delete(f"/api/channels/{channel['id']}").status_code == 200
+
+
+def test_paused_agent_channels_remain_manageable(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    agent = client.post("/api/agents", json={"name": "PausedAgent"}).json()
+    channel = _create_channel(client, agent_id=agent["id"])
+    paused = client.put(f"/api/agents/{agent['id']}", json={"status": "paused"})
+    assert paused.status_code == 200
+
+    listed = client.get("/api/channels", params={"agent_id": agent["id"]})
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()] == [channel["id"]]
+    assert client.delete(f"/api/channels/{channel['id']}").status_code == 200
+
+
+def test_archiving_an_agent_releases_its_cached_clients(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    agent = client.post("/api/agents", json={"name": "ArchiveMe"}).json()
+
+    class Registry:
+        def __init__(self) -> None:
+            self.closed_agents: list[str] = []
+
+        def is_busy(self, session_id):
+            return False
+
+        def is_agent_busy(self, agent_id):
+            return False
+
+        async def close_agent_clients(self, agent_id):
+            self.closed_agents.append(agent_id)
+            return 1
+
+        async def close_session(self, session_id):
+            return None
+
+    registry = Registry()
+    client.app.state.registry = registry
+
+    assert client.delete(f"/api/agents/{agent['id']}").status_code == 200
+    assert registry.closed_agents == [agent["id"]]

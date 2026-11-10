@@ -1444,3 +1444,33 @@ git commit -m "Document SDK-native channels and cron"
 - 覆盖 spec：渠道（Task 1/3/4）、定时（Task 5）、清理（Task 6）、配置与记忆（Task 7）、旧表与依赖（Task 8）、文档（Task 9）。
 - 与新核心计划的接口一致：`Turn` 增加 `delivery`，`ClaudeTurnRunner` 增加 `deliver_callback`，其余签名不变。
 - 未覆盖：工具层（`add_dirs`、技能工具到 MCP、QuickJS eval、rubric）——按 spec 第 12 节不在本版。
+
+---
+
+## 合并前最终审查修复（2026-11-11）
+
+在分支 `feature/claude-sdk-migration` 合并前，对整个分支与 SDK 用法做最终审查，落地以下修复；后端测试从 579 passed / 3 skipped 增至 645 passed / 3 skipped。
+
+| 项 | 修复 |
+|---|---|
+| P0-1 client 泄漏 | `ClaudeTurnRunner` 缓存按 `(agent_id, session_id)` 键控，默认空闲 TTL 300 秒、上限 8、每 60 秒清扫；轮开始/结束 touch；Agent 归档/暂停回收空闲 client。配置项 `CLAUDE_CLIENT_TTL_SECONDS` / `CLAUDE_CLIENT_MAX_CLIENTS` / `CLAUDE_CLIENT_SWEEP_SECONDS`。 |
+| P0-2 逐出阻塞信号量 | `_evict`/`close` 的 disconnect 统一加 `_DISCONNECT_TIMEOUT_SECONDS`；注册表在释放并发信号量后调用 `runner.after_turn` 执行延后逐出。 |
+| P0-3 停机预算 | `close_all` 每个 client 限时并在总预算内返回，超时对象保留在 `_orphaned_clients` 并记 warning；`deploy/agent-command-center.service` 的 `TimeoutStopSec` 提高到 60，README 说明。 |
+| P1-4 附件路径 | 新消息写相对工作区路径 `uploads/<name>`；`attachments` 兼容旧 `/uploads/<name>`；前端 `api.uploadUrl` 同时支持两种形式；微信媒体同步。 |
+| P1-5 跨 Agent 会话 | 网页提交校验 session 归属（已有 transcript 或 registry 已知 owner），跨 Agent 返回 409；client 缓存键含 agent id。 |
+| P1-6 忙碌会话配置 | client 记录 instructions + provider 指纹，下一轮开始发现变化即逐出重建；`close_agent_clients` 仍负责空闲会话。 |
+| P1-7 Agent 状态 | `paused`/`archived` 统一拒绝网页消息（409）、暂停渠道轮询（保留 cursor）、跳过定时任务；非 active Agent 的渠道页不再 404；恢复 active 时重新启动轮询。 |
+| P1-8 无 transcript 恢复 | 渠道空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发；网页来源写 `audit_log`。 |
+| P1-9 帧缓冲 | `ClaudeAgentOptions.max_buffer_size = 16 MB`。 |
+| P1-10 保留名 | `valid_agent_id` 拒绝 `con/prn/aux/nul/com1-9/lpt1-9`（大小写不敏感）。 |
+| P1-11 权限 | `ensure_claude_dirs` 对 `tmp/` 与 `workspaces/` 根同样设 0700。 |
+| P1-12 部分送达 | 至少一块已发送后失败（含登录过期）保持 `attempting`，补发保留「可能已部分送达」前缀；一块都没发出才 `mark_pending`。 |
+| P1-13 命令竞态 | `/new`、`/stop` 先有界等待在途 batch（`INFLIGHT_WAIT_SECONDS=30`）再重绑/中断；`_send_chunk` 在最后一次尝试时不再吞掉 `WeixinSessionExpired`。 |
+| P1-14 删除竞态 | registry 增加 `begin_delete`/`finish_delete`，删除开始后新提交被拒绝；手动删除与后台清理共用。 |
+| P1-15 settings 损坏 | 主文件不可解析且无 `.bak`、或没有合法 `agents` 列表时重新种子默认 sections（保留可读字段）；解析成功且显式 `agents: []` 保留并 warning。 |
+| P2-16 连接/中断锁 | `connect` 默认 60 秒超时（`CLAUDE_CONNECT_TIMEOUT_SECONDS`），超时断开并报错；`interrupt` 获取 client 锁有 5 秒超时。 |
+| P2-17 死代码/排障 | 删除 `session_catalog` 的死 `except ValueError`；SDK 选项接入 `stderr` debug 回调。 |
+| P2-18 文档 | 统一 CLAUDE.md 删除顺序描述；刷新语义改为「同进程重放 current_turn_id 缓冲，重启/断线才丢」；旧 cron 兼容说明按 ORM 缺列的实际表现更新。 |
+| P2-19 计划登记 | 本节。 |
+
+仍留到工具层（不在本轮范围）：平台注册表中的技能工具、`add_dirs`、MCP、浏览器/搜索/回测/定时/交易/资产/缠论/知识库工具接入 SDK；`langchain-core` 暂留；`attachments.build_model_content` 与图片压缩仅测试覆盖；`browser_tools.playwright_installed()` 无调用方；`WeixinRuntime.flush_all` 仅测试使用。上一节遗留中的「`close_agent_clients` 无超时预算」已在本轮修复。

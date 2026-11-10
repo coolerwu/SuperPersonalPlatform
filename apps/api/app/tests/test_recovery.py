@@ -1,8 +1,8 @@
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.db import SessionLocal, init_db
-from app.models import ChannelDelivery
+from app.models import AuditLog, ChannelDelivery
 from app.services import channel_delivery, recovery, turn_lease
 from app.services.claude_runner import transcript_path
 
@@ -263,7 +263,7 @@ async def _cleanup_deliveries(session_id: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recovery_drops_orphan_deliveries_with_dropped_lease(tmp_path):
+async def test_recovery_answers_orphan_deliveries_with_dropped_lease(tmp_path):
     await init_db()
     session_id = "bbbbbbbb-cccc-cccc-cccc-cccccccccccc"
     await turn_lease.add(session_id)
@@ -271,16 +271,48 @@ async def test_recovery_drops_orphan_deliveries_with_dropped_lease(tmp_path):
     filled_id = await _create_delivery(session_id)
     await channel_delivery.complete(filled_id, "already owed")
     try:
-        # No transcript, so recovery drops the lease.
+        # No transcript, so recovery drops the lease but must not lose the
+        # channel user's message silently.
         await recovery.recover_running_sessions(
             FakeRegistry(), FakeStore(), home=tmp_path
         )
         assert await turn_lease.is_running(session_id) is False
-        assert await channel_delivery.get(empty_id) is None
+        empty = await channel_delivery.get(empty_id)
+        assert empty is not None
+        assert empty.status == "pending"
+        assert recovery.LOST_TURN_TEXT in (empty.content or "")
+        assert "尚未开始处理" in (empty.content or "")
         # A filled row is already owed to the sender; recovery keeps it.
         assert await channel_delivery.get(filled_id) is not None
     finally:
         await _cleanup_deliveries(session_id)
+        await turn_lease.remove(session_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_audits_a_lost_web_turn(tmp_path):
+    await init_db()
+    session_id = "bbbbbbbb-eeee-eeee-eeee-eeeeeeeeeeee"
+    await turn_lease.add(session_id)
+    try:
+        await recovery.recover_running_sessions(
+            FakeRegistry(), FakeStore(), home=tmp_path
+        )
+        assert await turn_lease.is_running(session_id) is False
+        async with SessionLocal() as db:
+            row = await db.scalar(
+                select(AuditLog).where(
+                    AuditLog.action == "turn_lost_on_restart",
+                    AuditLog.entity_id == session_id,
+                )
+            )
+            assert row is not None
+    finally:
+        async with SessionLocal() as db:
+            await db.execute(
+                delete(AuditLog).where(AuditLog.entity_id == session_id)
+            )
+            await db.commit()
         await turn_lease.remove(session_id)
 
 

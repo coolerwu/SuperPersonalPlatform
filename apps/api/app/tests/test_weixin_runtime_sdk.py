@@ -944,7 +944,8 @@ async def test_media_and_quote_merge_into_one_batch():
         assert "这张图是什么" in prompt
         assert "[引用 Alice]" in prompt
         assert "原来的问题" in prompt
-        assert "/uploads/wx-" in prompt
+        assert "uploads/wx-" in prompt
+        assert "/uploads/" not in prompt
         assert client.downloads == ["https://cdn.example.com/a.png"]
     finally:
         await runtime.stop()
@@ -1016,3 +1017,219 @@ async def test_cancelled_flush_does_not_save_the_sync_cursor(monkeypatch):
     finally:
         await runtime.stop()
         await _cleanup_inbound(channel.id, ["cancel-1"])
+
+
+class PartialSendClient(FakeClient):
+    """Fails after the first accepted chunk to simulate a mid-send failure."""
+
+    def __init__(self, *, error: BaseException, fail_after: int = 1, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._error = error
+        self._fail_after = fail_after
+
+    async def send_text(self, *, to_user_id, text, context_token=None, client_id=None):
+        if len(self.sent) >= self._fail_after:
+            raise self._error
+        self.sent.append((to_user_id, text, context_token))
+        return {"ret": 0}
+
+
+@pytest.mark.asyncio
+async def test_partial_delivery_failure_stays_attempting_for_prefix_retry(monkeypatch):
+    monkeypatch.setattr(weixin_runtime_module, "RETRY_DELAY_SECONDS", 0)
+    channel = _channel()
+    conversation = _conversation(channel, context_token="ctx")
+    store = FakeStore([channel], {f"{channel.id}:wx-1": conversation})
+    client = PartialSendClient(error=RuntimeError("second chunk failed"))
+    runtime = _runtime(store, FakeRegistry(), client=client)
+    delivery_id = await _create_delivery(channel.id, content="a" * 4000)
+    try:
+        await runtime.deliver(delivery_id)
+
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        assert len(client.sent) == 1
+        # Keeping "attempting" is what makes the next sweep prepend the
+        # "possibly partially delivered" notice.
+        assert row.status == "attempting"
+        assert row.attempts == 1
+        assert "second chunk failed" in (row.last_error or "")
+    finally:
+        await _cleanup_deliveries(delivery_id)
+
+
+@pytest.mark.asyncio
+async def test_session_expiry_after_partial_send_also_keeps_attempting(monkeypatch):
+    monkeypatch.setattr(weixin_runtime_module, "RETRY_DELAY_SECONDS", 0)
+    channel = _channel()
+    conversation = _conversation(channel, context_token="ctx")
+    store = FakeStore([channel], {f"{channel.id}:wx-1": conversation})
+    client = PartialSendClient(error=WeixinSessionExpired("expired"))
+    runtime = _runtime(store, FakeRegistry(), client=client)
+    delivery_id = await _create_delivery(channel.id, content="a" * 4000)
+    try:
+        await runtime.deliver(delivery_id)
+
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        assert row.status == "attempting"
+        assert "expired" in (row.last_error or "")
+        assert _stored_channel(store, channel.id).status == "expired"
+    finally:
+        await _cleanup_deliveries(delivery_id)
+
+
+@pytest.mark.asyncio
+async def test_failure_with_no_chunk_sent_returns_to_pending(monkeypatch):
+    monkeypatch.setattr(weixin_runtime_module, "RETRY_DELAY_SECONDS", 0)
+    channel = _channel()
+    conversation = _conversation(channel, context_token="ctx")
+    store = FakeStore([channel], {f"{channel.id}:wx-1": conversation})
+    client = PartialSendClient(error=RuntimeError("never sent"), fail_after=0)
+    runtime = _runtime(store, FakeRegistry(), client=client)
+    delivery_id = await _create_delivery(channel.id, content="hello")
+    try:
+        await runtime.deliver(delivery_id)
+
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        assert row.status == "pending"
+    finally:
+        await _cleanup_deliveries(delivery_id)
+
+
+@pytest.mark.asyncio
+async def test_new_command_waits_for_an_inflight_batch(monkeypatch):
+    channel = _channel()
+    conversation = _conversation(channel, context_token="ctx")
+    store = FakeStore([channel], {f"{channel.id}:wx-1": conversation})
+    registry = FakeRegistry()
+    client = FakeClient()
+    runtime = _runtime(store, registry, client=client)
+    credentials = _credentials(channel)
+    key = (channel.id, "wx-1")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    real_ingest = channel_intake.ingest
+
+    async def gated_ingest(**kwargs):
+        if kwargs["external_message_ids"] == ["inflight-1"]:
+            started.set()
+            await release.wait()
+        return await real_ingest(**kwargs)
+
+    monkeypatch.setattr(weixin_runtime_module.channel_intake, "ingest", gated_ingest)
+    old_session = conversation.session_id
+    # Keep the binding valid while the batch is still in flight; otherwise the
+    # runtime would treat the not-yet-written transcript as a stale binding.
+    registry.busy_sessions.add(old_session)
+    try:
+        await runtime._handle_message(
+            credentials, _text_message("inflight-1", "旧会话里的话")
+        )
+        flush = asyncio.create_task(runtime.flush_pending(key))
+        await asyncio.wait_for(started.wait(), 1)
+
+        command = asyncio.create_task(
+            runtime._handle_message(
+                credentials, _text_message("cmd-new", "/new", context_token="ctx")
+            )
+        )
+        await asyncio.sleep(0.05)
+        # The command must not rebind the contact while the batch is landing.
+        assert not command.done()
+        assert store.settings.channel_conversations[
+            f"{channel.id}:wx-1"
+        ].session_id == old_session
+
+        release.set()
+        await asyncio.wait_for(flush, 1)
+        await asyncio.wait_for(command, 1)
+
+        # The buffered text stayed in the old session; the command started a
+        # new one.
+        assert len(registry.turns) == 1
+        assert registry.turns[0].session_id == old_session
+        assert store.settings.channel_conversations[
+            f"{channel.id}:wx-1"
+        ].session_id != old_session
+    finally:
+        await runtime.stop()
+        await _cleanup_inbound(channel.id, ["inflight-1", "cmd-new"])
+
+
+@pytest.mark.asyncio
+async def test_stop_command_waits_then_interrupts_the_inflight_session(monkeypatch):
+    channel = _channel()
+    conversation = _conversation(channel, context_token="ctx")
+    store = FakeStore([channel], {f"{channel.id}:wx-1": conversation})
+    registry = FakeRegistry()
+    client = FakeClient()
+    runtime = _runtime(store, registry, client=client)
+    credentials = _credentials(channel)
+    key = (channel.id, "wx-1")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    real_ingest = channel_intake.ingest
+
+    async def gated_ingest(**kwargs):
+        if kwargs["external_message_ids"] == ["inflight-stop"]:
+            started.set()
+            await release.wait()
+        return await real_ingest(**kwargs)
+
+    monkeypatch.setattr(weixin_runtime_module.channel_intake, "ingest", gated_ingest)
+    old_session = conversation.session_id
+    registry.busy_sessions.add(old_session)
+    try:
+        await runtime._handle_message(
+            credentials, _text_message("inflight-stop", "先执行这句")
+        )
+        flush = asyncio.create_task(runtime.flush_pending(key))
+        await asyncio.wait_for(started.wait(), 1)
+
+        command = asyncio.create_task(
+            runtime._handle_message(
+                credentials, _text_message("cmd-stop", "/stop", context_token="ctx")
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not command.done()
+
+        release.set()
+        await asyncio.wait_for(flush, 1)
+        await asyncio.wait_for(command, 1)
+
+        assert old_session in registry.interrupted
+    finally:
+        await runtime.stop()
+        await _cleanup_inbound(channel.id, ["inflight-stop", "cmd-stop"])
+
+
+@pytest.mark.asyncio
+async def test_start_channel_refuses_inactive_agent():
+    channel = _channel()
+    store = FakeStore([channel])
+    store.settings.agents[0].status = "paused"
+    runtime = _runtime(store, FakeRegistry(), client=FakeClient())
+    try:
+        assert await runtime.start_channel(channel.id) is False
+        assert runtime.running_channels() == []
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_poll_loop_pauses_when_agent_becomes_inactive():
+    channel = _channel()
+    store = FakeStore([channel])
+    credentials = _credentials(channel)
+    runtime = _runtime(store, FakeRegistry(), client=FakeClient())
+    store.settings.agents[0].status = "archived"
+    try:
+        await asyncio.wait_for(
+            runtime._poll_loop(credentials, FakeClient()), 1
+        )
+        assert runtime.running_channels() == []
+    finally:
+        await runtime.stop()

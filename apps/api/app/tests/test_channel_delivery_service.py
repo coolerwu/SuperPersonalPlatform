@@ -208,32 +208,6 @@ async def test_list_pending_skips_empty_content_and_terminal_rows():
 
 
 @pytest.mark.asyncio
-async def test_discard_unfilled_for_session_only_removes_empty_live_rows():
-    await init_db()
-    empty_id = None
-    filled_id = None
-    sent_id = None
-    try:
-        empty_id = await _create(session_id="s-orphan")
-        filled_id = await _create(session_id="s-orphan")
-        await channel_delivery.complete(filled_id, "answer")
-        sent_id = await _create(session_id="s-orphan")
-        await channel_delivery.complete(sent_id, "answer")
-        await channel_delivery.mark_attempting(sent_id)
-        await channel_delivery.mark_sent(sent_id)
-
-        assert await channel_delivery.discard_unfilled_for_session("s-orphan") == 1
-        assert await channel_delivery.get(empty_id) is None
-        assert await channel_delivery.get(filled_id) is not None
-        assert await channel_delivery.get(sent_id) is not None
-        assert (
-            await channel_delivery.discard_unfilled_for_session("s-missing") == 0
-        )
-    finally:
-        await _cleanup(empty_id, filled_id, sent_id)
-
-
-@pytest.mark.asyncio
 async def test_mark_pending_retries_until_limit_and_truncates_error():
     await init_db()
     delivery_id = None
@@ -359,5 +333,63 @@ async def test_init_db_rebuilds_stale_channel_deliveries_table():
         delivery_id = await _create(session_id="s-after-rebuild")
         row = await channel_delivery.get(delivery_id)
         assert row is not None and row.id == delivery_id
+    finally:
+        await _cleanup(delivery_id)
+
+
+@pytest.mark.asyncio
+async def test_fail_unfilled_for_session_fills_only_empty_live_rows():
+    await init_db()
+    empty_id = filled_id = None
+    try:
+        empty_id = await _create("session-empty")
+        filled_id = await _create("session-empty")
+        await channel_delivery.complete(filled_id, "already owed")
+
+        changed = await channel_delivery.fail_unfilled_for_session(
+            "session-empty", "服务重启时这条消息尚未开始处理", "lost"
+        )
+
+        assert changed == 1
+        empty = await channel_delivery.get(empty_id)
+        assert empty is not None and empty.status == "pending"
+        assert empty.content == "服务重启时这条消息尚未开始处理"
+        assert empty.last_error == "lost"
+        filled = await channel_delivery.get(filled_id)
+        assert filled is not None and filled.content == "already owed"
+    finally:
+        await _cleanup(empty_id, filled_id)
+
+
+@pytest.mark.asyncio
+async def test_mark_attempting_error_keeps_partial_send_claimable():
+    await init_db()
+    delivery_id = None
+    try:
+        delivery_id = await _create()
+        await channel_delivery.complete(delivery_id, "hello")
+        assert await channel_delivery.mark_attempting(delivery_id) is True
+        assert await channel_delivery.mark_attempting_error(delivery_id, "chunk 2 failed")
+
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        assert row.status == "attempting"
+        assert row.last_error == "chunk 2 failed"
+        assert row.attempts == 1
+
+        # The next sweep sees attempting and prepends the partial-send prefix.
+        assert await channel_delivery.mark_sent(delivery_id) is True
+    finally:
+        await _cleanup(delivery_id)
+
+
+@pytest.mark.asyncio
+async def test_has_for_session():
+    await init_db()
+    delivery_id = None
+    try:
+        delivery_id = await _create("session-has")
+        assert await channel_delivery.has_for_session("session-has") is True
+        assert await channel_delivery.has_for_session("session-missing") is False
     finally:
         await _cleanup(delivery_id)

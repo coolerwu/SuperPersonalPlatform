@@ -429,9 +429,12 @@ async def test_close_all_disconnects_cached_clients(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_close_all_uses_one_shared_disconnect_budget(tmp_path, monkeypatch):
+async def test_close_all_bounds_each_disconnect_and_keeps_orphans(
+    tmp_path, monkeypatch, caplog
+):
     await init_db()
     monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(claude_runner, "_SHUTDOWN_BUDGET_SECONDS", 5)
 
     class SlowDisconnectClient(FakeClient):
         def __init__(self, messages=None, *, fail=False):
@@ -458,12 +461,17 @@ async def test_close_all_uses_one_shared_disconnect_budget(tmp_path, monkeypatch
     )
     assert len(runner._clients) == 2
 
-    # One wedged disconnect exhausts the shared budget; the remaining client is
-    # dropped from the cache instead of being awaited for its own 10 seconds.
+    # Each client gets its own bounded attempt; a wedged disconnect is kept
+    # referenced instead of silently dropping the live CLI subprocess.
     await asyncio.wait_for(runner.close_all(), 1)
     assert first.disconnect_started.is_set()
-    assert second.disconnect_started.is_set() is False
+    assert second.disconnect_started.is_set()
     assert runner._clients == {}
+    assert runner._orphaned_clients == [first, second]
+    assert any(
+        "exceeded shutdown budget" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -508,7 +516,7 @@ async def test_interrupt_ignores_idle_cached_client(tmp_path):
     turn = make_turn(session_id="99999999-9999-9999-9999-999999999999")
     await runner.run(turn, TurnStream())
 
-    assert turn.session_id in runner._clients
+    assert (turn.agent_id, turn.session_id) in runner._clients
     assert await runner.interrupt(turn.session_id) is False
     assert client.interrupted is False
 
@@ -686,3 +694,247 @@ async def test_agent_settings_change_closes_idle_client_and_rebuilds(tmp_path):
         assert captured[1].system_prompt["append"] == "新指令"
     finally:
         await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_options_raise_frame_buffer_and_wire_stderr_logging(tmp_path):
+    await init_db()
+    captured = []
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options) or FakeClient([ResultMessage()]),
+    )
+    await runner.run(make_turn(), TurnStream())
+    assert captured[0].max_buffer_size == 16 * 1024 * 1024
+    assert callable(captured[0].stderr)
+
+
+@pytest.mark.asyncio
+async def test_idle_client_is_evicted_after_ttl(tmp_path):
+    await init_db()
+    client = FakeClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        client_ttl_seconds=0.01,
+        sweep_seconds=3600,
+    )
+    turn = make_turn(session_id="12121212-1212-1212-1212-121212121212")
+    await runner.run(turn, TurnStream())
+    assert (turn.agent_id, turn.session_id) in runner._clients
+
+    await asyncio.sleep(0.02)
+    assert await runner.sweep_idle_clients() == 1
+    assert runner._clients == {}
+    assert client.disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_sweep_never_evicts_a_running_client(tmp_path):
+    await init_db()
+    client = HangingClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        client_ttl_seconds=0,
+        sweep_seconds=3600,
+    )
+    turn = make_turn(session_id="13131313-1313-1313-1313-131313131313")
+    stream = TurnStream()
+    task = asyncio.create_task(runner.run(turn, stream))
+    try:
+        await asyncio.wait_for(client.queried.wait(), 1)
+        assert await runner.sweep_idle_clients() == 0
+        assert (turn.agent_id, turn.session_id) in runner._clients
+        assert client.disconnected is False
+    finally:
+        task.cancel()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            await turn_lease.remove(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_capacity_evicts_the_oldest_idle_client(tmp_path):
+    await init_db()
+    first = FakeClient([ResultMessage()])
+    second = FakeClient([ResultMessage()])
+    clients = [first, second]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: clients.pop(0),
+        max_clients=1,
+        client_ttl_seconds=3600,
+        sweep_seconds=3600,
+    )
+    first_turn = make_turn(session_id="14141414-1414-1414-1414-141414141414")
+    second_turn = make_turn(session_id="15151515-1515-1515-1515-151515151515")
+    await runner.run(first_turn, TurnStream())
+    await runner.run(second_turn, TurnStream())
+
+    assert first.disconnected is True
+    assert [key[1] for key in runner._clients] == [second_turn.session_id]
+
+
+@pytest.mark.asyncio
+async def test_changed_instructions_rebuild_a_cached_client(tmp_path):
+    await init_db()
+    captured = []
+    clients = [FakeClient([ResultMessage()]), FakeClient([ResultMessage()])]
+
+    def factory(options):
+        captured.append(options)
+        return clients[len(captured) - 1]
+
+    agent = make_agent()
+    agent.instructions = "旧指令"
+    runner = ClaudeTurnRunner(
+        store=FakeStore(agent), home=tmp_path, client_factory=factory
+    )
+    turn = make_turn(session_id="16161616-1616-1616-1616-161616161616")
+    await runner.run(turn, TurnStream())
+    agent.instructions = "新指令"
+    await runner.run(turn, TurnStream())
+
+    assert len(captured) == 2
+    assert clients[0].disconnected is True
+    assert captured[1].system_prompt["append"] == "新指令"
+
+
+@pytest.mark.asyncio
+async def test_same_session_id_across_agents_uses_separate_clients(tmp_path):
+    await init_db()
+    captured = []
+    clients = [FakeClient([ResultMessage()]), FakeClient([ResultMessage()])]
+
+    def factory(options):
+        captured.append(options)
+        return clients[len(captured) - 1]
+
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent("agent-a"), make_agent("agent-b")),
+        home=tmp_path,
+        client_factory=factory,
+    )
+    session_id = "17171717-1717-1717-1717-171717171717"
+    await runner.run(make_turn(session_id=session_id, agent_id="agent-a"), TurnStream())
+    await runner.run(make_turn(session_id=session_id, agent_id="agent-b"), TurnStream())
+
+    assert len(captured) == 2
+    assert captured[0].cwd != captured[1].cwd
+    assert set(runner._clients) == {
+        ("agent-a", session_id),
+        ("agent-b", session_id),
+    }
+
+
+@pytest.mark.asyncio
+async def test_connect_timeout_fails_the_turn_and_disconnects(tmp_path):
+    await init_db()
+
+    class HangingConnectClient(FakeClient):
+        async def connect(self):
+            await asyncio.Event().wait()
+
+    client = HangingConnectClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        connect_timeout_seconds=0.01,
+    )
+    outcome = await runner.run(
+        make_turn(session_id="18181818-1818-1818-1818-181818181818"),
+        TurnStream(),
+    )
+    assert outcome.status == "failed"
+    assert "connect timed out" in (outcome.error or "")
+    assert client.disconnected is True
+    assert runner._clients == {}
+
+
+@pytest.mark.asyncio
+async def test_deferred_eviction_waits_for_after_turn(tmp_path):
+    await init_db()
+    client = FakeClient(fail=True)
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="19191919-1919-1919-1919-191919191919")
+    outcome = await runner.run(turn, TurnStream(), defer_eviction=True)
+
+    assert outcome.status == "failed"
+    assert client.disconnected is False
+    assert (turn.agent_id, turn.session_id) in runner._evict_pending
+
+    await runner.after_turn(turn.session_id, turn.agent_id)
+    assert client.disconnected is True
+    assert runner._evict_pending == set()
+
+
+@pytest.mark.asyncio
+async def test_slow_eviction_does_not_block_the_next_turn(tmp_path, monkeypatch):
+    from app.services.session_registry import SessionRegistry
+
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 0.02)
+    evict_started = asyncio.Event()
+
+    class SlowDisconnectClient(FakeClient):
+        async def disconnect(self):
+            evict_started.set()
+            await asyncio.Event().wait()
+
+    failing = SlowDisconnectClient(fail=True)
+    succeeding = FakeClient([ResultMessage()])
+    clients = [failing, succeeding]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: clients.pop(0),
+    )
+    registry = SessionRegistry(runner, concurrency=1)
+    try:
+        first = make_turn(session_id="20202020-2020-2020-2020-202020202020")
+        second = make_turn(session_id="21212121-2121-2121-2121-212121212121")
+        await registry.submit(first)
+        await registry.submit(second)
+
+        await asyncio.wait_for(evict_started.wait(), 1)
+        # The second turn runs while the first client's disconnect is stuck.
+        await _wait_until(lambda: succeeding.queries == ["hi"])
+        assert registry.is_busy(first.session_id) is False
+    finally:
+        await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_marks_turn_active_under_timeout(tmp_path, monkeypatch):
+    await init_db()
+    client = HangingClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="22222222-3333-3333-3333-333333333333")
+    task = asyncio.create_task(runner.run(turn, TurnStream()))
+    try:
+        await asyncio.wait_for(client.queried.wait(), 1)
+        assert await runner.interrupt(turn.session_id) is True
+        assert client.interrupted is True
+    finally:
+        task.cancel()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            await turn_lease.remove(turn.session_id)

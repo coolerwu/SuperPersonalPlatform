@@ -2479,3 +2479,9 @@ git commit -m "Document SDK runtime migration"
 - 覆盖 spec：目录/env（Task 3）、settings（Task 2）、租约/恢复（Task 4/11）、执行核（Task 7/8）、流式接口（Task 10）、会话目录（Task 9）、前端（Task 13/14）。
 - 渠道、定时、清理、旧表删除、记忆与配置接口在第二份计划 `2026-11-10-channels-cron-decommission.md`。
 - 类型一致性：`Turn`、`TurnOutcome`、`TurnStream`、`SettingsStore` 在跨任务中签名一致。
+
+---
+
+## 合并前最终审查修复（2026-11-11）
+
+执行核在本轮修复了 client 缓存泄漏与停机预算：缓存按 `(agent_id, session_id)` 键控，默认空闲 TTL 300 秒、上限 8、每 60 秒清扫；轮末逐出移到并发信号量释放之后；`close_all` 按 client 限时并在超时后保留引用；`connect`/`interrupt` 加超时；`max_buffer_size` 提高到 16 MB；同会话配置变化在下一轮按指纹重建。逐项列表与仍留到工具层的项见 `2026-11-10-channels-cron-decommission.md` 的「合并前最终审查修复」一节。

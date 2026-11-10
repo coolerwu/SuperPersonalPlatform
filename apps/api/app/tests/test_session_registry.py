@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from app.services.claude_runner import Turn
-from app.services.session_registry import SessionRegistry
+from app.services.session_registry import SessionDeletingError, SessionRegistry
 
 
 async def wait_until(predicate, timeout=2.0):
@@ -32,6 +32,7 @@ class FakeRunner:
         self.finished = []
         self.interrupted = []
         self.closed = []
+        self.after_turns = []
         self.interrupt_result = False
         self.active = 0
         self.max_active = 0
@@ -43,7 +44,7 @@ class FakeRunner:
     def release(self, prompt: str) -> None:
         self.gate(prompt).set()
 
-    async def run(self, turn, stream):
+    async def run(self, turn, stream, *, defer_eviction=False):
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         self.started.append(turn.prompt)
@@ -55,7 +56,10 @@ class FakeRunner:
             self.active -= 1
             self.finished.append(turn.prompt)
 
-    async def interrupt(self, session_id):
+    async def after_turn(self, session_id, agent_id=None):
+        self.after_turns.append((session_id, agent_id))
+
+    async def interrupt(self, session_id, agent_id=None):
         self.interrupted.append(session_id)
         return self.interrupt_result
 
@@ -356,4 +360,62 @@ async def test_close_agent_clients_skips_busy_and_other_agents():
 
     runner.release("busy")
     await wait_until(lambda: "busy" in runner.finished)
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_after_turn_runs_after_the_session_turn_finishes():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    runner.release("a")
+    await registry.submit(turn(prompt="a"))
+    await wait_until(lambda: runner.finished == ["a"])
+    await wait_until(lambda: runner.after_turns == [("s1", "default")])
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_begin_delete_rejects_new_turns_until_finished():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    try:
+        assert registry.begin_delete("s1") is True
+        with pytest.raises(SessionDeletingError):
+            await registry.submit(turn(prompt="blocked"))
+
+        # The worker never saw the refused turn.
+        await asyncio.sleep(0)
+        assert runner.started == []
+
+        registry.finish_delete("s1")
+        runner.release("after-delete")
+        await registry.submit(turn(prompt="after-delete"))
+        await wait_until(lambda: runner.finished == ["after-delete"])
+    finally:
+        await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_begin_delete_refuses_a_busy_session():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    try:
+        await registry.submit(turn(prompt="a"))
+        await wait_until(lambda: runner.started == ["a"])
+        assert registry.begin_delete("s1") is False
+        runner.release("a")
+        await wait_until(lambda: runner.finished == ["a"])
+    finally:
+        await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_session_agent_reports_owner():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    runner.release("a")
+    await registry.submit(Turn(session_id="s1", agent_id="agent-a", prompt="a"))
+    assert registry.session_agent("s1") == "agent-a"
+    assert registry.session_agent("missing") is None
+    await wait_until(lambda: runner.finished == ["a"])
     await registry.close()

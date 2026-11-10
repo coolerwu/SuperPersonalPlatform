@@ -461,3 +461,61 @@ async def test_runtime_starts_and_stops(monkeypatch):
     await runtime.start()
     assert runtime._task is not None
     await runtime.stop()
+
+
+class _AtomicDeleteRegistry(_FakeRegistry):
+    def __init__(self, *, refuse: bool = False) -> None:
+        super().__init__()
+        self.refuse = refuse
+        self.began: list[str] = []
+        self.finished: list[str] = []
+
+    def begin_delete(self, session_id: str) -> bool:
+        self.began.append(session_id)
+        return not self.refuse
+
+    def finish_delete(self, session_id: str) -> None:
+        self.finished.append(session_id)
+
+
+@pytest.mark.asyncio
+async def test_purge_marks_the_session_deleting_before_unlinking(tmp_path, monkeypatch):
+    await init_db()
+    session_id = _session_id()
+    _make_transcript(tmp_path, "default", session_id, age_days=400)
+    _install_fake_delete(monkeypatch, tmp_path, "default")
+    registry = _AtomicDeleteRegistry()
+
+    removed = await session_service.purge_expired_transcripts(
+        agent_id="default",
+        retention_days=30,
+        home=tmp_path,
+        registry=registry,
+    )
+
+    assert removed == 1
+    assert registry.began == [session_id]
+    assert registry.finished == [session_id]
+    assert registry.closed == [session_id]
+
+
+@pytest.mark.asyncio
+async def test_purge_skips_when_begin_delete_refuses(tmp_path, monkeypatch):
+    await init_db()
+    session_id = _session_id()
+    _make_transcript(tmp_path, "default", session_id, age_days=400)
+    deleted = _install_fake_delete(monkeypatch, tmp_path, "default")
+    registry = _AtomicDeleteRegistry(refuse=True)
+
+    removed = await session_service.purge_expired_transcripts(
+        agent_id="default",
+        retention_days=30,
+        home=tmp_path,
+        registry=registry,
+    )
+
+    assert removed == 0
+    assert deleted == []
+    assert registry.began == [session_id]
+    assert registry.finished == []
+    assert transcript_path(session_id, "default", home=tmp_path).exists()

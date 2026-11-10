@@ -47,6 +47,9 @@ CONTENT_DEDUP_SECONDS = 300.0
 LAST_SEEN_INTERVAL_SECONDS = 60.0
 MAX_FLUSH_RETRIES = 5
 DELIVERY_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+# A command must not rebind the contact while its previous batch is still
+# being ingested; wait bounded for that batch to land in the old conversation.
+INFLIGHT_WAIT_SECONDS = 30.0
 
 # A channel that is inactive or whose login expired must not burn through the
 # delivery retry budget: the obligation stays pending until the channel is
@@ -134,6 +137,7 @@ class WeixinRuntime:
         self._pending: dict[tuple[str, str], PendingBatch] = {}
         self._pending_tasks: dict[tuple[str, str], asyncio.Task[Any]] = {}
         self._inflight: set[tuple[str, str]] = set()
+        self._inflight_events: dict[tuple[str, str], asyncio.Event] = {}
         self._pending_sync: dict[str, str] = {}
         self._stop = asyncio.Event()
 
@@ -157,6 +161,7 @@ class WeixinRuntime:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
         self._pending.clear()
         self._inflight.clear()
+        self._inflight_events.clear()
         self._pending_sync.clear()
         # Let in-flight sends finish first: a delivery may still be using a
         # cached poll client that the close below would yank away.
@@ -199,6 +204,13 @@ class WeixinRuntime:
                 return True
             credentials = await self._load_credentials(channel_id)
             if credentials is None:
+                return False
+            if not await self._agent_is_active(credentials.agent_id):
+                logger.info(
+                    "weixin poll not started; agent is not active channel=%s agent=%s",
+                    channel_id,
+                    credentials.agent_id,
+                )
                 return False
             client = self._build_client(credentials)
             self._clients[channel_id] = client
@@ -350,6 +362,8 @@ class WeixinRuntime:
         channel_id, sender_id = key
         # Mark the channel busy before the first await so the sync cursor is
         # never persisted while this batch is still being processed.
+        inflight_done = asyncio.Event()
+        self._inflight_events[key] = inflight_done
         self._inflight.add(key)
         save_sync = True
         try:
@@ -417,8 +431,34 @@ class WeixinRuntime:
             raise
         finally:
             self._inflight.discard(key)
-            if save_sync:
-                await self._save_sync_if_idle(channel_id)
+            try:
+                if save_sync:
+                    await self._save_sync_if_idle(channel_id)
+            finally:
+                self._inflight_events.pop(key, None)
+                inflight_done.set()
+
+    async def _wait_inflight(self, key: tuple[str, str]) -> bool:
+        """Wait for a batch already being ingested, bounded by a timeout.
+
+        A command that arrives while its conversation's previous batch is in
+        flight must not race the contact rebinding: /new would otherwise land
+        in the old session, and /stop could interrupt the wrong session.
+        """
+        event = self._inflight_events.get(key)
+        if event is None:
+            return True
+        try:
+            async with asyncio.timeout(INFLIGHT_WAIT_SECONDS):
+                await event.wait()
+            return True
+        except TimeoutError:
+            logger.warning(
+                "in-flight batch did not finish before command channel=%s sender=%s",
+                key[0],
+                key[1][:8],
+            )
+            return False
 
     def _retry_or_drop_batch(
         self,
@@ -545,6 +585,23 @@ class WeixinRuntime:
         failures = 0
         try:
             while not self._stop.is_set():
+                try:
+                    agent_active = await self._agent_is_active(credentials.agent_id)
+                except Exception:
+                    logger.exception(
+                        "weixin could not read agent status channel=%s", channel_id
+                    )
+                    await asyncio.sleep(RETRY_DELAY_SECONDS)
+                    continue
+                if not agent_active:
+                    # Pausing polling keeps the persisted sync cursor, so
+                    # re-activating the Agent resumes from the same point.
+                    logger.info(
+                        "weixin poll paused; agent is not active channel=%s agent=%s",
+                        channel_id,
+                        credentials.agent_id,
+                    )
+                    return
                 try:
                     data = await client.get_updates(sync_buf)
                 except asyncio.CancelledError:
@@ -676,9 +733,15 @@ class WeixinRuntime:
         if is_command:
             command = parse_command(text)
             if command in ("/new", "/clear"):
+                # Let the previous packet finish ingesting into the old
+                # session before the command rebinds the contact.
+                await self._wait_inflight(key)
                 # Start the new session with nothing buffered from before.
                 await self.flush_pending(key)
             elif command == "/stop":
+                # Wait so an already-submitted batch has a session to
+                # interrupt; then discard any follow-up that has not run yet.
+                await self._wait_inflight(key)
                 # A stop means the buffered follow-up should not run at all.
                 self._drop_pending(key)
             # /help, /status and unknown commands must not disturb the batch
@@ -951,6 +1014,7 @@ class WeixinRuntime:
             client = self._build_client(credentials)
             temporary = True
 
+        sent_chunks = 0
         try:
             chunks = split_reply(content)
             if recovered and chunks:
@@ -963,6 +1027,7 @@ class WeixinRuntime:
                     text=chunk,
                     context_token=conversation.context_token,
                 )
+                sent_chunks += 1
                 if index < len(chunks) - 1 and CHUNK_DELAY_SECONDS:
                     await asyncio.sleep(CHUNK_DELAY_SECONDS)
         except asyncio.CancelledError:
@@ -970,18 +1035,14 @@ class WeixinRuntime:
         except WeixinSessionExpired as exc:
             # Keep the obligation for after the next login; it must not fail
             # just because the stored token expired.
-            await channel_delivery.mark_pending(
-                delivery_id,
-                _error_text(exc),
-                max_attempts=_UNBOUNDED_ATTEMPTS,
+            await self._mark_failed_chunks(
+                delivery_id, sent_chunks, _error_text(exc), unbounded=True
             )
             await self._mark_expired(channel.id, _error_text(exc))
             return
         except Exception as exc:
-            await channel_delivery.mark_pending(
-                delivery_id,
-                _error_text(exc),
-                max_attempts=settings.channel_delivery_max_attempts,
+            await self._mark_failed_chunks(
+                delivery_id, sent_chunks, _error_text(exc), unbounded=False
             )
             logger.warning(
                 "weixin delivery failed delivery=%s: %s", delivery_id, exc
@@ -995,6 +1056,33 @@ class WeixinRuntime:
                     logger.exception("failed to close temporary weixin client")
 
         await channel_delivery.mark_sent(delivery_id)
+
+    async def _mark_failed_chunks(
+        self,
+        delivery_id: int,
+        sent_chunks: int,
+        error: str,
+        *,
+        unbounded: bool,
+    ) -> None:
+        """Record a failed send without losing the partial-delivery signal.
+
+        Once at least one chunk reached the contact, the row stays
+        ``attempting`` so the next sweep prepends "possibly partially
+        delivered" instead of presenting the retry as a fresh message. If
+        nothing was sent (or the channel is unusable), the normal bounded
+        ``mark_pending`` path applies.
+        """
+        if sent_chunks > 0:
+            await channel_delivery.mark_attempting_error(delivery_id, error)
+            return
+        await channel_delivery.mark_pending(
+            delivery_id,
+            error,
+            max_attempts=(
+                _UNBOUNDED_ATTEMPTS if unbounded else settings.channel_delivery_max_attempts
+            ),
+        )
 
     async def sweep_deliveries(self, channel_id: str | None = None) -> None:
         snapshot = await self.store.get()
@@ -1037,10 +1125,12 @@ class WeixinRuntime:
                 return
             except WeixinSessionExpired:
                 if token and not dropped_token:
-                    # iLink accepts a tokenless send as a degraded retry.
-                    dropped_token = True
-                    token = None
-                    continue
+                    # iLink accepts a tokenless send as a degraded retry, but
+                    # only if the retry loop still has an attempt left.
+                    if attempt < attempts:
+                        dropped_token = True
+                        token = None
+                        continue
                 raise
             except WeixinRateLimited as exc:
                 if attempt >= attempts:
@@ -1099,6 +1189,15 @@ class WeixinRuntime:
         if channel is None:
             return None
         return _credentials_from(channel)
+
+    async def _agent_is_active(self, agent_id: str) -> bool:
+        if not agent_id:
+            return False
+        snapshot = await self.store.get()
+        agent = next(
+            (item for item in snapshot.agents if item.id == agent_id), None
+        )
+        return agent is not None and agent.status == "active"
 
     async def _save_sync_buf(self, channel_id: str, sync_buf: str) -> None:
         await self.store.update_channel_fields(channel_id, sync_buf=sync_buf)

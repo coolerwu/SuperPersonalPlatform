@@ -9,9 +9,9 @@ its lease untouched, so re-enabling the agent resumes it on a later startup
 a "continue after restart" prompt: the SDK conversation is kept, and the model
 is told not to repeat steps that already completed. A lease without a
 transcript (the lease was written but the SDK had not written its transcript
-yet, or the session was deleted) is dropped together with any empty delivery
-obligation it left behind, as is a lease whose session id is not a canonical
-UUID, because the id becomes a path component.
+yet, or the session was deleted) is dropped after answering its delivery
+obligation, as is a lease whose session id is not a canonical UUID, because
+the id becomes a path component.
 
 The lease table has no ``agent_id``, so ownership is inferred from which
 agent's project directory holds the transcript; the first match in settings
@@ -21,6 +21,11 @@ into a path. Recovery is best-effort: a bad row is logged and skipped so the
 remaining leases still resume, and a failure to load settings or leases, or a
 settings file that yields no agents, aborts only this pass without deleting
 leases.
+
+A lease without a transcript is dropped, but never silently: an empty channel
+obligation is filled with an explicit failure text so the normal startup
+sweep can tell that contact their message was not processed, and a web turn
+(which has no delivery row) leaves an ``audit_log`` entry.
 """
 
 from __future__ import annotations
@@ -29,26 +34,65 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.db import SessionLocal
+from app.models import AuditLog
 from app.services import channel_delivery, turn_lease
 from app.services.claude_runner import Turn, transcript_path
 from app.services.identifiers import is_canonical_uuid, valid_agent_id
 
 logger = logging.getLogger(__name__)
 
+LOST_TURN_TEXT = (
+    "服务重启时这条消息尚未开始处理，请重新发送。"
+    "（消息未丢失，但本次没有生成回复。）"
+)
 
-async def _drop_lease(session_id: str) -> None:
-    """Remove a lease and any empty delivery obligation it left behind.
 
-    A crash between lease removal and completion leaves an unfilled row with
-    no turn to finish it; dropping the lease is the point where recovery can
-    safely discard it. Filled rows are left to the sender.
-    """
+async def _audit_lost_turn(session_id: str) -> None:
     try:
-        await channel_delivery.discard_unfilled_for_session(session_id)
+        async with SessionLocal() as db:
+            db.add(
+                AuditLog(
+                    actor="system",
+                    action="turn_lost_on_restart",
+                    entity="session",
+                    entity_id=session_id,
+                )
+            )
+            await db.commit()
     except Exception:
         logger.exception(
-            "recovery could not discard deliveries session=%s", session_id
+            "recovery could not write audit entry session=%s", session_id
         )
+
+
+async def _drop_lease(session_id: str) -> None:
+    """Remove a lease after answering any obligation it left behind.
+
+    A crash before the SDK wrote a transcript means the turn never ran. A
+    channel message still has an empty delivery row; filling it with an
+    explicit failure keeps it deliverable. Filled rows are left to the sender;
+    a web turn has no delivery row, so its loss is recorded in ``audit_log``.
+    """
+    answered = 0
+    try:
+        answered = await channel_delivery.fail_unfilled_for_session(
+            session_id, LOST_TURN_TEXT, "turn ended before its transcript existed"
+        )
+    except Exception:
+        logger.exception(
+            "recovery could not answer deliveries session=%s", session_id
+        )
+    if not answered:
+        try:
+            has_delivery = await channel_delivery.has_for_session(session_id)
+        except Exception:
+            has_delivery = False
+            logger.exception(
+                "recovery could not inspect deliveries session=%s", session_id
+            )
+        if not has_delivery:
+            await _audit_lost_turn(session_id)
     await turn_lease.remove(session_id)
 
 

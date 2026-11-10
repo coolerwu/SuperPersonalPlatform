@@ -211,7 +211,13 @@ export const api = {
       turnId ? `?turn_id=${encodeURIComponent(turnId)}` : ""
     }`,
   uploadUrl: (agentId: string, path: string) => {
-    const name = path.startsWith("/uploads/") ? path.slice("/uploads/".length) : path;
+    // Attachments written by newer runs use a workspace-relative path
+    // ("uploads/x"); transcripts from before the SDK migration may still
+    // carry "/uploads/x". Both resolve to the same download endpoint.
+    const relative = path.startsWith("/") ? path.slice(1) : path;
+    const name = relative.startsWith("uploads/")
+      ? relative.slice("uploads/".length)
+      : relative;
     return `/api/agents/${encodeURIComponent(agentId)}/uploads/${encodeURIComponent(name)}`;
   },
 

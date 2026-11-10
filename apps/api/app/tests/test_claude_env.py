@@ -115,6 +115,12 @@ def test_ensure_claude_dirs_config_is_private(tmp_path):
     assert mode == 0o700
 
 
+def test_ensure_claude_dirs_tmp_and_workspaces_are_private(tmp_path):
+    ensure_claude_dirs(tmp_path)
+    assert stat.S_IMODE((tmp_path / "tmp").stat().st_mode) == 0o700
+    assert stat.S_IMODE((tmp_path / "workspaces").stat().st_mode) == 0o700
+
+
 def test_install_claude_process_env_overrides_existing_value(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/elsewhere/claude")
     config_dir = install_claude_process_env(tmp_path)

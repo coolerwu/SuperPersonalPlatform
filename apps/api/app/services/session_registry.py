@@ -31,6 +31,10 @@ from app.services.turn_stream import TurnStream
 logger = logging.getLogger(__name__)
 
 
+class SessionDeletingError(RuntimeError):
+    """A turn was submitted while its session was being deleted."""
+
+
 class SessionRegistry:
     def __init__(
         self,
@@ -56,12 +60,18 @@ class SessionRegistry:
         # cached SDK client that a settings change needs to close.
         # ``close_session`` removes them.
         self._session_agents: dict[str, str] = {}
+        # Sessions whose delete has started. Unlike ``is_busy``, the check and
+        # the marker are set without an await, so a turn cannot slip into the
+        # queue between the check and the transcript delete.
+        self._deleting: set[str] = set()
         self._max_streams = max(1, max_streams)
         self._closed = False
 
     async def submit(self, turn: Turn) -> str:
         if self._closed:
             raise RuntimeError("registry is closed")
+        if turn.session_id in self._deleting:
+            raise SessionDeletingError("session is being deleted")
         # This method intentionally has no awaits: queue creation, stream
         # registration and enqueue must be atomic with respect to a worker
         # retiring itself after seeing its queue empty.
@@ -107,19 +117,22 @@ class SessionRegistry:
             self._pending[session_id] = (turn, stream)
             self._running.add(session_id)
             try:
-                async with self._semaphore:
-                    self._started.add(session_id)
-                    skip = turn.id in self._cancelled
-                    self._cancelled.discard(turn.id)
-                    if not skip:
-                        await self._runner.run(turn, stream)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception(
-                    "session turn failed session=%s turn=%s", session_id, turn.id
-                )
-                stream.close()
+                try:
+                    async with self._semaphore:
+                        self._started.add(session_id)
+                        skip = turn.id in self._cancelled
+                        self._cancelled.discard(turn.id)
+                        if not skip:
+                            await self._runner.run(
+                                turn, stream, defer_eviction=True
+                            )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "session turn failed session=%s turn=%s", session_id, turn.id
+                    )
+                    stream.close()
             finally:
                 self._started.discard(session_id)
                 self._pending.pop(session_id, None)
@@ -127,6 +140,17 @@ class SessionRegistry:
                 self._running.discard(session_id)
                 self._current.pop(session_id, None)
                 queue.task_done()
+                # A slow CLI disconnect must not hold the concurrency permit;
+                # the runner deferred it until now.
+                after_turn = getattr(self._runner, "after_turn", None)
+                if after_turn is not None:
+                    try:
+                        await after_turn(turn.session_id, turn.agent_id)
+                    except Exception:
+                        logger.exception(
+                            "deferred client eviction failed session=%s",
+                            session_id,
+                        )
             self._evict_closed_streams()
             if queue.empty():
                 # Retire atomically with the empty check and with submit (which
@@ -147,6 +171,24 @@ class SessionRegistry:
         """Release the runner's cached SDK client after transcript deletion."""
         self._session_agents.pop(session_id, None)
         await self._runner.close(session_id)
+
+    def begin_delete(self, session_id: str) -> bool:
+        """Atomically mark a session for deletion.
+
+        Returns False when a turn is queued or running, so the caller must not
+        delete the transcript under it. Once True, ``submit`` rejects new turns
+        for this session until ``finish_delete`` runs.
+        """
+        if self.is_busy(session_id):
+            return False
+        self._deleting.add(session_id)
+        return True
+
+    def finish_delete(self, session_id: str) -> None:
+        self._deleting.discard(session_id)
+
+    def session_agent(self, session_id: str) -> str | None:
+        return self._session_agents.get(session_id)
 
     async def close_agent_clients(self, agent_id: str) -> int:
         """Close cached SDK clients for one Agent's idle sessions.
@@ -215,7 +257,9 @@ class SessionRegistry:
                 worker.cancel()
             self._queues.pop(session_id, None)
             self._current.pop(session_id, None)
-        active = await self._runner.interrupt(session_id)
+        active = await self._runner.interrupt(
+            session_id, self._session_agents.get(session_id)
+        )
         return bool(active or cancelled)
 
     async def close(self) -> None:
@@ -252,5 +296,6 @@ class SessionRegistry:
             self._started.clear()
             self._cancelled.clear()
             self._session_agents.clear()
+            self._deleting.clear()
             self._streams.clear()
             self._turn_sessions.clear()

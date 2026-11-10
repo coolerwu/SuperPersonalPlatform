@@ -80,5 +80,7 @@ def ensure_claude_dirs(home: Path | None = None) -> None:
     paths = claude_paths(home)
     for key in ("config", "tmp", "workspaces"):
         paths[key].mkdir(parents=True, exist_ok=True)
-    # The SDK config holds credentials and session transcripts; keep it private.
-    paths["config"].chmod(0o700)
+    # The SDK config holds credentials and session transcripts, and the
+    # scratch/workspace roots hold user files. Keep all three private.
+    for key in ("config", "tmp", "workspaces"):
+        paths[key].chmod(0o700)

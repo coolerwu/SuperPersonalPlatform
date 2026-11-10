@@ -96,14 +96,9 @@ class SessionCatalog:
         if agent_id is not None and not self._owns(agent_id, session_id):
             return []
         rows: list[dict[str, Any]] = []
-        try:
-            raw_messages = await asyncio.to_thread(
-                sdk_bridge.get_session_messages, session_id
-            )
-        except ValueError:
-            # An id the SDK cannot parse is not a session; callers get an
-            # empty transcript rather than a 500.
-            return []
+        raw_messages = await asyncio.to_thread(
+            sdk_bridge.get_session_messages, session_id
+        )
         for message in raw_messages:
             if getattr(message, "parent_tool_use_id", None):
                 continue

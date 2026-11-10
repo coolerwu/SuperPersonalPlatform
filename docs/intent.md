@@ -77,13 +77,15 @@
 2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`、`turn_end`）。
 3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。
 4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示已停止。
-5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约直接丢弃；暂停/归档 Agent 的租约保留到 Agent 恢复。
+5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；网页来源没有投递行时写 `audit_log`；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。
 6. 命令：`/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示；`/memory` 与「整理记忆」已删除。
 7. 输入框 `/` 前缀弹出命令面板：↑/↓ 选择，Enter/Tab 填入，Esc 关闭；面板只填入不执行。
-8. 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片支持选择、粘贴、拖拽，浏览器端缩到最长边 1600 px；发送时把文件名、工作区路径和字节数写入用户消息，Agent 用文件工具读取。图片作为文件由 Agent 的 Read 工具查看；本版不再单独构造 `image_url` 模型输入。
+8. 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片支持选择、粘贴、拖拽，浏览器端缩到最长边 1600 px；发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具读取。图片作为文件由 Agent 的 Read 工具查看；本版不再单独构造 `image_url` 模型输入。旧 transcript 里的绝对 `/uploads/<name>` 仍按兼容路径解析，但可能失效，优先在 `uploads/` 下查找。
 9. 消息操作：复制、引用；失败或停止后显示提示，用户重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成、删除单条消息。
 10. assistant 消息按 Markdown 渲染（GFM、代码高亮、KaTeX `$$...$$`）；流式文本约 80ms 节流。
-11. 消息不显示时间戳；刷新或断线后无法续看当前输出。
+11. 消息不显示时间戳。同一进程内刷新或重连会在数秒内通过 `current_turn_id` 重放当前轮缓冲；进程重启或订阅断开后才丢失当前输出。
+12. 网页消息只接受 active Agent；paused 与 archived 都返回 409 和中文提示。`session_id` 必须属于该 Agent：已有 transcript 必须是同一 Agent 的，否则 409；同一个 session id 不会跨 Agent 复用 client。
+13. 每个 Agent 的 SDK client 缓存有上限（默认 8 个）和空闲 TTL（默认 300 秒），每 60 秒清扫；同一会话配置（instructions/Provider）变化后下一轮重建 client。
 
 #### 验收标准
 
@@ -103,9 +105,9 @@
 1. 会话只存在于 SDK transcript：`claude/projects/<agent_id>/<uuid>.jsonl`；平台不建 sessions/messages/runs 表。
 2. 会话列表由 SDK `list_sessions()` 扫描全部项目目录，再按 `cwd == workspaces/<agent>` 过滤；标题取 SDK summary（最多 80 字），`last_modified` 用于排序和展示。
 3. 会话历史由 `get_session_messages(session_id)` 读取；重命名、删除走 SDK（删除同时移除 transcript 与子 Agent transcript 目录）。
-4. 删除会话前拒绝正在执行的会话（409）；删除时清理 `workspaces/<agent>/screenshots/<session_id>/`、该会话的 `channel_deliveries` 行和 `channel_conversations` 绑定。
+4. 删除会话前拒绝正在执行的会话（409）；删除开始时原子标记会话（新的提交在删除完成前被拒绝），删除完成后释放标记。删除时清理 `workspaces/<agent>/screenshots/<session_id>/`、该会话的 `channel_deliveries` 行和 `channel_conversations` 绑定。
 5. 后台清理 `SessionCleanupRuntime`：启动后立即执行首轮，之后每 `SESSION_CLEANUP_INTERVAL_SECONDS`（默认 3600，最小 60）扫描；按 transcript mtime 早于保留天数（`settings.runtime.session_retention_days`，默认 30，0 关闭）删除。
-6. 清理跳过：有租约的会话、registry 中忙碌的会话、非 UUID 文件名；先清产物再删 transcript；`claude/` 下的 auto memory 不清理。
+6. 清理跳过：有租约的会话、registry 中忙碌或正在删除的会话、非 UUID 文件名；先清产物再删 transcript；`claude/` 下的 auto memory 不清理。
 7. 微信绑定指向已删除会话时，下一条入站消息自动生成新 UUID 重新绑定；定时任务在 transcript 不存在时下次触发重新生成 session id。
 
 #### 验收标准
@@ -121,11 +123,11 @@
 
 #### 功能点
 
-1. 平台配置单文件 `data/settings.json`：`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`。单 `asyncio.Lock`；写临时文件 → fsync → `os.replace`；写前保留 `.bak`；主文件损坏时回退 `.bak`，仍失败按节回退默认值。
+1. 平台配置单文件 `data/settings.json`：`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`。单 `asyncio.Lock`；写临时文件 → fsync → `os.replace`；写前保留 `.bak`；主文件损坏时回退 `.bak`。启动种子在主文件不可解析且 `.bak` 也不可用、或文件中没有合法 `agents` 列表时重写默认 sections（保留仍可读的 runtime/knowledge/channels），并记 warning；解析成功且显式 `agents: []` 的文件视为用户主动清空，保留并 warning。
 2. 环境变量只做首次种子（默认 Agent 与提示词、`SESSION_RETENTION_DAYS`、`KB_WEBDAV_*`）；文件存在后不再读取。旧库 `app_configs.session_retention_days` 在首次启动迁移一次，用 `runtime.legacy_import_done` 标记。
 3. Provider 为单例（id=`default`），编辑的是 default Agent 的 Provider；`base_url` 自动补 `/anthropic`；接口只返回 `has_api_key`。
-4. Agent：id、名称、instructions、状态（active/paused/archived）、`enabled_skills`、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。
-5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，下一个 turn 生效；忙碌会话等当前 turn 结束后的下一次设置变更或重建。
+4. Agent：id、名称、instructions、状态（active/paused/archived）、`enabled_skills`、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。状态语义统一为：`active` 正常接收网页、渠道和定时任务；`paused` 与 `archived` 都拒绝网页新消息（409）、拒绝渠道入站并暂停该 Agent 的渠道轮询（保留 cursor，恢复 active 后继续）、跳过定时任务；两种非 active 状态下渠道页仍可查看/编辑/删除渠道。
+5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，忙碌会话在下一次 turn 开始时按配置指纹自动重建 client，因此配置变更不会永久丢失。
 6. Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区与 transcript，彻底删除会同时删除工作区目录和 transcript 目录，并级联删除渠道、渠道绑定、投递/入站记录与定时任务；有活动 turn 时 409。
 7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers` 读写 `settings.json`；`/api/memories` 只读写 `claude/CLAUDE.md`；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`。
 
@@ -164,19 +166,19 @@
 2. 新建渠道后扫码登录；iLink 二维码在页面展示，登录成功后 `WeixinRuntime` 在 API 进程内为每个 active 渠道跑一个 `getupdates` 长轮询任务。
 3. 入站：
    - 群聊忽略；语音/视频不下载、不落盘；纯语音/视频直接回提示且不创建 turn；混合消息只处理文字/图片/文件。
-   - 图片/文件从 iLink CDN 下载、AES-128-ECB 解密后保存到 `workspaces/<agent_id>/uploads/wx-<hash>-<name>`，以附件清单写入用户消息。
+   - 图片/文件从 iLink CDN 下载、AES-128-ECB 解密后保存到 `workspaces/<agent_id>/uploads/wx-<hash>-<name>`，以附件清单写入用户消息，路径为相对工作区的 `uploads/<name>`（旧 transcript 的 `/uploads/<name>` 仍兼容解析）。
    - 同一联系人连续消息在 `CHANNEL_INBOUND_BATCH_SECONDS`（默认 5 秒，最长 15 秒）内打包成一个 turn。
    - 入站按 `(channel_id, external_message_id)` 幂等；打包窗口内不保存 `sync_buf`，崩溃后由 iLink 重放、幂等表吸收。
    - 引用回包通常只有 `msg_id` / `create_time_ms`：先按消息 id 查 `channel_inbounds`，再在目标时间前 2 秒、后 30 秒窗口内查入站文本与机器人回复；查不到写「引用原文不可用」。
-   - 命令 `/new`、`/clear`、`/stop`、`/status`、`/help`：`/new` 先 flush 待打包消息再新建 UUID 并重绑；`/stop` 丢弃待打包消息并中断当前会话；`/status` 返回 Agent、会话 UUID、忙闲；命令不进 Agent、不建 turn，确认消息直接 `sendmessage`。
+   - 命令 `/new`、`/clear`、`/stop`、`/status`、`/help`：`/new` 先等待在途打包批次落库到旧会话，再 flush 待打包消息并新建 UUID 重绑；`/stop` 先等待在途批次完成，再丢弃待打包消息并中断当前会话；等待有界（30 秒超时后继续并记日志）。`/status` 返回 Agent、会话 UUID、忙闲；命令不进 Agent、不建 turn，确认消息直接 `sendmessage`。
 4. 出站：
    - turn 开始时在同一事务写 `running_sessions` 租约与 `channel_deliveries` pending 行；结束时回填最终答复并发送；取消的 turn 不发送并删除空投递行。
    - 回复按 1800 字在段落/代码围栏边界切块，最多 10 块，超出截断并标注。
-   - 崩溃重启后按 pending/attempting 行补发；attempting 行补发文案为「♻️ 上一条回复可能已部分送达，以下为完整内容：」；渠道暂停/登录过期时保留 pending，恢复后继续。
+   - 崩溃重启后按 pending/attempting 行补发；attempting 行补发文案为「♻️ 上一条回复可能已部分送达，以下为完整内容：」。如果一次发送在至少一块已送达后失败（含登录过期），行保持 attempting，后续补发保留该前缀；只有一块都没发出时才回到 pending。渠道暂停/登录过期时保留 pending，恢复后继续。
    - 网页里在渠道会话中手动发消息不推回微信；定时推送复用同一投递机制。
 5. 运行期截图推送：工具层未接入，`channel_images.send_session_image` 已保留但当前没有调用方；下一版本接入浏览器工具后启用。
 6. 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；重新扫码后补发未发送回复。
-7. 删除渠道：停止轮询、清空登录态、删除投递/入站记录、清理定时任务推送目标、移除渠道与联系人绑定；已产生的会话与 transcript 保留。
+7. 删除渠道：停止轮询、清空登录态、删除投递/入站记录、清理定时任务推送目标、移除渠道与联系人绑定；已产生的会话与 transcript 保留。渠道所属 Agent 非 active 时轮询暂停（保留 `sync_buf`），恢复 active 后重新启动；渠道管理接口不受 Agent 状态限制。
 
 #### 验收标准
 
@@ -352,7 +354,7 @@
 1. 生产：宿主机 systemd 用户服务 + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`（SPA fallback），没有 nginx/Postgres 容器。
 2. 运行时目录 `~/.super-personal-platform/`：`claude/`、`workspaces/<agent>/`、`skills/`、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
 3. 新库的 `app.db` 只创建六张表：`audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留旧表，旧 `providers`/`agents`/`channels`/`sessions`/`messages`/`runs`/`run_events`/`memory_items` 等表不再读写，`app_configs` 仅在首次启动读取一次保留天数后不再使用。
-4. 升级：本版不做数据迁移。先备份 `data/app.db` 与 `data/settings.json`；旧库可直接沿用，启动时检测并重建旧结构 `channel_deliveries` / `channel_inbounds`（旧待投递与入站去重记录丢失，iLink 可能重放一次）；旧 `providers` / `agents` / `channels` / `knowledge_configs` 配置不会导入，`settings.json` 用环境变量和默认值重新种子（仅首次启动读取旧 `app_configs.session_retention_days` 一次）；旧用户记忆与旧 `sessions/messages/runs/...` 聊天历史不会导入；旧微信渠道凭据不在 settings.json，需重新扫码绑定；旧定时任务列结构不兼容时会在启动/触发报错，先备份再决定删除重建；回测历史保留。
+4. 升级：本版不做数据迁移。先备份 `data/app.db` 与 `data/settings.json`；旧库可直接沿用，启动时检测并重建旧结构 `channel_deliveries` / `channel_inbounds`（旧待投递与入站去重记录丢失，iLink 可能重放一次）；旧 `providers` / `agents` / `channels` / `knowledge_configs` 配置不会导入，`settings.json` 用环境变量和默认值重新种子（仅首次启动读取旧 `app_configs.session_retention_days` 一次）；旧用户记忆与旧 `sessions/messages/runs/...` 聊天历史不会导入；旧微信渠道凭据不在 settings.json，需重新扫码绑定；旧定时任务列结构不兼容时，定时 tick 会持续记录 `cron tick failed`、任务列表接口可能 500，先备份再决定删除重建；回测历史保留。
 5. 彻底重建：删除 `data/app.db` 后重启，会丢失回测历史、定时任务、审计、未完成投递与入站去重记录；`data/settings.json` 和会话 transcript 不受影响，微信绑定在 settings.json 中，不需要因此重新扫码。
 6. 备份：`data/app.db`、`data/settings.json`、`claude/`、`workspaces/`、`data/trade-journal.jsonl`、`data/allocation*.json*`、`skills/`、`knowledge/`。
 7. 旧 home 的 `memory-organizer` 技能由启动 seed 清理（未修改时删除，用户改过的保留但停止跟踪）。
@@ -380,4 +382,4 @@
 9. 渠道运行期截图实时推送（等工具层）。
 10. `/memory` 指令与整理记忆。
 
-已知能力损失（已接受）：刷新丢流式输出、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失；`langchain-core` 暂留。
+已知能力损失（已接受）：进程重启或订阅断开后丢当前流式输出（同进程刷新会在数秒内从 `current_turn_id` 重放缓冲）、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失；`langchain-core` 暂留。

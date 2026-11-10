@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     # same Run, so the wall-clock cap leaves room for a 5-minute wait plus the
     # actual task after login.
     run_timeout_seconds: int = 900
+
+    # Every cached SDK client keeps a CLI subprocess alive (roughly 150 MB
+    # idle). Bound the cache by idle time and size, and sweep it periodically.
+    # ``touch`` on turn start/end keeps an active conversation warm.
+    claude_client_ttl_seconds: int = 300
+    claude_client_max_clients: int = 8
+    claude_client_sweep_seconds: int = 60
+    claude_connect_timeout_seconds: int = 60
     run_recursion_limit: int = 500
     max_history_messages: int = 40
     vision_max_images: int = 4

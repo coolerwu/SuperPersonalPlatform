@@ -12,7 +12,7 @@ Environment=APP_DATABASE_URL=sqlite+aiosqlite:///%h/.super-personal-platform/dat
 ExecStart=%h/SuperPersonalPlatform-v1-deploy/.venv/bin/uvicorn app.main:app --app-dir apps/api --host 0.0.0.0 --port 8888
 Restart=always
 RestartSec=3
-TimeoutStopSec=20
+TimeoutStopSec=60
 
 [Install]
 WantedBy=default.target

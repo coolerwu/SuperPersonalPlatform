@@ -21,10 +21,10 @@ def test_attachment_upload_writes_to_workspace(client) -> None:
     payload = response.json()
     assert payload["name"] == "备注.txt"
     assert payload["size"] == 5
-    assert payload["path"].startswith("/uploads/")
+    assert payload["path"].startswith("uploads/")
     assert ".." not in payload["path"]
 
-    stored = settings.workspaces_dir / agent_id / payload["path"].lstrip("/")
+    stored = settings.workspaces_dir / agent_id / payload["path"]
     assert stored.read_bytes() == b"hello"
     assert stored.parent.name == "uploads"
 
@@ -140,10 +140,27 @@ def test_build_model_content_attaches_images_only(client) -> None:
 def _attachment_content(entries: list[tuple[str, int]], body: str = "看图") -> str:
     lines = ["附件已上传到工作区："]
     lines.extend(
-        f"- {name}（工作区路径：/uploads/{name}，大小：{size} 字节）"
+        f"- {name}（工作区路径：uploads/{name}，大小：{size} 字节）"
         for name, size in entries
     )
     return "\n".join(lines) + "\n\n" + body
+
+
+def test_build_model_content_accepts_legacy_absolute_upload_path(tmp_path) -> None:
+    from app.services.attachments import build_model_content
+
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    data = b"\x89PNG\r\n\x1a\n" + b"0" * 20
+    (uploads / "old.png").write_bytes(data)
+    content = (
+        "附件已上传到工作区：\n"
+        f"- old.png（工作区路径：/uploads/old.png，大小：{len(data)} 字节）"
+    )
+
+    built = build_model_content(content, tmp_path)
+    assert isinstance(built, list)
+    assert built[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 def test_build_model_content_warns_about_oversized_image(tmp_path) -> None:

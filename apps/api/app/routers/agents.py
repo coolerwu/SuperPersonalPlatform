@@ -60,6 +60,36 @@ async def _close_agent_clients(request: Request, agent_id: str) -> None:
         logger.exception("closing cached clients failed agent=%s", agent_id)
 
 
+async def _sync_agent_channels(
+    request: Request, agent_id: str, *, active: bool
+) -> None:
+    """Start or stop an Agent's channel polling with its status.
+
+    A paused/archived Agent must not receive new channel turns. Stopping the
+    poll task keeps the persisted sync cursor, so re-activating resumes from
+    the same point instead of replaying old messages.
+    """
+    runtime = getattr(request.app.state, "weixin", None)
+    if runtime is None:
+        return
+    snapshot = await _store(request).get()
+    for channel in snapshot.channels:
+        if channel.agent_id != agent_id or channel.type != "wechat":
+            continue
+        try:
+            if active and channel.status == "active":
+                await runtime.start_channel(channel.id)
+                await runtime.sweep_deliveries(channel.id)
+            elif not active:
+                await runtime.stop_channel(channel.id)
+        except Exception:
+            logger.exception(
+                "syncing channel polling failed agent=%s channel=%s",
+                agent_id,
+                channel.id,
+            )
+
+
 def _agent_out(agent: AgentSection) -> AgentOut:
     created = agent.created_at or _now_iso()
     return AgentOut(
@@ -218,6 +248,10 @@ async def update_agent(
         fields["updated_at"] = _now_iso()
         await store.update_agent_fields(agent_id, **fields)
         await _close_agent_clients(request, agent_id)
+        if "status" in fields:
+            await _sync_agent_channels(
+                request, agent_id, active=fields["status"] == "active"
+            )
     updated = agent.model_copy(update=fields) if fields else agent
     return _agent_out(updated)
 
@@ -370,4 +404,8 @@ async def archive_agent(
     await store.update_agent_fields(
         agent_id, status="archived", updated_at=_now_iso()
     )
+    # Archiving stops channel polling and releases idle SDK clients; the
+    # workspace and transcripts stay on disk.
+    await _sync_agent_channels(request, agent_id, active=False)
+    await _close_agent_clients(request, agent_id)
     return {"archived": True}

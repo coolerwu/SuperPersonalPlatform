@@ -56,10 +56,9 @@ def _now_iso() -> str:
 
 
 def _find_agent(snapshot: PlatformSettings, agent_id: str):
-    agent = next((item for item in snapshot.agents if item.id == agent_id), None)
-    if agent is None or agent.status == "archived":
-        return None
-    return agent
+    # Paused and archived Agents keep their channels manageable so the owner
+    # can inspect, edit or delete them; only polling is suspended.
+    return next((item for item in snapshot.agents if item.id == agent_id), None)
 
 
 def _find_channel(snapshot: PlatformSettings, channel_id: str) -> ChannelSection | None:

@@ -312,13 +312,17 @@ async def test_rename_maps_sdk_value_error(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_messages_invalid_uuid_returns_empty(monkeypatch):
+async def test_messages_without_agent_id_does_not_swallow_sdk_errors(monkeypatch):
+    # Callers that pass agent_id are validated before the SDK call; anything
+    # else must surface the SDK error instead of silently pretending the
+    # session has no messages.
     def boom(session_id):
         raise ValueError("invalid session id")
 
     monkeypatch.setattr(sdk_bridge, "get_session_messages", boom)
     catalog = session_catalog.SessionCatalog(FakeStore(), home=Path("/tmp"))
-    assert await catalog.messages("not-a-uuid") == []
+    with pytest.raises(ValueError):
+        await catalog.messages("not-a-uuid")
 
 
 @pytest.mark.asyncio

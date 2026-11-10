@@ -6,8 +6,9 @@ holds content is only sent by the delivery worker/sweep. ``sent`` and
 ``failed`` are terminal and never rewritten.
 
 Known limitation: a hard crash between lease removal and ``complete`` can
-leave an unfilled row with no owning lease. Recovery deletes those rows when
-it drops the lease (``discard_unfilled_for_session``).
+leave an unfilled row with no owning lease. Recovery answers it with an
+explicit failure text (``fail_unfilled_for_session``) instead of dropping the
+channel user's message silently.
 """
 
 from __future__ import annotations
@@ -96,22 +97,42 @@ async def discard(delivery_id: int) -> bool:
         return (result.rowcount or 0) > 0
 
 
-async def discard_unfilled_for_session(session_id: str) -> int:
-    """Delete empty live obligations left behind when a lease is dropped.
+async def fail_unfilled_for_session(
+    session_id: str, content: str, error: str
+) -> int:
+    """Answer an empty obligation after its turn was lost in a restart.
 
-    Recovery only removes empty rows: a filled row already belongs to the
-    sender, and terminal rows are delivery history.
+    Recovery removes the lease but must not drop the channel user's message
+    silently. Filling the row keeps it deliverable, so the normal startup
+    sweep sends the failure text; the row intentionally stays ``pending`` (no
+    partial-send prefix) because nothing was ever sent.
     """
     async with SessionLocal() as db:
         result = await db.execute(
-            delete(ChannelDelivery).where(
+            update(ChannelDelivery)
+            .where(
                 ChannelDelivery.session_id == session_id,
                 ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
                 ChannelDelivery.content == "",
             )
+            .values(
+                content=content,
+                last_error=str(error)[:2000],
+                updated_at=utcnow(),
+            )
         )
         await db.commit()
         return int(result.rowcount or 0)
+
+
+async def has_for_session(session_id: str) -> bool:
+    async with SessionLocal() as db:
+        row = await db.scalar(
+            select(ChannelDelivery.id)
+            .where(ChannelDelivery.session_id == session_id)
+            .limit(1)
+        )
+        return row is not None
 
 
 async def delete_for_session(session_id: str) -> int:
@@ -147,6 +168,26 @@ async def mark_attempting(delivery_id: int) -> bool:
                 last_error=None,
                 updated_at=utcnow(),
             )
+        )
+        await db.commit()
+        return (result.rowcount or 0) > 0
+
+
+async def mark_attempting_error(delivery_id: int, error: str) -> bool:
+    """Record a failure after at least one chunk was already sent.
+
+    The row stays ``attempting`` so the next sweep keeps the "possibly
+    partially delivered" prefix instead of presenting the retry as a fresh
+    message. Only live rows are updated.
+    """
+    async with SessionLocal() as db:
+        result = await db.execute(
+            update(ChannelDelivery)
+            .where(
+                ChannelDelivery.id == delivery_id,
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+            )
+            .values(last_error=str(error)[:2000], updated_at=utcnow())
         )
         await db.commit()
         return (result.rowcount or 0) > 0

@@ -182,7 +182,9 @@ async def test_seed_keeps_existing_anthropic_suffix(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ensure_seeded_keeps_existing_file(tmp_path, monkeypatch):
+async def test_ensure_seeded_fills_missing_agents_but_keeps_readable_sections(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("SESSION_RETENTION_DAYS", "5")
     # No legacy database: the marker was already written by a previous boot.
     monkeypatch.setattr(
@@ -204,8 +206,73 @@ async def test_ensure_seeded_keeps_existing_file(tmp_path, monkeypatch):
     )
     await SettingsStore(path).ensure_seeded()
     data = json.loads(path.read_text("utf-8"))
+    # A partial file without an agents section would otherwise leave the
+    # platform with no Agent forever.
     assert data["runtime"]["session_retention_days"] == 12
-    assert "agents" not in data
+    assert data["agents"][0]["id"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_ensure_seeded_rebuilds_a_corrupt_file_without_backup(tmp_path, caplog):
+    path = tmp_path / "settings.json"
+    path.write_text("{broken", "utf-8")
+    store = SettingsStore(path)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.settings_store"):
+        settings = await store.ensure_seeded()
+
+    assert [agent.id for agent in settings.agents] == ["default"]
+    data = json.loads(path.read_text("utf-8"))
+    assert data["agents"][0]["id"] == "default"
+    assert data["runtime"]["legacy_import_done"] is True
+    assert any(
+        "re-seeding defaults" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_seeded_rebuilds_when_every_agent_entry_is_invalid(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "runtime": {"legacy_import_done": True},
+                "agents": [{"name": "missing id"}, "not-an-object"],
+            }
+        ),
+        "utf-8",
+    )
+    settings = await SettingsStore(path).ensure_seeded()
+    assert [agent.id for agent in settings.agents] == ["default"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_seeded_preserves_a_deliberate_empty_agents_list(
+    tmp_path, caplog
+):
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "session_retention_days": 12,
+                    "legacy_import_done": True,
+                },
+                "agents": [],
+            }
+        ),
+        "utf-8",
+    )
+    store = SettingsStore(path)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.settings_store"):
+        settings = await store.ensure_seeded()
+
+    assert settings.agents == []
+    data = json.loads(path.read_text("utf-8"))
+    assert data["agents"] == []
+    assert any("empty agents list" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio

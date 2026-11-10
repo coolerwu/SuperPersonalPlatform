@@ -1,9 +1,21 @@
+import functools
+
 import pytest
 
 from app.services import commands
+from app.services.claude_runner import transcript_path
+from app.services.session_registry import SessionDeletingError
 from app.services.turn_stream import TurnStream
 
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def _store(client):
+    return client.app.state.settings_store
+
+
+def _call(client, function, /, *args, **kwargs):
+    return client.portal.call(functools.partial(function, *args, **kwargs))
 
 
 class RecordingRegistry:
@@ -66,7 +78,7 @@ def test_send_message_enqueues(client, fake_registry):
     response = client.post(
         "/api/chat/messages",
         json={
-            "agent_id": "agent-x",
+            "agent_id": "default",
             "session_id": SESSION_ID,
             "content": "  hi  ",
         },
@@ -80,8 +92,81 @@ def test_send_message_enqueues(client, fake_registry):
     turn = fake_registry.turns[0]
     assert turn.prompt == "hi"
     assert turn.session_id == SESSION_ID
-    assert turn.agent_id == "agent-x"
+    assert turn.agent_id == "default"
     assert turn.source == "manual"
+
+
+@pytest.mark.parametrize("status", ["paused", "archived"])
+def test_send_message_rejects_inactive_agent(client, fake_registry, status):
+    agent = client.post("/api/agents", json={"name": f"Inactive-{status}"}).json()
+    if status == "archived":
+        assert client.delete(f"/api/agents/{agent['id']}").status_code == 200
+    else:
+        assert (
+            client.put(
+                f"/api/agents/{agent['id']}", json={"status": "paused"}
+            ).status_code
+            == 200
+        )
+    response = client.post(
+        "/api/chat/messages",
+        json={"agent_id": agent["id"], "session_id": SESSION_ID, "content": "hi"},
+    )
+    assert response.status_code == 409
+    assert "暂停或归档" in response.json()["detail"]
+    assert fake_registry.turns == []
+
+
+def test_send_message_rejects_unknown_agent(client, fake_registry):
+    response = client.post(
+        "/api/chat/messages",
+        json={"agent_id": "missing", "session_id": SESSION_ID, "content": "hi"},
+    )
+    assert response.status_code == 404
+    assert fake_registry.turns == []
+
+
+def test_send_message_rejects_session_owned_by_another_agent(client, fake_registry):
+    other = client.post("/api/agents", json={"name": "Other"}).json()
+    path = transcript_path(SESSION_ID, other["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", "utf-8")
+    try:
+        response = client.post(
+            "/api/chat/messages",
+            json={"agent_id": "default", "session_id": SESSION_ID, "content": "hi"},
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == "session id belongs to another agent"
+        assert fake_registry.turns == []
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_send_message_allows_the_session_owner(client, fake_registry):
+    path = transcript_path(SESSION_ID, "default")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", "utf-8")
+    try:
+        response = client.post(
+            "/api/chat/messages",
+            json={"agent_id": "default", "session_id": SESSION_ID, "content": "hi"},
+        )
+        assert response.status_code == 201
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_send_message_rejects_session_being_deleted(client):
+    client.app.state.registry = RecordingRegistry(
+        submit_error=SessionDeletingError("session is being deleted")
+    )
+    response = client.post(
+        "/api/chat/messages",
+        json={"agent_id": "default", "session_id": SESSION_ID, "content": "hi"},
+    )
+    assert response.status_code == 409
+    assert "being deleted" in response.json()["detail"]
 
 
 def test_send_message_rejects_blank_content(client, fake_registry):
@@ -321,3 +406,63 @@ def test_messages_returns_transcript(client):
         {"id": "m1", "role": "user", "content": "hi", "blocks": []}
     ]
     assert catalog.message_calls == [(SESSION_ID, "default")]
+
+
+class DeletingRegistry(RecordingRegistry):
+    def __init__(self, *, busy=False):
+        super().__init__(busy=busy)
+        self.deleting: set[str] = set()
+        self.delete_attempts: list[str] = []
+        self.finished: list[str] = []
+
+    def begin_delete(self, session_id):
+        self.delete_attempts.append(session_id)
+        if self.busy:
+            return False
+        self.deleting.add(session_id)
+        return True
+
+    def finish_delete(self, session_id):
+        self.finished.append(session_id)
+        self.deleting.discard(session_id)
+
+
+def test_delete_uses_atomic_begin_delete_and_finishes(client):
+    registry = DeletingRegistry()
+    client.app.state.registry = registry
+    client.app.state.session_catalog = RecordingCatalog(deleted=True)
+
+    response = client.delete(f"/api/sessions/{SESSION_ID}?agent_id=default")
+
+    assert response.status_code == 200
+    assert registry.delete_attempts == [SESSION_ID]
+    assert registry.finished == [SESSION_ID]
+    assert registry.deleting == set()
+
+
+def test_delete_refused_when_begin_delete_fails(client):
+    registry = DeletingRegistry(busy=True)
+    client.app.state.registry = registry
+    client.app.state.session_catalog = RecordingCatalog(deleted=True)
+
+    response = client.delete(f"/api/sessions/{SESSION_ID}?agent_id=default")
+
+    assert response.status_code == 409
+    assert registry.finished == []
+    registry.finish_delete(SESSION_ID)
+
+
+def test_delete_releases_delete_marker_when_catalog_raises(client):
+    class RaisingCatalog(RecordingCatalog):
+        async def delete(self, agent_id, session_id):
+            raise RuntimeError("sdk delete failed")
+
+    registry = DeletingRegistry()
+    client.app.state.registry = registry
+    client.app.state.session_catalog = RaisingCatalog()
+
+    with pytest.raises(RuntimeError):
+        client.delete(f"/api/sessions/{SESSION_ID}?agent_id=default")
+
+    assert registry.finished == [SESSION_ID]
+    assert registry.deleting == set()
