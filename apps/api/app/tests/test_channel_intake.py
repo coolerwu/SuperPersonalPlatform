@@ -648,14 +648,23 @@ async def test_resolve_quoted_text_by_inbound_time_window():
     channel_id = f"q{uuid.uuid4().hex[:12]}"
     target = datetime.now(timezone.utc).replace(microsecond=0)
     async with SessionLocal() as db:
-        db.add(
-            ChannelInbound(
-                channel_id=channel_id,
-                external_message_id="window-1",
-                text="窗口内的原文",
-                external_id="wx-1",
-                created_at=target - timedelta(seconds=1),
-            )
+        db.add_all(
+            [
+                ChannelInbound(
+                    channel_id=channel_id,
+                    external_message_id="window-far",
+                    text="较远的原文",
+                    external_id="wx-1",
+                    created_at=target - timedelta(seconds=1.8),
+                ),
+                ChannelInbound(
+                    channel_id=channel_id,
+                    external_message_id="window-near",
+                    text="窗口内的原文",
+                    external_id="wx-1",
+                    created_at=target - timedelta(seconds=0.5),
+                ),
+            ]
         )
         await db.commit()
     try:
@@ -685,7 +694,8 @@ async def test_resolve_quoted_text_by_bot_reply_time_window():
                 session_id=str(uuid.uuid4()),
                 content="昨天的日报正文",
                 status="sent",
-                created_at=target - timedelta(seconds=1),
+                created_at=target - timedelta(seconds=60),
+                delivered_at=target - timedelta(seconds=1),
             )
         )
         await db.commit()

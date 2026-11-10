@@ -184,12 +184,13 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 from app.services.session_catalog import SessionCatalog
                 from app.services.session_registry import SessionRegistry
 
-                # The delivery callback must exist before start(), so the
-                # runtime is constructed first and its registry is attached as
-                # soon as the runner/registry pair exists.
+                # Hand the send to a background task: turn teardown must not
+                # wait for (potentially slow) WeChat delivery.
+                async def _enqueue_delivery(delivery_id: int) -> None:
+                    weixin.schedule_delivery(delivery_id)
+
                 runner = ClaudeTurnRunner(
-                    store,
-                    deliver_callback=lambda delivery_id: weixin.deliver(delivery_id),
+                    store, deliver_callback=_enqueue_delivery
                 )
                 app.state.runner = runner
                 registry = SessionRegistry(

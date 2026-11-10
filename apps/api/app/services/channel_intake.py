@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db import SessionLocal
@@ -150,6 +150,7 @@ async def resolve_quoted_text(
             return None
         start = target - timedelta(seconds=QUOTE_LOOKUP_LATE_SECONDS)
         end = target + timedelta(seconds=QUOTE_LOOKUP_WINDOW_SECONDS)
+        target_text = target.strftime("%Y-%m-%d %H:%M:%S.%f")
 
         inbound = await db.scalar(
             select(ChannelInbound.text)
@@ -160,22 +161,37 @@ async def resolve_quoted_text(
                 ChannelInbound.created_at <= end,
                 ChannelInbound.text != "",
             )
-            .order_by(ChannelInbound.created_at.desc())
+            .order_by(
+                func.abs(
+                    func.julianday(ChannelInbound.created_at)
+                    - func.julianday(target_text)
+                )
+            )
             .limit(1)
         )
         if isinstance(inbound, str) and inbound.strip():
             return inbound
 
+        # A bot reply is stamped when it finished sending, not when the
+        # obligation row was created; fall back to created_at only for older
+        # rows that were never delivered.
+        delivery_time = func.coalesce(
+            ChannelDelivery.delivered_at, ChannelDelivery.created_at
+        )
         content = await db.scalar(
             select(ChannelDelivery.content)
             .where(
                 ChannelDelivery.channel_id == channel_id,
                 ChannelDelivery.external_id == external_id,
-                ChannelDelivery.created_at >= start,
-                ChannelDelivery.created_at <= end,
+                delivery_time >= start,
+                delivery_time <= end,
                 ChannelDelivery.content != "",
             )
-            .order_by(ChannelDelivery.created_at.desc())
+            .order_by(
+                func.abs(
+                    func.julianday(delivery_time) - func.julianday(target_text)
+                )
+            )
             .limit(1)
         )
         if isinstance(content, str) and content.strip():

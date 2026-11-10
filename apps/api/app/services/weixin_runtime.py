@@ -26,7 +26,7 @@ from app.config import settings
 from app.services import channel_delivery, channel_intake, weixin_media
 from app.services.attachments import SavedAttachment, build_attachment_header
 from app.services.channel_text import split_reply
-from app.services.commands import is_command_text
+from app.services.commands import is_command_text, parse_command
 from app.services.settings_store import ChannelSection
 from app.services.weixin_client import (
     WeixinClient,
@@ -48,6 +48,8 @@ CHUNK_DELAY_SECONDS = 0.3
 MAX_ERROR_TEXT = 500
 CONTENT_DEDUP_SECONDS = 300.0
 LAST_SEEN_INTERVAL_SECONDS = 60.0
+MAX_FLUSH_RETRIES = 5
+DELIVERY_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 
 # A channel that is inactive or whose login expired must not burn through the
 # delivery retry budget: the obligation stays pending until the channel is
@@ -74,6 +76,7 @@ class PendingBatch:
     context_token: str | None
     first_at: float
     last_at: float
+    retries: int = 0
 
 
 def _error_text(exc: BaseException) -> str:
@@ -127,9 +130,11 @@ class WeixinRuntime:
             else max(0.0, batch_max_seconds)
         )
         self._poll_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._start_locks: dict[str, asyncio.Lock] = {}
         self._clients: dict[str, WeixinClient] = {}
         self._login_sessions: dict[str, dict[str, str]] = {}
         self._delivering: set[int] = set()
+        self._delivery_tasks: set[asyncio.Task[Any]] = set()
         self._recent_text: dict[str, float] = {}
         self._last_touch: dict[str, float] = {}
         self._pending: dict[tuple[str, str], PendingBatch] = {}
@@ -159,6 +164,24 @@ class WeixinRuntime:
         self._pending.clear()
         self._inflight.clear()
         self._pending_sync.clear()
+        # Let in-flight sends finish first: a delivery may still be using a
+        # cached poll client that the close below would yank away.
+        delivery_tasks = list(self._delivery_tasks)
+        if delivery_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*delivery_tasks, return_exceptions=True),
+                    timeout=DELIVERY_SHUTDOWN_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "weixin delivery shutdown timed out; cancelling %d task(s)",
+                    len(delivery_tasks),
+                )
+                for task in delivery_tasks:
+                    task.cancel()
+                await asyncio.gather(*delivery_tasks, return_exceptions=True)
+            self._delivery_tasks.clear()
         tasks = list(self._poll_tasks.values())
         self._poll_tasks.clear()
         for task in tasks:
@@ -174,18 +197,22 @@ class WeixinRuntime:
                 logger.exception("failed to close weixin client")
 
     async def start_channel(self, channel_id: str) -> bool:
-        if channel_id in self._poll_tasks:
-            return True
-        credentials = await self._load_credentials(channel_id)
-        if credentials is None:
-            return False
-        client = self._build_client(credentials)
-        self._clients[channel_id] = client
-        task = asyncio.create_task(
-            self._poll_loop(credentials, client),
-            name=f"weixin-poll-{channel_id}",
-        )
-        self._poll_tasks[channel_id] = task
+        # Two concurrent activations (QR login + startup sweep) must not spawn
+        # two poll loops for the same channel.
+        lock = self._start_locks.setdefault(channel_id, asyncio.Lock())
+        async with lock:
+            if channel_id in self._poll_tasks:
+                return True
+            credentials = await self._load_credentials(channel_id)
+            if credentials is None:
+                return False
+            client = self._build_client(credentials)
+            self._clients[channel_id] = client
+            task = asyncio.create_task(
+                self._poll_loop(credentials, client),
+                name=f"weixin-poll-{channel_id}",
+            )
+            self._poll_tasks[channel_id] = task
         logger.info("weixin poll started channel=%s account=%s", channel_id, credentials.account_id[:8])
         return True
 
@@ -321,67 +348,121 @@ class WeixinRuntime:
         if batch is None or not batch.ids:
             return
         channel_id, sender_id = key
-        content = self._batch_content(batch)
-        if not content.strip():
-            await self._save_sync_if_idle(channel_id)
-            return
-        # Defensive re-check: a batch claim is atomic, so an id already claimed
-        # elsewhere must not drag its new neighbours into a duplicate drop.
-        seen = await channel_intake.inbound_seen(channel_id, batch.ids)
-        if seen:
-            batch.ids = [item for item in batch.ids if item not in seen]
-            if not batch.ids:
-                await self._save_sync_if_idle(channel_id)
-                return
+        # Mark the channel busy before the first await so the sync cursor is
+        # never persisted while this batch is still being processed.
         self._inflight.add(key)
+        save_sync = True
         try:
-            result = await channel_intake.ingest(
-                store=self.store,
-                registry=self.registry,
-                channel_id=channel_id,
-                external_message_ids=batch.ids,
-                external_id=sender_id,
-                display_name=batch.sender_name,
-                text=content,
-                context_token=batch.context_token,
-            )
-        except Exception:
-            self._inflight.discard(key)
-            logger.exception(
-                "weixin batch ingest failed channel=%s sender=%s",
-                channel_id,
-                sender_id[:8],
-            )
-            current = self._pending.get(key)
-            if current is None:
-                self._pending[key] = batch
-            else:
-                current.texts[:0] = batch.texts
-                current.media[:0] = batch.media
-                current.ids[:0] = [
-                    item for item in batch.ids if item not in current.ids
-                ]
-                current.first_at = min(current.first_at, batch.first_at)
-            self._schedule_flush(key, RETRY_DELAY_SECONDS)
-            return
-        self._inflight.discard(key)
-
-        # A duplicate batch was already claimed (and its turn queued) by an
-        # earlier delivery; advancing the cursor is all that is left to do.
-        if not result.duplicate and result.reply:
-            credentials = await self._load_credentials(channel_id)
-            if credentials is not None:
-                await self._send_text(
-                    credentials,
-                    to_user_id=sender_id,
-                    text=result.reply,
-                    context_token=batch.context_token,
-                    client=self._clients.get(channel_id),
-                    label="batch",
+            content = self._batch_content(batch)
+            if not content.strip():
+                return
+            try:
+                # Defensive re-check: a batch claim is atomic, so an id already
+                # claimed elsewhere must not drag its new neighbours into a
+                # duplicate drop.
+                seen = await channel_intake.inbound_seen(
+                    channel_id, batch.ids
                 )
-        await self._save_sync_if_idle(channel_id)
+                if seen:
+                    batch.ids = [
+                        item for item in batch.ids if item not in seen
+                    ]
+                    if not batch.ids:
+                        return
+                result = await channel_intake.ingest(
+                    store=self.store,
+                    registry=self.registry,
+                    channel_id=channel_id,
+                    external_message_ids=batch.ids,
+                    external_id=sender_id,
+                    display_name=batch.sender_name,
+                    text=content,
+                    context_token=batch.context_token,
+                )
+            except ValueError as exc:
+                # Permanent rejection (channel/agent unavailable, bad
+                # arguments): drop the packet and keep the last persisted
+                # cursor, so a restart replays it instead of retrying forever.
+                save_sync = False
+                self._pending_sync.pop(channel_id, None)
+                logger.warning(
+                    "weixin batch rejected channel=%s sender=%s: %s",
+                    channel_id,
+                    sender_id[:8],
+                    exc,
+                )
+                return
+            except Exception as exc:
+                save_sync = False
+                self._retry_or_drop_batch(key, batch, exc)
+                return
+
+            # A duplicate batch was already claimed (and its turn queued) by
+            # an earlier delivery; advancing the cursor is all that is left.
+            if not result.duplicate and result.reply:
+                credentials = await self._load_credentials(channel_id)
+                if credentials is not None:
+                    await self._send_text(
+                        credentials,
+                        to_user_id=sender_id,
+                        text=result.reply,
+                        context_token=batch.context_token,
+                        client=self._clients.get(channel_id),
+                        label="batch",
+                    )
+        except asyncio.CancelledError:
+            # Shutdown or a reschedule interrupted the ingest: keep the saved
+            # cursor where it was so iLink replays the packet.
+            save_sync = False
+            raise
+        finally:
+            self._inflight.discard(key)
+            if save_sync:
+                await self._save_sync_if_idle(channel_id)
+
+    def _retry_or_drop_batch(
+        self,
+        key: tuple[str, str],
+        batch: PendingBatch,
+        exc: BaseException,
+    ) -> None:
+        channel_id = key[0]
+        batch.retries += 1
+        if batch.retries > MAX_FLUSH_RETRIES:
+            # Transient failures get a bounded number of retries; after that
+            # the packet is dropped and the old cursor is left for a replay.
+            self._pending_sync.pop(channel_id, None)
+            logger.warning(
+                "weixin batch dropped after %d attempts channel=%s: %s",
+                batch.retries,
+                channel_id,
+                exc,
+                exc_info=True,
+            )
+            return
+        logger.warning(
+            "weixin batch ingest failed channel=%s attempt=%d/%d: %s",
+            channel_id,
+            batch.retries,
+            MAX_FLUSH_RETRIES,
+            exc,
+        )
+        current = self._pending.get(key)
+        if current is None:
+            self._pending[key] = batch
+        else:
+            current.texts[:0] = batch.texts
+            current.media[:0] = batch.media
+            current.ids[:0] = [
+                item for item in batch.ids if item not in current.ids
+            ]
+            current.first_at = min(current.first_at, batch.first_at)
+            current.retries = batch.retries
+        self._schedule_flush(key, RETRY_DELAY_SECONDS)
 
     async def flush_all(self) -> None:
+        # TODO(decommission): test compatibility only; the runtime has no
+        # production caller for a synchronous flush of every pending batch.
         for key in list(self._pending):
             await self.flush_pending(key)
 
@@ -586,9 +667,15 @@ class WeixinRuntime:
         key = (credentials.channel_id, sender_id)
 
         if is_command:
-            # Flush buffered text first: /new and /clear must not inherit it,
-            # and /stop should stop what was already said.
-            await self.flush_pending(key)
+            command = parse_command(text)
+            if command in ("/new", "/clear"):
+                # Start the new session with nothing buffered from before.
+                await self.flush_pending(key)
+            elif command == "/stop":
+                # A stop means the buffered follow-up should not run at all.
+                self._drop_pending(key)
+            # /help, /status and unknown commands must not disturb the batch
+            # window or flush partial text into a new turn.
             try:
                 result = await channel_intake.ingest(
                     store=self.store,
@@ -770,6 +857,27 @@ class WeixinRuntime:
         return new_client
 
     # ------------------------------------------------------------------ delivery
+
+    def schedule_delivery(self, delivery_id: int) -> None:
+        """Start a send in the background so turn teardown never waits on it."""
+        task = asyncio.create_task(
+            self.deliver(delivery_id),
+            name=f"weixin-delivery-{delivery_id}",
+        )
+        self._delivery_tasks.add(task)
+        task.add_done_callback(self._delivery_done)
+
+    def _delivery_done(self, task: asyncio.Task[Any]) -> None:
+        self._delivery_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "weixin background delivery failed: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
 
     async def deliver(self, delivery_id: int, *, recovered: bool = False) -> None:
         """Send one filled delivery obligation, if it is still owed."""
@@ -987,27 +1095,8 @@ class WeixinRuntime:
             return None
         return _credentials_from(channel)
 
-    async def _mutate_channel(
-        self,
-        channel_id: str,
-        mutate: Callable[[ChannelSection], None],
-    ) -> ChannelSection | None:
-        snapshot = await self.store.get()
-        channel = next(
-            (item for item in snapshot.channels if item.id == channel_id), None
-        )
-        if channel is None:
-            return None
-        updated = channel.model_copy(deep=True)
-        mutate(updated)
-        await self.store.update_channel(updated)
-        return updated
-
     async def _save_sync_buf(self, channel_id: str, sync_buf: str) -> None:
-        def mutate(channel: ChannelSection) -> None:
-            channel.sync_buf = sync_buf
-
-        await self._mutate_channel(channel_id, mutate)
+        await self.store.update_channel_fields(channel_id, sync_buf=sync_buf)
 
     async def _touch_last_seen(self, channel_id: str) -> None:
         now = time.monotonic()
@@ -1016,17 +1105,15 @@ class WeixinRuntime:
             return
         self._last_touch[channel_id] = now
         stamp = datetime.now(timezone.utc).isoformat()
-
-        def mutate(channel: ChannelSection) -> None:
-            channel.last_seen_at = stamp
-
-        await self._mutate_channel(channel_id, mutate)
+        await self.store.update_channel_fields(channel_id, last_seen_at=stamp)
 
     async def _mark_expired(self, channel_id: str, error: str) -> None:
-        def mutate(channel: ChannelSection) -> None:
-            channel.status = "expired"
-            channel.last_error = error
-
-        await self._mutate_channel(channel_id, mutate)
+        # A login expiry invalidates the buffered packets too: retrying them
+        # would only spam tracebacks until the channel logs in again.
+        self._drop_channel_buffers(channel_id)
+        self._last_touch.pop(channel_id, None)
+        await self.store.update_channel_fields(
+            channel_id, status="expired", last_error=error
+        )
         if self._poll_tasks.get(channel_id) is not asyncio.current_task():
             await self.stop_channel(channel_id)

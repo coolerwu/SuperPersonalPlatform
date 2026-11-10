@@ -349,6 +349,26 @@ class SettingsStore:
 
         await self._json.update(mutate)
 
+    async def update_channel_fields(self, channel_id: str, **fields: Any) -> None:
+        """Patch only the given fields of one channel.
+
+        Polling and delivery touch different fields concurrently; a full
+        channel write from one path must not overwrite the other's update.
+        """
+        unknown = set(fields) - set(ChannelSection.model_fields)
+        if unknown:
+            raise ValueError(
+                "unknown channel field(s): " + ", ".join(sorted(unknown))
+            )
+
+        def mutate(data: dict[str, Any]) -> None:
+            for item in _list_section(data, "channels"):
+                if isinstance(item, dict) and item.get("id") == channel_id:
+                    item.update(fields)
+                    return
+
+        await self._json.update(mutate)
+
     async def update_conversation(
         self, external_id: str, conversation: ConversationSection
     ) -> None:

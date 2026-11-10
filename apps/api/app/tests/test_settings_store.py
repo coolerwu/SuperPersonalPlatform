@@ -203,3 +203,41 @@ async def test_mutate_raw_persists_arbitrary_changes(tmp_path):
     returned = await store.mutate_raw(mutate)
     assert returned["channel_conversations"] == {}
     assert json.loads(path.read_text("utf-8"))["channel_conversations"] == {}
+
+
+@pytest.mark.asyncio
+async def test_channel_field_updates_do_not_overwrite_each_other(tmp_path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    await store.mutate_raw(
+        lambda data: data.update(
+            {
+                "channels": [
+                    {"id": "ch1", "agent_id": "default", "status": "active"}
+                ]
+            }
+        )
+    )
+
+    await asyncio.gather(
+        store.update_channel_fields("ch1", sync_buf="cursor"),
+        store.update_channel_fields(
+            "ch1", last_seen_at="2026-01-01T00:00:00+00:00"
+        ),
+        store.update_channel_fields(
+            "ch1", status="expired", last_error="login expired"
+        ),
+    )
+
+    channel = (await store.get()).channels[0]
+    assert channel.sync_buf == "cursor"
+    assert channel.last_seen_at == "2026-01-01T00:00:00+00:00"
+    assert channel.status == "expired"
+    assert channel.last_error == "login expired"
+
+
+@pytest.mark.asyncio
+async def test_channel_field_update_rejects_unknown_fields(tmp_path):
+    store = SettingsStore(tmp_path / "settings.json")
+    with pytest.raises(ValueError, match="unknown channel field"):
+        await store.update_channel_fields("ch1", bogus="x")
