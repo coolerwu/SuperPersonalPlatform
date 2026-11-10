@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import and_, delete, func, or_, select, text
+from sqlalchemy import and_, delete, func, or_, select
 
 from app.db import SessionLocal
-from app.models import MemoryItem, RunEvent, RunMemory, utcnow
+from app.models import MemoryItem, RunMemory, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +16,11 @@ MAX_ITEMS_PER_SCOPE = 200
 MAX_PROMPT_ITEMS = 12
 MAX_PROMPT_CHARS = 1500
 MAX_PROMPT_ITEM_CHARS = 320
-MAX_MEMORY_OPERATIONS = 12
 EXPLICIT_RE = re.compile(r"^(?:请)?记住[:：,，]?\s*(.+)", re.S)
-TOKEN_SPLIT_RE = re.compile(r"[\s,，。！？!?;；:：/\\|()（）\[\]【】]+")
 _CJK_RE = re.compile(r"[一-鿿]+")
 _WORD_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_+#.-]*")
+SOURCE_STRENGTH = {"legacy": 0, "manual": 1, "agent": 2, "explicit": 3}
+
 
 # Common function-word bigrams carry no retrieval signal; filtering them keeps
 # a long Chinese question from matching unrelated memories through “这个/可以”.
@@ -309,12 +307,18 @@ async def create_memory(
     tags: list[str] | None = None,
     source_message_id: str | None = None,
     source_run_id: str | None = None,
+    source_session_id: str | None = None,
+    source_kind: str = "manual",
+    snapshot_text: str | None = None,
+    snapshot_at: Any = None,
 ) -> MemoryItem | None:
     content = normalize_content(content)
     if scope not in ("user", "agent") or not content:
         return None
     if scope == "agent" and not agent_id:
         return None
+    if source_kind not in SOURCE_STRENGTH:
+        source_kind = "manual"
     normalized_tags = normalize_tags(tags or [])
     agent_key = agent_id if scope == "agent" else None
 
@@ -326,10 +330,18 @@ async def create_memory(
         if existing is not None:
             if normalized_tags:
                 existing.tags = normalized_tags
-            if source_message_id:
+            # Stronger provenance wins: an explicit user statement replaces an
+            # Agent note, but repeating a weaker source never overwrites the
+            # verified snapshot that already exists.
+            if SOURCE_STRENGTH[source_kind] > SOURCE_STRENGTH.get(
+                existing.source_kind or "legacy", 0
+            ):
+                existing.source_kind = source_kind
                 existing.source_message_id = source_message_id
-            if source_run_id:
                 existing.source_run_id = source_run_id
+                existing.source_session_id = source_session_id
+                existing.snapshot_text = snapshot_text
+                existing.snapshot_at = snapshot_at
             existing.updated_at = utcnow()
             await db.commit()
             await db.refresh(existing)
@@ -352,6 +364,10 @@ async def create_memory(
             tags=normalized_tags,
             source_message_id=source_message_id,
             source_run_id=source_run_id,
+            source_session_id=source_session_id,
+            source_kind=source_kind,
+            snapshot_text=snapshot_text,
+            snapshot_at=snapshot_at,
         )
         db.add(item)
         await db.commit()

@@ -6349,12 +6349,56 @@ body:has(.app-shell.pearl) .select-empty {
   color: #5b4bf0;
 }
 
-.chan-range-dialog {
-  width: min(520px, 100%);
+.chan-range-wrap {
+  position: relative;
+  display: inline-flex;
 }
 
-.chan-range-dialog .confirm-copy {
-  margin-top: 10px;
+.chan-range-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+}
+
+.chan-range-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.chan-range-field {
+  display: grid;
+  gap: 4px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.chan-range-field input {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.chan-range-error {
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.chan-range-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .chan-toolbar-toggles {

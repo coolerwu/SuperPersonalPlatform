@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
 import type { ChanAnalysis } from "../types";
@@ -135,6 +135,25 @@ export function ChanPage() {
   const [draftStart, setDraftStart] = useState("");
   const [draftEnd, setDraftEnd] = useState("");
   const [rangeError, setRangeError] = useState("");
+  const rangeWrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!rangeOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (rangeWrapRef.current && !rangeWrapRef.current.contains(event.target as Node)) {
+        setRangeOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRangeOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [rangeOpen]);
 
   const analyze = useCallback(
     async (override?: { start?: string; end?: string }) => {
@@ -269,10 +288,58 @@ export function ChanPage() {
             <option value="1week">1w</option>
           </select>
         </label>
-        <button type="button" className="chan-range-trigger" onClick={openRange}>
-          <span>时间窗口</span>
-          <strong>{rangeLabel}</strong>
-        </button>
+        <div className="chan-range-wrap" ref={rangeWrapRef}>
+          <button
+            type="button"
+            className="chan-range-trigger"
+            onClick={() => (rangeOpen ? setRangeOpen(false) : openRange())}
+          >
+            <span>时间窗口</span>
+            <strong>{rangeLabel}</strong>
+          </button>
+          {rangeOpen && (
+            <div className="chan-range-popover" role="dialog" aria-label="选择时间窗口">
+              <p className="chan-range-hint">
+                UTC 时间，步长跟随周期（{granularity}）。结束留空 = 最新已收盘 K 线；
+                开始留空 = 结束往前 {DEFAULT_WINDOW_BARS} 根。
+              </p>
+              <label className="chan-range-field">
+                <span>开始 (UTC)</span>
+                <input
+                  type="datetime-local"
+                  step={GRANULARITY_STEP_SECONDS[granularity]}
+                  value={draftStart}
+                  onChange={(event) => setDraftStart(event.target.value)}
+                  autoFocus
+                />
+              </label>
+              <label className="chan-range-field">
+                <span>结束 (UTC)</span>
+                <input
+                  type="datetime-local"
+                  step={GRANULARITY_STEP_SECONDS[granularity]}
+                  value={draftEnd}
+                  onChange={(event) => setDraftEnd(event.target.value)}
+                />
+              </label>
+              {rangeError && <div className="chan-range-error">{rangeError}</div>}
+              <div className="chan-range-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraftStart("");
+                    setDraftEnd("");
+                  }}
+                >
+                  清空
+                </button>
+                <button type="button" className="primary" onClick={applyRange}>
+                  应用并分析
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="chan-mode-tabs">
           <button className={mode === "chart" ? "active" : ""} onClick={() => setMode("chart")}>结构图</button>
           <button className={mode === "backtest" ? "active" : ""} onClick={() => setMode("backtest")}>信号回测</button>
@@ -304,58 +371,6 @@ export function ChanPage() {
           </div>
         )}
       </header>
-
-      {rangeOpen && (
-        <div className="modal-backdrop" onClick={() => setRangeOpen(false)}>
-          <div
-            className="modal confirm-dialog chan-range-dialog"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-heading">
-              <h2>选择时间窗口</h2>
-            </div>
-            <p className="confirm-copy">
-              UTC 时间，步长跟随周期（{granularity}）。结束时间留空表示最新已收盘 K 线；
-              开始时间留空表示从结束往前 {DEFAULT_WINDOW_BARS} 根。
-            </p>
-            <div className="backtest-form-grid">
-              <label className="backtest-field">
-                <span>开始 (UTC)</span>
-                <input
-                  type="datetime-local"
-                  step={GRANULARITY_STEP_SECONDS[granularity]}
-                  value={draftStart}
-                  onChange={(event) => setDraftStart(event.target.value)}
-                />
-              </label>
-              <label className="backtest-field">
-                <span>结束 (UTC)</span>
-                <input
-                  type="datetime-local"
-                  step={GRANULARITY_STEP_SECONDS[granularity]}
-                  value={draftEnd}
-                  onChange={(event) => setDraftEnd(event.target.value)}
-                />
-              </label>
-            </div>
-            {rangeError && <div className="error-banner">{rangeError}</div>}
-            <div className="modal-actions">
-              <button
-                type="button"
-                onClick={() => {
-                  setDraftStart("");
-                  setDraftEnd("");
-                }}
-              >
-                清空
-              </button>
-              <button type="button" className="primary" onClick={applyRange}>
-                应用并分析
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="settings-scroll">
         <div className="settings-lane">

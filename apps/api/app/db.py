@@ -196,6 +196,37 @@ async def _ensure_session_origin(conn) -> None:  # noqa: ANN001
             raise
 
 
+async def _ensure_memory_item_columns(conn) -> None:  # noqa: ANN001
+    result = await conn.exec_driver_sql("PRAGMA table_info(memory_items)")
+    columns = {row[1] for row in result.fetchall()}
+    additions = (
+        ("source_session_id", "VARCHAR(32)"),
+        ("source_kind", "VARCHAR(20) NOT NULL DEFAULT 'legacy'"),
+        ("snapshot_text", "TEXT"),
+        ("snapshot_at", "DATETIME"),
+    )
+    for column, ddl in additions:
+        if column in columns:
+            continue
+        try:
+            await conn.exec_driver_sql(
+                f"ALTER TABLE memory_items ADD COLUMN {column} {ddl}"
+            )
+        except Exception:
+            # Another process may have added the column concurrently; only
+            # re-raise when it is genuinely still missing.
+            result = await conn.exec_driver_sql("PRAGMA table_info(memory_items)")
+            if column not in {row[1] for row in result.fetchall()}:
+                raise
+        columns.add(column)
+    # Rows written before provenance tracking cannot be told apart from
+    # auto-extracted guesses, so they stay unverified.
+    await conn.exec_driver_sql(
+        "UPDATE memory_items SET source_kind='legacy' "
+        "WHERE source_kind IS NULL OR source_kind=''"
+    )
+
+
 async def _ensure_cron_job_column(conn, column: str) -> None:  # noqa: ANN001
     result = await conn.exec_driver_sql("PRAGMA table_info(cron_jobs)")
     if column in {row[1] for row in result.fetchall()}:
@@ -223,6 +254,7 @@ async def init_db() -> None:
             await _ensure_app_config_columns(conn)
             await _ensure_session_origin(conn)
             await _ensure_cron_job_columns(conn)
+            await _ensure_memory_item_columns(conn)
 
     if settings.app_database_url.startswith("sqlite"):
         try:
