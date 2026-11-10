@@ -47,6 +47,10 @@ class TurnStream:
         self._subscribers.add(queue)
         return queue
 
+    def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        """Detach a subscriber. Idempotent and safe after ``close()``."""
+        self._subscribers.discard(queue)
+
     def close(self) -> None:
         if self._closed:
             return

@@ -7,7 +7,6 @@ with spaces or other text is a normal Agent message.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,11 +17,16 @@ from app.db import SessionLocal
 from app.models import Agent, Run, Session, utcnow
 from app.services import memory_service
 
+# Parsing lives in the dependency-free ``commands`` module; re-export it here
+# for callers that still import command parsing from this module.
+from app.services.commands import (  # noqa: F401
+    is_command_text,
+    memory_command_content,
+    parse_command,
+)
+
 logger = logging.getLogger(__name__)
 
-_COMMAND_RE = re.compile(r"^/[A-Za-z][A-Za-z0-9_-]{0,15}$")
-_MEMORY_COMMAND_RE = re.compile(r"^/memory(?:\s+.*)?$", re.IGNORECASE | re.DOTALL)
-_MEMORY_CONTENT_RE = re.compile(r"^/memory(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 KNOWN_COMMANDS = frozenset({"/new", "/clear", "/help", "/status", "/stop", "/memory"})
 ACTIVE_RUN_STATUSES = ("queued", "running")
 
@@ -45,29 +49,6 @@ WEB_NEW_SESSION_TEXT = "已开始新会话，之前的对话不会带入；旧�
 MEMORY_COMMAND_USAGE = "用法：/memory <要记住的内容>。"
 MEMORY_COMMAND_SAVED = "已写入用户记忆：{content}"
 MEMORY_COMMAND_LIMIT = "用户记忆写入失败，请稍后重试。"
-
-
-def is_command_text(text: str) -> bool:
-    """True for a whole slash command, including /memory with an argument."""
-    value = (text or "").strip()
-    return bool(_COMMAND_RE.match(value) or _MEMORY_COMMAND_RE.match(value))
-
-
-def parse_command(text: str) -> str | None:
-    stripped = (text or "").strip()
-    if _MEMORY_COMMAND_RE.match(stripped):
-        return "/memory"
-    if not _COMMAND_RE.match(stripped):
-        return None
-    return stripped.lower()
-
-
-def memory_command_content(text: str) -> str | None:
-    """Return the /memory argument, or None when the text is not /memory."""
-    match = _MEMORY_CONTENT_RE.match((text or "").strip())
-    if not match:
-        return None
-    return (match.group(1) or "").strip()
 
 
 @dataclass(frozen=True)

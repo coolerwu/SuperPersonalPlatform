@@ -9,7 +9,9 @@ removed together. Nothing here touches a database.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,8 @@ from typing import Any
 from app.services import sdk_bridge
 from app.services.claude_env import workspace_for
 from app.services.claude_runner import transcript_path
+
+logger = logging.getLogger(__name__)
 
 _AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _TITLE_LIMIT = 80
@@ -103,9 +107,14 @@ class SessionCatalog:
         if agent_id is not None and not self._owns(agent_id, session_id):
             return []
         rows: list[dict[str, Any]] = []
-        raw_messages = await asyncio.to_thread(
-            sdk_bridge.get_session_messages, session_id
-        )
+        try:
+            raw_messages = await asyncio.to_thread(
+                sdk_bridge.get_session_messages, session_id
+            )
+        except ValueError:
+            # An id the SDK cannot parse is not a session; callers get an
+            # empty transcript rather than a 500.
+            return []
         for message in raw_messages:
             if getattr(message, "parent_tool_use_id", None):
                 continue
@@ -140,6 +149,8 @@ class SessionCatalog:
     async def rename(
         self, session_id: str, title: str, *, agent_id: str | None = None
     ) -> None:
+        if not _is_canonical_uuid(session_id):
+            raise ValueError(f"invalid session id {session_id!r}")
         if agent_id is not None and not self._owns(agent_id, session_id):
             raise FileNotFoundError(
                 f"session {session_id} not found for agent {agent_id}"
@@ -155,4 +166,29 @@ class SessionCatalog:
             await asyncio.to_thread(sdk_bridge.delete_session, session_id)
         except FileNotFoundError:
             return False
+        await self._cleanup(agent_id, session_id)
         return True
+
+    async def _cleanup(self, agent_id: str, session_id: str) -> None:
+        """Remove per-session artifacts nothing else will reference again."""
+        screenshots = workspace_for(agent_id, self._home) / "screenshots" / session_id
+        await asyncio.to_thread(shutil.rmtree, screenshots, ignore_errors=True)
+
+        def unbind(data: dict[str, Any]) -> None:
+            conversations = data.get("channel_conversations")
+            if not isinstance(conversations, dict):
+                return
+            for key, value in list(conversations.items()):
+                if isinstance(value, dict) and value.get("session_id") == session_id:
+                    conversations.pop(key, None)
+
+        try:
+            await self._store.mutate_raw(unbind)
+        except Exception:
+            # The transcript is already gone; leaving a stale binding is worse
+            # than failing the request, but not worth a 500 here.
+            logger.warning(
+                "failed to unbind channel conversation session=%s",
+                session_id,
+                exc_info=True,
+            )

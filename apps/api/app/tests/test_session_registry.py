@@ -31,6 +31,7 @@ class FakeRunner:
         self.started = []
         self.finished = []
         self.interrupted = []
+        self.closed = []
         self.interrupt_result = False
         self.active = 0
         self.max_active = 0
@@ -57,6 +58,9 @@ class FakeRunner:
     async def interrupt(self, session_id):
         self.interrupted.append(session_id)
         return self.interrupt_result
+
+    async def close(self, session_id):
+        self.closed.append(session_id)
 
 
 def turn(session_id="s1", prompt="a"):
@@ -284,3 +288,21 @@ async def test_close_terminates_queued_streams():
     assert await drain_terminal(queued_stream) == [
         {"type": "turn_end", "status": "cancelled"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_is_bound_to_session_and_close_session_delegates():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    turn_id = await registry.submit(turn("s1", "a"))
+
+    assert registry.stream(turn_id, "s1") is not None
+    assert registry.stream(turn_id, "other") is None
+    assert registry.stream(turn_id) is not None
+
+    await registry.close_session("s1")
+    assert runner.closed == ["s1"]
+
+    runner.release("a")
+    await wait_until(lambda: runner.finished == ["a"])
+    await registry.close()

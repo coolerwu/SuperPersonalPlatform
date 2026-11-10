@@ -298,6 +298,12 @@ class SettingsStore:
     async def get(self) -> PlatformSettings:
         return _parse(await self._json.read())
 
+    async def mutate_raw(
+        self, mutate: Callable[[dict[str, Any]], None]
+    ) -> dict[str, Any]:
+        """Apply a raw JSON mutation and persist it atomically."""
+        return await self._json.update(mutate)
+
     async def ensure_seeded(self) -> PlatformSettings:
         if not self.path.exists():
             await self._json.update(lambda data: data.update(build_default_settings()))

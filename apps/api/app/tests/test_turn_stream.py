@@ -62,3 +62,24 @@ async def test_subscriber_after_close_receives_only_published_turn_end():
     assert await asyncio.wait_for(queue.get(), 1) == {"type": "assistant_delta", "delta": "a"}
     assert await asyncio.wait_for(queue.get(), 1) == rich_end
     assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_stops_delivery_and_is_idempotent():
+    stream = TurnStream()
+    queue = await stream.subscribe()
+    stream.unsubscribe(queue)
+    stream.unsubscribe(queue)
+    assert stream._subscribers == set()
+    stream.publish({"type": "assistant_delta", "delta": "late"})
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_after_close_is_safe():
+    stream = TurnStream()
+    queue = await stream.subscribe()
+    stream.close()
+    assert await asyncio.wait_for(queue.get(), 1) == {"type": "turn_end"}
+    stream.unsubscribe(queue)
+    assert stream._subscribers == set()

@@ -189,3 +189,17 @@ async def test_update_knowledge_rejects_unknown_and_invalid_values(tmp_path):
     with pytest.raises(ValueError):
         await store.update_knowledge(interval_seconds=0)
     assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_mutate_raw_persists_arbitrary_changes(tmp_path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    await store.ensure_seeded()
+
+    def mutate(data):
+        data["channel_conversations"] = {}
+
+    returned = await store.mutate_raw(mutate)
+    assert returned["channel_conversations"] == {}
+    assert json.loads(path.read_text("utf-8"))["channel_conversations"] == {}

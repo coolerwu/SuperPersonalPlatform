@@ -11,10 +11,25 @@ SESSION_ID = "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
 
 
 class FakeStore:
+    def __init__(self, conversations=None):
+        if conversations is None:
+            conversations = {
+                "wx-1": {"session_id": "s1", "channel_id": "ch1", "display_name": "张三"}
+            }
+        self.raw = {"channel_conversations": conversations}
+        self.mutations = 0
+
     async def get(self):
-        return PlatformSettings(agents=[], channels=[], channel_conversations={
-            "wx-1": {"session_id": "s1", "channel_id": "ch1", "display_name": "张三"}
-        })
+        return PlatformSettings(
+            agents=[],
+            channels=[],
+            channel_conversations=dict(self.raw.get("channel_conversations") or {}),
+        )
+
+    async def mutate_raw(self, fn):
+        fn(self.raw)
+        self.mutations += 1
+        return self.raw
 
 
 def _session(session_id="s1", summary="hi", last_modified=10, cwd=None):
@@ -265,3 +280,70 @@ async def test_delete_removes_transcript(tmp_path, monkeypatch):
     assert await catalog.delete("default", SESSION_ID) is True
     assert calls == [SESSION_ID]
     assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_rename_rejects_invalid_uuid_before_sdk(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sdk_bridge,
+        "rename_session",
+        lambda session_id, title: calls.append((session_id, title)),
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    with pytest.raises(ValueError):
+        await catalog.rename("not-a-uuid", "title")
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_rename_maps_sdk_value_error(tmp_path, monkeypatch):
+    path = transcript_path(SESSION_ID, "default", home=tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("{}", "utf-8")
+
+    def boom(session_id, title):
+        raise ValueError("unknown session")
+
+    monkeypatch.setattr(sdk_bridge, "rename_session", boom)
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    with pytest.raises(ValueError):
+        await catalog.rename(SESSION_ID, "title", agent_id="default")
+
+
+@pytest.mark.asyncio
+async def test_messages_invalid_uuid_returns_empty(monkeypatch):
+    def boom(session_id):
+        raise ValueError("invalid session id")
+
+    monkeypatch.setattr(sdk_bridge, "get_session_messages", boom)
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=Path("/tmp"))
+    assert await catalog.messages("not-a-uuid") == []
+
+
+@pytest.mark.asyncio
+async def test_delete_cascades_screenshots_and_channel_bindings(tmp_path, monkeypatch):
+    path = transcript_path(SESSION_ID, "default", home=tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("{}", "utf-8")
+    screenshots = (
+        tmp_path / "workspaces" / "default" / "screenshots" / SESSION_ID
+    )
+    screenshots.mkdir(parents=True)
+    (screenshots / "shot.png").write_text("x", "utf-8")
+    store = FakeStore(
+        {
+            "wx-1": {"session_id": SESSION_ID, "channel_id": "ch1", "display_name": "甲"},
+            "wx-2": {"session_id": "other", "channel_id": "ch2", "display_name": "乙"},
+        }
+    )
+
+    def fake_delete(session_id):
+        path.unlink()
+
+    monkeypatch.setattr(sdk_bridge, "delete_session", fake_delete)
+    catalog = session_catalog.SessionCatalog(store, home=tmp_path)
+    assert await catalog.delete("default", SESSION_ID) is True
+    assert not screenshots.exists()
+    assert list(store.raw["channel_conversations"]) == ["wx-2"]
+    assert store.mutations == 1

@@ -44,6 +44,7 @@ class SessionRegistry:
         self._queues: dict[str, asyncio.Queue[tuple[Turn, TurnStream]]] = {}
         self._workers: dict[str, asyncio.Task[None]] = {}
         self._streams: dict[str, TurnStream] = {}
+        self._turn_sessions: dict[str, str] = {}
         self._pending: dict[str, tuple[Turn, TurnStream]] = {}
         self._current: dict[str, str] = {}
         self._running: set[str] = set()
@@ -68,6 +69,7 @@ class SessionRegistry:
             )
         stream = TurnStream()
         self._streams[turn.id] = stream
+        self._turn_sessions[turn.id] = turn.session_id
         self._evict_closed_streams()
         queue.put_nowait((turn, stream))
         return turn.id
@@ -88,6 +90,7 @@ class SessionRegistry:
             if oldest_closed is None:
                 break
             self._streams.pop(oldest_closed, None)
+            self._turn_sessions.pop(oldest_closed, None)
 
     async def _session_loop(self, session_id: str) -> None:
         queue = self._queues[session_id]
@@ -126,8 +129,14 @@ class SessionRegistry:
                 self._workers.pop(session_id, None)
                 return
 
-    def stream(self, turn_id: str) -> TurnStream | None:
+    def stream(self, turn_id: str, session_id: str | None = None) -> TurnStream | None:
+        if session_id is not None and self._turn_sessions.get(turn_id) != session_id:
+            return None
         return self._streams.get(turn_id)
+
+    async def close_session(self, session_id: str) -> None:
+        """Release the runner's cached SDK client after transcript deletion."""
+        await self._runner.close(session_id)
 
     def current_turn_id(self, session_id: str) -> str | None:
         return self._current.get(session_id)
@@ -204,3 +213,4 @@ class SessionRegistry:
             self._started.clear()
             self._cancelled.clear()
             self._streams.clear()
+            self._turn_sessions.clear()
