@@ -3,6 +3,11 @@
 This module only translates. Run lifecycle, persistence and cancellation
 handling stay in the runner; the mapper is a pure, stateful decoder for one
 turn's raw Anthropic SSE events.
+
+Tool activity rows require ``include_partial_messages=True`` on the SDK
+options (the runner enables it). Without partial messages there are no
+``StreamEvent`` objects, so real-time text, thinking and tool rows are lost;
+the final result text and terminal outcome still come from ``ResultMessage``.
 """
 
 from __future__ import annotations
@@ -33,6 +38,10 @@ class StreamMapper:
             if block.get("type") == "tool_use":
                 self._tool_name = str(block.get("name") or "")
                 self._tool_json = ""
+            else:
+                # A non-tool block means any dangling tool capture is stale.
+                self._tool_name = None
+                self._tool_json = ""
             return []
         if kind == "content_block_delta":
             delta = event.get("delta") or {}
@@ -45,14 +54,17 @@ class StreamMapper:
                     return [{"type": "reasoning_delta", "delta": thinking}]
                 return []
             if delta.get("type") == "input_json_delta":
-                self._tool_json += str(delta.get("partial_json") or "")
+                if self._tool_name is not None:
+                    self._tool_json += str(delta.get("partial_json") or "")
             return []
-        if kind == "content_block_stop" and self._tool_name:
+        if kind == "content_block_stop" and self._tool_name is not None:
             name, raw = self._tool_name, self._tool_json
             self._tool_name, self._tool_json = None, ""
             try:
                 parsed = json.loads(raw) if raw else {}
             except ValueError:
+                parsed = {}
+            if not isinstance(parsed, dict):
                 parsed = {}
             return [{"type": "tool_call", "name": name, "input": parsed}]
         return []
@@ -65,6 +77,7 @@ def outcome_from_result(message: Any, *, fallback_text: str) -> TurnOutcome:
     errors = getattr(message, "errors", None) or []
     usage = getattr(message, "usage", None)
     is_error = bool(getattr(message, "is_error", False))
+    api_error_status = getattr(message, "api_error_status", None)
     if terminal in ("aborted_streaming", "aborted_tools"):
         return TurnOutcome(
             status="cancelled",
@@ -79,9 +92,17 @@ def outcome_from_result(message: Any, *, fallback_text: str) -> TurnOutcome:
             terminal_reason=terminal,
             usage=usage,
         )
-    error_text = "; ".join(str(item) for item in errors if item) or str(
-        result or terminal or "run failed"
-    )
+    error_text = "; ".join(str(item) for item in errors if item)
+    if not error_text:
+        result_text = str(result).strip() if result is not None else ""
+        if result_text:
+            error_text = result_text
+        elif terminal:
+            error_text = str(terminal)
+        elif api_error_status is not None:
+            error_text = f"API error (HTTP {api_error_status})"
+        else:
+            error_text = "run failed"
     return TurnOutcome(
         status="failed",
         output=fallback_text,
