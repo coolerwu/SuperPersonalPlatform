@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionLocal
 from app.models import ChannelDelivery, utcnow
+
+_DELIVERABLE_STATUSES = ("pending", "attempting")
 
 
 async def create_pending(
@@ -26,55 +28,108 @@ async def get(delivery_id: int) -> ChannelDelivery | None:
         return await db.get(ChannelDelivery, delivery_id)
 
 
-async def complete(delivery_id: int, content: str) -> None:
+async def complete(delivery_id: int, content: str) -> bool:
+    """Fill the final answer while keeping the row deliverable.
+
+    ``sent`` and ``failed`` are terminal, so a late completion never rewrites
+    them. Returns whether the update applied.
+    """
     async with SessionLocal() as db:
-        row = await db.get(ChannelDelivery, delivery_id)
-        if row is None or row.status == "sent":
-            return
-        row.content = content
-        row.status = "pending"
+        result = await db.execute(
+            update(ChannelDelivery)
+            .where(
+                ChannelDelivery.id == delivery_id,
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+            )
+            .values(content=content, updated_at=utcnow())
+        )
         await db.commit()
+        return (result.rowcount or 0) > 0
 
 
-async def mark_attempting(delivery_id: int) -> None:
+async def mark_attempting(delivery_id: int) -> bool:
+    """Atomically claim a delivery for one send attempt.
+
+    Returns False when another attempt already moved the row to a terminal
+    state, so the caller must not send it again.
+    """
     async with SessionLocal() as db:
-        row = await db.get(ChannelDelivery, delivery_id)
-        if row is None:
-            return
-        row.status = "attempting"
-        row.attempts = int(row.attempts or 0) + 1
-        row.last_error = None
+        result = await db.execute(
+            update(ChannelDelivery)
+            .where(
+                ChannelDelivery.id == delivery_id,
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+            )
+            .values(
+                status="attempting",
+                attempts=ChannelDelivery.attempts + 1,
+                last_error=None,
+                updated_at=utcnow(),
+            )
+        )
         await db.commit()
+        return (result.rowcount or 0) > 0
 
 
-async def mark_sent(delivery_id: int) -> None:
+async def mark_sent(delivery_id: int) -> bool:
+    """Mark a live delivery as sent; terminal rows are left untouched."""
     async with SessionLocal() as db:
-        row = await db.get(ChannelDelivery, delivery_id)
-        if row is None:
-            return
-        row.status = "sent"
-        row.last_error = None
-        row.delivered_at = utcnow()
+        result = await db.execute(
+            update(ChannelDelivery)
+            .where(
+                ChannelDelivery.id == delivery_id,
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+            )
+            .values(
+                status="sent",
+                last_error=None,
+                delivered_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
         await db.commit()
+        return (result.rowcount or 0) > 0
 
 
-async def mark_pending(
-    delivery_id: int, error: str, *, max_attempts: int
-) -> None:
+async def mark_pending(delivery_id: int, error: str, *, max_attempts: int) -> bool:
+    """Record a failed attempt, moving the row to ``failed`` at the limit.
+
+    ``sent`` and ``failed`` are terminal; callers get False for those rows.
+    """
+    next_status = case(
+        (ChannelDelivery.attempts >= max_attempts, "failed"),
+        else_="pending",
+    )
     async with SessionLocal() as db:
-        row = await db.get(ChannelDelivery, delivery_id)
-        if row is None or row.status == "sent":
-            return
-        row.last_error = error[:2000]
-        row.status = "failed" if int(row.attempts or 0) >= max_attempts else "pending"
+        result = await db.execute(
+            update(ChannelDelivery)
+            .where(
+                ChannelDelivery.id == delivery_id,
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+            )
+            .values(
+                last_error=error[:2000],
+                status=next_status,
+                updated_at=utcnow(),
+            )
+        )
         await db.commit()
+        return (result.rowcount or 0) > 0
 
 
 async def list_pending() -> list[ChannelDelivery]:
+    """Return deliverable rows that already hold a final answer.
+
+    Rows are created empty at turn start, so only rows completed with content
+    may be swept; terminal rows and unfinished turns are excluded.
+    """
     async with SessionLocal() as db:
         rows = await db.scalars(
             select(ChannelDelivery)
-            .where(ChannelDelivery.status.in_(("pending", "attempting")))
+            .where(
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+                ChannelDelivery.content != "",
+            )
             .order_by(ChannelDelivery.id)
         )
         return list(rows)

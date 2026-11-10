@@ -244,10 +244,24 @@ async def _ensure_cron_job_columns(conn) -> None:  # noqa: ANN001
         await _ensure_cron_job_column(conn, column)
 
 
+async def _drop_stale_channel_deliveries(conn) -> None:  # noqa: ANN001
+    result = await conn.exec_driver_sql("PRAGMA table_info(channel_deliveries)")
+    columns = {row[1] for row in result.fetchall()}
+    if not columns or "id" in columns:
+        return
+    logger.warning(
+        "dropping stale channel_deliveries table without id column: %s",
+        ", ".join(sorted(columns)),
+    )
+    await conn.exec_driver_sql("DROP TABLE channel_deliveries")
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
     async with engine.begin() as conn:
+        if settings.app_database_url.startswith("sqlite"):
+            await _drop_stale_channel_deliveries(conn)
         await conn.run_sync(Base.metadata.create_all)
         if settings.app_database_url.startswith("sqlite"):
             await _ensure_agent_columns(conn)

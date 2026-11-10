@@ -183,18 +183,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 app.state.worker = worker
                 weixin.worker = worker
                 await worker.start()
-                await weixin.start()
-                cron = CronRuntime(worker)
-                app.state.cron = cron
-                await cron.start()
-                backtest_worker = BacktestWorker()
-                app.state.backtest_worker = backtest_worker
-                set_active_worker(backtest_worker)
-                await backtest_worker.start()
-                await knowledge.start()
-                session_cleanup = SessionCleanupRuntime()
-                app.state.session_cleanup = session_cleanup
-                await session_cleanup.start()
+
                 from app.services.claude_runner import ClaudeTurnRunner
                 from app.services.recovery import recover_running_sessions
                 from app.services.session_catalog import SessionCatalog
@@ -207,7 +196,23 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 )
                 app.state.registry = registry
                 app.state.session_catalog = SessionCatalog(store)
+                # Recover interrupted sessions before WeixinRuntime.start()
+                # sweeps pending deliveries: a delivery row created at turn
+                # start has no content until the turn completes.
                 await recover_running_sessions(registry, store)
+
+                await weixin.start()
+                cron = CronRuntime(worker)
+                app.state.cron = cron
+                await cron.start()
+                backtest_worker = BacktestWorker()
+                app.state.backtest_worker = backtest_worker
+                set_active_worker(backtest_worker)
+                await backtest_worker.start()
+                await knowledge.start()
+                session_cleanup = SessionCleanupRuntime()
+                app.state.session_cleanup = session_cleanup
+                await session_cleanup.start()
             yield
         finally:
             # A startup failure must still tear down whatever did start. Each
