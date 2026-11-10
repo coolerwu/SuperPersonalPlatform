@@ -5,12 +5,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db import SessionLocal
 from app.models import ChannelInbound
-from app.services.claude_runner import DeliveryRequest, Turn
+from app.services.claude_runner import DeliveryRequest, Turn, transcript_path
 from app.services.commands import (
     HELP_TEXT,
     NEW_SESSION_TEXT,
@@ -19,6 +19,7 @@ from app.services.commands import (
     UNKNOWN_COMMAND_TEXT,
     parse_command,
 )
+from app.services.identifiers import is_canonical_uuid, valid_agent_id
 from app.services.settings_store import ConversationSection
 
 logger = logging.getLogger(__name__)
@@ -31,31 +32,81 @@ class IngestResult:
     reply: str | None = None
 
 
-async def _claim_inbound(channel_id: str, external_message_id: str) -> bool:
-    """Insert the idempotency row; False when it already exists."""
+def _conversation_key(channel_id: str, external_id: str) -> str:
+    """Bindings are scoped per channel; two bots may see the same contact id."""
+    return f"{channel_id}:{external_id}"
+
+
+def _normalize_message_ids(values: Any) -> list[str]:
+    if not isinstance(values, (list, tuple)):
+        raise ValueError("external_message_ids must be a list")
+    message_ids = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("external_message_ids must be non-empty strings")
+        message_ids.append(value.strip())
+    if not message_ids:
+        raise ValueError("external_message_ids is required")
+    # A batch may repeat an id after a partial iLink replay; claim it once.
+    return list(dict.fromkeys(message_ids))
+
+
+async def _claim_inbound(channel_id: str, message_ids: list[str]) -> bool:
+    """Claim every message id in one transaction.
+
+    ``False`` means the batch was already claimed (duplicate). A unique
+    violation that turns out not to be one of these rows is re-raised.
+    """
     async with SessionLocal() as db:
-        db.add(ChannelInbound(channel_id=channel_id, external_message_id=external_message_id))
+        db.add_all(
+            [
+                ChannelInbound(channel_id=channel_id, external_message_id=message_id)
+                for message_id in message_ids
+            ]
+        )
         try:
             await db.commit()
         except IntegrityError:
             await db.rollback()
-            return False
+            existing = await db.scalar(
+                select(ChannelInbound.id)
+                .where(
+                    ChannelInbound.channel_id == channel_id,
+                    ChannelInbound.external_message_id.in_(message_ids),
+                )
+                .limit(1)
+            )
+            if existing is not None:
+                return False
+            raise
         return True
 
 
-async def _record_inbound(
-    channel_id: str, external_message_id: str, session_id: str | None
-) -> None:
+async def _release_inbound(channel_id: str, message_ids: list[str]) -> None:
+    """Undo a claim after a failed ingest so the batch can be retried."""
     async with SessionLocal() as db:
-        row = await db.scalar(
-            select(ChannelInbound).where(
+        await db.execute(
+            delete(ChannelInbound).where(
                 ChannelInbound.channel_id == channel_id,
-                ChannelInbound.external_message_id == external_message_id,
+                ChannelInbound.external_message_id.in_(message_ids),
             )
         )
-        if row is not None:
-            row.session_id = session_id
-            await db.commit()
+        await db.commit()
+
+
+async def _record_inbound(
+    channel_id: str, message_ids: list[str], session_id: str | None
+) -> None:
+    async with SessionLocal() as db:
+        await db.execute(
+            update(ChannelInbound)
+            .where(
+                ChannelInbound.channel_id == channel_id,
+                ChannelInbound.external_message_id.in_(message_ids),
+            )
+            .values(session_id=session_id)
+        )
+        await db.commit()
 
 
 def _new_conversation(
@@ -69,6 +120,22 @@ def _new_conversation(
     )
 
 
+def _binding_is_valid(
+    conversation: ConversationSection, channel_id: str, agent_id: str
+) -> bool:
+    """A binding is reusable only when its SDK transcript still exists.
+
+    A deleted session leaves the binding behind; the next inbound message must
+    start a fresh session instead of resurrecting the stale id.
+    """
+    return (
+        conversation.channel_id == channel_id
+        and valid_agent_id(agent_id)
+        and is_canonical_uuid(conversation.session_id)
+        and transcript_path(conversation.session_id, agent_id).is_file()
+    )
+
+
 async def _command_reply(
     command: str,
     *,
@@ -76,6 +143,7 @@ async def _command_reply(
     agent_id: str,
     registry: Any,
 ) -> str:
+    # /new and /clear are intercepted by ``ingest`` before this helper runs.
     if command == "/help":
         return HELP_TEXT
     if command == "/status":
@@ -95,7 +163,7 @@ async def ingest(
     store: Any,
     registry: Any,
     channel_id: str,
-    external_message_id: str,
+    external_message_ids: list[str],
     external_id: str,
     display_name: str,
     text: str,
@@ -104,8 +172,10 @@ async def ingest(
     text = (text or "").strip()
     if not text:
         raise ValueError("text is required")
-    if not await _claim_inbound(channel_id, external_message_id):
-        return IngestResult(duplicate=True)
+    external_id = (external_id or "").strip()
+    if not external_id:
+        raise ValueError("external_id is required")
+    message_ids = _normalize_message_ids(external_message_ids)
 
     settings = await store.get()
     channel = next((item for item in settings.channels if item.id == channel_id), None)
@@ -115,41 +185,72 @@ async def ingest(
     if agent is None or agent.status != "active":
         raise ValueError("agent is not available")
 
-    conversation = settings.channel_conversations.get(external_id)
-    if conversation is None:
-        conversation = _new_conversation(channel_id, display_name, context_token)
-    else:
-        conversation.display_name = display_name or conversation.display_name
-        if context_token:
-            conversation.context_token = context_token
-    await store.update_conversation(external_id, conversation)
+    if not await _claim_inbound(channel_id, message_ids):
+        return IngestResult(duplicate=True)
 
-    command = parse_command(text)
-    if command is not None:
+    try:
+        key = _conversation_key(channel_id, external_id)
+        existing = settings.channel_conversations.get(key)
+        if existing is not None and existing.channel_id == channel_id:
+            token = context_token or existing.context_token
+            name = display_name or existing.display_name
+            if _binding_is_valid(existing, channel_id, agent.id):
+                conversation = existing.model_copy(
+                    update={"display_name": name, "context_token": token}
+                )
+            else:
+                conversation = _new_conversation(channel_id, name, token)
+        else:
+            # Unknown key or a binding owned by another channel: never reuse its
+            # session or carry its context token across channels.
+            conversation = _new_conversation(
+                channel_id, display_name, context_token
+            )
+
+        command = parse_command(text)
         if command in ("/new", "/clear"):
             conversation = _new_conversation(
-                channel_id, conversation.display_name, context_token
+                channel_id,
+                conversation.display_name,
+                context_token or conversation.context_token,
             )
-            await store.update_conversation(external_id, conversation)
-            reply = NEW_SESSION_TEXT
-        else:
-            reply = await _command_reply(
-                command,
-                conversation=conversation,
-                agent_id=agent.id,
-                registry=registry,
-            )
-        await _record_inbound(channel_id, external_message_id, conversation.session_id)
-        return IngestResult(session_id=conversation.session_id, reply=reply)
 
-    await registry.submit(
-        Turn(
-            session_id=conversation.session_id,
-            agent_id=agent.id,
-            prompt=text,
-            source="wechat",
-            delivery=DeliveryRequest(channel_id=channel_id, external_id=external_id),
+        # One settings write per inbound message, after the final conversation
+        # is known. Commands and turns share it.
+        await store.update_conversation(key, conversation)
+
+        if command is not None:
+            if command in ("/new", "/clear"):
+                reply = NEW_SESSION_TEXT
+            else:
+                reply = await _command_reply(
+                    command,
+                    conversation=conversation,
+                    agent_id=agent.id,
+                    registry=registry,
+                )
+            await _record_inbound(channel_id, message_ids, conversation.session_id)
+            return IngestResult(session_id=conversation.session_id, reply=reply)
+
+        await registry.submit(
+            Turn(
+                session_id=conversation.session_id,
+                agent_id=agent.id,
+                prompt=text,
+                source="wechat",
+                delivery=DeliveryRequest(channel_id=channel_id, external_id=external_id),
+            )
         )
-    )
-    await _record_inbound(channel_id, external_message_id, conversation.session_id)
-    return IngestResult(session_id=conversation.session_id)
+        await _record_inbound(channel_id, message_ids, conversation.session_id)
+        return IngestResult(session_id=conversation.session_id)
+    except BaseException:
+        # Leave no claimed ids behind: the channel runtime retries the whole
+        # batch after a failure, and claimed-but-unprocessed ids would be
+        # silently dropped as duplicates.
+        try:
+            await _release_inbound(channel_id, message_ids)
+        except Exception:
+            logger.warning(
+                "failed to release inbound claim channel=%s", channel_id, exc_info=True
+            )
+        raise

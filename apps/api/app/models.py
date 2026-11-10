@@ -267,7 +267,7 @@ class ChannelInbound(Base):
     channel_id: Mapped[str] = mapped_column(String(32), ForeignKey("channels.id"), index=True)
     external_message_id: Mapped[str] = mapped_column(String(200))
     conversation_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    session_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     message_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

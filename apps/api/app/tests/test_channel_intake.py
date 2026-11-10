@@ -1,51 +1,64 @@
+import uuid
+
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.db import SessionLocal, init_db
 from app.models import ChannelInbound
-from app.services.channel_intake import (
-    HELP_TEXT,
-    NEW_SESSION_TEXT,
-    STOP_REQUESTED_TEXT,
-    ingest,
-)
+from app.services import commands
+from app.services.channel_intake import ingest
+from app.services.claude_runner import transcript_path
 from app.services.settings_store import (
     AgentSection,
     ChannelSection,
+    ConversationSection,
     PlatformSettings,
 )
 
 
 class FakeStore:
-    def __init__(self):
+    """Settings store that hands out copies, like the real JSON-backed one."""
+
+    def __init__(self, *, agent_status="active", channel_status="active"):
         self.settings = PlatformSettings(
-            agents=[AgentSection(id="default", name="Assistant")],
+            agents=[AgentSection(id="default", name="Assistant", status=agent_status)],
             channels=[
                 ChannelSection(
                     id="ch1",
                     agent_id="default",
-                    status="active",
+                    status=channel_status,
                     account_id="a1",
-                    bot_token="t",
-                )
+                    bot_token="t1",
+                ),
+                ChannelSection(
+                    id="ch2",
+                    agent_id="default",
+                    status="active",
+                    account_id="a2",
+                    bot_token="t2",
+                ),
             ],
             channel_conversations={},
         )
 
     async def get(self):
-        return self.settings
+        return self.settings.model_copy(deep=True)
 
     async def update_conversation(self, external_id, conversation):
-        self.settings.channel_conversations[external_id] = conversation
+        self.settings.channel_conversations[external_id] = conversation.model_copy(deep=True)
 
 
 class FakeRegistry:
-    def __init__(self):
+    def __init__(self, *, busy=False, interrupt_result=True):
         self.turns = []
         self.interrupted = []
-        self.interrupt_result = True
+        self.busy = busy
+        self.interrupt_result = interrupt_result
+        self.submit_error = None
 
     async def submit(self, turn):
+        if self.submit_error is not None:
+            raise self.submit_error
         self.turns.append(turn)
         return turn.id
 
@@ -54,19 +67,64 @@ class FakeRegistry:
         return self.interrupt_result
 
     def is_busy(self, session_id):
-        return False
+        return self.busy
 
 
-async def _cleanup(message_ids):
+async def _ingest(
+    store,
+    registry,
+    *,
+    message_ids,
+    text="你好",
+    channel_id="ch1",
+    external_id="wx-1",
+    display_name="张三",
+    context_token="ctx",
+):
+    return await ingest(
+        store=store,
+        registry=registry,
+        channel_id=channel_id,
+        external_message_ids=message_ids,
+        external_id=external_id,
+        display_name=display_name,
+        text=text,
+        context_token=context_token,
+    )
+
+
+async def _cleanup(channel_id, message_ids):
     """Remove only the idempotency rows this test created."""
     async with SessionLocal() as db:
         await db.execute(
             delete(ChannelInbound).where(
-                ChannelInbound.channel_id == "ch1",
+                ChannelInbound.channel_id == channel_id,
                 ChannelInbound.external_message_id.in_(message_ids),
             )
         )
         await db.commit()
+
+
+async def _rows(channel_id, message_ids):
+    async with SessionLocal() as db:
+        result = await db.scalars(
+            select(ChannelInbound).where(
+                ChannelInbound.channel_id == channel_id,
+                ChannelInbound.external_message_id.in_(message_ids),
+            )
+        )
+        return list(result)
+
+
+def _create_transcript(agent_id, session_id):
+    path = transcript_path(session_id, agent_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}", "utf-8")
+    return path
+
+
+def _conversation_key(channel_id, external_id):
+    return f"{channel_id}:{external_id}"
 
 
 @pytest.mark.asyncio
@@ -75,23 +133,30 @@ async def test_first_message_creates_conversation_and_turn():
     store = FakeStore()
     registry = FakeRegistry()
     try:
-        result = await ingest(
-            store=store,
-            registry=registry,
-            channel_id="ch1",
-            external_message_id="first-1",
-            external_id="wx-1",
-            display_name="张三",
-            text="你好",
-            context_token="ctx",
-        )
+        result = await _ingest(store, registry, message_ids=["first-1"])
         assert result.session_id
         assert registry.turns[0].prompt == "你好"
         assert registry.turns[0].delivery.external_id == "wx-1"
         assert registry.turns[0].source == "wechat"
-        assert store.settings.channel_conversations["wx-1"].context_token == "ctx"
+        assert registry.turns[0].session_id == result.session_id
+        conversation = store.settings.channel_conversations[_conversation_key("ch1", "wx-1")]
+        assert conversation.session_id == result.session_id
+        assert conversation.channel_id == "ch1"
+        assert conversation.context_token == "ctx"
     finally:
-        await _cleanup(["first-1"])
+        await _cleanup("ch1", ["first-1"])
+
+
+@pytest.mark.asyncio
+async def test_text_is_stripped_before_submit():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    try:
+        await _ingest(store, registry, message_ids=["trim-1"], text="  你好  ")
+        assert registry.turns[0].prompt == "你好"
+    finally:
+        await _cleanup("ch1", ["trim-1"])
 
 
 @pytest.mark.asyncio
@@ -100,31 +165,38 @@ async def test_duplicate_is_ignored():
     store = FakeStore()
     registry = FakeRegistry()
     try:
-        await ingest(
-            store=store,
-            registry=registry,
-            channel_id="ch1",
-            external_message_id="dup-1",
-            external_id="wx-1",
-            display_name="张三",
-            text="你好",
-            context_token="ctx",
-        )
-        result = await ingest(
-            store=store,
-            registry=registry,
-            channel_id="ch1",
-            external_message_id="dup-1",
-            external_id="wx-1",
-            display_name="张三",
-            text="你好",
-            context_token="ctx",
-        )
+        await _ingest(store, registry, message_ids=["dup-1"])
+        result = await _ingest(store, registry, message_ids=["dup-1"])
         assert result.duplicate is True
         assert result.session_id is None
         assert len(registry.turns) == 1
     finally:
-        await _cleanup(["dup-1"])
+        await _cleanup("ch1", ["dup-1"])
+
+
+@pytest.mark.asyncio
+async def test_batch_claims_every_message_id():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    batch = ["batch-1", "batch-2", "batch-3"]
+    try:
+        result = await _ingest(store, registry, message_ids=batch)
+        rows = await _rows("ch1", batch)
+        assert len(rows) == 3
+        assert {row.session_id for row in rows} == {result.session_id}
+        assert len(registry.turns) == 1
+
+        replay = await _ingest(store, registry, message_ids=batch)
+        assert replay.duplicate is True
+
+        # A later slice of the same batch (iLink replay of leftover ids) is
+        # already claimed too, so it cannot start a second turn.
+        tail = await _ingest(store, registry, message_ids=batch[1:])
+        assert tail.duplicate is True
+        assert len(registry.turns) == 1
+    finally:
+        await _cleanup("ch1", batch)
 
 
 @pytest.mark.asyncio
@@ -133,21 +205,12 @@ async def test_help_command():
     store = FakeStore()
     registry = FakeRegistry()
     try:
-        result = await ingest(
-            store=store,
-            registry=registry,
-            channel_id="ch1",
-            external_message_id="help-1",
-            external_id="wx-1",
-            display_name="张三",
-            text="/help",
-            context_token=None,
-        )
-        assert result.reply == HELP_TEXT
+        result = await _ingest(store, registry, message_ids=["help-1"], text="/help")
+        assert result.reply == commands.HELP_TEXT
         assert result.session_id
         assert registry.turns == []
     finally:
-        await _cleanup(["help-1"])
+        await _cleanup("ch1", ["help-1"])
 
 
 @pytest.mark.asyncio
@@ -155,58 +218,111 @@ async def test_new_command_rebinds_conversation():
     await init_db()
     store = FakeStore()
     registry = FakeRegistry()
+    ids = ["new-1", "new-2", "new-3"]
+    transcript = None
     try:
-        first = await ingest(
-            store=store,
-            registry=registry,
-            channel_id="ch1",
-            external_message_id="new-1",
-            external_id="wx-1",
-            display_name="张三",
-            text="你好",
-            context_token="ctx",
-        )
+        first = await _ingest(store, registry, message_ids=["new-1"])
         session_a = first.session_id
         assert session_a
-        assert store.settings.channel_conversations["wx-1"].session_id == session_a
 
-        created = await ingest(
-            store=store,
-            registry=registry,
-            channel_id="ch1",
-            external_message_id="new-2",
-            external_id="wx-1",
-            display_name="张三",
-            text="/new",
-            context_token="ctx-2",
+        created = await _ingest(
+            store, registry, message_ids=["new-2"], text="/new", context_token="ctx-2"
         )
         session_b = created.session_id
-        assert created.reply == NEW_SESSION_TEXT
+        assert created.reply == commands.NEW_SESSION_TEXT
         assert session_b
         assert session_b != session_a
-        conversation = store.settings.channel_conversations["wx-1"]
+        conversation = store.settings.channel_conversations[_conversation_key("ch1", "wx-1")]
         assert conversation.session_id == session_b
-        # The conversation UUID is regenerated, not reused.
         assert conversation.channel_id == "ch1"
         assert conversation.context_token == "ctx-2"
-        # /new itself does not start a turn.
         assert len(registry.turns) == 1
 
-        follow_up = await ingest(
-            store=store,
-            registry=registry,
-            channel_id="ch1",
-            external_message_id="new-3",
-            external_id="wx-1",
-            display_name="张三",
-            text="继续",
-            context_token=None,
-        )
+        # The SDK writes the transcript once a turn runs in the new session.
+        transcript = _create_transcript("default", session_b)
+        follow_up = await _ingest(store, registry, message_ids=["new-3"], text="继续", context_token=None)
         assert follow_up.session_id == session_b
         assert registry.turns[-1].session_id == session_b
         assert registry.turns[-1].prompt == "继续"
     finally:
-        await _cleanup(["new-1", "new-2", "new-3"])
+        if transcript is not None:
+            transcript.unlink(missing_ok=True)
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_clear_command_rebinds_conversation():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    ids = ["clear-1", "clear-2"]
+    try:
+        first = await _ingest(store, registry, message_ids=["clear-1"])
+        cleared = await _ingest(store, registry, message_ids=["clear-2"], text="/clear")
+        assert cleared.reply == commands.NEW_SESSION_TEXT
+        assert cleared.session_id != first.session_id
+        assert (
+            store.settings.channel_conversations[_conversation_key("ch1", "wx-1")].session_id
+            == cleared.session_id
+        )
+    finally:
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_new_command_keeps_existing_context_token():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    ids = ["token-1", "token-2"]
+    try:
+        await _ingest(store, registry, message_ids=["token-1"], context_token="ctx-old")
+        await _ingest(store, registry, message_ids=["token-2"], text="/new", context_token=None)
+        conversation = store.settings.channel_conversations[_conversation_key("ch1", "wx-1")]
+        assert conversation.context_token == "ctx-old"
+    finally:
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_status_command_reports_busy_and_idle():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry(busy=True)
+    ids = ["status-1", "status-2", "status-3"]
+    transcript = None
+    try:
+        started = await _ingest(store, registry, message_ids=["status-1"])
+        transcript = _create_transcript("default", started.session_id)
+        busy = await _ingest(store, registry, message_ids=["status-2"], text="/status")
+        assert "执行中" in busy.reply
+        assert "default" in busy.reply
+        assert started.session_id in busy.reply
+
+        registry.busy = False
+        idle = await _ingest(store, registry, message_ids=["status-3"], text="/status")
+        assert "空闲" in idle.reply
+        assert len(registry.turns) == 1
+    finally:
+        if transcript is not None:
+            transcript.unlink(missing_ok=True)
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_memory_and_unknown_commands_are_unknown():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    ids = ["unknown-1", "unknown-2"]
+    try:
+        memory = await _ingest(store, registry, message_ids=["unknown-1"], text="/memory 记一下")
+        assert memory.reply == commands.UNKNOWN_COMMAND_TEXT
+        unknown = await _ingest(store, registry, message_ids=["unknown-2"], text="/foo")
+        assert unknown.reply == commands.UNKNOWN_COMMAND_TEXT
+        assert registry.turns == []
+    finally:
+        await _cleanup("ch1", ids)
 
 
 @pytest.mark.asyncio
@@ -214,35 +330,204 @@ async def test_stop_command_delegates_to_registry():
     await init_db()
     store = FakeStore()
     registry = FakeRegistry()
+    ids = ["stop-1", "stop-2"]
+    transcript = None
     try:
-        started = await ingest(
-            store=store,
-            registry=registry,
-            channel_id="ch1",
-            external_message_id="stop-1",
-            external_id="wx-1",
-            display_name="张三",
-            text="跑一个长任务",
-            context_token="ctx",
-        )
+        started = await _ingest(store, registry, message_ids=["stop-1"], text="跑一个长任务")
         session_id = started.session_id
         assert session_id
-        assert len(registry.turns) == 1
+        transcript = _create_transcript("default", session_id)
 
-        stopped = await ingest(
-            store=store,
-            registry=registry,
-            channel_id="ch1",
-            external_message_id="stop-2",
-            external_id="wx-1",
-            display_name="张三",
-            text="/stop",
-            context_token="ctx",
-        )
-        assert stopped.reply == STOP_REQUESTED_TEXT
+        stopped = await _ingest(store, registry, message_ids=["stop-2"], text="/stop")
+        assert stopped.reply == commands.STOP_REQUESTED_TEXT
         assert stopped.session_id == session_id
         assert registry.interrupted == [session_id]
-        # /stop is a command, not a new turn.
         assert len(registry.turns) == 1
     finally:
-        await _cleanup(["stop-1", "stop-2"])
+        if transcript is not None:
+            transcript.unlink(missing_ok=True)
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_stop_without_active_turn_reports_empty():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry(interrupt_result=False)
+    ids = ["stop-idle-1", "stop-idle-2"]
+    try:
+        await _ingest(store, registry, message_ids=["stop-idle-1"])
+        stopped = await _ingest(store, registry, message_ids=["stop-idle-2"], text="/stop")
+        assert stopped.reply == commands.STOP_EMPTY_TEXT
+        assert len(registry.interrupted) == 1
+    finally:
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_inactive_channel_is_rejected_before_claim():
+    await init_db()
+    store = FakeStore(channel_status="pairing")
+    registry = FakeRegistry()
+    ids = ["inactive-channel-1"]
+    try:
+        with pytest.raises(ValueError, match="channel is not active"):
+            await _ingest(store, registry, message_ids=ids)
+        assert await _rows("ch1", ids) == []
+
+        # Activation makes the same message id retryable.
+        store.settings.channels[0].status = "active"
+        result = await _ingest(store, registry, message_ids=ids)
+        assert result.session_id
+        assert len(registry.turns) == 1
+    finally:
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_inactive_agent_is_rejected_before_claim():
+    await init_db()
+    store = FakeStore(agent_status="paused")
+    registry = FakeRegistry()
+    ids = ["inactive-agent-1"]
+    try:
+        with pytest.raises(ValueError, match="agent is not available"):
+            await _ingest(store, registry, message_ids=ids)
+        assert await _rows("ch1", ids) == []
+    finally:
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_submit_failure_releases_claim():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    registry.submit_error = RuntimeError("registry down")
+    ids = ["submit-fail-1", "submit-fail-2"]
+    try:
+        with pytest.raises(RuntimeError, match="registry down"):
+            await _ingest(store, registry, message_ids=ids)
+        assert await _rows("ch1", ids) == []
+
+        # The retry after the failure must be able to run.
+        registry.submit_error = None
+        result = await _ingest(store, registry, message_ids=ids)
+        assert result.session_id
+        assert len(registry.turns) == 1
+    finally:
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_empty_inputs_are_rejected_before_claim():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    with pytest.raises(ValueError, match="text is required"):
+        await _ingest(store, registry, message_ids=["empty-1"], text="   ")
+    with pytest.raises(ValueError, match="external_id is required"):
+        await _ingest(store, registry, message_ids=["empty-2"], external_id="  ")
+    with pytest.raises(ValueError, match="external_message_ids"):
+        await _ingest(store, registry, message_ids=[])
+    with pytest.raises(ValueError, match="external_message_ids"):
+        await _ingest(store, registry, message_ids=["ok-1", "   "])
+    assert registry.turns == []
+
+
+@pytest.mark.asyncio
+async def test_deleted_transcript_rebinding_creates_new_session():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    stale_session = str(uuid.uuid4())
+    store.settings.channel_conversations[_conversation_key("ch1", "wx-1")] = ConversationSection(
+        session_id=stale_session,
+        channel_id="ch1",
+        display_name="张三",
+        context_token="ctx-old",
+    )
+    try:
+        result = await _ingest(store, registry, message_ids=["stale-1"], context_token=None)
+        assert result.session_id
+        assert result.session_id != stale_session
+        conversation = store.settings.channel_conversations[_conversation_key("ch1", "wx-1")]
+        assert conversation.session_id == result.session_id
+        assert conversation.context_token == "ctx-old"
+        assert registry.turns[0].session_id == result.session_id
+    finally:
+        await _cleanup("ch1", ["stale-1"])
+
+
+@pytest.mark.asyncio
+async def test_valid_existing_binding_is_reused():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    session_id = str(uuid.uuid4())
+    path = _create_transcript("default", session_id)
+    store.settings.channel_conversations[_conversation_key("ch1", "wx-1")] = ConversationSection(
+        session_id=session_id,
+        channel_id="ch1",
+        display_name="旧名字",
+        context_token="ctx-old",
+    )
+    try:
+        result = await _ingest(
+            store, registry, message_ids=["reuse-1"], display_name="新名字", context_token=None
+        )
+        assert result.session_id == session_id
+        assert registry.turns[0].session_id == session_id
+        conversation = store.settings.channel_conversations[_conversation_key("ch1", "wx-1")]
+        assert conversation.display_name == "新名字"
+        assert conversation.context_token == "ctx-old"
+    finally:
+        path.unlink(missing_ok=True)
+        await _cleanup("ch1", ["reuse-1"])
+
+
+@pytest.mark.asyncio
+async def test_wrong_channel_binding_is_not_reused():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    foreign_session = str(uuid.uuid4())
+    path = _create_transcript("default", foreign_session)
+    key = _conversation_key("ch1", "wx-1")
+    store.settings.channel_conversations[key] = ConversationSection(
+        session_id=foreign_session,
+        channel_id="ch2",
+        display_name="别的渠道",
+        context_token="ctx-old",
+    )
+    try:
+        result = await _ingest(store, registry, message_ids=["foreign-1"], context_token=None)
+        assert result.session_id != foreign_session
+        conversation = store.settings.channel_conversations[key]
+        assert conversation.channel_id == "ch1"
+        assert conversation.session_id == result.session_id
+        # A cross-channel binding must not leak its context token.
+        assert conversation.context_token is None
+    finally:
+        path.unlink(missing_ok=True)
+        await _cleanup("ch1", ["foreign-1"])
+
+
+@pytest.mark.asyncio
+async def test_same_external_id_in_two_channels_is_isolated():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    try:
+        first = await _ingest(store, registry, message_ids=["cross-1"], channel_id="ch1")
+        second = await _ingest(store, registry, message_ids=["cross-2"], channel_id="ch2")
+        assert first.session_id
+        assert second.session_id
+        assert first.session_id != second.session_id
+        by_key = store.settings.channel_conversations
+        assert by_key[_conversation_key("ch1", "wx-1")].session_id == first.session_id
+        assert by_key[_conversation_key("ch2", "wx-1")].session_id == second.session_id
+        assert by_key[_conversation_key("ch2", "wx-1")].channel_id == "ch2"
+    finally:
+        await _cleanup("ch1", ["cross-1"])
+        await _cleanup("ch2", ["cross-2"])
