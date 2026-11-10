@@ -34,13 +34,11 @@ from app.services.chat_commands import (
     KNOWN_COMMANDS,
     MEMORY_COMMAND_LIMIT,
     MEMORY_COMMAND_SAVED,
-    MEMORY_COMMAND_TOO_LONG,
     MEMORY_COMMAND_USAGE,
     STOP_EMPTY_TEXT,
     STOP_FINISHED_TEXT,
     STOP_UNAVAILABLE_TEXT,
     UNKNOWN_COMMAND_TEXT,
-    MAX_MEMORY_COMMAND_CHARS,
     is_command_text,
     memory_command_content,
     parse_command,
@@ -111,8 +109,6 @@ async def _apply_command(
         content = memory_command_content(raw_text) or ""
         if not content:
             return conversation, session, MEMORY_COMMAND_USAGE, ()
-        if len(content) > MAX_MEMORY_COMMAND_CHARS:
-            return conversation, session, MEMORY_COMMAND_TOO_LONG, ()
         item = await memory_service.create_memory_in_session(
             db,
             scope="user",

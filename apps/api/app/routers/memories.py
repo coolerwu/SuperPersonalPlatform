@@ -66,6 +66,18 @@ async def create_memory(
         raise HTTPException(status_code=400, detail="agent_id is required for agent memory")
     if payload.scope == "agent" and await db.get(Agent, payload.agent_id) is None:
         raise HTTPException(status_code=404, detail="agent not found")
+    if (
+        payload.scope == "agent"
+        and len(memory_service.normalize_content(payload.content))
+        > memory_service.MAX_AGENT_MEMORY_CHARS
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "agent memory must be at most "
+                f"{memory_service.MAX_AGENT_MEMORY_CHARS} characters"
+            ),
+        )
     item = await memory_service.create_memory(
         scope=payload.scope,
         agent_id=payload.agent_id,
@@ -89,6 +101,18 @@ async def update_memory(memory_id: str, payload: MemoryUpdate) -> MemoryOut:
     content_changed = bool(
         payload.content is not None and normalized and normalized != current.content
     )
+    if (
+        content_changed
+        and current.scope == "agent"
+        and len(normalized) > memory_service.MAX_AGENT_MEMORY_CHARS
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "agent memory must be at most "
+                f"{memory_service.MAX_AGENT_MEMORY_CHARS} characters"
+            ),
+        )
     item = await memory_service.update_memory(
         memory_id,
         content=payload.content,

@@ -13,10 +13,8 @@ from app.models import MemoryItem, RunMemory, utcnow
 
 logger = logging.getLogger(__name__)
 
-MAX_ITEMS_PER_SCOPE = 200
-MAX_USER_PROMPT_ITEMS = 60
-MAX_USER_PROMPT_CHARS = 6000
-MAX_USER_PROMPT_ITEM_CHARS = 320
+MAX_AGENT_MEMORIES = 200
+MAX_AGENT_MEMORY_CHARS = 320
 MAX_AGENT_INDEX_ITEMS = 40
 MAX_AGENT_INDEX_SNIPPET_CHARS = 60
 SOURCE_STRENGTH = {
@@ -91,6 +89,8 @@ async def create_memory_in_session(
         return None
     if scope == "agent" and not agent_id:
         return None
+    if scope == "agent" and len(content) > MAX_AGENT_MEMORY_CHARS:
+        return None
     if source_kind not in SOURCE_STRENGTH:
         source_kind = "manual"
     normalized_tags = normalize_tags(tags or [])
@@ -125,8 +125,8 @@ async def create_memory_in_session(
         )
         or 0
     )
-    if count >= MAX_ITEMS_PER_SCOPE:
-        logger.warning("memory limit reached for scope=%s agent_id=%s", scope, agent_key)
+    if scope == "agent" and count >= MAX_AGENT_MEMORIES:
+        logger.warning("agent memory limit reached for agent_id=%s", agent_key)
         return None
 
     item = MemoryItem(
@@ -277,12 +277,6 @@ def _dedupe_memories(items: list[MemoryItem]) -> list[MemoryItem]:
     return list(by_content.values())
 
 
-def _clip_user_memory(content: str) -> str:
-    if len(content) <= MAX_USER_PROMPT_ITEM_CHARS:
-        return content
-    return content[:MAX_USER_PROMPT_ITEM_CHARS].rstrip() + "…"
-
-
 async def retrieve_for_prompt(
     *,
     agent_id: str | None,
@@ -290,9 +284,9 @@ async def retrieve_for_prompt(
 ) -> tuple[str, list[str]]:
     """Build the memory block: all user memories plus an Agent memory index.
 
-    User memories are global rules and facts, so they are always injected (up to
-    a budget). Agent memories are the Agent's own notes; only an index is
-    injected and the Agent decides what to read with memory_read/search.
+    User memories are global rules and facts, so every entry is injected in
+    full. Agent memories are the Agent's own notes; only an index is injected
+    and the Agent decides what to read with memory_read/search.
     """
     async with SessionLocal() as db:
         user_items = list(
@@ -331,23 +325,11 @@ async def retrieve_for_prompt(
         ]
 
         user_lines: list[str] = []
-        used_ids: list[str] = []
-        user_chars = 0
-        omitted_user = 0
         for item in user_items:
             content = normalize_content(item.content)
             if not content:
                 continue
-            clipped = _clip_user_memory(content)
-            if (
-                len(user_lines) >= MAX_USER_PROMPT_ITEMS
-                or user_chars + len(clipped) > MAX_USER_PROMPT_CHARS
-            ):
-                omitted_user += 1
-                continue
-            user_lines.append(f"- {clipped}")
-            used_ids.append(item.id)
-            user_chars += len(clipped)
+            user_lines.append(f"- {content}")
 
         index_lines: list[str] = []
         omitted_agent = 0
@@ -373,8 +355,6 @@ async def retrieve_for_prompt(
                 "",
                 *user_lines,
             ]
-            if omitted_user:
-                parts.extend(["", f"（另有 {omitted_user} 条用户记忆因预算未注入。）"])
             blocks.append("\n".join(parts))
         if index_lines:
             parts = [
@@ -389,13 +369,10 @@ async def retrieve_for_prompt(
 
         if not blocks:
             return "", []
-        if used_ids:
-            now = utcnow()
-            for item in user_items:
-                if item.id in used_ids:
-                    item.last_used_at = now
-            await db.commit()
-        return "\n\n".join(blocks), used_ids
+        # User memories are always injected, so writing last_used_at or
+        # run_memories for every one of them would grow with their count on
+        # every Run; only Agent memories read through memory_read are recorded.
+        return "\n\n".join(blocks), []
 
 
 async def record_run_memories(run_id: str, memory_ids: list[str]) -> None:

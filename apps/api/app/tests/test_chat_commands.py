@@ -160,7 +160,7 @@ def test_memory_command_writes_user_memory(client) -> None:
     assert client.get(f"/api/sessions/{session_id}/messages").json() == []
 
 
-def test_memory_command_requires_content_and_caps_length(client) -> None:
+def test_memory_command_requires_content_and_accepts_long_content(client) -> None:
     agent_id = _agent_id(client)
     session_id = _create_session(client, agent_id)
 
@@ -168,9 +168,16 @@ def test_memory_command_requires_content_and_caps_length(client) -> None:
     assert usage.status_code == 200
     assert "用法" in usage.json()["reply"]
 
-    too_long = _command(client, agent_id, session_id, "/memory " + "字" * 321)
-    assert too_long.status_code == 200
-    assert "最多 320" in too_long.json()["reply"]
+    content = "字" * 500
+    saved = _command(client, agent_id, session_id, f"/memory {content}")
+    assert saved.status_code == 200
+    assert "已写入用户记忆" in saved.json()["reply"]
+    item = next(
+        item
+        for item in client.get("/api/memories?scope=user").json()
+        if item["content"] == content
+    )
+    assert item["source_kind"] == "command"
 
 
 def test_memory_command_is_idempotent(client) -> None:

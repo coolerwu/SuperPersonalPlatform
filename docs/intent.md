@@ -2167,7 +2167,7 @@ F56 让新提取的记忆可以写 user scope，但历史记忆仍全在 agent s
 
 - 只做 Agent→用户，不做用户→Agent、跨 Agent 移动或批量迁移。
 - `memory_move` 只改 scope，不改正文；需要改内容时由 organizer 另行 update。
-- user scope 200 条上限仍然生效。
+- user scope 200 条上限仍然生效。（由 F90 调整：user scope 不再限制条数；`memory_move` 已在 F87 移除。）
 
 #### 非目标
 
@@ -3263,10 +3263,10 @@ F81 之后中枢框在离开段起点结束：zone2 画成 10-12 04:00 → 10-21
 
 #### 功能点
 
-1. `retrieve_for_prompt` 改为两段：全部 user 记忆按 `created_at` / `id` 稳定排序注入，总预算 6000 字、最多 60 条、单条 320 字，超出部分在块尾注明未注入条数；当前 Agent 的 agent 记忆只注入索引（id + tags + 60 字摘要），最多 40 条，不做总字数限制，超出提示用 `memory_search` 查找。
+1. `retrieve_for_prompt` 改为两段：全部 user 记忆按 `created_at` / `id` 稳定排序注入，不限制条数和字数，全部原文注入；当前 Agent 的 agent 记忆只注入索引（id + tags + 60 字摘要），最多 40 条，不做总字数限制，超出提示用 `memory_search` 查找。
 2. 正文完全相同的 user/agent 条目只保留 user，不再重复出现在 Agent 索引。
 3. 新增平台工具 `memory_search` / `memory_read`（始终可用，不参与技能门控）：`memory_search` 按关键词搜索当前 Agent 的 Agent 记忆；`memory_read` 按 id 返回全文，更新 `last_used_at` 并记录 `run_memories`；两者都不能读取 user 记忆或其他 Agent 记忆。
-4. 记忆块附加到系统提示词末尾；user 记忆全量注入时更新 `last_used_at`。
+4. 记忆块附加到系统提示词末尾；user 记忆不再写 `last_used_at` 或 `run_memories`（全量注入，避免随条数增长的写放大）。
 5. 默认提示词说明：用户记忆全量注入；Agent 记忆只有索引，需要细节时用 `memory_read` / `memory_search`，不要只凭摘要猜测。
 
 #### 验收标准
@@ -3292,7 +3292,7 @@ F81 之后中枢框在离开段起点结束：zone2 画成 10-12 04:00 → 10-21
 
 #### 功能点
 
-1. 新增聊天命令 `/memory <内容>`（网页和微信 1:1 共用 `chat_commands`）：不创建 Run 或 Message，直接写一条 user memory；保存 `source_kind=command`、完整指令原文 `snapshot_text` 和 `snapshot_at`；内容最多 320 字，空内容返回用法，重复内容复用已有条目。
+1. 新增聊天命令 `/memory <内容>`（网页和微信 1:1 共用 `chat_commands`）：不创建 Run 或 Message，直接写一条 user memory；保存 `source_kind=command`、完整指令原文 `snapshot_text` 和 `snapshot_at`；空内容返回用法，重复内容复用已有条目。
 2. 移除网页 `POST /api/chat/messages` 和微信入站的「记住…」前缀写入；删除 `explicit_memory_content`；`source_kind=explicit` 仅保留给旧数据。
 3. 记忆页手动新增保持 `source_kind=manual`、无快照；编辑正文降级为 manual 并清空快照。
 4. 前端命令面板增加 `/memory`，选中后填入 `/memory `；带内容的 `/memory …` 走命令接口，不再作为普通消息发送。
@@ -3303,10 +3303,37 @@ F81 之后中枢框在离开段起点结束：zone2 画成 10-12 04:00 → 10-21
 - 发送 `/memory 内容` 产生 user memory，带完整指令快照，不产生新 Run 或 Message。
 - 「记住…」开头的普通消息不再写 user memory，只作为正常对话。
 - 微信 1:1 的 `/memory 内容` 同样生效。
-- `/memory` 无内容返回用法；超过 320 字拒绝写入。
+- `/memory` 无内容返回用法；内容长度和用户记忆条数都不限制。
 - 后端测试与前端构建通过。
 
 #### 非目标
 
 - 删除已有的 `explicit` 旧记忆；
+- 向量/语义检索。
+
+
+### F90 用户记忆取消条数和字数限制
+
+- 状态：已完成
+- 日期：2026-11-10
+- 来源：用户要求用户记忆不限制字数和条数
+
+#### 功能点
+
+1. `retrieve_for_prompt` 注入全部 user 记忆，不设总字数、条数或单条裁剪；仍按 `created_at` / `id` 稳定排序；不再写 `last_used_at` 或 `run_memories`，避免条数增长导致每轮写放大。
+2. `create_memory` 的 200 条上限只作用于 agent scope；user memory 不限制条数。
+3. 删除 `/memory` 命令的 320 字上限；`ChatCommandRequest`、`MemoryCreate`、`MemoryUpdate` 不再限制用户记忆正文长度；记忆页手动新增同样不限长度。
+4. Agent 记忆限制保持不变：`memory_save` 2–320 字、每次 Run 最多 5 条、每个 Agent 最多 200 条；索引最多 40 条、不设总字数。
+5. 默认提示词去掉「受总预算约束」，改为用户长期记忆全部注入。
+
+#### 验收标准
+
+- 长于 320 字的用户记忆通过 `/memory` 和记忆页都能完整写入并完整注入。
+- 超过 200 条的 user memory 仍可继续创建。
+- agent memory 的 320 字 / 5 条 / 200 条限制不变。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 取消 agent memory 的条数和字数限制；
 - 向量/语义检索。

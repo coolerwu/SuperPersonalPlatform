@@ -58,8 +58,8 @@ async def _add_memory(
 @pytest.mark.asyncio
 async def test_all_user_memories_injected_regardless_of_query() -> None:
     agent = await _create_agent()
-    first = await _add_memory(scope="user", content="用户喜欢简短回答")
-    second = await _add_memory(scope="user", content="用户住在杭州")
+    await _add_memory(scope="user", content="用户喜欢简短回答")
+    await _add_memory(scope="user", content="用户住在杭州")
     agent_memory = await _add_memory(
         scope="agent", agent_id=agent, content="Agent 使用 systemd 部署"
     )
@@ -68,7 +68,7 @@ async def test_all_user_memories_injected_regardless_of_query() -> None:
         agent_id=agent, query="今天天气怎么样"
     )
 
-    assert ids == [first, second]
+    assert ids == []
     assert "用户喜欢简短回答" in block
     assert "用户住在杭州" in block
     assert "## 用户长期记忆" in block
@@ -93,41 +93,53 @@ async def test_agent_memory_is_indexed_not_injected_in_full() -> None:
 @pytest.mark.asyncio
 async def test_agent_index_skips_duplicate_of_user_memory() -> None:
     agent = await _create_agent()
-    user_id = await _add_memory(scope="user", content="用户喜欢简短回答")
+    await _add_memory(scope="user", content="用户喜欢简短回答")
     await _add_memory(scope="agent", agent_id=agent, content="用户喜欢简短回答")
 
     block, ids = await memory_service.retrieve_for_prompt(
         agent_id=agent, query="简短回答"
     )
 
-    assert ids == [user_id]
+    assert ids == []
     assert block.count("用户喜欢简短回答") == 1
     assert "## Agent 记忆索引" not in block
 
 
 @pytest.mark.asyncio
-async def test_long_user_memory_is_clipped() -> None:
+async def test_long_user_memory_is_injected_in_full() -> None:
     agent = await _create_agent()
-    await _add_memory(scope="user", content="回答" + "很" * 400)
+    content = "回答" + "很" * 400 + "TAILMARKER"
+    await _add_memory(scope="user", content=content)
 
     block, _ = await memory_service.retrieve_for_prompt(agent_id=agent, query="")
 
-    line = next(line for line in block.splitlines() if line.startswith("- "))
-    injected = line[2:]
-    assert injected.endswith("…")
-    assert len(injected) <= memory_service.MAX_USER_PROMPT_ITEM_CHARS + 1
+    assert content in block
+    assert "TAILMARKER" in block
 
 
 @pytest.mark.asyncio
-async def test_user_memory_budget_omits_and_reports() -> None:
+async def test_all_user_memories_injected_without_budget() -> None:
     agent = await _create_agent()
+    ids: list[str] = []
     for index in range(25):
-        await _add_memory(scope="user", content=f"规则{index}：" + "很" * 300)
+        ids.append(
+            await _add_memory(scope="user", content=f"规则{index}：" + "很" * 300)
+        )
 
-    block, ids = await memory_service.retrieve_for_prompt(agent_id=agent, query="")
+    block, injected = await memory_service.retrieve_for_prompt(agent_id=agent, query="")
 
-    assert len(ids) <= memory_service.MAX_USER_PROMPT_ITEMS
-    assert "条用户记忆因预算未注入" in block
+    assert injected == []
+    assert all(f"规则{index}：" in block for index in range(25))
+    assert "条用户记忆因预算未注入" not in block
+
+
+@pytest.mark.asyncio
+async def test_user_memory_has_no_count_limit(monkeypatch) -> None:
+    monkeypatch.setattr(memory_service, "MAX_AGENT_MEMORIES", 0)
+    item = await memory_service.create_memory(
+        scope="user", content="用户规则不受条数限制"
+    )
+    assert item is not None
 
 
 @pytest.mark.asyncio
@@ -178,7 +190,7 @@ async def test_no_memories_returns_empty_block() -> None:
 
 
 @pytest.mark.asyncio
-async def test_injected_user_memories_update_last_used_at() -> None:
+async def test_user_memory_injection_does_not_write_usage() -> None:
     agent = await _create_agent()
     user_id = await _add_memory(scope="user", content="用户喜欢简短回答")
 
@@ -187,4 +199,4 @@ async def test_injected_user_memories_update_last_used_at() -> None:
     async with SessionLocal() as db:
         stored = await db.get(MemoryItem, user_id)
         assert stored is not None
-        assert stored.last_used_at is not None
+        assert stored.last_used_at is None

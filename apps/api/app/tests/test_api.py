@@ -376,6 +376,26 @@ def test_manual_memory_has_no_snapshot(client) -> None:
     assert body["source_message_id"] is None
 
 
+def test_user_memory_has_no_length_limit(client) -> None:
+    content = "字" * 500
+    created = client.post(
+        "/api/memories", json={"scope": "user", "content": content}
+    )
+    assert created.status_code == 201
+    assert created.json()["content"] == content
+
+
+def test_agent_memory_rejects_over_320(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    too_long = "字" * 321
+    created = client.post(
+        "/api/memories",
+        json={"scope": "agent", "agent_id": agent_id, "content": too_long},
+    )
+    assert created.status_code == 400
+    assert "at most 320" in created.json()["detail"]
+
+
 def test_agent_auto_memory_flag(client) -> None:
     created = client.post(
         "/api/agents", json={"name": "NoMemory", "auto_memory": False}

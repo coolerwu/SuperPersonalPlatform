@@ -25,7 +25,6 @@ _MEMORY_COMMAND_RE = re.compile(r"^/memory(?:\s+.*)?$", re.IGNORECASE | re.DOTAL
 _MEMORY_CONTENT_RE = re.compile(r"^/memory(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 KNOWN_COMMANDS = frozenset({"/new", "/clear", "/help", "/status", "/stop", "/memory"})
 ACTIVE_RUN_STATUSES = ("queued", "running")
-MAX_MEMORY_COMMAND_CHARS = 320
 
 HELP_TEXT = (
     "可用命令：\n"
@@ -43,10 +42,9 @@ STOP_UNAVAILABLE_TEXT = "停止任务失败：运行队列不可用，请稍后�
 STOP_FINISHED_TEXT = "任务已经结束，无需停止。"
 NO_SESSION_STATUS_TEXT = "当前还没有会话，直接发消息即可开始新对话。"
 WEB_NEW_SESSION_TEXT = "已开始新会话，之前的对话不会带入；旧会话仍保留在会话列表。"
-MEMORY_COMMAND_USAGE = f"用法：/memory <要记住的内容>（最多 {MAX_MEMORY_COMMAND_CHARS} 字）。"
-MEMORY_COMMAND_TOO_LONG = f"内容太长，最多 {MAX_MEMORY_COMMAND_CHARS} 字。"
+MEMORY_COMMAND_USAGE = "用法：/memory <要记住的内容>。"
 MEMORY_COMMAND_SAVED = "已写入用户记忆：{content}"
-MEMORY_COMMAND_LIMIT = "用户记忆已达上限，请先在记忆页清理。"
+MEMORY_COMMAND_LIMIT = "用户记忆写入失败，请稍后重试。"
 
 
 def is_command_text(text: str) -> bool:
@@ -125,8 +123,6 @@ async def execute_command(
             content = memory_command_content(raw_command or command) or ""
             if not content:
                 return CommandResult(command=command, reply=MEMORY_COMMAND_USAGE)
-            if len(content) > MAX_MEMORY_COMMAND_CHARS:
-                return CommandResult(command=command, reply=MEMORY_COMMAND_TOO_LONG)
             item = await memory_service.create_memory(
                 scope="user",
                 content=content,
