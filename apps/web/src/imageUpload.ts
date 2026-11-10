@@ -27,7 +27,7 @@ async function loadBitmap(
 
 /**
  * Phone photos are often 4-10 MB. Sending those into the model would bloat the
- * checkpoint, so large images are downscaled before upload.
+ * transcript, so large images are downscaled before upload.
  */
 export async function prepareImageForUpload(file: File): Promise<File> {
   if (!file.type.startsWith("image/") || file.size <= COMPRESS_OVER_BYTES) {

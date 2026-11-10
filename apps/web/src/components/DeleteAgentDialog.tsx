@@ -42,8 +42,8 @@ export function DeleteAgentDialog({ agent, busy, onClose, onConfirm }: DeleteAge
           <button type="button" className="icon-button" onClick={onClose}>×</button>
         </div>
         <p className="danger-copy">
-          这会永久删除 <strong>{agent.name}</strong>，以及它的所有会话、消息、Run、事件和
-          checkpoint。删除后无法恢复。
+          这会永久删除 <strong>{agent.name}</strong>，以及它的全部会话 transcript、工作区、
+          渠道和定时任务。删除后无法恢复。
         </p>
         <label className="field-label" htmlFor="delete-agent-name">输入 Agent 名称确认</label>
         <input

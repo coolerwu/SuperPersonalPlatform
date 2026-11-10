@@ -74,7 +74,7 @@
 #### 功能点
 
 1. 每条用户消息创建一个 turn，在 `SessionRegistry` 中按 session 串行执行；不同 session 并发，上限为 `BROWSER_CONCURRENCY`（默认 5）。同一会话在运行中可继续发送，新 turn 排队。
-2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`、`turn_end`、`turn_error`）。
+2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`、`turn_end`）。
 3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。
 4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示已停止。
 5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约直接丢弃；暂停/归档 Agent 的租约保留到 Agent 恢复。
@@ -127,7 +127,7 @@
 4. Agent：id、名称、instructions、状态（active/paused/archived）、`enabled_skills`、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。
 5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，下一个 turn 生效；忙碌会话等当前 turn 结束后的下一次设置变更或重建。
 6. Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区与 transcript，彻底删除会同时删除工作区目录和 transcript 目录，并级联删除渠道、渠道绑定、投递/入站记录与定时任务；有活动 turn 时 409。
-7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers`、`/api/memories` 读写 `settings.json` / `claude/CLAUDE.md`；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；密钥只返回 `has_api_key` / `has_password`。
+7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers`、`/api/memories` 读写 `settings.json` / `claude/CLAUDE.md`；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`。
 
 #### 验收标准
 
@@ -172,7 +172,7 @@
 4. 出站：
    - turn 开始时在同一事务写 `running_sessions` 租约与 `channel_deliveries` pending 行；结束时回填最终答复并发送；取消的 turn 不发送并删除空投递行。
    - 回复按 1800 字在段落/代码围栏边界切块，最多 10 块，超出截断并标注。
-   - 崩溃重启后按 pending/attempting 行补发；attempting 补发加「可能重复」标记；渠道暂停/登录过期时保留 pending，恢复后继续。
+   - 崩溃重启后按 pending/attempting 行补发；attempting 行补发文案为「♻️ 上一条回复可能已部分送达，以下为完整内容：」；渠道暂停/登录过期时保留 pending，恢复后继续。
    - 网页里在渠道会话中手动发消息不推回微信；定时推送复用同一投递机制。
 5. 运行期截图推送：工具层未接入，`channel_images.send_session_image` 已保留但当前没有调用方；下一版本接入浏览器工具后启用。
 6. 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；重新扫码后补发未发送回复。
@@ -198,7 +198,7 @@
 4. 会话忙时跳过本次触发并写 `audit_log`（`cron_skipped`），不排队堆积；手动「立即运行」遇到忙返回 409。
 5. 调度在提交 turn 前先提交数据库（消费本次计划）；提交失败写 `cron_trigger_failed` 审计，不重试。停机跨过多个触发点后每个任务最多补跑一次。
 6. 暂停/归档 Agent 时不触发；恢复后从下一个匹配时间继续。暂停/删除任务不取消已产生的 turn；删除任务保留会话与 transcript。
-7. 推送目标必须是当前 Agent 的 active `wechat` 渠道下已有 1:1 联系人；触发时与租约同一事务写 pending 投递，复用渠道分块、重试、补发；未配置不推送。渠道或联系人删除时清空目标。
+7. 推送目标必须是当前 Agent 的 active `wechat` 渠道下已有 1:1 联系人；触发时与租约同一事务写 pending 投递，复用渠道分块、重试、补发；未配置不推送。删除渠道会清空该渠道相关任务的推送目标；删除会话或联系人只移除绑定，任务保留目标，但届时找不到绑定会静默不推送。
 8. 接口：`GET/POST /api/cron-jobs`、`PUT/DELETE /api/cron-jobs/{id}`、`POST /api/cron-jobs/{id}/run`；响应为任务对象（不含 `last_run_id` / `last_run_status`）。
 
 #### 验收标准
@@ -351,9 +351,9 @@
 
 1. 生产：宿主机 systemd 用户服务 + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`（SPA fallback），没有 nginx/Postgres 容器。
 2. 运行时目录 `~/.super-personal-platform/`：`claude/`、`workspaces/<agent>/`、`skills/`、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
-3. 新库的 `app.db` 只创建六张表：`audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留旧表，平台不再读写。
-4. 升级：先备份 `data/app.db` 与 `data/settings.json`；旧库可直接沿用，启动时检测并重建旧结构 `channel_deliveries` / `channel_inbounds`（旧待投递与入站去重记录丢失，iLink 可能重放一次）；旧 `sessions/messages/runs/...` 表留在库中但不再使用；旧微信渠道配置不在 settings.json，需重新扫码绑定；旧定时任务列结构不兼容时会在启动/触发报错，先备份再决定删除重建；回测历史保留。
-5. 彻底重建：删除 `data/app.db` 后重启，会丢失回测历史、定时任务、审计与未完成投递，并需重新绑定微信。
+3. 新库的 `app.db` 只创建六张表：`audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留旧表，旧 `providers`/`agents`/`channels`/`sessions`/`messages`/`runs`/`run_events`/`memory_items` 等表不再读写，`app_configs` 仅在首次启动读取一次保留天数后不再使用。
+4. 升级：本版不做数据迁移。先备份 `data/app.db` 与 `data/settings.json`；旧库可直接沿用，启动时检测并重建旧结构 `channel_deliveries` / `channel_inbounds`（旧待投递与入站去重记录丢失，iLink 可能重放一次）；旧 `providers` / `agents` / `channels` / `knowledge_configs` 配置不会导入，`settings.json` 用环境变量和默认值重新种子（仅首次启动读取旧 `app_configs.session_retention_days` 一次）；旧用户记忆与旧 `sessions/messages/runs/...` 聊天历史不会导入；旧微信渠道凭据不在 settings.json，需重新扫码绑定；旧定时任务列结构不兼容时会在启动/触发报错，先备份再决定删除重建；回测历史保留。
+5. 彻底重建：删除 `data/app.db` 后重启，会丢失回测历史、定时任务、审计、未完成投递与入站去重记录；`data/settings.json` 和会话 transcript 不受影响，微信绑定在 settings.json 中，不需要因此重新扫码。
 6. 备份：`data/app.db`、`data/settings.json`、`claude/`、`workspaces/`、`data/trade-journal.jsonl`、`data/allocation*.json*`、`skills/`、`knowledge/`。
 7. 旧 home 的 `memory-organizer` 技能由启动 seed 清理（未修改时删除，用户改过的保留但停止跟踪）。
 

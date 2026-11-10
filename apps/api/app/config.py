@@ -143,10 +143,6 @@ class Settings(BaseSettings):
     backtest_future_check: bool = True
 
     @property
-    def checkpoint_dir(self) -> Path:
-        return self.app_data_dir / "checkpoints"
-
-    @property
     def workspaces_dir(self) -> Path:
         return self.app_workspaces_dir or (APP_HOME / "workspaces")
 

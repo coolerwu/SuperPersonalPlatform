@@ -97,7 +97,7 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
         />
         <span>
           <strong>允许 Agent 写入记忆</strong>
-          <small>开启后 Agent 可在 Run 中用 memory_save 记录自己的工作知识</small>
+          <small>兼容保留字段；当前版本不注入记忆工具，Agent 笔记由 Claude auto memory 管理</small>
         </span>
       </label>
 
@@ -105,7 +105,7 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
       <button className="primary" type="submit" disabled={saving || !name.trim()}>
         {saving ? "保存中…" : "保存 Agent"}
       </button>
-      <div className="hint">修改在下一轮对话生效；当前 session 的 checkpoint 不会被清空。</div>
+      <div className="hint">修改在下一轮对话生效；空闲会话的缓存客户端会在保存后关闭并在下一次对话重建。</div>
     </form>
   );
 }

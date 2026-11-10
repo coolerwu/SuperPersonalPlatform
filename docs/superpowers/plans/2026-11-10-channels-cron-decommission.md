@@ -1408,12 +1408,27 @@ git add docs/intent.md CLAUDE.md README.md apps/web/dist
 git commit -m "Document SDK-native channels and cron"
 ```
 
+**验收结果（核心 spec 第 13 节）：**
+
+| # | 结果 | 本地验证 / 需生产验证步骤 |
+|---|---|---|
+| 1 | 本地通过；真实模型需生产验证 | 本地：`test_chat_api.py`（send/interrupt/stream/messages）、`test_session_catalog.py`（list/messages）、`test_claude_runner.py::test_runner_maps_stream_and_completes`。生产：登录 → 新对话 → 发送“回复 OK” → 观察流式 → 刷新后历史可读。 |
+| 2 | 本地通过 | `test_session_registry.py::test_interrupt_*`、`test_claude_runner.py::test_interrupt_*` 与租约断言；取消后 `running_sessions` 无该会话。 |
+| 3 | 本地通过；真实 restart 需生产验证 | `test_recovery.py`（11 项）、`test_turn_lease.py`、`test_claude_runner.py::test_shutdown_cancellation_keeps_lease_for_recovery`。生产：发长任务 → `systemctl --user restart agent-command-center.service` → 会话自动续跑 → `running_sessions` 清空。 |
+| 4 | 本地通过；真实 iLink 需生产验证 | `test_weixin_runtime_sdk.py`、`test_channel_intake.py`、`test_channel_delivery_service.py`。生产：扫码 → 微信发消息 → 5 秒内收到回复 → 断网重放不重复处理。 |
+| 5 | 本地通过；真实微信需生产验证 | `test_channel_intake.py::test_help_command` / `test_new_command_rebinds_conversation` / `test_clear_command_rebinds_conversation` / `test_status_command_reports_busy_and_idle` / `test_stop_command_delegates_to_registry`；`test_weixin_runtime_sdk.py::test_new_command_flushes_pending_and_sends_reply_without_a_turn` / `test_stop_command_discards_pending_without_flushing` / `test_help_and_status_commands_leave_the_batch_window_alone`。生产：微信发送 `/new`、`/status`、`/stop` 各一次。 |
+| 6 | 本地通过；真实调度/推送需生产验证 | `test_cron_service.py`（due/busy/audit/session-id/push）、`test_cron_api.py`（CRUD/run/busy/push contract）。生产：创建 1 分钟后任务 → 到点检查会话与 `audit_log` → 配置微信推送并确认送达。 |
+| 7 | 本地通过；真实到期清理需生产验证 | `test_session_cleanup.py`（old/fresh/running/screenshots/deliveries/bindings/retention=0/non-UUID/artifacts-before-transcript）。生产：把保留天数设为 1 → 构造旧 mtime 会话 → 运行清理 → 确认 transcript 删除且 `claude/projects/*/memory/` 保留。 |
+| 8 | 本地通过 | `test_backtests_api.py`、`test_chan_api.py`、`test_allocation_api.py`、`test_trade_journal_api.py`、`test_knowledge_api.py` 全通过；`npm run build` 通过。生产：依次打开回测、交易记录、资产配置、缠论、知识库页面并做一次读写/刷新。 |
+| 9 | 通过 | `grep -rn "deepagents\|langgraph\|langchain_openai" apps/api` → 无输出（exit 1）；`git grep` 同样无结果。本地旧 egg-info 曾残留，已重新 editable 安装刷新。 |
+| 10 | 需生产验证（真实 DeepSeek key） | ① 记忆页保存 `claude/CLAUDE.md` → 新建会话问个人偏好，回答体现画像；② 让 Agent 记录工作笔记 → 新建会话询问，验证 auto memory 跨会话；③ **Auto Dream 单独验证**：观察 `claude/projects/<project>/memory/` 是否生成/整理，确认 Auto Dream 在 DeepSeek 端点下可运行；若不可运行，记录现象并降级为不依赖它，只保留 auto memory 的普通读写。 |
+
 > **质量审查结果（Task 9）：**
 > - 文档按当前实现重写：`docs/intent.md` 重新编号为 F1–F16（旧 F1–F82 归档在 git 历史），`CLAUDE.md`、`README.md` 与 `deploy/.env.example` 同步渠道、定时、清理、配置接口、六张表与运行时目录；删除记忆系统、Run 历史、搜索、rubric、eval 描述，写明本版不包含项与升级损失。
 > - 代码小修：`seed_default_skills` 清理已移除且未被用户修改的内置技能（`memory-organizer`），用户改过的保留并停止跟踪；默认提示词不再提 `/skills/<name>/SKILL.md`；删除 `.message-command-*` 死样式；前端 CronJob 去掉 `last_run_id`/`last_run_status`，`api.ts` 的删除/立即运行响应改为 `CronJob`；顺带删除未使用的 `session_title` 常量与函数。
-> - 三次自查发现并修正：提示词测试断言、删除 Agent 会连工作区一起删除（原文档误写“保留”）、前端没有单条消息重试按钮（改为“重新发送”）、`/api/settings` 与 `/api/cron-jobs` 的存储位置表述、CronPage 的 Run 措辞。
-> - 验证：后端 573 passed / 3 skipped；前端构建通过；`grep -r "deepagents\|langgraph\|langchain_openai" apps/api` 无结果（editable 元数据已刷新）。真实 DeepSeek 流式/resume/auto memory 与微信投递、定时推送需生产验证。
-> - 遗留（下一版/工具层）：`data/checkpoints` 空目录仍由 `main.py` 创建；`detach_session` 兼容桩仅测试使用；技能正文仍描述未接入的工具；`langchain-core` 暂留；`close_agent_clients` 无超时预算。
+> - 三次自查发现并修正：提示词测试断言、删除 Agent 会连工作区一起删除（原文档误写“保留”）、前端没有单条消息重试按钮（改为“重新发送”）、`/api/settings` 与 `/api/cron-jobs` 的存储位置表述、CronPage 的 Run 措辞。规格复审后补充：删除 `turn_error` 假事件、修正“删 app.db 会丢微信绑定”、写明本版不做数据迁移、区分渠道 `has_credentials` 与 `has_api_key`/`has_password`、补全 attempt 补发文案、删除 `data/checkpoints` 死目录代码与 `.run-trace-rubric*` 死样式、收口 cron-scheduler 技能正文与 AgentEditor 文案、升级损失清单与推送目标删除语义。
+> - 验证：后端 573 passed / 3 skipped；前端构建通过；`grep -rn "deepagents\|langgraph\|langchain_openai" apps/api` 无输出（exit 1），`git grep` 同样无结果。真实 DeepSeek 流式/resume/auto memory/Auto Dream 与微信投递、定时推送需生产验证。
+> - 遗留（下一版/工具层）：`cron_service.detach_session` 兼容桩仅测试使用；其他技能正文仍描述未接入的工具；`langchain-core` 暂留；`close_agent_clients` 无超时预算。
 
 ---
 

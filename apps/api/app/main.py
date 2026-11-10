@@ -48,7 +48,6 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     async def lifespan(app: FastAPI):
         try:
             settings.app_data_dir.mkdir(parents=True, exist_ok=True)
-            settings.checkpoint_dir.mkdir(parents=True, exist_ok=True)
             settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
             settings.skills_dir.expanduser().mkdir(parents=True, exist_ok=True)
             settings.knowledge_dir.mkdir(parents=True, exist_ok=True)

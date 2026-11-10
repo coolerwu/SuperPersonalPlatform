@@ -83,7 +83,7 @@ npm run dev
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
 - **Agent**：列出全部 Agent 摘要（Provider/model、启用技能数、状态），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。
 - **知识库**：启用开关、WebDAV 地址、账号、应用密码、根目录、同步间隔；密码只写入 `settings.json`，接口只返回 `has_password`。
-- **运行环境**：版本、执行核、数据库类型、Run 超时、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 关闭，`GET/PUT /api/settings`）。
+- **运行环境**：版本、执行核、数据库类型、单轮执行超时（`RUN_TIMEOUT_SECONDS`）、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 关闭，`GET/PUT /api/settings`）。
 - Agent 彻底删除：有活动 turn 时 409；确认后删除该 Agent 的 transcript、工作区目录、渠道与绑定、定时任务、投递/入站记录和渠道登录态。归档只改状态，不删文件。
 
 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent 列表只能切换这个全局选中的 Agent，不持有第二套选择状态。
@@ -139,7 +139,7 @@ metadata:
 - 每个与 bot 私聊的联系人映射为一个独立 SDK 会话（侧栏带「微信」徽标），在网页端可见并可继续对话；群聊忽略。
 - 入站支持文字、图片、文件与文本引用：图片/文件从 iLink CDN 下载、AES-128-ECB 解密后保存到该 Agent 的 `uploads/`，并以附件清单进入会话；引用回包通常不含原文，平台按 `msg_id` / `create_time_ms` 在本地入站记录与机器人回复中反查，查不到时标注「引用原文不可用」。语音/视频不下载、不落盘；纯语音/视频直接回固定提示且不创建对话，混合消息只处理文字/图片/文件。
 - 同一联系人的连续消息在 5 秒窗口内合并成一个 turn（最长 15 秒）；打包窗口内不保存 `sync_buf`，服务重启时由 iLink 重放消息，重复消息按 `external_message_id` 幂等吸收。
-- 回复在 turn 结束时立即发送，按 1800 字在段落/代码围栏边界切块（最多 10 块，超出截断并标注）；发送失败按 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 重试。服务崩溃后启动时补发未完成回复；`attempting` 行补发时加「可能重复」提示。取消的 turn 不回信。
+- 回复在 turn 结束时立即发送，按 1800 字在段落/代码围栏边界切块（最多 10 块，超出截断并标注）；发送失败按 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 重试。服务崩溃后启动时补发未完成回复；`attempting` 行补发时加「♻️ 上一条回复可能已部分送达，以下为完整内容：」前缀。取消的 turn 不回信。
 - 微信里可以发命令：`/new`（或 `/clear`）为当前联系人开始新会话（旧会话保留）、`/stop` 取消并丢弃待打包消息、`/status` 查看 Agent/会话/忙闲、`/help`。命令不经过 Agent、不产生消息或 turn，确认回复直接通过 iLink 发送（进程崩溃时可能丢失确认）。
 - 网页聊天框支持同一套命令；网页里在渠道会话中手动发消息不会推回微信。
 - 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；点「重新扫码」重新登录，未发送的回复在恢复后补发。
@@ -160,7 +160,7 @@ metadata:
 - 到点时如果任务会话已有排队/运行中的 turn，本次触发跳过并写 `audit_log`；「立即运行」遇到忙返回 409。
 - 调度在提交 turn 前先提交数据库（消费本次计划）；提交失败写审计，不重试。服务停机跨过多个触发点后恢复，每个任务最多补跑一次，随后按表达式继续。
 - 暂停或删除任务不会取消已经产生的 turn；删除任务保留会话与 transcript；暂停/归档 Agent 时不触发，恢复后从下一个匹配时间继续。
-- 可选推送到微信：任务可以显式选择一个当前 Agent 的 active 微信渠道下已有 1:1 联系人（`GET /api/channels/{id}/conversations` 列出候选）；触发时与租约同一事务写 pending 投递，复用渠道分块、重试和补发。渠道或联系人删除时目标自动清空；未配置则只留在网页会话里，群聊不支持，取消的 turn 不发送。
+- 可选推送到微信：任务可以显式选择一个当前 Agent 的 active 微信渠道下已有 1:1 联系人（`GET /api/channels/{id}/conversations` 列出候选）；触发时与租约同一事务写 pending 投递，复用渠道分块、重试和补发。删除渠道会清空该渠道相关任务的推送目标；删除会话或联系人只移除绑定，任务保留目标但届时静默不推送。未配置目标则只留在网页会话里，群聊不支持，取消的 turn 不发送。
 - 任务页显示下次触发、最近运行时间、上次跳过提示和「打开会话」入口，支持暂停/启用、编辑、立即运行和删除。
 - Agent 的 `cron-scheduler` 技能与任务工具已注册，但本版未接入 SDK。
 
@@ -243,7 +243,7 @@ metadata:
   - `running_sessions`：运行时租约（`session_id` 主键）。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles` 和 `market_sync_state`；可以独立删除，下次回测会重新抓取。
 - `trade-journal.jsonl`、`allocation.json`、`allocation-ledger.jsonl`：交易记录与资产配置数据，权限 0600，不建数据库表。
-- `browser_state.json`：浏览器 cookies/localStorage（0600）；工具层接入浏览器工具后用于跨 Run 保持登录态。
+- `browser_state.json`：浏览器 cookies/localStorage（0600）；工具层接入浏览器工具后用于跨会话、跨轮次保持登录态。
 - `knowledge_sync_state.json`：知识库同步状态（etag + 本地哈希）。
 - `backtests/`：回测策略临时文件。
 - `~/.super-personal-platform/claude/`：SDK 配置、用户画像 `CLAUDE.md`、会话 transcript 与 auto memory；权限 0700。SDK transcript 是会话历史的唯一来源。
@@ -360,14 +360,15 @@ curl --noproxy '*' http://127.0.0.1:8888/api/health
 
 升级后的行为与损失范围：
 
+- 本版**不做数据迁移**：旧库里的自定义 Agent 名称/instructions/`enabled_skills`、Provider 配置、知识库配置、旧用户记忆和旧聊天历史都不会导入。`data/settings.json` 用环境变量和默认值重新种子（仅首次启动读取旧 `app_configs.session_retention_days` 一次），之后在配置页重新填写 Provider、Agent 与知识库。
 - 旧 `app.db` 可以直接沿用。启动时会检测旧结构的 `channel_deliveries`、`channel_inbounds` 并重建：旧待投递和入站去重记录会丢失，iLink 可能重放一次已处理的消息。
-- 旧 `sessions`、`messages`、`runs`、`run_events`、`memory_items` 等表会留在库里但不再使用；可以在备份后手动删除，平台不会读写它们。
-- 旧的微信渠道配置不在 `settings.json` 里，升级后需要在「渠道」页重新扫码绑定。
+- 旧 `providers`/`agents`/`channels`/`sessions`/`messages`/`runs`/`run_events`/`memory_items` 等表会留在库里但不再读写；`app_configs` 仅在首次启动读取一次保留天数后不再使用；可以在备份后手动删除旧表。
+- 旧版本把微信渠道凭据和联系人绑定存在 `app.db`，它们不会迁移到 `settings.json`，升级后需要在「渠道」页重新扫码绑定。
 - 旧定时任务如果 `cron_jobs` 列结构与新模型不兼容，会在启动或触发时报错；先备份数据库，再决定删除重建（任务配置会丢失）。
 - 回测历史保留（`backtests` 表结构兼容）。
 - 旧 home 里遗留的 `memory-organizer` 技能会在启动 seed 时清理：未修改的直接删除，用户改过的保留但停止跟踪。
 
-如果选择彻底重建 `data/app.db`：停止服务，删除 `~/.super-personal-platform/data/app.db` 后重启即可。会丢失回测历史、定时任务、审计记录与未完成投递，并需要重新绑定微信；`data/settings.json`、会话 transcript 和其他 JSON 文件不受影响。
+如果选择彻底重建 `data/app.db`：停止服务，删除 `~/.super-personal-platform/data/app.db` 后重启即可。会丢失回测历史、定时任务、审计记录、未完成投递与入站去重记录；`data/settings.json`（含渠道配置与联系人绑定）和会话 transcript 不受影响，微信不需要因此重新扫码。
 
 ### 日常更新
 

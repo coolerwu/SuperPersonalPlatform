@@ -348,7 +348,7 @@ export function SettingsPage(props: SettingsPageProps) {
                 <div className="danger-zone">
                   <div>
                     <strong>彻底删除这个 Agent</strong>
-                    <p>删除它的全部会话、消息、Run、事件和 checkpoint，无法恢复。</p>
+                    <p>删除它的全部会话 transcript、工作区、渠道和定时任务，无法恢复。</p>
                   </div>
                   <button
                     type="button"
@@ -392,14 +392,12 @@ export function SettingsPage(props: SettingsPageProps) {
                   <div><span>版本</span><strong>{system.version}</strong></div>
                   <div><span>执行核</span><strong>{system.execution_core}</strong></div>
                   <div><span>数据库</span><strong>{system.database}</strong></div>
-                  <div><span>Run 超时</span><strong>{system.run_timeout_seconds}s</strong></div>
-                  <div><span>历史消息上限</span><strong>{system.max_history_messages}</strong></div>
-                  <div><span>Run 总数</span><strong>{system.counts.runs}</strong></div>
+                  <div><span>单轮执行超时</span><strong>{system.run_timeout_seconds}s</strong></div>
                 </div>
 
                 <div className="system-counts">
                   {system.counts.providers} providers · {system.counts.agents} agents ·{" "}
-                  {system.counts.sessions} sessions · {system.counts.messages} messages
+                  {system.counts.sessions} sessions
                 </div>
 
                 <div className="system-counts workspace-path-preview">
@@ -419,8 +417,8 @@ export function SettingsPage(props: SettingsPageProps) {
             <div className="settings-subhead">会话与记忆维护</div>
             <form className="editor" onSubmit={saveRuntimeSettings}>
               <p className="hint">
-                最后一条消息超过保留天数的会话会被自动删除，并清理消息、Run、
-                checkpoint 和截图；0 表示不清理。
+                超过保留天数没有更新的会话会被自动删除，并清理截图、投递记录与渠道绑定；
+                运行中的会话会跳过；0 表示不清理。
               </p>
               <label className="field-label" htmlFor="retention-days">保留天数</label>
               <input
