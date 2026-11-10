@@ -21,6 +21,13 @@ class FakeRegistry:
         return turn.id
 
 
+class EmptyAgentStore:
+    async def get(self):
+        from app.services.settings_store import PlatformSettings
+
+        return PlatformSettings(agents=[])
+
+
 @pytest.mark.asyncio
 async def test_recovery_resubmits_only_existing_transcripts(tmp_path):
     await init_db()
@@ -45,6 +52,22 @@ async def test_recovery_resubmits_only_existing_transcripts(tmp_path):
     finally:
         await turn_lease.remove("11111111-1111-1111-1111-111111111111")
         await turn_lease.remove("22222222-2222-2222-2222-222222222222")
+
+
+@pytest.mark.asyncio
+async def test_recovery_keeps_leases_when_no_agents(tmp_path):
+    await init_db()
+    session_id = "33333333-3333-3333-3333-333333333333"
+    await turn_lease.add(session_id)
+    registry = FakeRegistry()
+    try:
+        await recovery.recover_running_sessions(
+            registry, EmptyAgentStore(), home=tmp_path
+        )
+        assert registry.turns == []
+        assert await turn_lease.is_running(session_id) is True
+    finally:
+        await turn_lease.remove(session_id)
 
 
 @pytest.mark.asyncio

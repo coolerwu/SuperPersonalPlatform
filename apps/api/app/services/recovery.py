@@ -9,7 +9,8 @@ lease without a transcript (the process crashed before dispatch, or the
 session was deleted) is dropped, as is a lease whose session id is not a
 canonical UUID, because the id becomes a path component. Recovery is
 best-effort: a bad row is logged and skipped so the remaining leases still
-resume, and a failure to load settings or leases aborts only this pass.
+resume, and a failure to load settings or leases, or a settings file that
+yields no agents, aborts only this pass without deleting leases.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 def _is_canonical_uuid(value: str) -> bool:
     try:
         return str(uuid.UUID(value)) == value
-    except ValueError:
+    except (AttributeError, TypeError, ValueError):
         return False
 
 
@@ -65,6 +66,12 @@ async def recover_running_sessions(
         settings = await store.get()
     except Exception:
         logger.exception("recovery could not load settings")
+        return
+    if not settings.agents:
+        # An unreadable or corrupt settings file parses to zero agents. Dropping
+        # every lease then would erase sessions that are still recoverable, so
+        # leave them in place and retry on the next startup.
+        logger.warning("recovery skipped: no agents configured")
         return
     agents = {agent.id: agent for agent in settings.agents}
     try:
