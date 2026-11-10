@@ -609,17 +609,6 @@ async def run_job_now(
             return job
 
 
-async def detach_session(db: AsyncSession, session_id: str) -> None:
-    """Compatibility stub; cron jobs no longer bind to ``sessions`` rows.
-
-    ``session_service`` still calls this while deleting a session. Cron session
-    ids are SDK transcript identities, so deleting the database session does
-    not need to touch the job: the next trigger regenerates the id if the
-    transcript is gone.
-    """
-    return None
-
-
 class CronRuntime:
     def __init__(
         self,

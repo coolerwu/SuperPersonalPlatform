@@ -103,3 +103,82 @@ def test_seed_keeps_user_edited_retired_builtin_skill(tmp_path, monkeypatch) -> 
     seed_default_skills(tmp_path)
     assert target.read_text(encoding="utf-8") == edited
     assert name not in _state(tmp_path)["skills"]
+
+
+def test_seed_retired_skill_keeps_user_added_files(tmp_path, monkeypatch) -> None:
+    seed_default_skills(tmp_path)
+    name = "web-browser"
+    directory = tmp_path / name
+    extra = directory / "notes.txt"
+    extra.write_text("user notes", encoding="utf-8")
+    monkeypatch.delitem(DEFAULT_SKILLS, name)
+
+    seed_default_skills(tmp_path)
+
+    assert not (directory / "SKILL.md").exists()
+    assert extra.read_text(encoding="utf-8") == "user notes"
+    assert directory.is_dir()
+    assert name not in _state(tmp_path)["skills"]
+
+
+def test_seed_retired_skill_missing_skill_md_drops_state_only(tmp_path, monkeypatch) -> None:
+    seed_default_skills(tmp_path)
+    name = "web-browser"
+    directory = tmp_path / name
+    (directory / "SKILL.md").unlink()
+    extra = directory / "notes.txt"
+    extra.write_text("user notes", encoding="utf-8")
+    monkeypatch.delitem(DEFAULT_SKILLS, name)
+
+    seed_default_skills(tmp_path)
+
+    assert extra.read_text(encoding="utf-8") == "user notes"
+    assert directory.is_dir()
+    assert name not in _state(tmp_path)["skills"]
+
+
+def test_seed_retired_unreadable_skill_keeps_state(tmp_path, monkeypatch) -> None:
+    seed_default_skills(tmp_path)
+    name = "web-browser"
+    target = tmp_path / name / "SKILL.md"
+    unreadable = b"\xff\xfe\x00"
+    target.write_bytes(unreadable)
+    recorded = _state(tmp_path)["skills"][name]
+    monkeypatch.delitem(DEFAULT_SKILLS, name)
+
+    seed_default_skills(tmp_path)
+
+    assert target.read_bytes() == unreadable
+    assert _state(tmp_path)["skills"][name] == recorded
+
+
+def test_seed_drops_invalid_state_entries(tmp_path) -> None:
+    (tmp_path / SEED_STATE_FILENAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "skills": {"../escape": "deadbeef", "Bad Name": "deadbeef"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    seed_default_skills(tmp_path)
+
+    state = _state(tmp_path)["skills"]
+    assert "../escape" not in state
+    assert "Bad Name" not in state
+
+
+def test_seed_corrupt_state_keeps_retired_directory(tmp_path, monkeypatch) -> None:
+    seed_default_skills(tmp_path)
+    name = "web-browser"
+    target = tmp_path / name / "SKILL.md"
+    original = target.read_text(encoding="utf-8")
+    (tmp_path / SEED_STATE_FILENAME).write_text("{not json", encoding="utf-8")
+    monkeypatch.delitem(DEFAULT_SKILLS, name)
+
+    seed_default_skills(tmp_path)
+
+    assert target.read_text(encoding="utf-8") == original
+    assert name not in _state(tmp_path)["skills"]

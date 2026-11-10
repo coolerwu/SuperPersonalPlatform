@@ -36,7 +36,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
   checkpoints: "Checkpoint",
   filesystem: "文件系统",
   shell: "Shell",
-  browser: "浏览器",
+  browser: "浏览器工具（未接入）",
   skills: "Skills",
   memory: "Memory",
 };

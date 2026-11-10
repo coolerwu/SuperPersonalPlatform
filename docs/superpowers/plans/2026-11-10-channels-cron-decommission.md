@@ -1424,11 +1424,17 @@ git commit -m "Document SDK-native channels and cron"
 | 10 | 需生产验证（真实 DeepSeek key） | ① 记忆页保存 `claude/CLAUDE.md` → 新建会话问个人偏好，回答体现画像；② 让 Agent 记录工作笔记 → 新建会话询问，验证 auto memory 跨会话；③ **Auto Dream 单独验证**：观察 `claude/projects/<project>/memory/` 是否生成/整理，确认 Auto Dream 在 DeepSeek 端点下可运行；若不可运行，记录现象并降级为不依赖它，只保留 auto memory 的普通读写。 |
 
 > **质量审查结果（Task 9）：**
-> - 文档按当前实现重写：`docs/intent.md` 重新编号为 F1–F16（旧 F1–F82 归档在 git 历史），`CLAUDE.md`、`README.md` 与 `deploy/.env.example` 同步渠道、定时、清理、配置接口、六张表与运行时目录；删除记忆系统、Run 历史、搜索、rubric、eval 描述，写明本版不包含项与升级损失。
+> - 文档按当前实现重写：`docs/intent.md` 重新编号为 F1–F16（旧 F1–F90 归档在 git 历史），`CLAUDE.md`、`README.md` 与 `deploy/.env.example` 同步渠道、定时、清理、配置接口、六张表与运行时目录；删除记忆系统、Run 历史、搜索、rubric、eval 描述，写明本版不包含项与升级损失。
 > - 代码小修：`seed_default_skills` 清理已移除且未被用户修改的内置技能（`memory-organizer`），用户改过的保留并停止跟踪；默认提示词不再提 `/skills/<name>/SKILL.md`；删除 `.message-command-*` 死样式；前端 CronJob 去掉 `last_run_id`/`last_run_status`，`api.ts` 的删除/立即运行响应改为 `CronJob`；顺带删除未使用的 `session_title` 常量与函数。
-> - 三次自查发现并修正：提示词测试断言、删除 Agent 会连工作区一起删除（原文档误写“保留”）、前端没有单条消息重试按钮（改为“重新发送”）、`/api/settings` 与 `/api/cron-jobs` 的存储位置表述、CronPage 的 Run 措辞。规格复审后补充：删除 `turn_error` 假事件、修正“删 app.db 会丢微信绑定”、写明本版不做数据迁移、区分渠道 `has_credentials` 与 `has_api_key`/`has_password`、补全 attempt 补发文案、删除 `data/checkpoints` 死目录代码与 `.run-trace-rubric*` 死样式、收口 cron-scheduler 技能正文与 AgentEditor 文案、升级损失清单与推送目标删除语义。
+> - 三次自查发现并修正：提示词测试断言、删除 Agent 会连工作区一起删除（原文档误写“保留”）、前端没有单条消息重试按钮（改为“重新发送”）、`/api/settings` 与 `/api/cron-jobs` 的存储位置表述、CronPage 的 Run 措辞。规格复审后补充：文档与前端删除 `turn_error`、修正“删 app.db 会丢微信绑定”、写明本版不做数据迁移（旧编号至 F90）、统一“新库只创建六张表”、区分渠道 `has_credentials` 与 `has_api_key`/`has_password`、补全 attempt 补发文案、删除 `data/checkpoints` 死目录代码与 `.run-trace-rubric*` 死样式、升级损失清单与推送目标删除语义。质量复审后补充：技能 UI/工具页改为当前事实（启用列表不门控工具、`skill_save` 未接入）、退役技能只删被跟踪的 `SKILL.md` 并保留用户附加文件、补齐 seed 边界测试、删除前端 `turn_error` 死代码与 `detach_session` 桩、`project-commit` 技能更新为新栈、`/api/system` 的 browser 能力改为未接入、按 bundled CLI init frame 核实并列出默认工具集。
 > - 验证：后端 573 passed / 3 skipped；前端构建通过；`grep -rn "deepagents\|langgraph\|langchain_openai" apps/api` 无输出（exit 1），`git grep` 同样无结果。真实 DeepSeek 流式/resume/auto memory/Auto Dream 与微信投递、定时推送需生产验证。
-> - 遗留（下一版/工具层）：`cron_service.detach_session` 兼容桩仅测试使用；其他技能正文仍描述未接入的工具；`langchain-core` 暂留；`close_agent_clients` 无超时预算。
+> - 遗留（下一版/工具层）：
+>   - `/api/system` 仍返回 `counts.messages` / `counts.runs`（恒为 0）与 `max_history_messages` 兼容字段，前端已不展示；
+>   - `attachments.build_model_content` 与图片压缩路径生产无调用方（仅测试覆盖），待图片输入方案或工具层确定后处理；
+>   - 除 cron-scheduler 外的技能正文仍描述待工具层接入的能力；
+>   - `langchain-core` 暂留；
+>   - `close_agent_clients` 无超时预算；
+>   - `.claude/skills/project-commit/SKILL.md` 已按当前 SDK 栈更新（settings.json、六张表、升级注意事项、dist 提交流程）。
 
 ---
 

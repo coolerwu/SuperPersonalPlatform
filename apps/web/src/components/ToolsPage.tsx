@@ -35,7 +35,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
         <div>
           <div className="eyebrow">TOOLS</div>
           <h1>工具</h1>
-          <p>文件工具由 Claude Code 内置提供；当前版本平台工具与技能工具尚未接入 Agent，后续版本启用。</p>
+          <p>Agent 使用 Claude Code 默认工具集；当前版本平台工具与技能工具尚未接入 Agent，后续版本启用。</p>
         </div>
         <button className="ghost-button" onClick={onClose}>返回对话</button>
       </header>
@@ -67,8 +67,11 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
           <section className="settings-card">
             <div className="settings-card-head">
               <div>
-                <h2>文件工具</h2>
-                <p>Claude Code 内置工具，作用于当前 Agent 的工作区。</p>
+                <h2>Claude Code 默认工具集</h2>
+                <p>
+                  runner 未显式限制 tools，以下为 bundled CLI 实际默认启用的工具；
+                  文件类工具作用于当前 Agent 的工作区，Bash 没有沙箱。
+                </p>
               </div>
             </div>
             <div className="tool-list">
@@ -98,8 +101,8 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
             </div>
 
             <div className="hint">
-              web_search / web_fetch 使用当前 Agent Provider 的 DeepSeek Search/Fetch API，
-              按成功请求计费；浏览器工具需要 web-browser 技能。
+              搜索、浏览器、回测、交易记录、资产配置、缠论和知识库工具都未接入 SDK；
+              本版 Agent 不会调用这些工具。
             </div>
             {error && <div className="error-banner">{error}</div>}
             {!data && !error && <div className="empty-note">读取中…</div>}
@@ -116,7 +119,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
                       声明技能：
                       {tool.skills.length > 0
                         ? tool.skills.join(", ")
-                        : "—（还没有技能声明，无法通过技能解锁）"}
+                        : "—（没有技能声明）"}
                     </small>
                   </div>
                   <span className={`capability ${tool.registered ? "on" : "off"}`}>

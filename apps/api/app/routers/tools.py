@@ -14,23 +14,38 @@ from app.services.skills import scan_skills
 
 router = APIRouter(prefix="/api/tools", tags=["tools"], dependencies=[Depends(require_auth)])
 
-# Claude Code's built-in tools. The SDK runtime exposes them directly; they do
-# not come from the skill registry in this version.
-FILESYSTEM_TOOLS = (
-    ("Read", "读取工作区文件"),
-    ("Write", "创建或覆盖工作区文件"),
-    ("Edit", "精确替换文件片段"),
+# Claude Code's default built-in tool set. The runner does not set ``tools``,
+# so the bundled CLI enables this exact set (verified from the CLI init frame,
+# Claude Code 2.1.321). Skill/platform tools are not wired yet.
+CLAUDE_CODE_TOOLS = (
+    ("Task", "派生子 Agent 执行任务"),
     ("Bash", "在宿主机执行命令；没有沙箱，工作目录是当前 Agent 工作区"),
-    ("Glob", "按模式查找文件"),
-    ("Grep", "在工作区搜索文本"),
+    ("CronCreate", "Claude Code 自带的定时任务创建（与平台「定时」页面无关）"),
+    ("CronDelete", "Claude Code 自带的定时任务删除"),
+    ("CronList", "Claude Code 自带的定时任务列表"),
+    ("Edit", "精确替换文件片段"),
+    ("EnterWorktree", "进入 git worktree"),
+    ("ExitWorktree", "退出 git worktree"),
+    ("ListAgents", "列出 Claude Code Agent"),
+    ("Monitor", "后台监控事件"),
+    ("NotebookEdit", "编辑 Jupyter notebook"),
+    ("Read", "读取工作区文件（含图片）"),
+    ("ReportFindings", "报告代码审查发现"),
+    ("ScheduleWakeup", "安排稍后唤醒"),
+    ("SendMessage", "向其他 Agent 或会话发送消息"),
+    ("Skill", "调用 Claude Code 技能"),
+    ("TaskStop", "停止后台任务"),
+    ("WebFetch", "抓取网页内容"),
+    ("WebSearch", "搜索网页"),
+    ("Workflow", "运行工作流"),
+    ("Write", "创建或覆盖工作区文件"),
 )
 
 # Static declaration: the SDK runtime does not expose platform tools yet.
 PLATFORM_TOOLS = (
     (
         "skill_save",
-        "把可复用的流程保存为技能；创建后自动加入当前 Agent 的启用列表，"
-        "下一次对话生效。",
+        "把可复用的流程保存为技能（本版尚未接入 SDK，Agent 无法调用）。",
     ),
 )
 
@@ -75,7 +90,7 @@ async def list_tools() -> ToolsOut:
                 source="claude-code",
                 wired=True,
             )
-            for name, description in FILESYSTEM_TOOLS
+            for name, description in CLAUDE_CODE_TOOLS
         ],
         skill_tools=skill_tools,
     )

@@ -1,6 +1,6 @@
 ---
 name: project-commit
-description: Commit workflow for the v1 Agent Command Center (FastAPI + deepagents in apps/api, React/Vite in apps/web). Use when asked to prepare, commit, or push changes. Keeps docs/intent.md, CLAUDE.md, README, deploy config, and the API/web checks in sync.
+description: Commit workflow for the v1 Agent Command Center (FastAPI + Claude Agent SDK in apps/api, React/Vite in apps/web). Use when asked to prepare, commit, or push changes. Keeps docs/intent.md, CLAUDE.md, README, deploy config, and the API/web checks in sync.
 ---
 
 # Project Commit
@@ -47,6 +47,18 @@ Production runs as a **user-level systemd service** on the host:
 port 8888. FastAPI serves `apps/web/dist` directly. Docker Compose, nginx, and
 Postgres are no longer used; their deployment files were removed.
 
+Runtime state lives in `~/.super-personal-platform/`:
+
+- `data/settings.json` — platform config, including providers, agents, channels,
+  knowledge; written atomically with a `.bak` backup.
+- `data/app.db` — SQLite. New installs create only `audit_log`, `cron_jobs`,
+  `channel_inbounds`, `channel_deliveries`, `backtests`, `running_sessions`;
+  upgraded databases keep unused legacy tables.
+- `claude/` — SDK config, user profile `CLAUDE.md`, session transcripts and
+  auto memory.
+- `workspaces/`, `skills/`, `knowledge/`, `tmp/`, and the JSON/JSONL data files
+  listed in `README.md`.
+
 If the user explicitly asks to deploy v1 on the target machine:
 
 1. Push the target branch to `origin` first and record the pushed SHA.
@@ -72,11 +84,25 @@ If the user explicitly asks to deploy v1 on the target machine:
    Do not claim deployment success if any phase failed.
 8. Never put SSH/sudo passwords, API keys, or tokens in repository files or
    command text.
-9. Do not delete `~/.super-personal-platform/`. Back up
-   `~/.super-personal-platform/data/app.db` and `data/checkpoints/` before
-   schema changes.
+9. Do not delete `~/.super-personal-platform/`. Before schema changes or risky
+   upgrades, back up `data/app.db`, `data/settings.json`, `claude/`, and
+   `workspaces/`.
 10. Docker deployment files have been removed; do not reintroduce Docker
     Compose, nginx, or Postgres.
+
+### Upgrading from the deepagents/LangGraph version
+
+- Back up `data/app.db` and `data/settings.json` first.
+- No data migration is performed: old Provider/Agent config, knowledge config,
+  memories and chat history are not imported. `settings.json` is seeded from
+  `.env` and defaults (only `app_configs.session_retention_days` is read once).
+- Old `channel_deliveries` / `channel_inbounds` tables are rebuilt when their
+  columns are stale, so pending deliveries and inbound dedup rows are lost.
+- WeChat channels must be re-scanned because their credentials lived in the old
+  `channels` table, not in `settings.json`.
+- Old legacy tables stay in `app.db` but are no longer read or written.
+- Rebuilding `app.db` loses backtest history, cron jobs, audit rows, pending
+  deliveries and inbound dedup records, but not `settings.json` or transcripts.
 
 ## Guardrails
 
@@ -87,11 +113,21 @@ If the user explicitly asks to deploy v1 on the target machine:
 - `apps/web/dist/` **is** committed; include the rebuilt assets.
 - Do not reset or overwrite existing changes unless the user explicitly asks.
 - Do not assume a push synchronized `rc-clone`; it is an independent checkout.
-- v1 has workspace filesystem tools, long-term memory, and a skills library
-  (per-agent enabled skills; skill-provided tools unlock only after the model
-  reads the skill's `SKILL.md`). Browser tools (`browser_*`) are skill-gated via
-  `web-browser` and use a local Playwright Chromium; there are no shell tools and
-  no approval flow; do not describe those as available.
+- Current runtime facts:
+  - execution core is `ClaudeSDKClient`; sessions/messages are SDK transcripts
+    under `claude/projects/<agent_id>/<uuid>.jsonl`; there are no
+    sessions/messages/runs tables;
+  - `instructions` are appended to the Claude Code preset system prompt;
+  - the default tool set is Claude Code's own (the runner does not set `tools`);
+  - platform and skill tools are **not wired** into the SDK yet, and the
+    per-agent `enabled_skills` list does not gate anything in this version;
+  - skills are file documents under `skills/`; editing them does not require a
+    form, but the skill tools they declare are unavailable;
+  - memory is `claude/CLAUDE.md` plus Claude auto memory; there is no `/memory`
+    command, memory table, memory tool or consolidation skill;
+  - rubric evaluation, QuickJS `eval`, session full-text search and Run history
+    are removed;
+  - browser screenshots are not pushed to WeChat until the tool layer is wired.
 - Production uses systemd + venv + SQLite. Docker deployment is deprecated:
   do not reintroduce Docker Compose, Dockerfiles, nginx, or Postgres.
 - If a commit workflow change is requested, update both `CLAUDE.md` and this

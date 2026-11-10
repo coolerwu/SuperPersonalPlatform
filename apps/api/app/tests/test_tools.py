@@ -14,7 +14,29 @@ def test_tools_api_declares_claude_code_and_unwired_tools(client) -> None:
     body = client.get("/api/tools").json()
 
     filesystem = {tool["name"]: tool for tool in body["filesystem_tools"]}
-    assert set(filesystem) == {"Read", "Write", "Edit", "Bash", "Glob", "Grep"}
+    assert set(filesystem) == {
+        "Task",
+        "Bash",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "Edit",
+        "EnterWorktree",
+        "ExitWorktree",
+        "ListAgents",
+        "Monitor",
+        "NotebookEdit",
+        "Read",
+        "ReportFindings",
+        "ScheduleWakeup",
+        "SendMessage",
+        "Skill",
+        "TaskStop",
+        "WebFetch",
+        "WebSearch",
+        "Workflow",
+        "Write",
+    }
     assert all(tool["source"] == "claude-code" for tool in filesystem.values())
     assert all(tool["wired"] and tool["registered"] for tool in filesystem.values())
 

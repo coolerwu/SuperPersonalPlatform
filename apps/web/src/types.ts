@@ -95,8 +95,7 @@ export type TurnStreamEvent =
       error?: string | null;
       terminal_reason?: string | null;
       usage?: Record<string, unknown> | null;
-    }
-  | { type: "turn_error"; error: string };
+    };
 
 export type CronJob = {
   id: string;

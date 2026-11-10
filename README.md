@@ -6,7 +6,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 - `apps/web`：React + Vite + TypeScript
 - `deploy/`：systemd unit 与 `.env` 模板（生产）
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`
-- 会话与消息由 SDK transcript 管理；平台配置在 `data/settings.json`；`app.db` 只保留 `audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions` 六张表
+- 会话与消息由 SDK transcript 管理；平台配置在 `data/settings.json`；新库的 `app.db` 只创建 `audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions` 六张表（从旧版升级的库会保留未使用的旧表）
 
 本版明确不包含：工具层迁移（技能工具、`add_dirs`、MCP、浏览器/搜索/回测等工具接入 Agent）、rubric 质检、QuickJS eval、会话全文搜索、多 Agent 协作、刷新后继续看当前输出、消息时间戳、Run 历史。`langchain-core` 暂留，待工具层迁移后删除。
 
@@ -29,7 +29,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 ├── tmp/                    # SDK 的 TMPDIR
 └── data/
     ├── settings.json       # 平台配置（0600，写前留 .bak）
-    ├── app.db              # SQLite（六张表）
+    ├── app.db              # SQLite（新库六张表；升级库保留旧表）
     ├── market.db           # Bitget 行情缓存
     ├── knowledge_sync_state.json
     ├── trade-journal.jsonl
@@ -92,9 +92,9 @@ npm run dev
 
 侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、渠道、定时、记忆；「平台」组放配置和退出登录。功能工作区放回测、交易记录、资产配置、缠论图，不显示 Agent 选择器和会话。
 
-- **技能**：列出全局技能库，按「系统技能」和「交互创建」分组，按当前 Agent 勾选/取消启用（立即保存）；展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（删除技能目录并从所有 Agent 的启用列表移除）。
-- **工具**：如实展示当前接入状态。Claude Code 内置工具（Read / Write / Edit / Bash / Glob / Grep）为已接入；平台工具与技能工具标记为未接入，等待工具层迁移。本版 Agent 不能调用搜索、浏览器、回测、定时、交易记录、资产配置、缠论或知识库工具。
-- 内置技能在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除（例如旧 home 的 `memory-organizer`），用户改过的保留并停止跟踪。
+- **技能**：列出全局技能库，按「系统技能」和「交互创建」分组，按当前 Agent 勾选/取消启用（立即保存）；启用列表本版只保存偏好，不门控工具。展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（删除技能目录并从所有 Agent 的启用列表移除）。
+- **工具**：如实展示当前接入状态。runner 未显式限制 `tools`，Agent 使用 Claude Code 默认工具集：Task、Bash、CronCreate/CronDelete/CronList、Edit、EnterWorktree/ExitWorktree、ListAgents、Monitor、NotebookEdit、Read、ReportFindings、ScheduleWakeup、SendMessage、Skill、TaskStop、WebFetch、WebSearch、Workflow、Write；平台工具与技能工具标记为未接入，等待工具层迁移。本版 Agent 不能调用平台注册表中的搜索、浏览器、回测、定时、交易记录、资产配置、缠论或知识库工具。
+- 内置技能在技能库中 seed：`web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
 
 ### Skills 文件格式
 
@@ -107,7 +107,7 @@ skills/
     └── 其他辅助文件（可选）
 ```
 
-`SKILL.md` 必须有 YAML frontmatter，`name` 与目录名一致：
+`SKILL.md` 必须有 YAML frontmatter，`name` 建议与目录名一致；不一致时技能页会告警，但仍可保存和启用。
 
 ```markdown
 ---
@@ -234,7 +234,7 @@ metadata:
 生产数据都在 `~/.super-personal-platform/data/`：
 
 - `settings.json`：平台配置（0600）：`runtime`（会话保留天数、旧配置迁移标记）、`knowledge`（WebDAV 配置，含密码）、`agents`（instructions、Provider、`enabled_skills`、状态）、`channels`（iLink 凭据与同步游标）、`channel_conversations`（`"{channel_id}:{external_id}"` → session_id、display_name、context_token）。写前保留 `.bak`，主文件损坏时回退。
-- `app.db`：SQLite（WAL，busy_timeout=5000），只有六张表：
+- `app.db`：SQLite（WAL，busy_timeout=5000）。新库只创建六张表；从旧版升级的库会保留未使用的旧表：
   - `audit_log`：审计流水（定时跳过、触发失败等）；
   - `cron_jobs`：定时任务定义、`session_id`（UUID）、`next_run_at`、最近运行/跳过、推送目标；
   - `channel_inbounds`：入站幂等键（渠道 + 外部消息 id），同时保存入站文本/联系人供引用找回；

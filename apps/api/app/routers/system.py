@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, Request
 from app import APP_VERSION
 from app.auth import require_auth
 from app.config import settings
-from app.services.browser_tools import playwright_installed
 from app.services.claude_env import claude_paths
 from app.services.settings_store import SettingsStore, get_settings_store
 
@@ -62,7 +61,9 @@ async def system_info(request: Request) -> dict[str, object]:
             "checkpoints": False,
             "filesystem": True,
             "shell": True,
-            "browser": playwright_installed(),
+            # Browser tooling exists in the repo but is not wired into the SDK
+            # runtime; the tool-layer migration will turn this on.
+            "browser": False,
             "skills": True,
             "memory": True,
         },

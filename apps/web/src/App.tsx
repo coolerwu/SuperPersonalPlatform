@@ -622,9 +622,6 @@ export default function App() {
           notice: "",
         }));
         break;
-      case "turn_error":
-        updateLive(forSession, (current) => ({ ...current, notice: event.error }));
-        break;
       case "turn_end": {
         if (streamsRef.current.get(forSession) !== source) return;
         const endedTurnId = activeTurnRef.current[forSession] ?? null;

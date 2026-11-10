@@ -16,7 +16,6 @@ from app.services.cron_service import (
     CronScheduleError,
     CronValidationError,
     create_job,
-    detach_session,
     next_run,
     run_due_jobs,
     run_job_now,
@@ -621,13 +620,3 @@ async def test_update_job_sets_and_clears_push_target(client) -> None:
         assert job.push_channel_id is None
         assert job.push_conversation_id is None
         await db.commit()
-
-
-async def test_detach_session_is_a_noop(client) -> None:
-    job_id = await _make_job()
-    session_id = (await _job(job_id)).session_id
-    assert session_id is not None
-    async with SessionLocal() as db:
-        await detach_session(db, session_id)
-        await db.commit()
-    assert (await _job(job_id)).session_id == session_id

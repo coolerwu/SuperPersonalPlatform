@@ -118,7 +118,7 @@ export function SkillsPage({
           </strong>
           <small>{skill.description}</small>
           {skill.include_tools.length > 0 && (
-            <small>提供工具：{skill.include_tools.join(", ")}</small>
+            <small>声明工具（本版未接入）：{skill.include_tools.join(", ")}</small>
           )}
           <small className="skill-path">{skill.path}</small>
           {skill.warnings.map((warning) => (
@@ -161,7 +161,7 @@ export function SkillsPage({
         <div>
           <div className="eyebrow">SKILLS</div>
           <h1>技能</h1>
-          <p>为当前 Agent 启用技能；读取 SKILL.md 后，技能工具才会解锁。</p>
+          <p>为当前 Agent 维护技能启用列表；本版技能是文件说明，不改变 Agent 可用的工具。</p>
         </div>
         <button className="ghost-button" onClick={onClose}>返回对话</button>
       </header>
@@ -183,10 +183,9 @@ export function SkillsPage({
             {agent && (
               <>
                 <div className="hint">
-                  技能库：~/.super-personal-platform/skills。Agent 在对话里可以用 skill_save
-                  主动沉淀可复用的流程，也可以按你的要求创建技能；AI 创建的技能会自动加入当前
-                  Agent 的启用列表，下一次对话生效。启用技能即允许它声明的工具，读取 SKILL.md
-                  后解锁。文件工具始终可用。
+                  技能库：~/.super-personal-platform/skills。技能是文件说明，启用列表仅为后续工具层
+                  准备并保存到当前 Agent；本版技能工具与 skill_save 尚未接入 SDK，启用不会改变当前
+                  可用工具。Agent 可以在对话中用文件工具查看或修改 skills/ 下的 SKILL.md。
                 </div>
 
                 <div className="skill-group">
@@ -204,13 +203,14 @@ export function SkillsPage({
                 <div className="skill-group">
                   <div className="skill-group-head">
                     <h3>交互创建</h3>
-                    <small>AI 创建会自动启用；手动创建需在这里启用。</small>
+                    <small>通过对话中的文件工具创建或编辑；启用列表仅保存偏好。</small>
                   </div>
                   {createdSkills.length > 0 ? (
                     <div className="skill-list">{createdSkills.map(renderSkill)}</div>
                   ) : (
                     <div className="empty-note">
-                      还没有交互创建的技能。完成可复用的流程后，可以让 Agent 把它保存成技能。
+                      还没有交互创建的技能。可以让 Agent 用文件工具在 skills/ 下写入 SKILL.md，
+                      或直接编辑现有技能。
                     </div>
                   )}
                 </div>

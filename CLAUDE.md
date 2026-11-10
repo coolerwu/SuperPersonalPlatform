@@ -14,8 +14,8 @@
 - v1 从 0 到 1 重建；`apps/api` 使用 FastAPI + Claude Agent SDK（Python，`ClaudeSDKClient`），模型走 DeepSeek 的 Anthropic 兼容端点；`apps/web` 使用 React + Vite + TypeScript。
 - 执行核：`SessionRegistry`（按 session 串行、跨 session 并发，并发数 = `BROWSER_CONCURRENCY`）+ `ClaudeTurnRunner`（每个 session 一个 `ClaudeSDKClient` 缓存）。
 - 会话/消息由 SDK transcript 管理：`~/.super-personal-platform/claude/projects/<agent_id>/<uuid>.jsonl`；会话列表/历史/重命名/删除走 `sdk_bridge` / `session_catalog`，平台不建 sessions/messages/runs 表。
-- 平台配置在 `data/settings.json`（`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`）；单文件、单锁、临时文件 + fsync + `os.replace`，写前留 `.bak`；密钥只返回 `has_api_key` / `has_password`。
-- `app.db` 只有六张表：`audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`。`market.db` 行情缓存不变。
+- 平台配置在 `data/settings.json`（`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`）；单文件、单锁、临时文件 + fsync + `os.replace`，写前留 `.bak`；密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。平台写入的密钥存 `settings.json`，`.env` 提供的密钥只读。
+- 新库的 `app.db` 只创建六张表：`audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留未使用的旧表。`market.db` 行情缓存不变。
 - `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 注入；修改 Agent/Provider 后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
 - 重启恢复：`running_sessions` 租约 + `resume`；恢复提示要求先检查状态、继续原任务、不重复已完成步骤；没有 transcript 的租约丢弃；暂停/归档 Agent 的租约保留。
 - 网页聊天：`POST /api/chat/messages` → `{session_id, turn_id, accepted}`；SSE `GET /api/sessions/{uuid}/stream?turn_id=...`；历史 `GET /api/sessions/{uuid}/messages?agent_id=...`；中断 `POST /api/sessions/{uuid}/interrupt`；命令 `POST /api/chat/commands`（`/new` `/clear` `/stop` `/status` `/help`）。刷新会丢失当前流式输出，历史从 transcript 重建。
@@ -23,8 +23,8 @@
 - 定时：`cron_jobs.session_id` 是 SDK 会话 UUID；每次触发在专属会话入队一个 turn；会话忙时跳过并写 `audit_log`；启动补跑最多一次；推送目标是当前 Agent 的 active 微信渠道下已有 1:1 联系人，复用渠道投递。
 - 清理：`SessionCleanupRuntime` 按 transcript mtime 与 `runtime.session_retention_days`（默认 30，0 关闭）删除；跳过租约/忙碌会话；后台清理先清产物（截图、投递、渠道绑定）再删 transcript；手动删除会话先调用 SDK `delete_session`，再尽力清理产物；`claude/` 下 auto memory 保留。
 - 记忆：用户画像 = `claude/CLAUDE.md`（记忆页单文档编辑，保存留 `.bak`）；Agent 指令在 `settings.json`；Agent 笔记由 Claude auto memory 管理；`agents[].auto_memory` 仅为兼容保留，运行时不再读取。平台没有记忆表、记忆工具、`/memory` 指令或整理记忆。
-- 技能：全局 `skills/<name>/SKILL.md`；`DEFAULT_SKILLS` 为 `web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`；`.seed_state.json` 记录内置内容哈希，只更新用户未修改的内置技能；已从默认列表移除且未修改的技能在 seed 时删除，用户改过的保留并停止跟踪。
-- 工具层未迁移：技能工具、`add_dirs`、MCP、浏览器/搜索/回测/定时/交易/资产/缠论/知识库工具都没有接入 SDK；工具页如实显示 Claude Code 内置工具（Read/Write/Edit/Bash/Glob/Grep）为已接入，平台与技能工具标记为未接入。`langchain-core` 暂留。
+- 技能：全局 `skills/<name>/SKILL.md`；`DEFAULT_SKILLS` 为 `web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`；`.seed_state.json` 记录内置内容哈希，只更新用户未修改的内置技能；已从默认列表移除且未修改的技能只删除被跟踪的 SKILL.md，保留用户附加文件；启用列表本版只保存偏好，不门控工具。
+- 工具层未迁移：技能工具、`add_dirs`、MCP、浏览器/搜索/回测/定时/交易/资产/缠论/知识库工具都没有接入 SDK；runner 未显式设置 `tools`，Claude Code 默认工具集为 Task、Bash、CronCreate/CronDelete/CronList、Edit、EnterWorktree/ExitWorktree、ListAgents、Monitor、NotebookEdit、Read、ReportFindings、ScheduleWakeup、SendMessage、Skill、TaskStop、WebFetch、WebSearch、Workflow、Write。工具页按此如实展示，平台与技能工具标记为未接入。`langchain-core` 暂留。
 - 知识库：`KnowledgeSyncRuntime` 在进程内把 WebDAV 目录双向同步到 `knowledge/`；配置在 `settings.json` 的 `knowledge` 节；本版不挂载给 Agent。
 - 业务页面（回测、交易记录、资产配置、缠论图）不绑定 Agent，逻辑与旧版一致：`backtests` 表、`trade-journal.jsonl`、`allocation.json` + `allocation-ledger.jsonl`、`market.db`。
 - Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区，彻底删除会删除工作区与 transcript 目录。

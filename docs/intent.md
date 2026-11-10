@@ -4,7 +4,7 @@
 - 最后更新：2026-11-11
 - 编号水位：F16
 
-本文件是新项目的需求唯一来源。2026-11-11 已按 Claude Agent SDK 迁移后的实现重写；旧的 F1–F82 需求记录（deepagents/LangGraph、记忆系统、rubric、eval、会话全文搜索、Run 历史）随迁移废止，历史文本见 git 历史（cf67560 及之前）。编号从 F1 重新起算。
+本文件是新项目的需求唯一来源。2026-11-11 已按 Claude Agent SDK 迁移后的实现重写；旧的 F1–F90 需求记录（deepagents/LangGraph、记忆系统、rubric、eval、会话全文搜索、Run 历史）随迁移废止，历史文本见 git 历史（cf67560 及之前）。编号从 F1 重新起算。
 
 ## 怎么用
 
@@ -38,7 +38,7 @@
 7. 定时任务：5 字段 cron、IANA 时区、专属会话、忙时跳过并审计、可选推送到微信联系人、停机后最多补跑一次。
 8. 会话保留清理：按 transcript mtime 与保留天数删除，跳过运行中会话，保留 auto memory。
 9. 记忆：用户画像 = `claude/CLAUDE.md`（记忆页单文档编辑）；Agent 指令 = `settings.json`；Agent 笔记由 Claude auto memory 管理。
-10. 配置页：Provider、Agent、知识库、运行环境；所有平台配置写入 `data/settings.json`，密钥只返回 `has_api_key` / `has_password`。
+10. 配置页：Provider、Agent、知识库、运行环境；所有平台配置写入 `data/settings.json`，密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。
 11. 技能库：全局 `skills/` 目录，内置技能 seed 与哈希跟踪；本版技能工具尚未接入 Agent。
 12. 知识库：WebDAV 双向镜像到 `knowledge/`，配置与同步状态在设置接口；本版尚未挂载给 Agent。
 13. 业务页面：回测、交易记录、资产配置、缠论图，均不绑定 Agent。
@@ -57,7 +57,7 @@
 - 单用户、自托管，不做多租户/RBAC。
 - 单进程部署；cron 与微信运行时都在 API 进程内，多 worker 会重复触发。
 - 不提供刷新后继续看当前输出、消息时间戳、会话全文搜索、Run 历史、rubric 质检、QuickJS eval、多 Agent 协作。
-- 密钥只存 `data/settings.json`（权限 0600），不写日志、不返回前端。
+- 平台写入的密钥存 `data/settings.json`（权限 0600）；`.env` 提供的密钥只读、不再回写。密钥不写日志、不返回前端。
 
 #### 非目标
 
@@ -127,7 +127,7 @@
 4. Agent：id、名称、instructions、状态（active/paused/archived）、`enabled_skills`、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。
 5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，下一个 turn 生效；忙碌会话等当前 turn 结束后的下一次设置变更或重建。
 6. Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区与 transcript，彻底删除会同时删除工作区目录和 transcript 目录，并级联删除渠道、渠道绑定、投递/入站记录与定时任务；有活动 turn 时 409。
-7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers`、`/api/memories` 读写 `settings.json` / `claude/CLAUDE.md`；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`。
+7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers` 读写 `settings.json`；`/api/memories` 只读写 `claude/CLAUDE.md`；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`。
 
 #### 验收标准
 
@@ -215,9 +215,9 @@
 #### 功能点
 
 1. 技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `builtin` / `ai` / `manual`。
-2. 内置技能 seed：`web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。`.seed_state.json` 记录内置内容哈希：未修改的内置技能随版本更新；用户改过的保留；已从默认列表移除且未被修改的内置技能在启动 seed 时删除，用户改过的保留并停止跟踪（例如旧 home 的 `memory-organizer`）。
-3. 技能页按「系统技能 / 交互创建」分组，可查看和编辑 SKILL.md、启用/停用；非系统技能可删除（同时从所有 Agent 的启用列表移除）。
-4. 本版工具层未迁移：技能、`add_dirs`、MCP、平台工具、技能工具（搜索/浏览器/回测/定时/交易/资产/缠论/知识库）都没有接入 SDK；工具页如实显示 Claude Code 内置工具（Read/Write/Edit/Bash/Glob/Grep）为已接入，平台工具与技能工具标记为未接入。
+2. 内置技能 seed：`web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。`.seed_state.json` 记录内置内容哈希：未修改的内置技能随版本更新；用户改过的保留；已从默认列表移除且未被修改的内置技能在启动 seed 时只删除被跟踪的 `SKILL.md`，目录内用户附加文件保留，只有目录为空时才移除目录；用户改过的保留并停止跟踪（例如旧 home 的 `memory-organizer`）。
+3. 技能页按「系统技能 / 交互创建」分组，可查看和编辑 SKILL.md、启用/停用；启用列表本版只保存偏好，不门控工具；非系统技能可删除（同时从所有 Agent 的启用列表移除）。
+4. 本版工具层未迁移：技能、`add_dirs`、MCP、平台工具、技能工具（搜索/浏览器/回测/定时/交易/资产/缠论/知识库）都没有接入 SDK；runner 未显式设置 `tools`，Claude Code 默认工具集为 Task、Bash、CronCreate/CronDelete/CronList、Edit、EnterWorktree/ExitWorktree、ListAgents、Monitor、NotebookEdit、Read、ReportFindings、ScheduleWakeup、SendMessage、Skill、TaskStop、WebFetch、WebSearch、Workflow、Write。工具页按此如实展示，平台工具与技能工具标记为未接入。
 5. `langchain-core` 依赖暂留，等工具层迁移完成后删除。
 
 #### 验收标准
