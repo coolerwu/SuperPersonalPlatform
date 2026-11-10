@@ -26,6 +26,7 @@ import { Markdown } from "./Markdown";
 
 type ChatPanelProps = {
   messages: TranscriptMessage[];
+  queuedMessages: TranscriptMessage[];
   loading: boolean;
   streamText: string;
   streamReasoning: string;
@@ -89,8 +90,6 @@ function commandReplyLabel(command: string): string {
       return "会话状态";
     case "/stop":
       return "停止任务";
-    case "/memory":
-      return "写记忆";
     default:
       return "命令";
   }
@@ -257,6 +256,101 @@ function MessageSkeleton() {
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function UserMessageRow({
+  message,
+  agentId,
+  highlighted,
+  onQuote,
+}: {
+  message: TranscriptMessage;
+  agentId: string;
+  highlighted: boolean;
+  onQuote: (text: string) => void;
+}) {
+  const parsed = parseUserContent(message.content);
+  const copyContent = userMessageText(message.content);
+  return (
+    <div
+      id={`message-${message.id}`}
+      className={`message-row user ${highlighted ? "message-focus" : ""}`}
+    >
+      <div className="message-bubble user">
+        {parsed.kind === "attachments" ? (
+          <>
+            {parsed.files.some((file) => isImageName(file.name)) && (
+              <div className="message-images">
+                {parsed.files
+                  .filter((file) => isImageName(file.name))
+                  .map((file, index) => {
+                    const url = api.uploadUrl(agentId, file.path);
+                    return (
+                      <a
+                        className="message-image"
+                        key={`${file.path}-${index}`}
+                        href={url}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`打开 ${file.name}`}
+                      >
+                        <img src={url} alt={file.name} loading="lazy" />
+                      </a>
+                    );
+                  })}
+              </div>
+            )}
+            {parsed.files.some((file) => !isImageName(file.name)) && (
+              <div className="message-files">
+                {parsed.files
+                  .filter((file) => !isImageName(file.name))
+                  .map((file, index) => (
+                    <span
+                      className="message-file"
+                      key={`${file.path}-${index}`}
+                      title={file.path}
+                    >
+                      <FileIcon />
+                      <span className="message-file-name">{file.name}</span>
+                      {file.size !== null && (
+                        <span className="message-file-size">{formatBytes(file.size)}</span>
+                      )}
+                    </span>
+                  ))}
+              </div>
+            )}
+            {parsed.text && <Markdown content={parsed.text} />}
+          </>
+        ) : parsed.kind === "memory-command" ? (
+          <>
+            <div className="message-command">
+              <span className="message-command-mark" aria-hidden="true">
+                ✦
+              </span>
+              <span className="message-command-text">
+                <strong>整理记忆</strong>
+                <small>合并重复与失效的长期记忆</small>
+              </span>
+            </div>
+            <details className="message-command-raw">
+              <summary>查看指令</summary>
+              <pre>{message.content}</pre>
+            </details>
+          </>
+        ) : (
+          <Markdown content={message.content} />
+        )}
+      </div>
+      <div className="message-footer user">
+        <div className="message-actions">
+          <CopyButton text={copyContent} />
+          <button type="button" className="message-action" onClick={() => onQuote(copyContent)}>
+            引用
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -512,13 +606,18 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   function applyCommand(command: string) {
-    props.onDraftChange(command === "/memory" ? "/memory " : command);
+    props.onDraftChange(command);
     setCommandMenuDismissed(true);
     textareaRef.current?.focus();
   }
 
   function useSuggestion(text: string) {
     props.onDraftChange(text);
+    textareaRef.current?.focus();
+  }
+
+  function quoteFromMessage(text: string) {
+    props.onQuote(text);
     textareaRef.current?.focus();
   }
 
@@ -545,97 +644,14 @@ export function ChatPanel(props: ChatPanelProps) {
 
         {props.messages.map((message) => {
           if (message.role === "user") {
-            const parsed = parseUserContent(message.content);
-            const copyContent = userMessageText(message.content);
             return (
-              <div
+              <UserMessageRow
                 key={message.id}
-                id={`message-${message.id}`}
-                className={`message-row user ${highlightId === message.id ? "message-focus" : ""}`}
-              >
-                <div className="message-bubble user">
-                  {parsed.kind === "attachments" ? (
-                    <>
-                      {parsed.files.some((file) => isImageName(file.name)) && (
-                        <div className="message-images">
-                          {parsed.files
-                            .filter((file) => isImageName(file.name))
-                            .map((file, index) => {
-                              const url = api.uploadUrl(props.agentId, file.path);
-                              return (
-                                <a
-                                  className="message-image"
-                                  key={`${file.path}-${index}`}
-                                  href={url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  title={`打开 ${file.name}`}
-                                >
-                                  <img src={url} alt={file.name} loading="lazy" />
-                                </a>
-                              );
-                            })}
-                        </div>
-                      )}
-                      {parsed.files.some((file) => !isImageName(file.name)) && (
-                        <div className="message-files">
-                          {parsed.files
-                            .filter((file) => !isImageName(file.name))
-                            .map((file, index) => (
-                              <span
-                                className="message-file"
-                                key={`${file.path}-${index}`}
-                                title={file.path}
-                              >
-                                <FileIcon />
-                                <span className="message-file-name">{file.name}</span>
-                                {file.size !== null && (
-                                  <span className="message-file-size">
-                                    {formatBytes(file.size)}
-                                  </span>
-                                )}
-                              </span>
-                            ))}
-                        </div>
-                      )}
-                      {parsed.text && <Markdown content={parsed.text} />}
-                    </>
-                  ) : parsed.kind === "memory-command" ? (
-                    <>
-                      <div className="message-command">
-                        <span className="message-command-mark" aria-hidden="true">
-                          ✦
-                        </span>
-                        <span className="message-command-text">
-                          <strong>整理记忆</strong>
-                          <small>合并重复与失效的长期记忆</small>
-                        </span>
-                      </div>
-                      <details className="message-command-raw">
-                        <summary>查看指令</summary>
-                        <pre>{message.content}</pre>
-                      </details>
-                    </>
-                  ) : (
-                    <Markdown content={message.content} />
-                  )}
-                </div>
-                <div className="message-footer user">
-                  <div className="message-actions">
-                    <CopyButton text={copyContent} />
-                    <button
-                      type="button"
-                      className="message-action"
-                      onClick={() => {
-                        props.onQuote(copyContent);
-                        textareaRef.current?.focus();
-                      }}
-                    >
-                      引用
-                    </button>
-                  </div>
-                </div>
-              </div>
+                message={message}
+                agentId={props.agentId}
+                highlighted={highlightId === message.id}
+                onQuote={quoteFromMessage}
+              />
             );
           }
           const steps = processSteps(message.blocks);
@@ -697,6 +713,16 @@ export function ChatPanel(props: ChatPanelProps) {
             </div>
           </div>
         )}
+
+        {props.queuedMessages.map((message) => (
+          <UserMessageRow
+            key={message.id}
+            message={message}
+            agentId={props.agentId}
+            highlighted={highlightId === message.id}
+            onQuote={quoteFromMessage}
+          />
+        ))}
 
         {props.commandReply && (
           <div className="message-row system">
@@ -975,7 +1001,9 @@ export function ChatPanel(props: ChatPanelProps) {
             aria-controls={commandMenuOpen ? "composer-command-list" : undefined}
             placeholder={
               !props.canSend
-                ? "先选择一个 Agent 和会话"
+                ? props.loading
+                  ? "会话加载中，请稍候"
+                  : "先选择一个 Agent 和会话"
                 : props.tracking
                   ? "继续追问，发送后会排队…"
                   : "给 Agent 发消息…"

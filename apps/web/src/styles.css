@@ -992,18 +992,6 @@ textarea {
   color: var(--text);
 }
 
-.message-time {
-  color: var(--faint);
-  font-size: 11px;
-}
-
-.streaming-label {
-  color: var(--accent);
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
 .message-footer {
   display: flex;
   align-items: center;
@@ -1015,12 +1003,6 @@ textarea {
 
 .message-footer.user {
   justify-content: flex-end;
-}
-
-.message-footer-time {
-  color: var(--faint);
-  font-size: 11px;
-  line-height: 1.4;
 }
 
 .message-footer .message-actions {
@@ -1832,34 +1814,8 @@ textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.run-times {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  color: var(--faint);
-  font-size: 11px;
-  margin-bottom: 16px;
-}
-
 .events-heading {
   margin: 14px 0 8px;
-}
-
-.event-toggle {
-  width: 100%;
-  margin-bottom: 8px;
-  padding: 7px 9px;
-  border-radius: 8px;
-  border: 1px dashed var(--border-strong);
-  background: transparent;
-  color: var(--faint);
-  font-size: 11px;
-  text-align: left;
-}
-
-.event-toggle:hover {
-  color: var(--text);
-  border-color: var(--muted);
 }
 
 .event-list {
@@ -3529,48 +3485,6 @@ textarea {
   white-space: nowrap;
 }
 
-.run-activity-sep {
-  flex: 0 0 auto;
-  color: var(--faint);
-}
-
-.run-activity-elapsed {
-  flex: 0 0 auto;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-}
-
-.message-bubble.terminal.failed {
-  border-color: var(--danger-border);
-  background: linear-gradient(180deg, #fff, var(--danger-soft));
-}
-
-.message-bubble.terminal.cancelled {
-  border-color: #fde68a;
-  background: linear-gradient(180deg, #fff, var(--warn-soft));
-}
-
-.run-status-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.run-status-pill.failed {
-  color: var(--danger-ink);
-  border: 1px solid var(--danger-border);
-  background: #fff;
-}
-
-.run-status-pill.cancelled {
-  color: var(--warn);
-  border: 1px solid #fde68a;
-  background: #fff;
-}
-
 .scroll-bottom-button {
   position: absolute;
   left: 50%;
@@ -4259,10 +4173,6 @@ body:has(.app-shell.pearl) .select-empty {
   padding: 0 6px;
 }
 
-.pearl .message-footer-time {
-  color: #98a0ad;
-}
-
 .pearl .message-footer .message-action {
   color: #8a93a0;
 }
@@ -4330,11 +4240,6 @@ body:has(.app-shell.pearl) .select-empty {
 .pearl .message-author {
   font-size: 12.5px;
   letter-spacing: -0.01em;
-}
-
-.pearl .message-time {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
 }
 
 .pearl .message-bubble.user {
@@ -4708,26 +4613,11 @@ body:has(.app-shell.pearl) .select-empty {
   background: linear-gradient(135deg, #0fb5a6, #7a6cff);
 }
 
-.pearl .run-activity-elapsed {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
-}
-
 .pearl .cursor {
   width: 7px;
   height: 14px;
   border-radius: 2px;
   background: linear-gradient(180deg, #0fb5a6, #7a6cff);
-}
-
-.pearl .message-bubble.terminal.failed {
-  border-color: rgba(220, 38, 38, 0.2);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(254, 242, 242, 0.72));
-}
-
-.pearl .message-bubble.terminal.cancelled {
-  border-color: rgba(180, 83, 9, 0.22);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 251, 235, 0.72));
 }
 
 /* Composer */

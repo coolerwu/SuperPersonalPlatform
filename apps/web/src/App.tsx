@@ -67,6 +67,9 @@ type FocusTarget = {
 type PendingUser = {
   id: string;
   content: string;
+  turnId: string | null;
+  /** True while another turn is still streaming in this session. */
+  queued: boolean;
 };
 
 const MEMORY_SKILL = "memory-organizer";
@@ -137,6 +140,7 @@ export default function App() {
   const [pendingUserBySession, setPendingUserBySession] = useState<
     Record<string, PendingUser[]>
   >({});
+  const [loadedSessions, setLoadedSessions] = useState<Record<string, true>>({});
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
@@ -158,6 +162,11 @@ export default function App() {
   const followUpRef = useRef<Set<string>>(new Set());
   const pendingUsersRef = useRef<Record<string, PendingUser[]>>({});
   const consumedUsersRef = useRef<Record<string, Record<string, number>>>({});
+  // Explicit queued turn ids make the next subscription deterministic instead
+  // of racing the registry with a no-turn-id attach.
+  const queuedTurnsRef = useRef<Record<string, string[]>>({});
+  const activeTurnRef = useRef<Record<string, string>>({});
+  const loadedSessionsRef = useRef<Set<string>>(new Set());
   // Last loaded transcript counts, kept across agent switches so a new send of
   // text that already exists in history gets a correct matching baseline.
   const transcriptUserCountsRef = useRef<Record<string, Record<string, number>>>({});
@@ -186,14 +195,22 @@ export default function App() {
   const pendingHere = Boolean(pendingSessions[activeKey]);
   const tracking = live.tracking;
   const chatSending = pendingHere || tracking;
+  const sessionLoaded = !sessionId || Boolean(loadedSessions[sessionId]);
   const messages = useMemo(
     () => [
       ...(messagesBySession[sessionId] ?? []),
-      ...(pendingUserBySession[sessionId] ?? []).map((item) =>
-        transcriptMessage("user", item.content, item.id),
-      ),
+      ...(pendingUserBySession[sessionId] ?? [])
+        .filter((item) => !item.queued)
+        .map((item) => transcriptMessage("user", item.content, item.id)),
     ],
     [messagesBySession, pendingUserBySession, sessionId],
+  );
+  const queuedMessages = useMemo(
+    () =>
+      (pendingUserBySession[sessionId] ?? [])
+        .filter((item) => item.queued)
+        .map((item) => transcriptMessage("user", item.content, item.id)),
+    [pendingUserBySession, sessionId],
   );
   const messagesLoading = loadingBySession[sessionId] ?? false;
   const sessionTitle = currentSession?.title || "新对话";
@@ -275,6 +292,54 @@ export default function App() {
     });
   }
 
+  function bindPendingTurn(id: string, messageId: string, turnId: string) {
+    const list = pendingUsersRef.current[id];
+    if (!list) return;
+    updatePendingUsers({
+      ...pendingUsersRef.current,
+      [id]: list.map((item) =>
+        item.id === messageId ? { ...item, turnId } : item,
+      ),
+    });
+  }
+
+  function setPendingQueued(id: string, messageId: string, queued: boolean) {
+    const list = pendingUsersRef.current[id];
+    if (!list) return;
+    let changed = false;
+    const nextList = list.map((item) => {
+      if (item.id !== messageId || item.queued === queued) return item;
+      changed = true;
+      return { ...item, queued };
+    });
+    if (changed) updatePendingUsers({ ...pendingUsersRef.current, [id]: nextList });
+  }
+
+  /** Its turn is now the live one: render the question before the answer. */
+  function markPendingTurnActive(id: string, turnId: string) {
+    const list = pendingUsersRef.current[id];
+    if (!list) return;
+    let changed = false;
+    const nextList = list.map((item) => {
+      if (item.turnId !== turnId || !item.queued) return item;
+      changed = true;
+      return { ...item, queued: false };
+    });
+    if (changed) updatePendingUsers({ ...pendingUsersRef.current, [id]: nextList });
+  }
+
+  /** A failed/cancelled turn will never write its row; remove the ghost. */
+  function dropPendingForTurn(id: string, turnId: string) {
+    const list = pendingUsersRef.current[id];
+    if (!list) return;
+    const remaining = list.filter((item) => item.turnId !== turnId);
+    if (remaining.length === list.length) return;
+    const next = { ...pendingUsersRef.current };
+    if (remaining.length > 0) next[id] = remaining;
+    else delete next[id];
+    updatePendingUsers(next);
+  }
+
   function removePendingUser(id: string, messageId: string) {
     const list = pendingUsersRef.current[id];
     if (!list) return;
@@ -297,6 +362,64 @@ export default function App() {
     delete consumedUsersRef.current[id];
     delete transcriptUserCountsRef.current[id];
     dropPendingUsers(id);
+    forgetQueuedTurns(id);
+    unmarkSessionLoaded(id);
+  }
+
+  function markSessionLoaded(id: string) {
+    loadedSessionsRef.current.add(id);
+    setLoadedSessions((current) => (current[id] ? current : { ...current, [id]: true }));
+  }
+
+  function unmarkSessionLoaded(id: string) {
+    loadedSessionsRef.current.delete(id);
+    setLoadedSessions((current) => {
+      if (!current[id]) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function sessionQueueKey(id: string): string {
+    return sessionKey(sessionAgentRef.current[id] ?? agentIdRef.current, id);
+  }
+
+  function enqueueTurn(id: string, turnId: string) {
+    const key = sessionQueueKey(id);
+    queuedTurnsRef.current = {
+      ...queuedTurnsRef.current,
+      [key]: [...(queuedTurnsRef.current[key] ?? []), turnId],
+    };
+  }
+
+  function shiftQueuedTurn(id: string): string | null {
+    const key = sessionQueueKey(id);
+    const list = queuedTurnsRef.current[key];
+    if (!list?.length) return null;
+    const [next, ...rest] = list;
+    const queued = { ...queuedTurnsRef.current };
+    if (rest.length > 0) queued[key] = rest;
+    else delete queued[key];
+    queuedTurnsRef.current = queued;
+    return next;
+  }
+
+  function clearQueuedTurns(id: string) {
+    const key = sessionQueueKey(id);
+    if (!queuedTurnsRef.current[key]) return;
+    const queued = { ...queuedTurnsRef.current };
+    delete queued[key];
+    queuedTurnsRef.current = queued;
+  }
+
+  function forgetQueuedTurns(id: string) {
+    const queued = { ...queuedTurnsRef.current };
+    for (const key of Object.keys(queued)) {
+      if (key.endsWith(`:${id}`)) delete queued[key];
+    }
+    queuedTurnsRef.current = queued;
+    delete activeTurnRef.current[id];
   }
 
   /**
@@ -475,6 +598,8 @@ export default function App() {
         break;
       case "turn_end": {
         if (streamsRef.current.get(forSession) !== source) return;
+        const endedTurnId = activeTurnRef.current[forSession] ?? null;
+        delete activeTurnRef.current[forSession];
         closeStream(forSession);
         if (event.status === "failed") {
           updateLive(forSession, (current) => ({
@@ -484,7 +609,7 @@ export default function App() {
         } else if (event.status === "cancelled") {
           updateLive(forSession, (current) => ({ ...current, notice: "已停止当前任务。" }));
         }
-        void finishTurn(forSession);
+        void finishTurn(forSession, event.status ?? null, endedTurnId);
         break;
       }
     }
@@ -512,6 +637,7 @@ export default function App() {
     }
     const source = new EventSource(api.sessionStreamUrl(forSession, turnId));
     streamsRef.current.set(forSession, source);
+    if (turnId) activeTurnRef.current[forSession] = turnId;
     updateLive(forSession, (current) => ({ ...current, tracking: true }));
     bindStreamSource(forSession, source);
 
@@ -591,6 +717,7 @@ export default function App() {
       transcriptUserCountsRef.current[forSession] = counts;
       settlePendingUsers(forSession, list);
       setMessagesFor(forSession, list);
+      markSessionLoaded(forSession);
     } catch (exc) {
       failure = describeApiError(exc);
     } finally {
@@ -612,22 +739,50 @@ export default function App() {
     }
   }
 
-  async function finishTurn(forSession: string) {
-    const queued = (pendingUsersRef.current[forSession] ?? []).length > 0;
-    if (queued) followUpRef.current.add(forSession);
+  async function finishTurn(
+    forSession: string,
+    status: "completed" | "failed" | "cancelled" | null,
+    endedTurnId: string | null,
+  ) {
+    const pending = pendingUsersRef.current[forSession] ?? [];
+    const hasQueuedTurn =
+      (queuedTurnsRef.current[sessionQueueKey(forSession)] ?? []).length > 0;
+    if (pending.length > 0 || hasQueuedTurn) followUpRef.current.add(forSession);
     try {
       await refreshTranscript(forSession);
       await refreshSessions();
     } finally {
       followUpRef.current.delete(forSession);
     }
-    const stillQueued = (pendingUsersRef.current[forSession] ?? []).length > 0;
-    if (stillQueued) {
-      openStreamWithRetry(forSession);
-    } else {
-      updateLive(forSession, (current) => ({ ...current, tracking: false }));
-      if (forSession === sessionIdRef.current) attachIfBusy(forSession);
+    if ((status === "failed" || status === "cancelled") && endedTurnId) {
+      // The turn never wrote a transcript row, so its optimistic question is
+      // a ghost; the error itself stays in the notice.
+      dropPendingForTurn(forSession, endedTurnId);
     }
+    if (status === "cancelled") {
+      // Interrupt drains queued turns too, so their ids will never run.
+      const key = sessionQueueKey(forSession);
+      for (const queuedId of queuedTurnsRef.current[key] ?? []) {
+        dropPendingForTurn(forSession, queuedId);
+      }
+      clearQueuedTurns(forSession);
+    }
+    const nextTurnId = shiftQueuedTurn(forSession);
+    if (nextTurnId) {
+      markPendingTurnActive(forSession, nextTurnId);
+      openStream(forSession, nextTurnId);
+      return;
+    }
+    const stillQueued = (pendingUsersRef.current[forSession] ?? []).some(
+      (item) => item.queued,
+    );
+    if (stillQueued && status !== "failed" && status !== "cancelled") {
+      // A queued send whose POST response (and turn id) has not landed yet.
+      openStreamWithRetry(forSession);
+      return;
+    }
+    updateLive(forSession, (current) => ({ ...current, tracking: false }));
+    if (forSession === sessionIdRef.current) attachIfBusy(forSession);
   }
 
   useEffect(() => {
@@ -709,6 +864,22 @@ export default function App() {
     navigate(next);
   }
 
+  /** Switch agents without ever pairing an old session id with the new agent. */
+  function changeAgent(next: string) {
+    if (!next || next === agentId) return;
+    sessionIdRef.current = "";
+    setSessionId("");
+    setFocus(null);
+    setCommandReply(null);
+    if (view === "chat") {
+      const path = pathForView("chat", "");
+      if (window.location.pathname !== path) {
+        window.history.replaceState(null, "", path);
+      }
+    }
+    setAgentId(next);
+  }
+
   // Keep the address bar in step with derived state (session auto-selection,
   // deep-link fallback) without stacking a history entry for every change.
   useEffect(() => {
@@ -763,7 +934,7 @@ export default function App() {
         sessionId: item.source_session_id,
         messageId: item.source_message_id,
       };
-      setAgentId(targetAgent);
+      changeAgent(targetAgent);
       return;
     }
     openFocusSession(item.source_session_id, item.source_message_id);
@@ -824,6 +995,8 @@ export default function App() {
       // deep link can name a session of another agent.
       sessionAgentRef.current[sessionId] = agentId;
     }
+    const owner = sessionAgentRef.current[sessionId];
+    if (owner && owner !== agentId) return;
     if (skipRefreshRef.current.delete(sessionId)) {
       // A brand-new turn already streams; keep its optimistic user message
       // rather than replacing the lane with a possibly empty transcript.
@@ -881,10 +1054,18 @@ export default function App() {
     });
   }
 
+  function registerSessionOwner(list: SessionSummary[], forAgent: string) {
+    const current = sessionIdRef.current;
+    if (current && list.some((item) => item.id === current)) {
+      sessionAgentRef.current[current] = forAgent;
+    }
+  }
+
   async function loadSessions(forAgent: string) {
     const requestId = ++sessionsRequestRef.current;
     const list = await api.listSessions(forAgent);
     if (requestId !== sessionsRequestRef.current || forAgent !== agentIdRef.current) return;
+    registerSessionOwner(list, forAgent);
     applySessions(mergeLiveSession(list));
     if (list.length === 0) {
       restoreSessionRef.current = "";
@@ -899,6 +1080,7 @@ export default function App() {
     const restore = restoreSessionRef.current;
     restoreSessionRef.current = "";
     const target = restore && list.some((item) => item.id === restore) ? restore : list[0].id;
+    sessionAgentRef.current[target] = forAgent;
     sessionIdRef.current = target;
     setSessionId(target);
   }
@@ -909,6 +1091,7 @@ export default function App() {
     try {
       const list = await api.listSessions(forAgent);
       if (forAgent !== agentIdRef.current) return;
+      registerSessionOwner(list, forAgent);
       applySessions(mergeLiveSession(list));
     } catch {
       // Keep the current list on a transient refresh failure.
@@ -930,6 +1113,7 @@ export default function App() {
         if (cancelled || forAgent !== agentIdRef.current) return;
         const current = sessionIdRef.current;
         const wasBusy = sessionsRef.current.find((item) => item.id === current)?.busy ?? false;
+        registerSessionOwner(list, forAgent);
         applySessions(mergeLiveSession(list));
         if (!current) return;
         const row = list.find((item) => item.id === current);
@@ -983,8 +1167,12 @@ export default function App() {
         text: response.reply,
       });
       if (response.command === "/stop") {
-        // The runtime drops queued turns; their optimistic user rows must go too.
-        if (targetSessionId) dropPendingUsers(targetSessionId);
+        // The runtime drops queued turns; their optimistic user rows and ids
+        // must go too.
+        if (targetSessionId) {
+          dropPendingUsers(targetSessionId);
+          clearQueuedTurns(targetSessionId);
+        }
         void refreshSessions();
       }
       return true;
@@ -1009,6 +1197,14 @@ export default function App() {
     if (overrideText === undefined && isSlashCommand(text)) {
       return runCommand(text, sendKey);
     }
+    const wasNew = !sessionIdRef.current;
+    if (!wasNew && !loadedSessionsRef.current.has(sessionIdRef.current)) {
+      // A send before the first transcript load would baseline at 0 and let a
+      // same-text history row swallow the new pending message.
+      setError("会话加载中，请稍候");
+      return false;
+    }
+    if (pendingSessionsRef.current[sendKey]) return false;
     setCommandReply(null);
     const attachmentBlock = attachments
       .map((file) => `- ${file.name}（工作区路径：${file.path}，大小：${file.size} 字节）`)
@@ -1021,76 +1217,91 @@ export default function App() {
     const content = attachmentBlock
       ? `附件已上传到工作区：\n${attachmentBlock}${body ? `\n\n${body}` : ""}`
       : body;
-    const wasNew = !sessionIdRef.current;
     const targetSessionId = sessionIdRef.current || newSessionId();
+    const newKey = sessionKey(sendAgentId, targetSessionId);
     const alreadyStreaming = streamsRef.current.has(targetSessionId);
     sessionAgentRef.current[targetSessionId] = sendAgentId;
     setError("");
     clearLiveNotice(targetSessionId);
     markPending(sendKey);
+    if (wasNew) markPending(newKey);
     if (overrideText === undefined) setDraftFor(sendKey, "");
     const optimisticId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    pushPendingUser(targetSessionId, { id: optimisticId, content });
+    pushPendingUser(targetSessionId, {
+      id: optimisticId,
+      content,
+      turnId: null,
+      queued: alreadyStreaming,
+    });
+    if (wasNew) {
+      // Show the new session, its URL and its optimistic question immediately;
+      // the POST only fills in the turn id.
+      skipRefreshRef.current.add(targetSessionId);
+      markSessionLoaded(targetSessionId);
+      sessionIdRef.current = targetSessionId;
+      setSessionId(targetSessionId);
+      applySessions([
+        {
+          id: targetSessionId,
+          title: "新会话",
+          last_modified: Date.now(),
+          channel_type: null,
+          channel_name: null,
+          busy: true,
+        },
+        ...sessionsRef.current.filter((item) => item.id !== targetSessionId),
+      ]);
+    }
     if (!alreadyStreaming) {
       updateLive(targetSessionId, () => ({ ...EMPTY_LIVE, tracking: true }));
     }
-    if (wasNew) skipRefreshRef.current.add(targetSessionId);
     try {
       const response = await api.sendMessage({
         agent_id: sendAgentId,
         session_id: targetSessionId,
         content,
       });
+      bindPendingTurn(targetSessionId, optimisticId, response.turn_id);
       if (overrideText === undefined) {
         clearAttachmentsFor(sendKey);
         clearQuoteFor(sendKey);
       }
       const stillCurrentAgent = sendAgentId === agentIdRef.current;
-      if (wasNew && stillCurrentAgent) {
-        sessionIdRef.current = targetSessionId;
-        setSessionId(targetSessionId);
-        applySessions([
-          {
-            id: targetSessionId,
-            title: "新会话",
-            last_modified: Date.now(),
-            channel_type: null,
-            channel_name: null,
-            busy: true,
-          },
-          ...sessionsRef.current.filter((item) => item.id !== targetSessionId),
-        ]);
-        if (overrideText !== undefined) {
-          // A command (整理记忆) consumes neither the draft nor the attachments,
-          // so carry them from the pending new session to the created one.
-          const toKey = sessionKey(sendAgentId, targetSessionId);
-          const carriedDraft = draftsRef.current[sendKey] ?? "";
-          if (carriedDraft) {
-            draftsRef.current[toKey] = carriedDraft;
-            delete draftsRef.current[sendKey];
-            setDraftFor(toKey, carriedDraft);
-          }
-          setAttachmentsByKey((current) => {
-            const carried = current[sendKey];
-            if (!carried?.length) return current;
-            const next = { ...current };
-            delete next[sendKey];
-            next[toKey] = carried;
-            return next;
-          });
+      if (wasNew && stillCurrentAgent && overrideText !== undefined) {
+        // A command (整理记忆) consumes neither the draft nor the attachments,
+        // so carry them from the pending new session to the created one.
+        const carriedDraft = draftsRef.current[sendKey] ?? "";
+        if (carriedDraft) {
+          draftsRef.current[newKey] = carriedDraft;
+          delete draftsRef.current[sendKey];
+          setDraftFor(newKey, carriedDraft);
         }
+        setAttachmentsByKey((current) => {
+          const carried = current[sendKey];
+          if (!carried?.length) return current;
+          const next = { ...current };
+          delete next[sendKey];
+          next[newKey] = carried;
+          return next;
+        });
       }
       if (!stillCurrentAgent) {
         // The user switched agents while this send was in flight. The turn
         // belongs to the original agent; never surface it in the new view.
         skipRefreshRef.current.delete(targetSessionId);
+        if (streamsRef.current.has(targetSessionId)) {
+          enqueueTurn(targetSessionId, response.turn_id);
+        }
         return true;
       }
-      if (alreadyStreaming) {
-        // Another turn is still streaming in this lane; it will pick up the
-        // queued turn when it ends, so keep the current stream attached.
+      if (streamsRef.current.has(targetSessionId)) {
+        // Another turn is still streaming in this lane; its turn_end will
+        // subscribe to this explicit turn id, so keep the current stream.
+        setPendingQueued(targetSessionId, optimisticId, true);
+        enqueueTurn(targetSessionId, response.turn_id);
         updateLive(targetSessionId, (current) => ({ ...current, notice: QUEUED_NOTICE }));
       } else {
+        markPendingTurnActive(targetSessionId, response.turn_id);
         openStream(targetSessionId, response.turn_id);
       }
       void refreshSessions();
@@ -1102,8 +1313,10 @@ export default function App() {
       if (!alreadyStreaming) {
         updateLive(targetSessionId, (current) => ({ ...current, tracking: false }));
       }
-      if (wasNew) {
-        // The session never appeared in the URL or sidebar; drop its traces.
+      if (wasNew && sessionIdRef.current === targetSessionId) {
+        // Roll back only if this new session is still the one on screen.
+        sessionIdRef.current = "";
+        setSessionId("");
         delete sessionAgentRef.current[targetSessionId];
         forgetPendingUsers(targetSessionId);
         setLiveBySession((current) => {
@@ -1112,11 +1325,15 @@ export default function App() {
           delete next[targetSessionId];
           return next;
         });
+        applySessions(
+          sessionsRef.current.filter((item) => item.id !== targetSessionId),
+        );
       }
       setAgentError(describeApiError(exc), sendAgentId);
       return false;
     } finally {
       clearPending(sendKey);
+      if (wasNew) clearPending(newKey);
     }
   }
 
@@ -1145,7 +1362,10 @@ export default function App() {
     try {
       const result = await api.interruptSession(id);
       closeStream(id);
-      if (result.interrupted) dropPendingUsers(id);
+      if (result.interrupted) {
+        dropPendingUsers(id);
+        clearQueuedTurns(id);
+      }
       updateLive(id, (current) => ({
         ...current,
         tracking: false,
@@ -1273,7 +1493,7 @@ export default function App() {
     try {
       const created = await api.createAgent(payload);
       await loadWorkspace();
-      setAgentId(created.id);
+      changeAgent(created.id);
       setNewAgentOpen(false);
     } finally {
       setCreatingAgent(false);
@@ -1331,6 +1551,10 @@ export default function App() {
     pendingUsersRef.current = {};
     consumedUsersRef.current = {};
     transcriptUserCountsRef.current = {};
+    queuedTurnsRef.current = {};
+    activeTurnRef.current = {};
+    loadedSessionsRef.current.clear();
+    setLoadedSessions({});
     setPendingUserBySession({});
     followUpRef.current.clear();
     draftsRef.current = {};
@@ -1422,7 +1646,7 @@ export default function App() {
         }
         agents={agents}
         agentId={agentId}
-        onAgentChange={setAgentId}
+        onAgentChange={changeAgent}
         sessions={sessions}
         sessionId={sessionId}
         onSelectSession={openSession}
@@ -1497,7 +1721,7 @@ export default function App() {
           onSaveAgent={saveAgent}
           onSaveProvider={saveProvider}
           onCreateProvider={createProvider}
-          onSelectAgent={setAgentId}
+          onSelectAgent={changeAgent}
           onNewAgent={() => setNewAgentOpen(true)}
           onDeleteAgent={deleteAgentPermanently}
           onClose={() => openView("chat")}
@@ -1558,7 +1782,8 @@ export default function App() {
               draft={draft}
               quote={quotesByKey[activeKey] ?? ""}
               attachments={attachments}
-              canSend={Boolean(agentId)}
+              canSend={Boolean(agentId) && sessionLoaded}
+              queuedMessages={queuedMessages}
               agentId={agentId}
               agentName={agent?.name ?? "Agent"}
               channelType={currentSession?.channel_type ?? ""}
@@ -1596,7 +1821,7 @@ export default function App() {
       <ConfirmDialog
         open={sessionToDelete !== null}
         title="删除这个会话？"
-        description={`「${sessionToDelete?.title || "新会话"}」的消息和 checkpoint 会一起删除，无法恢复。`}
+        description={`「${sessionToDelete?.title || "新会话"}」的会话记录会一起删除，无法恢复。`}
         confirmLabel="删除"
         danger
         onClose={() => setSessionToDelete(null)}
