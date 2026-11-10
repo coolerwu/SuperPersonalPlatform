@@ -383,3 +383,9 @@ class AppConfig(Base):
     memory_consolidate_every_turns: Mapped[int] = mapped_column(Integer, default=10)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class RunningSession(Base):
+    __tablename__ = "running_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
