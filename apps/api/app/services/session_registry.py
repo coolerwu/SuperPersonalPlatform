@@ -9,12 +9,12 @@ turn's stream. Serial execution per session (one running turn per session) is
 the correctness invariant: the SDK client and checkpoint for a session are only
 safe to drive one turn at a time.
 
-``interrupt`` backs ``/stop``: it drains the session's queued turns, publishing
-a cancelled terminal event for each, and asks the runner to interrupt the turn
-that is currently attached to the SDK client. A turn that has already left the
-queue but is still waiting for the global concurrency permit is not cancelled;
-that window is tiny and acceptable because the registry runs in a single
-process. Idle workers retire once their queue is empty.
+``interrupt`` backs ``/stop``: it cancels a turn that has been dequeued but is
+still waiting for the global concurrency permit, drains the session's queued
+turns (publishing a cancelled terminal event for each), and asks the runner to
+interrupt a turn that is already running. Together with the runner's startup
+cancellation check this covers both the queue/semaphore window and the
+settings/client-connect window. Idle workers retire once their queue is empty.
 
 Run persistence and SSE delivery live outside this module.
 """
@@ -42,10 +42,13 @@ class SessionRegistry:
         self._runner = runner
         self._semaphore = asyncio.Semaphore(max(1, concurrency))
         self._queues: dict[str, asyncio.Queue[tuple[Turn, TurnStream]]] = {}
-        self._workers: dict[str, asyncio.Task] = {}
+        self._workers: dict[str, asyncio.Task[None]] = {}
         self._streams: dict[str, TurnStream] = {}
+        self._pending: dict[str, tuple[Turn, TurnStream]] = {}
         self._current: dict[str, str] = {}
         self._running: set[str] = set()
+        self._started: set[str] = set()
+        self._cancelled: set[str] = set()
         self._max_streams = max(1, max_streams)
         self._closed = False
 
@@ -91,9 +94,14 @@ class SessionRegistry:
         while True:
             turn, stream = await queue.get()
             self._current[session_id] = turn.id
+            self._pending[session_id] = (turn, stream)
             self._running.add(session_id)
             try:
                 async with self._semaphore:
+                    self._started.add(session_id)
+                    if turn.id in self._cancelled:
+                        self._cancelled.discard(turn.id)
+                        continue
                     await self._runner.run(turn, stream)
             except asyncio.CancelledError:
                 raise
@@ -103,9 +111,13 @@ class SessionRegistry:
                 )
                 stream.close()
             finally:
+                self._started.discard(session_id)
+                self._pending.pop(session_id, None)
+                self._cancelled.discard(turn.id)
                 self._running.discard(session_id)
                 self._current.pop(session_id, None)
                 queue.task_done()
+            self._evict_closed_streams()
             if queue.empty():
                 # Retire atomically with the empty check and with submit (which
                 # never awaits), so a new turn can never land in a queue whose
@@ -126,6 +138,16 @@ class SessionRegistry:
 
     async def interrupt(self, session_id: str) -> bool:
         cancelled = False
+        pending = self._pending.get(session_id)
+        if pending is not None and session_id not in self._started:
+            # The worker dequeued this turn but is still waiting for the global
+            # concurrency permit. Close its stream now; the worker will skip it
+            # once it acquires the permit and sees it in _cancelled.
+            turn, stream = pending
+            self._cancelled.add(turn.id)
+            stream.publish({"type": "turn_end", "status": "cancelled"})
+            stream.close()
+            cancelled = True
         queue = self._queues.get(session_id)
         if queue is not None:
             while True:
@@ -145,8 +167,8 @@ class SessionRegistry:
                 worker.cancel()
             self._queues.pop(session_id, None)
             self._current.pop(session_id, None)
-        interrupted = bool(await self._runner.interrupt(session_id))
-        return cancelled or interrupted
+        active = await self._runner.interrupt(session_id)
+        return bool(active or cancelled)
 
     async def close(self) -> None:
         self._closed = True
@@ -159,6 +181,10 @@ class SessionRegistry:
                 stream.publish({"type": "turn_end", "status": "cancelled"})
                 stream.close()
                 queue.task_done()
+        for session_id, (_, stream) in list(self._pending.items()):
+            if session_id not in self._started:
+                stream.publish({"type": "turn_end", "status": "cancelled"})
+                stream.close()
         tasks = list(self._workers.values())
         for task in tasks:
             task.cancel()
@@ -172,6 +198,9 @@ class SessionRegistry:
         finally:
             self._workers.clear()
             self._queues.clear()
+            self._pending.clear()
             self._current.clear()
             self._running.clear()
+            self._started.clear()
+            self._cancelled.clear()
             self._streams.clear()

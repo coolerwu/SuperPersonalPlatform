@@ -73,6 +73,20 @@ class FakeStore:
         )
 
 
+class SlowStore(FakeStore):
+    """Store whose first read blocks until the test releases it."""
+
+    def __init__(self, *agents):
+        super().__init__(*agents)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def get(self):
+        self.entered.set()
+        await self.release.wait()
+        return await super().get()
+
+
 class ResultMessage:
     def __init__(
         self,
@@ -473,4 +487,30 @@ async def test_interrupt_reaches_client_only_while_turn_is_active(tmp_path):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    assert not await turn_lease.is_running(turn.session_id)
+    assert runner._active == set()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_during_store_wait_cancels_before_query(tmp_path):
+    await init_db()
+    client = FakeClient([ResultMessage()])
+    store = SlowStore(make_agent())
+    runner = ClaudeTurnRunner(
+        store=store,
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="aaaaaaaa-2222-2222-2222-222222222222")
+    task = asyncio.create_task(runner.run(turn, TurnStream()))
+    await asyncio.wait_for(store.entered.wait(), 1)
+
+    assert await runner.interrupt(turn.session_id) is True
+    store.release.set()
+    outcome = await asyncio.wait_for(task, 1)
+
+    assert outcome.status == "cancelled"
+    assert client.queries == []
+    assert runner._active == set()
+    assert runner._cancel_requested == set()
     assert not await turn_lease.is_running(turn.session_id)

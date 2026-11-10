@@ -118,6 +118,11 @@ async def test_idle_worker_and_queue_are_reclaimed():
     await wait_until(lambda: runner.finished == ["a"])
     await wait_until(lambda: not registry._workers and not registry._queues)
     assert registry._current == {}
+
+    # The retired worker must not strand a later submit for the same session.
+    runner.release("b")
+    await registry.submit(turn(prompt="b"))
+    await wait_until(lambda: runner.finished == ["a", "b"])
     await registry.close()
 
 
@@ -201,6 +206,49 @@ async def test_interrupt_cancels_queued_turns_and_terminates_their_streams():
 
     runner.release("a")
     await wait_until(lambda: runner.finished == ["a"])
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_before_worker_starts_cancels_queued_turn():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    turn_id = await registry.submit(turn(prompt="a"))
+    stream = registry.stream(turn_id)
+
+    assert await registry.interrupt("s1") is True
+    assert stream.closed
+    assert await drain_terminal(stream) == [
+        {"type": "turn_end", "status": "cancelled"}
+    ]
+
+    await wait_until(lambda: not registry._workers)
+    assert runner.started == []
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_cancels_turn_waiting_for_concurrency_permit():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    await registry.submit(turn(session_id="s1", prompt="a"))
+    await wait_until(lambda: runner.started == ["a"])
+    waiting_id = await registry.submit(turn(session_id="s2", prompt="b"))
+    await wait_until(
+        lambda: "s2" in registry._pending and "s2" not in registry._started
+    )
+    waiting_stream = registry.stream(waiting_id)
+
+    assert await registry.interrupt("s2") is True
+    assert waiting_stream.closed
+    assert await drain_terminal(waiting_stream) == [
+        {"type": "turn_end", "status": "cancelled"}
+    ]
+
+    runner.release("a")
+    await wait_until(lambda: runner.finished == ["a"])
+    await wait_until(lambda: "s2" not in registry._pending)
+    assert "b" not in runner.started
     await registry.close()
 
 
