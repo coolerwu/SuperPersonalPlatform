@@ -53,6 +53,7 @@ class FakeRegistry:
         self.turns = []
         self.interrupted = []
         self.busy = busy
+        self.busy_sessions = set()
         self.interrupt_result = interrupt_result
         self.submit_error = None
 
@@ -60,6 +61,8 @@ class FakeRegistry:
         if self.submit_error is not None:
             raise self.submit_error
         self.turns.append(turn)
+        # A submitted turn occupies its session until it finishes.
+        self.busy_sessions.add(turn.session_id)
         return turn.id
 
     async def interrupt(self, session_id):
@@ -67,7 +70,7 @@ class FakeRegistry:
         return self.interrupt_result
 
     def is_busy(self, session_id):
-        return self.busy
+        return self.busy or session_id in self.busy_sessions
 
 
 async def _ingest(
@@ -300,6 +303,7 @@ async def test_status_command_reports_busy_and_idle():
         assert started.session_id in busy.reply
 
         registry.busy = False
+        registry.busy_sessions.clear()
         idle = await _ingest(store, registry, message_ids=["status-3"], text="/status")
         assert "空闲" in idle.reply
         assert len(registry.turns) == 1
@@ -531,3 +535,57 @@ async def test_same_external_id_in_two_channels_is_isolated():
     finally:
         await _cleanup("ch1", ["cross-1"])
         await _cleanup("ch2", ["cross-2"])
+
+
+@pytest.mark.asyncio
+async def test_queued_session_stays_valid_before_transcript():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    ids = ["queued-1", "queued-2", "queued-3", "queued-4"]
+    try:
+        first = await _ingest(store, registry, message_ids=["queued-1"])
+        session_id = first.session_id
+        assert session_id
+        # The turn is queued/running but the SDK has not written a transcript
+        # yet; the session is still valid because the registry owns it.
+        assert not transcript_path(session_id, "default").is_file()
+        assert registry.is_busy(session_id)
+
+        second = await _ingest(store, registry, message_ids=["queued-2"], text="再来一条")
+        assert second.session_id == session_id
+        assert registry.turns[-1].session_id == session_id
+
+        stopped = await _ingest(store, registry, message_ids=["queued-3"], text="/stop")
+        assert stopped.reply == commands.STOP_REQUESTED_TEXT
+        assert registry.interrupted == [session_id]
+
+        status = await _ingest(store, registry, message_ids=["queued-4"], text="/status")
+        assert "执行中" in status.reply
+        assert session_id in status.reply
+    finally:
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_record_inbound_failure_keeps_claim(monkeypatch):
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    ids = ["record-1"]
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("db write failed")
+
+    monkeypatch.setattr("app.services.channel_intake._record_inbound", boom)
+    try:
+        result = await _ingest(store, registry, message_ids=ids)
+        # The turn is submitted and the reply is on its way: a bookkeeping
+        # failure must not discard the claim and re-run the batch.
+        assert result.session_id
+        assert len(registry.turns) == 1
+        rows = await _rows("ch1", ids)
+        assert len(rows) == 1
+        assert rows[0].session_id is None
+    finally:
+        await _cleanup("ch1", ids)

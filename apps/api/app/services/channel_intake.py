@@ -121,18 +121,22 @@ def _new_conversation(
 
 
 def _binding_is_valid(
-    conversation: ConversationSection, channel_id: str, agent_id: str
+    conversation: ConversationSection, channel_id: str, agent_id: str, registry: Any
 ) -> bool:
-    """A binding is reusable only when its SDK transcript still exists.
+    """A binding is reusable while its session is queued/running or exists.
 
-    A deleted session leaves the binding behind; the next inbound message must
-    start a fresh session instead of resurrecting the stale id.
+    A brand-new session has no transcript until the SDK starts its first turn,
+    so the registry's active claim keeps the queued window valid. A deleted
+    session leaves the binding behind with neither signal; the next inbound
+    message must start a fresh session instead of resurrecting the stale id.
     """
+    if conversation.channel_id != channel_id:
+        return False
+    if not valid_agent_id(agent_id) or not is_canonical_uuid(conversation.session_id):
+        return False
     return (
-        conversation.channel_id == channel_id
-        and valid_agent_id(agent_id)
-        and is_canonical_uuid(conversation.session_id)
-        and transcript_path(conversation.session_id, agent_id).is_file()
+        registry.is_busy(conversation.session_id)
+        or transcript_path(conversation.session_id, agent_id).is_file()
     )
 
 
@@ -194,7 +198,7 @@ async def ingest(
         if existing is not None and existing.channel_id == channel_id:
             token = context_token or existing.context_token
             name = display_name or existing.display_name
-            if _binding_is_valid(existing, channel_id, agent.id):
+            if _binding_is_valid(existing, channel_id, agent.id, registry):
                 conversation = existing.model_copy(
                     update={"display_name": name, "context_token": token}
                 )
@@ -241,7 +245,18 @@ async def ingest(
                 delivery=DeliveryRequest(channel_id=channel_id, external_id=external_id),
             )
         )
-        await _record_inbound(channel_id, message_ids, conversation.session_id)
+        # The turn is already submitted, so a bookkeeping failure here must not
+        # release the claim: a replay would run the turn a second time. The
+        # channel runtime gets the session id in the return value regardless.
+        try:
+            await _record_inbound(channel_id, message_ids, conversation.session_id)
+        except Exception:
+            logger.warning(
+                "failed to record inbound session channel=%s session=%s",
+                channel_id,
+                conversation.session_id,
+                exc_info=True,
+            )
         return IngestResult(session_id=conversation.session_id)
     except BaseException:
         # Leave no claimed ids behind: the channel runtime retries the whole
