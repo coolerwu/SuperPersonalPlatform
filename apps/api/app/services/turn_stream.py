@@ -3,7 +3,9 @@
 One stream exists per turn. It is live-only: nothing is persisted, so a page
 refresh loses the live view by design. The terminal event is
 ``{"type": "turn_end"}``, delivered exactly once to each current and future
-subscriber. Events published before a subscriber attaches are buffered and
+subscriber. The runner may publish the terminal event itself with extra
+details; ``close()`` then only closes the stream instead of appending a bare
+duplicate. Events published before a subscriber attaches are buffered and
 replayed on subscribe; ``close()`` is idempotent and ignores later publishes.
 """
 
@@ -19,6 +21,9 @@ class TurnStream:
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._closed = False
 
+    def _has_end(self) -> bool:
+        return bool(self._buffer) and self._buffer[-1].get("type") == "turn_end"
+
     def publish(self, event: dict[str, Any]) -> None:
         if self._closed:
             return
@@ -31,7 +36,8 @@ class TurnStream:
         for event in self._buffer:
             queue.put_nowait(event)
         if self._closed:
-            queue.put_nowait({"type": "turn_end"})
+            if not self._has_end():
+                queue.put_nowait({"type": "turn_end"})
             return queue
         self._subscribers.add(queue)
         return queue
@@ -40,6 +46,7 @@ class TurnStream:
         if self._closed:
             return
         self._closed = True
-        for queue in list(self._subscribers):
-            queue.put_nowait({"type": "turn_end"})
+        if not self._has_end():
+            for queue in list(self._subscribers):
+                queue.put_nowait({"type": "turn_end"})
         self._subscribers.clear()
