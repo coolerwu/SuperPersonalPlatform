@@ -268,12 +268,35 @@ class ChatRequest(BaseModel):
     session_id: str
     content: str = Field(min_length=1)
     client_message_id: str | None = None
+    agent_id: str = "default"
 
 
 class ChatResponse(BaseModel):
     run_id: str
     session_id: str
     message_id: str
+
+
+class TurnAcceptedOut(BaseModel):
+    session_id: str
+    turn_id: str
+    accepted: bool = True
+
+
+class SessionSummaryOut(BaseModel):
+    id: str
+    title: str
+    last_modified: int = 0
+    channel_type: str | None = None
+    channel_name: str | None = None
+    busy: bool = False
+
+
+class TranscriptMessageOut(BaseModel):
+    id: str
+    role: str
+    content: str = ""
+    blocks: list[dict] = []
 
 
 class ChatCommandRequest(BaseModel):

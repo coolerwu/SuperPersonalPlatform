@@ -28,7 +28,6 @@ from app.routers.knowledge import router as knowledge_router
 from app.routers.memories import router as memories_router
 from app.routers.market import router as market_router
 from app.routers.providers import router as providers_router
-from app.routers.runs import router as runs_router
 from app.routers.screenshots import router as screenshots_router
 from app.routers.sessions import router as sessions_router
 from app.routers.skills import router as skills_router
@@ -218,7 +217,6 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(cron_router)
     app.include_router(knowledge_router)
     app.include_router(memories_router)
-    app.include_router(runs_router)
     app.include_router(screenshots_router)
     app.include_router(skills_router)
     app.include_router(tools_router)
