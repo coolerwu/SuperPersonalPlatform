@@ -13,6 +13,14 @@
 - 没有本文件覆盖的改动不进入实现。
 - 方案先定后做；涉及新依赖、破坏性接口、数据迁移时先确认。
 
+## 迁移进行中（2026-11-11）
+
+执行核已切换为 Claude Agent SDK（`ClaudeSDKClient`），模型走 DeepSeek 的 Anthropic 兼容端点；会话与消息由 SDK transcript 管理，平台只保留 `running_sessions` 运行时租约。平台配置写入 `data/settings.json`。
+
+v1 阶段已下线：rubric 质检、QuickJS eval、会话全文搜索、Run 历史与旧的记忆系统（用户画像改用 `CLAUDE.md`，Agent 笔记用 auto memory）。
+
+渠道、定时任务、配置接口与旧数据库表的切换仍在第二份迁移计划中执行；最终行为以两份计划完成后的文档为准。设计与计划见 `docs/superpowers/specs/2026-11-10-claude-agent-sdk-migration-design.md` 与 `docs/superpowers/plans/`。
+
 ## 需求记录
 
 ### F1 Agent Command Center v1
