@@ -275,6 +275,21 @@ export function ChanPage() {
             min={start}
             onChange={(event) => setEnd(event.target.value)}
           />
+          <button
+            type="button"
+            className="chan-latest"
+            title="设为当前时间，分析到最近一根已收盘 K 线"
+            onClick={() => {
+              const endMs = snapUtc(Date.now(), granularity);
+              setEnd(toUtcInput(endMs));
+              const startMs = parseUtcInput(start);
+              if (startMs !== null && startMs >= endMs) {
+                setStart(toUtcInput(endMs - DEFAULT_WINDOW_BARS * GRANULARITY_MS[granularity]));
+              }
+            }}
+          >
+            最新
+          </button>
         </label>
         <div className="chan-mode-tabs">
           <button className={mode === "chart" ? "active" : ""} onClick={() => setMode("chart")}>结构图</button>

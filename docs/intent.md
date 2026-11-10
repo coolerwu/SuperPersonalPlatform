@@ -3202,7 +3202,7 @@ F81 之后中枢框在离开段起点结束：zone2 画成 10-12 04:00 → 10-21
 2. `analyze_symbol` / `run_backtest` 增加 `start_ms` / `end_ms`，上界取包含 `end` 的那根 K 线（`floor` 后取下一根开盘作为排他上界）；窗口内根数校验（分析 20–1000，回测 60–1000），超限或没有已完成 K 线返回明确错误；`requested_bars` 记录窗口实际根数。
 3. `POST /api/chan/analyze`、`POST /api/chan/backtest` 增加可选 `start_date` / `end_date`（仍兼容 `bars`）。
 4. Agent 工具 `chan_analyze` / `chan_backtest` 参数改为 `start_date` / `end_date`，不传时默认最近 500 根；工具描述和 `chanlun` 技能口径同步。
-5. 缠论页用「开始 (UTC) / 结束 (UTC)」日期时间选择窗口，步长跟随周期（1h 可选到小时、15min 可选到 15 分钟），URL 保存 `start` / `end`（旧 `bars` 参数兼容换算）；切换周期时窗口按 500 根重算；信号回测使用同一窗口。
+5. 缠论页用「开始 (UTC) / 结束 (UTC)」日期时间选择窗口，步长跟随周期（1h 可选到小时、15min 可选到 15 分钟），结束旁有「最新」按钮可一键设为当前时间（分析到最近一根已收盘 K 线）；URL 保存 `start` / `end`（旧 `bars` 参数兼容换算）；切换周期时窗口按 500 根重算；信号回测使用同一窗口。
 
 #### 验收标准
 

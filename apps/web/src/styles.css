@@ -6324,6 +6324,21 @@ body:has(.app-shell.pearl) .select-empty {
   width: 132px;
 }
 
+.chan-control .chan-latest {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(91, 75, 240, 0.35);
+  border-radius: 10px;
+  background: rgba(91, 75, 240, 0.08);
+  color: #5b4bf0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chan-control .chan-latest:hover {
+  background: rgba(91, 75, 240, 0.16);
+}
+
 .chan-toolbar-toggles {
   margin: 0;
   gap: 8px 14px;
