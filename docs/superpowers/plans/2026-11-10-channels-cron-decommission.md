@@ -215,6 +215,7 @@ git commit -m "Replace channel delivery with session-keyed obligations"
 
 **Files:**
 - Modify: `apps/api/app/services/claude_runner.py`
+- Modify: `apps/api/app/services/channel_delivery.py`
 - Test: `apps/api/app/tests/test_claude_runner_delivery.py`
 
 - [ ] **Step 1: 写失败测试**
@@ -225,7 +226,7 @@ from sqlalchemy import select
 
 from app.db import SessionLocal, init_db
 from app.models import ChannelDelivery, RunningSession
-from app.services.claude_runner import ClaudeTurnRunner, Turn
+from app.services.claude_runner import ClaudeTurnRunner, DeliveryRequest, Turn
 from app.services.settings_store import AgentSection, PlatformSettings, ProviderSection
 from app.services.turn_stream import TurnStream
 
@@ -293,7 +294,7 @@ async def test_delivery_created_and_completed(tmp_path):
         agent_id="default",
         prompt="hi",
         source="wechat",
-        delivery={"channel_id": "ch1", "external_id": "wx-1"},
+        delivery=DeliveryRequest(channel_id="ch1", external_id="wx-1"),
     )
     outcome = await runner.run(turn, TurnStream())
     assert outcome.status == "completed"
@@ -383,7 +384,7 @@ git add apps/api/app/services/claude_runner.py apps/api/app/tests/test_claude_ru
 git commit -m "Attach channel delivery to SDK turns"
 ```
 
-> **质量审查修订：** 重启恢复要补投递归属——`recovery` 对 `source="resume"` 的轮次用 `channel_delivery.find_pending_for_session(session_id)` 找到崩溃前创建、尚未回填的投递行，作为 `Turn.delivery` 重新挂上；没有行就不投递。`complete` 只回填 pending/attempting，sent/failed 为终态。
+> **质量审查修订：** 重启恢复要补投递归属——runner 在 `source == "resume"` 时用 `channel_delivery.find_unfilled_for_session(session_id)` 认领崩溃前创建、`content` 仍为空的投递行（**绝不新建行**，否则会重复）；空行只归 resume、非空行只归 sweep，这一分区写进模块 docstring。`complete` 只回填 pending/attempting，sent/failed 为终态。**终态语义：** `completed` 正常回填并发送（空输出用“（无回复）”）；`failed` 且输出为空时用固定文案“（任务执行失败，请稍后重试。）”；用户取消（aborted 结果或 interrupt 后未收到结果）用 `discard(delivery_id)` 删除投递行、不发送；优雅停机（`keep_lease`）跳过 complete/callback，保留空 pending 行供重启恢复；`complete` 返回 False（行已不存在/终态）时不调用发送回调。
 
 ---
 

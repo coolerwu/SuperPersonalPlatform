@@ -19,6 +19,10 @@ RESUME_SESSION_ID = "66666666-7777-8888-9999-aaaaaaaaaaaa"
 FAILED_SESSION_ID = "bbbbbbbb-1111-2222-3333-444444444444"
 CANCELLED_SESSION_ID = "cccccccc-1111-2222-3333-444444444444"
 SHUTDOWN_SESSION_ID = "dddddddd-1111-2222-3333-444444444444"
+FILLED_SESSION_ID = "eeeeeeee-1111-2222-3333-444444444444"
+EMPTY_REPLY_SESSION_ID = "ffffffff-1111-2222-3333-444444444444"
+INTERRUPT_SESSION_ID = "abcdabcd-1111-2222-3333-444444444444"
+NO_DELIVERY_SESSION_ID = "abcdeeee-1111-2222-3333-444444444444"
 
 
 class FakeClient:
@@ -46,6 +50,24 @@ class FakeClient:
 class HangingClient(FakeClient):
     async def receive_messages(self):
         await asyncio.Event().wait()
+        yield  # pragma: no cover - never reached
+
+
+class InterruptibleClient(FakeClient):
+    """Ends the stream without a result as soon as interrupt() arrives."""
+
+    def __init__(self):
+        super().__init__()
+        self.interrupted = False
+        self._released = asyncio.Event()
+
+    async def interrupt(self):
+        self.interrupted = True
+        self._released.set()
+
+    async def receive_messages(self):
+        await self._released.wait()
+        return
         yield  # pragma: no cover - never reached
 
 
@@ -236,6 +258,8 @@ async def test_deliver_failure_does_not_mask_terminal_event_or_lease(tmp_path):
         assert events[-1]["status"] == "completed"
         rows = await _rows(turn.session_id)
         assert len(rows) == 1
+        # The row stays pending so the sweep can retry the failed send.
+        assert rows[0].status == "pending"
         assert rows[0].content == "answer"
         assert delivered == [rows[0].id]
         assert not await turn_lease.is_running(turn.session_id)
@@ -362,3 +386,156 @@ async def test_shutdown_cancellation_keeps_delivery_pending_for_resume(tmp_path)
         if not task.done():
             task.cancel()
         await _cleanup(SHUTDOWN_SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_without_output_sends_placeholder(tmp_path):
+    await init_db()
+    delivered: list[int] = []
+
+    async def deliver(delivery_id: int) -> None:
+        delivered.append(delivery_id)
+
+    client = FakeClient([ResultMessage(result="")])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        deliver_callback=deliver,
+    )
+    turn = Turn(
+        session_id=EMPTY_REPLY_SESSION_ID,
+        agent_id="default",
+        prompt="hi",
+        delivery=DeliveryRequest(channel_id="ch1", external_id="wx-1"),
+    )
+    try:
+        outcome = await runner.run(turn, TurnStream())
+
+        assert outcome.status == "completed"
+        assert outcome.output == ""
+        rows = await _rows(EMPTY_REPLY_SESSION_ID)
+        assert len(rows) == 1
+        # A channel turn must never be completed with an empty body.
+        assert rows[0].status == "pending"
+        assert rows[0].content == "（无回复）"
+        assert delivered == [rows[0].id]
+    finally:
+        await _cleanup(EMPTY_REPLY_SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_resume_does_not_claim_filled_delivery(tmp_path):
+    await init_db()
+    delivered: list[int] = []
+
+    async def deliver(delivery_id: int) -> None:
+        delivered.append(delivery_id)
+
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_pending(
+            db,
+            channel_id="ch1",
+            external_id="wx-1",
+            session_id=FILLED_SESSION_ID,
+        )
+        await db.commit()
+    # A filled row already belongs to the sender; only empty rows are
+    # recovery candidates.
+    await channel_delivery.complete(delivery_id, "old answer")
+
+    client = FakeClient([ResultMessage(result="new answer")])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        deliver_callback=deliver,
+    )
+    turn = Turn(
+        session_id=FILLED_SESSION_ID,
+        agent_id="default",
+        prompt="hi",
+        source="resume",
+    )
+    try:
+        outcome = await runner.run(turn, TurnStream())
+
+        assert outcome.status == "completed"
+        rows = await _rows(FILLED_SESSION_ID)
+        assert len(rows) == 1
+        assert rows[0].id == delivery_id
+        assert rows[0].content == "old answer"
+        assert delivered == []
+    finally:
+        await _cleanup(FILLED_SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_interrupted_turn_without_result_discards_delivery(tmp_path):
+    await init_db()
+    delivered: list[int] = []
+
+    async def deliver(delivery_id: int) -> None:
+        delivered.append(delivery_id)
+
+    client = InterruptibleClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        deliver_callback=deliver,
+    )
+    turn = Turn(
+        session_id=INTERRUPT_SESSION_ID,
+        agent_id="default",
+        prompt="hi",
+        delivery=DeliveryRequest(channel_id="ch1", external_id="wx-1"),
+    )
+    task = asyncio.create_task(runner.run(turn, TurnStream()))
+    try:
+        await asyncio.wait_for(client.queried.wait(), 1)
+        assert await runner.interrupt(turn.session_id) is True
+        outcome = await asyncio.wait_for(task, 1)
+
+        # The stream ended with no result after /stop: nothing is owed.
+        assert outcome.status == "failed"
+        assert outcome.error == "run ended without result"
+        assert client.interrupted is True
+        assert await _rows(INTERRUPT_SESSION_ID) == []
+        assert delivered == []
+        assert not await turn_lease.is_running(INTERRUPT_SESSION_ID)
+    finally:
+        if not task.done():
+            task.cancel()
+        await _cleanup(INTERRUPT_SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_turn_without_delivery_creates_no_row_or_callback(tmp_path):
+    await init_db()
+    delivered: list[int] = []
+
+    async def deliver(delivery_id: int) -> None:
+        delivered.append(delivery_id)
+
+    client = FakeClient([ResultMessage(result="web answer")])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        deliver_callback=deliver,
+    )
+    turn = Turn(
+        session_id=NO_DELIVERY_SESSION_ID,
+        agent_id="default",
+        prompt="hi",
+    )
+    try:
+        outcome = await runner.run(turn, TurnStream())
+
+        assert outcome.status == "completed"
+        assert await _rows(NO_DELIVERY_SESSION_ID) == []
+        assert delivered == []
+        assert not await turn_lease.is_running(NO_DELIVERY_SESSION_ID)
+    finally:
+        await _cleanup(NO_DELIVERY_SESSION_ID)

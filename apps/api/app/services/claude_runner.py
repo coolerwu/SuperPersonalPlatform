@@ -8,6 +8,11 @@ here rather than by ``TurnStream.close``. A client is evicted after timeouts,
 failures and streams that end without this turn's own result, so a poisoned
 stream cannot leak into the next turn. Run persistence, queueing and
 cancellation policy stay outside this module.
+
+The runner also owns a turn's channel delivery obligation: the pending row is
+written in the same transaction as the lease, filled with the final answer at
+teardown (or discarded when no reply is owed), and handed to
+``deliver_callback`` when one is configured.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from app.config import settings as app_settings
 from app.db import SessionLocal
@@ -33,6 +38,7 @@ logger = logging.getLogger(__name__)
 _DISCONNECT_TIMEOUT_SECONDS = 10
 
 # Channel users get a reply even when the turn produced no text at all.
+_EMPTY_REPLY_TEXT = "（无回复）"
 _FAILED_DELIVERY_TEXT = "（任务执行失败，请稍后重试。）"
 
 
@@ -56,6 +62,36 @@ class Turn:
     source: str = "manual"
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     delivery: DeliveryRequest | None = None
+
+
+def _delivery_content(
+    outcome: TurnOutcome, *, interrupted: bool, result_received: bool
+) -> str | None:
+    """Return the channel reply body, or ``None`` to drop the obligation.
+
+    Completed turns always answer (a placeholder when the model produced no
+    text); failed turns answer with their partial text or a fixed error;
+    cancelled or interrupted-without-result turns owe nothing.
+    """
+    if outcome.status == "cancelled":
+        return None
+    if interrupted and not result_received:
+        return None
+    if outcome.status == "completed":
+        return outcome.output if outcome.output.strip() else _EMPTY_REPLY_TEXT
+    return outcome.output if outcome.output.strip() else _FAILED_DELIVERY_TEXT
+
+
+async def _best_effort(action: Callable[[], Awaitable[Any]], label: str) -> Any:
+    """Run one delivery teardown step without breaking the finally block."""
+    try:
+        return await action()
+    except BaseException as exc:
+        if isinstance(exc, asyncio.CancelledError):
+            logger.warning("%s cancelled", label)
+        else:
+            logger.warning("%s failed", label, exc_info=True)
+        return None
 
 
 def transcript_dir(agent_id: str, *, home: Path | None = None) -> Path:
@@ -166,9 +202,10 @@ class ClaudeTurnRunner:
                         )
                     await db.commit()
                 # A resumed turn reuses the empty obligation created by the
-                # interrupted turn instead of creating a duplicate.
+                # interrupted turn; a filled row already belongs to the sender
+                # and must never be reloaded or duplicated.
                 if delivery_id is None and turn.source == "resume":
-                    existing = await channel_delivery.find_pending_for_session(
+                    existing = await channel_delivery.find_unfilled_for_session(
                         turn.session_id
                     )
                     if existing is not None:
@@ -255,8 +292,11 @@ class ClaudeTurnRunner:
             )
             evict = True
         finally:
+            # Snapshot before clearing: an interrupt without a result owes no
+            # channel reply. The marker is cleared at the end of teardown so the
+            # delivery decision can still see it.
+            interrupted = turn.session_id in self._cancel_requested
             self._active.discard(turn.session_id)
-            self._cancel_requested.discard(turn.session_id)
             if not result_received:
                 evict = True
             # Publish teardown synchronously first: a later await must not be
@@ -305,33 +345,29 @@ class ClaudeTurnRunner:
             # it sent and lose the answer. Failures here must never mask the
             # terminal event or break lease cleanup.
             if delivery_id is not None and not keep_lease:
-                if outcome.status == "cancelled":
+                content = _delivery_content(
+                    outcome,
+                    interrupted=interrupted,
+                    result_received=result_received,
+                )
+                if content is None:
                     # The user stopped the turn, so no reply is owed; drop the
                     # empty obligation instead of leaving a stale row behind.
-                    try:
-                        await channel_delivery.discard(delivery_id)
-                    except Exception:
-                        logger.exception(
-                            "delivery discard failed delivery=%s", delivery_id
-                        )
+                    await _best_effort(
+                        lambda: channel_delivery.discard(delivery_id),
+                        f"delivery discard delivery={delivery_id}",
+                    )
                 else:
-                    content = outcome.output
-                    if outcome.status == "failed" and not content.strip():
-                        content = _FAILED_DELIVERY_TEXT
-                    try:
-                        await channel_delivery.complete(delivery_id, content)
-                    except Exception:
-                        logger.exception(
-                            "delivery completion failed delivery=%s", delivery_id
+                    completed = await _best_effort(
+                        lambda: channel_delivery.complete(delivery_id, content),
+                        f"delivery completion delivery={delivery_id}",
+                    )
+                    if completed and self._deliver_callback is not None:
+                        await _best_effort(
+                            lambda: self._deliver_callback(delivery_id),
+                            f"delivery send delivery={delivery_id}",
                         )
-                    else:
-                        if self._deliver_callback is not None:
-                            try:
-                                await self._deliver_callback(delivery_id)
-                            except Exception:
-                                logger.exception(
-                                    "delivery send failed delivery=%s", delivery_id
-                                )
+            self._cancel_requested.discard(turn.session_id)
         return outcome
 
     async def interrupt(self, session_id: str) -> bool:

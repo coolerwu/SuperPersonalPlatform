@@ -29,3 +29,6 @@ node_modules/
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Scratch review data from other sessions (may hold secrets/DBs)
+apps/api/.tmp-review/

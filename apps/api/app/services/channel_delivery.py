@@ -1,3 +1,11 @@
+"""Channel reply obligations.
+
+Rows are created with empty content at turn start. An empty row is only
+claimed by a resumed turn (``find_unfilled_for_session``); a row that already
+holds content is only sent by the delivery worker/sweep. ``sent`` and
+``failed`` are terminal and never rewritten.
+"""
+
 from __future__ import annotations
 
 from sqlalchemy import case, delete, select, update
@@ -31,9 +39,10 @@ async def get(delivery_id: int) -> ChannelDelivery | None:
 async def find_pending_for_session(session_id: str) -> ChannelDelivery | None:
     """Return the latest live delivery for a session as a read-only snapshot.
 
-    Rows with empty content are included on purpose: recovery reattaches an
-    obligation created at turn start before the process crashed to the resumed
-    turn. The returned instance is detached; callers must not mutate it.
+    Rows with empty content are included on purpose: callers that need a
+    recovery candidate must use ``find_unfilled_for_session`` instead, so a
+    filled row already owed to the sender is never reloaded. The returned
+    instance is detached; callers must not mutate it.
     """
     async with SessionLocal() as db:
         return await db.scalar(
@@ -41,6 +50,26 @@ async def find_pending_for_session(session_id: str) -> ChannelDelivery | None:
             .where(
                 ChannelDelivery.session_id == session_id,
                 ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+            )
+            .order_by(ChannelDelivery.id.desc())
+            .limit(1)
+        )
+
+
+async def find_unfilled_for_session(session_id: str) -> ChannelDelivery | None:
+    """Return the newest live delivery for a session that still has no answer.
+
+    Only an empty obligation may be reattached to a resumed turn; a row with
+    content is already scheduled for the sender and must not be reloaded. The
+    returned instance is detached; callers must not mutate it.
+    """
+    async with SessionLocal() as db:
+        return await db.scalar(
+            select(ChannelDelivery)
+            .where(
+                ChannelDelivery.session_id == session_id,
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+                ChannelDelivery.content == "",
             )
             .order_by(ChannelDelivery.id.desc())
             .limit(1)

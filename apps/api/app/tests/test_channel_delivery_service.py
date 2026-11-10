@@ -261,6 +261,62 @@ async def test_mark_pending_retries_until_limit_and_truncates_error():
 
 
 @pytest.mark.asyncio
+async def test_discard_removes_only_live_rows():
+    await init_db()
+    pending_id = None
+    attempting_id = None
+    sent_id = None
+    failed_id = None
+    try:
+        pending_id = await _create()
+        attempting_id = await _create()
+        await channel_delivery.complete(attempting_id, "content")
+        await channel_delivery.mark_attempting(attempting_id)
+        sent_id = await _create()
+        await channel_delivery.complete(sent_id, "content")
+        await channel_delivery.mark_attempting(sent_id)
+        await channel_delivery.mark_sent(sent_id)
+        failed_id = await _create()
+        await channel_delivery.complete(failed_id, "content")
+        await channel_delivery.mark_attempting(failed_id)
+        await channel_delivery.mark_pending(failed_id, "boom", max_attempts=1)
+
+        assert await channel_delivery.discard(pending_id) is True
+        assert await channel_delivery.get(pending_id) is None
+        assert await channel_delivery.discard(attempting_id) is True
+        assert await channel_delivery.get(attempting_id) is None
+
+        # Terminal rows are delivery history, not pending obligations.
+        assert await channel_delivery.discard(sent_id) is False
+        row = await channel_delivery.get(sent_id)
+        assert row is not None and row.status == "sent"
+        assert await channel_delivery.discard(failed_id) is False
+        row = await channel_delivery.get(failed_id)
+        assert row is not None and row.status == "failed"
+    finally:
+        await _cleanup(pending_id, attempting_id, sent_id, failed_id)
+
+
+@pytest.mark.asyncio
+async def test_find_unfilled_for_session_skips_filled_rows():
+    await init_db()
+    filled_id = None
+    empty_id = None
+    try:
+        filled_id = await _create(session_id="s-unfilled")
+        await channel_delivery.complete(filled_id, "already owed")
+        empty_id = await _create(session_id="s-unfilled")
+
+        row = await channel_delivery.find_unfilled_for_session("s-unfilled")
+        assert row is not None and row.id == empty_id and row.content == ""
+        assert (
+            await channel_delivery.find_unfilled_for_session("s-missing") is None
+        )
+    finally:
+        await _cleanup(filled_id, empty_id)
+
+
+@pytest.mark.asyncio
 async def test_init_db_rebuilds_stale_channel_deliveries_table():
     async with engine.begin() as conn:
         await conn.exec_driver_sql("DROP TABLE IF EXISTS channel_deliveries")
