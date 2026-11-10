@@ -19,6 +19,7 @@ from app.models import (
 )
 from app.services.cron_service import run_due_jobs
 from app.services.run_service import complete_run
+from app.services.settings_store import ConversationSection
 
 
 async def _make_channel_conversation(
@@ -83,16 +84,57 @@ async def _fire(job_id: str) -> Run | None:
 
 
 async def test_channel_conversation_list_excludes_tokens(client) -> None:
-    channel_id, conversation_id, _ = await _make_channel_conversation()
-
-    response = client.get(f"/api/channels/{channel_id}/conversations")
-    assert response.status_code == 200, response.text
-    rows = response.json()
-    row = next(item for item in rows if item["id"] == conversation_id)
-    assert row["display_name"] == "Alice"
-    assert row["session_title"].startswith("微信")
-    assert "context_token" not in row
-    assert "external_id" not in row
+    store = client.app.state.settings_store
+    suffix = uuid.uuid4().hex[:8]
+    channel_id = f"ch-{suffix}"
+    key = f"{channel_id}:wx-{suffix}"
+    session_id = str(uuid.uuid4())
+    await store.mutate_raw(
+        lambda data: data.setdefault("channels", []).append(
+            {
+                "id": channel_id,
+                "agent_id": "default",
+                "type": "wechat",
+                "name": f"cron-channel-{suffix}",
+                "status": "active",
+                "account_id": f"bot-{suffix}",
+                "bot_token": "test-token",
+            }
+        )
+    )
+    await store.update_conversation(
+        key,
+        ConversationSection(
+            session_id=session_id,
+            channel_id=channel_id,
+            display_name="Alice",
+            context_token=f"ctx-{suffix}",
+            updated_at=utcnow().isoformat(),
+        ),
+    )
+    try:
+        response = client.get(f"/api/channels/{channel_id}/conversations")
+        assert response.status_code == 200, response.text
+        rows = response.json()
+        row = next(item for item in rows if item["session_id"] == session_id)
+        assert row["display_name"] == "Alice"
+        assert row["external_id"] == f"wx-{suffix}"
+        assert "context_token" not in row
+    finally:
+        await store.mutate_raw(
+            lambda data: data.update(
+                channels=[
+                    item
+                    for item in data.get("channels", [])
+                    if item.get("id") != channel_id
+                ],
+                channel_conversations={
+                    key_: value
+                    for key_, value in data.get("channel_conversations", {}).items()
+                    if key_ != key
+                },
+            )
+        )
 
 
 async def test_job_accepts_explicit_push_target(client) -> None:

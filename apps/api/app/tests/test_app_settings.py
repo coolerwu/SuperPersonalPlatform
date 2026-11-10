@@ -4,23 +4,14 @@ import os
 import time
 import uuid
 
-from app.db import SessionLocal
-from app.models import AppConfig
 from app.services import sdk_bridge
 from app.services.claude_runner import transcript_dir
 from app.services.session_service import SessionCleanupRuntime
 
 
-async def _reset_config() -> None:
-    async with SessionLocal() as db:
-        row = await db.get(AppConfig, "default")
-        if row is not None:
-            await db.delete(row)
-            await db.commit()
-
-
 async def test_settings_api_default_and_update(client) -> None:
-    await _reset_config()
+    store = client.app.state.settings_store
+    await store.update_runtime(session_retention_days=30)
 
     body = client.get("/api/settings").json()
     assert body["session_retention_days"] == 30
@@ -40,6 +31,21 @@ async def test_settings_api_default_and_update(client) -> None:
         == 422
     )
 
+    client.put("/api/settings", json={"session_retention_days": 30})
+
+
+def test_settings_roundtrip(client) -> None:
+    response = client.put("/api/settings", json={"session_retention_days": 7})
+    assert response.status_code == 200
+    assert client.get("/api/settings").json()["session_retention_days"] == 7
+    client.put("/api/settings", json={"session_retention_days": 30})
+
+
+def test_settings_persist_to_settings_file(client) -> None:
+    store = client.app.state.settings_store
+    client.put("/api/settings", json={"session_retention_days": 9})
+    assert store.path.is_file()
+    assert b'"session_retention_days": 9' in store.path.read_bytes()
     client.put("/api/settings", json={"session_retention_days": 30})
 
 

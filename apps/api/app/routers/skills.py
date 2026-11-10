@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth import require_auth
-from app.db import get_db
-from app.models import Agent
 from app.schemas import SkillCatalogOut, SkillDetailOut, SkillOut, SkillUpdate
+from app.services.settings_store import SettingsStore, get_settings_store
 from app.services.skills import (
     SkillDocument,
     SkillNotFoundError,
@@ -19,6 +16,11 @@ from app.services.skills import (
 )
 
 router = APIRouter(prefix="/api/skills", tags=["skills"], dependencies=[Depends(require_auth)])
+
+
+def _store(request: Request) -> SettingsStore:
+    store = getattr(request.app.state, "settings_store", None)
+    return store if store is not None else get_settings_store()
 
 
 def _detail_out(document: SkillDocument) -> SkillDetailOut:
@@ -74,9 +76,7 @@ async def save_skill(directory: str, payload: SkillUpdate) -> SkillDetailOut:
 
 
 @router.delete("/{directory}")
-async def remove_skill(
-    directory: str, db: AsyncSession = Depends(get_db)
-) -> dict[str, bool]:
+async def remove_skill(directory: str, request: Request) -> dict[str, bool]:
     try:
         declared_name = delete_skill(directory)
     except SkillNotFoundError as exc:
@@ -85,13 +85,19 @@ async def remove_skill(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     removed = {directory, declared_name}
-    agents = (await db.scalars(select(Agent))).all()
-    changed = False
-    for agent in agents:
-        names = list(agent.enabled_skills or [])
-        if any(name in removed for name in names):
-            agent.enabled_skills = [name for name in names if name not in removed]
-            changed = True
-    if changed:
-        await db.commit()
+
+    def drop_from_agents(data: dict) -> None:
+        agents = data.get("agents")
+        if not isinstance(agents, list):
+            return
+        for item in agents:
+            if not isinstance(item, dict):
+                continue
+            names = item.get("enabled_skills")
+            if isinstance(names, list):
+                item["enabled_skills"] = [
+                    name for name in names if name not in removed
+                ]
+
+    await _store(request).mutate_raw(drop_from_agents)
     return {"deleted": True}

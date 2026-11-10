@@ -5,8 +5,10 @@ import copy
 import json
 import logging
 import os
+import sqlite3
 import tempfile
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +47,11 @@ class AgentSection(BaseModel):
     status: str = "active"
     enabled_skills: list[str] = Field(default_factory=list)
     provider: ProviderSection = Field(default_factory=ProviderSection)
+    # Kept for the existing Agent API/UI. The SDK manages auto memory itself,
+    # so the runtime does not consult this flag.
+    auto_memory: bool = True
     created_at: str | None = None
+    updated_at: str | None = None
 
 
 class ChannelSection(BaseModel):
@@ -61,6 +67,8 @@ class ChannelSection(BaseModel):
     sync_buf: str = ""
     last_seen_at: str | None = None
     last_error: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class ConversationSection(BaseModel):
@@ -273,6 +281,7 @@ def build_default_settings() -> dict[str, Any]:
         name="Assistant",
         instructions=DEFAULT_AGENT_INSTRUCTIONS,
         provider=provider,
+        created_at=datetime.now(timezone.utc).isoformat(),
     )
     defaults = PlatformSettings(
         runtime=RuntimeSection(session_retention_days=current.session_retention_days),
@@ -285,6 +294,39 @@ def build_default_settings() -> dict[str, Any]:
         agents=[agent],
     )
     return defaults.model_dump()
+
+
+def _legacy_session_retention_days() -> int | None:
+    """Read ``app_configs.session_retention_days`` from the pre-settings DB.
+
+    Only used once, when ``settings.json`` is created. Task 6 removed the old
+    config API but users may already have set a retention window (including 0,
+    which disables cleanup); losing that value would silently re-enable a
+    default. Any failure is logged and ignored so a missing or unreadable
+    legacy database cannot block startup.
+    """
+    url = app_settings.app_database_url
+    if not url.startswith("sqlite") or ":///" not in url:
+        return None
+    path = Path(url.split(":///", 1)[1].split("?", 1)[0])
+    if not path.is_file():
+        return None
+    try:
+        with sqlite3.connect(str(path)) as connection:
+            row = connection.execute(
+                "SELECT session_retention_days FROM app_configs WHERE id = 'default'"
+            ).fetchone()
+    except sqlite3.Error as exc:
+        logger.info("legacy app_configs is not readable: %s", exc)
+        return None
+    if row is None:
+        return None
+    try:
+        value = int(row[0])
+    except (TypeError, ValueError):
+        logger.warning("legacy session_retention_days is invalid: %r", row[0])
+        return None
+    return max(0, min(value, 3650))
 
 
 class SettingsStore:
@@ -306,7 +348,11 @@ class SettingsStore:
 
     async def ensure_seeded(self) -> PlatformSettings:
         if not self.path.exists():
-            await self._json.update(lambda data: data.update(build_default_settings()))
+            defaults = build_default_settings()
+            legacy_retention = _legacy_session_retention_days()
+            if legacy_retention is not None:
+                defaults["runtime"]["session_retention_days"] = legacy_retention
+            await self._json.update(lambda data: data.update(defaults))
         return await self.get()
 
     async def update_agent(self, agent: AgentSection) -> None:
@@ -318,6 +364,28 @@ class SettingsStore:
             ]
             agents.append(agent.model_dump())
             data["agents"] = agents
+
+        await self._json.update(mutate)
+
+    async def update_agent_fields(self, agent_id: str, **fields: Any) -> None:
+        """Patch only the given fields of one agent.
+
+        Multiple UI actions (enable skill, rename, toggle status) may race;
+        each patches its own fields so a stale full-agent write cannot undo the
+        others. The merged entry is validated before it is persisted.
+        """
+        unknown = set(fields) - set(AgentSection.model_fields)
+        if unknown:
+            raise ValueError("unknown agent field(s): " + ", ".join(sorted(unknown)))
+
+        def mutate(data: dict[str, Any]) -> None:
+            agents = _list_section(data, "agents")
+            for index, item in enumerate(agents):
+                if isinstance(item, dict) and item.get("id") == agent_id:
+                    agents[index] = AgentSection.model_validate(
+                        {**item, **fields}
+                    ).model_dump()
+                    return
 
         await self._json.update(mutate)
 

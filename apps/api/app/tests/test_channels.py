@@ -1,610 +1,227 @@
-import os
-import sqlite3
+from __future__ import annotations
 
-import pytest
-from sqlalchemy import func, select
+import functools
+import uuid
+from datetime import datetime, timezone
 
-from app.db import SessionLocal
-from app.models import (
-    Channel,
-    ChannelConversation,
-    ChannelInbound,
-    ChannelRunLink,
-    MemoryItem,
-    Message,
-    Run,
-    Session,
-    utcnow,
-)
-from app.services.channel_service import (
-    ChannelUnavailable,
-    ingest_inbound,
-    resolve_quoted_text,
-)
-from app.routers.sessions import _session_out
+from app.services.claude_runner import transcript_dir
+from app.services.settings_store import ConversationSection
 
 
-@pytest.fixture(autouse=True)
-async def _cancel_wechat_runs():
-    yield
-    async with SessionLocal() as db:
-        runs = (
-            await db.scalars(
-                select(Run).where(
-                    Run.source == "wechat", Run.status.in_(("queued", "running"))
-                )
-            )
-        ).all()
-        for run in runs:
-            run.status = "cancelled"
-            run.finished_at = utcnow()
-        await db.commit()
+def _store(client):
+    return client.app.state.settings_store
 
 
-def _db_path() -> str:
-    return os.environ["APP_DATABASE_URL"].split("///", 1)[1]
+def _call(client, function, /, *args, **kwargs):
+    return client.portal.call(functools.partial(function, *args, **kwargs))
 
 
-def _sqlite_execute(statement: str, params: tuple = ()) -> None:
-    with sqlite3.connect(_db_path()) as connection:
-        connection.execute(statement, params)
-        connection.commit()
-
-
-def _sqlite_scalar(statement: str, params: tuple = ()) -> object:
-    with sqlite3.connect(_db_path()) as connection:
-        row = connection.execute(statement, params).fetchone()
-    return row[0] if row else None
-
-
-async def _create_active_channel(agent_id: str = "default") -> str:
-    async with SessionLocal() as db:
-        channel = Channel(
-            agent_id=agent_id,
-            type="wechat",
-            name=f"test-wechat-{utcnow().timestamp()}",
-            status="active",
-            account_id="bot-account@im.bot",
-            bot_token="secret-bot-token",
-            base_url="https://ilink.example",
-        )
-        db.add(channel)
-        await db.commit()
-        await db.refresh(channel)
-        return channel.id
-
-
-async def _ingest(channel_id: str, message_id: str, *, external_id: str = "user-1", text: str = "你好"):
-    return await ingest_inbound(
-        channel_id=channel_id,
-        external_message_id=message_id,
-        external_conversation_id=external_id,
-        conversation_name="Alice",
-        sender_name="Alice",
-        text=text,
-        context_token=f"ctx-{message_id}",
+def _create_channel(client, agent_id: str = "default", name: str = "我的微信") -> dict:
+    response = client.post(
+        "/api/channels", json={"agent_id": agent_id, "name": name}
     )
+    assert response.status_code == 201, response.text
+    return response.json()
 
 
-@pytest.mark.asyncio
-async def test_wechat_memory_command_writes_user_memory(client) -> None:
-    channel_id = await _create_active_channel()
-    result = await _ingest(
-        channel_id, "wx-memory-command-1", text="/memory 微信用户偏好先给结论"
+def _bind(client, channel_id: str, external_id: str, display_name: str = "Alice") -> str:
+    session_id = str(uuid.uuid4())
+    _call(
+        client,
+        _store(client).update_conversation,
+        f"{channel_id}:{external_id}",
+        ConversationSection(
+            session_id=session_id,
+            channel_id=channel_id,
+            display_name=display_name,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        ),
     )
+    return session_id
 
-    assert result.command == "/memory"
-    assert "已写入用户记忆" in (result.reply or "")
-    async with SessionLocal() as db:
-        item = await db.scalar(
-            select(MemoryItem).where(MemoryItem.content == "微信用户偏好先给结论")
-        )
-    assert item is not None
-    assert item.scope == "user"
-    assert item.source_kind == "command"
-    assert item.snapshot_text == "/memory 微信用户偏好先给结论"
+
+def _patch_runtime(client, monkeypatch) -> None:
+    runtime = client.app.state.weixin
+
+    async def noop(*args, **kwargs):
+        return None
+
+    for method in ("start_channel", "stop_channel", "sweep_deliveries"):
+        monkeypatch.setattr(runtime, method, noop)
 
 
 def test_channel_create_and_list_hides_secret(client) -> None:
-    response = client.post("/api/channels", json={"agent_id": "default", "name": "我的微信"})
-    assert response.status_code == 201
-    created = response.json()
+    created = _create_channel(client)
     assert created["status"] == "pairing"
     assert created["has_credentials"] is False
     assert "bot_token" not in created
 
-    _sqlite_execute(
-        "UPDATE channels SET account_id = ?, bot_token = ? WHERE id = ?",
-        ("acct@im.bot", "top-secret-token", created["id"]),
+    _call(
+        client,
+        _store(client).update_channel_fields,
+        created["id"],
+        account_id="acct@im.bot",
+        bot_token="top-secret-token",
+        base_url="https://ilink.example",
     )
-    listed = client.get("/api/channels", params={"agent_id": "default"})
-    assert listed.status_code == 200
-    body = listed.text
-    assert "top-secret-token" not in body
-    row = next(item for item in listed.json() if item["id"] == created["id"])
+    listed = client.get("/api/channels", params={"agent_id": "default"}).json()
+    row = next(item for item in listed if item["id"] == created["id"])
     assert row["has_credentials"] is True
+    assert "bot_token" not in row
+    assert "top-secret-token" not in str(row)
+
+    assert client.delete(f"/api/channels/{created['id']}").status_code == 200
 
 
-@pytest.mark.asyncio
-async def test_channel_out_never_exposes_token() -> None:
-    from app.routers.channels import _channel_out
-
-    async with SessionLocal() as db:
-        channel = Channel(
-            agent_id="default",
-            type="wechat",
-            name="token-hiding",
-            status="active",
-            account_id="acct@im.bot",
-            bot_token="top-secret-token",
-        )
-        db.add(channel)
-        await db.commit()
-        await db.refresh(channel)
-        payload = (await _channel_out(db, channel)).model_dump()
-        assert payload["has_credentials"] is True
-        assert "bot_token" not in payload
-        assert "top-secret-token" not in str(payload)
-
-
-def test_channel_activation_requires_login(client) -> None:
-    created = client.post(
-        "/api/channels", json={"agent_id": "default", "name": "待登录"}
-    ).json()
-    response = client.put(f"/api/channels/{created['id']}", json={"status": "active"})
-    assert response.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_inbound_creates_session_message_and_run() -> None:
-    channel_id = await _create_active_channel()
-    result = await _ingest(channel_id, "msg-1")
-
-    assert result.duplicate is False
-    assert result.run_id and result.session_id and result.message_id
-    async with SessionLocal() as db:
-        run = await db.get(Run, result.run_id)
-        assert run is not None
-        assert run.source == "wechat"
-        assert run.status == "queued"
-        session = await db.get(Session, result.session_id)
-        assert session is not None
-        assert session.title == "微信 · Alice"
-        message = await db.get(Message, result.message_id)
-        assert message is not None
-        assert message.role == "user"
-        conversation = await db.scalar(
-            select(ChannelConversation).where(
-                ChannelConversation.session_id == result.session_id
-            )
-        )
-        assert conversation is not None
-        assert conversation.context_token == "ctx-msg-1"
-        assert await db.get(ChannelRunLink, result.run_id) is not None
-        inbound = await db.scalar(
-            select(ChannelInbound).where(
-                ChannelInbound.channel_id == channel_id,
-                ChannelInbound.external_message_id == "msg-1",
-            )
-        )
-        assert inbound is not None
-        assert inbound.run_id == result.run_id
-
-
-@pytest.mark.asyncio
-async def test_inbound_is_idempotent() -> None:
-    channel_id = await _create_active_channel()
-    first = await _ingest(channel_id, "msg-dup")
-    second = await _ingest(channel_id, "msg-dup")
-
-    assert second.duplicate is True
-    assert second.run_id == first.run_id
-    async with SessionLocal() as db:
-        count = await db.scalar(
-            select(func.count(Run.id)).where(Run.session_id == first.session_id)
-        )
-        assert count == 1
-
-
-@pytest.mark.asyncio
-async def test_inbound_maps_each_contact_to_its_own_session() -> None:
-    channel_id = await _create_active_channel()
-    alice = await _ingest(channel_id, "msg-a", external_id="alice")
-    bob = await _ingest(channel_id, "msg-b", external_id="bob")
-
-    assert alice.session_id != bob.session_id
-    async with SessionLocal() as db:
-        sessions = (
-            await db.scalars(
-                select(Session).where(Session.id.in_([alice.session_id, bob.session_id]))
-            )
-        ).all()
-        assert len(sessions) == 2
-
-
-@pytest.mark.asyncio
-async def test_new_command_rebinds_contact_to_fresh_session() -> None:
-    channel_id = await _create_active_channel()
-    first = await _ingest(channel_id, "msg-before-new")
-    result = await _ingest(channel_id, "msg-new", text="/new")
-
-    assert result.duplicate is False
-    assert result.run_id is None
-    assert result.message_id is None
-    assert result.command == "/new"
-    assert result.reply
-    assert result.session_id is not None
-    assert result.session_id != first.session_id
-
-    async with SessionLocal() as db:
-        conversation = await db.scalar(
-            select(ChannelConversation).where(ChannelConversation.channel_id == channel_id)
-        )
-        assert conversation is not None
-        assert conversation.session_id == result.session_id
-        assert await db.get(Session, first.session_id) is not None
-        assert await db.get(Session, result.session_id) is not None
-        inbound = await db.scalar(
-            select(ChannelInbound).where(
-                ChannelInbound.channel_id == channel_id,
-                ChannelInbound.external_message_id == "msg-new",
-            )
-        )
-        assert inbound is not None
-        assert inbound.run_id is None
-        assert inbound.session_id == result.session_id
-        runs = (
-            await db.scalars(
-                select(Run).where(Run.session_id.in_([first.session_id, result.session_id]))
-            )
-        ).all()
-        assert [run.id for run in runs] == [first.run_id]
-
-
-@pytest.mark.asyncio
-async def test_new_command_mentions_running_tasks() -> None:
-    channel_id = await _create_active_channel()
-    await _ingest(channel_id, "msg-running")
-    result = await _ingest(channel_id, "msg-new-busy", text="/new")
-
-    assert result.command == "/new"
-    assert result.reply is not None
-    assert "任务" in result.reply
-
-
-@pytest.mark.asyncio
-async def test_clear_is_alias_for_new() -> None:
-    channel_id = await _create_active_channel()
-    first = await _ingest(channel_id, "msg-clear-before")
-    result = await _ingest(channel_id, "msg-clear", text="/clear")
-
-    assert result.command == "/clear"
-    assert result.reply
-    assert result.session_id is not None
-    assert result.session_id != first.session_id
-
-
-@pytest.mark.asyncio
-async def test_status_help_and_unknown_commands_create_no_run() -> None:
-    channel_id = await _create_active_channel()
-    started = await _ingest(channel_id, "msg-status-base")
-
-    status = await _ingest(channel_id, "msg-status", text="/status")
-    assert status.run_id is None
-    assert status.reply is not None
-    assert status.reply.startswith("Agent：")
-    assert "会话：" in status.reply
-    assert status.session_id == started.session_id
-
-    help_result = await _ingest(channel_id, "msg-help", text="/help")
-    assert help_result.reply is not None
-    assert "/new" in help_result.reply
-
-    unknown = await _ingest(channel_id, "msg-unknown", text="/foo")
-    assert unknown.reply is not None
-    assert "未知命令" in unknown.reply
-
-    async with SessionLocal() as db:
-        count = await db.scalar(
-            select(func.count(Run.id)).where(Run.session_id == started.session_id)
-        )
-        assert count == 1
-
-
-@pytest.mark.asyncio
-async def test_stop_command_returns_active_runs_to_cancel() -> None:
-    channel_id = await _create_active_channel()
-    first = await _ingest(channel_id, "msg-stop-1")
-    second = await _ingest(channel_id, "msg-stop-2")
-    result = await _ingest(channel_id, "msg-stop", text="/stop")
-
-    assert result.command == "/stop"
-    assert result.reply is None
-    assert set(result.cancel_run_ids) == {first.run_id, second.run_id}
-
-    idle = await _ingest(channel_id, "msg-stop-idle", text="/stop", external_id="other-user")
-    assert idle.reply is not None
-    assert idle.cancel_run_ids == ()
-    assert "没有" in idle.reply
-
-
-@pytest.mark.asyncio
-async def test_command_idempotent_by_message_id() -> None:
-    channel_id = await _create_active_channel()
-    first = await _ingest(channel_id, "msg-dup-new", text="/new")
-    second = await _ingest(channel_id, "msg-dup-new", text="/new")
-
-    assert first.duplicate is False
-    assert second.duplicate is True
-    assert second.run_id is None
-    assert second.reply is None
-    async with SessionLocal() as db:
-        inbound_count = await db.scalar(
-            select(func.count(ChannelInbound.id)).where(
-                ChannelInbound.channel_id == channel_id
-            )
-        )
-        assert inbound_count == 1
-        conversation = await db.scalar(
-            select(ChannelConversation).where(ChannelConversation.channel_id == channel_id)
-        )
-        assert conversation is not None
-        assert conversation.session_id == first.session_id
-
-
-@pytest.mark.asyncio
-async def test_plain_slash_text_still_goes_to_agent() -> None:
-    channel_id = await _create_active_channel()
-    result = await _ingest(channel_id, "msg-path", text="/etc/passwd 是什么")
-
-    assert result.command is None
-    assert result.run_id is not None
-
-
-@pytest.mark.asyncio
-async def test_inbound_queues_while_an_active_run_exists(client) -> None:
-    channel_id = await _create_active_channel()
-    first = await _ingest(channel_id, "msg-q1")
-    second = await _ingest(channel_id, "msg-q2")
-
-    async with SessionLocal() as db:
-        runs = (
-            await db.scalars(
-                select(Run).where(Run.session_id == first.session_id).order_by(Run.created_at)
-            )
-        ).all()
-        assert [run.status for run in runs] == ["queued", "queued"]
-        assert {run.id for run in runs} == {first.run_id, second.run_id}
-
-    # The web composer queues behind the channel Runs as well.
-    response = client.post(
-        "/api/chat/messages",
-        json={"session_id": first.session_id, "content": "from web"},
+def test_channel_activation_requires_login(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    created = _create_channel(client)
+    assert (
+        client.put(
+            f"/api/channels/{created['id']}", json={"status": "active"}
+        ).status_code
+        == 400
     )
-    assert response.status_code == 201
-    third_id = response.json()["run_id"]
 
-    async with SessionLocal() as db:
-        runs = (
-            await db.scalars(
-                select(Run).where(Run.session_id == first.session_id).order_by(Run.created_at)
-            )
-        ).all()
-        assert [run.status for run in runs] == ["queued", "queued", "queued"]
-        assert [run.id for run in runs] == [first.run_id, second.run_id, third_id]
-
-
-@pytest.mark.asyncio
-async def test_inbound_rejects_paused_channel() -> None:
-    channel_id = await _create_active_channel()
-    async with SessionLocal() as db:
-        channel = await db.get(Channel, channel_id)
-        assert channel is not None
-        channel.status = "paused"
-        await db.commit()
-
-    with pytest.raises(ChannelUnavailable):
-        await _ingest(channel_id, "msg-paused")
-
-
-@pytest.mark.asyncio
-async def test_session_list_and_active_run_endpoint_expose_queued_run(client) -> None:
-    channel_id = await _create_active_channel()
-    result = await _ingest(channel_id, "msg-active-run", external_id="active-user")
-
-    sessions = client.get("/api/agents/default/sessions")
-    assert sessions.status_code == 200
-    row = next(item for item in sessions.json() if item["id"] == result.session_id)
-    assert row["active_run_id"] == result.run_id
-    assert row["active_run_status"] == "queued"
-
-    active = client.get(f"/api/sessions/{result.session_id}/active-run")
-    assert active.status_code == 200
-    assert active.json()["id"] == result.run_id
-    assert active.json()["source"] == "wechat"
-
-
-@pytest.mark.asyncio
-async def test_delete_channel_keeps_session_but_removes_binding(client) -> None:
-    channel_id = await _create_active_channel()
-    result = await _ingest(channel_id, "msg-del-channel")
-
-    response = client.delete(f"/api/channels/{channel_id}")
-    assert response.status_code == 200
-
-    async with SessionLocal() as db:
-        assert await db.get(Channel, channel_id) is None
-        assert await db.get(Session, result.session_id) is not None
-        conversation = await db.scalar(
-            select(ChannelConversation).where(
-                ChannelConversation.session_id == result.session_id
-            )
-        )
-        assert conversation is None
-        assert await db.get(ChannelRunLink, result.run_id) is None
-
-
-@pytest.mark.asyncio
-async def test_delete_session_unlinks_conversation(client) -> None:
-    channel_id = await _create_active_channel()
-    result = await _ingest(channel_id, "msg-del-session")
-    async with SessionLocal() as db:
-        run = await db.get(Run, result.run_id)
-        assert run is not None
-        run.status = "completed"
-        run.finished_at = utcnow()
-        await db.commit()
-
-    response = client.delete(f"/api/sessions/{result.session_id}")
-    assert response.status_code == 200
-
-    async with SessionLocal() as db:
-        conversation = await db.scalar(
-            select(ChannelConversation).where(
-                ChannelConversation.session_id == result.session_id
-            )
-        )
-        assert conversation is None
-
-
-def test_agent_permanent_delete_cascades_channels(client) -> None:
-    agent = client.post(
-        "/api/agents",
-        json={"name": "Channel Agent", "instructions": "test"},
-    ).json()
-    channel = client.post(
-        "/api/channels", json={"agent_id": agent["id"], "name": "agent-wechat"}
-    ).json()
-
-    response = client.delete(f"/api/agents/{agent['id']}/permanent")
-    assert response.status_code == 200
-    assert _sqlite_scalar("SELECT COUNT(*) FROM channels WHERE id = ?", (channel["id"],)) == 0
-    assert _sqlite_scalar("SELECT COUNT(*) FROM agents WHERE id = ?", (agent["id"],)) == 0
-
-
-class _FakeLoginClient:
-    def __init__(self, status: dict) -> None:
-        self.status = status
-
-    async def fetch_qr(self):
-        return {
-            "qrcode": "qr-token",
-            "qrcode_img_content": "https://example.com/weixin/scan",
-        }
-
-    async def qr_status(self, qrcode: str, *, base_url: str | None = None):
-        return self.status
-
-    async def aclose(self) -> None:
-        return None
-
-
-class _FakeRuntime:
-    def __init__(self, status: dict) -> None:
-        self.status = status
-        self.login: dict[str, dict] = {}
-        self.started: list[str] = []
-        self.swept: list[str | None] = []
-
-    def new_client(self, **kwargs):
-        return _FakeLoginClient(self.status)
-
-    def set_login(self, channel_id: str, **kwargs) -> None:
-        self.login[channel_id] = kwargs
-
-    def get_login(self, channel_id: str):
-        return self.login.get(channel_id)
-
-    def clear_login(self, channel_id: str) -> None:
-        self.login.pop(channel_id, None)
-
-    async def start_channel(self, channel_id: str) -> bool:
-        self.started.append(channel_id)
-        return True
-
-    async def stop_channel(self, channel_id: str) -> None:
-        return None
-
-    async def sweep_deliveries(self, channel_id: str | None = None) -> None:
-        self.swept.append(channel_id)
-
-
-def test_wechat_qr_login_saves_credentials_and_hides_token(client) -> None:
-    created = client.post(
-        "/api/channels", json={"agent_id": "default", "name": "扫码测试"}
-    ).json()
-    fake = _FakeRuntime(
-        {
-            "status": "confirmed",
-            "ilink_bot_id": "bot-account@im.bot",
-            "bot_token": "confirmed-token",
-            "baseurl": "https://ilinkai.weixin.qq.com",
-            "ilink_user_id": "user-id",
-        }
+    _call(
+        client,
+        _store(client).update_channel_fields,
+        created["id"],
+        account_id="acct@im.bot",
+        bot_token="token",
     )
-    client.app.state.weixin = fake
+    activated = client.put(f"/api/channels/{created['id']}", json={"status": "active"})
+    assert activated.status_code == 200
+    assert activated.json()["status"] == "active"
+    paused = client.put(f"/api/channels/{created['id']}", json={"status": "paused"})
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "paused"
+
+    client.delete(f"/api/channels/{created['id']}")
+
+
+def test_channel_conversations_come_from_settings(client) -> None:
+    created = _create_channel(client)
+    session_id = _bind(client, created["id"], "wx-1")
+    other = _create_channel(client, name="另一个微信")
+    _bind(client, other["id"], "wx-2", display_name="Bob")
+
+    response = client.get(f"/api/channels/{created['id']}/conversations")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["display_name"] == "Alice"
+    assert row["external_id"] == "wx-1"
+    assert row["session_id"] == session_id
+    assert "context_token" not in row
+
+    client.delete(f"/api/channels/{created['id']}")
+    client.delete(f"/api/channels/{other['id']}")
+
+
+def test_delete_channel_removes_binding_but_keeps_transcript(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    created = _create_channel(client)
+    session_id = _bind(client, created["id"], "wx-1")
+    transcript = transcript_dir("default") / f"{session_id}.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text("{}", encoding="utf-8")
+
+    response = client.delete(f"/api/channels/{created['id']}")
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True}
+    assert transcript.is_file()
+    settings = _call(client, _store(client).get)
+    assert all(item.id != created["id"] for item in settings.channels)
+    assert f"{created['id']}:wx-1" not in settings.channel_conversations
+    transcript.unlink(missing_ok=True)
+
+
+def test_agent_permanent_delete_cascades_channels(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    agent = client.post("/api/agents", json={"name": "ChannelAgent"}).json()
+    channel = _create_channel(client, agent_id=agent["id"])
+    _bind(client, channel["id"], "wx-1")
+
+    assert client.delete(f"/api/agents/{agent['id']}/permanent").status_code == 200
+    settings = _call(client, _store(client).get)
+    assert all(item.id != channel["id"] for item in settings.channels)
+    assert f"{channel['id']}:wx-1" not in settings.channel_conversations
+    assert client.get("/api/channels", params={"agent_id": agent["id"]}).status_code == 404
+
+
+def test_wechat_login_saves_credentials_and_hides_token(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    runtime = client.app.state.weixin
+    created = _create_channel(client)
+
+    class FakeClient:
+        async def fetch_qr(self):
+            return {"qrcode": "qr-1", "qrcode_img_content": "https://example.com/qr"}
+
+        async def qr_status(self, qrcode, base_url=None):
+            assert qrcode == "qr-1"
+            return {
+                "status": "confirmed",
+                "ilink_bot_id": "bot-1",
+                "bot_token": "secret-token",
+                "baseurl": "https://ilink.example",
+                "ilink_user_id": "user-1",
+            }
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(runtime, "new_client", lambda **kwargs: FakeClient())
 
     login = client.post(f"/api/channels/{created['id']}/wechat/login")
-    assert login.status_code == 200
-    body = login.json()
-    assert body["qrcode"] == "qr-token"
-    assert body["scan_url"] == "https://example.com/weixin/scan"
-    assert "<svg" in body["qr_svg"]
+    assert login.status_code == 200, login.text
+    assert login.json()["qrcode"] == "qr-1"
+    assert "secret-token" not in login.text
 
     status = client.get(
         f"/api/channels/{created['id']}/wechat/login/status",
-        params={"qrcode": "qr-token"},
+        params={"qrcode": "qr-1"},
     )
-    assert status.status_code == 200
-    assert status.json() == {"status": "confirmed", "account_id": "bot-account@im.bot"}
-    assert fake.started == [created["id"]]
-    assert fake.swept == [created["id"]]
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "confirmed"
 
-    assert _sqlite_scalar("SELECT status FROM channels WHERE id = ?", (created["id"],)) == "active"
+    listed = client.get("/api/channels", params={"agent_id": "default"}).json()
+    row = next(item for item in listed if item["id"] == created["id"])
+    assert row["status"] == "active"
+    assert row["account_id"] == "bot-1"
+    assert row["has_credentials"] is True
+    assert "secret-token" not in str(row)
+
+    client.delete(f"/api/channels/{created['id']}")
+
+
+def test_relogin_clears_credentials(client, monkeypatch) -> None:
+    _patch_runtime(client, monkeypatch)
+    created = _create_channel(client)
+    _call(
+        client,
+        _store(client).update_channel_fields,
+        created["id"],
+        account_id="acct@im.bot",
+        bot_token="token",
+        status="active",
+    )
+
+    response = client.post(f"/api/channels/{created['id']}/wechat/relogin")
+    assert response.status_code == 200
+    assert response.json()["status"] == "pairing"
+    assert response.json()["has_credentials"] is False
+
+    client.delete(f"/api/channels/{created['id']}")
+
+
+def test_channel_requires_agent(client) -> None:
+    response = client.post(
+        "/api/channels", json={"agent_id": "missing", "name": "微信"}
+    )
+    assert response.status_code == 404
     assert (
-        _sqlite_scalar("SELECT bot_token FROM channels WHERE id = ?", (created["id"],))
-        == "confirmed-token"
+        client.get("/api/channels", params={"agent_id": "missing"}).status_code == 404
     )
-    listed = client.get("/api/channels", params={"agent_id": "default"})
-    assert "confirmed-token" not in listed.text
-
-
-@pytest.mark.asyncio
-async def test_session_summary_exposes_wechat_channel(client) -> None:  # noqa: ARG001
-    channel_id = await _create_active_channel("default")
-    result = await _ingest(channel_id, "session-channel-msg")
-    assert result.session_id is not None
-    async with SessionLocal() as db:
-        session = await db.get(Session, result.session_id)
-        assert session is not None
-        summary = await _session_out(db, session)
-    assert summary.channel_type == "wechat"
-    assert summary.channel_name is not None
-    assert summary.channel_name.startswith("test-wechat-")
-
-
-@pytest.mark.asyncio
-async def test_quoted_text_resolves_by_external_message_id() -> None:
-    channel_id = await _create_active_channel()
-    contact = "user-quote-by-id"
-    external_id = "wx-message-quote-id"
-    await ingest_inbound(
-        channel_id=channel_id,
-        external_message_id=external_id,
-        external_conversation_id=contact,
-        conversation_name="Alice",
-        text="我被引用的原话",
-    )
-    resolved = await resolve_quoted_text(
-        channel_id=channel_id,
-        external_conversation_id=contact,
-        msg_id=external_id,
-    )
-    assert resolved == "我被引用的原话"
-    missing = await resolve_quoted_text(
-        channel_id=channel_id,
-        external_conversation_id=contact,
-        msg_id="unknown-id",
-        create_time_ms=1762300000000,
-    )
-    assert missing == ""

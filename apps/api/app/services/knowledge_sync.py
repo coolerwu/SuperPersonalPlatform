@@ -27,13 +27,11 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 
 from app.config import settings
-from app.db import SessionLocal
-from app.models import KnowledgeConfig
+from app.services.settings_store import get_settings_store
 
 logger = logging.getLogger(__name__)
 
 KNOWLEDGE_SKILL_NAME = "knowledge-base"
-KNOWLEDGE_CONFIG_ID = "default"
 STATE_VERSION = 1
 CHUNK_SIZE = 1024 * 1024
 MAX_REMOTE_DIRS = 5_000
@@ -160,46 +158,34 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _settings_from_row(row: KnowledgeConfig | None) -> KnowledgeSettings | None:
-    if row is None:
+async def load_knowledge_settings(
+    store: Any | None = None,
+) -> KnowledgeSettings | None:
+    """Read the WebDAV configuration from ``settings.json``.
+
+    A missing URL means "not configured"; an existing but disabled section is
+    returned so the runtime can report it as configured-but-off.
+    """
+    snapshot = await (store or get_settings_store()).get()
+    section = snapshot.knowledge
+    url = (section.url or "").strip()
+    if not url:
         return None
     return KnowledgeSettings(
-        enabled=bool(row.enabled),
-        webdav_url=(row.webdav_url or "").strip(),
-        username=(row.username or "").strip(),
-        password=row.password or "",
-        root=(row.root or "").strip().strip("/"),
-        interval_seconds=max(MIN_SYNC_INTERVAL_SECONDS, int(row.interval_seconds or 0)),
+        enabled=bool(section.enabled),
+        webdav_url=url,
+        username=(section.username or "").strip(),
+        password=section.password or "",
+        root=(section.root or "").strip().strip("/"),
+        interval_seconds=max(
+            MIN_SYNC_INTERVAL_SECONDS, int(section.interval_seconds or 0)
+        ),
     )
 
 
-async def load_knowledge_settings() -> KnowledgeSettings | None:
-    async with SessionLocal() as db:
-        row = await db.get(KnowledgeConfig, KNOWLEDGE_CONFIG_ID)
-    return _settings_from_row(row)
-
-
 async def seed_knowledge_config() -> None:
-    """Adopt KB_* env vars once, until the config page has saved its own values."""
-    if not settings.kb_webdav_url.strip():
-        return
-    async with SessionLocal() as db:
-        if await db.get(KnowledgeConfig, KNOWLEDGE_CONFIG_ID) is not None:
-            return
-        db.add(
-            KnowledgeConfig(
-                id=KNOWLEDGE_CONFIG_ID,
-                enabled=True,
-                webdav_url=settings.kb_webdav_url.strip(),
-                username=settings.kb_webdav_username.strip(),
-                password=settings.kb_webdav_password,
-                root=settings.kb_webdav_root.strip().strip("/"),
-                interval_seconds=max(
-                    MIN_SYNC_INTERVAL_SECONDS, settings.kb_sync_interval_seconds
-                ),
-            )
-        )
-        await db.commit()
+    """Deprecated: KB_* env values seed ``settings.json`` when it is created."""
+    return None
 
 
 class WebDavClient:
@@ -858,9 +844,9 @@ def _make_webdav_client(config: KnowledgeSettings) -> WebDavClient:
 class KnowledgeSyncRuntime:
     """Loads the knowledge configuration and runs the mirror sync in-process.
 
-    The config lives in app.db and is managed from the config page. It is
-    re-read before every cycle, so saving the page takes effect on the next
-    wake without restarting the service.
+    The config lives in ``data/settings.json`` and is managed from the config
+    page. It is re-read before every cycle, so saving the page takes effect on
+    the next wake without restarting the service.
     """
 
     def __init__(

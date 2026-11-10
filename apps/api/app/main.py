@@ -37,7 +37,7 @@ from app.routers.tools import router as tools_router
 from app.routers.trade_journal import router as trade_journal_router
 from app.services.run_service import seed_default_provider
 from app.services.cron_service import CronRuntime
-from app.services.knowledge_sync import KnowledgeSyncRuntime, seed_knowledge_config
+from app.services.knowledge_sync import KnowledgeSyncRuntime
 from app.services.session_service import SessionCleanupRuntime
 from app.services.market_data import market_service
 from app.services.backtest_worker import BacktestWorker, set_active_worker
@@ -172,7 +172,6 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             await seed_default_agent()
             await sync_default_agent_instructions()
             await ensure_agent_workspaces()
-            await seed_knowledge_config()
             weixin = WeixinRuntime(store=store)
             app.state.weixin = weixin
             knowledge = KnowledgeSyncRuntime()

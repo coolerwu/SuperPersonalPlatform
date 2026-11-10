@@ -291,6 +291,30 @@ async def test_close_terminates_queued_streams():
 
 
 @pytest.mark.asyncio
+async def test_is_agent_busy_tracks_queued_and_running_turns():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    first = Turn(session_id="s1", agent_id="agent-a", prompt="a")
+    queued = Turn(session_id="s2", agent_id="agent-a", prompt="b")
+    other = Turn(session_id="s3", agent_id="agent-b", prompt="c")
+    await registry.submit(first)
+    await registry.submit(queued)
+    await registry.submit(other)
+    await wait_until(lambda: "a" in runner.started)
+
+    # The queued turn has no transcript yet, but it still protects its Agent.
+    assert registry.is_agent_busy("agent-a")
+    assert registry.is_agent_busy("agent-b")
+    assert not registry.is_agent_busy("agent-c")
+
+    for prompt in ("a", "b", "c"):
+        runner.release(prompt)
+    await wait_until(lambda: len(runner.finished) == 3)
+    await wait_until(lambda: not registry.is_agent_busy("agent-a"))
+    await registry.close()
+
+
+@pytest.mark.asyncio
 async def test_stream_is_bound_to_session_and_close_session_delegates():
     runner = FakeRunner()
     registry = SessionRegistry(runner, concurrency=2)

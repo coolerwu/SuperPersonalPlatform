@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import mimetypes
 import shutil
-from pathlib import Path
+import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -10,24 +12,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
-from app.config import settings
 from app.db import get_db
-from app.models import (
-    Agent,
-    Channel,
-    CronJob,
-    MemoryItem,
-    Message,
-    Provider,
-    Run,
-    RunEvent,
-    RunMemory,
-    Session,
-    new_id,
-)
+from app.models import ChannelDelivery, ChannelInbound, CronJob
 from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
 from app.schemas import AgentCreate, AgentOut, AgentUpdate, AttachmentOut
-from app.services import channel_service
 from app.services.attachments import (
     MAX_ATTACHMENT_BYTES,
     new_stored_name,
@@ -35,153 +23,264 @@ from app.services.attachments import (
     safe_attachment_name,
     save_attachment_bytes,
 )
-from app.services.workspace import WorkspaceError, resolve_workspace_path
+from app.services.claude_env import workspace_for
+from app.services.claude_runner import transcript_dir
+from app.services.identifiers import valid_agent_id
+from app.services.settings_store import (
+    AgentSection,
+    ProviderSection,
+    SettingsStore,
+    build_default_settings,
+    get_settings_store,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agents", tags=["agents"], dependencies=[Depends(require_auth)])
 
 
-def agent_out(agent: Agent, provider: Provider | None) -> AgentOut:
+def _store(request: Request) -> SettingsStore:
+    store = getattr(request.app.state, "settings_store", None)
+    return store if store is not None else get_settings_store()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _agent_out(agent: AgentSection) -> AgentOut:
+    created = agent.created_at or _now_iso()
     return AgentOut(
         id=agent.id,
         name=agent.name,
         instructions=agent.instructions,
-        provider_id=agent.provider_id,
-        provider_name=provider.name if provider else "",
-        model=provider.model if provider else "",
+        provider_id="default",
+        provider_name=agent.provider.name,
+        model=agent.provider.model,
         status=agent.status,
         auto_memory=agent.auto_memory,
-        enabled_skills=list(agent.enabled_skills or []),
-        created_at=agent.created_at,
-        updated_at=agent.updated_at,
+        enabled_skills=list(agent.enabled_skills),
+        created_at=created,
+        updated_at=agent.updated_at or created,
     )
 
 
-async def _default_provider(db: AsyncSession) -> Provider | None:
-    return await db.scalar(select(Provider).order_by(Provider.created_at).limit(1))
+def _find_agent(
+    agents: list[AgentSection], agent_id: str, *, include_archived: bool = False
+) -> AgentSection | None:
+    agent = next((item for item in agents if item.id == agent_id), None)
+    if agent is None:
+        return None
+    if not include_archived and agent.status == "archived":
+        return None
+    return agent
+
+
+def _fallback_provider(agents: list[AgentSection]) -> ProviderSection:
+    if agents:
+        return agents[0].provider
+    raw = build_default_settings()["agents"][0]["provider"]
+    return ProviderSection.model_validate(raw)
+
+
+def _agent_session_ids(snapshot, agent_id: str) -> set[str]:
+    session_ids: set[str] = set()
+    if valid_agent_id(agent_id):
+        directory = transcript_dir(agent_id)
+        if directory.is_dir():
+            session_ids.update(path.stem for path in directory.glob("*.jsonl"))
+    channel_ids = {
+        channel.id for channel in snapshot.channels if channel.agent_id == agent_id
+    }
+    for conversation in snapshot.channel_conversations.values():
+        if conversation.channel_id in channel_ids:
+            session_ids.add(conversation.session_id)
+    return session_ids
+
+
+async def _agent_has_active_turn(
+    request: Request, snapshot, agent_id: str, db: AsyncSession
+) -> bool:
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return False
+    agent_check = getattr(registry, "is_agent_busy", None)
+    if agent_check is not None and agent_check(agent_id):
+        return True
+    session_ids = _agent_session_ids(snapshot, agent_id)
+    job_sessions = (
+        await db.scalars(
+            select(CronJob.session_id).where(
+                CronJob.agent_id == agent_id, CronJob.session_id.isnot(None)
+            )
+        )
+    ).all()
+    session_ids.update(str(item) for item in job_sessions if item)
+    return any(registry.is_busy(session_id) for session_id in session_ids)
 
 
 @router.get("", response_model=list[AgentOut])
-async def list_agents(db: AsyncSession = Depends(get_db)) -> list[AgentOut]:
-    agents = (await db.scalars(select(Agent).where(Agent.status != "archived").order_by(Agent.created_at))).all()
-    providers = {p.id: p for p in (await db.scalars(select(Provider))).all()}
-    return [agent_out(agent, providers.get(agent.provider_id)) for agent in agents]
+async def list_agents(request: Request) -> list[AgentOut]:
+    snapshot = await _store(request).get()
+    return [
+        _agent_out(agent)
+        for agent in snapshot.agents
+        if agent.status != "archived"
+    ]
 
 
 @router.post("", response_model=AgentOut, status_code=201)
-async def create_agent(payload: AgentCreate, db: AsyncSession = Depends(get_db)) -> AgentOut:
-    provider = await db.get(Provider, payload.provider_id) if payload.provider_id else await _default_provider(db)
-    if provider is None:
-        raise HTTPException(status_code=400, detail="configure a provider first")
-    agent_id = new_id()
-    resolve_workspace_path(agent_id, create=True)
-    agent = Agent(
+async def create_agent(payload: AgentCreate, request: Request) -> AgentOut:
+    store = _store(request)
+    snapshot = await store.get()
+    if payload.provider_id and payload.provider_id != "default":
+        raise HTTPException(status_code=400, detail="provider not found")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    agent_id = uuid.uuid4().hex
+    workspace_for(agent_id).mkdir(parents=True, exist_ok=True)
+    now = _now_iso()
+    agent = AgentSection(
         id=agent_id,
-        name=payload.name.strip(),
+        name=name,
         instructions=payload.instructions.strip() or DEFAULT_AGENT_INSTRUCTIONS,
-        provider_id=provider.id,
         status="active",
-        auto_memory=payload.auto_memory,
         enabled_skills=payload.enabled_skills,
+        provider=_fallback_provider(snapshot.agents),
+        auto_memory=payload.auto_memory,
+        created_at=now,
+        updated_at=now,
     )
-    db.add(agent)
-    await db.commit()
-    await db.refresh(agent)
-    return agent_out(agent, provider)
+    await store.update_agent(agent)
+    return _agent_out(agent)
 
 
 @router.get("/{agent_id}", response_model=AgentOut)
-async def get_agent(agent_id: str, db: AsyncSession = Depends(get_db)) -> AgentOut:
-    agent = await db.get(Agent, agent_id)
-    if agent is None or agent.status == "archived":
+async def get_agent(agent_id: str, request: Request) -> AgentOut:
+    snapshot = await _store(request).get()
+    agent = _find_agent(snapshot.agents, agent_id)
+    if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
-    provider = await db.get(Provider, agent.provider_id)
-    return agent_out(agent, provider)
+    return _agent_out(agent)
 
 
 @router.put("/{agent_id}", response_model=AgentOut)
 async def update_agent(
-    agent_id: str,
-    payload: AgentUpdate,
-    db: AsyncSession = Depends(get_db),
+    agent_id: str, payload: AgentUpdate, request: Request
 ) -> AgentOut:
-    agent = await db.get(Agent, agent_id)
-    if agent is None or agent.status == "archived":
+    store = _store(request)
+    snapshot = await store.get()
+    agent = _find_agent(snapshot.agents, agent_id)
+    if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
+
     data = payload.model_dump(exclude_unset=True)
+    fields: dict[str, object] = {}
     if "name" in data and data["name"]:
-        agent.name = str(data["name"]).strip()
+        name = str(data["name"]).strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        fields["name"] = name
     if "instructions" in data and data["instructions"] is not None:
-        agent.instructions = str(data["instructions"])
+        fields["instructions"] = str(data["instructions"])
     if "provider_id" in data and data["provider_id"]:
-        provider = await db.get(Provider, str(data["provider_id"]))
-        if provider is None:
+        if str(data["provider_id"]) != "default":
             raise HTTPException(status_code=400, detail="provider not found")
-        agent.provider_id = provider.id
     if "status" in data and data["status"] in ("active", "paused"):
-        agent.status = str(data["status"])
+        fields["status"] = str(data["status"])
     if "auto_memory" in data and data["auto_memory"] is not None:
-        agent.auto_memory = bool(data["auto_memory"])
+        fields["auto_memory"] = bool(data["auto_memory"])
     if "enabled_skills" in data and data["enabled_skills"] is not None:
-        agent.enabled_skills = list(data["enabled_skills"])
-    await db.commit()
-    await db.refresh(agent)
-    provider = await db.get(Provider, agent.provider_id)
-    return agent_out(agent, provider)
+        fields["enabled_skills"] = list(data["enabled_skills"])
+    if fields:
+        fields["updated_at"] = _now_iso()
+        await store.update_agent_fields(agent_id, **fields)
+    updated = agent.model_copy(update=fields) if fields else agent
+    return _agent_out(updated)
 
 
 @router.delete("/{agent_id}/permanent")
 async def delete_agent_permanently(
     agent_id: str, request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict[str, object]:
-    agent = await db.get(Agent, agent_id)
+    store = _store(request)
+    snapshot = await store.get()
+    agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
-    active = await db.scalar(
-        select(Run).where(Run.agent_id == agent_id, Run.status.in_(("queued", "running"))).limit(1)
-    )
-    if active is not None:
+    if await _agent_has_active_turn(request, snapshot, agent_id, db):
         raise HTTPException(status_code=409, detail="agent has an active run")
 
-    channel_ids = list(
-        (await db.scalars(select(Channel.id).where(Channel.agent_id == agent_id))).all()
-    )
+    channel_ids = {
+        channel.id for channel in snapshot.channels if channel.agent_id == agent_id
+    }
     runtime = getattr(request.app.state, "weixin", None)
     if runtime is not None:
         for channel_id in channel_ids:
             await runtime.stop_channel(channel_id)
             runtime.clear_login(channel_id)
-    await channel_service.delete_channels(db, channel_ids)
 
-    await db.execute(delete(CronJob).where(CronJob.agent_id == agent_id))
-    session_ids = list((await db.scalars(select(Session.id).where(Session.agent_id == agent_id))).all())
-    run_ids = list((await db.scalars(select(Run.id).where(Run.agent_id == agent_id))).all())
-    memory_ids = list(
-        (
-            await db.scalars(
-                select(MemoryItem.id).where(
-                    MemoryItem.scope == "agent", MemoryItem.agent_id == agent_id
-                )
-            )
-        ).all()
+    session_directory = transcript_dir(agent_id) if valid_agent_id(agent_id) else None
+    session_count = (
+        len(list(session_directory.glob("*.jsonl")))
+        if session_directory is not None and session_directory.is_dir()
+        else 0
     )
-    if run_ids:
-        await db.execute(delete(RunMemory).where(RunMemory.run_id.in_(run_ids)))
-    if memory_ids:
-        await db.execute(delete(RunMemory).where(RunMemory.memory_id.in_(memory_ids)))
-    if run_ids:
-        await db.execute(delete(RunEvent).where(RunEvent.run_id.in_(run_ids)))
-        await db.execute(delete(Run).where(Run.id.in_(run_ids)))
-    if memory_ids:
-        await db.execute(delete(MemoryItem).where(MemoryItem.id.in_(memory_ids)))
-    if session_ids:
-        await db.execute(delete(Message).where(Message.session_id.in_(session_ids)))
-        await db.execute(delete(Session).where(Session.id.in_(session_ids)))
-    await db.delete(agent)
+
+    if channel_ids:
+        channel_id_list = list(channel_ids)
+        await db.execute(
+            delete(ChannelDelivery).where(ChannelDelivery.channel_id.in_(channel_id_list))
+        )
+        await db.execute(
+            delete(ChannelInbound).where(ChannelInbound.channel_id.in_(channel_id_list))
+        )
+    await db.execute(delete(CronJob).where(CronJob.agent_id == agent_id))
     await db.commit()
 
-    for session_id in session_ids:
-        _remove_checkpoint(agent_id, session_id)
-    return {"deleted": True, "sessions": len(session_ids), "runs": len(run_ids)}
+    registry = getattr(request.app.state, "registry", None)
+    if registry is not None:
+        for session_id in _agent_session_ids(snapshot, agent_id):
+            try:
+                await registry.close_session(session_id)
+            except Exception:
+                logger.warning(
+                    "failed to release cached session %s", session_id, exc_info=True
+                )
+
+    def remove_from_settings(data: dict) -> None:
+        agents = data.get("agents")
+        if isinstance(agents, list):
+            data["agents"] = [
+                item
+                for item in agents
+                if not (isinstance(item, dict) and item.get("id") == agent_id)
+            ]
+        channels = data.get("channels")
+        if isinstance(channels, list):
+            data["channels"] = [
+                item
+                for item in channels
+                if not (
+                    isinstance(item, dict) and item.get("agent_id") == agent_id
+                )
+            ]
+        conversations = data.get("channel_conversations")
+        if isinstance(conversations, dict):
+            for key, value in list(conversations.items()):
+                if isinstance(value, dict) and value.get("channel_id") in channel_ids:
+                    conversations.pop(key, None)
+
+    await store.mutate_raw(remove_from_settings)
+
+    if valid_agent_id(agent_id):
+        shutil.rmtree(workspace_for(agent_id), ignore_errors=True)
+        shutil.rmtree(transcript_dir(agent_id), ignore_errors=True)
+    else:
+        logger.warning("not deleting directories for invalid agent id %r", agent_id)
+    return {"deleted": True, "sessions": session_count, "runs": 0}
 
 
 @router.post("/{agent_id}/attachments", response_model=AttachmentOut, status_code=201)
@@ -189,10 +288,9 @@ async def upload_attachment(
     agent_id: str,
     request: Request,
     filename: str = Query(..., min_length=1, max_length=200),
-    db: AsyncSession = Depends(get_db),
 ) -> AttachmentOut:
-    agent = await db.get(Agent, agent_id)
-    if agent is None or agent.status == "archived":
+    snapshot = await _store(request).get()
+    if _find_agent(snapshot.agents, agent_id) is None:
         raise HTTPException(status_code=404, detail="agent not found")
 
     declared = request.headers.get("content-length", "")
@@ -213,10 +311,10 @@ async def upload_attachment(
 
 @router.get("/{agent_id}/uploads/{filename}")
 async def get_upload(
-    agent_id: str, filename: str, db: AsyncSession = Depends(get_db)
+    agent_id: str, filename: str, request: Request
 ) -> FileResponse:
-    agent = await db.get(Agent, agent_id)
-    if agent is None or agent.status == "archived":
+    snapshot = await _store(request).get()
+    if _find_agent(snapshot.agents, agent_id) is None:
         raise HTTPException(status_code=404, detail="agent not found")
     path = resolve_upload_file(agent_id, filename)
     if path is None:
@@ -230,28 +328,17 @@ async def get_upload(
 
 
 @router.delete("/{agent_id}")
-async def archive_agent(agent_id: str, db: AsyncSession = Depends(get_db)) -> dict[str, bool]:
-    agent = await db.get(Agent, agent_id)
+async def archive_agent(
+    agent_id: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> dict[str, bool]:
+    store = _store(request)
+    snapshot = await store.get()
+    agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
-    active = await db.scalar(
-        select(Run).where(Run.agent_id == agent_id, Run.status.in_(("queued", "running"))).limit(1)
-    )
-    if active is not None:
+    if await _agent_has_active_turn(request, snapshot, agent_id, db):
         raise HTTPException(status_code=409, detail="agent has an active run")
-    agent.status = "archived"
-    await db.commit()
+    await store.update_agent_fields(
+        agent_id, status="archived", updated_at=_now_iso()
+    )
     return {"archived": True}
-
-
-def _remove_checkpoint(agent_id: str, session_id: str) -> None:
-    base = settings.checkpoint_dir / f"{session_id}.sqlite"
-    for path in (base, Path(f"{base}-wal"), Path(f"{base}-shm")):
-        path.unlink(missing_ok=True)
-    try:
-        workspace = resolve_workspace_path(agent_id, create=False)
-    except WorkspaceError:
-        return
-    screenshots = workspace / "screenshots" / session_id
-    if screenshots.exists():
-        shutil.rmtree(screenshots, ignore_errors=True)

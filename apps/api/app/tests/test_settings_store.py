@@ -1,10 +1,12 @@
 import asyncio
 import json
 import logging
+import sqlite3
 import stat
 
 import pytest
 
+import app.services.settings_store as settings_store_module
 from app.services.settings_store import JsonStore, SettingsStore, build_default_settings
 
 
@@ -39,6 +41,13 @@ async def test_seed_default_settings_from_env(tmp_path, monkeypatch):
     monkeypatch.setenv("SESSION_RETENTION_DAYS", "5")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setenv("KB_WEBDAV_PASSWORD", "test-password")
+    # The shared test database may contain a legacy app_configs row; this test
+    # is about environment seeding, so keep the legacy migration out of it.
+    monkeypatch.setattr(
+        settings_store_module.app_settings,
+        "app_database_url",
+        f"sqlite+aiosqlite:///{tmp_path / 'no-legacy.db'}",
+    )
     path = tmp_path / "settings.json"
     store = SettingsStore(path)
     await store.ensure_seeded()
@@ -58,6 +67,77 @@ async def test_seed_normalizes_provider_base_url(tmp_path, monkeypatch):
     await SettingsStore(path).ensure_seeded()
     data = json.loads(path.read_text("utf-8"))
     assert data["agents"][0]["provider"]["base_url"] == "https://api.deepseek.com/anthropic"
+
+
+def _legacy_config_db(tmp_path, value: int) -> str:
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE app_configs (id TEXT PRIMARY KEY, session_retention_days INTEGER)"
+        )
+        connection.execute(
+            "INSERT INTO app_configs (id, session_retention_days) VALUES ('default', ?)",
+            (value,),
+        )
+    return f"sqlite+aiosqlite:///{path}"
+
+
+@pytest.mark.asyncio
+async def test_seed_migrates_legacy_retention_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        settings_store_module.app_settings,
+        "app_database_url",
+        _legacy_config_db(tmp_path, 0),
+    )
+    path = tmp_path / "settings.json"
+    await SettingsStore(path).ensure_seeded()
+    data = json.loads(path.read_text("utf-8"))
+    assert data["runtime"]["session_retention_days"] == 0
+
+
+@pytest.mark.asyncio
+async def test_seed_migrates_legacy_retention_value(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        settings_store_module.app_settings,
+        "app_database_url",
+        _legacy_config_db(tmp_path, 7),
+    )
+    path = tmp_path / "settings.json"
+    await SettingsStore(path).ensure_seeded()
+    data = json.loads(path.read_text("utf-8"))
+    assert data["runtime"]["session_retention_days"] == 7
+
+
+@pytest.mark.asyncio
+async def test_seed_ignores_missing_legacy_table(tmp_path, monkeypatch):
+    database = tmp_path / "empty.db"
+    with sqlite3.connect(database):
+        pass
+    monkeypatch.setattr(
+        settings_store_module.app_settings,
+        "app_database_url",
+        f"sqlite+aiosqlite:///{database}",
+    )
+    path = tmp_path / "settings.json"
+    await SettingsStore(path).ensure_seeded()
+    data = json.loads(path.read_text("utf-8"))
+    assert data["runtime"]["session_retention_days"] == 30
+
+
+@pytest.mark.asyncio
+async def test_existing_settings_file_is_not_migrated(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        settings_store_module.app_settings,
+        "app_database_url",
+        _legacy_config_db(tmp_path, 0),
+    )
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"runtime": {"session_retention_days": 12}}), "utf-8"
+    )
+    await SettingsStore(path).ensure_seeded()
+    data = json.loads(path.read_text("utf-8"))
+    assert data["runtime"]["session_retention_days"] == 12
 
 
 @pytest.mark.asyncio

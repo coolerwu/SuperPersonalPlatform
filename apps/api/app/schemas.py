@@ -212,6 +212,7 @@ class ChannelOut(BaseModel):
 class ChannelConversationOut(BaseModel):
     id: str
     channel_id: str
+    external_id: str = ""
     display_name: str
     session_id: str
     session_title: str = ""
@@ -339,6 +340,16 @@ class RunEventOut(BaseModel):
     type: str
     payload: dict
     created_at: datetime
+
+
+class MemoryFileOut(BaseModel):
+    content: str = ""
+    # Only set by the PUT response, kept for clients that use the old shape.
+    saved: bool | None = None
+
+
+class MemoryFileUpdate(BaseModel):
+    content: str = ""
 
 
 class MemoryCreate(BaseModel):

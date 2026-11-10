@@ -50,6 +50,9 @@ class SessionRegistry:
         self._running: set[str] = set()
         self._started: set[str] = set()
         self._cancelled: set[str] = set()
+        # Session -> Agent, so destructive Agent operations can tell whether a
+        # queued turn (which may not have created a transcript yet) is active.
+        self._session_agents: dict[str, str] = {}
         self._max_streams = max(1, max_streams)
         self._closed = False
 
@@ -67,6 +70,7 @@ class SessionRegistry:
                 self._session_loop(turn.session_id),
                 name=f"session-{turn.session_id[:8]}",
             )
+        self._session_agents[turn.session_id] = turn.agent_id
         stream = TurnStream()
         self._streams[turn.id] = stream
         self._turn_sessions[turn.id] = turn.session_id
@@ -127,6 +131,7 @@ class SessionRegistry:
                 # worker has already exited.
                 self._queues.pop(session_id, None)
                 self._workers.pop(session_id, None)
+                self._session_agents.pop(session_id, None)
                 return
 
     def stream(self, turn_id: str, session_id: str | None = None) -> TurnStream | None:
@@ -144,6 +149,19 @@ class SessionRegistry:
     def is_busy(self, session_id: str) -> bool:
         queue = self._queues.get(session_id)
         return session_id in self._running or (queue is not None and not queue.empty())
+
+    def is_agent_busy(self, agent_id: str) -> bool:
+        """Whether any queued or running turn belongs to ``agent_id``.
+
+        Used before archiving or permanently deleting an Agent. A queued turn
+        may not have a transcript yet, so checking transcript files alone is
+        not enough.
+        """
+        return any(
+            self.is_busy(session_id)
+            for session_id, owner in self._session_agents.items()
+            if owner == agent_id
+        )
 
     async def interrupt(self, session_id: str) -> bool:
         cancelled = False
@@ -212,5 +230,6 @@ class SessionRegistry:
             self._running.clear()
             self._started.clear()
             self._cancelled.clear()
+            self._session_agents.clear()
             self._streams.clear()
             self._turn_sessions.clear()

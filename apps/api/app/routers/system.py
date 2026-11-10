@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import APP_VERSION
 from app.auth import require_auth
 from app.config import settings
-from app.db import get_db
-from app.models import Agent, Message, Provider, Run, Session
 from app.services.browser_tools import playwright_installed
+from app.services.claude_env import claude_paths
+from app.services.settings_store import SettingsStore, get_settings_store
 
 router = APIRouter(prefix="/api/system", tags=["system"], dependencies=[Depends(require_auth)])
 
@@ -19,38 +17,51 @@ def database_kind(url: str) -> str:
     return scheme.split("+", 1)[0]
 
 
-async def _count(db: AsyncSession, model: type, *conditions: object) -> int:
-    statement = select(func.count()).select_from(model)
-    if conditions:
-        statement = statement.where(*conditions)
-    return int(await db.scalar(statement) or 0)
+def _store(request: Request) -> SettingsStore:
+    store = getattr(request.app.state, "settings_store", None)
+    return store if store is not None else get_settings_store()
+
+
+def _transcript_count() -> int:
+    root = claude_paths()["config"] / "projects"
+    if not root.is_dir():
+        return 0
+    try:
+        return sum(1 for path in root.glob("*/*.jsonl") if path.is_file())
+    except OSError:
+        return 0
 
 
 @router.get("")
-async def system_info(request: Request, db: AsyncSession = Depends(get_db)) -> dict[str, object]:
+async def system_info(request: Request) -> dict[str, object]:
+    snapshot = await _store(request).get()
     knowledge = getattr(request.app.state, "knowledge", None)
+    active_agents = [
+        agent for agent in snapshot.agents if agent.status != "archived"
+    ]
     return {
         "version": APP_VERSION,
-        "execution_core": "deepagents",
+        "execution_core": "claude-agent-sdk",
         "database": database_kind(settings.app_database_url),
         "workspace_root": str(settings.workspaces_dir.expanduser().resolve()),
         "skills_root": str(settings.skills_dir.expanduser().resolve()),
         "run_timeout_seconds": settings.run_timeout_seconds,
         "max_history_messages": settings.max_history_messages,
         "counts": {
-            "providers": await _count(db, Provider),
-            "agents": await _count(db, Agent, Agent.status != "archived"),
-            "sessions": await _count(db, Session),
-            "messages": await _count(db, Message),
-            "runs": await _count(db, Run),
+            "providers": 1 if active_agents else 0,
+            "agents": len(active_agents),
+            "sessions": _transcript_count(),
+            "messages": 0,
+            "runs": 0,
+            "channels": len(snapshot.channels),
         },
         "capabilities": {
             "chat": True,
             "multi_agent": True,
             "subagent": True,
-            "checkpoints": True,
+            "checkpoints": False,
             "filesystem": True,
-            "shell": False,
+            "shell": True,
             "browser": playwright_installed(),
             "skills": True,
             "memory": True,
