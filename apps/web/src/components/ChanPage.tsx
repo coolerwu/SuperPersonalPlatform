@@ -44,6 +44,18 @@ function parseUtcInput(value: string): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+function toUtcInput(ms: number): string {
+  const date = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+}
+
+function defaultWindowStart(endValue: string, granularity: ChanGranularity): number {
+  const endMs = endValue ? parseUtcInput(endValue) ?? Date.now() : Date.now();
+  const step = GRANULARITY_STEP_SECONDS[granularity] * 1000;
+  return Math.floor(endMs / step) * step - DEFAULT_WINDOW_BARS * step;
+}
+
 function shortTime(value: string): string {
   const ms = parseUtcInput(value);
   if (ms === null) return "";
@@ -199,7 +211,7 @@ export function ChanPage() {
   );
 
   function openRange() {
-    setDraftStart(start);
+    setDraftStart(start || toUtcInput(defaultWindowStart(end, granularity)));
     setDraftEnd(end);
     setRangeError("");
     setRangeOpen(true);
@@ -218,15 +230,23 @@ export function ChanPage() {
       setRangeError("开始时间必须早于结束时间");
       return;
     }
-    setStart(nextStart);
+    // Leaving the prefilled default start untouched keeps the window sliding
+    // with the latest bar instead of freezing that timestamp in the URL.
+    const step = GRANULARITY_STEP_SECONDS[granularity] * 1000;
+    const fallbackStart = defaultWindowStart(nextEnd, granularity);
+    const keepDefaultStart =
+      startMs !== null && Math.abs(startMs - fallbackStart) <= step;
+    const storedStart = nextStart === "" || keepDefaultStart ? "" : nextStart;
+    setStart(storedStart);
     setEnd(nextEnd);
     setRangeOpen(false);
-    void analyze({ start: nextStart, end: nextEnd });
+    void analyze({ start: storedStart, end: nextEnd });
   }
 
-  const rangeLabel = `${start ? shortTime(start) : `最近 ${DEFAULT_WINDOW_BARS} 根`} → ${
-    end ? shortTime(end) : "最新"
-  }`;
+  const resolvedStartLabel = start
+    ? shortTime(start)
+    : shortTime(toUtcInput(defaultWindowStart(end, granularity)));
+  const rangeLabel = `${resolvedStartLabel} → ${end ? shortTime(end) : "最新"}`;
 
   useEffect(() => {
     void analyze();
@@ -311,7 +331,7 @@ export function ChanPage() {
             <div className="chan-range-popover" role="dialog" aria-label="选择时间窗口">
               <p className="chan-range-hint">
                 UTC 时间，步长跟随周期（{granularity}）。结束留空 = 最新已收盘 K 线；
-                开始留空 = 结束往前 {DEFAULT_WINDOW_BARS} 根。
+                开始默认是结束往前 {DEFAULT_WINDOW_BARS} 根，留空表示跟随最新。
               </p>
               <label className="chan-range-field">
                 <span>开始 (UTC)</span>
@@ -336,6 +356,7 @@ export function ChanPage() {
               <div className="chan-range-actions">
                 <button
                   type="button"
+                  className="ghost-button"
                   onClick={() => {
                     setDraftStart("");
                     setDraftEnd("");

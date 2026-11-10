@@ -6446,8 +6446,16 @@ body:has(.app-shell.pearl) .select-empty {
 
 .chan-range-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.chan-range-actions button {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 12px;
 }
 
 .chan-toolbar-toggles {
