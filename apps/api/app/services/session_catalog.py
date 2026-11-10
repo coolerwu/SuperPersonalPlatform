@@ -3,23 +3,22 @@
 Session metadata and history come straight from the Claude Agent SDK
 transcripts (``list_sessions`` / ``get_session_messages``); deletion goes
 through the SDK so the transcript and its subagent transcript directory are
-removed together. Nothing here touches a database.
+removed together. Deleting a session also removes artifacts the platform owns
+outside the SDK: screenshot directories, channel delivery rows, and channel
+conversation bindings in the settings store.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
-import shutil
 from pathlib import Path
 from typing import Any
 
-from app.services import channel_delivery, sdk_bridge
+from app.services import sdk_bridge
 from app.services.claude_env import workspace_for
 from app.services.claude_runner import transcript_path
 from app.services.identifiers import is_canonical_uuid, valid_agent_id
-
-logger = logging.getLogger(__name__)
+from app.services.session_service import cleanup_session_artifacts
 
 _TITLE_LIMIT = 80
 
@@ -161,35 +160,6 @@ class SessionCatalog:
 
     async def _cleanup(self, agent_id: str, session_id: str) -> None:
         """Remove per-session artifacts nothing else will reference again."""
-        try:
-            await channel_delivery.delete_for_session(session_id)
-        except Exception:
-            # The transcript is already gone; a failed row cleanup must not
-            # turn a successful delete into a 500.
-            logger.warning(
-                "failed to delete channel deliveries session=%s",
-                session_id,
-                exc_info=True,
-            )
-
-        screenshots = workspace_for(agent_id, self._home) / "screenshots" / session_id
-        await asyncio.to_thread(shutil.rmtree, screenshots, ignore_errors=True)
-
-        def unbind(data: dict[str, Any]) -> None:
-            conversations = data.get("channel_conversations")
-            if not isinstance(conversations, dict):
-                return
-            for key, value in list(conversations.items()):
-                if isinstance(value, dict) and value.get("session_id") == session_id:
-                    conversations.pop(key, None)
-
-        try:
-            await self._store.mutate_raw(unbind)
-        except Exception:
-            # The transcript is already gone; leaving a stale binding is worse
-            # than failing the request, but not worth a 500 here.
-            logger.warning(
-                "failed to unbind channel conversation session=%s",
-                session_id,
-                exc_info=True,
-            )
+        await cleanup_session_artifacts(
+            agent_id, session_id, home=self._home, store=self._store
+        )

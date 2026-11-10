@@ -46,8 +46,8 @@ async def test_settings_api_default_and_update(client) -> None:
 async def test_cleanup_reads_configured_retention(client, monkeypatch) -> None:
     store = client.app.state.settings_store
     original = (await store.get()).runtime.session_retention_days
-    old_id = f"settings-{uuid.uuid4().hex}"
-    fresh_id = f"settings-{uuid.uuid4().hex}"
+    old_id = str(uuid.uuid4())
+    fresh_id = str(uuid.uuid4())
     directory = transcript_dir("default")
     directory.mkdir(parents=True, exist_ok=True)
     old_path = directory / f"{old_id}.jsonl"
