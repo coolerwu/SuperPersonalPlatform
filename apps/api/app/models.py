@@ -386,6 +386,11 @@ class AppConfig(Base):
 
 
 class RunningSession(Base):
+    """Runtime lease marking a session with an active turn.
+
+    Startup recovery consumes this table to find sessions that were mid-run.
+    """
+
     __tablename__ = "running_sessions"
 
     session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
