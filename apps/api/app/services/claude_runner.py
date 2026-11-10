@@ -4,7 +4,9 @@ One runner instance exists per process. It keeps a per-session
 ``ClaudeSDKClient`` cache so a session's next turn resumes the same SDK
 conversation; the turn lease row marks which session currently has a turn
 attached, and the rich ``turn_end`` event (status/error/usage) is published
-here rather than by ``TurnStream.close``. Run persistence, queueing and
+here rather than by ``TurnStream.close``. A client is evicted after timeouts,
+failures and streams that end without this turn's own result, so a poisoned
+stream cannot leak into the next turn. Run persistence, queueing and
 cancellation policy stay outside this module.
 """
 
@@ -106,6 +108,8 @@ class ClaudeTurnRunner:
         text_parts: list[str] = []
         outcome = TurnOutcome(status="failed", error="run ended without result")
         lease_added = False
+        result_received = False
+        evict = False
         try:
             async with asyncio.timeout(app_settings.run_timeout_seconds):
                 settings = await self._store.get()
@@ -116,8 +120,8 @@ class ClaudeTurnRunner:
                 if agent is None:
                     outcome = TurnOutcome(status="failed", error="agent not found")
                     return outcome
-                await turn_lease.add(turn.session_id)
                 lease_added = True
+                await turn_lease.add(turn.session_id)
                 client = await self._client(turn, agent)
                 if turn.source == "resume":
                     prompt = (
@@ -127,7 +131,10 @@ class ClaudeTurnRunner:
                 else:
                     prompt = turn.prompt
                 await client.query(prompt)
-                async for message in client.receive_response():
+                # Drain the full stream: receive_response() would stop at the
+                # first ResultMessage, which may be an injected background
+                # task notification rather than this turn's result.
+                async for message in client.receive_messages():
                     if getattr(message, "parent_tool_use_id", None):
                         continue
                     event = getattr(message, "event", None)
@@ -139,55 +146,47 @@ class ClaudeTurnRunner:
                         continue
                     # SystemMessage also carries .subtype; match the class name so
                     # the init frame is not mistaken for a result.
-                    if type(message).__name__ == "ResultMessage":
-                        # Background task notifications can surface as result
-                        # messages too; only this turn's own result is terminal.
-                        origin = getattr(message, "origin", None)
-                        kind = (
-                            origin.get("kind")
-                            if isinstance(origin, dict)
-                            else getattr(origin, "kind", None)
-                        )
-                        if kind not in (None, "human"):
-                            continue
-                        outcome = outcome_from_result(
-                            message, fallback_text="".join(text_parts)
-                        )
-                        break
+                    if type(message).__name__ != "ResultMessage":
+                        continue
+                    # Background task notifications can surface as result
+                    # messages too; keep draining until this turn's own result.
+                    origin = getattr(message, "origin", None)
+                    kind = (
+                        origin.get("kind")
+                        if isinstance(origin, dict)
+                        else getattr(origin, "kind", None)
+                    )
+                    if kind not in (None, "human"):
+                        continue
+                    outcome = outcome_from_result(
+                        message, fallback_text="".join(text_parts)
+                    )
+                    result_received = True
+                    break
         except TimeoutError:
             outcome = TurnOutcome(
                 status="failed",
                 output="".join(text_parts),
                 error="run exceeded the execution timeout",
             )
-            try:
-                await asyncio.wait_for(self.interrupt(turn.session_id), 5)
-            except Exception:
-                logger.exception(
-                    "interrupt after timeout failed session=%s", turn.session_id
-                )
-            await self.close(turn.session_id)
+            evict = True
         except asyncio.CancelledError:
             outcome = TurnOutcome(status="cancelled", output="".join(text_parts))
-            try:
-                await asyncio.shield(self.close(turn.session_id))
-            except BaseException:
-                logger.exception(
-                    "client close after cancellation failed session=%s",
-                    turn.session_id,
-                )
+            evict = True
             raise
         except Exception as exc:
-            outcome = TurnOutcome(
-                status="failed", output="".join(text_parts), error=str(exc)
-            )
             logger.exception(
                 "claude turn failed session=%s agent=%s",
                 turn.session_id,
                 turn.agent_id,
             )
-            await self.close(turn.session_id)
+            outcome = TurnOutcome(
+                status="failed", output="".join(text_parts), error=str(exc)
+            )
+            evict = True
         finally:
+            if not result_received and not evict:
+                evict = True
             # Publish teardown synchronously first: a later await must not be
             # able to delay or suppress the terminal event for subscribers.
             stream.publish(
@@ -200,23 +199,36 @@ class ClaudeTurnRunner:
                 }
             )
             stream.close()
+            if evict:
+                try:
+                    await asyncio.shield(self._evict(turn.session_id))
+                except BaseException:
+                    logger.warning(
+                        "client eviction failed session=%s",
+                        turn.session_id,
+                        exc_info=True,
+                    )
             if lease_added:
                 try:
                     await turn_lease.remove(turn.session_id)
                 except BaseException:
-                    logger.exception(
-                        "failed to remove turn lease session=%s", turn.session_id
+                    logger.warning(
+                        "failed to remove turn lease session=%s",
+                        turn.session_id,
+                        exc_info=True,
                     )
         return outcome
 
     async def interrupt(self, session_id: str) -> bool:
-        client = self._clients.get(session_id)
+        lock = self._client_lock(session_id)
+        async with lock:
+            client = self._clients.get(session_id)
         if client is None:
             return False
         await client.interrupt()
         return True
 
-    async def close(self, session_id: str) -> None:
+    async def _evict(self, session_id: str) -> None:
         lock = self._client_lock(session_id)
         async with lock:
             client = self._clients.pop(session_id, None)
@@ -225,3 +237,10 @@ class ClaudeTurnRunner:
                 await client.disconnect()
             except Exception:
                 logger.exception("client disconnect failed session=%s", session_id)
+
+    async def close(self, session_id: str) -> None:
+        await self._evict(session_id)
+
+    async def close_all(self) -> None:
+        for session_id in list(self._clients):
+            await self.close(session_id)
