@@ -3,14 +3,13 @@ import {
   DragEvent,
   KeyboardEvent,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
 } from "react";
 
 import { api } from "../api";
-import type { Attachment, Message, Run, ScreenshotInfo } from "../types";
-import { formatTime } from "../format";
+import type { Attachment, TranscriptMessage } from "../types";
+import { truncate } from "../format";
 import { copyText } from "../clipboard";
 import {
   filterSlashCommands,
@@ -21,40 +20,23 @@ import {
   userMessageText,
 } from "../messageContent";
 import { prepareImageForUpload } from "../imageUpload";
-import { formatDuration, type RunTraceStep } from "../runActivity";
-import { describeApiError, describeRunError } from "../errors";
+import { describeApiError } from "../errors";
 import { useThrottledText } from "../useThrottledText";
 import { Markdown } from "./Markdown";
 
-type TerminalRun = {
-  run: Run;
-  text: string;
-  reasoning: string;
-};
-
 type ChatPanelProps = {
-  messages: Message[];
+  messages: TranscriptMessage[];
   loading: boolean;
-  hasMore: boolean;
-  loadingOlder: boolean;
-  loadOlderError: string;
-  onLoadOlder: () => Promise<boolean>;
-  screenshots: ScreenshotInfo[];
   sessionId: string;
   streamText: string;
   streamReasoning: string;
-  trace: RunTraceStep[];
-  runReasoning: Record<string, string>;
-  runTraces: Record<string, RunTraceStep[]>;
+  activity: string[];
   sending: boolean;
-  runActive: boolean;
+  tracking: boolean;
   pendingSend: boolean;
-  activity: string;
-  terminalRun: TerminalRun | null;
   error: string;
   notice: string;
   commandReply: { command: string; text: string } | null;
-  activeRun: Run | null;
   draft: string;
   quote: string;
   attachments: Attachment[];
@@ -75,7 +57,6 @@ type ChatPanelProps = {
   onOrganizeMemory: () => Promise<boolean>;
   onCancel: () => void;
   onQuote: (text: string) => void;
-  onRetry: (runId: string) => void;
 };
 
 type UploadItem = {
@@ -85,6 +66,10 @@ type UploadItem = {
   percent: number;
   previewUrl?: string;
 };
+
+type ProcessStep =
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; name: string; input: Record<string, unknown> | null };
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
@@ -110,14 +95,6 @@ function commandReplyLabel(command: string): string {
     default:
       return "命令";
   }
-}
-
-function elapsedSeconds(from: string | null | undefined, toMs?: number): number {
-  if (!from) return 0;
-  const start = Date.parse(from);
-  const end = toMs ?? Date.now();
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
-  return Math.max(0, Math.floor((end - start) / 1000));
 }
 
 function CopyButton({ text, label = "复制" }: { text: string; label?: string }) {
@@ -155,74 +132,87 @@ function FileIcon() {
   );
 }
 
-function ScreenshotStrip({ sessionId, items }: { sessionId: string; items: ScreenshotInfo[] }) {
-  if (items.length === 0) return null;
-  return (
-    <div className="message-screenshots">
-      {items.map((item) => {
-        const url = api.screenshotUrl(sessionId, item.run_id, item.id);
-        return (
-          <a
-            key={item.id}
-            className="message-screenshot"
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            title="打开原图"
-          >
-            <img src={url} alt="页面截图" loading="lazy" />
-          </a>
-        );
-      })}
-    </div>
-  );
+/** Raw Anthropic blocks from the SDK transcript, merged for display. */
+function processSteps(blocks: TranscriptMessage["blocks"]): ProcessStep[] {
+  const steps: ProcessStep[] = [];
+  for (const block of blocks) {
+    if (block.type === "thinking") {
+      const text = String(block.thinking ?? "");
+      if (!text.trim()) continue;
+      const last = steps[steps.length - 1];
+      if (last?.kind === "thinking") last.text = `${last.text}\n\n${text}`;
+      else steps.push({ kind: "thinking", text });
+    } else if (block.type === "tool_use") {
+      const input =
+        block.input && typeof block.input === "object"
+          ? (block.input as Record<string, unknown>)
+          : null;
+      steps.push({ kind: "tool", name: String(block.name ?? "工具调用"), input });
+    }
+  }
+  return steps;
 }
 
-function ThinkingBlock({ text, streaming }: { text: string; streaming: boolean }) {
-  const [open, setOpen] = useState(streaming);
-  useEffect(() => {
-    if (!streaming) setOpen(false);
-  }, [streaming]);
-  if (!text.trim()) return null;
+function toolSummary(input: Record<string, unknown> | null): string {
+  if (!input) return "";
+  for (const key of ["path", "file_path", "command", "query", "url", "symbol", "name"]) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim()) return truncate(value, 80);
+  }
+  return "";
+}
+
+function AssistantProcess({ steps }: { steps: ProcessStep[] }) {
+  if (steps.length === 0) return null;
+  const toolCount = steps.filter((step) => step.kind === "tool").length;
   return (
-    <details
-      className="message-thinking"
-      open={open}
-      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
-    >
-      <summary>思考过程</summary>
-      <div className="message-thinking-body">
-        <Markdown content={text} />
+    <details className="message-thinking run-trace">
+      <summary>
+        <span>执行过程</span>
+        <span className="run-trace-count">
+          {steps.length} 步{toolCount > 0 ? ` · ${toolCount} 个工具` : ""}
+        </span>
+      </summary>
+      <div className="run-trace-steps">
+        {steps.map((step, index) =>
+          step.kind === "thinking" ? (
+            <div className="run-trace-reasoning" key={`thinking-${index}`}>
+              <div className="run-trace-step-label">思考</div>
+              <div className="message-thinking-body">
+                <Markdown content={step.text} />
+              </div>
+            </div>
+          ) : (
+            <div className="run-trace-tool" key={`tool-${index}`}>
+              <span className="run-trace-tool-dot" aria-hidden="true" />
+              <span className="run-trace-tool-label">{step.name}</span>
+              {toolSummary(step.input) && (
+                <span className="run-trace-tool-name">{toolSummary(step.input)}</span>
+              )}
+            </div>
+          ),
+        )}
       </div>
     </details>
   );
 }
 
-function RunTrace({
-  steps,
-  fallback,
-  streaming,
-  agentName,
+function LiveProcess({
+  reasoning,
+  activity,
+  streamingText,
 }: {
-  steps: RunTraceStep[];
-  fallback: string;
-  streaming: boolean;
-  agentName: string;
+  reasoning: string;
+  activity: string[];
+  streamingText: boolean;
 }) {
-  const [open, setOpen] = useState(streaming);
+  const [open, setOpen] = useState(true);
   useEffect(() => {
-    setOpen(streaming);
-  }, [streaming]);
-  const lastStep = steps[steps.length - 1];
-  const lastReasoningText =
-    lastStep?.kind === "reasoning" ? lastStep.text : "";
-  const throttledLastReasoning = useThrottledText(lastReasoningText);
-
-  if (steps.length === 0) {
-    return <ThinkingBlock text={fallback} streaming={streaming} />;
-  }
-
-  const toolCount = steps.filter((step) => step.kind === "tool").length;
+    // Collapse once the answer starts, like the previous run trace.
+    if (streamingText) setOpen(false);
+  }, [streamingText]);
+  const hasReasoning = Boolean(reasoning.trim());
+  if (!hasReasoning && activity.length === 0) return null;
   return (
     <details
       className="message-thinking run-trace"
@@ -232,74 +222,24 @@ function RunTrace({
       <summary>
         <span>执行过程</span>
         <span className="run-trace-count">
-          {steps.length} 步{toolCount > 0 ? ` · ${toolCount} 个工具` : ""}
+          {activity.length > 0 ? `${activity.length} 个工具` : "思考"}
         </span>
       </summary>
       <div className="run-trace-steps">
-        {steps.map((step) => {
-          if (step.kind === "reasoning") {
-            const text =
-              streaming && step === lastStep ? throttledLastReasoning : step.text;
-            return (
-              <div className="run-trace-reasoning" key={`reasoning-${step.id}`}>
-                <div className="run-trace-step-label">思考</div>
-                <div className="message-thinking-body">
-                  <Markdown content={text} />
-                </div>
-              </div>
-            );
-          }
-          if (step.kind === "rubric") {
-            const failedCheck =
-              step.result === "grader_error" || step.result === "failed";
-            const label = step.passed
-              ? "质检通过"
-              : failedCheck
-                ? "质检失败"
-                : "质检未通过";
-            const count = failedCheck
-              ? "评分器未返回结果"
-              : `${step.failed}/${step.total} 项未通过`;
-            if (step.failures.length === 0) {
-              return (
-                <div className="run-trace-tool" key={`rubric-${step.id}`}>
-                  <span className="run-trace-tool-dot" aria-hidden="true" />
-                  <span className="run-trace-tool-label">{label}</span>
-                  <span className="run-trace-tool-name">{count}</span>
-                </div>
-              );
-            }
-            return (
-              <details className="run-trace-rubric" key={`rubric-${step.id}`}>
-                <summary>
-                  <span className="run-trace-tool-dot" aria-hidden="true" />
-                  <span className="run-trace-tool-label">{label}</span>
-                  <span className="run-trace-tool-name">{count}</span>
-                </summary>
-                <ul className="run-trace-rubric-gaps">
-                  {step.failures.map((item, index) => (
-                    <li key={`rubric-gap-${index}`}>
-                      {item.name}
-                      {item.gap ? `：${item.gap}` : ""}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            );
-          }
-          return (
-            <div className="run-trace-tool" key={`tool-${step.id}`}>
-              <span className="run-trace-tool-dot" aria-hidden="true" />
-              <span className="run-trace-tool-label">
-                {step.label || step.tool || "工具调用"}
-              </span>
-              {step.agent && step.agent !== agentName && (
-                <span className="run-trace-tool-agent">{step.agent}</span>
-              )}
-              {step.tool && <span className="run-trace-tool-name">{step.tool}</span>}
+        {hasReasoning && (
+          <div className="run-trace-reasoning">
+            <div className="run-trace-step-label">思考</div>
+            <div className="message-thinking-body">
+              <Markdown content={reasoning} />
             </div>
-          );
-        })}
+          </div>
+        )}
+        {activity.map((name, index) => (
+          <div className="run-trace-tool" key={`${name}-${index}`}>
+            <span className="run-trace-tool-dot" aria-hidden="true" />
+            <span className="run-trace-tool-label">{name}</span>
+          </div>
+        ))}
       </div>
     </details>
   );
@@ -326,7 +266,6 @@ export function ChatPanel(props: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
-  const olderAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stickRef = useRef(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -339,7 +278,6 @@ export function ChatPanel(props: ChatPanelProps) {
   const [commandIndex, setCommandIndex] = useState(0);
   const [commandMenuDismissed, setCommandMenuDismissed] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
-  const [now, setNow] = useState(() => Date.now());
   const [highlightId, setHighlightId] = useState("");
   const focusAppliedRef = useRef(0);
   const highlightTimerRef = useRef<number | null>(null);
@@ -424,13 +362,6 @@ export function ChatPanel(props: ChatPanelProps) {
     return () => window.removeEventListener("resize", syncHeight);
   }, [props.draft]);
 
-  useEffect(() => {
-    if (!props.sending) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [props.sending]);
-
   function scrollToBottom() {
     const element = scrollRef.current;
     if (!element) return;
@@ -450,25 +381,6 @@ export function ChatPanel(props: ChatPanelProps) {
     scheduleScrollToBottom();
   }, [props.messages, throttledStreamText, props.sending, props.commandReply]);
 
-  useLayoutEffect(() => {
-    const anchor = olderAnchorRef.current;
-    const element = scrollRef.current;
-    if (!anchor || !element) return;
-    const added = element.scrollHeight - anchor.height;
-    if (added > 0) element.scrollTop = anchor.top + added;
-    olderAnchorRef.current = null;
-  }, [props.messages]);
-
-  async function requestOlder() {
-    if (!props.hasMore || props.loadingOlder || olderAnchorRef.current) return;
-    const element = scrollRef.current;
-    if (!element) return;
-    const anchor = { height: element.scrollHeight, top: element.scrollTop };
-    olderAnchorRef.current = anchor;
-    const loaded = await props.onLoadOlder();
-    if (!loaded && olderAnchorRef.current === anchor) olderAnchorRef.current = null;
-  }
-
   useEffect(() => {
     const container = scrollRef.current;
     const content = contentRef.current;
@@ -487,11 +399,6 @@ export function ChatPanel(props: ChatPanelProps) {
     const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
     stickRef.current = nearBottom;
     setAtBottom((current) => (current === nearBottom ? current : nearBottom));
-    const nearTop =
-      element.scrollHeight > element.clientHeight + 160 && element.scrollTop < 80;
-    if (nearTop && props.hasMore && !props.loadingOlder) {
-      void requestOlder();
-    }
   }
 
   function jumpToBottom() {
@@ -507,58 +414,8 @@ export function ChatPanel(props: ChatPanelProps) {
       props.attachments.length > 0 ||
       props.quote.trim().length > 0);
 
-  const screenshotsByRun = new Map<string, ScreenshotInfo[]>();
-  for (const shot of props.screenshots) {
-    const list = screenshotsByRun.get(shot.run_id);
-    if (list) {
-      list.push(shot);
-    } else {
-      screenshotsByRun.set(shot.run_id, [shot]);
-    }
-  }
-  const assistantRunIds = new Set(
-    props.messages
-      .filter((message) => message.role === "assistant" && message.run_id)
-      .map((message) => message.run_id as string),
-  );
-  const activeRunShown = Boolean(
-    props.activeRun && (props.sending || props.streamText || props.terminalRun),
-  );
-  const orphanScreenshots = props.screenshots.filter(
-    (shot) =>
-      !assistantRunIds.has(shot.run_id) &&
-      (!activeRunShown || shot.run_id !== props.activeRun?.id),
-  );
-
-  const queued = props.activeRun?.status === "queued";
-  const liveElapsed = elapsedSeconds(
-    props.activeRun?.started_at ?? props.activeRun?.created_at,
-    now,
-  );
-  const elapsedLabel =
-    props.sending && liveElapsed >= 10 ? `已用 ${formatDuration(liveElapsed)}` : "";
-  const activityText = queued
-    ? "排队中，等待前面的任务完成"
-    : props.trace.some((step) => step.kind === "tool")
-      ? ""
-      : props.activity;
-  const showActivity = props.sending && Boolean(activityText || elapsedLabel);
-  const terminalSeconds = props.terminalRun
-    ? elapsedSeconds(
-        props.terminalRun.run.started_at ?? props.terminalRun.run.created_at,
-        props.terminalRun.run.finished_at
-          ? Date.parse(props.terminalRun.run.finished_at)
-          : undefined,
-      )
-    : 0;
-  const terminalDuration =
-    terminalSeconds >= 10 ? `用时 ${formatDuration(terminalSeconds)}` : "";
-  const showStreaming = !props.terminalRun && (props.sending || Boolean(props.streamText));
-  // Once the persisted assistant message arrives, drop the live bubble even if
-  // a state update is still in flight (prevents a duplicate or flicker).
-  const streamingSuperseded = Boolean(
-    props.activeRun && assistantRunIds.has(props.activeRun.id),
-  );
+  const showStreaming = props.tracking || Boolean(props.streamText);
+  const latestActivity = props.activity[props.activity.length - 1] ?? "";
 
   async function submit() {
     if (!canSubmit) return;
@@ -670,23 +527,6 @@ export function ChatPanel(props: ChatPanelProps) {
     <section className="chat-panel">
       <div className="message-scroll" ref={scrollRef} onScroll={handleScroll}>
         <div className="message-flow" ref={contentRef}>
-        {props.hasMore && (
-          <div className="message-history" role="status">
-            {props.loadOlderError ? (
-              <button
-                type="button"
-                className="message-history-retry"
-                onClick={() => void requestOlder()}
-              >
-                加载更早消息失败，点击重试
-              </button>
-            ) : props.loadingOlder ? (
-              <span>正在加载更早的消息…</span>
-            ) : (
-              <span>上滑加载更早的消息</span>
-            )}
-          </div>
-        )}
         {props.loading && props.messages.length === 0 && <MessageSkeleton />}
 
         {!props.loading && props.messages.length === 0 && !props.sending && !props.commandReply && (
@@ -782,9 +622,6 @@ export function ChatPanel(props: ChatPanelProps) {
                   )}
                 </div>
                 <div className="message-footer user">
-                  <span className="message-footer-time">
-                    你 · {formatTime(message.created_at)}
-                  </span>
                   <div className="message-actions">
                     <CopyButton text={copyContent} />
                     <button
@@ -802,6 +639,7 @@ export function ChatPanel(props: ChatPanelProps) {
               </div>
             );
           }
+          const steps = processSteps(message.blocks);
           return (
             <div
               key={message.id}
@@ -811,21 +649,9 @@ export function ChatPanel(props: ChatPanelProps) {
               <div className="message-bubble assistant">
                 <div className="message-head">
                   <span className="message-author">{props.agentName || "Agent"}</span>
-                  <span className="message-time">{formatTime(message.created_at)}</span>
                 </div>
-                <RunTrace
-                  steps={message.run_id ? props.runTraces[message.run_id] ?? [] : []}
-                  fallback={
-                    message.run_id ? props.runReasoning[message.run_id] ?? "" : ""
-                  }
-                  streaming={false}
-                  agentName={props.agentName}
-                />
-                <Markdown content={message.content} />
-                <ScreenshotStrip
-                  sessionId={props.sessionId}
-                  items={message.run_id ? screenshotsByRun.get(message.run_id) ?? [] : []}
-                />
+                <AssistantProcess steps={steps} />
+                {message.content && <Markdown content={message.content} />}
               </div>
               <div className="message-footer assistant">
                 <div className="message-actions">
@@ -846,105 +672,29 @@ export function ChatPanel(props: ChatPanelProps) {
           );
         })}
 
-        {showStreaming && !streamingSuperseded && (
+        {showStreaming && (
           <div className="message-row assistant">
             <div className="message-bubble assistant streaming">
               <div className="message-head">
                 <span className="message-author">{props.agentName || "Agent"}</span>
               </div>
-              {showActivity && (
+              {latestActivity && (
                 <div className="run-activity" role="status">
-                  {!queued && <span className="run-activity-dot" aria-hidden="true" />}
-                  {activityText && <span className="run-activity-text">{activityText}</span>}
-                  {activityText && elapsedLabel && (
-                    <span className="run-activity-sep" aria-hidden="true">
-                      ·
-                    </span>
-                  )}
-                  {elapsedLabel && <span className="run-activity-elapsed">{elapsedLabel}</span>}
+                  <span className="run-activity-dot" aria-hidden="true" />
+                  <span className="run-activity-text">{latestActivity}</span>
                 </div>
               )}
-              <RunTrace
-                steps={props.trace}
-                fallback={throttledStreamReasoning}
-                streaming={!props.streamText}
-                agentName={props.agentName}
+              <LiveProcess
+                reasoning={throttledStreamReasoning}
+                activity={props.activity}
+                streamingText={Boolean(props.streamText)}
               />
               {props.streamText ? (
                 <Markdown content={throttledStreamText} streaming />
               ) : (
-                <div className="muted">{queued ? "排队中…" : "正在生成…"}</div>
+                <div className="muted">正在生成…</div>
               )}
-              {!queued && <span className="cursor" />}
-              {props.activeRun && (
-                <ScreenshotStrip
-                  sessionId={props.sessionId}
-                  items={screenshotsByRun.get(props.activeRun.id) ?? []}
-                />
-              )}
-            </div>
-          </div>
-        )}
-
-        {props.terminalRun && (
-          <div className="message-row assistant">
-            <div
-              className={`message-bubble assistant terminal ${
-                props.terminalRun.run.status === "cancelled" ? "cancelled" : "failed"
-              }`}
-            >
-              <div className="message-head">
-                <span className="message-author">{props.agentName || "Agent"}</span>
-                <span
-                  className={`run-status-pill ${
-                    props.terminalRun.run.status === "cancelled" ? "cancelled" : "failed"
-                  }`}
-                >
-                  {props.terminalRun.run.status === "cancelled" ? "已停止" : "失败"}
-                </span>
-                {terminalDuration && <span className="message-time">{terminalDuration}</span>}
-              </div>
-              <RunTrace
-                steps={props.trace}
-                fallback={props.terminalRun.reasoning}
-                streaming={false}
-                agentName={props.agentName}
-              />
-              {props.terminalRun.text ? (
-                <Markdown content={props.terminalRun.text} />
-              ) : (
-                <div className="muted">这个 Run 没有产生回复。</div>
-              )}
-              <div className="run-terminal-footer">
-                <span
-                  className="run-terminal-reason"
-                  title={props.terminalRun.run.error ?? undefined}
-                >
-                  {props.terminalRun.run.status === "cancelled"
-                    ? "已停止生成，上面的内容保留到停止时。"
-                    : describeRunError(props.terminalRun.run.error)}
-                </span>
-                <button
-                  type="button"
-                  className="ghost-button"
-                  disabled={props.sending}
-                  onClick={() => props.onRetry(props.terminalRun!.run.id)}
-                >
-                  重试
-                </button>
-              </div>
-              <ScreenshotStrip
-                sessionId={props.sessionId}
-                items={screenshotsByRun.get(props.terminalRun.run.id) ?? []}
-              />
-            </div>
-          </div>
-        )}
-
-        {orphanScreenshots.length > 0 && (
-          <div className="message-row assistant">
-            <div className="message-bubble assistant">
-              <ScreenshotStrip sessionId={props.sessionId} items={orphanScreenshots} />
+              <span className="cursor" />
             </div>
           </div>
         )}
@@ -1227,7 +977,7 @@ export function ChatPanel(props: ChatPanelProps) {
             placeholder={
               !props.canSend
                 ? "先选择一个 Agent 和会话"
-                : props.runActive
+                : props.tracking
                   ? "继续追问，发送后会排队…"
                   : "给 Agent 发消息…"
             }
@@ -1235,7 +985,7 @@ export function ChatPanel(props: ChatPanelProps) {
             disabled={!props.canSend}
           />
           <div className="composer-actions">
-            {props.runActive && (
+            {props.tracking && (
               <button
                 className="composer-send-button stop"
                 type="button"
@@ -1253,8 +1003,8 @@ export function ChatPanel(props: ChatPanelProps) {
               type="button"
               onClick={() => void submit()}
               disabled={!canSubmit}
-              aria-label={props.runActive ? "排队追问" : "发送"}
-              title={props.runActive ? "排队追问" : "发送"}
+              aria-label={props.tracking ? "排队追问" : "发送"}
+              title={props.tracking ? "排队追问" : "发送"}
             >
               <svg
                 viewBox="0 0 24 24"

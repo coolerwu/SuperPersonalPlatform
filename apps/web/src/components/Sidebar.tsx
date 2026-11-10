@@ -1,6 +1,16 @@
-import type { Agent, Session } from "../types";
-import { formatTime } from "../format";
+import type { Agent, SessionSummary } from "../types";
 import { Select } from "./Select";
+
+/** `SessionSummary.last_modified` is epoch milliseconds. */
+function sessionTime(value: number): string {
+  if (!value || !Number.isFinite(value)) return "";
+  return new Date(value).toLocaleString(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 type SidebarProps = {
   open: boolean;
@@ -10,7 +20,7 @@ type SidebarProps = {
   agents: Agent[];
   agentId: string;
   onAgentChange: (id: string) => void;
-  sessions: Session[];
+  sessions: SessionSummary[];
   sessionId: string;
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
@@ -142,21 +152,13 @@ export function Sidebar(props: SidebarProps) {
                         微信
                       </span>
                     )}
-                    {session.origin === "cron" && (
-                      <span className="session-channel cron" title="定时任务会话">
-                        定时
-                      </span>
-                    )}
                     {session.title || "新会话"}
                   </div>
                   <div className="session-meta">
-                    {session.active_run_status === "running" && (
+                    {session.busy && (
                       <span className="session-activity running">运行中</span>
                     )}
-                    {session.active_run_status === "queued" && (
-                      <span className="session-activity queued">排队</span>
-                    )}
-                    {session.message_count} 条 · {formatTime(session.last_message_at || session.updated_at)}
+                    {sessionTime(session.last_modified)}
                   </div>
                 </div>
                 <button

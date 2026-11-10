@@ -1,34 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 
-import { api, ApiError } from "./api";
+import { api } from "./api";
 import type {
   Agent,
   AgentSavePayload,
   Attachment,
   DrawerTab,
   MemoryItem,
-  Message,
   Provider,
-  Run,
-  RunEvent,
-  ScreenshotInfo,
-  Session,
-  SessionSearchHit,
+  SessionSummary,
   SkillInfo,
+  TranscriptMessage,
+  TurnStreamEvent,
 } from "./types";
-import {
-  activityFromEvents,
-  appendReasoningStep,
-  attemptDisplay,
-  attemptText,
-  buildRunTrace,
-  describeToolCall,
-  RUBRIC_REVISING_ACTIVITY,
-  rubricActivity,
-  rubricTraceStep,
-  toolTraceStep,
-  type RunTraceStep,
-} from "./runActivity";
 import { MEMORY_COMMAND, isSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
 import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
@@ -49,41 +33,6 @@ import { Sidebar } from "./components/Sidebar";
 import { SkillsPage } from "./components/SkillsPage";
 import { ToolsPage } from "./components/ToolsPage";
 
-function terminal(status: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
-}
-
-function active(status: string): boolean {
-  return status === "queued" || status === "running";
-}
-
-function isActiveRun(run: Run | null | undefined): boolean {
-  return Boolean(run && active(run.status));
-}
-
-const MESSAGE_PAGE_SIZE = 50;
-const MAX_FOCUS_PAGES = 20;
-
-function mergeMessages(current: Message[], incoming: Message[]): Message[] {
-  if (incoming.length === 0) return current;
-  const byId = new Map(current.map((message) => [message.id, message]));
-  for (const message of incoming) byId.set(message.id, message);
-  return [...byId.values()].sort(
-    (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
-  );
-}
-
-/** The session list is ordered by conversation activity, not run housekeeping. */
-function sessionActivity(session: Session): string {
-  return session.last_message_at || session.updated_at;
-}
-
-function sortSessionsByActivity(list: Session[]): Session[] {
-  return [...list].sort(
-    (a, b) => sessionActivity(b).localeCompare(sessionActivity(a)) || b.id.localeCompare(a.id),
-  );
-}
-
 /** A slash-command reply shown once in the current chat lane, never persisted. */
 type CommandReply = {
   key: string;
@@ -91,49 +40,32 @@ type CommandReply = {
   text: string;
 };
 
-/** Live run state is kept per session so switching away never drops it. */
+/** Live turn state is kept per session so switching away never drops it. */
 type SessionLive = {
-  activeRun: Run | null;
-  events: RunEvent[];
   streamText: string;
-  /** Revision buffered behind the visible draft; swapped in when the run finishes. */
-  revisionText: string;
-  revising: boolean;
   streamReasoning: string;
-  trace: RunTraceStep[];
-  activity: string;
+  activity: string[];
   notice: string;
   tracking: boolean;
 };
 
 const EMPTY_LIVE: SessionLive = {
-  activeRun: null,
-  events: [],
   streamText: "",
-  revisionText: "",
-  revising: false,
   streamReasoning: "",
-  trace: [],
-  activity: "",
+  activity: [],
   notice: "",
   tracking: false,
 };
 
-type RunSubscription = {
-  runId: string;
-  source: EventSource | null;
-  timer: number | null;
+type FocusTarget = {
+  sessionId: string;
+  messageId: string;
+  nonce: number;
 };
 
 const MEMORY_SKILL = "memory-organizer";
-const POLL_INTERVAL_MS = 800;
-const POLL_MAX_BACKOFF_MS = 5000;
-const MAX_POLL_RETRIES = 120;
-const RECONNECT_NOTICE = "服务连接中断，正在重试…";
-const RESTART_NOTICE = "服务重启，Run 已重新排队";
-const ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时进度；刚才的消息没有发送。";
-const RETRY_ATTACH_NOTICE = "这个会话已有 Run 在运行，已接入它的实时进度。";
 const QUEUED_NOTICE = "已排队，前面的任务完成后会自动执行";
+const SIDEBAR_POLL_MS = 5000;
 const NEW_SESSION_KEY = "__new__";
 const AGENT_STORAGE_KEY = "acc.selectedAgent";
 
@@ -159,17 +91,24 @@ function sessionKey(agentId: string, sessionId: string): string {
   return `${agentId}:${sessionId || NEW_SESSION_KEY}`;
 }
 
-function transientPollError(error: unknown): boolean {
-  if (error instanceof ApiError) return error.status >= 500;
-  return true;
+/** `crypto.randomUUID` needs a secure context; LAN HTTP still needs ids. */
+function newSessionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const value = (Math.random() * 16) | 0;
+    const nibble = char === "x" ? value : (value & 0x3) | 0x8;
+    return nibble.toString(16);
+  });
 }
 
-/** A 409 from chat/retry carries the Run the UI should attach to instead. */
-function conflictRunId(error: unknown): string | null {
-  if (!(error instanceof ApiError) || error.status !== 409) return null;
-  const detail = error.detail as { detail?: { active_run_id?: unknown } } | undefined;
-  const runId = detail?.detail?.active_run_id;
-  return typeof runId === "string" && runId ? runId : null;
+function transcriptMessage(
+  role: "user" | "assistant",
+  content: string,
+  id: string,
+): TranscriptMessage {
+  return { id, role, content, blocks: [] };
 }
 
 export default function App() {
@@ -180,23 +119,16 @@ export default function App() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillsErrors, setSkillsErrors] = useState<string[]>([]);
   const [agentId, setAgentId] = useState("");
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState(initialRoute?.sessionId ?? "");
-  const [screenshots, setScreenshots] = useState<ScreenshotInfo[]>([]);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [messagesHasMore, setMessagesHasMore] = useState(false);
-  const [messagesNextBefore, setMessagesNextBefore] = useState<string | null>(null);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [olderError, setOlderError] = useState("");
+  const [messagesBySession, setMessagesBySession] = useState<Record<string, TranscriptMessage[]>>({});
+  const [loadingBySession, setLoadingBySession] = useState<Record<string, boolean>>({});
   const [draft, setDraft] = useState("");
   const [commandReply, setCommandReply] = useState<CommandReply | null>(null);
   const [attachmentsByKey, setAttachmentsByKey] = useState<Record<string, Attachment[]>>({});
   const [quotesByKey, setQuotesByKey] = useState<Record<string, string>>({});
   const [pendingSessions, setPendingSessions] = useState<Record<string, true>>({});
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
-  const [runReasoning, setRunReasoning] = useState<Record<string, string>>({});
-  const [runTraces, setRunTraces] = useState<Record<string, RunTraceStep[]>>({});
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -205,36 +137,25 @@ export default function App() {
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
-  const [searchFocus, setSearchFocus] = useState<{
-    sessionId: string;
-    messageId: string;
-    nonce: number;
-  } | null>(null);
+  const [sessionToDelete, setSessionToDelete] = useState<SessionSummary | null>(null);
+  const [focus, setFocus] = useState<FocusTarget | null>(null);
 
-  const subscriptionsRef = useRef<Map<string, RunSubscription>>(new Map());
-  const appliedEventsRef = useRef<Map<string, number>>(new Map());
-  const finishingRunsRef = useRef<Set<string>>(new Set());
-  const finishedRunsRef = useRef<Set<string>>(new Set());
-  const suppressSessionResetRef = useRef<string | null>(null);
+  const streamsRef = useRef<Map<string, EventSource>>(new Map());
+  const sessionsRef = useRef<SessionSummary[]>([]);
+  const sessionAgentRef = useRef<Record<string, string>>({});
+  const transcriptRequestRef = useRef<Record<string, number>>({});
+  const skipRefreshRef = useRef<Set<string>>(new Set());
   const sessionIdRef = useRef("");
-  const messagesRequestRef = useRef(0);
-  const messagesSessionRef = useRef("");
-  const olderRequestRef = useRef(0);
-  const loadingOlderRef = useRef(false);
   const sessionsRequestRef = useRef(0);
   const agentIdRef = useRef("");
   const pendingMemoryFocus = useRef<{
     agentId: string;
     sessionId: string;
     messageId: string;
-    createdAt: string;
   } | null>(null);
   const draftsRef = useRef<Record<string, string>>({});
   const draftKeyRef = useRef("");
   const pendingSessionsRef = useRef<Record<string, true>>({});
-  const sessionCountsRef = useRef<Record<string, number>>({});
-  const runSessionsRef = useRef<Record<string, string>>({});
   const commandPendingRef = useRef(false);
   // A /chat/<id> deep link is applied once the agent's sessions load.
   const restoreSessionRef = useRef(initialRoute?.sessionId ?? "");
@@ -247,20 +168,11 @@ export default function App() {
   const agent = agents.find((item) => item.id === agentId);
   const live = liveBySession[sessionId] ?? EMPTY_LIVE;
   const pendingHere = Boolean(pendingSessions[sessionId || NEW_SESSION_KEY]);
-  const runActive = live.tracking && isActiveRun(live.activeRun);
-  const chatSending = pendingHere || runActive;
-  const visibleRun = live.activeRun;
-  const visibleStream = live.streamText;
-  const visibleReasoning = live.streamReasoning;
-  const visibleTrace = live.trace;
-  const visibleEvents = live.events;
-  const visibleActivity = live.activity;
-  const visibleNotice = live.notice;
-  const terminalRun =
-    visibleRun && (visibleRun.status === "failed" || visibleRun.status === "cancelled")
-      ? { run: visibleRun, text: visibleStream, reasoning: visibleReasoning }
-      : null;
-  const sessionTitle = sessions.find((item) => item.id === sessionId)?.title || "新对话";
+  const tracking = live.tracking;
+  const chatSending = pendingHere || tracking;
+  const messages = messagesBySession[sessionId] ?? [];
+  const messagesLoading = loadingBySession[sessionId] ?? false;
+  const sessionTitle = currentSession?.title || "新对话";
   const viewTitle =
     view === "settings"
       ? "配置"
@@ -308,18 +220,53 @@ export default function App() {
     });
   }
 
-  function rememberEvents(events: RunEvent[]) {
-    for (const event of events) {
-      const known = appliedEventsRef.current.get(event.run_id) ?? 0;
-      if (event.id > known) appliedEventsRef.current.set(event.run_id, event.id);
-    }
+  function applySessions(list: SessionSummary[]) {
+    sessionsRef.current = list;
+    setSessions(list);
   }
 
-  function acceptEvent(event: RunEvent): boolean {
-    const known = appliedEventsRef.current.get(event.run_id) ?? 0;
-    if (event.id <= known) return false;
-    appliedEventsRef.current.set(event.run_id, event.id);
-    return true;
+  function setMessagesFor(id: string, list: TranscriptMessage[]) {
+    setMessagesBySession((current) => ({ ...current, [id]: list }));
+  }
+
+  function appendMessage(id: string, message: TranscriptMessage) {
+    setMessagesBySession((current) => ({
+      ...current,
+      [id]: [...(current[id] ?? []), message],
+    }));
+  }
+
+  function removeMessage(id: string, messageId: string) {
+    setMessagesBySession((current) => {
+      const list = current[id];
+      if (!list) return current;
+      return { ...current, [id]: list.filter((item) => item.id !== messageId) };
+    });
+  }
+
+  function setLoadingFor(id: string, value: boolean) {
+    setLoadingBySession((current) => {
+      if ((current[id] ?? false) === value) return current;
+      return { ...current, [id]: value };
+    });
+  }
+
+  /** Keep a freshly created session in the sidebar until its transcript lands. */
+  function mergeLiveSession(list: SessionSummary[]): SessionSummary[] {
+    const current = sessionIdRef.current;
+    if (!current) return list;
+    if (list.some((item) => item.id === current)) return list;
+    if (!streamsRef.current.has(current)) return list;
+    const known = sessionsRef.current.find((item) => item.id === current);
+    const placeholder: SessionSummary = known ?? {
+      id: current,
+      title: "新会话",
+      last_modified: Date.now(),
+      channel_type: null,
+      channel_name: null,
+      busy: true,
+    };
+    return [{ ...placeholder, busy: true }, ...list];
   }
 
   function changeDraft(value: string | ((current: string) => string)) {
@@ -336,8 +283,8 @@ export default function App() {
     if (draftKeyRef.current === key) setDraft(value);
   }
 
-  // A send/retry request is pending per session, so Runs in other sessions
-  // never lock this session's composer.
+  // A send request is pending per session, so turns in other sessions never
+  // lock this session's composer.
   function markPending(session: string) {
     const key = session || NEW_SESSION_KEY;
     if (pendingSessionsRef.current[key]) return;
@@ -379,10 +326,122 @@ export default function App() {
     });
   }
 
-  function rememberSessionCounts(list: Session[]) {
-    const next = { ...sessionCountsRef.current };
-    for (const session of list) next[session.id] = session.message_count;
-    sessionCountsRef.current = next;
+  function closeStream(id: string) {
+    const source = streamsRef.current.get(id);
+    if (!source) return;
+    streamsRef.current.delete(id);
+    source.close();
+  }
+
+  function closeAllStreams() {
+    for (const id of Array.from(streamsRef.current.keys())) closeStream(id);
+  }
+
+  function attachIfBusy(id: string) {
+    if (!id || streamsRef.current.has(id)) return;
+    const row = sessionsRef.current.find((item) => item.id === id);
+    if (row?.busy) openStream(id);
+  }
+
+  function openStream(forSession: string, turnId?: string) {
+    closeStream(forSession);
+    if (!sessionAgentRef.current[forSession]) {
+      sessionAgentRef.current[forSession] = agentIdRef.current;
+    }
+    const source = new EventSource(api.sessionStreamUrl(forSession, turnId));
+    streamsRef.current.set(forSession, source);
+    updateLive(forSession, (current) => ({ ...current, tracking: true }));
+
+    source.onmessage = (message) => {
+      let event: TurnStreamEvent;
+      try {
+        event = JSON.parse(message.data) as TurnStreamEvent;
+      } catch {
+        return;
+      }
+      switch (event.type) {
+        case "assistant_delta":
+          updateLive(forSession, (current) => ({
+            ...current,
+            streamText: current.streamText + event.delta,
+            notice: "",
+          }));
+          break;
+        case "reasoning_delta":
+          updateLive(forSession, (current) => ({
+            ...current,
+            streamReasoning: current.streamReasoning + event.delta,
+            notice: "",
+          }));
+          break;
+        case "tool_call":
+          updateLive(forSession, (current) => ({
+            ...current,
+            activity: [...current.activity, event.name],
+            notice: "",
+          }));
+          break;
+        case "turn_error":
+          updateLive(forSession, (current) => ({ ...current, notice: event.error }));
+          break;
+        case "turn_end": {
+          if (streamsRef.current.get(forSession) !== source) return;
+          closeStream(forSession);
+          if (event.status === "failed") {
+            updateLive(forSession, (current) => ({
+              ...current,
+              notice: event.error || "本轮执行失败。",
+            }));
+          } else if (event.status === "cancelled") {
+            updateLive(forSession, (current) => ({ ...current, notice: "已停止当前任务。" }));
+          }
+          void finishTurn(forSession);
+          break;
+        }
+      }
+    };
+
+    source.onerror = () => {
+      if (streamsRef.current.get(forSession) !== source) return;
+      closeStream(forSession);
+      void refreshTranscript(forSession);
+    };
+  }
+
+  async function refreshTranscript(forSession: string) {
+    if (!forSession) return;
+    const requestId = (transcriptRequestRef.current[forSession] ?? 0) + 1;
+    transcriptRequestRef.current[forSession] = requestId;
+    setLoadingFor(forSession, true);
+    let failure = "";
+    try {
+      const owner = sessionAgentRef.current[forSession] ?? agentIdRef.current;
+      const list = await api.listSessionMessages(forSession, owner);
+      if (transcriptRequestRef.current[forSession] !== requestId) return;
+      setMessagesFor(forSession, list);
+    } catch (exc) {
+      failure = describeApiError(exc);
+    } finally {
+      if (transcriptRequestRef.current[forSession] !== requestId) return;
+      setLoadingFor(forSession, false);
+      const streaming = streamsRef.current.has(forSession);
+      updateLive(forSession, (current) => ({
+        ...current,
+        // A live stream owns these fields; reopening a busy session must not
+        // wipe text the stream has already accumulated.
+        streamText: streaming ? current.streamText : "",
+        streamReasoning: streaming ? current.streamReasoning : "",
+        activity: streaming ? current.activity : [],
+        notice: failure || current.notice,
+        tracking: streaming,
+      }));
+    }
+  }
+
+  async function finishTurn(forSession: string) {
+    await refreshTranscript(forSession);
+    await refreshSessions();
+    if (forSession === sessionIdRef.current) attachIfBusy(forSession);
   }
 
   useEffect(() => {
@@ -485,7 +544,7 @@ export default function App() {
       }
       setSidebarOpen(false);
       if (route.view === "chat") {
-        setSearchFocus(null);
+        setFocus(null);
         setCommandReply(null);
         setSessionId(route.sessionId);
       }
@@ -495,71 +554,33 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  function openCronSession(id: string) {
-    setSearchFocus(null);
+  function openSession(id: string) {
+    setFocus(null);
     setCommandReply(null);
     navigate("chat", id);
     void refreshSessions();
   }
 
-  function openSearchHit(hit: SessionSearchHit) {
+  function openFocusSession(targetSessionId: string, messageId: string) {
     setCommandReply(null);
-    setSearchFocus({
-      sessionId: hit.session_id,
-      messageId: hit.message_id,
-      nonce: Date.now(),
-    });
-    setSessions((current) => {
-      if (current.some((item) => item.id === hit.session_id)) return current;
-      return [
-        {
-          id: hit.session_id,
-          agent_id: agentId,
-          title: hit.session_title || "新会话",
-          origin: "chat",
-          message_count: 0,
-          active_run_id: null,
-          active_run_status: null,
-          channel_type: null,
-          channel_name: null,
-          created_at: hit.created_at,
-          updated_at: hit.created_at,
-          last_message_at: hit.created_at,
-        },
-        ...current,
-      ];
-    });
-    navigate("chat", hit.session_id);
-    if (hit.session_id === sessionIdRef.current) {
-      void loadMessages(hit.session_id, false, hit.message_id).catch((exc) => {
-        setSessionError(describeApiError(exc), hit.session_id);
-      });
-    }
+    setFocus({ sessionId: targetSessionId, messageId, nonce: Date.now() });
+    navigate("chat", targetSessionId);
   }
 
   function openMemorySource(item: MemoryItem) {
     if (!item.source_session_id || !item.source_message_id) return;
     if (item.source_message_exists === false) return;
     const targetAgent = item.source_agent_id || agentIdRef.current;
-    const focus = {
-      agentId: targetAgent,
-      sessionId: item.source_session_id,
-      messageId: item.source_message_id,
-      createdAt: item.snapshot_at || item.created_at,
-    };
     if (targetAgent && targetAgent !== agentIdRef.current) {
-      pendingMemoryFocus.current = focus;
+      pendingMemoryFocus.current = {
+        agentId: targetAgent,
+        sessionId: item.source_session_id,
+        messageId: item.source_message_id,
+      };
       setAgentId(targetAgent);
       return;
     }
-    openSearchHit({
-      message_id: focus.messageId,
-      session_id: focus.sessionId,
-      session_title: "",
-      role: "user",
-      snippet: "",
-      created_at: focus.createdAt,
-    });
+    openFocusSession(item.source_session_id, item.source_message_id);
   }
 
   useEffect(() => {
@@ -567,7 +588,7 @@ export default function App() {
       setError(describeApiError(exc));
       setAuth(false);
     });
-    return () => closeAllSubscriptions();
+    return () => closeAllStreams();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -575,22 +596,18 @@ export default function App() {
     agentIdRef.current = agentId;
     storeAgent(agentId);
     // Drop the previous agent's session before its view can appear under the
-    // new agent. Live runs of other sessions keep streaming in the background.
+    // new agent. Live turns of other sessions keep streaming in the background.
     sessionIdRef.current = "";
     setSessionId("");
-    setMessages([]);
-    setMessagesLoading(false);
-    messagesSessionRef.current = "";
-    olderRequestRef.current += 1;
-    loadingOlderRef.current = false;
-    setMessagesHasMore(false);
-    setMessagesNextBefore(null);
-    setLoadingOlder(false);
-    setOlderError("");
     setSessions([]);
+    sessionsRef.current = [];
+    setMessagesBySession({});
+    setLoadingBySession({});
     setError("");
     setCommandReply(null);
-    setSearchFocus(null);
+    setFocus(null);
+    pendingSessionsRef.current = {};
+    setPendingSessions({});
     if (!auth || !agentId) {
       sessionsRequestRef.current += 1;
       return;
@@ -605,67 +622,33 @@ export default function App() {
     const pending = pendingMemoryFocus.current;
     if (!pending || pending.agentId !== agentId) return;
     pendingMemoryFocus.current = null;
-    openSearchHit({
-      message_id: pending.messageId,
-      session_id: pending.sessionId,
-      session_title: "",
-      role: "user",
-      snippet: "",
-      created_at: pending.createdAt,
-    });
+    openFocusSession(pending.sessionId, pending.messageId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
-    const keepMessages = suppressSessionResetRef.current === sessionId;
-    suppressSessionResetRef.current = null;
-    messagesSessionRef.current = "";
-    olderRequestRef.current += 1;
-    loadingOlderRef.current = false;
-    setMessagesHasMore(false);
-    setMessagesNextBefore(null);
-    setLoadingOlder(false);
-    setOlderError("");
-    if (!keepMessages) {
-      // Never show the previous session's messages under the new one while its
-      // own messages are still loading.
-      messagesRequestRef.current += 1;
-      setMessages([]);
-      setMessagesLoading(Boolean(sessionId));
-    }
     setError("");
-    setScreenshots([]);
-    if (!sessionId) {
-      setMessagesLoading(false);
+    if (!agentId || !sessionId) return;
+    if (
+      !sessionAgentRef.current[sessionId] &&
+      sessionsRef.current.some((item) => item.id === sessionId)
+    ) {
+      // Only record ownership once the agent's session list confirms it; a
+      // deep link can name a session of another agent.
+      sessionAgentRef.current[sessionId] = agentId;
+    }
+    if (skipRefreshRef.current.delete(sessionId)) {
+      // A brand-new turn already streams; keep its optimistic user message
+      // rather than replacing the lane with a possibly empty transcript.
+      setLoadingFor(sessionId, false);
       return;
     }
-    const focusId =
-      searchFocus?.sessionId === sessionId ? searchFocus.messageId : undefined;
-    void loadMessages(sessionId, true, focusId).catch((exc) => {
-      if (sessionId !== sessionIdRef.current) return;
-      setMessagesLoading(false);
-      setSessionError(describeApiError(exc), sessionId);
+    void refreshTranscript(sessionId).then(() => {
+      if (sessionIdRef.current === sessionId) attachIfBusy(sessionId);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (!sessionId) {
-      setScreenshots([]);
-      return;
-    }
-    let mounted = true;
-    void api
-      .listScreenshots(sessionId)
-      .then((list) => {
-        if (mounted && sessionId === sessionIdRef.current) setScreenshots(list);
-      })
-      .catch(() => undefined);
-    return () => {
-      mounted = false;
-    };
-  }, [sessionId]);
+  }, [sessionId, agentId]);
 
   async function bootstrap() {
     const me = await api.me();
@@ -716,43 +699,31 @@ export default function App() {
     const requestId = ++sessionsRequestRef.current;
     const list = await api.listSessions(forAgent);
     if (requestId !== sessionsRequestRef.current || forAgent !== agentIdRef.current) return;
-    rememberSessionCounts(list);
-    setSessions(list);
+    applySessions(mergeLiveSession(list));
     if (list.length === 0) {
       restoreSessionRef.current = "";
       sessionIdRef.current = "";
       setSessionId("");
-      setMessages([]);
-      setMessagesLoading(false);
-      messagesSessionRef.current = "";
-      olderRequestRef.current += 1;
-      loadingOlderRef.current = false;
-      setMessagesHasMore(false);
-      setMessagesNextBefore(null);
-      setLoadingOlder(false);
-      setOlderError("");
       return;
     }
-    if (!list.some((item) => item.id === sessionIdRef.current)) {
-      const restore = restoreSessionRef.current;
+    if (list.some((item) => item.id === sessionIdRef.current)) {
       restoreSessionRef.current = "";
-      const target =
-        restore && list.some((item) => item.id === restore) ? restore : list[0].id;
-      sessionIdRef.current = target;
-      setSessionId(target);
-    } else {
-      restoreSessionRef.current = "";
+      return;
     }
+    const restore = restoreSessionRef.current;
+    restoreSessionRef.current = "";
+    const target = restore && list.some((item) => item.id === restore) ? restore : list[0].id;
+    sessionIdRef.current = target;
+    setSessionId(target);
   }
 
   async function refreshSessions() {
-    if (!agentId) return;
-    const forAgent = agentId;
+    const forAgent = agentIdRef.current;
+    if (!forAgent) return;
     try {
       const list = await api.listSessions(forAgent);
       if (forAgent !== agentIdRef.current) return;
-      rememberSessionCounts(list);
-      setSessions(list);
+      applySessions(mergeLiveSession(list));
     } catch {
       // Keep the current list on a transient refresh failure.
     }
@@ -772,18 +743,15 @@ export default function App() {
         const list = await api.listSessions(forAgent);
         if (cancelled || forAgent !== agentIdRef.current) return;
         const current = sessionIdRef.current;
-        const currentItem = list.find((item) => item.id === current);
-        const previousCount = current ? sessionCountsRef.current[current] : undefined;
-        rememberSessionCounts(list);
-        setSessions(list);
-        if (!current || !currentItem) return;
-        if (subscriptionsRef.current.has(current) || pendingSessionsRef.current[current || NEW_SESSION_KEY]) return;
-        if (currentItem.active_run_id) {
-          await loadMessages(current, true);
-          return;
-        }
-        if (previousCount !== undefined && currentItem.message_count > previousCount) {
-          await loadMessages(current, true);
+        const wasBusy = sessionsRef.current.find((item) => item.id === current)?.busy ?? false;
+        applySessions(mergeLiveSession(list));
+        if (!current) return;
+        const row = list.find((item) => item.id === current);
+        if (row?.busy) {
+          attachIfBusy(current);
+        } else if (wasBusy && !streamsRef.current.has(current)) {
+          // The turn finished while this tab was not attached; sync the lane.
+          void refreshTranscript(current);
         }
       } catch {
         // A transient failure keeps the existing sidebar and live view.
@@ -792,7 +760,7 @@ export default function App() {
       }
     };
 
-    const timer = window.setInterval(() => void tick(), 5000);
+    const timer = window.setInterval(() => void tick(), SIDEBAR_POLL_MS);
     const onVisible = () => {
       if (document.visibilityState === "visible") void tick();
     };
@@ -804,477 +772,6 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth, agentId]);
-
-  async function refreshScreenshots() {
-    const forSession = sessionIdRef.current;
-    if (!forSession) return;
-    try {
-      const list = await api.listScreenshots(forSession);
-      if (forSession === sessionIdRef.current) setScreenshots(list);
-    } catch {
-      // Keep the current list on a transient refresh failure.
-    }
-  }
-
-  function closeSubscription(id: string) {
-    const subscription = subscriptionsRef.current.get(id);
-    if (!subscription) return;
-    subscriptionsRef.current.delete(id);
-    subscription.source?.close();
-    if (subscription.timer !== null) window.clearTimeout(subscription.timer);
-  }
-
-  function closeAllSubscriptions() {
-    for (const id of Array.from(subscriptionsRef.current.keys())) closeSubscription(id);
-  }
-
-  function subscribe(id: string, runId: string, after = 0) {
-    closeSubscription(id);
-    const subscription: RunSubscription = { runId, source: null, timer: null };
-    subscriptionsRef.current.set(id, subscription);
-    let lastId = after;
-    const source = new EventSource(api.streamUrl(runId, after));
-    subscription.source = source;
-    source.onmessage = (message) => {
-      try {
-        const event = JSON.parse(message.data) as RunEvent;
-        lastId = Math.max(lastId, event.id);
-        applyEvent(id, event);
-      } catch {
-        // Ignore malformed frames.
-      }
-    };
-    source.onerror = () => {
-      if (subscriptionsRef.current.get(id) !== subscription) return;
-      source.close();
-      subscription.source = null;
-      void pollRun(id, runId, lastId);
-    };
-  }
-
-  function applyEvent(id: string, event: RunEvent) {
-    if (!acceptEvent(event)) return;
-    if (event.type === "reasoning_delta") {
-      const delta = String(event.payload.delta ?? "");
-      setRunReasoning((current) => ({
-        ...current,
-        [event.run_id]: (current[event.run_id] ?? "") + delta,
-      }));
-    }
-    setLiveBySession((current) => {
-      const session = current[id] ?? EMPTY_LIVE;
-      const next: SessionLive = { ...session, events: [...session.events, event] };
-      if (
-        next.activeRun?.status === "queued" &&
-        next.activeRun.id === event.run_id &&
-        (event.type === "assistant_delta" ||
-          event.type === "reasoning_delta" ||
-          event.type === "tool_call")
-      ) {
-        // Queued Runs have no "started" event; the first output marks the
-        // transition so the live bubble stops saying "排队中".
-        next.activeRun = {
-          ...next.activeRun,
-          status: "running",
-          started_at: next.activeRun.started_at ?? event.created_at,
-        };
-      }
-      if (event.type === "run_queued") {
-        if (event.payload.reason === "service_restart") {
-          // The checkpoint keeps the interrupted attempt; the requeued run will
-          // stream a fresh answer, so drop the previous attempt's live text.
-          next.streamText = "";
-          next.revisionText = "";
-          next.revising = false;
-          next.streamReasoning = "";
-          next.trace = [];
-          next.activity = "";
-          next.notice = RESTART_NOTICE;
-        } else {
-          next.notice = "";
-        }
-      } else if (event.type === "assistant_delta") {
-        const delta = String(event.payload.delta ?? "");
-        if (session.revising) {
-          // The draft stays on screen; the revision is swapped in when the
-          // run finishes.
-          next.revisionText = session.revisionText + delta;
-          next.activity = RUBRIC_REVISING_ACTIVITY;
-        } else {
-          next.streamText = session.streamText + delta;
-          next.activity = "";
-        }
-        if (session.notice === RECONNECT_NOTICE) next.notice = "";
-      } else if (event.type === "assistant_replace") {
-        const text = String(event.payload.text ?? "");
-        if (text) {
-          next.streamText = text;
-          next.revisionText = "";
-          next.revising = false;
-          next.activity = "";
-        } else {
-          // A rubric revision is coming: keep the draft visible and buffer the
-          // revision, so the answer never blanks out to "正在生成…".
-          next.revising = true;
-          next.revisionText = "";
-          if (session.notice === RECONNECT_NOTICE) next.notice = "";
-        }
-      } else if (event.type === "reasoning_delta") {
-        const delta = String(event.payload.delta ?? "");
-        next.streamReasoning = session.streamReasoning + delta;
-        next.trace = appendReasoningStep(session.trace, event.id, delta);
-        next.activity = "";
-        if (session.notice === RECONNECT_NOTICE) next.notice = "";
-      } else if (event.type === "tool_call") {
-        next.trace = [...session.trace, toolTraceStep(event)];
-        next.activity = describeToolCall(event.payload);
-      } else if (event.type === "rubric_start") {
-        next.activity = rubricActivity(event);
-      } else if (event.type === "rubric_result") {
-        next.trace = [...session.trace, rubricTraceStep(event)];
-        next.activity = rubricActivity(event);
-      } else if (event.type === "browser_action") {
-        // The tool finished; the next model step decides the next activity.
-        next.activity = "";
-      }
-      return { ...current, [id]: next };
-    });
-    if (event.type === "browser_action" && event.payload.screenshot_id && id === sessionIdRef.current) {
-      void refreshScreenshots();
-    }
-    if (event.type === "run_completed" || event.type === "run_failed" || event.type === "run_cancelled") {
-      void finishRun(id, event.run_id);
-    }
-  }
-
-  async function pollRun(id: string, runId: string, after = 0) {
-    closeSubscription(id);
-    const subscription: RunSubscription = { runId, source: null, timer: null };
-    subscriptionsRef.current.set(id, subscription);
-    let lastId = after;
-    let failures = 0;
-
-    const alive = () => subscriptionsRef.current.get(id) === subscription;
-
-    const schedule = (delay: number) => {
-      if (!alive()) return;
-      subscription.timer = window.setTimeout(() => {
-        subscription.timer = null;
-        void tick();
-      }, delay);
-    };
-
-    const tick = async () => {
-      if (!alive()) return;
-      try {
-        const newEvents = await api.getRunEvents(runId, lastId);
-        if (!alive()) return;
-        let sawRestart = false;
-        for (const event of newEvents) {
-          lastId = event.id;
-          if (event.type === "run_queued" && event.payload.reason === "service_restart") {
-            sawRestart = true;
-          }
-          applyEvent(id, event);
-        }
-        const run = await api.getRun(runId);
-        if (!alive()) return;
-        runSessionsRef.current[run.id] = run.session_id;
-        updateLive(id, (session) => ({
-          ...session,
-          activeRun: run,
-          tracking: !terminal(run.status),
-        }));
-        if (failures > 0) {
-          failures = 0;
-          if (!sawRestart) {
-            updateLive(id, (session) =>
-              session.notice === RECONNECT_NOTICE ? { ...session, notice: "" } : session,
-            );
-          }
-        }
-        if (terminal(run.status)) {
-          closeSubscription(id);
-          void finishRun(id, runId);
-          return;
-        }
-        schedule(POLL_INTERVAL_MS);
-      } catch (exc) {
-        if (!alive()) return;
-        if (transientPollError(exc) && failures < MAX_POLL_RETRIES) {
-          failures += 1;
-          updateLive(id, (session) => ({ ...session, notice: RECONNECT_NOTICE }));
-          schedule(
-            Math.min(
-              POLL_INTERVAL_MS * 2 ** Math.min(failures, 3),
-              POLL_MAX_BACKOFF_MS,
-            ),
-          );
-          return;
-        }
-        closeSubscription(id);
-        updateLive(id, (session) => ({ ...session, tracking: false, notice: "" }));
-        setSessionError(describeApiError(exc), id);
-      }
-    };
-    void tick();
-  }
-
-  async function finishRun(id: string, runId: string) {
-    if (finishedRunsRef.current.has(runId) || finishingRunsRef.current.has(runId)) return;
-    finishingRunsRef.current.add(runId);
-    closeSubscription(id);
-    try {
-      const [run, runEvents] = await Promise.all([api.getRun(runId), api.getRunEvents(runId)]);
-      rememberEvents(runEvents);
-      runSessionsRef.current[run.id] = run.session_id;
-      const reasoning = attemptText(runEvents, "reasoning_delta");
-      const text = attemptText(runEvents, "assistant_delta");
-      const trace = buildRunTrace(runEvents);
-      if (run.session_id === sessionIdRef.current && run.status === "completed") {
-        // Persist the final assistant message before dropping the stream text,
-        // so the completed answer never blinks out of the transcript.
-        await loadMessages(run.session_id, false).catch(() => undefined);
-      }
-      setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
-      setRunTraces((current) => ({ ...current, [run.id]: trace }));
-      // Keep the streamed text as a fallback until the persisted assistant
-      // message is in the transcript (ChatPanel hides the live bubble then).
-      // Background completed Runs do not need the fallback when reopening them.
-      const keepText = run.status !== "completed" || run.session_id === sessionIdRef.current;
-      updateLive(id, (session) => ({
-        ...session,
-        activeRun: run,
-        events: runEvents,
-        streamText: keepText ? text : "",
-        revisionText: "",
-        revising: false,
-        streamReasoning: keepText ? reasoning : "",
-        trace,
-        activity: "",
-        notice: "",
-        tracking: false,
-      }));
-      // Channel sessions can queue several Runs; pick up the next one.
-      const next = await api.getSessionActiveRun(id).catch(() => null);
-      if (next && isActiveRun(next)) {
-        const nextEvents = await api.getRunEvents(next.id).catch(() => [] as RunEvent[]);
-        rememberEvents(nextEvents);
-        runSessionsRef.current[next.id] = next.session_id;
-        const nextTrace = buildRunTrace(nextEvents);
-        const nextDisplay = attemptDisplay(nextEvents);
-        setRunTraces((current) => ({ ...current, [next.id]: nextTrace }));
-        updateLive(id, (session) => ({
-          ...session,
-          activeRun: next,
-          events: nextEvents,
-          streamText: nextDisplay.text,
-          revisionText: nextDisplay.revision,
-          revising: nextDisplay.revising,
-          streamReasoning: attemptText(nextEvents, "reasoning_delta"),
-          trace: nextTrace,
-          activity: activityFromEvents(nextEvents),
-          notice: "",
-          tracking: true,
-        }));
-        subscribe(id, next.id, nextEvents.at(-1)?.id ?? 0);
-      }
-      if (run.session_id === sessionIdRef.current) {
-        void refreshScreenshots();
-      }
-      finishedRunsRef.current.add(runId);
-      void refreshSessions();
-    } catch (exc) {
-      updateLive(id, (session) => ({ ...session, tracking: false, notice: "" }));
-      setSessionError(describeApiError(exc), id);
-      void refreshSessions();
-    } finally {
-      finishingRunsRef.current.delete(runId);
-    }
-  }
-
-  async function fetchMessageWindow(id: string, focusId?: string) {
-    const latest = await api.listMessagePage(id, { limit: MESSAGE_PAGE_SIZE });
-    let items = latest.items;
-    let hasMore = latest.has_more;
-    let nextBefore = latest.next_before;
-    if (focusId && !items.some((message) => message.id === focusId)) {
-      let pages = 0;
-      while (hasMore && nextBefore && pages < MAX_FOCUS_PAGES) {
-        const older = await api.listMessagePage(id, {
-          limit: MESSAGE_PAGE_SIZE,
-          before: nextBefore,
-        });
-        items = [...older.items, ...items];
-        hasMore = older.has_more;
-        nextBefore = older.next_before;
-        pages += 1;
-        if (items.some((message) => message.id === focusId)) break;
-      }
-      if (!items.some((message) => message.id === focusId)) {
-        items = await api.listMessages(id);
-        hasMore = false;
-        nextBefore = null;
-      }
-    }
-    return { items, hasMore, nextBefore };
-  }
-
-  async function loadMessages(id: string, syncRun = true, focusId?: string) {
-    const requestId = ++messagesRequestRef.current;
-    const result = await fetchMessageWindow(id, focusId);
-    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
-    const isRefresh = !focusId && messagesSessionRef.current === id;
-    setMessages((current) =>
-      isRefresh ? mergeMessages(current, result.items) : result.items,
-    );
-    messagesSessionRef.current = id;
-    if (!isRefresh) {
-      setMessagesHasMore(result.hasMore);
-      setMessagesNextBefore(result.nextBefore);
-    }
-    setMessagesLoading(false);
-    setOlderError("");
-    if (!syncRun) return;
-    setError("");
-    if (subscriptionsRef.current.has(id)) {
-      // This session's Run is already streaming in the background; reusing its
-      // live state avoids rewinding text to whatever the DB had at load time.
-      return;
-    }
-
-    // Channel sessions can have several queued Runs; the active one is not
-    // necessarily the newest message's Run.
-    const activeRun = await api.getSessionActiveRun(id);
-    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
-    const lastRunId =
-      activeRun?.id ?? [...result.items].reverse().find((message) => message.run_id)?.run_id;
-    if (!lastRunId) {
-      setLiveBySession((current) => {
-        if (current[id]?.tracking) return current;
-        return { ...current, [id]: { ...EMPTY_LIVE } };
-      });
-      return;
-    }
-    const [run, runEvents] = await Promise.all([api.getRun(lastRunId), api.getRunEvents(lastRunId)]);
-    if (requestId !== messagesRequestRef.current || id !== sessionIdRef.current) return;
-    runSessionsRef.current[run.id] = run.session_id;
-    rememberEvents(runEvents);
-    const reasoning = attemptText(runEvents, "reasoning_delta");
-    const text = attemptText(runEvents, "assistant_delta");
-    const display = attemptDisplay(runEvents);
-    const trace = buildRunTrace(runEvents);
-    const running = isActiveRun(run);
-    const streamText =
-      run.status === "completed" ? "" : running ? display.text : text;
-    const streamReasoning = run.status === "completed" ? "" : reasoning;
-    setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
-    setRunTraces((current) => ({ ...current, [run.id]: trace }));
-    setLiveBySession((current) => {
-      const existing = current[id];
-      if (existing && existing.activeRun?.id === run.id) {
-        const known = appliedEventsRef.current.get(run.id) ?? 0;
-        if (known > (runEvents.at(-1)?.id ?? 0)) {
-          return current;
-        }
-      }
-      if (existing?.tracking && existing.activeRun && existing.activeRun.id !== run.id) {
-        return current;
-      }
-      return {
-        ...current,
-        [id]: {
-          activeRun: run,
-          events: runEvents,
-          streamText,
-          revisionText: running ? display.revision : "",
-          revising: running && display.revising,
-          streamReasoning,
-          trace,
-          activity: running ? activityFromEvents(runEvents) : "",
-          notice: "",
-          tracking: running,
-        },
-      };
-    });
-    if (running && !subscriptionsRef.current.has(id)) {
-      subscribe(id, run.id, runEvents.at(-1)?.id ?? 0);
-    }
-  }
-
-  async function loadOlder(): Promise<boolean> {
-    const id = sessionIdRef.current;
-    if (!id || !messagesHasMore || !messagesNextBefore || loadingOlderRef.current) {
-      return false;
-    }
-    loadingOlderRef.current = true;
-    setLoadingOlder(true);
-    setOlderError("");
-    const requestId = ++olderRequestRef.current;
-    try {
-      const page = await api.listMessagePage(id, {
-        limit: MESSAGE_PAGE_SIZE,
-        before: messagesNextBefore,
-      });
-      if (requestId !== olderRequestRef.current || id !== sessionIdRef.current) return false;
-      setMessages((current) => mergeMessages(current, page.items));
-      messagesSessionRef.current = id;
-      setMessagesHasMore(page.has_more);
-      setMessagesNextBefore(page.next_before);
-      return page.items.length > 0;
-    } catch (exc) {
-      if (requestId === olderRequestRef.current && id === sessionIdRef.current) {
-        setOlderError(describeApiError(exc));
-      }
-      return false;
-    } finally {
-      if (requestId === olderRequestRef.current) {
-        loadingOlderRef.current = false;
-        setLoadingOlder(false);
-      }
-    }
-  }
-
-  async function attachRun(id: string, runId: string, notice: string) {
-    if (subscriptionsRef.current.get(id)?.runId === runId) {
-      clearPending(id);
-      return;
-    }
-    try {
-      const [run, runEvents] = await Promise.all([api.getRun(runId), api.getRunEvents(runId)]);
-      if (run.session_id !== id) return;
-      runSessionsRef.current[run.id] = run.session_id;
-      rememberEvents(runEvents);
-      const reasoning = attemptText(runEvents, "reasoning_delta");
-      const text = attemptText(runEvents, "assistant_delta");
-      const display = attemptDisplay(runEvents);
-      const trace = buildRunTrace(runEvents);
-      const running = isActiveRun(run);
-      setRunReasoning((current) => ({ ...current, [run.id]: reasoning }));
-      setRunTraces((current) => ({ ...current, [run.id]: trace }));
-      updateLive(id, () => ({
-        activeRun: run,
-        events: runEvents,
-        streamText: run.status === "completed" ? "" : running ? display.text : text,
-        revisionText: running ? display.revision : "",
-        revising: running && display.revising,
-        streamReasoning: run.status === "completed" ? "" : reasoning,
-        trace,
-        activity: running ? activityFromEvents(runEvents) : "",
-        notice,
-        tracking: running,
-      }));
-      if (running && !subscriptionsRef.current.has(id)) {
-        subscribe(id, run.id, runEvents.at(-1)?.id ?? 0);
-      } else if (!running && run.session_id === sessionIdRef.current) {
-        await loadMessages(id, false).catch(() => undefined);
-      }
-    } catch (exc) {
-      setSessionError(describeApiError(exc), id);
-    } finally {
-      clearPending(id);
-    }
-  }
 
   async function runCommand(command: string, sendKey: string): Promise<boolean> {
     if (commandPendingRef.current) return false;
@@ -1310,21 +807,13 @@ export default function App() {
     }
   }
 
-  async function send(
-    attachments: Attachment[] = [],
-    overrideText?: string,
-    sessionTitle?: string,
-  ): Promise<boolean> {
+  async function send(attachments: Attachment[] = [], overrideText?: string): Promise<boolean> {
     const text = (overrideText ?? draft).trim();
-    const sendAgentId = agentId;
+    const sendAgentId = agentIdRef.current || agentId;
     const sendKey = sessionKey(sendAgentId, sessionIdRef.current);
     const quoteText =
       overrideText === undefined ? (quotesByKey[sendKey] ?? "").trim() : "";
-    if (
-      (!text && attachments.length === 0 && !quoteText) ||
-      !agentId ||
-      pendingSessionsRef.current[sessionIdRef.current || NEW_SESSION_KEY]
-    ) {
+    if ((!text && attachments.length === 0 && !quoteText) || !sendAgentId) {
       return false;
     }
     if (overrideText === undefined && isSlashCommand(text)) {
@@ -1342,51 +831,49 @@ export default function App() {
     const content = attachmentBlock
       ? `附件已上传到工作区：\n${attachmentBlock}${body ? `\n\n${body}` : ""}`
       : body;
+    const wasNew = !sessionIdRef.current;
+    const targetSessionId = sessionIdRef.current || newSessionId();
+    const pendingKey = sessionIdRef.current;
+    const alreadyStreaming = streamsRef.current.has(targetSessionId);
+    sessionAgentRef.current[targetSessionId] = sendAgentId;
     setError("");
-    clearLiveNotice(sessionIdRef.current);
-    let createdSessionId = "";
-    let sent = false;
-    let targetSessionId = sessionIdRef.current;
-    markPending(targetSessionId);
+    clearLiveNotice(targetSessionId);
+    markPending(pendingKey);
     if (overrideText === undefined) setDraftFor(sendKey, "");
-    const optimisticId = `local-${Date.now()}`;
-    setMessages((current) => [
-      ...current,
-      {
-        id: optimisticId,
-        session_id: sessionIdRef.current,
-        role: "user",
-        content,
-        run_id: null,
-        created_at: new Date().toISOString(),
-      },
-    ]);
+    const optimisticId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    appendMessage(targetSessionId, transcriptMessage("user", content, optimisticId));
+    if (!alreadyStreaming) {
+      updateLive(targetSessionId, () => ({ ...EMPTY_LIVE, tracking: true }));
+    }
+    if (wasNew) skipRefreshRef.current.add(targetSessionId);
     try {
-      if (!targetSessionId) {
-        const created = await api.createSession(sendAgentId, sessionTitle ?? "新会话");
-        createdSessionId = created.id;
-        clearPending(targetSessionId);
-        targetSessionId = created.id;
-        markPending(targetSessionId);
-        if (sendAgentId === agentIdRef.current) {
-          sessionIdRef.current = created.id;
-          suppressSessionResetRef.current = created.id;
-          setSessions((current) => [created, ...current]);
-          setSessionId(created.id);
-          setMessagesLoading(false);
-        }
-      }
-      const response = await api.sendMessage(targetSessionId, content);
-      sent = true;
+      const response = await api.sendMessage({
+        agent_id: sendAgentId,
+        session_id: targetSessionId,
+        content,
+      });
       if (overrideText === undefined) {
         clearAttachmentsFor(sendKey);
         clearQuoteFor(sendKey);
       }
-      if (overrideText !== undefined && createdSessionId) {
-        // A command (整理记忆) consumes neither the draft nor the attachments,
-        // so carry them from the pending new session to the created one.
-        const toKey = sessionKey(sendAgentId, createdSessionId);
-        if (toKey !== sendKey) {
+      if (wasNew) {
+        sessionIdRef.current = targetSessionId;
+        setSessionId(targetSessionId);
+        applySessions([
+          {
+            id: targetSessionId,
+            title: "新会话",
+            last_modified: Date.now(),
+            channel_type: null,
+            channel_name: null,
+            busy: true,
+          },
+          ...sessionsRef.current.filter((item) => item.id !== targetSessionId),
+        ]);
+        if (overrideText !== undefined) {
+          // A command (整理记忆) consumes neither the draft nor the attachments,
+          // so carry them from the pending new session to the created one.
+          const toKey = sessionKey(sendAgentId, targetSessionId);
           const carriedDraft = draftsRef.current[sendKey] ?? "";
           if (carriedDraft) {
             draftsRef.current[toKey] = carriedDraft;
@@ -1403,68 +890,42 @@ export default function App() {
           });
         }
       }
-      try {
-        await loadMessages(targetSessionId, false);
-        setMessages((current) =>
-          current.filter((message) => message.id !== optimisticId),
-        );
-      } catch {
-        // Keep the optimistic user message; the run is already created.
-      }
-      const activeRunNow = await api
-        .getSessionActiveRun(targetSessionId)
-        .catch(() => undefined);
-      if (activeRunNow?.id === response.run_id) {
-        await attachRun(targetSessionId, response.run_id, "");
+      if (alreadyStreaming) {
+        // Another turn is still streaming in this lane; it will pick up the
+        // queued turn when it ends, so keep the current stream attached.
+        updateLive(targetSessionId, (current) => ({ ...current, notice: QUEUED_NOTICE }));
       } else {
-        clearPending(targetSessionId);
-        const stillTracked = Boolean(
-          live.tracking && live.activeRun && live.activeRun.id !== response.run_id,
-        );
-        if (activeRunNow || (activeRunNow === undefined && stillTracked)) {
-          updateLive(targetSessionId, (session) =>
-            session.activeRun?.id === response.run_id
-              ? session
-              : { ...session, notice: QUEUED_NOTICE },
-          );
-        }
+        openStream(targetSessionId, response.turn_id);
       }
       void refreshSessions();
       return true;
     } catch (exc) {
-      if (!sent) {
-        if (sendAgentId === agentIdRef.current) {
-          setMessages((current) => current.filter((message) => message.id !== optimisticId));
-        }
-        if (overrideText === undefined) setDraftFor(sendKey, text);
+      removeMessage(targetSessionId, optimisticId);
+      if (overrideText === undefined) setDraftFor(sendKey, text);
+      skipRefreshRef.current.delete(targetSessionId);
+      if (!alreadyStreaming) {
+        updateLive(targetSessionId, (current) => ({ ...current, tracking: false }));
       }
-      const conflict = conflictRunId(exc);
-      if (conflict) {
-        // Another tab or a channel Run owns this session. Show it instead of
-        // making the user guess what the 409 means; the message was not sent.
-        if (createdSessionId && !sent) {
-          await api.deleteSession(createdSessionId).catch(() => undefined);
-          if (sendAgentId === agentIdRef.current) {
-            sessionIdRef.current = "";
-            setSessions((current) => current.filter((item) => item.id !== createdSessionId));
-            setSessionId("");
-          }
-        }
-        await attachRun(targetSessionId, conflict, ATTACH_NOTICE);
-        void refreshSessions();
-        return false;
-      }
-      if (createdSessionId && !sent) {
-        await api.deleteSession(createdSessionId).catch(() => undefined);
-        if (sendAgentId === agentIdRef.current) {
-          sessionIdRef.current = "";
-          setSessions((current) => current.filter((item) => item.id !== createdSessionId));
-          setSessionId("");
-        }
+      if (wasNew) {
+        // The session never appeared in the URL or sidebar; drop its traces.
+        delete sessionAgentRef.current[targetSessionId];
+        setMessagesBySession((current) => {
+          if (!current[targetSessionId]) return current;
+          const next = { ...current };
+          delete next[targetSessionId];
+          return next;
+        });
+        setLiveBySession((current) => {
+          if (!current[targetSessionId]) return current;
+          const next = { ...current };
+          delete next[targetSessionId];
+          return next;
+        });
       }
       setAgentError(describeApiError(exc), sendAgentId);
-      clearPending(targetSessionId);
       return false;
+    } finally {
+      clearPending(pendingKey);
     }
   }
 
@@ -1484,15 +945,28 @@ export default function App() {
         return false;
       }
     }
-    return send([], MEMORY_COMMAND, "整理记忆");
+    return send([], MEMORY_COMMAND);
   }
 
   async function cancel() {
-    if (!visibleRun || !active(visibleRun.status)) return;
+    const id = sessionIdRef.current;
+    if (!id) return;
     try {
-      await api.cancelRun(visibleRun.id);
+      const result = await api.interruptSession(id);
+      closeStream(id);
+      updateLive(id, (current) => ({
+        ...current,
+        tracking: false,
+        notice: result.interrupted ? "已请求停止当前任务。" : "当前没有正在执行的任务。",
+      }));
+      void refreshSessions();
+      // Let the server publish the terminal event and flush the transcript
+      // before the lane is rebuilt from history.
+      window.setTimeout(() => {
+        if (sessionIdRef.current === id) void refreshTranscript(id);
+      }, 600);
     } catch (exc) {
-      setSessionError(describeApiError(exc), visibleRun.session_id);
+      setSessionError(describeApiError(exc), id);
     }
   }
 
@@ -1513,34 +987,15 @@ export default function App() {
     });
   }
 
-  async function retry(runId: string) {
-    if (chatSending) return;
-    const retrySessionId =
-      runSessionsRef.current[runId] ?? visibleRun?.session_id ?? sessionIdRef.current;
-    if (!retrySessionId || pendingSessionsRef.current[retrySessionId]) return;
-    setError("");
-    clearLiveNotice(retrySessionId);
-    markPending(retrySessionId);
-    try {
-      const response = await api.retryRun(runId);
-      await attachRun(retrySessionId, response.run_id, "");
-      void refreshSessions();
-    } catch (exc) {
-      const conflict = conflictRunId(exc);
-      if (conflict) {
-        await attachRun(retrySessionId, conflict, RETRY_ATTACH_NOTICE);
-        void refreshSessions();
-        return;
-      }
-      setSessionError(describeApiError(exc), retrySessionId);
-      clearPending(retrySessionId);
-    }
-  }
-
   async function deleteAgentPermanently(id: string) {
     const result = await api.deleteAgentPermanently(id);
     for (const key of Object.keys(draftsRef.current)) {
       if (key.startsWith(`${id}:`)) delete draftsRef.current[key];
+    }
+    for (const [session, owner] of Object.entries(sessionAgentRef.current)) {
+      if (owner !== id) continue;
+      closeStream(session);
+      delete sessionAgentRef.current[session];
     }
     setAttachmentsByKey((current) => {
       const next = { ...current };
@@ -1551,12 +1006,13 @@ export default function App() {
     });
     await loadWorkspace();
     if (id === agentId) {
-      closeAllSubscriptions();
+      closeAllStreams();
       setLiveBySession({});
       pendingSessionsRef.current = {};
       setPendingSessions({});
       setSessionId("");
-      setMessages([]);
+      setMessagesBySession({});
+      setLoadingBySession({});
     }
     return result;
   }
@@ -1568,8 +1024,6 @@ export default function App() {
     setCommandReply(null);
     sessionIdRef.current = "";
     setSessionId("");
-    setMessages([]);
-    setMessagesLoading(false);
     setError("");
     pushPath(DEFAULT_PATH);
   }
@@ -1578,10 +1032,10 @@ export default function App() {
     const forAgent = agentId;
     const key = sessionKey(forAgent, id);
     try {
-      await api.deleteSession(id);
-      closeSubscription(id);
+      await api.deleteSession(id, forAgent);
+      closeStream(id);
       delete draftsRef.current[key];
-      delete sessionCountsRef.current[id];
+      delete sessionAgentRef.current[id];
       setAttachmentsByKey((current) => {
         if (!current[key]) return current;
         const next = { ...current };
@@ -1594,21 +1048,26 @@ export default function App() {
         delete next[id];
         return next;
       });
+      setMessagesBySession((current) => {
+        if (!current[id]) return current;
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      setLoadingBySession((current) => {
+        if (!(id in current)) return current;
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
       if (forAgent !== agentIdRef.current) return;
       const list = await api.listSessions(forAgent);
       if (forAgent !== agentIdRef.current) return;
-      rememberSessionCounts(list);
-      setSessions(list);
+      applySessions(list);
       if (id === sessionIdRef.current) {
-        if (list.length > 0) {
-          sessionIdRef.current = list[0].id;
-          setSessionId(list[0].id);
-        } else {
-          sessionIdRef.current = "";
-          setSessionId("");
-          setMessages([]);
-          setMessagesLoading(false);
-        }
+        const target = list[0]?.id ?? "";
+        sessionIdRef.current = target;
+        setSessionId(target);
       }
     } catch (exc) {
       setAgentError(describeApiError(exc), forAgent);
@@ -1661,7 +1120,7 @@ export default function App() {
   }
 
   async function logout() {
-    closeAllSubscriptions();
+    closeAllStreams();
     await api.logout().catch(() => undefined);
     setAuth(false);
     setAgents([]);
@@ -1669,13 +1128,14 @@ export default function App() {
     setSkills([]);
     setSkillsErrors([]);
     setSessions([]);
-    setMessages([]);
-    setMessagesLoading(false);
+    sessionsRef.current = [];
+    setMessagesBySession({});
+    setLoadingBySession({});
     setLiveBySession({});
     pendingSessionsRef.current = {};
     setPendingSessions({});
     draftsRef.current = {};
-    sessionCountsRef.current = {};
+    sessionAgentRef.current = {};
     setAttachmentsByKey({});
     setAgentId("");
     setSessionId("");
@@ -1764,14 +1224,9 @@ export default function App() {
         agents={agents}
         agentId={agentId}
         onAgentChange={setAgentId}
-        sessions={sortSessionsByActivity(sessions)}
+        sessions={sessions}
         sessionId={sessionId}
-        onSelectSession={(id) => {
-          setSearchFocus(null);
-          setCommandReply(null);
-          navigate("chat", id);
-        }}
-        onSelectSearchHit={openSearchHit}
+        onSelectSession={openSession}
         onNewSession={newSession}
         newSessionActive={view === "chat" && !sessionId}
         onDeleteSession={(id) => {
@@ -1824,7 +1279,7 @@ export default function App() {
         <CronPage
           agent={agent}
           agentId={agentId}
-          onOpenSession={openCronSession}
+          onOpenSession={openSession}
           onClose={() => openView("chat")}
         />
       ) : view === "backtest" ? (
@@ -1892,26 +1347,16 @@ export default function App() {
               key={sessionId}
               messages={messages}
               loading={messagesLoading}
-              hasMore={messagesHasMore}
-              loadingOlder={loadingOlder}
-              loadOlderError={olderError}
-              onLoadOlder={loadOlder}
-              screenshots={screenshots}
               sessionId={sessionId}
-              streamText={visibleStream}
-              streamReasoning={visibleReasoning}
-              trace={visibleTrace}
-              runReasoning={runReasoning}
-              runTraces={runTraces}
+              streamText={live.streamText}
+              streamReasoning={live.streamReasoning}
+              activity={live.activity}
               sending={chatSending}
-              runActive={runActive}
+              tracking={tracking}
               pendingSend={pendingHere}
-              activity={visibleActivity}
-              terminalRun={terminalRun}
               error={error}
-              notice={visibleNotice}
+              notice={live.notice}
               commandReply={visibleCommandReply}
-              activeRun={visibleRun}
               draft={draft}
               quote={quotesByKey[activeKey] ?? ""}
               attachments={attachments}
@@ -1922,19 +1367,16 @@ export default function App() {
               channelName={currentSession?.channel_name ?? ""}
               memorySkillEnabled={agent?.enabled_skills.includes(MEMORY_SKILL) ?? false}
               focusSignal={focusSignal}
-              focusMessageId={
-                searchFocus?.sessionId === sessionId ? searchFocus.messageId : ""
-              }
-              focusMessageNonce={searchFocus?.nonce ?? 0}
+              focusMessageId={focus?.sessionId === sessionId ? focus.messageId : ""}
+              focusMessageNonce={focus?.nonce ?? 0}
               onDraftChange={changeDraft}
               onClearQuote={() => clearQuoteFor(activeKey)}
               onAddAttachment={(file) => addAttachmentFor(activeKey, file)}
               onRemoveAttachment={(path) => removeAttachmentFor(activeKey, path)}
-              onSend={(attachments) => send(attachments)}
+              onSend={(sent) => send(sent)}
               onOrganizeMemory={organizeMemory}
               onCancel={() => void cancel()}
               onQuote={quote}
-              onRetry={(runId) => void retry(runId)}
             />
           )}
         </main>
@@ -1944,8 +1386,8 @@ export default function App() {
         <Drawer
           tab={drawerTab}
           onTab={setDrawerTab}
-          run={visibleRun}
-          events={visibleEvents}
+          activity={live.activity}
+          reasoning={live.streamReasoning}
           agent={agent}
           providers={providers}
           onSaveAgent={saveAgent}
@@ -1956,7 +1398,7 @@ export default function App() {
       <ConfirmDialog
         open={sessionToDelete !== null}
         title="删除这个会话？"
-        description={`「${sessionToDelete?.title || "新会话"}」的消息、Run 和 checkpoint 会一起删除，无法恢复。`}
+        description={`「${sessionToDelete?.title || "新会话"}」的消息和 checkpoint 会一起删除，无法恢复。`}
         confirmLabel="删除"
         danger
         onClose={() => setSessionToDelete(null)}

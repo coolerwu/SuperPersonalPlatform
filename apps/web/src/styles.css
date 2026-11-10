@@ -488,90 +488,6 @@ textarea {
   padding-right: 2px;
 }
 
-.session-search {
-  position: relative;
-  display: flex;
-  align-items: center;
-  margin: 0 0 8px;
-}
-
-.session-search input {
-  width: 100%;
-  padding: 8px 30px 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel-2);
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
-}
-
-.session-search input:focus {
-  border-color: rgb(var(--accent-rgb) / 0.35);
-  background: var(--panel);
-}
-
-.session-search-clear {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  transform: translateY(-50%);
-}
-
-.session-search-results {
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-right: 2px;
-}
-
-.search-result {
-  display: block;
-  width: 100%;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel-2);
-  text-align: left;
-  cursor: pointer;
-}
-
-.search-result:hover {
-  border-color: rgb(var(--accent-rgb) / 0.3);
-  background: var(--accent-soft);
-}
-
-.search-result-title {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.search-result-snippet {
-  display: -webkit-box;
-  overflow: hidden;
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.search-result-meta {
-  margin-top: 3px;
-  color: var(--faint);
-  font-size: 10px;
-}
-
 .session-item {
   display: flex;
   align-items: center;
@@ -4097,12 +4013,6 @@ textarea {
   margin: 0 0 2px;
 }
 
-.pearl .sidebar-workspace .session-list,
-.pearl .sidebar-workspace .session-search-results {
-  flex: 1;
-  min-height: 0;
-}
-
 .pearl .sidebar-workspace .session-list {
   padding-bottom: 4px;
 }
@@ -4256,18 +4166,6 @@ textarea {
 .pearl .sidebar-action.new-session.active {
   background: linear-gradient(120deg, #0aa093, #6a5cf0);
   color: #fff;
-}
-
-.pearl .session-search input {
-  border-color: rgba(255, 255, 255, 0.85);
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.5);
-  padding: 8px 30px 8px 11px;
-}
-
-.pearl .session-search input:focus {
-  border-color: rgba(122, 108, 255, 0.35);
-  background: rgba(255, 255, 255, 0.82);
 }
 
 .pearl .session-item {
