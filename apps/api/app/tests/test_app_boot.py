@@ -15,22 +15,16 @@ from app.services.knowledge_sync import KnowledgeSyncRuntime
 from app.services.session_service import SessionCleanupRuntime
 from app.services.settings_store import get_settings_store
 from app.services.weixin_runtime import WeixinRuntime
-from app.services.worker import RunWorker
 
 
 @pytest.fixture
 def quiet_background_workers(monkeypatch):
-    """Keep startup/shutdown wiring tests off background loops and the network.
-
-    The shared test database may still hold legacy queued Runs from other test
-    modules, so the old RunWorker must not start claiming them either.
-    """
+    """Keep startup/shutdown wiring tests off background loops and the network."""
 
     async def noop(self):
         return None
 
     for worker_class in (
-        RunWorker,
         WeixinRuntime,
         CronRuntime,
         KnowledgeSyncRuntime,

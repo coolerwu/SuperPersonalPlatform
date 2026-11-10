@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 import unicodedata
 from pathlib import Path
 
 from app.config import settings
+from app.services.identifiers import valid_agent_id
+
+logger = logging.getLogger(__name__)
 
 MAX_PATH_CHARS = 200
 MAX_SEGMENT_BYTES = 255
@@ -65,14 +69,15 @@ def resolve_workspace_path(relative_path: str, *, create: bool) -> Path:
     return candidate
 
 
-async def ensure_agent_workspaces() -> None:
-    """Create `workspaces/<agent_id>` for every existing agent."""
-    from sqlalchemy import select
+async def ensure_agent_workspaces(store=None) -> None:
+    """Create `workspaces/<agent_id>` for every agent in the settings store."""
+    if store is None:
+        from app.services.settings_store import get_settings_store
 
-    from app.db import SessionLocal
-    from app.models import Agent
-
-    async with SessionLocal() as db:
-        agent_ids = list((await db.scalars(select(Agent.id))).all())
-    for agent_id in agent_ids:
-        resolve_workspace_path(agent_id, create=True)
+        store = get_settings_store()
+    settings = await store.get()
+    for agent in settings.agents:
+        if not valid_agent_id(agent.id):
+            logger.warning("skipping workspace for invalid agent id: %r", agent.id)
+            continue
+        resolve_workspace_path(agent.id, create=True)

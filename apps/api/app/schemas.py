@@ -124,25 +124,6 @@ class ToolsOut(BaseModel):
     skill_tools: list[ToolOut] = Field(default_factory=list)
 
 
-class SessionCreate(BaseModel):
-    title: str | None = None
-
-
-class SessionOut(BaseModel):
-    id: str
-    agent_id: str
-    title: str
-    origin: str = "chat"
-    message_count: int = 0
-    active_run_id: str | None = None
-    active_run_status: str | None = None
-    channel_type: str | None = None
-    channel_name: str | None = None
-    created_at: datetime
-    updated_at: datetime
-    last_message_at: datetime
-
-
 class CronJobCreate(BaseModel):
     agent_id: str = Field(min_length=1, max_length=32)
     name: str = ""
@@ -232,43 +213,11 @@ class ChannelLoginStatusOut(BaseModel):
     account_id: str = ""
 
 
-class MessageOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    session_id: str
-    role: str
-    content: str
-    run_id: str | None
-    created_at: datetime
-
-
-class MessagePageOut(BaseModel):
-    items: list[MessageOut]
-    has_more: bool
-    next_before: str | None = None
-
-
-class MessageSearchHitOut(BaseModel):
-    message_id: str
-    session_id: str
-    session_title: str
-    role: str
-    snippet: str
-    created_at: datetime
-
-
 class ChatRequest(BaseModel):
     session_id: str
     content: str = Field(min_length=1)
     client_message_id: str | None = None
     agent_id: str = "default"
-
-
-class ChatResponse(BaseModel):
-    run_id: str
-    session_id: str
-    message_id: str
 
 
 class TurnAcceptedOut(BaseModel):
@@ -312,36 +261,6 @@ class AttachmentOut(BaseModel):
     size: int
 
 
-class RunOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    agent_id: str
-    session_id: str
-    source: str
-    status: str
-    input: str
-    output: str | None
-    error: str | None
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int
-    cost: float | None
-    created_at: datetime
-    started_at: datetime | None
-    finished_at: datetime | None
-
-
-class RunEventOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    run_id: str
-    type: str
-    payload: dict
-    created_at: datetime
-
-
 class MemoryFileOut(BaseModel):
     content: str = ""
     # Only set by the PUT response, kept for clients that use the old shape.
@@ -350,41 +269,6 @@ class MemoryFileOut(BaseModel):
 
 class MemoryFileUpdate(BaseModel):
     content: str
-
-
-class MemoryCreate(BaseModel):
-    scope: str = Field(pattern="^(user|agent)$")
-    agent_id: str | None = None
-    content: str = Field(min_length=1)
-    tags: list[str] = []
-
-
-class MemoryUpdate(BaseModel):
-    content: str | None = Field(default=None, min_length=1)
-    tags: list[str] | None = None
-
-
-class MemoryOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    scope: str
-    agent_id: str | None
-    content: str
-    tags: list[str]
-    source_message_id: str | None
-    source_run_id: str | None
-    source_session_id: str | None
-    source_kind: str
-    snapshot_text: str | None
-    snapshot_at: datetime | None
-    created_at: datetime
-    updated_at: datetime
-    last_used_at: datetime | None
-    # Filled by the list endpoint only; None means "not checked".
-    source_message_exists: bool | None = None
-    source_session_exists: bool | None = None
-    source_agent_id: str | None = None
 
 
 class BacktestCreate(BaseModel):

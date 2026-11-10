@@ -512,6 +512,9 @@ _settings_store: SettingsStore | None = None
 
 def get_settings_store() -> SettingsStore:
     global _settings_store
-    if _settings_store is None:
-        _settings_store = SettingsStore(default_settings_path())
+    path = default_settings_path()
+    # Tests may point ``app_data_dir`` at a temporary directory between
+    # cases; keep the singleton bound to the current runtime home.
+    if _settings_store is None or _settings_store.path != path:
+        _settings_store = SettingsStore(path)
     return _settings_store

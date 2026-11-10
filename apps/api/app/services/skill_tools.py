@@ -305,26 +305,28 @@ def _make_search_tool(context: SkillToolContext) -> BaseTool:
 async def _enable_skill_for_agent(agent_id: str, skill_name: str) -> bool:
     """Append a newly created skill to the agent's enabled list.
 
-    Each Run reloads the Agent row, so the change takes effect on the next
-    turn of the same session.
+    Each turn reloads the Agent's settings, so the change takes effect on the
+    next turn of the same session.
     """
     if not agent_id or not skill_name:
         return False
     try:
-        from app.db import SessionLocal
-        from app.models import Agent
+        from app.services.settings_store import get_settings_store
 
+        store = get_settings_store()
         async with _enable_lock():
-            async with SessionLocal() as db:
-                agent = await db.get(Agent, agent_id)
-                if agent is None:
-                    return False
-                current = list(agent.enabled_skills or [])
-                if skill_name in current:
-                    return True
-                agent.enabled_skills = [*current, skill_name]
-                await db.commit()
+            settings = await store.get()
+            agent = next(
+                (item for item in settings.agents if item.id == agent_id), None
+            )
+            if agent is None:
+                return False
+            if skill_name in agent.enabled_skills:
                 return True
+            await store.update_agent_fields(
+                agent_id, enabled_skills=[*agent.enabled_skills, skill_name]
+            )
+            return True
     except Exception:
         logger.exception(
             "failed to enable skill %s for agent %s", skill_name, agent_id

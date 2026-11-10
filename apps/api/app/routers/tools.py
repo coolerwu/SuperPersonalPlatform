@@ -6,7 +6,6 @@ from app.auth import require_auth
 from app.schemas import ToolOut, ToolsOut
 from app.services import backtest_tools  # noqa: F401 - registers backtest tools
 from app.services import browser_tools  # noqa: F401 - registers browser tools
-from app.services import memory_tools  # noqa: F401 - registers memory tools
 from app.services.skill_tools import SKILL_TOOL_REGISTRY
 from app.services.skills import scan_skills
 
@@ -22,32 +21,14 @@ FILESYSTEM_TOOLS = (
     ("grep", "在工作区搜索文本"),
 )
 
+# Static declaration: the SDK runtime does not expose these yet. Session
+# search and memory tools return with the tool-layer migration; the page only
+# reports the skill registry in the meantime.
 PLATFORM_TOOLS = (
     (
         "skill_save",
         "把可复用的流程保存为技能；创建后自动加入当前 Agent 的启用列表，"
         "下一次对话生效。",
-    ),
-    (
-        "session_search",
-        "按关键词搜索当前 Agent 的历史会话消息，返回命中片段与会话/消息 id。",
-    ),
-    (
-        "session_read",
-        "读取某个历史会话中命中消息前后的上下文；只允许当前 Agent 的会话。",
-    ),
-    (
-        "memory_save",
-        "记录一条当前 Agent 的长期记忆；只写可复用的工作知识，"
-        "单条最多 320 字，不写用户记忆。",
-    ),
-    (
-        "memory_search",
-        "按关键词搜索当前 Agent 的 Agent 记忆，返回 id、标签和摘要。",
-    ),
-    (
-        "memory_read",
-        "读取一条当前 Agent 的 Agent 记忆全文；id 来自记忆索引或 memory_search。",
     ),
 )
 

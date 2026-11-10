@@ -121,25 +121,13 @@ def test_normalize_skill_names_dedupes_and_validates() -> None:
             normalize_skill_names([invalid])
 
 
-def test_catalog_and_middleware_agree_on_names(tmp_path: Path) -> None:
-    from deepagents.backends import FilesystemBackend
-
-    from app.services.skill_middleware import AgentSkillsMiddleware
-
+def test_catalog_names_are_stable(tmp_path: Path) -> None:
     _write_skill(tmp_path, "alpha", "name: alpha\ndescription: Alpha")
     _write_skill(tmp_path, "beta", "name: beta\ndescription: Beta")
 
     catalog = scan_skills(tmp_path)
-    middleware = AgentSkillsMiddleware(
-        backend=FilesystemBackend(root_dir=tmp_path, virtual_mode=True),
-        sources=[("/", "Test")],
-        enabled_skills=[skill.name for skill in catalog.skills],
-        tools=[],
-    )
-    update = middleware.before_agent({"skills_metadata": None}, None, {})
-    assert update is not None
-    loaded = {skill["name"] for skill in update["skills_metadata"]}
-    assert loaded == {skill.name for skill in catalog.skills}
+    assert {skill.name for skill in catalog.skills} == {"alpha", "beta"}
+    assert all(skill.include_tools == () for skill in catalog.skills)
 
 
 def test_default_web_skills_seeded(client) -> None:

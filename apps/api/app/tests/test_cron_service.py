@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import AuditLog, CronJob, Session, utcnow
+from app.models import AuditLog, CronJob, utcnow
 from app.services.claude_runner import DeliveryRequest, transcript_path
 from app.services.cron_service import (
     CronBusy,
@@ -487,7 +487,6 @@ async def test_create_job_uses_transcript_session_id(client) -> None:
         await db.commit()
         await db.refresh(job)
         assert is_canonical_uuid(job.session_id)
-        assert await db.get(Session, job.session_id) is None
 
 
 async def test_create_job_requires_active_settings_agent(client) -> None:

@@ -7,9 +7,6 @@ submission, and outbound replies go through the ``channel_delivery``
 obligation rows. The SDK turn runner calls :meth:`deliver` right after a
 channel turn reaches a terminal state; pending rows are also swept on startup
 and when a channel becomes active again.
-
-The legacy ``RunWorker`` still calls :meth:`deliver_run`; that stub is kept only
-for the old stack and never touches the new tables.
 """
 
 from __future__ import annotations
@@ -1001,14 +998,6 @@ class WeixinRuntime:
                     logger.exception("failed to close temporary weixin client")
 
         await channel_delivery.mark_sent(delivery_id)
-
-    async def deliver_run(self, run_id: str, *, recovered: bool = False) -> None:
-        """Deprecated legacy entry point; the old RunWorker may still call it."""
-        logger.warning(
-            "weixin_runtime.deliver_run is deprecated; ignoring legacy run=%s recovered=%s",
-            run_id,
-            recovered,
-        )
 
     async def sweep_deliveries(self, channel_id: str | None = None) -> None:
         snapshot = await self.store.get()
