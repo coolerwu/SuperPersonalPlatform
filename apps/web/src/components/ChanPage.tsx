@@ -81,11 +81,21 @@ function readChanConfig(search: string): ChanConfig {
     : "1h";
   const startParam = (params.get("start") ?? "").trim();
   const endParam = (params.get("end") ?? "").trim();
+  const startMs = parseUtcInput(startParam);
+  const endMs = parseUtcInput(endParam);
+  const stepMs = GRANULARITY_STEP_SECONDS[nextGranularity] * 1000;
+  // Links written by older builds pinned both bounds. Normalise them back to
+  // the default window so the label keeps reading like "最近 500 根 → 最新".
+  const endIsLatest = endMs !== null && endMs >= Date.now() - stepMs;
+  const startIsDefaultWindow =
+    startMs !== null &&
+    endMs !== null &&
+    Math.abs(endMs - startMs - DEFAULT_WINDOW_BARS * stepMs) <= stepMs;
   return {
     symbol: symbol || "BTCUSDT",
     granularity: nextGranularity,
-    start: parseUtcInput(startParam) === null ? "" : startParam,
-    end: parseUtcInput(endParam) === null ? "" : endParam,
+    start: startMs === null || (endIsLatest && startIsDefaultWindow) ? "" : startParam,
+    end: endMs === null || endIsLatest ? "" : endParam,
     mode: params.get("mode") === "backtest" ? "backtest" : "chart",
     showMerged: flag("merged"),
     showFractals: flag("fractals"),
