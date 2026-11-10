@@ -158,6 +158,9 @@ export default function App() {
   const followUpRef = useRef<Set<string>>(new Set());
   const pendingUsersRef = useRef<Record<string, PendingUser[]>>({});
   const consumedUsersRef = useRef<Record<string, Record<string, number>>>({});
+  // Last loaded transcript counts, kept across agent switches so a new send of
+  // text that already exists in history gets a correct matching baseline.
+  const transcriptUserCountsRef = useRef<Record<string, Record<string, number>>>({});
   const sessionIdRef = useRef("");
   const sessionsRequestRef = useRef(0);
   const agentIdRef = useRef("");
@@ -256,6 +259,16 @@ export default function App() {
   }
 
   function pushPendingUser(id: string, item: PendingUser) {
+    // Baseline the match counter on what the transcript already contains: a
+    // reloaded history with the same text must not swallow the new message.
+    const known =
+      transcriptUserCountsRef.current[id]?.[item.content] ??
+      (messagesBySession[id] ?? []).filter(
+        (message) => message.role === "user" && message.content === item.content,
+      ).length;
+    const consumed = { ...(consumedUsersRef.current[id] ?? {}) };
+    consumed[item.content] = Math.max(consumed[item.content] ?? 0, known);
+    consumedUsersRef.current[id] = consumed;
     updatePendingUsers({
       ...pendingUsersRef.current,
       [id]: [...(pendingUsersRef.current[id] ?? []), item],
@@ -282,12 +295,17 @@ export default function App() {
   /** The session is gone; drop both pending rows and the match counters. */
   function forgetPendingUsers(id: string) {
     delete consumedUsersRef.current[id];
+    delete transcriptUserCountsRef.current[id];
     dropPendingUsers(id);
   }
 
   /**
    * A queued turn's user message only reaches the transcript when that turn
    * starts, so keep unmatched sends visible until their text appears.
+   *
+   * Known edge: a queued turn cancelled outside this tab (another client or a
+   * command path we do not observe) can leave an unmatched pending row until a
+   * later transcript refresh or session reopen reconciles it.
    */
   function settlePendingUsers(id: string, transcript: TranscriptMessage[]) {
     const pending = pendingUsersRef.current[id];
@@ -485,6 +503,9 @@ export default function App() {
   }
 
   function openStream(forSession: string, turnId?: string) {
+    // One subscription per turn: re-subscribing replays the stream buffer and
+    // would append the same deltas twice.
+    if (streamsRef.current.has(forSession)) return;
     closeStream(forSession);
     if (!sessionAgentRef.current[forSession]) {
       sessionAgentRef.current[forSession] = agentIdRef.current;
@@ -507,6 +528,7 @@ export default function App() {
    * while keeping the lane marked as tracking.
    */
   function openStreamWithRetry(forSession: string, attempts = 10) {
+    if (streamsRef.current.has(forSession)) return;
     closeStream(forSession);
     if (!sessionAgentRef.current[forSession]) {
       sessionAgentRef.current[forSession] = agentIdRef.current;
@@ -515,6 +537,7 @@ export default function App() {
     let remaining = attempts - 1;
 
     const connect = () => {
+      if (streamsRef.current.has(forSession)) return;
       const source = new EventSource(api.sessionStreamUrl(forSession));
       streamsRef.current.set(forSession, source);
       // Keep the lane marked as tracking across retry gaps.
@@ -559,6 +582,13 @@ export default function App() {
       const owner = sessionAgentRef.current[forSession] ?? agentIdRef.current;
       const list = await api.listSessionMessages(forSession, owner);
       if (transcriptRequestRef.current[forSession] !== requestId) return;
+      const counts: Record<string, number> = {};
+      for (const message of list) {
+        if (message.role === "user") {
+          counts[message.content] = (counts[message.content] ?? 0) + 1;
+        }
+      }
+      transcriptUserCountsRef.current[forSession] = counts;
       settlePendingUsers(forSession, list);
       setMessagesFor(forSession, list);
     } catch (exc) {
@@ -1300,6 +1330,7 @@ export default function App() {
     setPendingSessions({});
     pendingUsersRef.current = {};
     consumedUsersRef.current = {};
+    transcriptUserCountsRef.current = {};
     setPendingUserBySession({});
     followUpRef.current.clear();
     draftsRef.current = {};
