@@ -105,7 +105,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
             </div>
 
             <div className="hint">
-              搜索、浏览器、回测、交易记录、资产配置、缠论和知识库工具都未接入 SDK；
+              平台注册表中的搜索、浏览器、回测、交易记录、资产配置、缠论和知识库工具都未接入 SDK；
               本版 Agent 不会调用这些工具。列表中的 Skill 是 Claude Code 自带工具，
               不读取平台 skills/ 目录。
             </div>

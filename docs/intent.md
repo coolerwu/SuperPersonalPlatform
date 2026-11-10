@@ -57,7 +57,7 @@
 - 单用户、自托管，不做多租户/RBAC。
 - 单进程部署；cron 与微信运行时都在 API 进程内，多 worker 会重复触发。
 - 不提供刷新后继续看当前输出、消息时间戳、会话全文搜索、Run 历史、rubric 质检、QuickJS eval、平台级多 Agent 编排或自定义子 Agent 配置；SDK 内置 Task 子 Agent 可用。
-- 平台写入的密钥存 `data/settings.json`（权限 0600）；`.env` 提供的密钥只读、不再回写。密钥不写日志、不返回前端。
+- 平台写入的密钥存 `data/settings.json`（权限 0600）；`.env` 提供的密钥仅在首次种子时复制到 settings.json，之后以文件为准，平台不回写 `.env`。密钥不写日志、不返回前端。
 
 #### 非目标
 
