@@ -151,6 +151,17 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
         settings.skills_dir.expanduser().mkdir(parents=True, exist_ok=True)
         settings.knowledge_dir.mkdir(parents=True, exist_ok=True)
         settings.backtests_dir.mkdir(parents=True, exist_ok=True)
+        from app.services.claude_env import (
+            ensure_claude_dirs,
+            install_claude_process_env,
+        )
+        from app.services.settings_store import get_settings_store
+
+        install_claude_process_env()
+        ensure_claude_dirs()
+        store = get_settings_store()
+        await store.ensure_seeded()
+        app.state.settings_store = store
         seed_default_skills()
         await init_db()
         await init_market_db()
@@ -180,8 +191,25 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             session_cleanup = SessionCleanupRuntime()
             app.state.session_cleanup = session_cleanup
             await session_cleanup.start()
+            from app.services.claude_runner import ClaudeTurnRunner
+            from app.services.recovery import recover_running_sessions
+            from app.services.session_catalog import SessionCatalog
+            from app.services.session_registry import SessionRegistry
+
+            runner = ClaudeTurnRunner(store)
+            app.state.runner = runner
+            registry = SessionRegistry(runner, concurrency=settings.run_concurrency)
+            app.state.registry = registry
+            app.state.session_catalog = SessionCatalog(store)
+            await recover_running_sessions(registry, store)
         yield
         if start_worker:
+            registry = getattr(app.state, "registry", None)
+            if registry is not None:
+                await registry.close()
+            runner = getattr(app.state, "runner", None)
+            if runner is not None:
+                await runner.close_all()
             session_cleanup = getattr(app.state, "session_cleanup", None)
             if session_cleanup is not None:
                 await session_cleanup.stop()
