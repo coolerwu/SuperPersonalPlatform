@@ -2,10 +2,12 @@ export const MEMORY_COMMAND =
   "请整理当前 Agent 的长期记忆：先读取 /skills/memory-organizer/SKILL.md，然后按技能说明只整理 Agent 记忆，合并重复、删除失效项，不要碰用户记忆，不要新增事实。";
 
 const SLASH_COMMAND = /^\/[A-Za-z][A-Za-z0-9_-]{0,15}$/;
+const MEMORY_SLASH_COMMAND = /^\/memory(?:\s+[\s\S]*)?$/i;
 
-/** True only when the whole text is one slash command token, like /new. */
+/** True for a bare slash command or /memory with its content. */
 export function isSlashCommand(text: string): boolean {
-  return SLASH_COMMAND.test(text.trim());
+  const value = text.trim();
+  return SLASH_COMMAND.test(value) || MEMORY_SLASH_COMMAND.test(value);
 }
 
 export type SlashCommandItem = {
@@ -19,6 +21,7 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   { command: "/new", label: "新会话", description: "开始新会话，旧会话保留在会话列表" },
   { command: "/clear", label: "同 /new", description: "与 /new 相同，不删除历史" },
   { command: "/stop", label: "停止任务", description: "停止当前会话排队或运行中的任务" },
+  { command: "/memory", label: "写记忆", description: "写一条用户记忆：/memory 内容" },
   { command: "/status", label: "会话状态", description: "查看当前 Agent、会话与任务数量" },
   { command: "/help", label: "命令说明", description: "查看全部可用命令" },
 ];

@@ -187,9 +187,10 @@ class MemoryItem(Base):
     source_message_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_session_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    # explicit: user said "记住…"; manual: added/edited in the memory page;
+    # explicit: legacy rows created by the old chat "记住…" command; manual:
+    # added/edited in the memory page; command: written by the /memory command;
     # agent: written by the Agent itself through memory_save; legacy: rows that
-    # predate this model and have no verified provenance.
+    # predate provenance tracking.
     source_kind: Mapped[str] = mapped_column(String(20), default="manual")
     snapshot_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     snapshot_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

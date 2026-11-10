@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth import require_auth
 from app.schemas import ChatCommandRequest, ChatCommandResponse, ChatRequest, ChatResponse
-from app.services import chat_commands, memory_service
-from app.services.run_service import ActiveRunConflict, append_event, create_run
+from app.services import chat_commands
+from app.services.run_service import ActiveRunConflict, create_run
 
 router = APIRouter(prefix="/api/chat", tags=["chat"], dependencies=[Depends(require_auth)])
 
@@ -25,30 +25,6 @@ async def send_message(payload: ChatRequest, request: Request) -> ChatResponse:
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    explicit = memory_service.explicit_memory_content(content)
-    if explicit:
-        memory = await memory_service.create_memory(
-            scope="user",
-            content=explicit,
-            source_message_id=message.id,
-            source_run_id=run.id,
-            source_session_id=message.session_id,
-            source_kind="explicit",
-            snapshot_text=content,
-            snapshot_at=message.created_at,
-        )
-        if memory is not None:
-            await append_event(
-                run.id,
-                "memory_saved",
-                {
-                    "source": "explicit",
-                    "scope": "user",
-                    "memory_id": memory.id,
-                    "content": memory.content,
-                },
-            )
-
     worker = getattr(request.app.state, "worker", None)
     if worker is not None:
         worker.wake()
@@ -65,6 +41,7 @@ async def run_command(payload: ChatCommandRequest, request: Request) -> ChatComm
             agent_id=payload.agent_id,
             session_id=payload.session_id,
             command=command,
+            raw_command=payload.command,
             worker=getattr(request.app.state, "worker", None),
         )
     except LookupError as exc:

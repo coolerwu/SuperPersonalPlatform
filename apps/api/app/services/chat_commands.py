@@ -15,13 +15,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionLocal
-from app.models import Agent, Run, Session
+from app.models import Agent, Run, Session, utcnow
+from app.services import memory_service
 
 logger = logging.getLogger(__name__)
 
 _COMMAND_RE = re.compile(r"^/[A-Za-z][A-Za-z0-9_-]{0,15}$")
-KNOWN_COMMANDS = frozenset({"/new", "/clear", "/help", "/status", "/stop"})
+_MEMORY_COMMAND_RE = re.compile(r"^/memory(?:\s+.*)?$", re.IGNORECASE | re.DOTALL)
+_MEMORY_CONTENT_RE = re.compile(r"^/memory(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
+KNOWN_COMMANDS = frozenset({"/new", "/clear", "/help", "/status", "/stop", "/memory"})
 ACTIVE_RUN_STATUSES = ("queued", "running")
+MAX_MEMORY_COMMAND_CHARS = 320
 
 HELP_TEXT = (
     "可用命令：\n"
@@ -29,6 +33,7 @@ HELP_TEXT = (
     "/clear 同 /new\n"
     "/status 查看当前会话与任务状态\n"
     "/stop 停止当前会话排队或运行中的任务\n"
+    "/memory 写一条用户记忆：/memory 要记住的内容\n"
     "/help 显示本说明\n\n"
     "直接发送其他内容即可与 Agent 对话。"
 )
@@ -38,18 +43,33 @@ STOP_UNAVAILABLE_TEXT = "停止任务失败：运行队列不可用，请稍后�
 STOP_FINISHED_TEXT = "任务已经结束，无需停止。"
 NO_SESSION_STATUS_TEXT = "当前还没有会话，直接发消息即可开始新对话。"
 WEB_NEW_SESSION_TEXT = "已开始新会话，之前的对话不会带入；旧会话仍保留在会话列表。"
+MEMORY_COMMAND_USAGE = f"用法：/memory <要记住的内容>（最多 {MAX_MEMORY_COMMAND_CHARS} 字）。"
+MEMORY_COMMAND_TOO_LONG = f"内容太长，最多 {MAX_MEMORY_COMMAND_CHARS} 字。"
+MEMORY_COMMAND_SAVED = "已写入用户记忆：{content}"
+MEMORY_COMMAND_LIMIT = "用户记忆已达上限，请先在记忆页清理。"
 
 
 def is_command_text(text: str) -> bool:
-    """True only for a whole message that is a single slash command token."""
-    return bool(_COMMAND_RE.match((text or "").strip()))
+    """True for a whole slash command, including /memory with an argument."""
+    value = (text or "").strip()
+    return bool(_COMMAND_RE.match(value) or _MEMORY_COMMAND_RE.match(value))
 
 
 def parse_command(text: str) -> str | None:
     stripped = (text or "").strip()
+    if _MEMORY_COMMAND_RE.match(stripped):
+        return "/memory"
     if not _COMMAND_RE.match(stripped):
         return None
     return stripped.lower()
+
+
+def memory_command_content(text: str) -> str | None:
+    """Return the /memory argument, or None when the text is not /memory."""
+    match = _MEMORY_CONTENT_RE.match((text or "").strip())
+    if not match:
+        return None
+    return (match.group(1) or "").strip()
 
 
 @dataclass(frozen=True)
@@ -79,6 +99,7 @@ async def execute_command(
     agent_id: str,
     session_id: str | None,
     command: str,
+    raw_command: str | None = None,
     worker: Any = None,
 ) -> CommandResult:
     """Run one slash command for the web chat.
@@ -99,6 +120,26 @@ async def execute_command(
 
         if command not in KNOWN_COMMANDS:
             return CommandResult(command=command, reply=UNKNOWN_COMMAND_TEXT)
+
+        if command == "/memory":
+            content = memory_command_content(raw_command or command) or ""
+            if not content:
+                return CommandResult(command=command, reply=MEMORY_COMMAND_USAGE)
+            if len(content) > MAX_MEMORY_COMMAND_CHARS:
+                return CommandResult(command=command, reply=MEMORY_COMMAND_TOO_LONG)
+            item = await memory_service.create_memory(
+                scope="user",
+                content=content,
+                source_kind="command",
+                snapshot_text=(raw_command or command).strip(),
+                snapshot_at=utcnow(),
+            )
+            if item is None:
+                return CommandResult(command=command, reply=MEMORY_COMMAND_LIMIT)
+            return CommandResult(
+                command=command,
+                reply=MEMORY_COMMAND_SAVED.format(content=item.content),
+            )
 
         if command in ("/new", "/clear"):
             active = await _active_runs(db, session.id) if session is not None else []

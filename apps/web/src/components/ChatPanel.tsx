@@ -105,6 +105,8 @@ function commandReplyLabel(command: string): string {
       return "会话状态";
     case "/stop":
       return "停止任务";
+    case "/memory":
+      return "写记忆";
     default:
       return "命令";
   }
@@ -654,7 +656,7 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   function applyCommand(command: string) {
-    props.onDraftChange(command);
+    props.onDraftChange(command === "/memory" ? "/memory " : command);
     setCommandMenuDismissed(true);
     textareaRef.current?.focus();
   }

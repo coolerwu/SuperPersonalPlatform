@@ -14,6 +14,7 @@ type MemoryPageProps = {
 
 const SOURCE_LABELS: Record<string, string> = {
   explicit: "来自对话",
+  command: "指令添加",
   agent: "Agent 记录",
   manual: "手动添加",
   legacy: "旧记忆（无快照）",
@@ -180,7 +181,7 @@ export function MemoryPage({ agents, agentId, onClose, onOpenSource }: MemoryPag
 
             <p className="memory-scope-hint">
               {scope === "user"
-                ? "所有 Agent 共享；只能在对话里说“记住：……”或在这里手动添加，平台不会自动推断。"
+                ? "所有 Agent 共享；用 /memory 指令或在本页手动添加，平台不会从对话自动推断。"
                 : agent
                   ? `仅对 ${agent.name} 生效；Agent 可以在 Run 中用 memory_save 自己记录，你也可以手动添加。`
                   : "先选择一个 Agent。"}

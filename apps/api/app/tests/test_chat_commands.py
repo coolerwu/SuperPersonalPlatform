@@ -139,6 +139,56 @@ def test_command_rejects_non_command_text(client) -> None:
     assert result.status_code == 400
 
 
+def test_memory_command_writes_user_memory(client) -> None:
+    agent_id = _agent_id(client)
+    session_id = _create_session(client, agent_id)
+    command = "/memory 回答先给结论"
+
+    result = _command(client, agent_id, session_id, command)
+    assert result.status_code == 200
+    assert result.json()["command"] == "/memory"
+    assert "已写入用户记忆" in result.json()["reply"]
+
+    item = next(
+        item
+        for item in client.get("/api/memories?scope=user").json()
+        if item["content"] == "回答先给结论"
+    )
+    assert item["source_kind"] == "command"
+    assert item["snapshot_text"] == command
+    assert item["snapshot_at"] is not None
+    assert client.get(f"/api/sessions/{session_id}/messages").json() == []
+
+
+def test_memory_command_requires_content_and_caps_length(client) -> None:
+    agent_id = _agent_id(client)
+    session_id = _create_session(client, agent_id)
+
+    usage = _command(client, agent_id, session_id, "/memory")
+    assert usage.status_code == 200
+    assert "用法" in usage.json()["reply"]
+
+    too_long = _command(client, agent_id, session_id, "/memory " + "字" * 321)
+    assert too_long.status_code == 200
+    assert "最多 320" in too_long.json()["reply"]
+
+
+def test_memory_command_is_idempotent(client) -> None:
+    agent_id = _agent_id(client)
+    session_id = _create_session(client, agent_id)
+
+    first = _command(client, agent_id, session_id, "/memory 同一内容只存一次")
+    second = _command(client, agent_id, session_id, "/memory 同一内容只存一次")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    items = [
+        item
+        for item in client.get("/api/memories?scope=user").json()
+        if item["content"] == "同一内容只存一次"
+    ]
+    assert len(items) == 1
+
+
 def test_command_rejects_session_from_another_agent(client) -> None:
     first_agent = _agent_id(client)
     second = client.post("/api/agents", json={"name": "Second"})

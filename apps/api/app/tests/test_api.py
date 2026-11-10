@@ -349,63 +349,20 @@ def test_agent_memory_requires_agent(client) -> None:
     assert any(item["id"] == created.json()["id"] for item in listed)
 
 
-def test_explicit_remember_creates_user_memory(client) -> None:
+def test_chat_remember_no_longer_creates_memory(client) -> None:
     agent_id = client.get("/api/agents").json()[0]["id"]
     session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
     response = client.post(
         "/api/chat/messages",
-        json={"session_id": session_id, "content": "记住：以后回答先给结论"},
+        json={"session_id": session_id, "content": "记住：这条不应写入记忆"},
     )
     assert response.status_code == 201
     run_id = response.json()["run_id"]
-    message_id = response.json()["message_id"]
 
     memories = client.get("/api/memories?scope=user").json()
-    item = next(item for item in memories if "以后回答先给结论" in item["content"])
-    assert item["source_kind"] == "explicit"
-    assert item["snapshot_text"] == "记住：以后回答先给结论"
-    assert item["source_message_id"] == message_id
-    assert item["source_session_id"] == session_id
-    assert item["snapshot_at"] is not None
-    assert item["source_message_exists"] is True
-    assert item["source_session_exists"] is True
-
+    assert not any("这条不应写入记忆" in item["content"] for item in memories)
     events = client.get(f"/api/runs/{run_id}/events").json()
-    assert any(
-        event["type"] == "memory_saved"
-        and event["payload"].get("source") == "explicit"
-        for event in events
-    )
-
-    # Editing the text makes it a manual note; the old quote is no longer
-    # evidence for the new wording.
-    edited = client.put(
-        f"/api/memories/{item['id']}",
-        json={"content": "回答先给结论，再展开", "tags": ["style"]},
-    )
-    assert edited.status_code == 200
-    assert edited.json()["source_kind"] == "manual"
-    assert edited.json()["snapshot_text"] is None
-    assert edited.json()["source_message_id"] is None
-
-
-def test_explicit_memory_tags_edit_keeps_snapshot(client) -> None:
-    agent_id = client.get("/api/agents").json()[0]["id"]
-    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
-    client.post(
-        "/api/chat/messages",
-        json={"session_id": session_id, "content": "记住：回答保持简洁"},
-    )
-    item = next(
-        item
-        for item in client.get("/api/memories?scope=user").json()
-        if "回答保持简洁" in item["content"]
-    )
-
-    updated = client.put(f"/api/memories/{item['id']}", json={"tags": ["style"]})
-    assert updated.status_code == 200
-    assert updated.json()["source_kind"] == "explicit"
-    assert updated.json()["snapshot_text"] == "记住：回答保持简洁"
+    assert not any(event["type"] == "memory_saved" for event in events)
 
 
 def test_manual_memory_has_no_snapshot(client) -> None:
@@ -417,53 +374,6 @@ def test_manual_memory_has_no_snapshot(client) -> None:
     assert body["source_kind"] == "manual"
     assert body["snapshot_text"] is None
     assert body["source_message_id"] is None
-
-
-def test_manual_duplicate_does_not_overwrite_explicit_snapshot(client) -> None:
-    agent_id = client.get("/api/agents").json()[0]["id"]
-    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
-    client.post(
-        "/api/chat/messages",
-        json={"session_id": session_id, "content": "记住：重复内容不覆盖快照"},
-    )
-
-    duplicate = client.post(
-        "/api/memories",
-        json={"scope": "user", "content": "重复内容不覆盖快照"},
-    )
-    assert duplicate.status_code == 201
-    assert duplicate.json()["source_kind"] == "explicit"
-    assert duplicate.json()["snapshot_text"] == "记住：重复内容不覆盖快照"
-
-
-def test_explicit_memory_survives_session_delete(client) -> None:
-    agent_id = client.get("/api/agents").json()[0]["id"]
-    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
-    response = client.post(
-        "/api/chat/messages",
-        json={"session_id": session_id, "content": "记住：会话删除后快照仍在"},
-    )
-    run_id = response.json()["run_id"]
-
-    async def finish_run() -> None:
-        async with SessionLocal() as db:
-            run = await db.get(Run, run_id)
-            assert run is not None
-            run.status = "completed"
-            run.finished_at = utcnow()
-            await db.commit()
-
-    asyncio.run(finish_run())
-    assert client.delete(f"/api/sessions/{session_id}").status_code == 200
-
-    item = next(
-        item
-        for item in client.get("/api/memories?scope=user").json()
-        if "会话删除后快照仍在" in item["content"]
-    )
-    assert item["snapshot_text"] == "记住：会话删除后快照仍在"
-    assert item["source_message_exists"] is False
-    assert item["source_session_exists"] is False
 
 
 def test_agent_auto_memory_flag(client) -> None:

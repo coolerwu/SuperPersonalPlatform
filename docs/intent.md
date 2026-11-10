@@ -3225,7 +3225,7 @@ F81 之后中枢框在离开段起点结束：zone2 画成 10-12 04:00 → 10-21
 #### 功能点
 
 1. 删除 Run 完成后的后台自动抽取（`extract_memories`、`parse_extraction`、`find_merge_candidates`、`has_explicit_memory_event` 及 worker 调度）；普通对话不再产生任何记忆。
-2. user 记忆只有三个入口：网页聊天「记住…」、微信 1:1「记住…」、记忆页手动新增。Agent 工具不能写 user scope。显式写入带 `source_kind=explicit`、`source_message_id`、`source_run_id`、`source_session_id`、`snapshot_text`（用户消息原文）和 `snapshot_at`；手动新增 `source_kind=manual`、无快照。编辑正文会降级为 manual 并清空快照，仅改 tags 保留快照。
+2. user 记忆只有三个入口：网页聊天「记住…」、微信 1:1「记住…」、记忆页手动新增。Agent 工具不能写 user scope。显式写入带 `source_kind=explicit`、`source_message_id`、`source_run_id`、`source_session_id`、`snapshot_text`（用户消息原文）和 `snapshot_at`；手动新增 `source_kind=manual`、无快照。编辑正文会降级为 manual 并清空快照，仅改 tags 保留快照。（由 F89 调整：网页/微信「记住…」改为 `/memory <内容>` 指令，`source_kind=command`；`explicit` 仅保留旧数据。）
 3. 新增平台工具 `memory_save`（始终可用，Agent 的 `auto_memory` 开启且不是整理 Run 时注入）：只写当前 Agent 的 agent 记忆，正文 2–320 字，每次 Run 最多 5 条，自动带 run/session/message 来源，`source_kind=agent`。
 4. `memory_items` 增加 `source_session_id`、`source_kind`、`snapshot_text`、`snapshot_at`；已有行回填 `source_kind='legacy'`。`GET /api/memories` 返回 `source_message_exists`、`source_session_exists`、`source_agent_id`。
 5. 删除按轮次的自动整理（`note_user_turn` 与 `memory_consolidate_every_turns` 的运行时、API 和 UI；DB 列与环境变量保留）；保留手动「整理记忆」，`memory-organizer` 只处理当前 Agent 的 agent 记忆，移除 `memory_move` 和所有用户记忆操作；合并必须保留原始事实，单条不超过 320 字。
@@ -3282,3 +3282,31 @@ F81 之后中枢框在离开段起点结束：zone2 画成 10-12 04:00 → 10-21
 - 向量/语义检索或 embedding；
 - 按相关度对 user 记忆排序或筛选；
 - 让 Agent 读取其他 Agent 的记忆。
+
+
+### F89 用户记忆改为 /memory 指令
+
+- 状态：已完成
+- 日期：2026-11-10
+- 来源：用户要求不要用「记住…」开头写记忆，改为 `/memory <内容>` 指令
+
+#### 功能点
+
+1. 新增聊天命令 `/memory <内容>`（网页和微信 1:1 共用 `chat_commands`）：不创建 Run 或 Message，直接写一条 user memory；保存 `source_kind=command`、完整指令原文 `snapshot_text` 和 `snapshot_at`；内容最多 320 字，空内容返回用法，重复内容复用已有条目。
+2. 移除网页 `POST /api/chat/messages` 和微信入站的「记住…」前缀写入；删除 `explicit_memory_content`；`source_kind=explicit` 仅保留给旧数据。
+3. 记忆页手动新增保持 `source_kind=manual`、无快照；编辑正文降级为 manual 并清空快照。
+4. 前端命令面板增加 `/memory`，选中后填入 `/memory `；带内容的 `/memory …` 走命令接口，不再作为普通消息发送。
+5. 默认提示词、`/help` 文案、记忆页说明和文档同步。
+
+#### 验收标准
+
+- 发送 `/memory 内容` 产生 user memory，带完整指令快照，不产生新 Run 或 Message。
+- 「记住…」开头的普通消息不再写 user memory，只作为正常对话。
+- 微信 1:1 的 `/memory 内容` 同样生效。
+- `/memory` 无内容返回用法；超过 320 字拒绝写入。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 删除已有的 `explicit` 旧记忆；
+- 向量/语义检索。

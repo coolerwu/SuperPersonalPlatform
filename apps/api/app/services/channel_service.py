@@ -6,7 +6,6 @@ touches the database so it can be unit-tested without iLink.
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -33,59 +32,25 @@ from app.models import (
 from app.services.chat_commands import (
     HELP_TEXT,
     KNOWN_COMMANDS,
+    MEMORY_COMMAND_LIMIT,
+    MEMORY_COMMAND_SAVED,
+    MEMORY_COMMAND_TOO_LONG,
+    MEMORY_COMMAND_USAGE,
     STOP_EMPTY_TEXT,
     STOP_FINISHED_TEXT,
     STOP_UNAVAILABLE_TEXT,
     UNKNOWN_COMMAND_TEXT,
+    MAX_MEMORY_COMMAND_CHARS,
     is_command_text,
+    memory_command_content,
     parse_command,
 )
 from app.services import memory_service
-from app.services.run_service import _create_run_in_db, append_event
-
-logger = logging.getLogger(__name__)
+from app.services.run_service import _create_run_in_db
 
 DELIVERY_FAILURE_TEXT = "处理这条消息时出错了，请稍后在网页端查看或重试。"
 DELIVERY_TRUNCATED_TEXT = "（内容过长，已截断）"
 MAX_REPLY_CHUNKS = 10
-
-
-async def _maybe_save_explicit_memory(
-    *,
-    text: str,
-    message_id: str,
-    session_id: str,
-    run_id: str,
-    created_at: datetime | None,
-) -> None:
-    """Persist a WeChat "记住…" message with the same snapshot as web chat."""
-    explicit = memory_service.explicit_memory_content(text)
-    if not explicit:
-        return
-    try:
-        memory = await memory_service.create_memory(
-            scope="user",
-            content=explicit,
-            source_message_id=message_id,
-            source_run_id=run_id,
-            source_session_id=session_id,
-            source_kind="explicit",
-            snapshot_text=text,
-            snapshot_at=created_at or utcnow(),
-        )
-        if memory is not None:
-            await append_event(
-                run_id,
-                "memory_saved",
-                {
-                    "source": "explicit",
-                    "scope": "user",
-                    "memory_id": memory.id,
-                    "content": memory.content,
-                },
-            )
-    except Exception:
-        logger.exception("explicit memory write failed for run %s", run_id)
 
 
 # Quote-replies arrive without text; look the quoted message up by time.
@@ -127,6 +92,7 @@ async def _apply_command(
     db: AsyncSession,
     *,
     command: str,
+    raw_text: str,
     channel: Channel,
     agent: Agent,
     conversation: ChannelConversation | None,
@@ -140,6 +106,29 @@ async def _apply_command(
 
     if command not in KNOWN_COMMANDS:
         return conversation, session, UNKNOWN_COMMAND_TEXT, ()
+
+    if command == "/memory":
+        content = memory_command_content(raw_text) or ""
+        if not content:
+            return conversation, session, MEMORY_COMMAND_USAGE, ()
+        if len(content) > MAX_MEMORY_COMMAND_CHARS:
+            return conversation, session, MEMORY_COMMAND_TOO_LONG, ()
+        item = await memory_service.create_memory_in_session(
+            db,
+            scope="user",
+            content=content,
+            source_kind="command",
+            snapshot_text=raw_text.strip(),
+            snapshot_at=utcnow(),
+        )
+        if item is None:
+            return conversation, session, MEMORY_COMMAND_LIMIT, ()
+        return (
+            conversation,
+            session,
+            MEMORY_COMMAND_SAVED.format(content=item.content),
+            (),
+        )
 
     if command in ("/new", "/clear"):
         active: list[tuple[str, str]] = []
@@ -528,6 +517,7 @@ async def ingest_inbound(
             conversation, session, reply, cancel_run_ids = await _apply_command(
                 db,
                 command=command,
+                raw_text=text,
                 channel=channel,
                 agent=agent,
                 conversation=conversation,
@@ -599,13 +589,6 @@ async def ingest_inbound(
         channel.last_seen_at = utcnow()
         channel.last_error = None
         await db.commit()
-        await _maybe_save_explicit_memory(
-            text=text,
-            message_id=message.id,
-            session_id=session.id,
-            run_id=run.id,
-            created_at=message.created_at,
-        )
         return InboundResult(
             run_id=run.id,
             session_id=session.id,

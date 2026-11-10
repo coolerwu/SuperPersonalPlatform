@@ -10,6 +10,7 @@ from app.models import (
     ChannelConversation,
     ChannelInbound,
     ChannelRunLink,
+    MemoryItem,
     Message,
     Run,
     Session,
@@ -83,6 +84,25 @@ async def _ingest(channel_id: str, message_id: str, *, external_id: str = "user-
         text=text,
         context_token=f"ctx-{message_id}",
     )
+
+
+@pytest.mark.asyncio
+async def test_wechat_memory_command_writes_user_memory(client) -> None:
+    channel_id = await _create_active_channel()
+    result = await _ingest(
+        channel_id, "wx-memory-command-1", text="/memory 微信用户偏好先给结论"
+    )
+
+    assert result.command == "/memory"
+    assert "已写入用户记忆" in (result.reply or "")
+    async with SessionLocal() as db:
+        item = await db.scalar(
+            select(MemoryItem).where(MemoryItem.content == "微信用户偏好先给结论")
+        )
+    assert item is not None
+    assert item.scope == "user"
+    assert item.source_kind == "command"
+    assert item.snapshot_text == "/memory 微信用户偏好先给结论"
 
 
 def test_channel_create_and_list_hides_secret(client) -> None:

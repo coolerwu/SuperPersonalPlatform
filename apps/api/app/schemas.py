@@ -279,7 +279,9 @@ class ChatResponse(BaseModel):
 class ChatCommandRequest(BaseModel):
     agent_id: str = Field(min_length=1)
     session_id: str | None = None
-    command: str = Field(min_length=2, max_length=17)
+    # /memory takes an argument, so command text can be longer than a bare
+    # slash token; the memory content itself is capped at 320 characters.
+    command: str = Field(min_length=2, max_length=2048)
 
 
 class ChatCommandResponse(BaseModel):

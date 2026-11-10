@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionLocal
 from app.models import MemoryItem, RunMemory, utcnow
@@ -18,8 +19,13 @@ MAX_USER_PROMPT_CHARS = 6000
 MAX_USER_PROMPT_ITEM_CHARS = 320
 MAX_AGENT_INDEX_ITEMS = 40
 MAX_AGENT_INDEX_SNIPPET_CHARS = 60
-EXPLICIT_RE = re.compile(r"^(?:请)?记住[:：,，]?\s*(.+)", re.S)
-SOURCE_STRENGTH = {"legacy": 0, "manual": 1, "agent": 2, "explicit": 3}
+SOURCE_STRENGTH = {
+    "legacy": 0,
+    "manual": 1,
+    "agent": 2,
+    "explicit": 3,
+    "command": 3,
+}
 
 
 def normalize_content(text: str) -> str:
@@ -39,14 +45,6 @@ def normalize_tags(tags: Any) -> list[str]:
         if len(result) >= 8:
             break
     return result
-
-
-def explicit_memory_content(text: str) -> str | None:
-    match = EXPLICIT_RE.match(text.strip())
-    if not match:
-        return None
-    content = normalize_content(match.group(1))
-    return content if len(content) >= 2 else None
 
 
 async def list_memories(
@@ -73,6 +71,81 @@ async def list_memories(
     return items
 
 
+async def create_memory_in_session(
+    db: AsyncSession,
+    *,
+    scope: str,
+    content: str,
+    agent_id: str | None = None,
+    tags: list[str] | None = None,
+    source_message_id: str | None = None,
+    source_run_id: str | None = None,
+    source_session_id: str | None = None,
+    source_kind: str = "manual",
+    snapshot_text: str | None = None,
+    snapshot_at: datetime | None = None,
+) -> MemoryItem | None:
+    """Create or refresh a memory in an existing transaction; the caller commits."""
+    content = normalize_content(content)
+    if scope not in ("user", "agent") or not content:
+        return None
+    if scope == "agent" and not agent_id:
+        return None
+    if source_kind not in SOURCE_STRENGTH:
+        source_kind = "manual"
+    normalized_tags = normalize_tags(tags or [])
+    agent_key = agent_id if scope == "agent" else None
+
+    conditions = [MemoryItem.scope == scope, MemoryItem.agent_id == agent_key]
+    existing = await db.scalar(
+        select(MemoryItem).where(*conditions, MemoryItem.content == content).limit(1)
+    )
+    if existing is not None:
+        if normalized_tags:
+            existing.tags = normalized_tags
+        # Stronger provenance wins: an explicit user statement replaces an
+        # Agent note, but repeating a weaker source never overwrites the
+        # verified snapshot that already exists.
+        if SOURCE_STRENGTH[source_kind] > SOURCE_STRENGTH.get(
+            existing.source_kind or "legacy", 0
+        ):
+            existing.source_kind = source_kind
+            existing.source_message_id = source_message_id
+            existing.source_run_id = source_run_id
+            existing.source_session_id = source_session_id
+            existing.snapshot_text = snapshot_text
+            existing.snapshot_at = snapshot_at
+        existing.updated_at = utcnow()
+        await db.flush()
+        return existing
+
+    count = int(
+        await db.scalar(
+            select(func.count()).select_from(MemoryItem).where(*conditions)
+        )
+        or 0
+    )
+    if count >= MAX_ITEMS_PER_SCOPE:
+        logger.warning("memory limit reached for scope=%s agent_id=%s", scope, agent_key)
+        return None
+
+    item = MemoryItem(
+        scope=scope,
+        agent_id=agent_key,
+        content=content,
+        tags=normalized_tags,
+        source_message_id=source_message_id,
+        source_run_id=source_run_id,
+        source_session_id=source_session_id,
+        source_kind=source_kind,
+        snapshot_text=snapshot_text,
+        snapshot_at=snapshot_at,
+    )
+    db.add(item)
+    await db.flush()
+    return item
+
+
 async def create_memory(
     *,
     scope: str,
@@ -86,56 +159,13 @@ async def create_memory(
     snapshot_text: str | None = None,
     snapshot_at: datetime | None = None,
 ) -> MemoryItem | None:
-    content = normalize_content(content)
-    if scope not in ("user", "agent") or not content:
-        return None
-    if scope == "agent" and not agent_id:
-        return None
-    if source_kind not in SOURCE_STRENGTH:
-        source_kind = "manual"
-    normalized_tags = normalize_tags(tags or [])
-    agent_key = agent_id if scope == "agent" else None
-
     async with SessionLocal() as db:
-        conditions = [MemoryItem.scope == scope, MemoryItem.agent_id == agent_key]
-        existing = await db.scalar(
-            select(MemoryItem).where(*conditions, MemoryItem.content == content).limit(1)
-        )
-        if existing is not None:
-            if normalized_tags:
-                existing.tags = normalized_tags
-            # Stronger provenance wins: an explicit user statement replaces an
-            # Agent note, but repeating a weaker source never overwrites the
-            # verified snapshot that already exists.
-            if SOURCE_STRENGTH[source_kind] > SOURCE_STRENGTH.get(
-                existing.source_kind or "legacy", 0
-            ):
-                existing.source_kind = source_kind
-                existing.source_message_id = source_message_id
-                existing.source_run_id = source_run_id
-                existing.source_session_id = source_session_id
-                existing.snapshot_text = snapshot_text
-                existing.snapshot_at = snapshot_at
-            existing.updated_at = utcnow()
-            await db.commit()
-            await db.refresh(existing)
-            return existing
-
-        count = int(
-            await db.scalar(
-                select(func.count()).select_from(MemoryItem).where(*conditions)
-            )
-            or 0
-        )
-        if count >= MAX_ITEMS_PER_SCOPE:
-            logger.warning("memory limit reached for scope=%s agent_id=%s", scope, agent_key)
-            return None
-
-        item = MemoryItem(
+        item = await create_memory_in_session(
+            db,
             scope=scope,
-            agent_id=agent_key,
             content=content,
-            tags=normalized_tags,
+            agent_id=agent_id,
+            tags=tags,
             source_message_id=source_message_id,
             source_run_id=source_run_id,
             source_session_id=source_session_id,
@@ -143,7 +173,8 @@ async def create_memory(
             snapshot_text=snapshot_text,
             snapshot_at=snapshot_at,
         )
-        db.add(item)
+        if item is None:
+            return None
         await db.commit()
         await db.refresh(item)
         return item
