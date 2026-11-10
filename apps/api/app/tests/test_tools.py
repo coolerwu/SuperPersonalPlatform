@@ -70,6 +70,8 @@ def test_tools_api_includes_platform_tools(client) -> None:
     assert tools["session_search"]["registered"] is True
     assert tools["session_read"]["registered"] is True
     assert tools["memory_save"]["registered"] is True
+    assert tools["memory_search"]["registered"] is True
+    assert tools["memory_read"]["registered"] is True
 
 
 def test_tools_api_reports_filesystem_and_skill_tools(client, monkeypatch) -> None:

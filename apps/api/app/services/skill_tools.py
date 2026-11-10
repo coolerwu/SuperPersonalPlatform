@@ -52,6 +52,8 @@ RESERVED_TOOL_NAMES = frozenset(
         "session_search",
         "session_read",
         "memory_save",
+        "memory_search",
+        "memory_read",
     }
 )
 

@@ -140,6 +140,8 @@ metadata:
 - **`session_search`**：按关键词搜索当前 Agent 的历史会话消息，返回命中片段的 session_id、message_id、会话标题、角色和时间。关键词不要传整句问题。
 - **`session_read`**：先用 `session_search` 拿到 session_id 和 message_id，再读取命中消息前后各 `before` / `after` 条；不传 message_id 时返回该会话最近的消息。只允许当前 Agent 的会话。
 - **`memory_save`**：Agent 自己记录一条当前 Agent 的 Agent 记忆（2–320 字，每次 Run 最多 5 条），自动带来源 Run/会话/消息；只在 Agent 开启「允许 Agent 写入记忆」时注入，不能写用户记忆。
+- **`memory_search`**：按关键词搜索当前 Agent 的 Agent 记忆，返回 id、标签和摘要；只搜索当前 Agent 的 Agent 记忆。
+- **`memory_read`**：读取一条当前 Agent 的 Agent 记忆全文；id 来自 Agent 记忆索引或 `memory_search`，不能读取用户记忆或其他 Agent 的记忆。
 
 平台注册表当前提供以下技能工具：
 
@@ -182,7 +184,7 @@ metadata:
 - 手动新增/编辑/删除/搜索；Run 完成后不再有后台自动抽取；
 - **整理记忆**：聊天输入区「＋」菜单的「整理记忆」指令会直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` 合并重复、删除失效项；只处理当前 Agent 的 Agent 记忆，不读取、不改写、不删除用户记忆，也不新增事实；合并必须保留原始事实，单条不超过 320 字。首次使用时会自动为当前 Agent 启用该技能；
 - 不再按回合自动触发整理；`agents.memory_turn_count` 和 `app_configs.memory_consolidate_every_turns` 仅为兼容旧库保留，运行时、API 和设置页都不再使用；
-- 每次 Run 只注入与本轮输入相关的记忆：中文按双字组（过滤停用词）、英文按词元匹配，user 与当前 Agent 同池按相关度竞争（不做 scope 配额或 user 全量注入）；最多 12 条、1500 字，单条最多 320 字，没有相关记忆时不注入。记忆作为数据块附加到系统提示词，不会自动修改 Agent instructions；记录实际使用的 memory id。
+- 每次 Run 全量注入用户记忆：按创建时间稳定排序，总预算 6000 字、最多 60 条、单条最多 320 字，超出部分在块尾注明未注入条数；Agent 记忆只注入索引（id + 标签 + 60 字摘要，最多 40 条，不做总字数限制，超出提示用 `memory_search`），模型需要细节时自己调用 `memory_search` / `memory_read` 读取全文。记忆作为数据块附加到系统提示词，不会自动修改 Agent instructions；用户记忆全量注入和 Agent 记忆被读取时更新 `last_used_at`，`memory_read` 同时记录 `run_memories`。
 - **回复校验**：网页聊天的每条最终回复在结束前会用 deepagents 的 `RubricMiddleware` 校验一次，rubric 由当前 Agent 的 instructions 和全部用户记忆（不含 agent 记忆）组成；评分器可以调用 `session_search` / `session_read` 核对历史对话。评分未通过时让主 Agent 修订一次，修订版直接作为最终回复，不再二次评分；聊天活动行在评分期间显示「质检中」，未通过时显示「质检未通过，正在修订」，已生成的草稿保持可见，修订版在结束时整段替换；质检结果和未通过项显示在消息的「执行过程」里。评分器失败时保留当前回复，不阻断 Run；没有用户记忆时不校验。
 
 ## 渠道（微信个人号）

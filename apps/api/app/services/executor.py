@@ -23,7 +23,11 @@ from langchain_core.messages import (
 
 from app.config import settings
 from app.services import memory_tools  # noqa: F401 - registers memory tools
-from app.services.memory_tools import build_memory_save_tool
+from app.services.memory_tools import (
+    build_memory_read_tool,
+    build_memory_save_tool,
+    build_memory_search_tool,
+)
 from app.services.browser_tools import BROWSER_TOOL_NAMES, BrowserSession
 from app.services.knowledge_sync import KNOWLEDGE_SKILL_NAME
 from app.services.model_retry import ModelRetryMixin
@@ -528,6 +532,8 @@ class DeepAgentExecutor:
                     build_skill_save_tool(skill_context),
                     build_session_search_tool(skill_context),
                     build_session_read_tool(skill_context),
+                    build_memory_search_tool(skill_context),
+                    build_memory_read_tool(skill_context),
                 ]
                 if self.auto_memory and self.agent_id and self.run_id:
                     platform_tools.append(build_memory_save_tool(skill_context))

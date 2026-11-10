@@ -7,7 +7,11 @@ import pytest
 from app.db import SessionLocal, init_db
 from app.models import Agent, Message, Provider, Run, Session
 from app.services import memory_service, memory_tools  # noqa: F401 - registers memory tools
-from app.services.memory_tools import build_memory_save_tool
+from app.services.memory_tools import (
+    build_memory_read_tool,
+    build_memory_save_tool,
+    build_memory_search_tool,
+)
 from app.services.skill_tools import SKILL_TOOL_REGISTRY, SkillToolContext
 from app.services.skills import DEFAULT_SKILLS, scan_skills, seed_default_skills
 
@@ -210,6 +214,46 @@ async def test_memory_save_writes_agent_memory_with_provenance() -> None:
     assert item.snapshot_text is None
     user_items = await memory_service.list_memories(scope="user")
     assert not any(entry.content == "项目用 Python 3.12" for entry in user_items)
+
+
+@pytest.mark.asyncio
+async def test_memory_search_and_read_only_touch_current_agent() -> None:
+    agent_id = await _create_agent()
+    other_agent = await _create_agent()
+    run_id, session_id, _message_id = await _create_run(agent_id)
+    item = await memory_service.create_memory(
+        scope="agent",
+        agent_id=agent_id,
+        content="项目使用 systemd 部署",
+        tags=["部署"],
+    )
+    other = await memory_service.create_memory(
+        scope="agent",
+        agent_id=other_agent,
+        content="别的 Agent 的记忆",
+    )
+    user_item = await memory_service.create_memory(
+        scope="user", content="用户偏好先给结论"
+    )
+    context = _context(agent_id, run_id=run_id, session_id=session_id)
+
+    search = build_memory_search_tool(context)
+    result = await search.ainvoke({"query": "systemd"})
+    assert item is not None and item.id in result
+    assert other is not None and other.id not in result
+    assert "memory_read" in result
+
+    read = build_memory_read_tool(context)
+    detail = await read.ainvoke({"memory_id": item.id})
+    assert "项目使用 systemd 部署" in detail
+    assert (await read.ainvoke({"memory_id": other.id})) == "Error: memory not found"
+    assert (
+        await read.ainvoke({"memory_id": user_item.id})
+    ) == "Error: memory not found"
+
+    stored = await memory_service.get_memory(item.id)
+    assert stored is not None
+    assert stored.last_used_at is not None
 
 
 @pytest.mark.asyncio

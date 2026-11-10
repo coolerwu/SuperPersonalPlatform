@@ -187,6 +187,8 @@ async def test_executor_always_mounts_host_shell_and_interpreter(
         "skill_save",
         "session_search",
         "session_read",
+        "memory_search",
+        "memory_read",
     ]
 
 

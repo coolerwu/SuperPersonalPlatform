@@ -239,6 +239,80 @@ def build_memory_save_tool(context: SkillToolContext) -> BaseTool:
     )
 
 
+async def _read_memory(context: SkillToolContext, memory_id: str) -> str:
+    memory_id = str(memory_id or "").strip()
+    if not memory_id:
+        return "Error: memory_id is required"
+    item = await memory_service.get_memory(memory_id)
+    if item is None or not _can_edit(context, item):
+        return "Error: memory not found"
+    await memory_service.touch_memory(memory_id)
+    if context.run_id:
+        try:
+            await memory_service.record_run_memories(context.run_id, [memory_id])
+        except Exception:
+            logger.exception("failed to record memory read for run %s", context.run_id)
+    tags = "、".join(item.tags or []) or "无"
+    return f"## Agent 记忆 {item.id}\n标签：{tags}\n\n{item.content}"
+
+
+async def _search_memory(
+    context: SkillToolContext, query: str, limit: int
+) -> str:
+    if not context.agent_id:
+        return "Error: current agent is not available for agent memory"
+    if not 1 <= limit <= 20:
+        return "Error: limit must be between 1 and 20"
+    needle = str(query or "").strip()
+    if len(needle) < 2:
+        return "Error: query is required (at least 2 characters)"
+    items = await memory_service.list_memories(
+        scope="agent", agent_id=context.agent_id, query=needle
+    )
+    if not items:
+        return "没有找到匹配的 Agent 记忆。"
+    items.sort(key=lambda item: item.updated_at or item.created_at, reverse=True)
+    lines = [f"## Agent 记忆搜索结果（{min(len(items), limit)}/{len(items)} 条）", ""]
+    for item in items[:limit]:
+        snippet = memory_service.normalize_content(item.content)
+        if len(snippet) > 120:
+            snippet = snippet[:120].rstrip() + "…"
+        tags = "、".join(item.tags or []) or "无"
+        lines.append(f"- id: {item.id} | tags: {tags} | {snippet}")
+    lines.extend(["", "需要全文时调用 memory_read(memory_id)。"])
+    return "\n".join(lines)
+
+
+def build_memory_read_tool(context: SkillToolContext) -> BaseTool:
+    async def memory_read(memory_id: str) -> str:
+        """读取一条当前 Agent 的 Agent 记忆全文。"""
+        return await _read_memory(context, memory_id)
+
+    return StructuredTool.from_function(
+        name="memory_read",
+        description=(
+            "读取一条当前 Agent 的 Agent 记忆全文；memory_id 来自 Agent 记忆索引"
+            "或 memory_search 的结果。不能读取用户记忆或其他 Agent 的记忆。"
+        ),
+        coroutine=memory_read,
+    )
+
+
+def build_memory_search_tool(context: SkillToolContext) -> BaseTool:
+    async def memory_search(query: str, limit: int = 10) -> str:
+        """按关键词搜索当前 Agent 的 Agent 记忆。"""
+        return await _search_memory(context, query, limit)
+
+    return StructuredTool.from_function(
+        name="memory_search",
+        description=(
+            "按关键词搜索当前 Agent 的 Agent 记忆，返回 id、标签和摘要；"
+            "需要全文时再用 memory_read(memory_id)。只搜索当前 Agent 的 Agent 记忆。"
+        ),
+        coroutine=memory_search,
+    )
+
+
 def register_memory_tools(registry: SkillToolRegistry = SKILL_TOOL_REGISTRY) -> None:
     specs = (
         ("memory_list", _make_list_tool, "列出当前 Agent 的 Agent 记忆"),

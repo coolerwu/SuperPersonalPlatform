@@ -42,6 +42,14 @@ PLATFORM_TOOLS = (
         "记录一条当前 Agent 的长期记忆；只写可复用的工作知识，"
         "单条最多 320 字，不写用户记忆。",
     ),
+    (
+        "memory_search",
+        "按关键词搜索当前 Agent 的 Agent 记忆，返回 id、标签和摘要。",
+    ),
+    (
+        "memory_read",
+        "读取一条当前 Agent 的 Agent 记忆全文；id 来自记忆索引或 memory_search。",
+    ),
 )
 
 

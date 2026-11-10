@@ -236,7 +236,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 3. 配置页独立「记忆」页面：用户/Agent 两个 tab，支持新增、编辑、删除、搜索。
 4. 对话里以“记住……”开头的内容，立即写入 user memory。
 5. 每个 Agent 有「自动学习记忆」开关；Run 完成后先用 FTS5（trigram）召回相关历史记忆（user memory + 当前 Agent memory），再让模型返回 add/update/delete 并为新增条目选择 `scope=user|agent`，合并或删除旧记忆，最多 12 个操作；带来源、去重、200 条上限。提取在 Run 落 completed 之后作为后台任务执行，不占用 Run 并发槽；同一 Agent 的提取在进程内串行，后一次能看到前一次刚写入的记忆，避免并发写入语义重复但措辞不同的记忆。（已由 F87 取代：删除后台自动抽取；user 记忆只在显式动作时写入并保存快照，agent 记忆由 Agent 自己写。）
-6. 每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入系统提示词，标注为数据而非指令；记录 `run_memories` 用量。
+6. 每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入系统提示词，标注为数据而非指令；记录 `run_memories` 用量。（由 F88 调整：user 记忆全量注入，Agent 记忆只注入索引，由 Agent 自己用工具读取全文。）
 7. 记忆内容不自动修改 Agent instructions。
 8. 记忆页面提供「整理记忆」按钮：对当前 scope 的记忆分批交给模型，只允许 update/delete，合并重复、删除失效项，不新增事实。（已由 F15 取代：移到聊天输入区「＋」菜单，改为 `memory-organizer` 技能触发。）
 
@@ -3249,3 +3249,36 @@ F81 之后中枢框在离开段起点结束：zone2 画成 10-12 04:00 → 10-21
 - agent 记忆的版本历史、回滚或自动遗忘；
 - 自动清理或重新分类旧记忆；
 - 让 Agent 写 user scope。
+
+
+### F88 记忆注入：用户全量 + Agent 索引
+
+- 状态：已完成
+- 日期：2026-11-10
+- 来源：用户要求 user 记忆全部加入系统提示词；Agent 记忆不应由平台按关键词挑，应由 AI 自己决定读哪些，平台只预先注入索引
+
+#### 背景与目标
+
+旧 `retrieve_for_prompt` 让 user 与 agent 记忆同池按关键词/双字组竞争，短问题可能一条用户规则都不注入；而回复校验的 rubric 使用全部 user 记忆，两边口径不一致。目标：用户记忆作为全局规则全量注入；Agent 记忆只给索引，由模型用工具自行读取。
+
+#### 功能点
+
+1. `retrieve_for_prompt` 改为两段：全部 user 记忆按 `created_at` / `id` 稳定排序注入，总预算 6000 字、最多 60 条、单条 320 字，超出部分在块尾注明未注入条数；当前 Agent 的 agent 记忆只注入索引（id + tags + 60 字摘要），最多 40 条，不做总字数限制，超出提示用 `memory_search` 查找。
+2. 正文完全相同的 user/agent 条目只保留 user，不再重复出现在 Agent 索引。
+3. 新增平台工具 `memory_search` / `memory_read`（始终可用，不参与技能门控）：`memory_search` 按关键词搜索当前 Agent 的 Agent 记忆；`memory_read` 按 id 返回全文，更新 `last_used_at` 并记录 `run_memories`；两者都不能读取 user 记忆或其他 Agent 记忆。
+4. 记忆块附加到系统提示词末尾；user 记忆全量注入时更新 `last_used_at`。
+5. 默认提示词说明：用户记忆全量注入；Agent 记忆只有索引，需要细节时用 `memory_read` / `memory_search`，不要只凭摘要猜测。
+
+#### 验收标准
+
+- 任意 query 下，所有 user 记忆都出现在注入块（受预算约束）。
+- Agent 记忆正文不直接出现在提示词，只出现 id、标签和摘要；`memory_read` 能取到全文。
+- 用户记忆超预算、Agent 索引超上限时，块尾有明确提示。
+- `memory_search` / `memory_read` 只能操作当前 Agent 的 Agent 记忆。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 向量/语义检索或 embedding；
+- 按相关度对 user 记忆排序或筛选；
+- 让 Agent 读取其他 Agent 的记忆。
