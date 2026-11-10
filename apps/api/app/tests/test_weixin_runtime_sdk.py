@@ -73,6 +73,21 @@ class FakeStore:
             deep=True
         )
 
+    async def update_conversation_if_unchanged(
+        self,
+        key: str,
+        expected_session_id: str | None,
+        conversation: ConversationSection,
+    ) -> bool:
+        current = self.settings.channel_conversations.get(key)
+        current_session = current.session_id if current is not None else None
+        if current_session != expected_session_id:
+            return False
+        self.settings.channel_conversations[key] = conversation.model_copy(
+            deep=True
+        )
+        return True
+
 
 class FakeRegistry:
     def __init__(self) -> None:
@@ -718,6 +733,10 @@ async def test_sweep_deliveries_uses_recovered_for_attempting_rows(monkeypatch):
     monkeypatch.setattr(runtime, "deliver", spy)
     try:
         await runtime.sweep_deliveries()
+        tasks = list(runtime._delivery_tasks)
+        assert tasks
+        await asyncio.gather(*tasks)
+        await asyncio.sleep(0)
 
         assert (pending_id, False) in calls
         assert (attempting_id, True) in calls

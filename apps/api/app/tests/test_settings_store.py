@@ -241,3 +241,24 @@ async def test_channel_field_update_rejects_unknown_fields(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
     with pytest.raises(ValueError, match="unknown channel field"):
         await store.update_channel_fields("ch1", bogus="x")
+
+
+@pytest.mark.asyncio
+async def test_channel_field_update_rejects_invalid_value(tmp_path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    await store.mutate_raw(
+        lambda data: data.update(
+            {
+                "channels": [
+                    {"id": "ch1", "agent_id": "default", "status": "active"}
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(ValueError):
+        await store.update_channel_fields("ch1", last_seen_at=123)
+
+    channel = (await store.get()).channels[0]
+    assert channel.last_seen_at is None

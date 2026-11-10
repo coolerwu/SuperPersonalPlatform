@@ -354,6 +354,8 @@ class SettingsStore:
 
         Polling and delivery touch different fields concurrently; a full
         channel write from one path must not overwrite the other's update.
+        The merged entry is validated before it is persisted so an invalid
+        value cannot make the whole channel unparseable.
         """
         unknown = set(fields) - set(ChannelSection.model_fields)
         if unknown:
@@ -362,9 +364,12 @@ class SettingsStore:
             )
 
         def mutate(data: dict[str, Any]) -> None:
-            for item in _list_section(data, "channels"):
+            channels = _list_section(data, "channels")
+            for index, item in enumerate(channels):
                 if isinstance(item, dict) and item.get("id") == channel_id:
-                    item.update(fields)
+                    channels[index] = ChannelSection.model_validate(
+                        {**item, **fields}
+                    ).model_dump()
                     return
 
         await self._json.update(mutate)
@@ -378,6 +383,36 @@ class SettingsStore:
             ] = conversation.model_dump()
 
         await self._json.update(mutate)
+
+    async def update_conversation_if_unchanged(
+        self,
+        external_id: str,
+        expected_session_id: str | None,
+        conversation: ConversationSection,
+    ) -> bool:
+        """Compare-and-set a conversation binding inside the store lock.
+
+        The caller reads a binding, decides which session should own the
+        contact, then writes it back. If another inbound turn rebound the
+        contact in between, the write is refused so the caller can re-read and
+        decide again instead of resurrecting a stale session.
+        """
+        updated = False
+
+        def mutate(data: dict[str, Any]) -> None:
+            nonlocal updated
+            conversations = _dict_section(data, "channel_conversations")
+            current = conversations.get(external_id)
+            current_session = (
+                current.get("session_id") if isinstance(current, dict) else None
+            )
+            if current_session != expected_session_id:
+                return
+            conversations[external_id] = conversation.model_dump()
+            updated = True
+
+        await self._json.update(mutate)
+        return updated
 
 
 def default_settings_path() -> Path:

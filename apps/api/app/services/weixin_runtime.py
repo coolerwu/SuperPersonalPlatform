@@ -217,18 +217,24 @@ class WeixinRuntime:
         return True
 
     async def stop_channel(self, channel_id: str) -> None:
-        self._drop_channel_buffers(channel_id)
-        self._last_touch.pop(channel_id, None)
-        task = self._poll_tasks.pop(channel_id, None)
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        client = self._clients.pop(channel_id, None)
-        if client is not None:
-            try:
-                await client.aclose()
-            except Exception:
-                logger.exception("failed to close weixin client channel=%s", channel_id)
+        # Serialize with start_channel: a pause/expiry must never race a QR
+        # confirmation and leave a poll task running for a disabled channel.
+        lock = self._start_locks.setdefault(channel_id, asyncio.Lock())
+        async with lock:
+            self._drop_channel_buffers(channel_id)
+            self._last_touch.pop(channel_id, None)
+            task = self._poll_tasks.pop(channel_id, None)
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            client = self._clients.pop(channel_id, None)
+            if client is not None:
+                try:
+                    await client.aclose()
+                except Exception:
+                    logger.exception(
+                        "failed to close weixin client channel=%s", channel_id
+                    )
 
     def running_channels(self) -> list[str]:
         return [channel_id for channel_id in self._poll_tasks]
@@ -467,6 +473,13 @@ class WeixinRuntime:
             await self.flush_pending(key)
 
     async def _save_sync_if_idle(self, channel_id: str) -> None:
+        """Persist the packet cursor once no batch is in flight.
+
+        Keeping the old cursor after a permanent ingest error is best effort:
+        if the channel stays active and another packet arrives, the poll loop
+        can still advance it, so the dropped packet is not guaranteed to be
+        replayed after a restart.
+        """
         if self._has_pending_for_channel(channel_id):
             return
         sync_buf = self._pending_sync.pop(channel_id, None)
@@ -676,6 +689,8 @@ class WeixinRuntime:
                 self._drop_pending(key)
             # /help, /status and unknown commands must not disturb the batch
             # window or flush partial text into a new turn.
+            # A failed command ingest is logged and dropped; the user has to
+            # resend the command (there is no turn to retry).
             try:
                 result = await channel_intake.ingest(
                     store=self.store,
@@ -858,10 +873,12 @@ class WeixinRuntime:
 
     # ------------------------------------------------------------------ delivery
 
-    def schedule_delivery(self, delivery_id: int) -> None:
+    def schedule_delivery(
+        self, delivery_id: int, *, recovered: bool = False
+    ) -> None:
         """Start a send in the background so turn teardown never waits on it."""
         task = asyncio.create_task(
-            self.deliver(delivery_id),
+            self.deliver(delivery_id, recovered=recovered),
             name=f"weixin-delivery-{delivery_id}",
         )
         self._delivery_tasks.add(task)
@@ -1005,7 +1022,9 @@ class WeixinRuntime:
         for row in await channel_delivery.list_pending():
             if row.channel_id not in active:
                 continue
-            await self.deliver(
+            # Startup/channel activation must not block on the network; the
+            # attempting flag decides whether the recovered prefix is used.
+            self.schedule_delivery(
                 row.id,
                 recovered=row.status == "attempting",
             )

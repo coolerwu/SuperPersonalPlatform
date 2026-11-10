@@ -279,6 +279,49 @@ async def _command_reply(
     return UNKNOWN_COMMAND_TEXT
 
 
+def _choose_conversation(
+    settings: Any,
+    *,
+    channel_id: str,
+    external_id: str,
+    display_name: str,
+    context_token: str | None,
+    agent_id: str,
+    command: str | None,
+    registry: Any,
+) -> tuple[str, str | None, ConversationSection]:
+    """Pick the session binding to write for this inbound message.
+
+    Also returns the session id the decision was based on, so the store can
+    compare-and-set and let the caller retry when a concurrent turn rebinds
+    the contact first.
+    """
+    key = _conversation_key(channel_id, external_id)
+    existing = settings.channel_conversations.get(key)
+    if existing is not None and existing.channel_id == channel_id:
+        token = context_token or existing.context_token
+        name = display_name or existing.display_name
+        if _binding_is_valid(existing, channel_id, agent_id, registry):
+            conversation = existing.model_copy(
+                update={"display_name": name, "context_token": token}
+            )
+        else:
+            conversation = _new_conversation(channel_id, name, token)
+    else:
+        # Unknown key or a binding owned by another channel: never reuse its
+        # session or carry its context token across channels.
+        conversation = _new_conversation(channel_id, display_name, context_token)
+
+    if command in ("/new", "/clear"):
+        conversation = _new_conversation(
+            channel_id,
+            conversation.display_name,
+            context_token or conversation.context_token,
+        )
+    expected = existing.session_id if existing is not None else None
+    return key, expected, conversation
+
+
 async def ingest(
     *,
     store: Any,
@@ -298,47 +341,47 @@ async def ingest(
         raise ValueError("external_id is required")
     message_ids = _normalize_message_ids(external_message_ids)
 
-    settings = await store.get()
-    channel = next((item for item in settings.channels if item.id == channel_id), None)
-    if channel is None or channel.status != "active":
-        raise ValueError("channel is not active")
-    agent = next((item for item in settings.agents if item.id == channel.agent_id), None)
-    if agent is None or agent.status != "active":
-        raise ValueError("agent is not available")
-
+    command = parse_command(text)
     if not await claim_inbound(channel_id, message_ids, text, external_id):
         return IngestResult(duplicate=True)
 
     try:
-        key = _conversation_key(channel_id, external_id)
-        existing = settings.channel_conversations.get(key)
-        if existing is not None and existing.channel_id == channel_id:
-            token = context_token or existing.context_token
-            name = display_name or existing.display_name
-            if _binding_is_valid(existing, channel_id, agent.id, registry):
-                conversation = existing.model_copy(
-                    update={"display_name": name, "context_token": token}
-                )
-            else:
-                conversation = _new_conversation(channel_id, name, token)
-        else:
-            # Unknown key or a binding owned by another channel: never reuse its
-            # session or carry its context token across channels.
-            conversation = _new_conversation(
-                channel_id, display_name, context_token
+        conversation: ConversationSection | None = None
+        agent: Any = None
+        # A concurrent inbound turn may rebind the contact between our read and
+        # write (notably /new racing an in-flight flush); retry against the
+        # latest settings instead of resurrecting the session we read.
+        for _attempt in range(3):
+            settings = await store.get()
+            channel = next(
+                (item for item in settings.channels if item.id == channel_id),
+                None,
             )
-
-        command = parse_command(text)
-        if command in ("/new", "/clear"):
-            conversation = _new_conversation(
-                channel_id,
-                conversation.display_name,
-                context_token or conversation.context_token,
+            if channel is None or channel.status != "active":
+                raise ValueError("channel is not active")
+            agent = next(
+                (item for item in settings.agents if item.id == channel.agent_id),
+                None,
             )
-
-        # One settings write per inbound message, after the final conversation
-        # is known. Commands and turns share it.
-        await store.update_conversation(key, conversation)
+            if agent is None or agent.status != "active":
+                raise ValueError("agent is not available")
+            key, expected, candidate = _choose_conversation(
+                settings,
+                channel_id=channel_id,
+                external_id=external_id,
+                display_name=display_name,
+                context_token=context_token,
+                agent_id=agent.id,
+                command=command,
+                registry=registry,
+            )
+            if await store.update_conversation_if_unchanged(
+                key, expected, candidate
+            ):
+                conversation = candidate
+                break
+        if conversation is None:
+            raise RuntimeError("conversation binding changed concurrently")
 
         if command is not None:
             if command in ("/new", "/clear"):

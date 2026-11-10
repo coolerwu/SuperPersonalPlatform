@@ -52,6 +52,53 @@ class FakeStore:
     async def update_conversation(self, external_id, conversation):
         self.settings.channel_conversations[external_id] = conversation.model_copy(deep=True)
 
+    async def update_conversation_if_unchanged(
+        self, external_id, expected_session_id, conversation
+    ):
+        current = self.settings.channel_conversations.get(external_id)
+        current_session = current.session_id if current is not None else None
+        if current_session != expected_session_id:
+            return False
+        self.settings.channel_conversations[external_id] = conversation.model_copy(
+            deep=True
+        )
+        return True
+
+
+class RacingStore(FakeStore):
+    """Rebinds a contact right after the first settings read.
+
+    Simulates another inbound turn (e.g. /new) winning the write between
+    ingest's read and compare-and-set.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        key: str = "ch1:wx-1",
+        channel_id: str = "ch1",
+    ) -> None:
+        super().__init__()
+        self._race_session_id = session_id
+        self._race_key = key
+        self._race_channel_id = channel_id
+        self._raced = False
+
+    async def get(self):
+        snapshot = await super().get()
+        if not self._raced:
+            self._raced = True
+            self.settings.channel_conversations[
+                self._race_key
+            ] = ConversationSection(
+                session_id=self._race_session_id,
+                channel_id=self._race_channel_id,
+                display_name="Alice",
+                context_token="ctx-race",
+            )
+        return snapshot
+
 
 class FakeRegistry:
     def __init__(self, *, busy=False, interrupt_result=True):
@@ -605,6 +652,29 @@ async def _cleanup_quote_rows(channel_id: str) -> None:
             delete(ChannelDelivery).where(ChannelDelivery.channel_id == channel_id)
         )
         await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_ingest_retries_when_binding_changes_between_read_and_write():
+    await init_db()
+    session_b = str(uuid.uuid4())
+    _create_transcript("default", session_b)
+    store = RacingStore(session_id=session_b)
+    registry = FakeRegistry()
+    try:
+        result = await _ingest(
+            store, registry, message_ids=["race-1"], text="新消息"
+        )
+
+        # The stale read must not write the old session back; the retry uses
+        # the binding the concurrent turn installed.
+        assert result.session_id == session_b
+        binding = store.settings.channel_conversations["ch1:wx-1"]
+        assert binding.session_id == session_b
+        assert registry.turns[-1].session_id == session_b
+    finally:
+        await _cleanup("ch1", ["race-1"])
+        transcript_path(session_b, "default").unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio
