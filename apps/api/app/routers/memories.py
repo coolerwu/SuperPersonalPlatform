@@ -1,12 +1,14 @@
 """User profile memory backed by ``claude/CLAUDE.md``.
 
 The Claude Agent SDK loads this file as user-level instructions, so the whole
-document is the memory. Writes replace it atomically (temporary file, fsync,
-``os.replace``) and keep it private because it can contain personal facts.
+document is the memory. Writes keep the previous version as ``CLAUDE.md.bak``
+and replace the file atomically (temporary file, fsync, ``os.replace``). Files
+are private because the profile can contain personal facts.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from pathlib import Path
@@ -31,7 +33,7 @@ def _read_content(path: Path) -> str:
         return ""
 
 
-def _write_content(path: Path, content: str) -> None:
+def _atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
     try:
@@ -46,13 +48,18 @@ def _write_content(path: Path, content: str) -> None:
             os.unlink(temp_name)
 
 
+def _backup_and_write(path: Path, content: str) -> None:
+    if path.is_file():
+        _atomic_write(path.with_name(path.name + ".bak"), path.read_text("utf-8"))
+    _atomic_write(path, content)
+
+
 @router.get("", response_model=MemoryFileOut, response_model_exclude_none=True)
 async def read_memory() -> MemoryFileOut:
-    return MemoryFileOut(content=_read_content(_memory_path()))
+    return MemoryFileOut(content=await asyncio.to_thread(_read_content, _memory_path()))
 
 
 @router.put("", response_model=MemoryFileOut)
 async def write_memory(payload: MemoryFileUpdate) -> MemoryFileOut:
-    path = _memory_path()
-    _write_content(path, payload.content)
+    await asyncio.to_thread(_backup_and_write, _memory_path(), payload.content)
     return MemoryFileOut(content=payload.content, saved=True)

@@ -226,6 +226,10 @@ async def _record_inbound(
         await db.commit()
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _new_conversation(
     channel_id: str, display_name: str, context_token: str | None
 ) -> ConversationSection:
@@ -234,6 +238,7 @@ def _new_conversation(
         channel_id=channel_id,
         display_name=display_name,
         context_token=context_token,
+        updated_at=_now_iso(),
     )
 
 
@@ -303,7 +308,11 @@ def _choose_conversation(
         name = display_name or existing.display_name
         if _binding_is_valid(existing, channel_id, agent_id, registry):
             conversation = existing.model_copy(
-                update={"display_name": name, "context_token": token}
+                update={
+                    "display_name": name,
+                    "context_token": token,
+                    "updated_at": _now_iso(),
+                }
             )
         else:
             conversation = _new_conversation(channel_id, name, token)

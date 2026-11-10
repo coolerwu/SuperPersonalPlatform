@@ -349,7 +349,7 @@ class MemoryFileOut(BaseModel):
 
 
 class MemoryFileUpdate(BaseModel):
-    content: str = ""
+    content: str
 
 
 class MemoryCreate(BaseModel):

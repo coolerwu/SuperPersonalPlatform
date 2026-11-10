@@ -26,8 +26,6 @@ import type {
   KnowledgeStatus,
   MarketProbe,
   MarketStatus,
-  MemoryItem,
-  MemoryScope,
   Provider,
   SessionSummary,
   SkillCatalog,
@@ -320,21 +318,12 @@ export const api = {
     }),
   listTools: () => request<ToolsCatalog>("/api/tools"),
 
-  listMemories: (params: { scope: MemoryScope; agentId?: string; q?: string }) => {
-    const search = new URLSearchParams({ scope: params.scope });
-    if (params.agentId) search.set("agent_id", params.agentId);
-    if (params.q) search.set("q", params.q);
-    return request<MemoryItem[]>(`/api/memories?${search.toString()}`);
-  },
-  createMemory: (payload: {
-    scope: MemoryScope;
-    agent_id?: string;
-    content: string;
-    tags?: string[];
-  }) => request<MemoryItem>("/api/memories", { method: "POST", body: JSON.stringify(payload) }),
-  updateMemory: (id: string, payload: { content?: string; tags?: string[] }) =>
-    request<MemoryItem>(`/api/memories/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
-  deleteMemory: (id: string) => request<{ deleted: boolean }>(`/api/memories/${id}`, { method: "DELETE" }),
+  getMemory: () => request<{ content: string }>("/api/memories"),
+  saveMemory: (content: string) =>
+    request<{ content: string; saved: boolean }>("/api/memories", {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    }),
 
   listBacktests: (limit = 50) => request<BacktestSummary[]>(`/api/backtests?limit=${limit}`),
   getBacktestMeta: () => request<BacktestMeta>("/api/backtests/meta"),

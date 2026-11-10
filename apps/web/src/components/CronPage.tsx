@@ -579,7 +579,7 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
                         {conversationsLoading ? "加载中…" : "选择联系人"}
                       </option>
                       {conversations.map((conversation) => (
-                        <option key={conversation.id} value={conversation.id}>
+                        <option key={conversation.id} value={conversation.external_id}>
                           {conversation.display_name || "未命名联系人"}
                         </option>
                       ))}

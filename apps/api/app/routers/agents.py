@@ -83,7 +83,9 @@ def _fallback_provider(agents: list[AgentSection]) -> ProviderSection:
     return ProviderSection.model_validate(raw)
 
 
-def _agent_session_ids(snapshot, agent_id: str) -> set[str]:
+async def _agent_session_ids(
+    snapshot, agent_id: str, db: AsyncSession
+) -> set[str]:
     session_ids: set[str] = set()
     if valid_agent_id(agent_id):
         directory = transcript_dir(agent_id)
@@ -95,19 +97,6 @@ def _agent_session_ids(snapshot, agent_id: str) -> set[str]:
     for conversation in snapshot.channel_conversations.values():
         if conversation.channel_id in channel_ids:
             session_ids.add(conversation.session_id)
-    return session_ids
-
-
-async def _agent_has_active_turn(
-    request: Request, snapshot, agent_id: str, db: AsyncSession
-) -> bool:
-    registry = getattr(request.app.state, "registry", None)
-    if registry is None:
-        return False
-    agent_check = getattr(registry, "is_agent_busy", None)
-    if agent_check is not None and agent_check(agent_id):
-        return True
-    session_ids = _agent_session_ids(snapshot, agent_id)
     job_sessions = (
         await db.scalars(
             select(CronJob.session_id).where(
@@ -116,7 +105,26 @@ async def _agent_has_active_turn(
         )
     ).all()
     session_ids.update(str(item) for item in job_sessions if item)
+    return session_ids
+
+
+def _registry_is_busy(
+    request: Request, agent_id: str, session_ids: set[str]
+) -> bool:
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return False
+    agent_check = getattr(registry, "is_agent_busy", None)
+    if agent_check is not None and agent_check(agent_id):
+        return True
     return any(registry.is_busy(session_id) for session_id in session_ids)
+
+
+async def _agent_has_active_turn(
+    request: Request, snapshot, agent_id: str, db: AsyncSession
+) -> bool:
+    session_ids = await _agent_session_ids(snapshot, agent_id, db)
+    return _registry_is_busy(request, agent_id, session_ids)
 
 
 @router.get("", response_model=list[AgentOut])
@@ -210,7 +218,8 @@ async def delete_agent_permanently(
     agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
-    if await _agent_has_active_turn(request, snapshot, agent_id, db):
+    session_ids = await _agent_session_ids(snapshot, agent_id, db)
+    if _registry_is_busy(request, agent_id, session_ids):
         raise HTTPException(status_code=409, detail="agent has an active run")
 
     channel_ids = {
@@ -242,7 +251,7 @@ async def delete_agent_permanently(
 
     registry = getattr(request.app.state, "registry", None)
     if registry is not None:
-        for session_id in _agent_session_ids(snapshot, agent_id):
+        for session_id in session_ids:
             try:
                 await registry.close_session(session_id)
             except Exception:
@@ -259,7 +268,11 @@ async def delete_agent_permanently(
                 if not (isinstance(item, dict) and item.get("id") == agent_id)
             ]
         channels = data.get("channels")
+        removed_channels: set[str] = set()
         if isinstance(channels, list):
+            for item in channels:
+                if isinstance(item, dict) and item.get("agent_id") == agent_id:
+                    removed_channels.add(str(item.get("id") or ""))
             data["channels"] = [
                 item
                 for item in channels
@@ -270,7 +283,10 @@ async def delete_agent_permanently(
         conversations = data.get("channel_conversations")
         if isinstance(conversations, dict):
             for key, value in list(conversations.items()):
-                if isinstance(value, dict) and value.get("channel_id") in channel_ids:
+                if (
+                    isinstance(value, dict)
+                    and value.get("channel_id") in removed_channels
+                ):
                     conversations.pop(key, None)
 
     await store.mutate_raw(remove_from_settings)

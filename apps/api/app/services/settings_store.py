@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 class RuntimeSection(BaseModel):
     session_retention_days: int = Field(default=30, ge=0)
+    # One-way marker: the legacy app_configs retention value has been imported
+    # (or the legacy table was absent) on a previous boot.
+    legacy_import_done: bool = False
 
 
 class KnowledgeSection(BaseModel):
@@ -283,13 +286,16 @@ def build_default_settings() -> dict[str, Any]:
         provider=provider,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
+    knowledge_url = current.kb_webdav_url.strip()
     defaults = PlatformSettings(
         runtime=RuntimeSection(session_retention_days=current.session_retention_days),
         knowledge=KnowledgeSection(
+            enabled=bool(knowledge_url),
             url=current.kb_webdav_url,
             username=current.kb_webdav_username,
             password=current.kb_webdav_password,
             root=current.kb_webdav_root,
+            interval_seconds=max(30, current.kb_sync_interval_seconds),
         ),
         agents=[agent],
     )
@@ -299,11 +305,11 @@ def build_default_settings() -> dict[str, Any]:
 def _legacy_session_retention_days() -> int | None:
     """Read ``app_configs.session_retention_days`` from the pre-settings DB.
 
-    Only used once, when ``settings.json`` is created. Task 6 removed the old
-    config API but users may already have set a retention window (including 0,
-    which disables cleanup); losing that value would silently re-enable a
-    default. Any failure is logged and ignored so a missing or unreadable
-    legacy database cannot block startup.
+    ``ensure_seeded`` runs this once per installation, guarded by the
+    ``runtime.legacy_import_done`` marker, so an instance that already had
+    ``settings.json`` before this migration still adopts a legacy value
+    (including 0, which disables cleanup). Any failure is logged and ignored so
+    a missing or unreadable legacy database cannot block startup.
     """
     url = app_settings.app_database_url
     if not url.startswith("sqlite") or ":///" not in url:
@@ -348,12 +354,26 @@ class SettingsStore:
 
     async def ensure_seeded(self) -> PlatformSettings:
         if not self.path.exists():
-            defaults = build_default_settings()
+            await self._json.update(
+                lambda data: data.update(build_default_settings())
+            )
+
+        settings = await self.get()
+        if not settings.runtime.legacy_import_done:
             legacy_retention = _legacy_session_retention_days()
-            if legacy_retention is not None:
-                defaults["runtime"]["session_retention_days"] = legacy_retention
-            await self._json.update(lambda data: data.update(defaults))
-        return await self.get()
+
+            def migrate(data: dict[str, Any]) -> None:
+                runtime = _dict_section(data, "runtime")
+                # Another startup path may have finished the import first.
+                if runtime.get("legacy_import_done") is True:
+                    return
+                if legacy_retention is not None:
+                    runtime["session_retention_days"] = legacy_retention
+                runtime["legacy_import_done"] = True
+
+            await self._json.update(migrate)
+            settings = await self.get()
+        return settings
 
     async def update_agent(self, agent: AgentSection) -> None:
         def mutate(data: dict[str, Any]) -> None:

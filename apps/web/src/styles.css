@@ -2740,6 +2740,55 @@ textarea {
   font-size: 11px;
 }
 
+.memory-editor {
+  margin-top: 14px;
+}
+
+.memory-editor textarea {
+  width: 100%;
+  min-height: 360px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  resize: vertical;
+  tab-size: 2;
+}
+
+.memory-editor textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.memory-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.memory-editor .memory-form-note {
+  margin: 0;
+}
+
+.memory-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.memory-editor-actions .primary,
+.memory-editor-actions .ghost-button {
+  padding: 8px 16px;
+}
+
 .link-button {
   border: none;
   background: transparent;
@@ -3334,6 +3383,18 @@ textarea {
 
   .memory-form-row input {
     flex-basis: 100%;
+  }
+
+  .memory-editor textarea {
+    min-height: 300px;
+  }
+
+  .memory-editor-actions {
+    width: 100%;
+  }
+
+  .memory-editor-actions button {
+    flex: 1;
   }
 
   .danger-zone {

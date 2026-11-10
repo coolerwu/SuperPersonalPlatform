@@ -53,6 +53,7 @@ async def test_seed_default_settings_from_env(tmp_path, monkeypatch):
     await store.ensure_seeded()
     data = json.loads(path.read_text("utf-8"))
     assert data["runtime"]["session_retention_days"] == 5
+    assert data["runtime"]["legacy_import_done"] is True
     assert data["agents"][0]["id"] == "default"
     assert data["agents"][0]["provider"]["api_key"] == "test-key"
     assert data["knowledge"]["password"] == "test-password"
@@ -125,7 +126,35 @@ async def test_seed_ignores_missing_legacy_table(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_existing_settings_file_is_not_migrated(tmp_path, monkeypatch):
+async def test_existing_settings_file_with_completed_marker_is_not_migrated(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        settings_store_module.app_settings,
+        "app_database_url",
+        _legacy_config_db(tmp_path, 0),
+    )
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "session_retention_days": 12,
+                    "legacy_import_done": True,
+                }
+            }
+        ),
+        "utf-8",
+    )
+    await SettingsStore(path).ensure_seeded()
+    data = json.loads(path.read_text("utf-8"))
+    assert data["runtime"]["session_retention_days"] == 12
+
+
+@pytest.mark.asyncio
+async def test_existing_settings_file_without_marker_migrates_zero(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(
         settings_store_module.app_settings,
         "app_database_url",
@@ -137,7 +166,8 @@ async def test_existing_settings_file_is_not_migrated(tmp_path, monkeypatch):
     )
     await SettingsStore(path).ensure_seeded()
     data = json.loads(path.read_text("utf-8"))
-    assert data["runtime"]["session_retention_days"] == 12
+    assert data["runtime"]["session_retention_days"] == 0
+    assert data["runtime"]["legacy_import_done"] is True
 
 
 @pytest.mark.asyncio
@@ -154,8 +184,24 @@ async def test_seed_keeps_existing_anthropic_suffix(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_ensure_seeded_keeps_existing_file(tmp_path, monkeypatch):
     monkeypatch.setenv("SESSION_RETENTION_DAYS", "5")
+    # No legacy database: the marker was already written by a previous boot.
+    monkeypatch.setattr(
+        settings_store_module.app_settings,
+        "app_database_url",
+        f"sqlite+aiosqlite:///{tmp_path / 'no-legacy.db'}",
+    )
     path = tmp_path / "settings.json"
-    path.write_text(json.dumps({"runtime": {"session_retention_days": 12}}), "utf-8")
+    path.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "session_retention_days": 12,
+                    "legacy_import_done": True,
+                }
+            }
+        ),
+        "utf-8",
+    )
     await SettingsStore(path).ensure_seeded()
     data = json.loads(path.read_text("utf-8"))
     assert data["runtime"]["session_retention_days"] == 12

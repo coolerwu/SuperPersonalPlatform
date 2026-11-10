@@ -211,6 +211,70 @@ async def test_push_target_uses_settings_conversation(client) -> None:
     assert partial.status_code == 400
 
 
+async def test_push_target_contract_uses_external_id(client) -> None:
+    """The contacts endpoint must hand the cron page a bare external id.
+
+    ``ChannelConversationOut.id`` is the compound settings key and is not a
+    valid push target; the frontend and API contract is ``external_id``.
+    """
+    store = client.app.state.settings_store
+    suffix = uuid.uuid4().hex[:8]
+    channel_id = f"ch-contract-{suffix}"
+    external_id = f"wx-contract-{suffix}"
+    job_id = None
+    await store.update_channel(
+        ChannelSection(
+            id=channel_id,
+            agent_id="default",
+            type="wechat",
+            name="契约微信",
+            status="active",
+        )
+    )
+    await store.update_conversation(
+        f"{channel_id}:{external_id}",
+        ConversationSection(
+            session_id=str(uuid.uuid4()),
+            channel_id=channel_id,
+            display_name="Alice",
+        ),
+    )
+    try:
+        rows = client.get(f"/api/channels/{channel_id}/conversations").json()
+        row = next(item for item in rows if item["session_id"])
+        assert row["id"] == f"{channel_id}:{external_id}"
+        assert row["external_id"] == external_id
+
+        created = _create_job(
+            client,
+            push_channel_id=channel_id,
+            push_conversation_id=row["external_id"],
+        )
+        assert created.status_code == 201, created.text
+        job_id = created.json()["id"]
+        assert created.json()["push_conversation_id"] == external_id
+
+        composite = _create_job(
+            client,
+            push_channel_id=channel_id,
+            push_conversation_id=row["id"],
+        )
+        assert composite.status_code == 400
+        assert "联系人" in composite.json()["detail"]
+
+        assert client.delete(f"/api/channels/{channel_id}").status_code == 200
+        async with SessionLocal() as db:
+            job = await db.get(CronJob, job_id)
+            assert job is not None
+            assert job.push_channel_id is None
+            assert job.push_conversation_id is None
+    finally:
+        if job_id is not None:
+            client.delete(f"/api/cron-jobs/{job_id}")
+        # Deleting twice is harmless: the first call above already removed it.
+        client.delete(f"/api/channels/{channel_id}")
+
+
 async def test_push_target_rejects_inactive_channel(client) -> None:
     store = client.app.state.settings_store
     suffix = uuid.uuid4().hex[:8]
@@ -334,6 +398,43 @@ async def test_archived_agent_jobs_are_hidden(client) -> None:
         assert client.delete(f"/api/cron-jobs/{job['id']}").status_code == 404
     finally:
         await _set_agent_status(store, "default", "active")
+
+
+async def test_permanent_delete_uses_cron_session_for_busy_and_cleanup(
+    client,
+) -> None:
+    store = client.app.state.settings_store
+    suffix = uuid.uuid4().hex[:8]
+    agent = client.post(
+        "/api/agents", json={"name": f"CronBusy-{suffix}"}
+    ).json()
+    agent_id = agent["id"]
+    job = _create_job(client, agent_id=agent_id).json()
+    session_id = job["session_id"]
+
+    class RecordingRegistry:
+        def __init__(self, busy: bool) -> None:
+            self.busy = busy
+            self.closed: list[str] = []
+
+        def is_busy(self, candidate: str) -> bool:
+            return self.busy and candidate == session_id
+
+        async def close_session(self, candidate: str) -> None:
+            self.closed.append(candidate)
+
+    registry = RecordingRegistry(busy=True)
+    client.app.state.registry = registry
+    try:
+        assert client.delete(f"/api/agents/{agent_id}/permanent").status_code == 409
+        assert registry.closed == []
+
+        registry.busy = False
+        assert client.delete(f"/api/agents/{agent_id}/permanent").status_code == 200
+        assert session_id in registry.closed
+    finally:
+        client.app.state.registry = None
+        client.delete(f"/api/agents/{agent_id}/permanent")
 
 
 async def test_permanent_agent_delete_cascades_cron_jobs(client) -> None:

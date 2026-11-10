@@ -183,11 +183,6 @@ async def load_knowledge_settings(
     )
 
 
-async def seed_knowledge_config() -> None:
-    """Deprecated: KB_* env values seed ``settings.json`` when it is created."""
-    return None
-
-
 class WebDavClient:
     """Minimal WebDAV client for the operations the mirror sync needs."""
 

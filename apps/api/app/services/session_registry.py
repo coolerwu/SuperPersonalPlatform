@@ -194,6 +194,7 @@ class SessionRegistry:
                 worker.cancel()
             self._queues.pop(session_id, None)
             self._current.pop(session_id, None)
+            self._session_agents.pop(session_id, None)
         active = await self._runner.interrupt(session_id)
         return bool(active or cancelled)
 

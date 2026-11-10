@@ -42,10 +42,13 @@ def test_settings_roundtrip(client) -> None:
 
 
 def test_settings_persist_to_settings_file(client) -> None:
+    import json
+
     store = client.app.state.settings_store
     client.put("/api/settings", json={"session_retention_days": 9})
     assert store.path.is_file()
-    assert b'"session_retention_days": 9' in store.path.read_bytes()
+    data = json.loads(store.path.read_text("utf-8"))
+    assert data["runtime"]["session_retention_days"] == 9
     client.put("/api/settings", json={"session_retention_days": 30})
 
 

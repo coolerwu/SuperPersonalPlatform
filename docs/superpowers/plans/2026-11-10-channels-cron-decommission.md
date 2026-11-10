@@ -1261,6 +1261,8 @@ git commit -m "Move settings, knowledge and memory APIs to files"
 ```
 
 > **质量审查修订：** 渠道联系人接口读取 `settings.channel_conversations` 时使用 `f"{channel_id}:{external_id}"` 新 key，并返回 `external_id`（`push_conversation_id` 用它）；不要假设 key 就是 external_id。
+>
+> **质量审查修订（后续）：** 旧 `Run` 表与 `channel_run_links` 的级联清理不在本任务补代码。本分支仍启动旧 `RunWorker`，永久删除 Agent 只清 settings、workspace、`claude/projects/<id>`、渠道与定时任务；旧表孤儿随 Task 8 整表删除一并消失。因此部署必须完成 Task 8，不能在本分支中途上线。Task 8 的删除清单同时加入 `apps/api/app/services/app_config.py` 与 `schemas.py` 的 `MemoryCreate` / `MemoryUpdate` / `MemoryOut`。
 
 ---
 
@@ -1268,7 +1270,8 @@ git commit -m "Move settings, knowledge and memory APIs to files"
 
 **Files:**
 - Modify: `apps/api/app/models.py`、`apps/api/app/db.py`、`apps/api/app/main.py`、`apps/api/pyproject.toml`
-- Delete: `executor.py`、`skill_middleware.py`、`rubric.py`、`model_retry.py`、`memory_service.py`、`memory_tools.py`、`memory_organizer.py`、`session_tools.py`、`session_search.py`、`channel_service.py`、`run_service.py`
+- Delete: `executor.py`、`skill_middleware.py`、`rubric.py`、`model_retry.py`、`memory_service.py`、`memory_tools.py`、`memory_organizer.py`、`session_tools.py`、`session_search.py`、`channel_service.py`、`run_service.py`、`app_config.py`
+- Delete schemas: `MemoryCreate` / `MemoryUpdate` / `MemoryOut`（`schemas.py` 内删除；`MemoryFileOut` / `MemoryFileUpdate` 保留）
 - Delete routers: `runs.py`（已在核心计划移除注册，文件删除）
 - Delete tests: `test_executor.py`、`test_executor_resume.py`、`test_model_retry.py`、`test_rubric.py`、`test_memory_tools.py`、`test_memory_retrieval.py`、`test_memory_organizer.py`、`test_session_search.py`、`test_messages_page.py`、`test_channel_delivery.py`（由新测试替代）
 

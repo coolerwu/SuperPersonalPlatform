@@ -6,7 +6,6 @@ import type {
   AgentSavePayload,
   Attachment,
   DrawerTab,
-  MemoryItem,
   Provider,
   SessionSummary,
   SkillInfo,
@@ -176,11 +175,6 @@ export default function App() {
   const sessionIdRef = useRef("");
   const sessionsRequestRef = useRef(0);
   const agentIdRef = useRef("");
-  const pendingMemoryFocus = useRef<{
-    agentId: string;
-    sessionId: string;
-    messageId: string;
-  } | null>(null);
   const draftsRef = useRef<Record<string, string>>({});
   const draftKeyRef = useRef("");
   const pendingSessionsRef = useRef<Record<string, true>>({});
@@ -1002,28 +996,6 @@ export default function App() {
     void refreshSessions();
   }
 
-  function openFocusSession(targetSessionId: string, messageId: string) {
-    setCommandReply(null);
-    setFocus({ sessionId: targetSessionId, messageId, nonce: Date.now() });
-    navigate("chat", targetSessionId);
-  }
-
-  function openMemorySource(item: MemoryItem) {
-    if (!item.source_session_id || !item.source_message_id) return;
-    if (item.source_message_exists === false) return;
-    const targetAgent = item.source_agent_id || agentIdRef.current;
-    if (targetAgent && targetAgent !== agentIdRef.current) {
-      pendingMemoryFocus.current = {
-        agentId: targetAgent,
-        sessionId: item.source_session_id,
-        messageId: item.source_message_id,
-      };
-      changeAgent(targetAgent);
-      return;
-    }
-    openFocusSession(item.source_session_id, item.source_message_id);
-  }
-
   useEffect(() => {
     void bootstrap().catch((exc) => {
       setError(describeApiError(exc));
@@ -1056,16 +1028,6 @@ export default function App() {
     void loadSessions(agentId).catch((exc) => setAgentError(describeApiError(exc), agentId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth, agentId]);
-
-  useEffect(() => {
-    // Consume a cross-agent memory link after the agent switch has reset the
-    // previous agent's session state; otherwise the reset would clear the focus.
-    const pending = pendingMemoryFocus.current;
-    if (!pending || pending.agentId !== agentId) return;
-    pendingMemoryFocus.current = null;
-    openFocusSession(pending.sessionId, pending.messageId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -1785,12 +1747,7 @@ export default function App() {
       />
 
       {view === "memory" ? (
-        <MemoryPage
-          agents={agents}
-          agentId={agentId}
-          onClose={() => openView("chat")}
-          onOpenSource={openMemorySource}
-        />
+        <MemoryPage onClose={() => openView("chat")} />
       ) : view === "skills" ? (
         <SkillsPage
           agent={agent}

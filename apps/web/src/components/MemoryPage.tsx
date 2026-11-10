@@ -1,144 +1,63 @@
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api, errorText } from "../api";
-import type { Agent, MemoryItem, MemoryScope } from "../types";
-import { formatTime } from "../format";
-import { ConfirmDialog } from "./ConfirmDialog";
 
 type MemoryPageProps = {
-  agents: Agent[];
-  agentId: string;
   onClose: () => void;
-  onOpenSource?: (item: MemoryItem) => void;
 };
 
-const SOURCE_LABELS: Record<string, string> = {
-  explicit: "来自对话",
-  command: "指令添加",
-  agent: "Agent 记录",
-  manual: "手动添加",
-  legacy: "旧记忆（无快照）",
-};
-
-function parseTags(value: string): string[] {
-  return value
-    .split(/[,，]/)
-    .map((tag) => tag.trim())
-    .filter(Boolean)
-    .slice(0, 8);
-}
-
-export function MemoryPage({ agents, agentId, onClose, onOpenSource }: MemoryPageProps) {
-  const [scope, setScope] = useState<MemoryScope>("user");
-  const [items, setItems] = useState<MemoryItem[]>([]);
-  const [query, setQuery] = useState("");
+/**
+ * The user profile is one Markdown document (`claude/CLAUDE.md`) that the
+ * Claude Agent SDK loads across every Agent, so this page is a single-document
+ * editor rather than a list of memory rows.
+ */
+export function MemoryPage({ onClose }: MemoryPageProps) {
   const [content, setContent] = useState("");
-  const [tags, setTags] = useState("");
-  const [editingId, setEditingId] = useState("");
-  const [editContent, setEditContent] = useState("");
-  const [editTags, setEditTags] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [savedContent, setSavedContent] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [confirmId, setConfirmId] = useState("");
-
-  const agent = agents.find((item) => item.id === agentId);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     let active = true;
     setError("");
-    if (scope === "agent" && !agentId) {
-      setItems([]);
-      return () => {
-        active = false;
-      };
-    }
     void api
-      .listMemories({ scope, agentId: scope === "agent" ? agentId : undefined })
-      .then((list) => {
-        if (active) setItems(list);
+      .getMemory()
+      .then((result) => {
+        if (!active) return;
+        setContent(result.content);
+        setSavedContent(result.content);
       })
       .catch((exc) => {
         if (active) setError(errorText(exc));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
       });
     return () => {
       active = false;
     };
-  }, [scope, agentId]);
+  }, []);
 
-  async function reload() {
-    const list = await api.listMemories({
-      scope,
-      agentId: scope === "agent" ? agentId : undefined,
-    });
-    setItems(list);
-  }
-
-  async function add(event: FormEvent) {
-    event.preventDefault();
-    if (!content.trim() || busy) return;
-    setBusy(true);
+  async function save() {
+    if (saving || loading) return;
+    setSaving(true);
     setError("");
+    setNotice("");
     try {
-      await api.createMemory({
-        scope,
-        agent_id: scope === "agent" ? agentId : undefined,
-        content: content.trim(),
-        tags: parseTags(tags),
-      });
-      setContent("");
-      setTags("");
-      await reload();
+      const result = await api.saveMemory(content);
+      setContent(result.content);
+      setSavedContent(result.content);
+      setNotice("已保存，新的会话会加载这份用户画像。");
     } catch (exc) {
       setError(errorText(exc));
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
-  function startEdit(item: MemoryItem) {
-    setEditingId(item.id);
-    setEditContent(item.content);
-    setEditTags(item.tags.join(", "));
-  }
-
-  async function saveEdit() {
-    if (!editingId || !editContent.trim()) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api.updateMemory(editingId, {
-        content: editContent.trim(),
-        tags: parseTags(editTags),
-      });
-      setEditingId("");
-      await reload();
-    } catch (exc) {
-      setError(errorText(exc));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove(id: string) {
-    setError("");
-    try {
-      await api.deleteMemory(id);
-      if (editingId === id) setEditingId("");
-      await reload();
-    } catch (exc) {
-      setError(errorText(exc));
-    }
-  }
-
-  const filtered = items.filter((item) => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return true;
-    return (
-      item.content.toLowerCase().includes(needle) ||
-      item.tags.some((tag) => tag.toLowerCase().includes(needle))
-    );
-  });
-  const unavailable = scope === "agent" && !agentId;
+  const dirty = content !== savedContent;
 
   return (
     <main className="memory-page">
@@ -146,7 +65,7 @@ export function MemoryPage({ agents, agentId, onClose, onOpenSource }: MemoryPag
         <div>
           <div className="eyebrow">MEMORY</div>
           <h1>记忆</h1>
-          <p>跨会话保留的用户偏好和 Agent 知识。</p>
+          <p>Claude 的用户画像（CLAUDE.md），跨 Agent 生效。</p>
         </div>
         <button className="ghost-button" onClick={onClose}>返回对话</button>
       </header>
@@ -154,165 +73,70 @@ export function MemoryPage({ agents, agentId, onClose, onOpenSource }: MemoryPag
       <div className="settings-scroll">
         <div className="settings-lane">
           <section className="settings-card">
-            <div className="memory-toolbar">
-              <div className="settings-tabs">
-                <button
-                  type="button"
-                  className={scope === "user" ? "active" : ""}
-                  onClick={() => setScope("user")}
-                >
-                  用户记忆
-                </button>
-                <button
-                  type="button"
-                  className={scope === "agent" ? "active" : ""}
-                  onClick={() => setScope("agent")}
-                >
-                  Agent 记忆
-                </button>
+            <div className="settings-card-head">
+              <div>
+                <h2>用户画像</h2>
+                <p>
+                  这份 Markdown 会作为用户级说明加载到每个 Agent 的上下文中；
+                  Agent 自己的笔记由 Claude 的 auto memory 管理，不在这里编辑。
+                </p>
               </div>
-              <input
-                className="memory-search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索记忆…"
-              />
             </div>
 
             <p className="memory-scope-hint">
-              {scope === "user"
-                ? "所有 Agent 共享；在本页手动添加，平台不会从对话自动推断。"
-                : agent
-                  ? `仅对 ${agent.name} 生效；Agent 可以在 Run 中用 memory_save 自己记录，你也可以手动添加。`
-                  : "先选择一个 Agent。"}
+              修改后保存到 <code>~/.super-personal-platform/claude/CLAUDE.md</code>，
+              新会话生效；旧版本保留为同目录的 <code>CLAUDE.md.bak</code>。
             </p>
 
-            {!unavailable && (
-              <>
-                <form className="memory-form" onSubmit={add}>
-                  <textarea
-                    rows={2}
-                    value={content}
-                    onChange={(event) => setContent(event.target.value)}
-                    placeholder="一条长期记忆，例如：回答先给结论，再展开。"
-                  />
-                  <div className="memory-form-row">
-                    <input
-                      value={tags}
-                      onChange={(event) => setTags(event.target.value)}
-                      placeholder="标签，用逗号分隔（可选）"
-                    />
-                    <button className="primary" type="submit" disabled={busy || !content.trim()}>
-                      {busy ? "保存中…" : "添加"}
+            {error && <div className="error-banner">{error}</div>}
+            {notice && <div className="hint">{notice}</div>}
+
+            {loading ? (
+              <div className="empty-note">读取中…</div>
+            ) : (
+              <form
+                className="memory-editor"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void save();
+                }}
+              >
+                <textarea
+                  value={content}
+                  onChange={(event) => {
+                    setContent(event.target.value);
+                    setNotice("");
+                  }}
+                  placeholder={"# 我\n- 偏好中文回复\n- 回答先给结论"}
+                  spellCheck={false}
+                  aria-label="CLAUDE.md 用户画像"
+                />
+                <div className="memory-editor-footer">
+                  <span className="memory-form-note">
+                    {content.length} 字符{dirty ? " · 有未保存修改" : ""}
+                  </span>
+                  <div className="memory-editor-actions">
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      disabled={!dirty || saving}
+                      onClick={() => {
+                        setContent(savedContent);
+                        setNotice("");
+                      }}
+                    >
+                      撤销修改
+                    </button>
+                    <button className="primary" type="submit" disabled={saving || !dirty}>
+                      {saving ? "保存中…" : "保存"}
                     </button>
                   </div>
-                </form>
-                <p className="memory-form-note">
-                  手动添加没有聊天快照，来源标记为手动。
-                </p>
-
-                {error && <div className="error-banner">{error}</div>}
-
-                <div className="memory-list">
-                  {filtered.length === 0 && <div className="empty-note">还没有记忆。</div>}
-                  {filtered.map((item) =>
-                    editingId === item.id ? (
-                      <div key={item.id} className="memory-item editing">
-                        <textarea
-                          rows={2}
-                          value={editContent}
-                          onChange={(event) => setEditContent(event.target.value)}
-                        />
-                        <div className="memory-form-row">
-                          <input
-                            value={editTags}
-                            onChange={(event) => setEditTags(event.target.value)}
-                            placeholder="标签，用逗号分隔"
-                          />
-                          <button
-                            className="primary"
-                            type="button"
-                            disabled={busy || !editContent.trim()}
-                            onClick={() => void saveEdit()}
-                          >
-                            保存
-                          </button>
-                          <button
-                            className="ghost-button"
-                            type="button"
-                            onClick={() => setEditingId("")}
-                          >
-                            取消
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div key={item.id} className="memory-item">
-                        <div className="memory-content">{item.content}</div>
-                        {item.snapshot_text && (
-                          <details className="memory-snapshot">
-                            <summary>
-                              当时的用户消息
-                              {item.snapshot_at ? ` · ${formatTime(item.snapshot_at)}` : ""}
-                            </summary>
-                            <div className="memory-snapshot-text">{item.snapshot_text}</div>
-                          </details>
-                        )}
-                        <div className="memory-meta">
-                          {item.tags.map((tag) => (
-                            <span key={tag} className="memory-tag">{tag}</span>
-                          ))}
-                          <span className="memory-badge">
-                            {SOURCE_LABELS[item.source_kind] ?? "手动添加"}
-                          </span>
-                          {item.source_kind === "explicit" &&
-                            item.snapshot_text &&
-                            onOpenSource &&
-                            (item.source_message_exists === true ? (
-                              <button
-                                type="button"
-                                className="link-button"
-                                onClick={() => onOpenSource(item)}
-                              >
-                                查看原消息
-                              </button>
-                            ) : item.source_message_exists === false ? (
-                              <span>原会话已删除，快照仍保留</span>
-                            ) : null)}
-                          <span>{formatTime(item.updated_at)}</span>
-                        </div>
-                        <div className="memory-actions">
-                          <button type="button" onClick={() => startEdit(item)}>编辑</button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmId(item.id)}
-                          >
-                            删除
-                          </button>
-                        </div>
-                      </div>
-                    ),
-                  )}
                 </div>
-              </>
+              </form>
             )}
           </section>
         </div>
       </div>
-
-      <ConfirmDialog
-        open={confirmId !== ""}
-        title="删除这条记忆？"
-        description="删除后无法恢复，仅删除这一条记忆。"
-        confirmLabel="删除"
-        danger
-        onClose={() => setConfirmId("")}
-        onConfirm={() => {
-          const target = confirmId;
-          setConfirmId("");
-          if (target) void remove(target);
-        }}
-      />
     </main>
   );
 }

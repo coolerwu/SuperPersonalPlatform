@@ -138,9 +138,30 @@ def test_default_settings_seed_knowledge_from_env(monkeypatch) -> None:
     monkeypatch.setenv("KB_WEBDAV_USERNAME", "user")
     monkeypatch.setenv("KB_WEBDAV_PASSWORD", "pass")
     monkeypatch.setenv("KB_WEBDAV_ROOT", "/notes/")
+    monkeypatch.setenv("KB_SYNC_INTERVAL_SECONDS", "45")
 
     data = build_default_settings()
+    assert data["knowledge"]["enabled"] is True
     assert data["knowledge"]["url"] == "https://dav.example.com/dav/"
     assert data["knowledge"]["username"] == "user"
     assert data["knowledge"]["password"] == "pass"
     assert data["knowledge"]["root"] == "/notes/"
+    assert data["knowledge"]["interval_seconds"] == 45
+
+
+def test_default_settings_knowledge_interval_has_minimum(monkeypatch) -> None:
+    monkeypatch.setenv("KB_WEBDAV_URL", "https://dav.example.com/dav/")
+    monkeypatch.setenv("KB_SYNC_INTERVAL_SECONDS", "5")
+
+    data = build_default_settings()
+    assert data["knowledge"]["enabled"] is True
+    assert data["knowledge"]["interval_seconds"] == 30
+
+
+def test_default_settings_without_knowledge_url_stays_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("KB_WEBDAV_URL", "")
+    monkeypatch.setenv("KB_SYNC_INTERVAL_SECONDS", "600")
+
+    data = build_default_settings()
+    assert data["knowledge"]["enabled"] is False
+    assert data["knowledge"]["interval_seconds"] == 600

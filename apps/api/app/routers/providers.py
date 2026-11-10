@@ -28,6 +28,8 @@ def _now() -> datetime:
 
 
 def _default_agent(agents: list[AgentSection]) -> AgentSection | None:
+    # The provider page edits the default Agent's provider. Other Agents keep
+    # their own provider copies in settings.json.
     return next((item for item in agents if item.id == "default"), agents[0] if agents else None)
 
 

@@ -150,6 +150,7 @@ export type ChannelLoginStatus = {
 export type ChannelConversation = {
   id: string;
   channel_id: string;
+  external_id: string;
   display_name: string;
   session_id: string;
   session_title: string;
@@ -221,28 +222,6 @@ export type KnowledgeState = {
 export type AppSettings = {
   session_retention_days: number;
   session_cleanup_interval_seconds: number;
-};
-
-export type MemoryScope = "user" | "agent";
-
-export type MemoryItem = {
-  id: string;
-  scope: MemoryScope;
-  agent_id: string | null;
-  content: string;
-  tags: string[];
-  source_message_id: string | null;
-  source_run_id: string | null;
-  source_session_id: string | null;
-  source_kind: "explicit" | "manual" | "agent" | "legacy" | string;
-  snapshot_text: string | null;
-  snapshot_at: string | null;
-  source_message_exists: boolean | null;
-  source_session_exists: boolean | null;
-  source_agent_id: string | null;
-  created_at: string;
-  updated_at: string;
-  last_used_at: string | null;
 };
 
 export type DrawerTab = "run" | "agent";

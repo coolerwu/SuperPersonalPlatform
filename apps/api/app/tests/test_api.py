@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import stat
 import uuid
 
@@ -44,42 +45,94 @@ def test_new_agent_defaults_to_hermes_instructions(client) -> None:
     assert "简体中文" in instructions
 
 
-def test_provider_create_and_system_info(client) -> None:
-    created = client.post(
-        "/api/providers",
-        json={
-            "name": "Backup",
-            "base_url": "https://api.example.com",
-            "model": "example-model",
-            "api_key": "secret",
-        },
+def _provider_state(client):
+    store = client.app.state.settings_store
+    snapshot = client.portal.call(store.get)
+    agent = next(item for item in snapshot.agents if item.id == "default")
+    return store, agent.provider.model_dump(), agent.updated_at
+
+
+def _restore_provider(client, provider: dict, updated_at: str | None) -> None:
+    # The provider tests mutate shared settings; restore the seeded values so
+    # later modules do not inherit "Backup".
+    store = client.app.state.settings_store
+    client.portal.call(
+        functools.partial(
+            store.update_agent_fields,
+            "default",
+            provider=provider,
+            updated_at=updated_at,
+        )
     )
-    assert created.status_code == 201
-    body = created.json()
-    assert body["id"] == "default"
-    assert body["name"] == "Backup"
-    assert body["has_api_key"] is True
-    assert "api_key" not in body
 
-    providers = client.get("/api/providers").json()
-    assert len(providers) == 1
-    assert providers[0]["name"] == "Backup"
 
-    system = client.get("/api/system")
-    assert system.status_code == 200
-    info = system.json()
-    assert info["version"] == "0.1.0"
-    assert info["execution_core"] == "claude-agent-sdk"
-    assert info["database"] == "sqlite"
-    assert info["capabilities"]["filesystem"] is True
-    assert info["capabilities"]["skills"] is True
-    assert info["capabilities"]["chat"] is True
-    assert info["capabilities"]["memory"] is True
-    assert info["skills_root"]
-    assert info["counts"]["providers"] == 1
-    assert info["counts"]["agents"] >= 1
-    assert info["knowledge"]["enabled"] is False
-    assert info["knowledge"]["local_dir"]
+def test_provider_create_and_system_info(client) -> None:
+    _, original, original_updated = _provider_state(client)
+    try:
+        created = client.post(
+            "/api/providers",
+            json={
+                "name": "Backup",
+                "base_url": "https://api.example.com",
+                "model": "example-model",
+                "api_key": "secret",
+            },
+        )
+        assert created.status_code == 201
+        body = created.json()
+        assert body["id"] == "default"
+        assert body["name"] == "Backup"
+        assert body["has_api_key"] is True
+        assert "api_key" not in body
+
+        providers = client.get("/api/providers").json()
+        assert len(providers) == 1
+        assert providers[0]["name"] == "Backup"
+
+        system = client.get("/api/system")
+        assert system.status_code == 200
+        info = system.json()
+        assert info["version"] == "0.1.0"
+        assert info["execution_core"] == "claude-agent-sdk"
+        assert info["database"] == "sqlite"
+        assert info["capabilities"]["filesystem"] is True
+        assert info["capabilities"]["skills"] is True
+        assert info["capabilities"]["chat"] is True
+        assert info["capabilities"]["memory"] is True
+        assert info["skills_root"]
+        assert info["counts"]["providers"] == 1
+        assert info["counts"]["agents"] >= 1
+        assert info["knowledge"]["enabled"] is False
+        assert info["knowledge"]["local_dir"]
+    finally:
+        _restore_provider(client, original, original_updated)
+
+
+def test_provider_update_preserves_or_replaces_key(client) -> None:
+    _, original, original_updated = _provider_state(client)
+    try:
+        updated = client.put(
+            "/api/providers/default",
+            json={
+                "name": "Rotated",
+                "model": "example-model-2",
+                "base_url": "https://api.other.example/v1",
+                "api_key": "rotated-key",
+            },
+        )
+        assert updated.status_code == 200
+        body = updated.json()
+        assert body["name"] == "Rotated"
+        assert body["model"] == "example-model-2"
+        assert body["base_url"] == "https://api.other.example/v1/anthropic"
+        assert body["has_api_key"] is True
+
+        blank = client.put("/api/providers/default", json={"api_key": ""})
+        assert blank.status_code == 200
+        assert blank.json()["has_api_key"] is True
+        assert client.put("/api/providers/missing", json={}).status_code == 404
+    finally:
+        _restore_provider(client, original, original_updated)
 
 
 def test_provider_create_rejects_blank_fields(client) -> None:
@@ -179,6 +232,23 @@ def test_memory_file_is_private(client) -> None:
 def test_memory_file_rejects_non_string_content(client) -> None:
     response = client.put("/api/memories", json={"content": 123})
     assert response.status_code == 422
+
+
+def test_memory_file_requires_content_field(client) -> None:
+    response = client.put("/api/memories", json={})
+    assert response.status_code == 422
+
+
+def test_memory_file_write_keeps_backup(client) -> None:
+    from app.services.claude_env import claude_paths
+
+    client.put("/api/memories", json={"content": "# 第一版\n"})
+    client.put("/api/memories", json={"content": "# 第二版\n"})
+    path = claude_paths()["config"] / "CLAUDE.md"
+    assert path.read_text("utf-8") == "# 第二版\n"
+    backup = path.with_name(path.name + ".bak")
+    assert backup.read_text("utf-8") == "# 第一版\n"
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
 
 
 def test_agent_auto_memory_flag(client) -> None:

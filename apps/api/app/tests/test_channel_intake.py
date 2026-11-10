@@ -198,6 +198,7 @@ async def test_first_message_creates_conversation_and_turn():
         assert conversation.session_id == result.session_id
         assert conversation.channel_id == "ch1"
         assert conversation.context_token == "ctx"
+        assert conversation.updated_at is not None
     finally:
         await _cleanup("ch1", ["first-1"])
 
@@ -537,6 +538,7 @@ async def test_valid_existing_binding_is_reused():
         conversation = store.settings.channel_conversations[_conversation_key("ch1", "wx-1")]
         assert conversation.display_name == "新名字"
         assert conversation.context_token == "ctx-old"
+        assert conversation.updated_at is not None
     finally:
         path.unlink(missing_ok=True)
         await _cleanup("ch1", ["reuse-1"])
