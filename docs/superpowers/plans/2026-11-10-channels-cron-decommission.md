@@ -1262,6 +1262,8 @@ git commit -m "Move settings, knowledge and memory APIs to files"
 
 > **质量审查修订：** 渠道联系人接口读取 `settings.channel_conversations` 时使用 `f"{channel_id}:{external_id}"` 新 key，并返回 `external_id`（`push_conversation_id` 用它）；不要假设 key 就是 external_id。
 >
+> **质量审查修订（执行时已落实）：** 前端 CronPage 改用 `external_id` 并补端到端契约测试；记忆页改为 `claude/CLAUDE.md` 单文档编辑器；知识库 env 种子恢复 `enabled` 与 `KB_SYNC_INTERVAL_SECONDS`；`runtime.legacy_import_done` 保证迁移只发生一次（文件已存在也生效）；`channel_intake` 写入/刷新绑定 `updated_at`；记忆写入要求 `content`、保留 `.bak`、线程化 IO；永久删除 Agent 纳入 cron 会话的 busy/close 与实际删除渠道集合。已知 Minor：迁移标记无法区分「旧表缺失」与「读取错误」（低风险，记录）；MemoryPage 离开页面不提示未保存修改（后续前端清理）。
+>
 > **质量审查修订（后续）：** 旧 `Run` 表与 `channel_run_links` 的级联清理不在本任务补代码。本分支仍启动旧 `RunWorker`，永久删除 Agent 只清 settings、workspace、`claude/projects/<id>`、渠道与定时任务；旧表孤儿随 Task 8 整表删除一并消失。因此部署必须完成 Task 8，不能在本分支中途上线。Task 8 的删除清单同时加入 `apps/api/app/services/app_config.py` 与 `schemas.py` 的 `MemoryCreate` / `MemoryUpdate` / `MemoryOut`。
 
 ---
@@ -1340,8 +1342,9 @@ git rm apps/api/app/tests/test_agent_skills.py apps/api/app/tests/test_allocatio
 保留 `langchain-core`（工具层迁移前，工具模块仍导入它，但不再注册到 Agent）。`main.py` 删除 `allocation_tools`/`backtest_tools`/`chan_tools`/`cron_tools`/`trade_journal_tools` 的导入与旧 worker/cron 装配，同时删除：
 
 - `seed_default_provider`、`seed_default_agent`、`sync_default_agent_instructions`；
-- `seed_knowledge_config`；
 - `RunWorker`、`DeepAgentExecutor`、`memory_service`、`session_search` 的导入。
+
+（`seed_knowledge_config` 已在 Task 7 随 `knowledge_sync.py` 一并删除。）
 
 路由注册保留：`auth`、`agents`、`providers`、`app_settings`、`channels`、`sessions`、`chat`、`cron`、`knowledge`、`memories`、`skills`、`tools`、`system`、`market`、`backtests`、`chan`、`trade_journal`、`allocation`；不再注册 `runs`。
 
