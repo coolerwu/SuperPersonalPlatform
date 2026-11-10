@@ -298,7 +298,6 @@ export const api = {
   getSettings: () => request<AppSettings>("/api/settings"),
   updateSettings: (payload: {
     session_retention_days: number;
-    memory_consolidate_every_turns?: number;
   }) =>
     request<AppSettings>("/api/settings", {
       method: "PUT",

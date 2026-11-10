@@ -56,7 +56,6 @@ export function SettingsPage(props: SettingsPageProps) {
   const [systemError, setSystemError] = useState("");
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const [retentionDays, setRetentionDays] = useState(30);
-  const [consolidateTurns, setConsolidateTurns] = useState(10);
   const [savingRetention, setSavingRetention] = useState(false);
   const [retentionNotice, setRetentionNotice] = useState("");
   const [retentionError, setRetentionError] = useState("");
@@ -105,7 +104,6 @@ export function SettingsPage(props: SettingsPageProps) {
         if (!active) return;
         setAppSettings(next);
         setRetentionDays(next.session_retention_days);
-        setConsolidateTurns(next.memory_consolidate_every_turns);
       })
       .catch((exc) => {
         if (active) setRetentionError(errorText(exc));
@@ -127,17 +125,10 @@ export function SettingsPage(props: SettingsPageProps) {
           0,
           Math.min(3650, Math.round(retentionDays || 0)),
         ),
-        memory_consolidate_every_turns: Math.max(
-          0,
-          Math.min(1000, Math.round(consolidateTurns || 0)),
-        ),
       });
       setAppSettings(next);
       setRetentionDays(next.session_retention_days);
-      setConsolidateTurns(next.memory_consolidate_every_turns);
-      setRetentionNotice(
-        "已保存；会话清理在下一轮扫描生效，记忆整理阈值从下一条消息开始计数。",
-      );
+      setRetentionNotice("已保存；会话清理在下一轮扫描生效。");
     } catch (exc) {
       setRetentionError(errorText(exc));
     } finally {
@@ -441,22 +432,6 @@ export function SettingsPage(props: SettingsPageProps) {
                 value={retentionDays}
                 onChange={(event) =>
                   setRetentionDays(Number(event.target.value) || 0)
-                }
-              />
-              <p className="hint">
-                每累计 N 个用户回合（网页或微信消息），自动触发一次「整理记忆」；
-                只对开启「自动学习记忆」的 Agent 生效，0 表示关闭。
-              </p>
-              <label className="field-label" htmlFor="consolidate-turns">记忆整理间隔（回合）</label>
-              <input
-                id="consolidate-turns"
-                type="number"
-                min={0}
-                max={1000}
-                step={1}
-                value={consolidateTurns}
-                onChange={(event) =>
-                  setConsolidateTurns(Number(event.target.value) || 0)
                 }
               />
               {retentionError && <div className="error-banner">{retentionError}</div>}

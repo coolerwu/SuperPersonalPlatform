@@ -358,9 +358,17 @@ def test_explicit_remember_creates_user_memory(client) -> None:
     )
     assert response.status_code == 201
     run_id = response.json()["run_id"]
+    message_id = response.json()["message_id"]
 
     memories = client.get("/api/memories?scope=user").json()
-    assert any("以后回答先给结论" in item["content"] for item in memories)
+    item = next(item for item in memories if "以后回答先给结论" in item["content"])
+    assert item["source_kind"] == "explicit"
+    assert item["snapshot_text"] == "记住：以后回答先给结论"
+    assert item["source_message_id"] == message_id
+    assert item["source_session_id"] == session_id
+    assert item["snapshot_at"] is not None
+    assert item["source_message_exists"] is True
+    assert item["source_session_exists"] is True
 
     events = client.get(f"/api/runs/{run_id}/events").json()
     assert any(
@@ -368,6 +376,94 @@ def test_explicit_remember_creates_user_memory(client) -> None:
         and event["payload"].get("source") == "explicit"
         for event in events
     )
+
+    # Editing the text makes it a manual note; the old quote is no longer
+    # evidence for the new wording.
+    edited = client.put(
+        f"/api/memories/{item['id']}",
+        json={"content": "回答先给结论，再展开", "tags": ["style"]},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["source_kind"] == "manual"
+    assert edited.json()["snapshot_text"] is None
+    assert edited.json()["source_message_id"] is None
+
+
+def test_explicit_memory_tags_edit_keeps_snapshot(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+    client.post(
+        "/api/chat/messages",
+        json={"session_id": session_id, "content": "记住：回答保持简洁"},
+    )
+    item = next(
+        item
+        for item in client.get("/api/memories?scope=user").json()
+        if "回答保持简洁" in item["content"]
+    )
+
+    updated = client.put(f"/api/memories/{item['id']}", json={"tags": ["style"]})
+    assert updated.status_code == 200
+    assert updated.json()["source_kind"] == "explicit"
+    assert updated.json()["snapshot_text"] == "记住：回答保持简洁"
+
+
+def test_manual_memory_has_no_snapshot(client) -> None:
+    created = client.post(
+        "/api/memories", json={"scope": "user", "content": "手动写入的偏好"}
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["source_kind"] == "manual"
+    assert body["snapshot_text"] is None
+    assert body["source_message_id"] is None
+
+
+def test_manual_duplicate_does_not_overwrite_explicit_snapshot(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+    client.post(
+        "/api/chat/messages",
+        json={"session_id": session_id, "content": "记住：重复内容不覆盖快照"},
+    )
+
+    duplicate = client.post(
+        "/api/memories",
+        json={"scope": "user", "content": "重复内容不覆盖快照"},
+    )
+    assert duplicate.status_code == 201
+    assert duplicate.json()["source_kind"] == "explicit"
+    assert duplicate.json()["snapshot_text"] == "记住：重复内容不覆盖快照"
+
+
+def test_explicit_memory_survives_session_delete(client) -> None:
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    session_id = client.post(f"/api/agents/{agent_id}/sessions", json={}).json()["id"]
+    response = client.post(
+        "/api/chat/messages",
+        json={"session_id": session_id, "content": "记住：会话删除后快照仍在"},
+    )
+    run_id = response.json()["run_id"]
+
+    async def finish_run() -> None:
+        async with SessionLocal() as db:
+            run = await db.get(Run, run_id)
+            assert run is not None
+            run.status = "completed"
+            run.finished_at = utcnow()
+            await db.commit()
+
+    asyncio.run(finish_run())
+    assert client.delete(f"/api/sessions/{session_id}").status_code == 200
+
+    item = next(
+        item
+        for item in client.get("/api/memories?scope=user").json()
+        if "会话删除后快照仍在" in item["content"]
+    )
+    assert item["snapshot_text"] == "记住：会话删除后快照仍在"
+    assert item["source_message_exists"] is False
+    assert item["source_session_exists"] is False
 
 
 def test_agent_auto_memory_flag(client) -> None:
@@ -380,65 +476,3 @@ def test_agent_auto_memory_flag(client) -> None:
         f"/api/agents/{created['id']}", json={"auto_memory": True}
     ).json()
     assert updated["auto_memory"] is True
-
-
-def test_parse_extraction_handles_fenced_json() -> None:
-    from app.services.memory_service import parse_extraction
-
-    result = parse_extraction(
-        '```json\n{"memories":[{"content":"用户偏好中文","tags":["preference"]}]}\n```'
-    )
-    assert result == [
-        {
-            "action": "add",
-            "scope": "agent",
-            "id": "",
-            "content": "用户偏好中文",
-            "tags": ["preference"],
-        }
-    ]
-
-    operations = parse_extraction(
-        '{"memories":['
-        '{"action":"update","id":"mem_a","content":"用户偏好先给结论","tags":["style"]},'
-        '{"action":"delete","id":"mem_b"}'
-        "]}"
-    )
-    assert operations[0]["action"] == "update"
-    assert operations[0]["id"] == "mem_a"
-    assert operations[0]["scope"] == "agent"
-    assert operations[1] == {
-        "action": "delete",
-        "scope": "agent",
-        "id": "mem_b",
-        "content": "",
-        "tags": [],
-    }
-
-    scoped = parse_extraction(
-        '{"memories":[{"action":"add","scope":"user","content":"用户喜欢简短回答"},'
-        '{"action":"add","scope":"bogus","content":"未知 scope 回退"}]}'
-    )
-    assert [entry["scope"] for entry in scoped] == ["user", "agent"]
-
-
-def test_fts_query_builds_or_terms() -> None:
-    from app.services.memory_service import fts_query
-
-    query = fts_query("用户偏好，回答简洁")
-    assert '"用户偏好"' in query
-    assert '"回答简洁"' in query
-    assert " OR " in query
-
-
-def test_parse_extraction_caps_at_12_operations() -> None:
-    import json
-
-    from app.services.memory_service import parse_extraction
-
-    payload = {
-        "memories": [
-            {"action": "add", "content": f"用户偏好 {index}"} for index in range(20)
-        ]
-    }
-    assert len(parse_extraction(json.dumps(payload))) == 12

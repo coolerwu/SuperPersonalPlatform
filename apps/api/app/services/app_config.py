@@ -46,11 +46,3 @@ async def get_session_retention_days() -> int:
     async with SessionLocal() as db:
         row = await get_or_create(db)
         return int(row.session_retention_days)
-
-
-async def get_memory_consolidate_every_turns(db: AsyncSession) -> int:
-    """Read-only lookup used while creating a Run; never creates or commits."""
-    row = await db.get(AppConfig, APP_CONFIG_ID)
-    if row is None:
-        return bounded_consolidate_turns(settings.memory_consolidate_every_turns)
-    return bounded_consolidate_turns(row.memory_consolidate_every_turns)

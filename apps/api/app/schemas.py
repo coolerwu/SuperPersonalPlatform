@@ -346,9 +346,17 @@ class MemoryOut(BaseModel):
     tags: list[str]
     source_message_id: str | None
     source_run_id: str | None
+    source_session_id: str | None
+    source_kind: str
+    snapshot_text: str | None
+    snapshot_at: datetime | None
     created_at: datetime
     updated_at: datetime
     last_used_at: datetime | None
+    # Filled by the list endpoint only; None means "not checked".
+    source_message_exists: bool | None = None
+    source_session_exists: bool | None = None
+    source_agent_id: str | None = None
 
 
 class BacktestCreate(BaseModel):
@@ -475,7 +483,6 @@ class KnowledgeConfigUpdate(BaseModel):
 
 class AppSettingsUpdate(BaseModel):
     session_retention_days: int = Field(ge=0, le=3650)
-    memory_consolidate_every_turns: int | None = Field(default=None, ge=0, le=1000)
 
 
 class TradeJournalCreate(BaseModel):

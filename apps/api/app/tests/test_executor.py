@@ -191,6 +191,52 @@ async def test_executor_always_mounts_host_shell_and_interpreter(
 
 
 @pytest.mark.asyncio
+async def test_executor_exposes_memory_save_only_when_enabled(tmp_path, monkeypatch) -> None:
+    captured: dict = {}
+
+    class FakeAgent:
+        async def astream(self, _state, config=None, *, stream_mode=None, subgraphs=False):
+            yield ((), "messages", (AIMessageChunk(content="done"), {}))
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return FakeAgent()
+
+    monkeypatch.setattr("deepagents.create_deep_agent", fake_create)
+    provider = SimpleNamespace(
+        api_key="test-key", base_url="https://api.deepseek.com", model="deepseek-v4-flash"
+    )
+
+    enabled = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="execution-agent",
+        agent_id="agent-1",
+        run_id="run-1",
+        auto_memory=True,
+    )
+    [event async for event in enabled.run(
+        instructions="test", session_id="memory-save-on", content="hi"
+    )]
+    assert "memory_save" in [tool.name for tool in captured["tools"]]
+
+    disabled = DeepAgentExecutor(
+        provider=provider,
+        checkpoint_dir=tmp_path,
+        agent_name="test",
+        workspace_path="execution-agent",
+        agent_id="agent-1",
+        run_id="run-1",
+        auto_memory=False,
+    )
+    [event async for event in disabled.run(
+        instructions="test", session_id="memory-save-off", content="hi"
+    )]
+    assert "memory_save" not in [tool.name for tool in captured["tools"]]
+
+
+@pytest.mark.asyncio
 async def test_executor_retries_on_the_model_for_subagents(tmp_path, monkeypatch) -> None:
     captured: dict = {}
 

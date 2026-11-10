@@ -59,7 +59,6 @@ async def _create_run_in_db(
     content: str,
     *,
     source: str = "manual",
-    count_turn: bool = True,
 ) -> tuple[Run, Message]:
     """Create the user Message + queued Run in the caller's transaction."""
     message = Message(session_id=session.id, role="user", content=content)
@@ -81,24 +80,6 @@ async def _create_run_in_db(
         session.title = title_from_content(content)
     session.updated_at = utcnow()
     db.add(RunEvent(run_id=run.id, type="run_queued", payload={"content": content}))
-
-    if count_turn:
-        from app.services.memory_organizer import COUNTED_SOURCES, note_user_turn
-
-        if source in COUNTED_SOURCES:
-            try:
-                # SAVEPOINT: a bookkeeping failure must not fail the user's message.
-                async with db.begin_nested():
-                    await note_user_turn(
-                        db,
-                        agent_id=session.agent_id,
-                        content=content,
-                        source=source,
-                    )
-            except Exception:
-                logger.exception(
-                    "memory consolidation check failed for agent %s", session.agent_id
-                )
     return run, message
 
 

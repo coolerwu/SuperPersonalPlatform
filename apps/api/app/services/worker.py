@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Agent, Message, Provider, Run, RunEvent, Session, utcnow
+from app.models import Agent, Provider, Run, RunEvent, Session, utcnow
 from app.services import memory_service
 from app.services.attachments import build_model_content
 from app.services.executor import DeepAgentExecutor
@@ -33,7 +33,6 @@ class RunWorker:
         self._wake = asyncio.Event()
         self._loop_task: asyncio.Task | None = None
         self._tasks: dict[str, asyncio.Task] = {}
-        self._background: set[asyncio.Task] = set()
         self._memory_locks: dict[str, asyncio.Lock] = {}
         self._shutting_down = False
 
@@ -55,11 +54,6 @@ class RunWorker:
         if self._tasks:
             await asyncio.gather(*self._tasks.values(), return_exceptions=True)
             self._tasks.clear()
-        for task in list(self._background):
-            task.cancel()
-        if self._background:
-            await asyncio.gather(*self._background, return_exceptions=True)
-            self._background.clear()
 
     def wake(self) -> None:
         self._wake.set()
@@ -177,9 +171,9 @@ class RunWorker:
                 enabled_skills=skills,
                 run_id=run_id,
                 rubric=rubric,
+                auto_memory=bool(agent.auto_memory) and run_source != "memory",
             )
             instructions = agent.instructions
-            auto_memory = agent.auto_memory
             agent_id = agent.id
             session_id = session.id
             content = run.input
@@ -221,14 +215,6 @@ class RunWorker:
                                 output_tokens=int(payload.get("output_tokens") or 0),
                                 total_tokens=int(payload.get("total_tokens") or 0),
                             )
-                            if auto_memory and run_source != "memory":
-                                self._schedule_memory_extraction(
-                                    provider=provider,
-                                    agent_id=agent_id,
-                                    run_id=run_id,
-                                    content=content,
-                                    output=output,
-                                )
                             await self._deliver_channel_reply(run_id)
                             return
                         if event.type == "run_failed":
@@ -264,81 +250,14 @@ class RunWorker:
         except Exception:
             logger.exception("channel delivery failed for run %s", run_id)
 
-    def _schedule_memory_extraction(
-        self,
-        *,
-        provider: Provider,
-        agent_id: str,
-        run_id: str,
-        content: str,
-        output: str,
-    ) -> None:
-        # Memory extraction is best-effort post-processing; it must not hold the
-        # run's concurrency slot while waiting on the model.
-        task = asyncio.create_task(
-            self._extract_memories(
-                provider=provider,
-                agent_id=agent_id,
-                run_id=run_id,
-                content=content,
-                output=output,
-            ),
-            name=f"memory-{run_id}",
-        )
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
-
     def _memory_lock(self, agent_id: str) -> asyncio.Lock:
-        # Runs from different sessions of the same Agent can finish together.
-        # Serialize their extraction so the second one sees the first one's adds
-        # as merge candidates instead of writing a near-duplicate memory.
+        # Manual consolidation is the only memory writer left; serialize it per
+        # Agent so two organizer Runs cannot rewrite the same entries at once.
         lock = self._memory_locks.get(agent_id)
         if lock is None:
             lock = asyncio.Lock()
             self._memory_locks[agent_id] = lock
         return lock
-
-    async def _extract_memories(
-        self,
-        *,
-        provider: Provider,
-        agent_id: str,
-        run_id: str,
-        content: str,
-        output: str,
-    ) -> None:
-        try:
-            if await memory_service.has_explicit_memory_event(run_id):
-                return
-            async with SessionLocal() as db:
-                source_message_id = await db.scalar(
-                    select(Message.id)
-                    .where(Message.run_id == run_id, Message.role == "user")
-                    .limit(1)
-                )
-            async with self._memory_lock(agent_id):
-                changes = await memory_service.extract_memories(
-                    provider=provider,
-                    agent_id=agent_id,
-                    user_content=content,
-                    assistant_output=output,
-                    run_id=run_id,
-                    source_message_id=source_message_id,
-                )
-            for change in changes:
-                await append_event(
-                    run_id,
-                    "memory_saved",
-                    {
-                        "source": "auto",
-                        "action": change.action,
-                        "scope": change.scope,
-                        "memory_id": change.memory_id,
-                        "content": change.content,
-                    },
-                )
-        except Exception:
-            logger.exception("auto memory extraction failed for run %s", run_id)
 
     async def cancel(self, run_id: str) -> bool:
         async with SessionLocal() as db:

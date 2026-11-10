@@ -1,5 +1,5 @@
 export const MEMORY_COMMAND =
-  "请整理长期记忆：先读取 /skills/memory-organizer/SKILL.md，然后按技能说明合并重复记忆、删除失效记忆，不要新增事实。";
+  "请整理当前 Agent 的长期记忆：先读取 /skills/memory-organizer/SKILL.md，然后按技能说明只整理 Agent 记忆，合并重复、删除失效项，不要碰用户记忆，不要新增事实。";
 
 const SLASH_COMMAND = /^\/[A-Za-z][A-Za-z0-9_-]{0,15}$/;
 

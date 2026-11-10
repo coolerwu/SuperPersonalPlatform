@@ -50,17 +50,6 @@ async def _cancel_queued_runs() -> None:
         await db.commit()
 
 
-async def _enable_auto_memory(session_id: str) -> None:
-    async with SessionLocal() as db:
-        session = await db.get(Session, session_id)
-        assert session is not None
-        agent = await db.get(Agent, session.agent_id)
-        assert agent is not None
-        if not agent.auto_memory:
-            agent.auto_memory = True
-            await db.commit()
-
-
 @pytest.mark.asyncio
 async def test_worker_completes_run(monkeypatch) -> None:
     monkeypatch.setattr("app.services.worker.DeepAgentExecutor", FakeExecutor)
@@ -441,106 +430,8 @@ async def test_requeue_running_runs_respects_cancel_request() -> None:
 
 
 @pytest.mark.asyncio
-async def test_memory_extraction_does_not_hold_run_slot(monkeypatch) -> None:
-    started: list[str] = []
-    extracting = asyncio.Event()
-    release = asyncio.Event()
-
-    class QuickExecutor:
-        def __init__(self, **kwargs) -> None:
-            self.kwargs = kwargs
-
-        async def run(self, *, instructions: str, session_id: str, content: str):
-            started.append(session_id)
-            yield ExecutorEvent(
-                "run_completed",
-                {"output": "ok", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-            )
-
-    async def slow_extract(**kwargs) -> list:
-        extracting.set()
-        await release.wait()
-        return []
-
-    monkeypatch.setattr("app.services.worker.DeepAgentExecutor", QuickExecutor)
-    monkeypatch.setattr("app.services.memory_service.extract_memories", slow_extract)
-    await _cancel_queued_runs()
-    session_ids = [await _new_session() for _ in range(3)]
-    await _enable_auto_memory(session_ids[0])
-    runs = [(await create_run(session_id, "hi"))[0] for session_id in session_ids]
-
-    worker = RunWorker()
-    await worker.start()
-    try:
-        await asyncio.wait_for(extracting.wait(), timeout=5)
-        deadline = asyncio.get_running_loop().time() + 5
-        while len(started) < 3 and asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.02)
-        assert len(started) == 3
-        statuses: list[str] = []
-        deadline = asyncio.get_running_loop().time() + 5
-        while asyncio.get_running_loop().time() < deadline:
-            async with SessionLocal() as db:
-                statuses = [(await db.get(Run, run.id)).status for run in runs]
-            if all(status == "completed" for status in statuses):
-                break
-            await asyncio.sleep(0.02)
-        assert statuses == ["completed", "completed", "completed"]
-    finally:
-        release.set()
-        await worker.stop()
-
-
-@pytest.mark.asyncio
-async def test_memory_extraction_is_serialized_per_agent(monkeypatch) -> None:
-    calls: list[str] = []
-    active = {"now": 0, "max": 0}
-
-    class QuickExecutor:
-        def __init__(self, **kwargs) -> None:
-            self.kwargs = kwargs
-
-        async def run(self, *, instructions: str, session_id: str, content: str):
-            yield ExecutorEvent(
-                "run_completed",
-                {"output": "ok", "input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-            )
-
-    async def tracked_extract(**kwargs) -> list:
-        calls.append(kwargs["run_id"])
-        active["now"] += 1
-        active["max"] = max(active["max"], active["now"])
-        try:
-            await asyncio.sleep(0.15)
-        finally:
-            active["now"] -= 1
-        return []
-
-    monkeypatch.setattr("app.services.worker.DeepAgentExecutor", QuickExecutor)
-    monkeypatch.setattr("app.services.memory_service.extract_memories", tracked_extract)
-    await _cancel_queued_runs()
-    session_ids = [await _new_session() for _ in range(2)]
-    await _enable_auto_memory(session_ids[0])
-    for session_id in session_ids:
-        await create_run(session_id, "hi")
-
-    worker = RunWorker()
-    await worker.start()
-    try:
-        deadline = asyncio.get_running_loop().time() + 5
-        while len(calls) < 2 and asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.02)
-        assert len(calls) == 2
-    finally:
-        await worker.stop()
-
-    assert active["max"] == 1
-
-
-@pytest.mark.asyncio
-async def test_worker_organizer_run_gets_skill_and_skips_extraction(monkeypatch) -> None:
+async def test_worker_organizer_run_gets_skill_and_skips_memory_context(monkeypatch) -> None:
     captured: dict = {}
-    scheduled: list[str] = []
 
     class CapturingExecutor(FakeExecutor):
         def __init__(self, **kwargs) -> None:
@@ -548,11 +439,6 @@ async def test_worker_organizer_run_gets_skill_and_skips_extraction(monkeypatch)
             captured.update(self.kwargs)
 
     monkeypatch.setattr("app.services.worker.DeepAgentExecutor", CapturingExecutor)
-    monkeypatch.setattr(
-        RunWorker,
-        "_schedule_memory_extraction",
-        lambda self, **kwargs: scheduled.append(kwargs.get("run_id", "")),
-    )
 
     async with SessionLocal() as db:
         agent = Agent(name="organizer-worker-test", provider_id="default")
@@ -582,7 +468,7 @@ async def test_worker_organizer_run_gets_skill_and_skips_extraction(monkeypatch)
         await worker.execute_run(run_id)
         assert captured["enabled_skills"] == [MEMORY_ORGANIZER_SKILL]
         assert captured["memory_context"] == ""
-        assert scheduled == []
+        assert captured["auto_memory"] is False
     finally:
         await worker.stop()
         async with SessionLocal() as db:

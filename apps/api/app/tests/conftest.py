@@ -11,9 +11,6 @@ os.environ["APP_AUTH_TOKEN"] = "test-token"
 os.environ["LLM_API_KEY"] = "test-key"
 os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
 os.environ["LLM_MODEL"] = "deepseek-v4-flash"
-# Keep automatic memory consolidation off unless a test turns it on; otherwise
-# unrelated tests that create runs would queue organizer runs in the shared DB.
-os.environ["MEMORY_CONSOLIDATE_EVERY_TURNS"] = "0"
 for _proxy_name in (
     "HTTP_PROXY",
     "HTTPS_PROXY",

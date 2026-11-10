@@ -96,8 +96,8 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
           onChange={(event) => setAutoMemory(event.target.checked)}
         />
         <span>
-          <strong>自动学习记忆</strong>
-          <small>每次 Run 完成后提取 Agent 专属长期记忆</small>
+          <strong>允许 Agent 写入记忆</strong>
+          <small>开启后 Agent 可在 Run 中用 memory_save 记录自己的工作知识</small>
         </span>
       </label>
 

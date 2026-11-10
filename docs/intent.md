@@ -235,7 +235,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 2. user memory 对所有 Agent 生效；agent memory 只对指定 Agent 生效；session 工作记忆继续由 checkpoint 负责。
 3. 配置页独立「记忆」页面：用户/Agent 两个 tab，支持新增、编辑、删除、搜索。
 4. 对话里以“记住……”开头的内容，立即写入 user memory。
-5. 每个 Agent 有「自动学习记忆」开关；Run 完成后先用 FTS5（trigram）召回相关历史记忆（user memory + 当前 Agent memory），再让模型返回 add/update/delete 并为新增条目选择 `scope=user|agent`，合并或删除旧记忆，最多 12 个操作；带来源、去重、200 条上限。提取在 Run 落 completed 之后作为后台任务执行，不占用 Run 并发槽；同一 Agent 的提取在进程内串行，后一次能看到前一次刚写入的记忆，避免并发写入语义重复但措辞不同的记忆。
+5. 每个 Agent 有「自动学习记忆」开关；Run 完成后先用 FTS5（trigram）召回相关历史记忆（user memory + 当前 Agent memory），再让模型返回 add/update/delete 并为新增条目选择 `scope=user|agent`，合并或删除旧记忆，最多 12 个操作；带来源、去重、200 条上限。提取在 Run 落 completed 之后作为后台任务执行，不占用 Run 并发槽；同一 Agent 的提取在进程内串行，后一次能看到前一次刚写入的记忆，避免并发写入语义重复但措辞不同的记忆。（已由 F87 取代：删除后台自动抽取；user 记忆只在显式动作时写入并保存快照，agent 记忆由 Agent 自己写。）
 6. 每次 Run 按关键词/标签/最近使用取 Top N（最多 12 条、约 1500 字）注入系统提示词，标注为数据而非指令；记录 `run_memories` 用量。
 7. 记忆内容不自动修改 Agent instructions。
 8. 记忆页面提供「整理记忆」按钮：对当前 scope 的记忆分批交给模型，只允许 update/delete，合并重复、删除失效项，不新增事实。（已由 F15 取代：移到聊天输入区「＋」菜单，改为 `memory-organizer` 技能触发。）
@@ -521,7 +521,7 @@ Agent 只能归档，不能彻底删除；Chat 页面是功能骨架，缺少 Ma
 
 1. 移除记忆页面的「整理记忆」按钮、`POST /api/memories/consolidate` 及相关解析/批处理代码；记忆页只保留手动 CRUD 和搜索。
 2. 聊天输入区「＋」菜单新增「整理记忆」指令，点击后直接发起一个 Run；不覆盖输入框里已有的草稿。
-3. 新增内置技能 `memory-organizer`，声明 `include_tools: memory_list memory_update memory_delete memory_move`；正文规定先列出记忆，再按批合并语义重复项、删除失效/矛盾/被否定项，并把属于用户偏好/个人事实的 Agent 记忆归位到用户级；只更新、删除和归位，不新增事实。
+3. 新增内置技能 `memory-organizer`，声明 `include_tools: memory_list memory_update memory_delete memory_move`；正文规定先列出记忆，再按批合并语义重复项、删除失效/矛盾/被否定项，并把属于用户偏好/个人事实的 Agent 记忆归位到用户级；只更新、删除和归位，不新增事实。（由 F87 调整：只整理当前 Agent 的 agent 记忆，移除 `memory_move`，不碰 user 记忆。）
 4. 新增技能工具 `memory_list` / `memory_update` / `memory_delete` / `memory_move`：列表可指定 `scope=user|agent|all`（默认 all，含当前 Agent），支持 `offset` 翻页，返回 id、scope、标签和正文；更新/删除只允许作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；`memory_move` 只允许把当前 Agent 的 agent memory 归位到 user memory（已有相同内容则合并），不注册新增工具。
 5. 首次点击「整理记忆」时，如果当前 Agent 未启用该技能，前端自动把 `memory-organizer` 加入 `enabled_skills` 再发送；菜单项会提示这一点。
 6. 技能随启动 seed，并遵循现有内置技能规则：用户未修改的随版本更新，改过的保持不动。
@@ -3210,3 +3210,42 @@ F81 之后中枢框在离开段起点结束：zone2 画成 10-12 04:00 → 10-21
 - 选择任意起止日期后点「分析」按该窗口返回；窗口过大/过小给出明确错误。
 - Agent 指定日期区间时按区间返回，未指定时用默认窗口。
 - 后端测试与前端构建通过。
+
+
+### F87 记忆来源快照与 Agent 自写记忆
+
+- 状态：已完成
+- 日期：2026-11-10
+- 来源：用户指出自动抽取会把一次提问写成长期记忆（「faker失败了？」→「关注英雄联盟职业赛事」），整理器凭感觉合并、丢失原文；要求每条用户记忆对应当时的 snapshot，每条 agent 记忆由 Agent 自己写
+
+#### 背景与目标
+
+旧的自动抽取在 Run 完成后让另一个模型读一轮对话并 add/update/delete 记忆，候选不足时用「最近更新」补位，导致一次提问被写成用户长期画像，且会改写与本轮无关的条目。整理器又会把主题相邻的条目重写成更长的摘要并硬删除原文，无法核对、无法回退。目标：用户记忆只在用户显式要求时产生，并持久保存当时的用户消息原文；agent 记忆由 Agent 在 Run 中通过工具自己写；不再有后台影子作者和按轮次的自动整理。
+
+#### 功能点
+
+1. 删除 Run 完成后的后台自动抽取（`extract_memories`、`parse_extraction`、`find_merge_candidates`、`has_explicit_memory_event` 及 worker 调度）；普通对话不再产生任何记忆。
+2. user 记忆只有三个入口：网页聊天「记住…」、微信 1:1「记住…」、记忆页手动新增。Agent 工具不能写 user scope。显式写入带 `source_kind=explicit`、`source_message_id`、`source_run_id`、`source_session_id`、`snapshot_text`（用户消息原文）和 `snapshot_at`；手动新增 `source_kind=manual`、无快照。编辑正文会降级为 manual 并清空快照，仅改 tags 保留快照。
+3. 新增平台工具 `memory_save`（始终可用，Agent 的 `auto_memory` 开启且不是整理 Run 时注入）：只写当前 Agent 的 agent 记忆，正文 2–320 字，每次 Run 最多 5 条，自动带 run/session/message 来源，`source_kind=agent`。
+4. `memory_items` 增加 `source_session_id`、`source_kind`、`snapshot_text`、`snapshot_at`；已有行回填 `source_kind='legacy'`。`GET /api/memories` 返回 `source_message_exists`、`source_session_exists`、`source_agent_id`。
+5. 删除按轮次的自动整理（`note_user_turn` 与 `memory_consolidate_every_turns` 的运行时、API 和 UI；DB 列与环境变量保留）；保留手动「整理记忆」，`memory-organizer` 只处理当前 Agent 的 agent 记忆，移除 `memory_move` 和所有用户记忆操作；合并必须保留原始事实，单条不超过 320 字。
+6. 前端记忆页展示来源徽标、用户消息快照（可展开）和「查看原消息」（复用会话搜索的定位与高亮链路）；旧记忆显示「旧记忆（无快照）」；Agent 开关文案改为「允许 Agent 写入记忆」；设置页移除「记忆整理间隔」。
+7. 会话/Agent 删除逻辑不变：不删除记忆、不清来源；快照原文持久保存在记忆行内。
+
+#### 验收标准
+
+- 发送「faker失败了？」（不带「记住」）后 user 记忆条数不变，Run 无 `memory_saved` 事件。
+- 网页或微信发送「记住：…」产生带快照的 user 记忆；记忆页可展开原文并跳回原消息高亮。
+- 记忆页手动新增标记为「手动添加」、无快照；编辑正文后快照清空并降级为手动。
+- 开启 `auto_memory` 的 Agent 可调用 `memory_save` 写 agent 记忆；关闭后工具不可见。
+- 删除产生显式记忆的会话后，记忆仍在并显示「原会话已删除，快照仍保留」。
+- 手动「整理记忆」只能列出、更新、删除 agent 记忆；对 user 记忆 id 操作返回 not found。
+- 连续超过原阈值多轮不再自动创建 `source='memory'` 的 Run；设置页无整理间隔输入。
+- 后端测试与前端构建通过。
+
+#### 非目标
+
+- 向量/语义检索或 embedding；
+- agent 记忆的版本历史、回滚或自动遗忘；
+- 自动清理或重新分类旧记忆；
+- 让 Agent 写 user scope。

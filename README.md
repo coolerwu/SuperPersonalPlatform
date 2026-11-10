@@ -55,7 +55,7 @@ npm run dev
 - 默认 Assistant 的 instructions 为中文，参考 Hermes Agent 的默认身份 behavior spec；
 - 新对话采用懒创建：点击「新对话」只清空当前视图，首次发送时才创建 Session；
 - 每个页面有独立路径：`/chat`（打开某个会话为 `/chat/<session_id>`）、`/config`、`/memory`、`/skills`、`/tools`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；刷新或直接打开链接会回到对应页面和会话，浏览器前进/后退可用，未知路径回到聊天页；选中的 Agent 会记在浏览器本地，下次打开沿用；
-- 对话里以“记住：……”开头的内容会写入用户记忆；
+- 对话里以「记住：……」开头的内容会立即写入用户记忆，并保存这条用户消息原文作为快照；微信 1:1 同样生效。平台不会从普通提问自动推断记忆；
 - 用户消息和 assistant 消息都按 Markdown 渲染：GFM 表格/列表、代码高亮、代码块复制、链接、图片，以及 `$$...$$` 数学公式（KaTeX；单 `$` 仍按普通文本处理，避免和金额混淆）；
 - 消息操作：复制、引用；按钮位于气泡下方、气泡之外，引用内容显示在输入框上方并可单独取消，发送时以 `> ` 引用块写入消息；失败 Run 可重试；
 - 流式输出、停止生成、运行中排队追问、自动增高输入框；Run 运行中停止键和发送键并排显示，发送的追问进入同会话队列并显示「已排队，前面的任务完成后会自动执行」；运行状态按会话保存，切走再切回会继续显示该会话的流式文本、执行过程和截图；发送时强制滚到底部，输出期间上滑后显示浮动的「回到最新」按钮；模型返回 `reasoning_content` 时，聊天中显示可折叠的「执行过程」：折叠条左对齐并占满消息宽度，连续思考片段与工具调用按发生顺序交错展示，思考/工具阶段展开，开始输出答案后自动折叠，完成后默认折叠、可展开；流式文本约 80ms 节流后渲染 Markdown，长回答和思考过程不会每个 token 重排一次；
@@ -81,11 +81,11 @@ npm run dev
 侧栏底部「配置」进入配置页，顶部用 `Provider / Agent / 运行环境` 三个 tab 切换，不需要一路滚到底；Provider 默认只显示列表，点条目展开表单；Agent 列表点击行切换当前 Agent，点「编辑」展开表单。**配置页始终编辑当前 Agent（与侧边栏共用一个选择状态）**；Agent tab 列出全部 Agent 的摘要，点击任意一行即可切换当前 Agent，侧边栏选择器同步变化；编辑区只编辑当前 Agent。切换 Agent 时，Provider tab 会自动选中该 Agent 的 Provider；输入草稿按 Agent 分别保留（当前页面内），切换时旧 Agent 的会话和消息不会短暂显示在新 Agent 下。集中管理：
 
 - Provider：查看全部 Provider、密钥是否已配置、新增和编辑；
-- Agent：列表展示全部 Agent 的 Provider/model、启用技能数、自动记忆和状态，点击行切换当前 Agent；下方编辑名称、Provider、instructions、工作区，或新建 Agent；新建时未填写 instructions 会使用默认的中文个人助手提示词（能力说明 + 行为规范）；
+- Agent：列表展示全部 Agent 的 Provider/model、启用技能数、自主写记忆和状态，点击行切换当前 Agent；下方编辑名称、Provider、instructions、工作区，或新建 Agent；新建时未填写 instructions 会使用默认的中文个人助手提示词（能力说明 + 行为规范）；
 - 工作区：每个 Agent 固定使用 `~/.super-personal-platform/workspaces/<agent_id>/`，不支持自定义路径；配置页只读展示机器目录，并随左上角选中的 Agent 变化。Agent 可以查看和修改工作区内的文件；
 - 技能：在侧边栏「Agent 能力」组的「技能」页面按当前 Agent 勾选启用；未启用的技能不会进入系统提示，读取它的 SKILL.md 也不会解锁工具。磁盘上已删除但仍在启用列表里的技能会显示为“未找到”，可取消勾选移除；
 - Agent 彻底删除：输入 Agent 名称确认后，级联删除它的会话、消息、Run、事件和 checkpoint（有活动 Run 时拒绝）；
-- 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）；同时可设置会话自动清理的保留天数（默认 30 天，0 表示不清理）和自动记忆整理间隔（每 N 个用户回合，默认 10，0 表示关闭；`GET/PUT /api/settings`，存 `app_configs`）。
+- 运行环境：版本、执行核、数据库类型、Run 超时、历史消息上限、计数和能力开关（`GET /api/system`）；同时可设置会话自动清理的保留天数（默认 30 天，0 表示不清理；`GET/PUT /api/settings`，存 `app_configs`）。
 
 Run 事件存放在 `run_events` 表；前端默认折叠 `assistant_delta` / `reasoning_delta` 流式片段，在右侧抽屉里展开查看。`tool_call` 事件记录工具名与解析后的参数，聊天中的活动行据此显示「正在读取 …」「正在浏览 …」，运行超过 10 秒后附上已用时间。
 
@@ -139,6 +139,7 @@ metadata:
 - **`skill_save`**：把可复用的工作流程保存成技能。参数 `name`（小写字母/数字/连字符）、`description`、`instructions`、`include_tools`（空格分隔的已注册工具名，可空）；写入 `/skills/<name>/SKILL.md` 并标记 `metadata.source: ai`；通过 `skill_save` 每次 Run 最多创建 3 个，不能覆盖已有技能。创建后自动加入当前 Agent 的启用列表，下一次对话生效。
 - **`session_search`**：按关键词搜索当前 Agent 的历史会话消息，返回命中片段的 session_id、message_id、会话标题、角色和时间。关键词不要传整句问题。
 - **`session_read`**：先用 `session_search` 拿到 session_id 和 message_id，再读取命中消息前后各 `before` / `after` 条；不传 message_id 时返回该会话最近的消息。只允许当前 Agent 的会话。
+- **`memory_save`**：Agent 自己记录一条当前 Agent 的 Agent 记忆（2–320 字，每次 Run 最多 5 条），自动带来源 Run/会话/消息；只在 Agent 开启「允许 Agent 写入记忆」时注入，不能写用户记忆。
 
 平台注册表当前提供以下技能工具：
 
@@ -158,7 +159,7 @@ metadata:
 
 `web_search` 和 `web_fetch` 使用当前 Agent Provider 的 key，需要 Provider 支持 DeepSeek Search/Fetch；成功后按请求计费（各每 1000 次 5 元），分别受 DeepSeek QPS 限制（Search 100、Fetch 25）。使用条件：启用 `web-search` 并读取其 SKILL.md 后，会同时解锁 `web_search` 和 `web_fetch`；只抓取网页时也可以启用独立的 `web-fetch` 技能。`web-browser` 同样需要启用并读取其 SKILL.md。
 
-- **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除长期记忆（`memory-organizer` 技能声明）；列表返回 id、scope、标签和正文，更新/删除只能作用在 user memory 或当前 Agent 的 agent memory 上，其他 Agent 的记忆返回 not found；不提供新增工具。
+- **`memory_list` / `memory_update` / `memory_delete`**：读取、更新、删除当前 Agent 的 Agent 记忆（`memory-organizer` 技能声明）；列表返回 id、标签和正文，只作用于当前 Agent 的 agent memory，用户记忆和其他 Agent 的记忆返回 not found；不提供新增工具。
 - **`backtest_run` / `backtest_status` / `backtest_result` / `backtest_cancel` / `market_probe` / `market_cache_status`**：加密货币回测工具（`quant-backtest` 技能声明）。`backtest_run` 创建 Bitget 现货单标的回测（可指定 `warmup_bars`，默认 200）并最多等待 90 秒，完成返回指标摘要，未完成返回任务 id；`backtest_status` 查状态/进度；`backtest_result` 返回指标、告警和最近交易；`backtest_cancel` 取消排队或执行中的任务；`market_probe` / `market_cache_status` 检查 Bitget 连接和本地行情缓存。
 - **`cron_list` / `cron_targets` / `cron_create` / `cron_update` / `cron_delete` / `cron_run`**：定时任务工具（`cron-scheduler` 技能声明）。只操作当前 Agent 的任务；`cron_list` 返回任务 id、表达式、时区、启停、下次触发、最近状态、专属会话和推送目标；`cron_targets` 列出当前 Agent 的微信渠道和已有 1:1 联系人会话；`cron_create` 创建任务并生成专属会话，prompt 必须自包含，可同时传 `push_channel_id` / `push_conversation_id`；`cron_update` 修改指定字段，两个推送 id 都传空字符串表示清除；`cron_delete` 删除配置但保留会话；`cron_run` 立即运行一次且不改变原计划。未启用技能或未读取 SKILL.md 时工具不可见。
 - **`chan_analyze`**：缠论分析工具（`chanlun` 技能声明）。参数 `symbol`、`granularity`（`15min/1h/4h/1day/1week`）、时间窗口 `start_date` / `end_date`（UTC，日期或 ISO 时间，精确到所选周期，例如 1h 可选到小时，结束时间包含在内，默认最近 500 根对应窗口，窗口 20–1000 根）；返回数据区间、合并 K 线、笔/未完成走势/中枢/1/2/3 买卖点、MACD 面积背离摘要和 warnings，不返回完整 K 线数组；买卖点带失效标记；结构是程序化老笔近似，不是交易建议。
@@ -176,12 +177,11 @@ metadata:
 
 侧栏「记忆」进入独立记忆页面：
 
-- **用户记忆**：所有 Agent 共享，适合偏好、长期事实；
-- **Agent 记忆**：只对当前 Agent 生效，适合角色和领域知识；
-- 手动新增/编辑/删除/搜索；对话里“记住：……”会立即写入用户记忆；
-- Agent 编辑区有「自动学习记忆」开关：开启后，Run 完成时最多返回 12 个记忆操作；先用 FTS5（trigram）在 user memory 和当前 Agent memory 中找出相关历史记忆，再让模型返回 add/update/delete 做合并，并为新增条目选择 `scope=user|agent`（用户长期偏好/个人事实写 user，Agent 工作方式/项目知识写 agent，不确定用 agent；update/delete 保持原 scope），去重后直接写入，每个 scope 上限 200 条；提取在 Run 完成后以后台任务执行，不占用 Run 并发槽，同一 Agent 的提取串行执行，避免并发写入重复记忆；
-- **整理记忆**：聊天输入区「＋」菜单的「整理记忆」指令会直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` / `memory_move` 合并重复、删除失效项，并把明显属于用户偏好或个人事实、但落在当前 Agent 记忆里的条目归位到 user memory；只更新/删除/归位、不新增事实；范围是 user memory 和当前 Agent 的 agent memory。首次使用时会自动为当前 Agent 启用该技能；
-- **自动整理**：每个 Agent 累计用户回合（网页与微信消息，定时任务和重试不算），达到配置页「运行环境」设置的间隔（默认 10，0 关闭）时自动发起一次「整理记忆」Run 并把计数归零；生成的会话标题为「记忆整理」，与手动整理使用同一条指令和技能。只对开启「自动学习记忆」的 Agent 生效；反复手动整理不会重复触发；
+- **用户记忆**：所有 Agent 共享，适合用户偏好、长期事实；只来自网页/微信「记住：……」和记忆页手动新增，平台不会从普通提问自动推断。显式记忆保存当时的用户消息原文、消息/会话/Run id 和时间作为快照，可在记忆页展开并跳回原消息；会话删除后快照仍保留。手动添加标记为「手动添加」、没有快照；编辑正文会降级为手动并清空快照，仅改标签保留快照；每个 scope 上限 200 条；
+- **Agent 记忆**：只对当前 Agent 生效，适合角色和领域知识；由 Agent 在 Run 中调用平台工具 `memory_save` 自己写（2–320 字，每次 Run 最多 5 条），也可以在记忆页手动新增。Agent 编辑区的「允许 Agent 写入记忆」开关控制 `memory_save` 是否注入；
+- 手动新增/编辑/删除/搜索；Run 完成后不再有后台自动抽取；
+- **整理记忆**：聊天输入区「＋」菜单的「整理记忆」指令会直接发起一个 Run，读取 `memory-organizer` 技能后用 `memory_list` / `memory_update` / `memory_delete` 合并重复、删除失效项；只处理当前 Agent 的 Agent 记忆，不读取、不改写、不删除用户记忆，也不新增事实；合并必须保留原始事实，单条不超过 320 字。首次使用时会自动为当前 Agent 启用该技能；
+- 不再按回合自动触发整理；`agents.memory_turn_count` 和 `app_configs.memory_consolidate_every_turns` 仅为兼容旧库保留，运行时、API 和设置页都不再使用；
 - 每次 Run 只注入与本轮输入相关的记忆：中文按双字组（过滤停用词）、英文按词元匹配，user 与当前 Agent 同池按相关度竞争（不做 scope 配额或 user 全量注入）；最多 12 条、1500 字，单条最多 320 字，没有相关记忆时不注入。记忆作为数据块附加到系统提示词，不会自动修改 Agent instructions；记录实际使用的 memory id。
 - **回复校验**：网页聊天的每条最终回复在结束前会用 deepagents 的 `RubricMiddleware` 校验一次，rubric 由当前 Agent 的 instructions 和全部用户记忆（不含 agent 记忆）组成；评分器可以调用 `session_search` / `session_read` 核对历史对话。评分未通过时让主 Agent 修订一次，修订版直接作为最终回复，不再二次评分；聊天活动行在评分期间显示「质检中」，未通过时显示「质检未通过，正在修订」，已生成的草稿保持可见，修订版在结束时整段替换；质检结果和未通过项显示在消息的「执行过程」里。评分器失败时保留当前回复，不阻断 Run；没有用户记忆时不校验。
 
@@ -301,13 +301,13 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
   - `runs`：每次发送/重试/定时触发一行，含 `source`（`manual` / `retry` / `wechat` / `cron`）、状态、input/output、错误、token 用量、时间；
   - `run_events`：append-only，含 `run_queued`、`assistant_delta`（每个流式片段一行）、`reasoning_delta`（思考片段）、`model_usage`、`run_completed`、`memory_saved` 等；
   - `cron_jobs`：定时任务配置、专属 Session、`next_run_at`（UTC）、最近运行/跳过时间；任务删除后 Session 保留，Session 删除后任务解绑并在下次触发时重建；
-  - `memory_items`：长期记忆，`scope=user|agent`，含 content、tags、来源 Run/Message、last_used_at；
+  - `memory_items`：长期记忆，`scope=user|agent`，含 content、tags、来源 Run/Message/会话、`source_kind`（explicit/manual/agent/legacy）、`snapshot_text` / `snapshot_at`、last_used_at；
   - `run_memories`：某次 Run 实际注入了哪些记忆；
   - `providers`：Provider 配置，API Key 存在这里，接口只返回 `has_api_key`，不返回明文；依赖 `app.db` 的文件权限保护。
   - `channels`：渠道及其 iLink 登录凭据（`bot_token` 不返回前端、不写日志）；`channel_conversations`：外部联系人与 Session 的映射（含最新 `context_token`）；`channel_inbounds`：入站消息幂等键；`channel_run_links`：哪些 Run 需要回信；`channel_deliveries`：Run 终态的发送记录，用于崩溃恢复。
   - `backtests`：回测任务与结果，含状态、策略代码、指标、下采样净值/回撤/价格、交易明细和告警；大数组按上限截断。
   - `knowledge_configs`：知识库 WebDAV 配置（单行），含启用开关、地址、账号、应用密码、根目录和同步间隔；密码不返回前端。
-  - `app_configs`：平台设置（单行），保存会话自动清理的保留天数和自动记忆整理间隔。
+  - `app_configs`：平台设置（单行），保存会话自动清理的保留天数。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles`（按 `symbol + granularity + open_time_ms` 唯一）和 `market_sync_state`（已同步范围与上次错误）。可以独立删除，下次回测会重新抓取。
 - `trade-journal.jsonl`：交易记录，一行一个 JSON 对象，权限 0600；由 `trade-journal` 技能的工具读写，不建数据库表。字段和计算口径见「交易记录」；可以独立备份、复制和手工查看。
 - `allocation.json`：长期资产组合配置，权限 0600；保存组合名称、基础币种、备注、现金目标、再平衡带宽、目标占比和手动价。见「资产配置」；不建数据库表。
@@ -374,7 +374,7 @@ Agent 可以通过 `/knowledge/` 直接读写坚果云上的个人知识库，�
 | `VISION_MAX_IMAGE_BYTES` | 单张图片发送给模型的上限；超过时先压缩 | `4194304` |
 | `VISION_MAX_IMAGE_EDGE` | 超大图片压缩后的最长边（像素，最小 320） | `1600` |
 | `SESSION_RETENTION_DAYS` | 会话保留初始值（天）；仅在首次创建配置时写入，之后在配置页「运行环境」修改，`0` 表示不清理 | `30` |
-| `MEMORY_CONSOLIDATE_EVERY_TURNS` | 自动记忆整理间隔初始值（用户回合）；仅在首次创建配置时写入，之后在配置页「运行环境」修改，`0` 表示关闭 | `10` |
+| `MEMORY_CONSOLIDATE_EVERY_TURNS` | 已废弃：自动整理已移除，仅在首次创建配置行时作为旧字段种子，运行时和设置页都不再使用 | `10` |
 | `SESSION_CLEANUP_INTERVAL_SECONDS` | 会话清理扫描间隔（秒，最小 60） | `3600` |
 | `WEIXIN_LONG_POLL_TIMEOUT_MS` | iLink `getupdates` 长轮询窗口 | `35000` |
 | `WEIXIN_API_TIMEOUT_MS` | iLink `sendmessage` 请求超时 | `15000` |

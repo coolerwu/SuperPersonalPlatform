@@ -51,6 +51,7 @@ RESERVED_TOOL_NAMES = frozenset(
         "skill_save",
         "session_search",
         "session_read",
+        "memory_save",
     }
 )
 
@@ -95,6 +96,8 @@ class SkillToolContext:
     browser: BrowserSession | None = None
     agent_id: str = ""
     session_id: str = ""
+    run_id: str = ""
+    allow_memory_save: bool = False
     skills_dir: Path | None = None
     created_skills: list[str] = field(default_factory=list)
 

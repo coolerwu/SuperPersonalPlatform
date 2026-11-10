@@ -6,6 +6,7 @@ import type {
   AgentSavePayload,
   Attachment,
   DrawerTab,
+  MemoryItem,
   Message,
   Provider,
   Run,
@@ -223,6 +224,12 @@ export default function App() {
   const loadingOlderRef = useRef(false);
   const sessionsRequestRef = useRef(0);
   const agentIdRef = useRef("");
+  const pendingMemoryFocus = useRef<{
+    agentId: string;
+    sessionId: string;
+    messageId: string;
+    createdAt: string;
+  } | null>(null);
   const draftsRef = useRef<Record<string, string>>({});
   const draftKeyRef = useRef("");
   const pendingSessionsRef = useRef<Record<string, true>>({});
@@ -530,6 +537,31 @@ export default function App() {
     }
   }
 
+  function openMemorySource(item: MemoryItem) {
+    if (!item.source_session_id || !item.source_message_id) return;
+    if (item.source_message_exists === false) return;
+    const targetAgent = item.source_agent_id || agentIdRef.current;
+    const focus = {
+      agentId: targetAgent,
+      sessionId: item.source_session_id,
+      messageId: item.source_message_id,
+      createdAt: item.snapshot_at || item.created_at,
+    };
+    if (targetAgent && targetAgent !== agentIdRef.current) {
+      pendingMemoryFocus.current = focus;
+      setAgentId(targetAgent);
+      return;
+    }
+    openSearchHit({
+      message_id: focus.messageId,
+      session_id: focus.sessionId,
+      session_title: "",
+      role: "user",
+      snippet: "",
+      created_at: focus.createdAt,
+    });
+  }
+
   useEffect(() => {
     void bootstrap().catch((exc) => {
       setError(describeApiError(exc));
@@ -566,6 +598,23 @@ export default function App() {
     void loadSessions(agentId).catch((exc) => setAgentError(describeApiError(exc), agentId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth, agentId]);
+
+  useEffect(() => {
+    // Consume a cross-agent memory link after the agent switch has reset the
+    // previous agent's session state; otherwise the reset would clear the focus.
+    const pending = pendingMemoryFocus.current;
+    if (!pending || pending.agentId !== agentId) return;
+    pendingMemoryFocus.current = null;
+    openSearchHit({
+      message_id: pending.messageId,
+      session_id: pending.sessionId,
+      session_title: "",
+      role: "user",
+      snippet: "",
+      created_at: pending.createdAt,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -1756,6 +1805,7 @@ export default function App() {
           agents={agents}
           agentId={agentId}
           onClose={() => openView("chat")}
+          onOpenSource={openMemorySource}
         />
       ) : view === "skills" ? (
         <SkillsPage

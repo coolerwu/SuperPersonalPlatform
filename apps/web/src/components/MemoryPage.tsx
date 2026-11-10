@@ -9,6 +9,14 @@ type MemoryPageProps = {
   agents: Agent[];
   agentId: string;
   onClose: () => void;
+  onOpenSource?: (item: MemoryItem) => void;
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  explicit: "来自对话",
+  agent: "Agent 记录",
+  manual: "手动添加",
+  legacy: "旧记忆（无快照）",
 };
 
 function parseTags(value: string): string[] {
@@ -19,7 +27,7 @@ function parseTags(value: string): string[] {
     .slice(0, 8);
 }
 
-export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
+export function MemoryPage({ agents, agentId, onClose, onOpenSource }: MemoryPageProps) {
   const [scope, setScope] = useState<MemoryScope>("user");
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [query, setQuery] = useState("");
@@ -172,9 +180,9 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
 
             <p className="memory-scope-hint">
               {scope === "user"
-                ? "所有 Agent 共享；也可以在对话里说“记住：……”。"
+                ? "所有 Agent 共享；只能在对话里说“记住：……”或在这里手动添加，平台不会自动推断。"
                 : agent
-                  ? `仅对 ${agent.name} 生效；开启自动学习后会在 Run 完成时自动提取。`
+                  ? `仅对 ${agent.name} 生效；Agent 可以在 Run 中用 memory_save 自己记录，你也可以手动添加。`
                   : "先选择一个 Agent。"}
             </p>
 
@@ -198,6 +206,9 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
                     </button>
                   </div>
                 </form>
+                <p className="memory-form-note">
+                  手动添加没有聊天快照，来源标记为手动。
+                </p>
 
                 {error && <div className="error-banner">{error}</div>}
 
@@ -237,15 +248,36 @@ export function MemoryPage({ agents, agentId, onClose }: MemoryPageProps) {
                     ) : (
                       <div key={item.id} className="memory-item">
                         <div className="memory-content">{item.content}</div>
+                        {item.snapshot_text && (
+                          <details className="memory-snapshot">
+                            <summary>
+                              当时的用户消息
+                              {item.snapshot_at ? ` · ${formatTime(item.snapshot_at)}` : ""}
+                            </summary>
+                            <div className="memory-snapshot-text">{item.snapshot_text}</div>
+                          </details>
+                        )}
                         <div className="memory-meta">
                           {item.tags.map((tag) => (
                             <span key={tag} className="memory-tag">{tag}</span>
                           ))}
-                          <span>
-                            {item.source_run_id
-                              ? `来自 Run ${item.source_run_id.slice(0, 8)}`
-                              : "手动添加"}
+                          <span className="memory-badge">
+                            {SOURCE_LABELS[item.source_kind] ?? "手动添加"}
                           </span>
+                          {item.source_kind === "explicit" &&
+                            item.snapshot_text &&
+                            onOpenSource &&
+                            (item.source_message_exists === true ? (
+                              <button
+                                type="button"
+                                className="link-button"
+                                onClick={() => onOpenSource(item)}
+                              >
+                                查看原消息
+                              </button>
+                            ) : item.source_message_exists === false ? (
+                              <span>原会话已删除，快照仍保留</span>
+                            ) : null)}
                           <span>{formatTime(item.updated_at)}</span>
                         </div>
                         <div className="memory-actions">

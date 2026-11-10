@@ -32,6 +32,10 @@ async def send_message(payload: ChatRequest, request: Request) -> ChatResponse:
             content=explicit,
             source_message_id=message.id,
             source_run_id=run.id,
+            source_session_id=message.session_id,
+            source_kind="explicit",
+            snapshot_text=content,
+            snapshot_at=message.created_at,
         )
         if memory is not None:
             await append_event(

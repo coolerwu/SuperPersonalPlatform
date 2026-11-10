@@ -8,6 +8,7 @@ from app.db import (
     _ensure_agent_columns,
     _ensure_app_config_columns,
     _ensure_cron_job_columns,
+    _ensure_memory_item_columns,
     _ensure_session_origin,
     engine,
     init_db,
@@ -87,6 +88,40 @@ async def test_ensure_session_origin_is_idempotent(tmp_path: Path) -> None:
         ).fetchone()
         assert row is not None
         assert row[0] == "chat"
+    await engine.dispose()
+
+
+async def test_ensure_memory_item_columns_is_idempotent(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'legacy-memory.db'}")
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            "CREATE TABLE memory_items "
+            "(id TEXT PRIMARY KEY, scope TEXT, agent_id TEXT, content TEXT)"
+        )
+        await conn.exec_driver_sql(
+            "INSERT INTO memory_items (id, scope, agent_id, content) "
+            "VALUES ('m', 'user', NULL, '旧记忆')"
+        )
+        await _ensure_memory_item_columns(conn)
+        await _ensure_memory_item_columns(conn)
+
+        result = await conn.exec_driver_sql("PRAGMA table_info(memory_items)")
+        columns = {row[1] for row in result.fetchall()}
+        assert {
+            "source_session_id",
+            "source_kind",
+            "snapshot_text",
+            "snapshot_at",
+        } <= columns
+
+        row = (
+            await conn.exec_driver_sql(
+                "SELECT source_kind, snapshot_text FROM memory_items WHERE id='m'"
+            )
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "legacy"
+        assert row[1] is None
     await engine.dispose()
 
 

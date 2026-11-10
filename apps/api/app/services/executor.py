@@ -23,6 +23,7 @@ from langchain_core.messages import (
 
 from app.config import settings
 from app.services import memory_tools  # noqa: F401 - registers memory tools
+from app.services.memory_tools import build_memory_save_tool
 from app.services.browser_tools import BROWSER_TOOL_NAMES, BrowserSession
 from app.services.knowledge_sync import KNOWLEDGE_SKILL_NAME
 from app.services.model_retry import ModelRetryMixin
@@ -374,6 +375,7 @@ class DeepAgentExecutor:
         skills_dir: Path | None = None,
         run_id: str = "",
         rubric: str = "",
+        auto_memory: bool = False,
     ) -> None:
         self.provider = provider
         self.checkpoint_dir = checkpoint_dir
@@ -386,6 +388,7 @@ class DeepAgentExecutor:
         self.skills_dir = skills_dir
         self.run_id = run_id
         self.rubric = rubric
+        self.auto_memory = auto_memory
 
     async def run(self, *, instructions: str, session_id: str, content: RunContent) -> AsyncIterator[ExecutorEvent]:
         try:
@@ -476,6 +479,8 @@ class DeepAgentExecutor:
                     browser=browser,
                     agent_id=self.agent_id,
                     session_id=session_id,
+                    run_id=self.run_id,
+                    allow_memory_save=self.auto_memory,
                     skills_dir=skills_dir,
                 )
                 skills_middleware = AgentSkillsMiddleware(
@@ -519,13 +524,16 @@ class DeepAgentExecutor:
                 # The model class owns retries (including subagents and the
                 # step-limit summary); ChatOpenAI SDK retries stay disabled so
                 # there is exactly one retry layer.
+                platform_tools: list[Any] = [
+                    build_skill_save_tool(skill_context),
+                    build_session_search_tool(skill_context),
+                    build_session_read_tool(skill_context),
+                ]
+                if self.auto_memory and self.agent_id and self.run_id:
+                    platform_tools.append(build_memory_save_tool(skill_context))
                 agent = create_deep_agent(
                     model=chat_model,
-                    tools=[
-                        build_skill_save_tool(skill_context),
-                        build_session_search_tool(skill_context),
-                        build_session_read_tool(skill_context),
-                    ],
+                    tools=platform_tools,
                     system_prompt=system_prompt,
                     checkpointer=checkpointer,
                     backend=backend,

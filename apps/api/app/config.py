@@ -50,9 +50,8 @@ class Settings(BaseSettings):
     session_retention_days: int = 30
     session_cleanup_interval_seconds: int = 3600
 
-    # Automatic memory consolidation runs after this many user turns per
-    # Agent; 0 disables it. This value only seeds the first app_configs row,
-    # after which the config page owns it.
+    # Deprecated: automatic consolidation was removed. The value only seeds the
+    # legacy app_configs column so old databases keep loading; nothing reads it.
     memory_consolidate_every_turns: int = 10
 
     # Cron jobs run inside the API process. The tick only needs to be shorter

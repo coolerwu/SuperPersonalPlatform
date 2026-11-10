@@ -41,8 +41,8 @@ function eventText(event: RunEvent): string {
           ? "更新记忆"
           : action === "delete"
             ? "删除记忆"
-            : payload.source === "auto"
-              ? "自动记住"
+            : payload.source === "agent"
+              ? "Agent 记住了"
               : "记住了";
       return `${label}：${String(payload.content ?? "")}`;
     }
