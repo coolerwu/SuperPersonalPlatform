@@ -207,6 +207,8 @@ git add apps/api/app/models.py apps/api/app/services/channel_delivery.py apps/ap
 git commit -m "Replace channel delivery with session-keyed obligations"
 ```
 
+> **质量审查修订（执行时已落实）：** `mark_attempting` 改为条件 UPDATE 的原子 claim（仅 pending/attempting，返回是否抢到）；`sent`/`failed` 为终态不可回退；`complete` 只回填 pending/attempting；`list_pending` 过滤空 content 与终态行；`init_db` 检测旧 `channel_deliveries`（缺 `id` 列）时直接 DROP 重建并 warning；启动顺序改为先恢复 `running_sessions` 再 `weixin.start()`（sweep 不会扫到空行）；测试补 rollback 不落库、claim 竞争、attempts/max_attempts、终态 no-op、过滤与清理。**后续 Task 6：** 删除会话时按 `session_id` 一并删除投递行，移除联系人绑定时按 `(channel_id, external_id)` 清理。**Task 5：** `cron_jobs.push_conversation_id` 现在按 `external_id` 语义理解（重建库后不再有旧 32 位 hex 数据）。
+
 ---
 
 ### Task 2: 轮次携带投递义务
@@ -380,6 +382,8 @@ Expected: PASS
 git add apps/api/app/services/claude_runner.py apps/api/app/tests/test_claude_runner_delivery.py
 git commit -m "Attach channel delivery to SDK turns"
 ```
+
+> **质量审查修订：** 重启恢复要补投递归属——`recovery` 对 `source="resume"` 的轮次用 `channel_delivery.find_pending_for_session(session_id)` 找到崩溃前创建、尚未回填的投递行，作为 `Turn.delivery` 重新挂上；没有行就不投递。`complete` 只回填 pending/attempting，sent/failed 为终态。
 
 ---
 
@@ -859,6 +863,8 @@ Expected: PASS
 git add apps/api/app/services/weixin_runtime.py apps/api/app/main.py apps/api/app/tests/test_weixin_runtime_sdk.py
 git commit -m "Move WeChat runtime to SDK sessions"
 ```
+
+> **质量审查修订：** `mark_attempting` 允许对 `attempting` 行重抢（重启 sweep 需要），发送方必须在进程内用 `_delivering: set[int]` 按 delivery_id 去重，保证同一行同一进程内至多一个发送者；启动/渠道激活 sweep 与轮次结束回调共享该集合。
 
 ---
 

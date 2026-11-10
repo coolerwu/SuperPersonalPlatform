@@ -233,7 +233,7 @@ for row in running_sessions:
 channel_deliveries(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   channel_id TEXT NOT NULL,
-  conversation_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'pending',
