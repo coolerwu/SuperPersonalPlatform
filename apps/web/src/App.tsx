@@ -12,7 +12,7 @@ import type {
   TranscriptMessage,
   TurnStreamEvent,
 } from "./types";
-import { MEMORY_COMMAND, isSlashCommand } from "./messageContent";
+import { isSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
 import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
 import { ChatPanel } from "./components/ChatPanel";
@@ -71,7 +71,6 @@ type PendingUser = {
   queued: boolean;
 };
 
-const MEMORY_SKILL = "memory-organizer";
 const QUEUED_NOTICE = "已排队，前面的任务完成后会自动执行";
 const SIDEBAR_POLL_MS = 5000;
 const NEW_SESSION_KEY = "__new__";
@@ -1231,28 +1230,16 @@ export default function App() {
     }
   }
 
-  async function send(attachments: Attachment[] = [], overrideText?: string): Promise<boolean> {
-    const text = (overrideText ?? draft).trim();
+  async function send(attachments: Attachment[] = []): Promise<boolean> {
+    const text = draft.trim();
     const sendAgentId = agentIdRef.current || agentId;
     const sendKey = sessionKey(sendAgentId, sessionIdRef.current);
-    const quoteText =
-      overrideText === undefined ? (quotesByKey[sendKey] ?? "").trim() : "";
+    const quoteText = (quotesByKey[sendKey] ?? "").trim();
     if ((!text && attachments.length === 0 && !quoteText) || !sendAgentId) {
       return false;
     }
-    if (overrideText === undefined && isSlashCommand(text)) {
+    if (isSlashCommand(text)) {
       return runCommand(text, sendKey);
-    }
-    if (overrideText === undefined && /^\/memory\s/i.test(text)) {
-      // User memory is no longer written by a chat command; do not send this
-      // text to the model as an ordinary prompt.
-      setCommandReply({
-        key: sendKey,
-        command: "/memory",
-        text: "用户记忆已迁移到 CLAUDE.md / 记忆页，请直接在记忆页维护。",
-      });
-      setDraftFor(sendKey, "");
-      return true;
     }
     const wasNew = !sessionIdRef.current;
     if (!wasNew && !loadedSessionsRef.current.has(sessionIdRef.current)) {
@@ -1282,7 +1269,7 @@ export default function App() {
     clearLiveNotice(targetSessionId);
     markPending(sendKey);
     if (wasNew) markPending(newKey);
-    if (overrideText === undefined) setDraftFor(sendKey, "");
+    setDraftFor(sendKey, "");
     const optimisticId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     pushPendingUser(targetSessionId, {
       id: optimisticId,
@@ -1319,29 +1306,9 @@ export default function App() {
         content,
       });
       bindPendingTurn(targetSessionId, optimisticId, response.turn_id);
-      if (overrideText === undefined) {
-        clearAttachmentsFor(sendKey);
-        clearQuoteFor(sendKey);
-      }
+      clearAttachmentsFor(sendKey);
+      clearQuoteFor(sendKey);
       const stillCurrentAgent = sendAgentId === agentIdRef.current;
-      if (wasNew && stillCurrentAgent && overrideText !== undefined) {
-        // A command (整理记忆) consumes neither the draft nor the attachments,
-        // so carry them from the pending new session to the created one.
-        const carriedDraft = draftsRef.current[sendKey] ?? "";
-        if (carriedDraft) {
-          draftsRef.current[newKey] = carriedDraft;
-          delete draftsRef.current[sendKey];
-          setDraftFor(newKey, carriedDraft);
-        }
-        setAttachmentsByKey((current) => {
-          const carried = current[sendKey];
-          if (!carried?.length) return current;
-          const next = { ...current };
-          delete next[sendKey];
-          next[newKey] = carried;
-          return next;
-        });
-      }
       if (!stillCurrentAgent) {
         // The user switched agents while this send was in flight. The turn
         // belongs to the original agent; never surface it in the new view.
@@ -1365,7 +1332,7 @@ export default function App() {
       return true;
     } catch (exc) {
       removePendingUser(targetSessionId, optimisticId);
-      if (overrideText === undefined) setDraftFor(sendKey, text);
+      setDraftFor(sendKey, text);
       skipRefreshRef.current.delete(targetSessionId);
       if (!alreadyStreaming) {
         updateLive(targetSessionId, (current) => ({ ...current, tracking: false }));
@@ -1392,25 +1359,6 @@ export default function App() {
       clearPending(sendKey);
       if (wasNew) clearPending(newKey);
     }
-  }
-
-  async function organizeMemory(): Promise<boolean> {
-    const target = agents.find((item) => item.id === agentIdRef.current);
-    if (!target || chatSending) return false;
-    if (!target.enabled_skills.includes(MEMORY_SKILL)) {
-      try {
-        const updated = await api.updateAgent(target.id, {
-          enabled_skills: [...target.enabled_skills, MEMORY_SKILL],
-        });
-        setAgents((current) =>
-          current.map((item) => (item.id === updated.id ? updated : item)),
-        );
-      } catch (exc) {
-        setAgentError(describeApiError(exc), target.id);
-        return false;
-      }
-    }
-    return send([], MEMORY_COMMAND);
   }
 
   async function cancel() {
@@ -1853,7 +1801,6 @@ export default function App() {
               agentName={agent?.name ?? "Agent"}
               channelType={currentSession?.channel_type ?? ""}
               channelName={currentSession?.channel_name ?? ""}
-              memorySkillEnabled={agent?.enabled_skills.includes(MEMORY_SKILL) ?? false}
               focusSignal={focusSignal}
               focusMessageId={focus?.sessionId === sessionId ? focus.messageId : ""}
               focusMessageNonce={focus?.nonce ?? 0}
@@ -1862,7 +1809,6 @@ export default function App() {
               onAddAttachment={(file) => addAttachmentFor(activeKey, file)}
               onRemoveAttachment={(path) => removeAttachmentFor(activeKey, path)}
               onSend={(sent) => send(sent)}
-              onOrganizeMemory={organizeMemory}
               onCancel={() => void cancel()}
               onQuote={quote}
             />

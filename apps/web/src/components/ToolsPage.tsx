@@ -35,7 +35,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
         <div>
           <div className="eyebrow">TOOLS</div>
           <h1>工具</h1>
-          <p>平台工具和文件工具始终可用；技能工具由技能启用状态控制，读取 SKILL.md 后解锁。</p>
+          <p>文件工具由 Claude Code 内置提供；当前版本平台工具与技能工具尚未接入 Agent，后续版本启用。</p>
         </div>
         <button className="ghost-button" onClick={onClose}>返回对话</button>
       </header>
@@ -46,7 +46,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
             <div className="settings-card-head">
               <div>
                 <h2>平台工具</h2>
-                <p>由平台直接提供，所有 Agent 始终可用，不需要技能解锁。</p>
+                <p>由平台声明；当前版本尚未接入 Agent，待工具层迁移。</p>
               </div>
             </div>
             <div className="tool-list">
@@ -56,7 +56,9 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
                     <strong>{tool.name}</strong>
                     <small>{tool.description}</small>
                   </div>
-                  <span className="capability on">始终可用</span>
+                  <span className={`capability ${tool.wired ? "on" : "off"}`}>
+                    {tool.wired ? "已接入" : "未接入（待工具层）"}
+                  </span>
                 </div>
               ))}
             </div>
@@ -66,7 +68,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
             <div className="settings-card-head">
               <div>
                 <h2>文件工具</h2>
-                <p>由 FilesystemMiddleware 提供，作用于当前 Agent 的工作区，不需要技能解锁。</p>
+                <p>Claude Code 内置工具，作用于当前 Agent 的工作区。</p>
               </div>
             </div>
             <div className="tool-list">
@@ -76,7 +78,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
                     <strong>{tool.name}</strong>
                     <small>{tool.description}</small>
                   </div>
-                  <span className="capability on">始终可用</span>
+                  <span className="capability on">Claude Code 内置</span>
                 </div>
               ))}
             </div>
@@ -86,7 +88,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
             <div className="settings-card-head">
               <div>
                 <h2>技能工具</h2>
-                <p>启用声明它的技能后，读取该技能 SKILL.md 即可解锁；工具本身不需要单独启用。</p>
+                <p>工具注册表已保留；当前版本尚未接入 Agent，待工具层迁移。</p>
               </div>
               <div className="settings-card-actions">
                 <button className="ghost-button" onClick={() => void load()} disabled={loading}>

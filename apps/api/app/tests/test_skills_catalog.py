@@ -121,13 +121,37 @@ def test_normalize_skill_names_dedupes_and_validates() -> None:
             normalize_skill_names([invalid])
 
 
-def test_catalog_names_are_stable(tmp_path: Path) -> None:
-    _write_skill(tmp_path, "alpha", "name: alpha\ndescription: Alpha")
-    _write_skill(tmp_path, "beta", "name: beta\ndescription: Beta")
+def test_seeded_skill_tool_declarations_match_registry() -> None:
+    from app.services import (  # noqa: F401 - import registers tool factories
+        allocation_tools,
+        backtest_tools,
+        browser_tools,
+        chan_tools,
+        skill_tools,
+        trade_journal_tools,
+    )
+    from app.services.skill_tools import SKILL_TOOL_REGISTRY
+    from app.services.skills import seed_default_skills
 
-    catalog = scan_skills(tmp_path)
-    assert {skill.name for skill in catalog.skills} == {"alpha", "beta"}
-    assert all(skill.include_tools == () for skill in catalog.skills)
+    seed_default_skills()
+    catalog = scan_skills()
+    declared = {tool for skill in catalog.skills for tool in skill.include_tools}
+    registered = {spec.name for spec in SKILL_TOOL_REGISTRY.specs()}
+
+    # Cron tools lost their module with the legacy stack; the skill keeps
+    # declaring them until the tool-layer migration rewrites the contract.
+    pending = {
+        "cron_list",
+        "cron_targets",
+        "cron_create",
+        "cron_update",
+        "cron_delete",
+        "cron_run",
+    }
+    assert declared - registered == pending
+    cron_skill = next(skill for skill in catalog.skills if skill.name == "cron-scheduler")
+    assert set(cron_skill.include_tools) == pending
+    assert "memory-organizer" not in {skill.name for skill in catalog.skills}
 
 
 def test_default_web_skills_seeded(client) -> None:

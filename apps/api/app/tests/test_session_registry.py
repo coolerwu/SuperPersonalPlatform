@@ -330,3 +330,30 @@ async def test_stream_is_bound_to_session_and_close_session_delegates():
     runner.release("a")
     await wait_until(lambda: runner.finished == ["a"])
     await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_close_agent_clients_skips_busy_and_other_agents():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    idle = Turn(session_id="idle", agent_id="agent-a", prompt="idle")
+    busy = Turn(session_id="busy", agent_id="agent-a", prompt="busy")
+    other = Turn(session_id="other", agent_id="agent-b", prompt="other")
+
+    await registry.submit(idle)
+    runner.release("idle")
+    await wait_until(lambda: "idle" in runner.finished)
+
+    await registry.submit(busy)
+    await wait_until(lambda: "busy" in runner.started)
+
+    await registry.submit(other)
+    runner.release("other")
+    await wait_until(lambda: "other" in runner.finished)
+
+    assert await registry.close_agent_clients("agent-a") == 1
+    assert runner.closed == ["idle"]
+
+    runner.release("busy")
+    await wait_until(lambda: "busy" in runner.finished)
+    await registry.close()

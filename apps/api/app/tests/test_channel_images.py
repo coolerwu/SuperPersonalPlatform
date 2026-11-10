@@ -108,3 +108,88 @@ async def test_send_session_image_skips_inactive_channel(tmp_path, monkeypatch):
 
     assert ok is False
     assert built == []
+
+
+class FailingClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    async def send_image(self, *, to_user_id: str, image: bytes, context_token=None):
+        self.attempts += 1
+        raise RuntimeError("send exploded")
+
+
+@pytest.mark.asyncio
+async def test_send_session_image_skips_oversized_file(tmp_path, monkeypatch):
+    client = FakeClient()
+    monkeypatch.setattr(channel_images, "_build_client", lambda channel: client)
+    monkeypatch.setattr(channel_images.settings, "browser_screenshot_max_bytes", 2)
+    image = tmp_path / "shot.png"
+    image.write_bytes(b"png")
+
+    ok = await channel_images.send_session_image(
+        SESSION_ID, image, store=FakeStore(_settings())
+    )
+
+    assert ok is False
+    assert client.sent == []
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_send_session_image_skips_unreadable_file(tmp_path, monkeypatch):
+    client = FakeClient()
+    monkeypatch.setattr(channel_images, "_build_client", lambda channel: client)
+
+    ok = await channel_images.send_session_image(
+        SESSION_ID, tmp_path / "missing.png", store=FakeStore(_settings())
+    )
+
+    assert ok is False
+    assert client.sent == []
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_send_session_image_closes_client_after_send_failure(
+    tmp_path, monkeypatch
+):
+    client = FailingClient()
+    monkeypatch.setattr(channel_images, "_build_client", lambda channel: client)
+    monkeypatch.setattr(channel_images, "RETRY_DELAY_SECONDS", 0)
+    image = tmp_path / "shot.png"
+    image.write_bytes(b"png")
+
+    ok = await channel_images.send_session_image(
+        SESSION_ID, image, store=FakeStore(_settings())
+    )
+
+    assert ok is False
+    assert client.attempts == channel_images.SEND_ATTEMPTS
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_send_session_image_rejects_mismatched_binding_key(
+    tmp_path, monkeypatch
+):
+    built: list[ChannelSection] = []
+
+    def factory(channel):
+        built.append(channel)
+        return FakeClient()
+
+    monkeypatch.setattr(channel_images, "_build_client", factory)
+    settings = _settings()
+    conversation = settings.channel_conversations.pop("ch1:wx-1")
+    settings.channel_conversations["other:wx-1"] = conversation
+    image = tmp_path / "shot.png"
+    image.write_bytes(b"png")
+
+    ok = await channel_images.send_session_image(
+        SESSION_ID, image, store=FakeStore(settings)
+    )
+
+    assert ok is False
+    assert built == []

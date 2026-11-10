@@ -47,7 +47,6 @@ type ChatPanelProps = {
   agentName: string;
   channelType: string;
   channelName: string;
-  memorySkillEnabled: boolean;
   focusSignal: number;
   focusMessageId: string;
   focusMessageNonce: number;
@@ -56,7 +55,6 @@ type ChatPanelProps = {
   onAddAttachment: (file: Attachment) => void;
   onRemoveAttachment: (path: string) => void;
   onSend: (attachments: Attachment[]) => Promise<boolean>;
-  onOrganizeMemory: () => Promise<boolean>;
   onCancel: () => void;
   onQuote: (text: string) => void;
 };
@@ -324,22 +322,6 @@ function UserMessageRow({
               </div>
             )}
             {parsed.text && <Markdown content={parsed.text} />}
-          </>
-        ) : parsed.kind === "memory-command" ? (
-          <>
-            <div className="message-command">
-              <span className="message-command-mark" aria-hidden="true">
-                ✦
-              </span>
-              <span className="message-command-text">
-                <strong>整理记忆</strong>
-                <small>合并重复与失效的长期记忆</small>
-              </span>
-            </div>
-            <details className="message-command-raw">
-              <summary>查看指令</summary>
-              <pre>{message.content}</pre>
-            </details>
           </>
         ) : (
           <Markdown content={message.content} />
@@ -886,39 +868,6 @@ export function ChatPanel(props: ChatPanelProps) {
                   <span className="composer-menu-text">
                     <strong>上传附件</strong>
                     <small>保存到当前 Agent 工作区</small>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!props.canSend || props.sending}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    void props.onOrganizeMemory();
-                  }}
-                >
-                  <span className="composer-menu-icon" aria-hidden="true">
-                    <svg
-                      viewBox="0 0 24 24"
-                      width="15"
-                      height="15"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="m12 3 1.9 4.6 4.6 1.9-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3Z" />
-                      <path d="m18 14 .9 2.1 2.1.9-2.1.9L18 20l-.9-2.1-2.1-.9 2.1-.9L18 14Z" />
-                    </svg>
-                  </span>
-                  <span className="composer-menu-text">
-                    <strong>整理记忆</strong>
-                    <small>
-                      {props.memorySkillEnabled
-                        ? "合并重复与失效的长期记忆"
-                        : "首次使用会自动启用 memory-organizer 技能"}
-                    </small>
                   </span>
                 </button>
                 <button

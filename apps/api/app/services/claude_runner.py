@@ -28,6 +28,7 @@ from app.config import settings as app_settings
 from app.db import SessionLocal
 from app.services import channel_delivery, sdk_bridge, turn_lease
 from app.services.claude_env import build_claude_env, claude_paths, workspace_for
+from app.services.identifiers import valid_agent_id
 from app.services.sdk_events import StreamMapper, TurnOutcome, outcome_from_result
 from app.services.settings_store import SettingsStore
 from app.services.turn_stream import TurnStream
@@ -133,6 +134,10 @@ class ClaudeTurnRunner:
             client = self._clients.get(turn.session_id)
             if client is not None:
                 return client
+            # Agent ids become the SDK project directory and a workspace path
+            # component; refuse malformed settings before creating anything.
+            if not valid_agent_id(agent.id):
+                raise ValueError(f"invalid agent id: {agent.id!r}")
             options_class = sdk_bridge.options_class()
             exists = transcript_path(turn.session_id, agent.id, home=self._home).is_file()
             workspace = workspace_for(agent.id, self._home)

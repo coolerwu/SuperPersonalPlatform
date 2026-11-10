@@ -10,8 +10,6 @@ from __future__ import annotations
 import re
 
 _COMMAND_RE = re.compile(r"^/[A-Za-z][A-Za-z0-9_-]{0,15}$")
-_MEMORY_COMMAND_RE = re.compile(r"^/memory(?:\s+.*)?$", re.IGNORECASE | re.DOTALL)
-_MEMORY_CONTENT_RE = re.compile(r"^/memory(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 
 HELP_TEXT = (
     "可用命令：\n"
@@ -30,23 +28,12 @@ STOP_REQUESTED_TEXT = "已请求停止当前任务。"
 
 
 def is_command_text(text: str) -> bool:
-    """True for a whole slash command, including /memory with an argument."""
-    value = (text or "").strip()
-    return bool(_COMMAND_RE.match(value) or _MEMORY_COMMAND_RE.match(value))
+    """True for a whole slash command."""
+    return bool(_COMMAND_RE.match((text or "").strip()))
 
 
 def parse_command(text: str) -> str | None:
     stripped = (text or "").strip()
-    if _MEMORY_COMMAND_RE.match(stripped):
-        return "/memory"
     if not _COMMAND_RE.match(stripped):
         return None
     return stripped.lower()
-
-
-def memory_command_content(text: str) -> str | None:
-    """Return the /memory argument, or None when the text is not /memory."""
-    match = _MEMORY_CONTENT_RE.match((text or "").strip())
-    if not match:
-        return None
-    return (match.group(1) or "").strip()

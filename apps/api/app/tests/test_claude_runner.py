@@ -618,3 +618,71 @@ async def test_empty_instructions_keep_preset_without_append(tmp_path):
         "preset": "claude_code",
     }
     assert "append" not in captured[0].system_prompt
+
+
+async def _wait_until(predicate, timeout=2.0):
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_invalid_agent_id_fails_before_creating_workspace(tmp_path):
+    await init_db()
+    agent = AgentSection(
+        id="../escape",
+        name="Bad",
+        provider=ProviderSection(
+            base_url="https://api.deepseek.com/anthropic",
+            model="deepseek-flash[1m]",
+            api_key="sk-test",
+        ),
+    )
+    runner = ClaudeTurnRunner(
+        store=FakeStore(agent),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient([ResultMessage()]),
+    )
+    turn = Turn(session_id=SESSION_ID, agent_id="../escape", prompt="hi")
+
+    outcome = await runner.run(turn, TurnStream())
+
+    assert outcome.status == "failed"
+    assert "invalid agent id" in (outcome.error or "")
+    assert not (tmp_path / "workspaces" / ".." / "escape").exists()
+    assert not await turn_lease.is_running(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_agent_settings_change_closes_idle_client_and_rebuilds(tmp_path):
+    from app.services.session_registry import SessionRegistry
+
+    await init_db()
+    captured = []
+    clients = [FakeClient([ResultMessage()]), FakeClient([ResultMessage()])]
+
+    def factory(options):
+        captured.append(options)
+        return clients[len(captured) - 1]
+
+    agent = make_agent()
+    agent.instructions = "旧指令"
+    store = FakeStore(agent)
+    runner = ClaudeTurnRunner(store=store, home=tmp_path, client_factory=factory)
+    registry = SessionRegistry(runner, concurrency=1)
+    turn = make_turn()
+
+    try:
+        await registry.submit(turn)
+        await _wait_until(lambda: len(captured) == 1 and not registry.is_busy(turn.session_id))
+        assert captured[0].system_prompt["append"] == "旧指令"
+
+        store._agents[0].instructions = "新指令"
+        assert await registry.close_agent_clients("default") == 1
+        assert clients[0].disconnected is True
+
+        await registry.submit(make_turn())
+        await _wait_until(lambda: len(captured) == 2 and not registry.is_busy(turn.session_id))
+        assert captured[1].system_prompt["append"] == "新指令"
+    finally:
+        await registry.close()

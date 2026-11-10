@@ -53,41 +53,43 @@ async def send_session_image(
     """
     if not session_id:
         return False
-    if store is None:
-        from app.services.settings_store import get_settings_store
-
-        store = get_settings_store()
-    current = await store.get()
-    binding = next(
-        (
-            (key, conversation)
-            for key, conversation in current.channel_conversations.items()
-            if conversation.session_id == session_id
-        ),
-        None,
-    )
-    if binding is None:
-        return False
-    key, conversation = binding
-    parts = _conversation_key_parts(key)
-    channel = next(
-        (item for item in current.channels if item.id == conversation.channel_id),
-        None,
-    )
-    if (
-        parts is None
-        or channel is None
-        or channel.type != "wechat"
-        or channel.status != "active"
-        or not channel.bot_token
-        or not channel.account_id
-    ):
-        return False
-    to_user_id = parts[1]
-    context_token = conversation.context_token
-    client = _build_client(channel)
-
+    client = None
     try:
+        if store is None:
+            from app.services.settings_store import get_settings_store
+
+            store = get_settings_store()
+        current = await store.get()
+        binding = next(
+            (
+                (key, conversation)
+                for key, conversation in current.channel_conversations.items()
+                if conversation.session_id == session_id
+            ),
+            None,
+        )
+        if binding is None:
+            return False
+        key, conversation = binding
+        parts = _conversation_key_parts(key)
+        channel = next(
+            (item for item in current.channels if item.id == conversation.channel_id),
+            None,
+        )
+        if (
+            parts is None
+            or parts[0] != conversation.channel_id
+            or channel is None
+            or channel.id != conversation.channel_id
+            or channel.type != "wechat"
+            or channel.status != "active"
+            or not channel.bot_token
+            or not channel.account_id
+        ):
+            return False
+        to_user_id = parts[1]
+        context_token = conversation.context_token
+        client = _build_client(channel)
         try:
             data = image_path.read_bytes()
         except OSError:
@@ -129,4 +131,12 @@ async def send_session_image(
         logger.warning("weixin image send failed session=%s", session_id, exc_info=True)
         return False
     finally:
-        await client.aclose()
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:
+                logger.warning(
+                    "failed to close weixin image client session=%s",
+                    session_id,
+                    exc_info=True,
+                )

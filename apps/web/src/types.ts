@@ -49,6 +49,8 @@ export type ToolInfo = {
   description: string;
   registered: boolean;
   skills: string[];
+  source: "claude-code" | "platform" | "skill" | string;
+  wired: boolean;
 };
 
 export type ToolsCatalog = {

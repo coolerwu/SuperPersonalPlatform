@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,12 +16,26 @@ from app.services.settings_store import (
 
 router = APIRouter(prefix="/api/providers", tags=["providers"], dependencies=[Depends(require_auth)])
 
+logger = logging.getLogger(__name__)
+
 PROVIDER_ID = "default"
 
 
 def _store(request: Request) -> SettingsStore:
     store = getattr(request.app.state, "settings_store", None)
     return store if store is not None else get_settings_store()
+
+
+async def _close_agent_clients(request: Request, agent_id: str) -> None:
+    """Drop cached SDK clients so the next turn picks up a new provider."""
+    registry = getattr(request.app.state, "registry", None)
+    close = getattr(registry, "close_agent_clients", None)
+    if close is None:
+        return
+    try:
+        await close(agent_id)
+    except Exception:
+        logger.exception("closing cached clients failed agent=%s", agent_id)
 
 
 def _now() -> datetime:
@@ -91,6 +106,7 @@ async def create_provider(payload: ProviderCreate, request: Request) -> Provider
     await store.update_agent_fields(
         agent.id, provider=provider.model_dump(), updated_at=now
     )
+    await _close_agent_clients(request, agent.id)
     return _provider_out(
         agent.model_copy(update={"provider": provider, "updated_at": now})
     )
@@ -120,6 +136,7 @@ async def update_provider(
     await store.update_agent_fields(
         agent.id, provider=provider.model_dump(), updated_at=now
     )
+    await _close_agent_clients(request, agent.id)
     return _provider_out(
         agent.model_copy(update={"provider": provider, "updated_at": now})
     )

@@ -116,6 +116,11 @@ class ToolOut(BaseModel):
     description: str = ""
     registered: bool = False
     skills: list[str] = Field(default_factory=list)
+    # "claude-code" for SDK built-ins, "platform" for platform tools,
+    # "skill" for tools from the skill registry.
+    source: str = ""
+    # Whether this version actually exposes the tool to the Agent.
+    wired: bool = False
 
 
 class ToolsOut(BaseModel):
@@ -245,7 +250,6 @@ class TranscriptMessageOut(BaseModel):
 class ChatCommandRequest(BaseModel):
     agent_id: str = Field(min_length=1)
     session_id: str | None = None
-    # /memory takes an argument and user memory has no length cap.
     command: str = Field(min_length=2)
 
 

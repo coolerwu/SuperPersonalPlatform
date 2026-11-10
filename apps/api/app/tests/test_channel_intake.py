@@ -1,13 +1,15 @@
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import delete, select
 
-from app.db import SessionLocal, init_db
+from app.db import SessionLocal, engine, init_db
 from app.models import ChannelDelivery, ChannelInbound
 from app.services import commands
 from app.services.channel_intake import (
+    claim_inbound,
     inbound_seen,
     ingest,
     resolve_quoted_text,
@@ -371,13 +373,20 @@ async def test_memory_and_unknown_commands_are_unknown():
     await init_db()
     store = FakeStore()
     registry = FakeRegistry()
-    ids = ["unknown-1", "unknown-2"]
+    ids = ["unknown-1", "unknown-2", "unknown-3"]
     try:
-        memory = await _ingest(store, registry, message_ids=["unknown-1"], text="/memory 记一下")
+        memory = await _ingest(store, registry, message_ids=["unknown-1"], text="/memory")
         assert memory.reply == commands.UNKNOWN_COMMAND_TEXT
         unknown = await _ingest(store, registry, message_ids=["unknown-2"], text="/foo")
         assert unknown.reply == commands.UNKNOWN_COMMAND_TEXT
         assert registry.turns == []
+
+        # /memory with an argument is ordinary text now, not a command.
+        ordinary = await _ingest(
+            store, registry, message_ids=["unknown-3"], text="/memory 记一下"
+        )
+        assert ordinary.reply is None
+        assert [turn.prompt for turn in registry.turns] == ["/memory 记一下"]
     finally:
         await _cleanup("ch1", ids)
 
@@ -831,3 +840,33 @@ async def test_resolve_quoted_text_is_scoped_per_contact():
         )
     finally:
         await _cleanup_quote_rows(channel_id)
+
+
+@pytest.mark.asyncio
+async def test_stale_channel_inbounds_schema_is_rebuilt(caplog):
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql("DROP TABLE IF EXISTS channel_inbounds")
+        await conn.exec_driver_sql(
+            "CREATE TABLE channel_inbounds ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "channel_id VARCHAR(32) NOT NULL, "
+            "external_message_id VARCHAR(200) NOT NULL, "
+            "conversation_id VARCHAR(32), "
+            "session_id VARCHAR(36), "
+            "message_id VARCHAR(32), "
+            "run_id VARCHAR(32), "
+            "created_at DATETIME)"
+        )
+
+    with caplog.at_level(logging.WARNING, logger="app.db"):
+        await init_db()
+
+    assert "dropping stale channel_inbounds" in caplog.text
+    async with engine.begin() as conn:
+        result = await conn.exec_driver_sql("PRAGMA table_info(channel_inbounds)")
+        columns = {row[1] for row in result.fetchall()}
+    assert {"text", "external_id", "session_id"} <= columns
+
+    assert await claim_inbound("ch-stale", ["m1"], text="hi", external_id="wx-1")
+    assert not await claim_inbound("ch-stale", ["m1"], text="hi", external_id="wx-1")
+    await _cleanup("ch-stale", ["m1"])

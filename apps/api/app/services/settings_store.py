@@ -387,27 +387,63 @@ class SettingsStore:
 
         await self._json.update(mutate)
 
-    async def update_agent_fields(self, agent_id: str, **fields: Any) -> None:
+    async def update_agent_fields(self, agent_id: str, **fields: Any) -> bool:
         """Patch only the given fields of one agent.
 
         Multiple UI actions (enable skill, rename, toggle status) may race;
         each patches its own fields so a stale full-agent write cannot undo the
-        others. The merged entry is validated before it is persisted.
+        others. The merged entry is validated before it is persisted. Returns
+        whether the agent exists.
         """
         unknown = set(fields) - set(AgentSection.model_fields)
         if unknown:
             raise ValueError("unknown agent field(s): " + ", ".join(sorted(unknown)))
 
+        updated = False
+
         def mutate(data: dict[str, Any]) -> None:
+            nonlocal updated
             agents = _list_section(data, "agents")
             for index, item in enumerate(agents):
                 if isinstance(item, dict) and item.get("id") == agent_id:
                     agents[index] = AgentSection.model_validate(
                         {**item, **fields}
                     ).model_dump()
+                    updated = True
                     return
 
         await self._json.update(mutate)
+        return updated
+
+    async def append_agent_skill(self, agent_id: str, skill_name: str) -> bool:
+        """Append one skill to an Agent's enabled list atomically.
+
+        The read-modify-write happens inside the store lock and always starts
+        from the latest list, so enabling a skill cannot overwrite a concurrent
+        change from the skills page. Returns whether the agent exists.
+        """
+        if not agent_id or not skill_name:
+            return False
+        found = False
+
+        def mutate(data: dict[str, Any]) -> None:
+            nonlocal found
+            agents = _list_section(data, "agents")
+            for index, item in enumerate(agents):
+                if not isinstance(item, dict) or item.get("id") != agent_id:
+                    continue
+                found = True
+                current = item.get("enabled_skills")
+                current = list(current) if isinstance(current, list) else []
+                if skill_name in current:
+                    return
+                agents[index] = AgentSection.model_validate(
+                    {**item, "enabled_skills": [*current, skill_name]}
+                ).model_dump()
+                return
+
+        await self._json.update(mutate)
+        return found
 
     async def update_runtime(self, **values: Any) -> None:
         validated = _validated_update(RuntimeSection, values)

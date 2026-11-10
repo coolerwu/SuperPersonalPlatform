@@ -52,6 +52,9 @@ class SessionRegistry:
         self._cancelled: set[str] = set()
         # Session -> Agent, so destructive Agent operations can tell whether a
         # queued turn (which may not have created a transcript yet) is active.
+        # Entries survive worker retirement: an idle session may still hold a
+        # cached SDK client that a settings change needs to close.
+        # ``close_session`` removes them.
         self._session_agents: dict[str, str] = {}
         self._max_streams = max(1, max_streams)
         self._closed = False
@@ -128,10 +131,11 @@ class SessionRegistry:
             if queue.empty():
                 # Retire atomically with the empty check and with submit (which
                 # never awaits), so a new turn can never land in a queue whose
-                # worker has already exited.
+                # worker has already exited. Keep the session -> agent map: an
+                # idle session may still hold a cached SDK client, and Agent
+                # settings changes need to find it.
                 self._queues.pop(session_id, None)
                 self._workers.pop(session_id, None)
-                self._session_agents.pop(session_id, None)
                 return
 
     def stream(self, turn_id: str, session_id: str | None = None) -> TurnStream | None:
@@ -141,7 +145,24 @@ class SessionRegistry:
 
     async def close_session(self, session_id: str) -> None:
         """Release the runner's cached SDK client after transcript deletion."""
+        self._session_agents.pop(session_id, None)
         await self._runner.close(session_id)
+
+    async def close_agent_clients(self, agent_id: str) -> int:
+        """Close cached SDK clients for one Agent's idle sessions.
+
+        Called after Agent instructions or provider settings change so the
+        next turn rebuilds its client with the new configuration. Busy
+        sessions are left alone; their next turn starts from the old client
+        until it finishes and the settings change can be retried.
+        """
+        closed = 0
+        for session_id, owner in list(self._session_agents.items()):
+            if owner != agent_id or self.is_busy(session_id):
+                continue
+            await self._runner.close(session_id)
+            closed += 1
+        return closed
 
     def current_turn_id(self, session_id: str) -> str | None:
         return self._current.get(session_id)
@@ -194,7 +215,6 @@ class SessionRegistry:
                 worker.cancel()
             self._queues.pop(session_id, None)
             self._current.pop(session_id, None)
-            self._session_agents.pop(session_id, None)
         active = await self._runner.interrupt(session_id)
         return bool(active or cancelled)
 

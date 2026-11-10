@@ -29,6 +29,16 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 
 
+@pytest.fixture(autouse=True)
+def _reset_settings_store():
+    """Keep the module-level settings store from leaking between tests."""
+    from app.services import settings_store
+
+    settings_store._settings_store = None
+    yield
+    settings_store._settings_store = None
+
+
 @pytest.fixture
 def client():
     with TestClient(create_app(start_worker=False)) as test_client:

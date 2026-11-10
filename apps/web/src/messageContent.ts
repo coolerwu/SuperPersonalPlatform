@@ -1,6 +1,3 @@
-export const MEMORY_COMMAND =
-  "请整理当前 Agent 的长期记忆：先读取 /skills/memory-organizer/SKILL.md，然后按技能说明只整理 Agent 记忆，合并重复、删除失效项，不要碰用户记忆，不要新增事实。";
-
 const SLASH_COMMAND = /^\/[A-Za-z][A-Za-z0-9_-]{0,15}$/;
 
 /** True for a bare slash command (the composer palette sends these). */
@@ -68,8 +65,7 @@ export function isImageName(name: string): boolean {
 
 export type UserContent =
   | { kind: "text"; text: string }
-  | { kind: "attachments"; files: MessageFile[]; text: string }
-  | { kind: "memory-command" };
+  | { kind: "attachments"; files: MessageFile[]; text: string };
 
 function parseFileLine(line: string): MessageFile | null {
   const match = line.match(ATTACHMENT_LINE);
@@ -89,7 +85,6 @@ function parseFileLine(line: string): MessageFile | null {
  * reads the real paths and instructions); the UI only hides the scaffolding.
  */
 export function parseUserContent(content: string): UserContent {
-  if (content.trim() === MEMORY_COMMAND) return { kind: "memory-command" };
   const lines = content.split("\n");
   if (lines[0]?.trim() !== ATTACHMENT_HEADER) return { kind: "text", text: content };
   const files: MessageFile[] = [];
@@ -106,7 +101,6 @@ export function parseUserContent(content: string): UserContent {
 /** What the user meant to write, for copy/quote actions. */
 export function userMessageText(content: string): string {
   const parsed = parseUserContent(content);
-  if (parsed.kind === "memory-command") return "整理记忆";
   if (parsed.kind === "attachments") {
     return parsed.text || parsed.files.map((file) => file.name).join("、");
   }

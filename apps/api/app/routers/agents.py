@@ -48,6 +48,18 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def _close_agent_clients(request: Request, agent_id: str) -> None:
+    """Drop cached SDK clients so the next turn picks up new settings."""
+    registry = getattr(request.app.state, "registry", None)
+    close = getattr(registry, "close_agent_clients", None)
+    if close is None:
+        return
+    try:
+        await close(agent_id)
+    except Exception:
+        logger.exception("closing cached clients failed agent=%s", agent_id)
+
+
 def _agent_out(agent: AgentSection) -> AgentOut:
     created = agent.created_at or _now_iso()
     return AgentOut(
@@ -205,6 +217,7 @@ async def update_agent(
     if fields:
         fields["updated_at"] = _now_iso()
         await store.update_agent_fields(agent_id, **fields)
+        await _close_agent_clients(request, agent_id)
     updated = agent.model_copy(update=fields) if fields else agent
     return _agent_out(updated)
 

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-import weakref
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,21 +16,6 @@ if TYPE_CHECKING:
     from app.services.browser_tools import BrowserSession
 
 logger = logging.getLogger(__name__)
-
-# Auto-enable is a read-modify-write on the agent's JSON list. Two sessions of
-# the same agent can run concurrently, so serialize the update per event loop.
-_ENABLE_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
-    weakref.WeakKeyDictionary()
-)
-
-
-def _enable_lock() -> asyncio.Lock:
-    loop = asyncio.get_running_loop()
-    lock = _ENABLE_LOCKS.get(loop)
-    if lock is None:
-        lock = asyncio.Lock()
-        _ENABLE_LOCKS[loop] = lock
-    return lock
 
 
 # Tool names the runtime already exposes to the model. A skill tool with the
@@ -299,27 +282,15 @@ async def _enable_skill_for_agent(agent_id: str, skill_name: str) -> bool:
     """Append a newly created skill to the agent's enabled list.
 
     Each turn reloads the Agent's settings, so the change takes effect on the
-    next turn of the same session.
+    next turn of the same session. The store applies the append atomically so a
+    concurrent skills-page edit cannot be overwritten.
     """
     if not agent_id or not skill_name:
         return False
     try:
         from app.services.settings_store import get_settings_store
 
-        store = get_settings_store()
-        async with _enable_lock():
-            settings = await store.get()
-            agent = next(
-                (item for item in settings.agents if item.id == agent_id), None
-            )
-            if agent is None:
-                return False
-            if skill_name in agent.enabled_skills:
-                return True
-            await store.update_agent_fields(
-                agent_id, enabled_skills=[*agent.enabled_skills, skill_name]
-            )
-            return True
+        return await get_settings_store().append_agent_skill(agent_id, skill_name)
     except Exception:
         logger.exception(
             "failed to enable skill %s for agent %s", skill_name, agent_id

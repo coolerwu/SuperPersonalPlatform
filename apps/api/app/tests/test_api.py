@@ -261,3 +261,34 @@ def test_agent_auto_memory_flag(client) -> None:
         f"/api/agents/{created['id']}", json={"auto_memory": True}
     ).json()
     assert updated["auto_memory"] is True
+
+
+def test_agent_and_provider_updates_close_cached_clients(client):
+    calls = []
+
+    class _Registry:
+        async def close_agent_clients(self, agent_id: str) -> int:
+            calls.append(agent_id)
+            return 0
+
+    created = client.post("/api/agents", json={"name": "Cache"}).json()
+    client.app.state.registry = _Registry()
+    try:
+        updated = client.put(
+            f"/api/agents/{created['id']}", json={"instructions": "新指令"}
+        )
+        assert updated.status_code == 200
+        assert calls == [created["id"]]
+
+        _, original, original_updated = _provider_state(client)
+        try:
+            response = client.put(
+                "/api/providers/default", json={"model": "example-model-3"}
+            )
+            assert response.status_code == 200
+        finally:
+            _restore_provider(client, original, original_updated)
+        assert calls == [created["id"], "default"]
+    finally:
+        client.app.state.registry = None
+        client.delete(f"/api/agents/{created['id']}/permanent")
