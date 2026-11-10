@@ -40,6 +40,15 @@ class InvalidAgentStore:
         )
 
 
+class PausedAgentStore:
+    async def get(self):
+        from app.services.settings_store import AgentSection, PlatformSettings
+
+        return PlatformSettings(
+            agents=[AgentSection(id="default", name="Assistant", status="paused")]
+        )
+
+
 class RaisingStore:
     async def get(self):
         raise RuntimeError("settings unavailable")
@@ -162,6 +171,24 @@ async def test_recovery_skips_invalid_agent_ids(tmp_path):
         )
         assert registry.turns == []
         # No valid agent can own the transcript, so the lease is dropped.
+        assert await turn_lease.is_running(session_id) is False
+    finally:
+        await turn_lease.remove(session_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_skips_inactive_agents_and_drops_their_leases(tmp_path):
+    await init_db()
+    session_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    _write_transcript(session_id, "default", tmp_path)
+    await turn_lease.add(session_id)
+    registry = FakeRegistry()
+    try:
+        await recovery.recover_running_sessions(
+            registry, PausedAgentStore(), home=tmp_path
+        )
+        # A paused agent is not woken by startup, so its lease is dropped.
+        assert registry.turns == []
         assert await turn_lease.is_running(session_id) is False
     finally:
         await turn_lease.remove(session_id)

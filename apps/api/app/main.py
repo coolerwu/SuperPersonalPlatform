@@ -148,95 +148,127 @@ async def sync_default_agent_instructions() -> None:
 def create_app(*, start_worker: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        settings.app_data_dir.mkdir(parents=True, exist_ok=True)
-        settings.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
-        settings.skills_dir.expanduser().mkdir(parents=True, exist_ok=True)
-        settings.knowledge_dir.mkdir(parents=True, exist_ok=True)
-        settings.backtests_dir.mkdir(parents=True, exist_ok=True)
-        from app.services.claude_env import (
-            ensure_claude_dirs,
-            install_claude_process_env,
-        )
-        from app.services.settings_store import get_settings_store
-
-        install_claude_process_env()
-        ensure_claude_dirs()
-        store = get_settings_store()
-        await store.ensure_seeded()
-        app.state.settings_store = store
-        seed_default_skills()
-        await init_db()
-        await init_market_db()
-        await seed_default_provider()
-        await seed_default_agent()
-        await sync_default_agent_instructions()
-        await ensure_agent_workspaces()
-        await seed_knowledge_config()
-        weixin = WeixinRuntime()
-        app.state.weixin = weixin
-        knowledge = KnowledgeSyncRuntime()
-        app.state.knowledge = knowledge
-        if start_worker:
-            worker = RunWorker(weixin_runtime=weixin)
-            app.state.worker = worker
-            weixin.worker = worker
-            await worker.start()
-            await weixin.start()
-            cron = CronRuntime(worker)
-            app.state.cron = cron
-            await cron.start()
-            backtest_worker = BacktestWorker()
-            app.state.backtest_worker = backtest_worker
-            set_active_worker(backtest_worker)
-            await backtest_worker.start()
-            await knowledge.start()
-            session_cleanup = SessionCleanupRuntime()
-            app.state.session_cleanup = session_cleanup
-            await session_cleanup.start()
-            from app.services.claude_runner import ClaudeTurnRunner
-            from app.services.recovery import recover_running_sessions
-            from app.services.session_catalog import SessionCatalog
-            from app.services.session_registry import SessionRegistry
-
-            runner = ClaudeTurnRunner(store)
-            app.state.runner = runner
-            registry = SessionRegistry(runner, concurrency=settings.run_concurrency)
-            app.state.registry = registry
-            app.state.session_catalog = SessionCatalog(store)
-            await recover_running_sessions(registry, store)
-        yield
         try:
+            settings.app_data_dir.mkdir(parents=True, exist_ok=True)
+            settings.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
+            settings.skills_dir.expanduser().mkdir(parents=True, exist_ok=True)
+            settings.knowledge_dir.mkdir(parents=True, exist_ok=True)
+            settings.backtests_dir.mkdir(parents=True, exist_ok=True)
+            from app.services.claude_env import (
+                ensure_claude_dirs,
+                install_claude_process_env,
+            )
+            from app.services.settings_store import get_settings_store
+
+            install_claude_process_env()
+            ensure_claude_dirs()
+            store = get_settings_store()
+            await store.ensure_seeded()
+            app.state.settings_store = store
+            seed_default_skills()
+            await init_db()
+            await init_market_db()
+            await seed_default_provider()
+            await seed_default_agent()
+            await sync_default_agent_instructions()
+            await ensure_agent_workspaces()
+            await seed_knowledge_config()
+            weixin = WeixinRuntime()
+            app.state.weixin = weixin
+            knowledge = KnowledgeSyncRuntime()
+            app.state.knowledge = knowledge
             if start_worker:
-                registry = getattr(app.state, "registry", None)
-                if registry is not None:
-                    try:
-                        await registry.close()
-                    except Exception:
-                        logger.exception("registry shutdown failed")
-                runner = getattr(app.state, "runner", None)
-                if runner is not None:
-                    try:
-                        await runner.close_all()
-                    except Exception:
-                        logger.exception("runner shutdown failed")
-                session_cleanup = getattr(app.state, "session_cleanup", None)
-                if session_cleanup is not None:
-                    await session_cleanup.stop()
-                await knowledge.stop()
-                backtest_worker = getattr(app.state, "backtest_worker", None)
-                if backtest_worker is not None:
-                    await backtest_worker.stop()
-                set_active_worker(None)
-                cron = getattr(app.state, "cron", None)
-                if cron is not None:
-                    await cron.stop()
-                await weixin.stop()
-                worker = getattr(app.state, "worker", None)
-                if worker is not None:
-                    await worker.stop()
+                worker = RunWorker(weixin_runtime=weixin)
+                app.state.worker = worker
+                weixin.worker = worker
+                await worker.start()
+                await weixin.start()
+                cron = CronRuntime(worker)
+                app.state.cron = cron
+                await cron.start()
+                backtest_worker = BacktestWorker()
+                app.state.backtest_worker = backtest_worker
+                set_active_worker(backtest_worker)
+                await backtest_worker.start()
+                await knowledge.start()
+                session_cleanup = SessionCleanupRuntime()
+                app.state.session_cleanup = session_cleanup
+                await session_cleanup.start()
+                from app.services.claude_runner import ClaudeTurnRunner
+                from app.services.recovery import recover_running_sessions
+                from app.services.session_catalog import SessionCatalog
+                from app.services.session_registry import SessionRegistry
+
+                runner = ClaudeTurnRunner(store)
+                app.state.runner = runner
+                registry = SessionRegistry(
+                    runner, concurrency=settings.run_concurrency
+                )
+                app.state.registry = registry
+                app.state.session_catalog = SessionCatalog(store)
+                await recover_running_sessions(registry, store)
+            yield
         finally:
-            await market_service.close()
+            # A startup failure must still tear down whatever did start. Each
+            # stop is isolated so one failure cannot strand the others, and the
+            # market client is always released.
+            try:
+                if start_worker:
+                    registry = getattr(app.state, "registry", None)
+                    if registry is not None:
+                        try:
+                            await registry.close()
+                        except Exception:
+                            logger.exception("registry shutdown failed")
+                    runner = getattr(app.state, "runner", None)
+                    if runner is not None:
+                        try:
+                            await runner.close_all()
+                        except Exception:
+                            logger.exception("runner shutdown failed")
+                    session_cleanup = getattr(app.state, "session_cleanup", None)
+                    if session_cleanup is not None:
+                        try:
+                            await session_cleanup.stop()
+                        except Exception:
+                            logger.exception("session cleanup shutdown failed")
+                    knowledge = getattr(app.state, "knowledge", None)
+                    if knowledge is not None:
+                        try:
+                            await knowledge.stop()
+                        except Exception:
+                            logger.exception("knowledge sync shutdown failed")
+                    backtest_worker = getattr(app.state, "backtest_worker", None)
+                    if backtest_worker is not None:
+                        try:
+                            await backtest_worker.stop()
+                        except Exception:
+                            logger.exception("backtest worker shutdown failed")
+                    try:
+                        set_active_worker(None)
+                    except Exception:
+                        logger.exception("backtest worker cleanup failed")
+                    cron = getattr(app.state, "cron", None)
+                    if cron is not None:
+                        try:
+                            await cron.stop()
+                        except Exception:
+                            logger.exception("cron shutdown failed")
+                    weixin = getattr(app.state, "weixin", None)
+                    if weixin is not None:
+                        try:
+                            await weixin.stop()
+                        except Exception:
+                            logger.exception("weixin shutdown failed")
+                    worker = getattr(app.state, "worker", None)
+                    if worker is not None:
+                        try:
+                            await worker.stop()
+                        except Exception:
+                            logger.exception("run worker shutdown failed")
+            finally:
+                await market_service.close()
 
     app = FastAPI(title="Agent Command Center", version=APP_VERSION, lifespan=lifespan)
     app.add_middleware(

@@ -2,9 +2,12 @@
 
 The app reads ``running_sessions`` at startup. For each lease we look for a
 Claude SDK transcript under one of the configured agents' project directories
-and, when one exists, submit a ``Turn`` with ``source="resume"``. The runner
-turns that into a "continue after restart" prompt: the SDK conversation is
-kept, and the model is told not to repeat steps that already completed. A
+and, when one exists, submit a ``Turn`` with ``source="resume"``. Only active
+agents are resumable: a transcript owned by a paused or archived agent is
+treated like a missing one, because the other runtimes do not wake paused
+agents either. The runner turns that into a "continue after restart" prompt:
+the SDK conversation is kept, and the model is told not to repeat steps that
+already completed. A
 lease without a transcript (the lease was written but the SDK had not written
 its transcript yet, or the session was deleted) is dropped, as is a lease
 whose session id is not a canonical UUID, because the id becomes a path
@@ -41,15 +44,27 @@ async def _recover_session(
         await turn_lease.remove(session_id)
         return
     found = None
+    inactive_owner = None
     for agent in agents.values():
         if not valid_agent_id(agent.id):
             logger.warning("skipping agent with invalid id %r", agent.id)
             continue
-        if transcript_path(session_id, agent.id, home=home).is_file():
-            found = agent
-            break
+        if not transcript_path(session_id, agent.id, home=home).is_file():
+            continue
+        if agent.status != "active":
+            inactive_owner = agent
+            continue
+        found = agent
+        break
     if found is None:
-        logger.info("dropping lease without transcript session=%s", session_id)
+        if inactive_owner is not None:
+            logger.info(
+                "dropping lease owned by inactive agent %r session=%s",
+                inactive_owner.id,
+                session_id,
+            )
+        else:
+            logger.info("dropping lease without transcript session=%s", session_id)
         await turn_lease.remove(session_id)
         return
     await registry.submit(

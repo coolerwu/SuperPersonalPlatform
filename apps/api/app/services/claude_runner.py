@@ -28,6 +28,10 @@ from app.services.turn_stream import TurnStream
 
 logger = logging.getLogger(__name__)
 
+# Bounds shutdown so a wedged CLI subprocess cannot exceed systemd's
+# ``TimeoutStopSec``; the lease stays behind for startup recovery.
+_DISCONNECT_TIMEOUT_SECONDS = 10
+
 
 @dataclass
 class Turn:
@@ -115,6 +119,9 @@ class ClaudeTurnRunner:
         lease_added = False
         result_received = False
         evict = False
+        # Cancellation is shutdown, not failure: keep the lease so startup
+        # recovery can resume the session after the restart.
+        keep_lease = False
         try:
             async with asyncio.timeout(app_settings.run_timeout_seconds):
                 settings = await self._store.get()
@@ -196,6 +203,7 @@ class ClaudeTurnRunner:
         except asyncio.CancelledError:
             outcome = TurnOutcome(status="cancelled", output="".join(text_parts))
             evict = True
+            keep_lease = True
             raise
         except Exception as exc:
             logger.exception(
@@ -238,7 +246,7 @@ class ClaudeTurnRunner:
                             turn.session_id,
                             exc_info=True,
                         )
-            if lease_added:
+            if lease_added and not keep_lease:
                 try:
                     await turn_lease.remove(turn.session_id)
                 except BaseException as exc:
@@ -287,4 +295,11 @@ class ClaudeTurnRunner:
 
     async def close_all(self) -> None:
         for session_id in list(self._clients):
-            await self.close(session_id)
+            try:
+                await asyncio.wait_for(
+                    self.close(session_id), _DISCONNECT_TIMEOUT_SECONDS
+                )
+            except TimeoutError:
+                logger.warning(
+                    "client disconnect timed out session=%s", session_id
+                )

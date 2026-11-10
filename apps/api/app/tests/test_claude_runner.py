@@ -5,7 +5,7 @@ import pytest
 
 from app.config import settings as app_settings
 from app.db import init_db
-from app.services import turn_lease
+from app.services import claude_runner, turn_lease
 from app.services.claude_runner import (
     ClaudeTurnRunner,
     Turn,
@@ -428,7 +428,32 @@ async def test_close_all_disconnects_cached_clients(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cancellation_evicts_and_publishes_cancelled_end(tmp_path):
+async def test_close_all_bounds_each_disconnect(tmp_path, monkeypatch):
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 0.01)
+
+    class SlowDisconnectClient(FakeClient):
+        async def disconnect(self):
+            await asyncio.Event().wait()
+
+    client = SlowDisconnectClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    await runner.run(
+        make_turn(session_id="dddddddd-ffff-ffff-ffff-ffffffffffff"), TurnStream()
+    )
+    assert runner._clients != {}
+
+    # A wedged disconnect must not hold shutdown past the timeout.
+    await asyncio.wait_for(runner.close_all(), 1)
+    assert runner._clients == {}
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_keeps_lease_for_recovery(tmp_path):
     await init_db()
     client = HangingClient()
     runner = ClaudeTurnRunner(
@@ -441,14 +466,20 @@ async def test_cancellation_evicts_and_publishes_cancelled_end(tmp_path):
     queue = await stream.subscribe()
     task = asyncio.create_task(runner.run(turn, stream))
     await asyncio.wait_for(client.queried.wait(), 1)
+    # registry.close() cancels the worker task during shutdown.
     task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    end = (await drain_until_end(queue))[-1]
-    assert end["type"] == "turn_end"
-    assert end["status"] == "cancelled"
-    assert client.disconnected is True
-    assert not await turn_lease.is_running(turn.session_id)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        end = (await drain_until_end(queue))[-1]
+        assert end["type"] == "turn_end"
+        assert end["status"] == "cancelled"
+        assert client.disconnected is True
+        # The lease stays behind so recover_running_sessions can resume it
+        # after the process restarts.
+        assert await turn_lease.is_running(turn.session_id) is True
+    finally:
+        await turn_lease.remove(turn.session_id)
 
 
 @pytest.mark.asyncio
@@ -484,11 +515,15 @@ async def test_interrupt_reaches_client_only_while_turn_is_active(tmp_path):
     assert await runner.interrupt(turn.session_id) is True
     assert client.interrupted is True
 
+    # Hard cancellation is shutdown semantics: keep the lease for recovery.
     task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert not await turn_lease.is_running(turn.session_id)
-    assert runner._active == set()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await turn_lease.is_running(turn.session_id) is True
+        assert runner._active == set()
+    finally:
+        await turn_lease.remove(turn.session_id)
 
 
 @pytest.mark.asyncio
