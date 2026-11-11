@@ -258,8 +258,18 @@ def test_build_model_content_compresses_oversized_image(tmp_path) -> None:
     assert (uploads / "big.png").read_bytes() == data
 
 
-def test_attachment_api_rejects_non_active_agent(client) -> None:
+def test_attachment_upload_rejects_non_active_agent_but_read_allows_history(
+    client,
+) -> None:
     agent = client.post("/api/agents", json={"name": "FilesPaused"}).json()
+    uploaded = client.post(
+        f"/api/agents/{agent['id']}/attachments",
+        params={"filename": "note.txt"},
+        content=b"hello",
+    )
+    assert uploaded.status_code == 201
+    filename = uploaded.json()["path"].rsplit("/", 1)[-1]
+
     assert (
         client.put(
             f"/api/agents/{agent['id']}", json={"status": "paused"}
@@ -268,22 +278,23 @@ def test_attachment_api_rejects_non_active_agent(client) -> None:
     )
     upload = client.post(
         f"/api/agents/{agent['id']}/attachments",
-        params={"filename": "note.txt"},
+        params={"filename": "other.txt"},
         content=b"hello",
     )
     assert upload.status_code == 409
     assert "暂停或归档" in upload.json()["detail"]
-    read = client.get(f"/api/agents/{agent['id']}/uploads/note.txt")
-    assert read.status_code == 409
-    assert "暂停或归档" in read.json()["detail"]
+    # Existing attachments are read-only history and stay viewable.
+    read = client.get(f"/api/agents/{agent['id']}/uploads/{filename}")
+    assert read.status_code == 200
+    assert read.content == b"hello"
 
-    archived = client.post("/api/agents", json={"name": "FilesArchived"}).json()
-    assert client.delete(f"/api/agents/{archived['id']}").status_code == 200
+    assert client.delete(f"/api/agents/{agent['id']}").status_code == 200
     upload = client.post(
-        f"/api/agents/{archived['id']}/attachments",
-        params={"filename": "note.txt"},
+        f"/api/agents/{agent['id']}/attachments",
+        params={"filename": "after-archive.txt"},
         content=b"hello",
     )
     assert upload.status_code == 409
-    read = client.get(f"/api/agents/{archived['id']}/uploads/note.txt")
-    assert read.status_code == 409
+    read = client.get(f"/api/agents/{agent['id']}/uploads/{filename}")
+    assert read.status_code == 200
+    assert read.content == b"hello"

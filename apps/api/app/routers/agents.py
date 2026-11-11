@@ -398,11 +398,9 @@ async def get_upload(
     agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
     if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
-    if agent.status != "active":
-        raise HTTPException(
-            status_code=409,
-            detail="Agent 已暂停或归档，不能读取附件；请先在配置页恢复为 active。",
-        )
+    # Reading attachments is a read-only history operation: paused and
+    # archived Agents keep their existing files viewable so old conversations
+    # still render. Only new uploads are restricted to active Agents.
     path = resolve_upload_file(agent_id, filename)
     if path is None:
         raise HTTPException(status_code=404, detail="attachment not found")
