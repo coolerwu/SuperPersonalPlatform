@@ -39,7 +39,7 @@
 8. 会话保留清理：按 transcript mtime 与保留天数删除，跳过运行中会话，保留 auto memory。
 9. 记忆：记忆页有用户画像（`claude/CLAUDE.md`，跨 Agent）与 Agent 记忆（`workspaces/<agent_id>/CLAUDE.md`）；Agent 指令 = `settings.json`；Claude auto memory 在记忆页只读展示。
 10. 配置页：Provider、Agent、知识库、运行环境；所有平台配置写入 `data/settings.json`，密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。
-11. 技能库：全局 `claude/skills/` 目录（Claude Code 用户级技能），内置技能 seed 与哈希跟踪；技能是说明文档，没有技能创作工具。
+11. 技能库：全局 `claude/skills/` 目录（Claude Code 用户级技能），初始化技能 seed 与哈希跟踪；技能是说明文档，没有技能创作工具。
 12. 知识库：WebDAV 双向镜像到 `knowledge/`，配置与同步状态在设置接口；本版尚未挂载给 Agent。
 13. 业务页面：回测、交易记录、资产配置、缠论图，均不绑定 Agent。
 14. 前端路由自建（History API），刷新/直达/前进后退可用。
@@ -221,17 +221,17 @@
 
 #### 功能点
 
-1. 技能库 `~/.super-personal-platform/claude/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `builtin` / `ai` / `manual`。
-2. 内置技能 seed：`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取改用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作改用官方集市 `playwright` 插件，对应技能已退役）。`.seed_state.json` 记录内置内容哈希：未修改的内置技能随版本更新；用户改过的保留；已从默认列表移除且未被修改的内置技能在启动 seed 时只删除被跟踪的 `SKILL.md`，目录内用户附加文件保留，只有目录为空时才移除目录；用户改过的保留并停止跟踪（例如旧 home 的 `memory-organizer`、`web-search`、`web-fetch`、`web-browser`、`knowledge-base`；`knowledge-base` 退役后知识库镜像仍同步，Agent 直接用文件工具读写）。
-3. 技能页按「系统技能 / 交互创建」分组，可查看和编辑 SKILL.md；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关；非系统技能可删除（只删技能目录）。
+1. 技能库 `~/.super-personal-platform/claude/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `initial` / `ai` / `manual`。
+2. 初始化模板在 `apps/api/app/seed_skills/<name>/SKILL.md`：`quant-backtest`、`chanlun`、`trade-journal`、`allocation`、`cron-scheduler`。模板按「工具清单 + 组合方式 + 硬契约」组织；平台没有给 Agent 定时任务工具，`cron-scheduler` 只说明页面入口和定时触发会话的语义。启动 seed 规则：从未初始化过的缺失技能写入；未修改（哈希等于 `.seed_state.json` 记录）的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑、不再生成；模板移除时只删记录、保留本地文件。
+3. 技能页按「初始化技能 / 其他技能」分组，可查看和编辑 SKILL.md；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关；任何技能都可删除（只删技能目录），初始化技能删除后不复活；改过的初始化技能标「已调整」。
 4. 平台业务工具已通过进程内 MCP 接入 chat：回测 4 个（`backtest_*`）、行情 2 个（`market_*`）、交易记录 5 个（`trade_journal_*`）、资产配置 6 个（`allocation_*`）、缠论 2 个（`chan_analyze` / `chan_backtest`），共 19 个。runner 为每个缓存的 SDK client 挂一个 `platform_tools` SDK MCP server，工具以 `mcp__platform_tools__*` 出现在 init frame；插件自带的 MCP 继续并存。server 配置 `timeout`（至少 180 秒）和 `disableAutoBackground`，覆盖 `backtest_run` 最长约 90 秒的等待。交易记录与资产配置的写入工具对 Agent 开放。
 5. 平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入；浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。工具页按 `wired` 展示实际接入状态。
 6. `langchain-core` 暂留：业务工具仍以 `StructuredTool` 注册，runner 把它们适配成 SDK MCP 工具。
 
 #### 验收标准
 
-- 启动 seed 不覆盖用户修改的技能；被移除的内置技能在未修改时自动删除。
-- 技能页可查看、编辑、删除；工具页状态与实际一致。
+- 启动 seed 不覆盖已修改（含 Agent 修改）的初始化技能；用户删除后不复活；模板移除时本地文件保留。
+- 技能页正确显示来源与「已调整」，初始化技能可删除；工具页状态与实际一致。
 - Agent 只能调用工具页标为「已接入」的平台工具和 Claude Code 默认工具集。
 
 ### F9 知识库镜像
@@ -363,7 +363,7 @@
 4. 升级：本版不做数据迁移。先备份 `data/app.db` 与 `data/settings.json`；旧库可直接沿用，启动时检测并重建旧结构 `channel_deliveries` / `channel_inbounds`（旧待投递与入站去重记录丢失，iLink 可能重放一次）；旧 `providers` / `agents` / `channels` / `knowledge_configs` 配置不会导入，`settings.json` 用环境变量和默认值重新种子（仅首次启动读取旧 `app_configs.session_retention_days` 一次）；旧用户记忆与旧 `sessions/messages/runs/...` 聊天历史不会导入；旧微信渠道凭据不在 settings.json，需重新扫码绑定；旧定时任务列结构不兼容时，定时 tick 会持续记录 `cron tick failed`、任务列表接口可能 500，先备份再决定删除重建；回测历史保留。启动时会把逐字节等于旧默认的 Agent instructions 更新为新默认（用户改过的保留，写出保留 `.bak`）。
 5. 彻底重建：删除 `data/app.db` 后重启，会丢失回测历史、定时任务、审计、未完成投递与入站去重记录；`data/settings.json` 和会话 transcript 不受影响，微信绑定在 settings.json 中，不需要因此重新扫码。
 6. 备份：`data/app.db`、`data/settings.json`、`claude/`、`workspaces/`、`data/trade-journal.jsonl`、`data/allocation*.json*`、`knowledge/`。
-7. 旧 home 的 `memory-organizer` 技能由启动 seed 清理（未修改时删除，用户改过的保留但停止跟踪）。
+7. 旧 home 里遗留的已退役技能（如 `memory-organizer`、`knowledge-base`）不再由启动 seed 删除：模板移除时只删 `.seed_state.json` 记录，本地文件保留，由用户自行清理。
 
 #### 验收标准
 

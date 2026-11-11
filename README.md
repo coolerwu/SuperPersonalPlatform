@@ -20,7 +20,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 ├── claude/                 # CLAUDE_CONFIG_DIR（权限 0700）
 │   ├── CLAUDE.md           # 用户画像，跨 Agent 生效（记忆页编辑）
 │   ├── settings.json       # Claude Code 自身配置（插件启用状态等）
-│   ├── skills/             # 全局技能库（.seed_state.json 记录内置技能哈希）
+│   ├── skills/             # 全局技能库（.seed_state.json 记录初始化技能哈希）
 │   ├── plugins/            # 官方集市与已安装插件（插件页管理）
 │   └── projects/<agent_id>/
 │       ├── <uuid>.jsonl    # SDK 会话 transcript
@@ -94,10 +94,10 @@ npm run dev
 
 侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、插件、渠道、定时、记忆；「平台」组放配置和退出登录。功能工作区放回测、交易记录、资产配置、缠论图，不显示 Agent 选择器和会话。
 
-- **技能**：列出全局技能库，按「系统技能」和「交互创建」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（只删技能目录）。
+- **技能**：列出全局技能库，按「初始化技能」和「其他技能」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、「已调整」标记、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；任何技能都可删除（只删技能目录）。
 - **工具**：如实展示当前接入状态。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）已通过进程内 `platform_tools` MCP 接入，以 `mcp__platform_tools__*` 出现在运行时 init frame；插件自带的 MCP 继续并存。平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入：浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。
 - **插件**：管理 Claude Code 官方集市与插件，见下节。
-- 内置技能在技能库中 seed：`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作使用官方集市 `playwright` 插件，均不再单独 seed 技能；`knowledge-base` 已退役，知识库镜像仍会同步，Agent 直接用文件工具读写）。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
+- 初始化技能模板在 `apps/api/app/seed_skills/`：`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。技能只是初始化参考：`.seed_state.json` 记录初始化内容哈希；从未初始化过的缺失技能写入；未修改的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑、不再生成；模板移除时只删记录、保留本地文件。网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作使用官方集市 `playwright` 插件。
 
 ### 插件集市
 
@@ -383,7 +383,7 @@ curl --noproxy '*' http://127.0.0.1:8888/api/health
 - 旧版本把微信渠道凭据和联系人绑定存在 `app.db`，它们不会迁移到 `settings.json`，升级后需要在「渠道」页重新扫码绑定。
 - 旧定时任务如果 `cron_jobs` 列结构与新模型不兼容，ORM 查询会因缺列失败：定时 tick 持续记录 `cron tick failed`，任务列表接口也可能 500。先备份数据库，再决定删除重建（任务配置会丢失）。
 - 回测历史保留（`backtests` 表结构兼容）。
-- 旧 home 里遗留的 `memory-organizer` 技能会在启动 seed 时清理：未修改的直接删除，用户改过的保留但停止跟踪。
+- 旧 home 里遗留的已退役技能（如 `memory-organizer`、`knowledge-base`）不再由 seed 删除：模板移除时只删 `.seed_state.json` 记录，本地文件保留，由用户自行清理。
 
 如果选择彻底重建 `data/app.db`：停止服务，删除 `~/.super-personal-platform/data/app.db` 后重启即可。会丢失回测历史、定时任务、审计记录、未完成投递与入站去重记录；`data/settings.json`（含渠道配置与联系人绑定）和会话 transcript 不受影响，微信不需要因此重新扫码。
 
