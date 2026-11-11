@@ -160,7 +160,13 @@ function toolSummary(input: Record<string, unknown> | null): string {
   return "";
 }
 
-function AssistantProcess({ steps }: { steps: ProcessStep[] }) {
+function AssistantProcess({
+  steps,
+  agentId,
+}: {
+  steps: ProcessStep[];
+  agentId: string;
+}) {
   if (steps.length === 0) return null;
   const toolCount = steps.filter((step) => step.kind === "tool").length;
   return (
@@ -177,7 +183,7 @@ function AssistantProcess({ steps }: { steps: ProcessStep[] }) {
             <div className="run-trace-reasoning" key={`thinking-${index}`}>
               <div className="run-trace-step-label">思考</div>
               <div className="message-thinking-body">
-                <Markdown content={step.text} />
+                <Markdown content={step.text} agentId={agentId} />
               </div>
             </div>
           ) : (
@@ -199,10 +205,12 @@ function LiveProcess({
   reasoning,
   activity,
   streamingText,
+  agentId,
 }: {
   reasoning: string;
   activity: string[];
   streamingText: boolean;
+  agentId: string;
 }) {
   const [open, setOpen] = useState(true);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -244,7 +252,7 @@ function LiveProcess({
                   body.scrollHeight - body.scrollTop - body.clientHeight < 48;
               }}
             >
-              <Markdown content={reasoning} />
+              <Markdown content={reasoning} agentId={agentId} />
             </div>
           </div>
         )}
@@ -337,10 +345,10 @@ function UserMessageRow({
                   ))}
               </div>
             )}
-            {parsed.text && <Markdown content={parsed.text} />}
+            {parsed.text && <Markdown content={parsed.text} agentId={agentId} />}
           </>
         ) : (
-          <Markdown content={message.content} />
+          <Markdown content={message.content} agentId={agentId} />
         )}
       </div>
       <div className="message-footer user">
@@ -674,8 +682,10 @@ export function ChatPanel(props: ChatPanelProps) {
                 <div className="message-head">
                   <span className="message-author">{props.agentName || "Agent"}</span>
                 </div>
-                <AssistantProcess steps={steps} />
-                {message.content && <Markdown content={message.content} />}
+                <AssistantProcess steps={steps} agentId={props.agentId} />
+                {message.content && (
+                  <Markdown content={message.content} agentId={props.agentId} />
+                )}
               </div>
               <div className="message-footer assistant">
                 <div className="message-actions">
@@ -712,9 +722,14 @@ export function ChatPanel(props: ChatPanelProps) {
                 reasoning={throttledStreamReasoning}
                 activity={props.activity}
                 streamingText={Boolean(props.streamText)}
+                agentId={props.agentId}
               />
               {props.streamText ? (
-                <Markdown content={throttledStreamText} streaming />
+                <Markdown
+                  content={throttledStreamText}
+                  streaming
+                  agentId={props.agentId}
+                />
               ) : (
                 <div className="muted">正在生成…</div>
               )}

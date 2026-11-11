@@ -1,4 +1,4 @@
-import { Children, isValidElement, memo, ReactNode, useState } from "react";
+import { Children, isValidElement, memo, ReactNode, useMemo, useState } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -8,6 +8,7 @@ import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 
 import { copyText } from "../clipboard";
+import { workspaceFileUrl, workspaceLinkUrl } from "../workspaceUrl";
 
 function textOf(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -42,29 +43,42 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-const components: Components = {
-  pre({ children }) {
-    return <CodeBlock>{children}</CodeBlock>;
-  },
-  a({ href, children }) {
-    return (
-      <a href={href} target="_blank" rel="noreferrer">
-        {children}
-      </a>
-    );
-  },
-  img({ src, alt }) {
-    return <img src={src} alt={alt ?? ""} loading="lazy" />;
-  },
-};
+function buildComponents(agentId?: string): Components {
+  // Relative image paths are the Agent's workspace files. Without the
+  // rewrite the browser asks the SPA route for them and gets index.html,
+  // so the image silently degrades to its alt text.
+  const imageSrc = (src?: string) =>
+    agentId && src ? workspaceFileUrl(agentId, src) ?? src : src;
+  const linkHref = (href?: string) =>
+    agentId && href ? workspaceLinkUrl(agentId, href) ?? href : href;
+  return {
+    pre({ children }) {
+      return <CodeBlock>{children}</CodeBlock>;
+    },
+    a({ href, children }) {
+      return (
+        <a href={linkHref(href)} target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      );
+    },
+    img({ src, alt }) {
+      return <img src={imageSrc(src)} alt={alt ?? ""} loading="lazy" />;
+    },
+  };
+}
 
 export const Markdown = memo(function Markdown({
   content,
   streaming = false,
+  agentId,
 }: {
   content: string;
   streaming?: boolean;
+  /** Owner of workspace-relative image and file links. */
+  agentId?: string;
 }) {
+  const components = useMemo(() => buildComponents(agentId), [agentId]);
   return (
     <div className="markdown">
       <ReactMarkdown
