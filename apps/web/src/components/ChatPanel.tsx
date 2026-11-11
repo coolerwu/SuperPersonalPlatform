@@ -41,6 +41,7 @@ type ChatPanelProps = {
   error: string;
   notice: string;
   commandReply: { command: string; text: string } | null;
+  claudeCommands: string[];
   draft: string;
   quote: string;
   attachments: Attachment[];
@@ -447,7 +448,10 @@ export function ChatPanel(props: ChatPanelProps) {
 
   const uploading = uploads.length > 0;
   const commandQuery = slashCommandQuery(props.draft);
-  const commandMatches = commandQuery === null ? [] : filterSlashCommands(commandQuery);
+  const commandMatches =
+    commandQuery === null
+      ? []
+      : filterSlashCommands(commandQuery, props.claudeCommands);
   const commandMenuOpen = commandMatches.length > 0 && !commandMenuDismissed;
   const activeCommandIndex =
     commandMatches.length > 0 ? Math.min(commandIndex, commandMatches.length - 1) : -1;

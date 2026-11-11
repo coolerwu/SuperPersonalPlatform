@@ -30,6 +30,19 @@ def _store(request: Request):
     return store if store is not None else get_settings_store()
 
 
+@router.get("/slash-commands")
+async def slash_commands(agent_id: str, request: Request) -> dict[str, list[str]]:
+    """Slash commands the Claude Code runtime currently exposes for an Agent.
+
+    The list comes from the CLI's init frame, so the chat palette mirrors what
+    the runtime actually supports instead of a hardcoded copy. Empty until the
+    Agent has run at least one turn in this process.
+    """
+    runner = getattr(request.app.state, "runner", None)
+    lookup = getattr(runner, "slash_commands", None)
+    return {"commands": lookup(agent_id) if lookup is not None else []}
+
+
 async def _validate_session_owner(
     request: Request, agent_id: str, session_id: str
 ) -> None:
@@ -105,30 +118,51 @@ async def send_message(payload: ChatRequest, request: Request) -> TurnAcceptedOu
 
 @router.post("/commands", response_model=ChatCommandResponse)
 async def run_command(payload: ChatCommandRequest, request: Request) -> ChatCommandResponse:
-    command = commands.parse_command(payload.command)
+    command = commands.parse_web_command(payload.command)
     if command is None:
         raise HTTPException(status_code=400, detail="not a command")
     registry = _registry(request)
-    if command in ("/new", "/clear"):
-        reply = commands.NEW_SESSION_TEXT
-    elif command == "/help":
-        reply = commands.HELP_TEXT
-    elif command == "/status":
-        if payload.session_id is None:
-            reply = commands.NO_SESSION_TEXT
-        else:
-            busy = registry.is_busy(payload.session_id)
-            reply = (
-                f"Agent：{payload.agent_id}\n会话：{payload.session_id}\n"
-                f"状态：{'执行中' if busy else '空闲'}"
+    if command in commands.PLATFORM_COMMANDS:
+        if command in ("/new", "/clear"):
+            reply = commands.NEW_SESSION_TEXT
+        elif command == "/help":
+            reply = commands.HELP_TEXT
+        elif command == "/status":
+            if payload.session_id is None:
+                reply = commands.NO_SESSION_TEXT
+            else:
+                busy = registry.is_busy(payload.session_id)
+                reply = (
+                    f"Agent：{payload.agent_id}\n会话：{payload.session_id}\n"
+                    f"状态：{'执行中' if busy else '空闲'}"
+                )
+        elif command == "/stop":
+            if payload.session_id is None:
+                reply = commands.STOP_EMPTY_TEXT
+            elif await registry.interrupt(payload.session_id):
+                reply = commands.STOP_REQUESTED_TEXT
+            else:
+                reply = commands.STOP_EMPTY_TEXT
+        else:  # pragma: no cover - PLATFORM_COMMANDS and this chain must match
+            raise HTTPException(
+                status_code=500, detail="unhandled platform command"
             )
-    elif command == "/stop":
-        if payload.session_id is None:
-            reply = commands.STOP_EMPTY_TEXT
-        elif await registry.interrupt(payload.session_id):
-            reply = commands.STOP_REQUESTED_TEXT
-        else:
-            reply = commands.STOP_EMPTY_TEXT
+        return ChatCommandResponse(command=command, reply=reply)
+
+    # Only commands the Claude Code runtime reported are forwarded; everything
+    # else gets an answer that lists what the runtime actually offers.
+    runner = getattr(request.app.state, "runner", None)
+    lookup = getattr(runner, "slash_commands", None)
+    known = lookup(payload.agent_id) if lookup is not None else []
+    if not known:
+        reply = commands.COMMANDS_NOT_READY_TEXT
     else:
-        reply = commands.UNKNOWN_COMMAND_TEXT
+        canonical = {
+            item.lower().lstrip("/"): item.lstrip("/") for item in known
+        }.get(command.lstrip("/"))
+        if canonical is not None:
+            return ChatCommandResponse(
+                command=f"/{canonical}", reply="", forward=True
+            )
+        reply = commands.unknown_command_text(known)
     return ChatCommandResponse(command=command, reply=reply)

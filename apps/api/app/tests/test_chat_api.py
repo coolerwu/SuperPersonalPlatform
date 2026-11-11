@@ -237,6 +237,73 @@ def test_commands_without_registry_is_503(client):
     assert response.status_code == 503
 
 
+def test_slash_commands_reads_the_runtime(client):
+    class Runner:
+        def slash_commands(self, agent_id):
+            return ["compact", "context"] if agent_id == "default" else []
+
+    client.app.state.runner = Runner()
+    body = client.get(
+        "/api/chat/slash-commands", params={"agent_id": "default"}
+    ).json()
+    assert body == {"commands": ["compact", "context"]}
+    assert client.get(
+        "/api/chat/slash-commands", params={"agent_id": "other"}
+    ).json() == {"commands": []}
+
+
+def test_slash_commands_without_runtime_is_empty(client):
+    assert client.get(
+        "/api/chat/slash-commands", params={"agent_id": "default"}
+    ).json() == {"commands": []}
+
+
+def _runtime_with_commands(client, names):
+    class Runner:
+        def slash_commands(self, agent_id):
+            return names if agent_id == "default" else []
+
+    client.app.state.runner = Runner()
+
+
+def test_known_claude_command_is_forwarded(client, fake_registry):
+    _runtime_with_commands(client, ["compact", "plugin:command"])
+    for command in ("/compact", "/plugin:command"):
+        body = client.post(
+            "/api/chat/commands",
+            json={"agent_id": "default", "command": command},
+        ).json()
+        assert body["forward"] is True, command
+        assert body["reply"] == ""
+    body = client.post(
+        "/api/chat/commands",
+        json={"agent_id": "default", "command": "/COMPACT"},
+    ).json()
+    assert body["forward"] is True
+    assert body["command"] == "/compact"
+
+
+def test_unknown_claude_command_lists_runtime_commands(client, fake_registry):
+    _runtime_with_commands(client, ["compact", "context"])
+    body = client.post(
+        "/api/chat/commands",
+        json={"agent_id": "default", "command": "/nope"},
+    ).json()
+    assert body["forward"] is False
+    assert "未知命令" in body["reply"]
+    assert "/compact" in body["reply"]
+    assert "/context" in body["reply"]
+
+
+def test_unknown_claude_command_before_init_is_not_ready(client, fake_registry):
+    body = client.post(
+        "/api/chat/commands",
+        json={"agent_id": "default", "command": "/compact"},
+    ).json()
+    assert body["forward"] is False
+    assert body["reply"] == commands.COMMANDS_NOT_READY_TEXT
+
+
 def test_help_command(client, fake_registry):
     response = client.post(
         "/api/chat/commands",

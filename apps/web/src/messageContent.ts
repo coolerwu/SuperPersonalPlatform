@@ -20,7 +20,35 @@ export const SLASH_COMMANDS: SlashCommandItem[] = [
   { command: "/help", label: "命令说明", description: "查看全部可用命令" },
 ];
 
-const COMMAND_DRAFT = /^\/[A-Za-z0-9_-]*$/;
+const PLATFORM_COMMAND_NAMES = new Set(SLASH_COMMANDS.map((item) => item.command));
+
+const BARE_SLASH_COMMAND = /^\/[A-Za-z][A-Za-z0-9_:-]{0,63}$/;
+
+/** True for a bare slash command the backend should classify. */
+export function isBareSlashCommand(text: string): boolean {
+  return BARE_SLASH_COMMAND.test(text.trim());
+}
+
+/** Merge Claude Code's runtime slash commands into the platform palette. */
+export function mergeSlashCommands(claudeCommands: string[]): SlashCommandItem[] {
+  const seen = new Set(PLATFORM_COMMAND_NAMES);
+  const merged = [...SLASH_COMMANDS];
+  for (const raw of claudeCommands) {
+    const name = raw.trim().replace(/^\//, "").toLowerCase();
+    if (!name) continue;
+    const command = `/${name}`;
+    if (seen.has(command)) continue;
+    seen.add(command);
+    merged.push({
+      command,
+      label: "Claude Code",
+      description: "由 Claude Code 运行时提供",
+    });
+  }
+  return merged;
+}
+
+const COMMAND_DRAFT = /^\/[A-Za-z0-9_:-]*$/;
 
 /**
  * The prefix typed after "/" while the composer should offer commands.
@@ -32,8 +60,13 @@ export function slashCommandQuery(text: string): string | null {
   return value.toLowerCase();
 }
 
-export function filterSlashCommands(query: string): SlashCommandItem[] {
-  return SLASH_COMMANDS.filter((item) => item.command.startsWith(query));
+export function filterSlashCommands(
+  query: string,
+  claudeCommands: string[] = [],
+): SlashCommandItem[] {
+  return mergeSlashCommands(claudeCommands).filter((item) =>
+    item.command.startsWith(query),
+  );
 }
 
 const ATTACHMENT_HEADER = "附件已上传到工作区：";

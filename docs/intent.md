@@ -78,8 +78,8 @@
 3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。
 4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示已停止。
 5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 `audit_log`；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。
-6. 命令：`/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示；`/memory` 与「整理记忆」已删除。
-7. 输入框 `/` 前缀弹出命令面板：↑/↓ 选择，Enter/Tab 填入，Esc 关闭；面板只填入不执行。
+6. 命令：平台处理 `/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示。其余以 `/` 开头的裸命令只有出现在 Claude Code 运行时 init frame 的 `slash_commands` 中才由 `forward=true` 指示前端作为普通用户消息转发给 Agent；不在列表中的回复「未知命令」并列出当前可用命令，列表尚未加载时提示先发送一条普通消息。`GET /api/chat/slash-commands?agent_id=...` 返回该列表（排除 `terminal_slash_commands` 与平台命令重名项），按 Agent 进程内缓存，首次 turn 后可用。
+7. 输入框 `/` 前缀弹出命令面板：列出平台命令和 Claude Code 运行时命令，↑/↓ 选择，Enter/Tab 填入，Esc 关闭；面板只填入不执行。
 8. 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片支持选择、粘贴、拖拽，浏览器端缩到最长边 1600 px；发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具读取。图片作为文件由 Agent 的 Read 工具查看；本版不再单独构造 `image_url` 模型输入。旧 transcript 里的绝对 `/uploads/<name>` 仍按兼容路径解析，但可能失效，优先在 `uploads/` 下查找。Agent 为 paused/archived 时上传接口返回 409；读取历史附件放行（只读）。
 9. 消息操作：复制、引用；失败或停止后显示提示，用户重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成、删除单条消息。
 10. assistant 消息按 Markdown 渲染（GFM、代码高亮、KaTeX `$$...$$`）；流式文本约 80ms 节流。
@@ -95,6 +95,7 @@
 - 执行中停止 → 状态为已停止，租约删除。
 - 执行中重启服务 → 会话自动 resume 并完成，`running_sessions` 清空。
 - 同一会话第二个 turn 排队，不同会话可并发。
+- 输入 `/` 能看到平台命令和 Claude Code 运行时命令；选择 Claude Code 命令后作为消息发送并产生 turn；不在运行时长列表中的 `/` 命令会收到「未知命令」并列出当前可用命令。
 - 附件上传后可被 Agent 读取；引用以 `> ` 块进入消息。
 - Agent 在工作区保存截图并在回复中用相对路径引用时，页面直接显示图片；点击可在新标签打开原文件。
 - Agent 写入工作区文件后，回复下方出现「产物」列表（图片为缩略图，其他文件为文件卡片），流式过程中出现，刷新后仍在。

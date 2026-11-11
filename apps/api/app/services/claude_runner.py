@@ -255,6 +255,10 @@ class ClaudeTurnRunner:
             else connect_timeout_seconds
         )
         self._sweeper: asyncio.Task[None] | None = None
+        # Slash commands reported by the CLI's init frame, per Agent. Claude
+        # Code owns this list; the chat palette only mirrors it. Terminal-bound
+        # commands cannot run through the SDK and are excluded.
+        self._slash_commands: dict[str, tuple[str, ...]] = {}
         # Clients whose disconnect exceeded the shutdown budget. They must be
         # kept referenced so the CLI process is not silently orphaned; the
         # process dies with this one.
@@ -266,6 +270,38 @@ class ClaudeTurnRunner:
             lock = asyncio.Lock()
             self._locks[session_id] = lock
         return lock
+
+    def _capture_init(self, agent_id: str, message: Any) -> None:
+        """Remember the slash commands a CLI init frame reports for an Agent."""
+        data = getattr(message, "data", None)
+        if not isinstance(data, dict) or getattr(message, "subtype", "") != "init":
+            return
+        raw = data.get("slash_commands")
+        if not isinstance(raw, list):
+            return
+        terminal = data.get("terminal_slash_commands")
+        blocked = (
+            {
+                str(item).strip().lstrip("/")
+                for item in terminal
+                if isinstance(item, str)
+            }
+            if isinstance(terminal, list)
+            else set()
+        )
+        commands: list[str] = []
+        for item in raw:
+            if not isinstance(item, str):
+                continue
+            name = item.strip().lstrip("/")
+            if not name or name in blocked or name in commands:
+                continue
+            commands.append(name)
+        self._slash_commands[agent_id] = tuple(commands)
+
+    def slash_commands(self, agent_id: str) -> list[str]:
+        """Slash commands the CLI currently exposes for ``agent_id``."""
+        return list(self._slash_commands.get(agent_id, ()))
 
     def _keys_for_session(self, session_id: str) -> list[ClientKey]:
         keys = set(self._clients) | self._active | self._cancel_requested
@@ -539,6 +575,12 @@ class ClaudeTurnRunner:
                 async for message in client.receive_messages():
                     if getattr(message, "parent_tool_use_id", None):
                         continue
+                    if (
+                        getattr(message, "subtype", "") == "init"
+                        and isinstance(getattr(message, "data", None), dict)
+                    ):
+                        self._capture_init(turn.agent_id, message)
+                        continue
                     event = getattr(message, "event", None)
                     if isinstance(event, dict):
                         for mapped in mapper.feed(event):
@@ -606,6 +648,13 @@ class ClaudeTurnRunner:
             self._touch(key)
             if not result_received:
                 evict = True
+            # A local CLI slash command (and any turn the CLI did not stream)
+            # only reports its text in the result. Publish it once so the chat
+            # is not empty; streamed turns already collected it in text_parts.
+            if not text_parts and outcome.output.strip():
+                stream.publish(
+                    {"type": "assistant_delta", "delta": outcome.output}
+                )
             # Publish teardown synchronously first: a later await must not be
             # able to delay or suppress the terminal event for subscribers.
             stream.publish(

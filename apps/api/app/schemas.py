@@ -284,6 +284,9 @@ class ChatCommandResponse(BaseModel):
     command: str
     reply: str
     cancelled_count: int = 0
+    # A Claude Code command the runtime knows: the client sends it as a normal
+    # chat turn instead of showing a command reply.
+    forward: bool = False
 
 
 class AttachmentOut(BaseModel):

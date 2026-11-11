@@ -13,7 +13,7 @@ import type {
   TranscriptMessage,
   TurnStreamEvent,
 } from "./types";
-import { isSlashCommand } from "./messageContent";
+import { isBareSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
 import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
 import { ChatPanel } from "./components/ChatPanel";
@@ -40,6 +40,11 @@ type CommandReply = {
   command: string;
   text: string;
 };
+
+type CommandOutcome =
+  | { outcome: "handled" }
+  | { outcome: "forward"; command: string }
+  | { outcome: "error" };
 
 /** Live turn state is kept per session so switching away never drops it. */
 type SessionLive = {
@@ -146,6 +151,7 @@ export default function App() {
   const [messagesBySession, setMessagesBySession] = useState<Record<string, TranscriptMessage[]>>({});
   const [loadingBySession, setLoadingBySession] = useState<Record<string, boolean>>({});
   const [draft, setDraft] = useState("");
+  const [claudeCommands, setClaudeCommands] = useState<string[]>([]);
   const [commandReply, setCommandReply] = useState<CommandReply | null>(null);
   const [attachmentsByKey, setAttachmentsByKey] = useState<Record<string, Attachment[]>>({});
   const [quotesByKey, setQuotesByKey] = useState<Record<string, string>>({});
@@ -656,6 +662,8 @@ export default function App() {
           updateLive(forSession, (current) => ({ ...current, notice: "已停止当前任务。" }));
         }
         void finishTurn(forSession, event.status ?? null, endedTurnId);
+        const owner = sessionAgentRef.current[forSession] ?? agentIdRef.current;
+        if (owner) refreshClaudeCommands(owner);
         break;
       }
     }
@@ -993,6 +1001,17 @@ export default function App() {
     });
   }
 
+  function refreshClaudeCommands(forAgent: string) {
+    void api
+      .getSlashCommands(forAgent)
+      .then((result) => {
+        if (agentIdRef.current === forAgent) setClaudeCommands(result.commands);
+      })
+      .catch(() => {
+        // The palette keeps the platform commands; commands fill in after a turn.
+      });
+  }
+
   function openSession(id: string) {
     setFocus(null);
     setCommandReply(null);
@@ -1040,9 +1059,12 @@ export default function App() {
     setPendingSessions({});
     if (!auth || !agentId) {
       sessionsRequestRef.current += 1;
+      setClaudeCommands([]);
       return;
     }
+    setClaudeCommands([]);
     void loadSessions(agentId).catch((exc) => setAgentError(describeApiError(exc), agentId));
+    refreshClaudeCommands(agentId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth, agentId]);
 
@@ -1206,8 +1228,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth, agentId]);
 
-  async function runCommand(command: string, sendKey: string): Promise<boolean> {
-    if (commandPendingRef.current) return false;
+  async function runCommand(
+    command: string,
+    sendKey: string,
+  ): Promise<CommandOutcome> {
+    if (commandPendingRef.current) return { outcome: "error" };
     const targetAgentId = agentId;
     const targetSessionId = sessionIdRef.current;
     commandPendingRef.current = true;
@@ -1221,7 +1246,10 @@ export default function App() {
         session_id: targetSessionId || null,
         command,
       });
-      if (targetAgentId !== agentIdRef.current) return false;
+      if (targetAgentId !== agentIdRef.current) return { outcome: "error" };
+      if (response.forward) {
+        return { outcome: "forward", command: response.command };
+      }
       const startsNew = response.command === "/new" || response.command === "/clear";
       if (startsNew) newSession();
       setCommandReply({
@@ -1238,26 +1266,29 @@ export default function App() {
         }
         void refreshSessions();
       }
-      return true;
+      return { outcome: "handled" };
     } catch (exc) {
       setSessionError(describeApiError(exc), targetSessionId);
       setDraftFor(sendKey, command);
-      return false;
+      return { outcome: "error" };
     } finally {
       commandPendingRef.current = false;
     }
   }
 
   async function send(attachments: Attachment[] = []): Promise<boolean> {
-    const text = draft.trim();
+    let text = draft.trim();
     const sendAgentId = agentIdRef.current || agentId;
     const sendKey = sessionKey(sendAgentId, sessionIdRef.current);
     const quoteText = (quotesByKey[sendKey] ?? "").trim();
     if ((!text && attachments.length === 0 && !quoteText) || !sendAgentId) {
       return false;
     }
-    if (isSlashCommand(text)) {
-      return runCommand(text, sendKey);
+    if (isBareSlashCommand(text)) {
+      const result = await runCommand(text, sendKey);
+      if (result.outcome !== "forward") return result.outcome === "handled";
+      // Use Claude Code's canonical command spelling for the turn.
+      text = result.command;
     }
     const wasNew = !sessionIdRef.current;
     if (!wasNew && !loadedSessionsRef.current.has(sessionIdRef.current)) {
@@ -1811,6 +1842,7 @@ export default function App() {
               error={error}
               notice={live.notice}
               commandReply={visibleCommandReply}
+              claudeCommands={claudeCommands}
               draft={draft}
               quote={quotesByKey[activeKey] ?? ""}
               attachments={attachments}

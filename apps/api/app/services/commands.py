@@ -10,6 +10,15 @@ from __future__ import annotations
 import re
 
 _COMMAND_RE = re.compile(r"^/[A-Za-z][A-Za-z0-9_-]{0,15}$")
+# Web chat also accepts Claude Code command names: plugin-qualified names use
+# ":" and some are longer than the platform command limit.
+_WEB_COMMAND_RE = re.compile(r"^/[A-Za-z][A-Za-z0-9_:-]{0,63}$")
+
+PLATFORM_COMMANDS = frozenset({"/new", "/clear", "/stop", "/status", "/help"})
+
+COMMANDS_NOT_READY_TEXT = (
+    "Claude 命令列表尚未加载。先发送一条普通消息，等这一轮结束后再使用 / 命令。"
+)
 
 HELP_TEXT = (
     "可用命令：\n"
@@ -37,3 +46,24 @@ def parse_command(text: str) -> str | None:
     if not _COMMAND_RE.match(stripped):
         return None
     return stripped.lower()
+
+
+def parse_web_command(text: str) -> str | None:
+    """Parse a bare web-chat command, including Claude Code's names."""
+    stripped = (text or "").strip()
+    if not _WEB_COMMAND_RE.match(stripped):
+        return None
+    return stripped.lower()
+
+
+def unknown_command_text(known: list[str]) -> str:
+    """Explain an unknown command and show what the runtime actually offers."""
+    lines = ["未知命令。"]
+    if known:
+        lines.append("")
+        lines.append(
+            "Claude Code 当前可用：" + "、".join(f"/{name}" for name in known)
+        )
+    lines.append("")
+    lines.append(HELP_TEXT)
+    return "\n".join(lines)

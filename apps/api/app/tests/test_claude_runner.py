@@ -182,6 +182,47 @@ async def test_runner_maps_stream_and_completes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_runner_records_slash_commands_from_init_frame(tmp_path):
+    await init_db()
+    init = SimpleNamespace(
+        subtype="init",
+        data={
+            "slash_commands": ["compact", "/context", "exit", "model", "compact"],
+            "terminal_slash_commands": ["exit", "model"],
+        },
+    )
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient([init, ResultMessage()]),
+    )
+
+    await runner.run(make_turn(), TurnStream())
+
+    assert runner.slash_commands("default") == ["compact", "context"]
+    assert runner.slash_commands("other") == []
+
+
+@pytest.mark.asyncio
+async def test_runner_publishes_result_text_when_the_stream_had_none(tmp_path):
+    await init_db()
+    client = FakeClient([ResultMessage(result="compacted")])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    stream = TurnStream()
+    queue = await stream.subscribe()
+
+    await runner.run(make_turn(), stream)
+
+    events = await drain_until_end(queue)
+    assert events[0] == {"type": "assistant_delta", "delta": "compacted"}
+    assert events[-1]["type"] == "turn_end"
+
+
+@pytest.mark.asyncio
 async def test_runner_publishes_rich_turn_end(tmp_path):
     await init_db()
     client = FakeClient([ResultMessage()])

@@ -293,10 +293,18 @@ export const api = {
     }),
 
   runChatCommand: (payload: { agent_id: string; session_id: string | null; command: string }) =>
-    request<{ command: string; reply: string; cancelled_count: number }>("/api/chat/commands", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+    request<{ command: string; reply: string; cancelled_count: number; forward: boolean }>(
+      "/api/chat/commands",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
+
+  getSlashCommands: (agentId: string) =>
+    request<{ commands: string[] }>(
+      `/api/chat/slash-commands?agent_id=${encodeURIComponent(agentId)}`,
+    ),
 
   getSystem: () => request<SystemInfo>("/api/system"),
   getSettings: () => request<AppSettings>("/api/settings"),
