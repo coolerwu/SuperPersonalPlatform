@@ -35,7 +35,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
         <div>
           <div className="eyebrow">TOOLS</div>
           <h1>工具</h1>
-          <p>Agent 使用 Claude Code 默认工具集；当前版本平台工具与技能工具尚未接入 Agent，后续版本启用。</p>
+          <p>Agent 使用 Claude Code 默认工具集；平台业务工具已通过进程内 MCP 接入，浏览器与搜索由 Claude Code 自带能力或插件提供。</p>
         </div>
         <button className="ghost-button" onClick={onClose}>返回对话</button>
       </header>
@@ -46,7 +46,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
             <div className="settings-card-head">
               <div>
                 <h2>平台工具</h2>
-                <p>由平台声明；当前版本尚未接入 Agent，待工具层迁移。</p>
+                <p>技能创作工具尚未接入 Agent；平台业务工具见下方。</p>
               </div>
             </div>
             <div className="tool-list">
@@ -57,7 +57,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
                     <small>{tool.description}</small>
                   </div>
                   <span className={`capability ${tool.wired ? "on" : "off"}`}>
-                    {tool.wired ? "已接入" : "未接入（待工具层）"}
+                    {tool.wired ? "已接入" : "未接入"}
                   </span>
                 </div>
               ))}
@@ -70,7 +70,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
                 <h2>Claude Code 默认工具集</h2>
                 <p>
                   {data?.claude_code_note ??
-                    "Claude Code 默认工具集，随 bundled CLI 版本和插件环境变化，以运行时 init frame 为准。"}
+                    "Claude Code 默认工具集，随 bundled CLI 版本和插件环境变化；平台业务工具以 mcp__platform_tools__* 出现在运行时 init frame。"}
                 </p>
                 <p>
                   默认以工作区为起点，但没有沙箱或权限边界（Bash 同理）；
@@ -95,7 +95,7 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
             <div className="settings-card-head">
               <div>
                 <h2>技能工具</h2>
-                <p>工具注册表已保留；当前版本尚未接入 Agent，待工具层迁移。</p>
+                <p>平台业务工具已通过进程内 MCP 接入；浏览器、搜索和技能创作仍未接入。</p>
               </div>
               <div className="settings-card-actions">
                 <button className="ghost-button" onClick={() => void load()} disabled={loading}>
@@ -105,9 +105,9 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
             </div>
 
             <div className="hint">
-              平台注册表中的搜索、浏览器、回测、交易记录、资产配置、缠论和知识库工具都未接入 SDK；
-              本版 Agent 不会调用这些工具。列表中的 Skill 是 Claude Code 自带工具，
-              不读取平台 skills/ 目录。
+              回测、行情、交易记录、资产配置和缠论工具已接入 Agent；
+              浏览器操作走官方 Playwright 插件，搜索走 Claude Code 自带的 WebSearch/WebFetch。
+              平台自带的浏览器工具、web_search/web_fetch 与技能创作仍未接入。
             </div>
             {error && <div className="error-banner">{error}</div>}
             {!data && !error && <div className="empty-note">读取中…</div>}
@@ -127,8 +127,12 @@ export function ToolsPage({ onClose }: ToolsPageProps) {
                         : "—（没有技能声明）"}
                     </small>
                   </div>
-                  <span className={`capability ${tool.registered ? "on" : "off"}`}>
-                    {tool.registered ? "已注册" : "未注册"}
+                  <span className={`capability ${tool.wired ? "on" : "off"}`}>
+                    {tool.wired
+                      ? "已接入"
+                      : tool.registered
+                        ? "已注册（未接入）"
+                        : "未注册"}
                   </span>
                 </div>
               ))}

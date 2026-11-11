@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import sqlite3
@@ -8,6 +9,55 @@ import pytest
 
 import app.services.settings_store as settings_store_module
 from app.services.settings_store import JsonStore, SettingsStore, build_default_settings
+
+
+@pytest.mark.asyncio
+async def test_ensure_seeded_migrates_legacy_default_instructions(
+    tmp_path, monkeypatch
+):
+    legacy = "legacy default instructions"
+    updated = "new default instructions"
+    monkeypatch.setattr(
+        settings_store_module,
+        "LEGACY_DEFAULT_INSTRUCTION_HASHES",
+        frozenset({hashlib.sha256(legacy.encode()).hexdigest()}),
+    )
+    monkeypatch.setattr(
+        settings_store_module, "DEFAULT_AGENT_INSTRUCTIONS", updated
+    )
+    data = build_default_settings()
+    data["agents"][0]["instructions"] = legacy
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    settings = await SettingsStore(path).ensure_seeded()
+    assert settings.agents[0].instructions == updated
+    backup = path.with_name(path.name + ".bak")
+    assert legacy in backup.read_text("utf-8")
+
+    settings = await SettingsStore(path).ensure_seeded()
+    assert settings.agents[0].instructions == updated
+
+
+@pytest.mark.asyncio
+async def test_ensure_seeded_preserves_custom_instructions(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        settings_store_module,
+        "LEGACY_DEFAULT_INSTRUCTION_HASHES",
+        frozenset({hashlib.sha256(b"legacy").hexdigest()}),
+    )
+    monkeypatch.setattr(
+        settings_store_module, "DEFAULT_AGENT_INSTRUCTIONS", "new default"
+    )
+    data = build_default_settings()
+    data["agents"][0]["instructions"] = "my custom instructions"
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    settings = await SettingsStore(path).ensure_seeded()
+    assert settings.agents[0].instructions == "my custom instructions"
 
 
 @pytest.mark.asyncio

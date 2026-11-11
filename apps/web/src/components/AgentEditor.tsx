@@ -95,8 +95,8 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
 
       <div className="field-label">技能</div>
       <div className="hint">
-        在左侧「技能」页面为当前 Agent 维护启用列表；列表会保存，但本版技能工具尚未接入 SDK，
-        不会改变当前可用工具。
+        技能由 Claude Code 自动发现、所有 Agent 共享；本版没有技能创作工具，
+        需要时由模型按技能说明调用。
       </div>
 
       <div className="field-label">渠道</div>

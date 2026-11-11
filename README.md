@@ -8,7 +8,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`
 - 会话与消息由 SDK transcript 管理；平台配置在 `data/settings.json`；新库的 `app.db` 只创建 `audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions` 六张表（从旧版升级的库会保留未使用的旧表）
 
-本版明确不包含：工具层迁移（技能工具、`add_dirs`、MCP、浏览器/搜索/回测等工具接入 Agent）、rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、进程重启后继续看当前输出、消息时间戳、Run 历史。同一进程内刷新会在数秒内重放当前轮缓冲；进程重启或断线才丢失。`langchain-core` 暂留，待工具层迁移后删除。
+本版明确不包含：平台自带浏览器/搜索工具、`add_dirs`、技能创作工具、知识库工具接入 Agent；rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、进程重启后继续看当前输出、消息时间戳、Run 历史。平台业务工具（回测、行情、交易记录、资产配置、缠论）已通过进程内 MCP 接入。同一进程内刷新会在数秒内重放当前轮缓冲；进程重启或断线才丢失。`langchain-core` 暂留，用于工具包装。
 
 ## 运行时目录
 
@@ -36,7 +36,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
     ├── trade-journal.jsonl
     ├── allocation.json
     ├── allocation-ledger.jsonl
-    ├── browser_state.json  # 浏览器登录态（工具层接入后使用）
+    ├── browser_state.json  # 浏览器登录态（平台浏览器工具接入后使用）
     └── backtests/          # 回测策略临时文件
 ```
 
@@ -95,7 +95,7 @@ npm run dev
 侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、插件、渠道、定时、记忆；「平台」组放配置和退出登录。功能工作区放回测、交易记录、资产配置、缠论图，不显示 Agent 选择器和会话。
 
 - **技能**：列出全局技能库，按「系统技能」和「交互创建」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（只删技能目录）。
-- **工具**：如实展示当前接入状态。runner 未显式限制 `tools`，Agent 使用 Claude Code 默认工具集（以工具页/运行时 init frame 为准，随 bundled CLI 版本和插件环境变化；例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。WebFetch/WebSearch 是 Claude Code 自带工具，不代表平台注册表中的搜索/浏览器工具已接入；平台工具与技能工具标记为未接入，等待工具层迁移。本版 Agent 不能调用平台注册表中的搜索、浏览器、回测、定时、交易记录、资产配置、缠论或知识库工具。
+- **工具**：如实展示当前接入状态。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）已通过进程内 `platform_tools` MCP 接入，以 `mcp__platform_tools__*` 出现在运行时 init frame；插件自带的 MCP 继续并存。平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入：浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。
 - **插件**：管理 Claude Code 官方集市与插件，见下节。
 - 内置技能在技能库中 seed：`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作使用官方集市 `playwright` 插件，均不再单独 seed 技能）。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
 
@@ -131,7 +131,7 @@ metadata:
 # 技能正文
 ```
 
-`metadata.include_tools` 必须是空格分隔的工具名。本版这些声明只用于技能页展示，工具尚未接入 SDK。
+`metadata.include_tools` 必须是空格分隔的工具名。这些声明只用于技能页展示，工具是否可用以工具页和运行时 init frame 为准。
 
 ## 记忆
 
@@ -157,7 +157,7 @@ metadata:
 - 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；点「重新扫码」重新登录，未发送任何分块（pending）的回复在恢复后补发；部分送达行（attempting）仍受 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 约束，达到上限后为 `failed`，不再自动补发。
 - 渠道暂停后停止收发；删除渠道会删除登录凭据、渠道绑定、入站/投递记录并清空定时任务的推送目标，已产生的会话与 transcript 保留。
 - `bot_token` 只存在 `data/settings.json`，接口不返回明文；请保护该文件权限。
-- 运行期 `browser_screenshot` 实时推送截图的逻辑已保留（`channel_images.py`），但本版浏览器工具尚未接入 SDK，因此没有调用方；工具层迁移后启用。
+- 运行期 `browser_screenshot` 实时推送截图的逻辑已保留（`channel_images.py`），但本版平台浏览器工具尚未接入 SDK，因此没有调用方；接入后启用。
 - iLink 协议实现参考 Nous Research 的 [hermes-agent](https://github.com/NousResearch/hermes-agent) Weixin 适配器（MIT），许可声明见 `THIRD_PARTY_NOTICES.md`。
 
 接口：`GET/POST /api/channels`、`PUT/DELETE /api/channels/{id}`、`GET /api/channels/{id}/conversations`、`POST /api/channels/{id}/wechat/login`、`GET /api/channels/{id}/wechat/login/status`、`POST /api/channels/{id}/wechat/relogin`。
@@ -174,7 +174,7 @@ metadata:
 - 暂停或删除任务不会取消已经产生的 turn；删除任务保留会话与 transcript；暂停/归档 Agent 时不触发，恢复后从下一个匹配时间继续。
 - 可选推送到微信：任务可以显式选择一个当前 Agent 的 active 微信渠道下已有 1:1 联系人（`GET /api/channels/{id}/conversations` 列出候选）；触发时与租约同一事务写 pending 投递，复用渠道分块、重试和补发。删除渠道会清空该渠道相关任务的推送目标；删除会话或联系人只移除绑定，任务保留目标但届时静默不推送。未配置目标则只留在网页会话里，群聊不支持，取消的 turn 不发送。
 - 任务页显示下次触发、最近运行时间、上次跳过提示和「打开会话」入口，支持暂停/启用、编辑、立即运行和删除。
-- Agent 的 `cron-scheduler` 技能与任务工具已注册，但本版未接入 SDK。
+- Agent 的 `cron-scheduler` 技能与平台定时工具仍未接入 SDK。
 
 接口：`GET/POST /api/cron-jobs`、`PUT/DELETE /api/cron-jobs/{id}`、`POST /api/cron-jobs/{id}/run`；响应为任务对象（`last_run_at` / `last_skipped_at`，不含 `last_run_id` / `last_run_status`）。
 
@@ -186,7 +186,7 @@ metadata:
 - 同步规则：远端和本地都改过同一文件时，远端版本保留原名，本地版本另存为 `<name>.conflict-local-<时间戳>` 并上传；远端删除且本地未修改时删除本地；本地删除不传播，远端文件会在下一轮恢复。单文件默认上限 50 MB（`KB_MAX_FILE_BYTES`），超出跳过；路径限制在配置的根目录内，拒绝 `..` 和符号链接。
 - 坚果云限流：免费账号每 30 分钟约 600 次 WebDAV 请求（所有第三方应用共享），单次 `PROPFIND` 最多 750 项，且不支持 `Depth: infinity`。平台默认每 4.5 秒最多发一个请求（`KB_REQUEST_INTERVAL_SECONDS`），默认跳过 `.obsidian`、`.git`、`.trash`、`node_modules`、`.DS_Store`（`KB_EXCLUDE_DIRS`）；收到 `BlockedTemporarily` 时暂停约 30 分钟（`KB_BLOCKED_RETRY_SECONDS`）。列表达到 750 项、被截断或某个子目录读取失败时，本轮不做删除判断。
 - 更改 WebDAV 地址、账号或根目录时，本地镜像和同步状态会移到 `.old-<时间戳>` 备份后按新配置重建，避免旧文件被上传到新根目录。
-- 本版知识库镜像不挂载给 Agent（技能工具层未迁移）；页面配置与同步正常运行。
+- 本版知识库镜像不挂载给 Agent（知识库工具未接入）；页面配置与同步正常运行。
 - 接口：`GET/PUT /api/knowledge` 读取和保存配置（响应包含同步状态，不含密码），`POST /api/knowledge/sync` 立即触发一次同步；`GET /api/system` 的 `knowledge` 字段也返回同步状态。
 
 ## 量化回测
@@ -200,7 +200,7 @@ metadata:
 - 结果：总收益、年化、最大回撤、Sharpe、Sortino、胜率、交易次数、盈亏比、基准买入持有；价格 K 线与买卖点、净值、回撤、交易明细。净值/回撤/价格曲线下采样到约 2000 点，交易明细最多保存 5000 笔。结果持久化在 `backtests` 表，可在历史列表回看。
 - 任务：`queued/fetching/running/completed/failed/cancelled`；服务重启后未完成任务重新排队；同时只执行一个回测，其余排队。
 - 限制：单次回测最多 `BACKTEST_MAX_BARS`（默认 200000）根 K 线；缺口超过修复预算时保留为空仓并在结果里告警；模拟做空不含借币成本、资金费率与强平。
-- Agent 的 `quant-backtest` 技能与回测工具已注册，但本版未接入 SDK。
+- Agent 的 `quant-backtest` 技能与 `backtest_*` / `market_*` 工具已通过 `platform` MCP 接入。
 
 ## 交易记录
 
@@ -211,7 +211,7 @@ metadata:
 - 计算：`status`、价格收益、R 倍数、净盈亏、胜负由平台计算，不写入文件；没有 `quantity` 时只有价格收益和 R，没有金额盈亏。
 - 写入：服务层按进程内事件循环串行写入，更新用临时文件原子替换，文件权限 0600；文件损坏行会被跳过。
 - 接口：`GET/POST /api/trade-journal`、`GET /api/trade-journal/stats`、`GET/PUT /api/trade-journal/{id}`、`POST /api/trade-journal/{id}/close`。
-- Agent 的 `trade-journal` 技能与工具已注册，但本版未接入 SDK。
+- Agent 的 `trade-journal` 技能与五个工具已通过 `platform` MCP 接入。
 - 边界：不接交易所、不自动下单、不计算实时浮盈、不删除记录。
 
 ## 资产配置
@@ -227,7 +227,7 @@ metadata:
 - 总览：顶部「总览」把所有组合折算成 USD 合并：显示总资产、现金、投入本金、浮盈、已实现、总收益、总收益率和近似 XIRR（历史现金流按当前汇率折算），以及合并持仓明细（同一标的跨组合合并）。不支持的币种不计入并提示。
 - 页面：功能 → 资产配置；不分 tab。上面是总览和合并持仓，中间是所有组合合并的流水（可按组合/标的筛选），最下面是组合设置（目标、再平衡、编辑/记一笔入口）。
 - 接口：`GET /api/allocation`、`POST /api/allocation/refresh`、`POST/PUT/DELETE /api/allocation/portfolios...`、`GET/POST /api/allocation/portfolios/{id}/entries`、`PUT/DELETE /api/allocation/portfolios/{id}/entries/{entry_id}`。
-- Agent 的 `allocation` 技能与工具已注册，但本版未接入 SDK。
+- Agent 的 `allocation` 技能与六个工具已通过 `platform` MCP 接入。
 - 边界：不接券商/交易所、不自动下单、不自动再平衡；没有每日估值快照，不做净值曲线、最大回撤和收益归因；总览的汇率和 XIRR 为近似值；不做税务批次、做空、保证金或借币成本。
 
 ## 缠论图
@@ -239,7 +239,7 @@ metadata:
 - 算法：确定性程序计算，不调用 AI。包含处理（向上取高高、向下取低低）、严格三根分型、老笔（顶底交替且至少 5 根合并 K 线含两端）、完整中枢（进入段 + 连续三笔重叠 + 确认离开段）、笔级别 1/2/3 买卖点（带失效标记）、MACD(12,26,9) 与简化背离。笔一旦成立不会因后续价格越过起点而回滚；未成笔分型不标注；最后一笔之后的未确认走势用虚线画出，不计入笔数、不参与中枢/背离/买卖点。买卖点和背离是笔级别近似，不是严格缠论背驰，也不是交易建议。
 - 接口：`POST /api/chan/analyze` 返回 candles/merged/fractals/strokes/pending_strokes/zones/points/macd/divergences/rules/warnings，不建表、不落库；`POST /api/chan/backtest` 用因果前缀回放、下一根开盘进场、固定止损/R 目标/时间止损和费用，输出胜率、平均 R、回撤和按信号类型统计。
 - 页面：交易 → 缠论图；顶部工具栏直接显示参数和显示项；中枢用半透明色块，买卖点标为 1买/2买/3买、1卖/2卖/3卖；MACD 副图与主图时间轴、十字线同步，背离标为「底背 / 顶背」。交易对、周期、时间窗口、结构/回测模式和各显示开关写入 `/chan?...` 查询串，刷新或直达后恢复并自动分析。
-- Agent 的 `chanlun` 技能与工具已注册，但本版未接入 SDK。
+- Agent 的 `chanlun` 技能与 `chan_analyze` / `chan_backtest` 已通过 `platform` MCP 接入。
 
 ## 数据存储
 
@@ -255,7 +255,7 @@ metadata:
   - `running_sessions`：运行时租约（`session_id` 主键）。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles` 和 `market_sync_state`；可以独立删除，下次回测会重新抓取。
 - `trade-journal.jsonl`、`allocation.json`、`allocation-ledger.jsonl`：交易记录与资产配置数据，权限 0600，不建数据库表。
-- `browser_state.json`：浏览器 cookies/localStorage（0600）；工具层接入浏览器工具后用于跨会话、跨轮次保持登录态。
+- `browser_state.json`：浏览器 cookies/localStorage（0600）；平台浏览器工具接入后用于跨会话、跨轮次保持登录态。
 - `knowledge_sync_state.json`：知识库同步状态（etag + 本地哈希）。
 - `backtests/`：回测策略临时文件。
 - `~/.super-personal-platform/claude/`：SDK 配置、用户画像 `CLAUDE.md`、会话 transcript 与 auto memory；权限 0700。SDK transcript 是会话历史的唯一来源。
@@ -286,7 +286,7 @@ metadata:
 | `CLAUDE_CLIENT_MAX_CLIENTS` | 缓存 SDK client 上限（LRU 淘汰空闲项） | `8` |
 | `CLAUDE_CLIENT_SWEEP_SECONDS` | 空闲 client 清扫间隔（秒） | `60` |
 | `CLAUDE_CONNECT_TIMEOUT_SECONDS` | 连接 SDK CLI 的超时（秒） | `60` |
-| `BROWSER_CONCURRENCY` | 跨 session 并发上限（同时是浏览器标签页上限，供工具层使用） | `5` |
+| `BROWSER_CONCURRENCY` | 跨 session 并发上限（同时是浏览器标签页上限，供平台浏览器工具使用） | `5` |
 | `SESSION_RETENTION_DAYS` | 首次种子：会话保留天数；之后由配置页管理，0 关闭 | `30` |
 | `SESSION_CLEANUP_INTERVAL_SECONDS` | 会话清理扫描间隔（秒，最小 60） | `3600` |
 | `CRON_TICK_SECONDS` | 定时任务扫描间隔（秒） | `20` |
@@ -298,7 +298,7 @@ metadata:
 | `CHANNEL_INBOUND_BATCH_MAX_SECONDS` | 连续消息不断刷新时的最长打包时间（秒） | `15` |
 | `CHANNEL_MEDIA_MAX_BYTES` | 单个微信图片/文件下载上限 | `20971520` |
 | `CHANNEL_MEDIA_MAX_ITEMS` | 单条微信消息最多下载的媒体数 | `4` |
-| `VISION_MAX_IMAGES` / `VISION_MAX_IMAGE_BYTES` / `VISION_MAX_IMAGE_EDGE` | 图片附件压缩参数（保留给工具层与旧附件流程） | `4` / `4194304` / `1600` |
+| `VISION_MAX_IMAGES` / `VISION_MAX_IMAGE_BYTES` / `VISION_MAX_IMAGE_EDGE` | 图片附件压缩参数（保留给平台浏览器工具与旧附件流程） | `4` / `4194304` / `1600` |
 | `WEIXIN_LONG_POLL_TIMEOUT_MS` | iLink `getupdates` 长轮询窗口 | `35000` |
 | `WEIXIN_API_TIMEOUT_MS` | iLink `sendmessage` 请求超时 | `15000` |
 | `WEIXIN_QR_TIMEOUT_MS` | iLink 二维码请求/状态轮询超时 | `35000` |
@@ -320,7 +320,7 @@ metadata:
 | `BACKTEST_CONCURRENCY` | 同时执行的回测数 | `1` |
 | `BACKTEST_TIMEOUT_SECONDS` | 策略子进程超时 | `120` |
 | `BACKTEST_FETCH_TIMEOUT_SECONDS` | 单次回测抓取行情的总超时 | `600` |
-| `BACKTEST_TOOL_WAIT_SECONDS` | Agent 的 `backtest_run` 工具最多等待秒数（工具层接入后生效） | `90` |
+| `BACKTEST_TOOL_WAIT_SECONDS` | Agent 的 `backtest_run` 工具最多等待秒数 | `90` |
 | `BACKTEST_MEMORY_LIMIT_MB` | 策略子进程内存上限（POSIX best-effort） | `2048` |
 | `BACKTEST_MAX_BARS` | 单次回测的 K 线上限 | `200000` |
 | `BACKTEST_MAX_TRADES` | 结果中保留的交易明细上限 | `5000` |

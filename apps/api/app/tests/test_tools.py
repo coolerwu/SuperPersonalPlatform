@@ -32,6 +32,7 @@ def test_tools_api_declares_claude_code_and_unwired_tools(client) -> None:
     assert all(tool["source"] == "claude-code" for tool in filesystem.values())
     assert all(tool["wired"] and tool["registered"] for tool in filesystem.values())
     assert "随 bundled CLI 版本" in body["claude_code_note"]
+    assert "mcp__platform_tools__" in body["claude_code_note"]
 
     platform = {tool["name"]: tool for tool in body["platform_tools"]}
     assert set(platform) == {"skill_save"}
@@ -40,6 +41,13 @@ def test_tools_api_declares_claude_code_and_unwired_tools(client) -> None:
     assert platform["skill_save"]["registered"] is False
 
     skills = {tool["name"]: tool for tool in body["skill_tools"]}
+    business = {
+        "backtest_run",
+        "market_probe",
+        "chan_analyze",
+        "trade_journal_record",
+        "allocation_overview",
+    }
     for name in (
         "web_search",
         "web_fetch",
@@ -51,8 +59,7 @@ def test_tools_api_declares_claude_code_and_unwired_tools(client) -> None:
     ):
         assert skills[name]["registered"] is True, name
         assert skills[name]["source"] == "skill"
-        # Registry code is kept, but no skill tool is wired to the SDK yet.
-        assert skills[name]["wired"] is False
+        assert skills[name]["wired"] is (name in business), name
     # The web-search/web-fetch skills were retired in favour of Claude Code's
     # built-in WebFetch/WebSearch; their tool modules stay registered for the
     # tool-layer migration but no skill declares them any more.

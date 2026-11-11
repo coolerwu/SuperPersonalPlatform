@@ -36,11 +36,12 @@ from typing import Any, Awaitable, Callable
 
 from app.config import settings as app_settings
 from app.db import SessionLocal
-from app.services import channel_delivery, sdk_bridge, turn_lease
+from app.services import channel_delivery, platform_mcp, sdk_bridge, turn_lease
 from app.services.claude_env import build_claude_env, claude_paths, workspace_for
 from app.services.identifiers import valid_agent_id
 from app.services.sdk_events import StreamMapper, TurnOutcome, outcome_from_result
 from app.services.settings_store import SettingsStore
+from app.services.skill_tools import SkillToolContext
 from app.services.tool_artifacts import artifact_from_tool
 from app.services.turn_stream import TurnStream
 
@@ -322,6 +323,18 @@ class ClaudeTurnRunner:
                     "cli[%s] %s", turn.session_id, line
                 ),
             }
+            tool_context = SkillToolContext(
+                api_key=agent.provider.api_key,
+                base_url=agent.provider.base_url,
+                agent_id=agent.id,
+                session_id=turn.session_id,
+            )
+            kwargs["mcp_servers"] = {
+                platform_mcp.SERVER_NAME: platform_mcp.build_server(
+                    tool_context
+                )
+            }
+            kwargs["allowed_tools"] = platform_mcp.allowed_tool_names()
             # Keep Claude Code's default system prompt and append the Agent's
             # own instructions. The preset without ``append`` adds no CLI flag,
             # so an empty instruction set leaves the default prompt untouched.

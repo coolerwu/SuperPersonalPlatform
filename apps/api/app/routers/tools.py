@@ -9,6 +9,7 @@ from app.services import backtest_tools  # noqa: F401 - registers backtest tools
 from app.services import browser_tools  # noqa: F401 - registers browser tools
 from app.services import chan_tools  # noqa: F401 - registers Chan tools
 from app.services import trade_journal_tools  # noqa: F401 - registers journal tools
+from app.services.platform_mcp import BUSINESS_TOOL_NAMES
 from app.services.skill_tools import SKILL_TOOL_REGISTRY
 from app.services.skills import scan_skills
 
@@ -47,11 +48,11 @@ CLAUDE_CODE_TOOLS = (
 )
 
 CLAUDE_CODE_TOOLS_NOTE = (
-    "Claude Code 默认工具集，随 bundled CLI 版本和插件环境变化，"
-    "以运行时 init frame 为准。"
+    "Claude Code 默认工具集，随 bundled CLI 版本和插件环境变化；"
+    "平台业务工具以 mcp__platform_tools__* 出现在运行时 init frame。"
 )
 
-# Static declaration: the SDK runtime does not expose platform tools yet.
+# Static declaration: skill authoring stays outside the SDK runtime.
 PLATFORM_TOOLS = (
     (
         "skill_save",
@@ -75,9 +76,9 @@ async def list_tools() -> ToolsOut:
             registered=name in registered,
             skills=sorted(declared.get(name, ())),
             source="skill",
-            # The tool-layer migration has not connected registry tools to the
-            # SDK runtime yet.
-            wired=False,
+            # Business tools are mounted on the in-process platform MCP
+            # server; browser and web tooling stay unwired.
+            wired=name in BUSINESS_TOOL_NAMES,
         )
         for name in sorted(set(registered) | set(declared))
     ]

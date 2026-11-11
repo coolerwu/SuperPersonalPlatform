@@ -76,7 +76,7 @@ export function SkillsPage({
           </strong>
           <small>{skill.description}</small>
           {skill.include_tools.length > 0 && (
-            <small>声明工具（本版未接入）：{skill.include_tools.join(", ")}</small>
+            <small>声明工具（是否可用以工具页为准）：{skill.include_tools.join(", ")}</small>
           )}
           <small className="skill-path">{skill.path}</small>
           {skill.warnings.map((warning) => (

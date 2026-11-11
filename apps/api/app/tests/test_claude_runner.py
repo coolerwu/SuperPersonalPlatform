@@ -723,6 +723,10 @@ async def test_options_raise_frame_buffer_and_wire_stderr_logging(tmp_path):
     await runner.run(make_turn(), TurnStream())
     assert captured[0].max_buffer_size == 16 * 1024 * 1024
     assert callable(captured[0].stderr)
+    servers = captured[0].mcp_servers
+    assert servers["platform_tools"]["type"] == "sdk"
+    assert servers["platform_tools"]["name"] == "platform_tools"
+    assert "mcp__platform_tools__backtest_run" in captured[0].allowed_tools
 
 
 @pytest.mark.asyncio

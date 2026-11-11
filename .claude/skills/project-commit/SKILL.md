@@ -112,10 +112,12 @@ If the user explicitly asks to deploy v1 on the target machine:
     sessions/messages/runs tables;
   - `instructions` are appended to the Claude Code preset system prompt;
   - the default tool set is Claude Code's own (the runner does not set `tools`);
-  - platform and skill tools are **not wired** into the SDK yet, and the
-    per-agent `enabled_skills` list does not gate anything in this version;
+  - platform business tools (backtest/market/journal/allocation/chan) are
+    mounted as an in-process `platform` SDK MCP server and appear as
+    `mcp__platform_tools__*`; platform browser/search tools and `skill_save` remain
+    unwired; tool declarations in skills do not gate availability;
   - skills are file documents under `skills/`; editing them does not require a
-    form, but the skill tools they declare are unavailable;
+    form, and the platform business tools are available through the MCP server;
   - memory is the shared user profile `claude/CLAUDE.md` plus per-Agent
     `workspaces/<agent_id>/CLAUDE.md`; Claude auto memory is displayed read-only;
     there is no `/memory` command, memory table, memory tool or consolidation

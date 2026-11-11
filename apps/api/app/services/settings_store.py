@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -15,7 +16,10 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings, settings as app_settings
-from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
+from app.prompts import (
+    DEFAULT_AGENT_INSTRUCTIONS,
+    LEGACY_DEFAULT_INSTRUCTION_HASHES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +454,44 @@ class SettingsStore:
 
             await self._json.update(migrate)
             settings = await self.get()
-        return settings
+        return await self._migrate_default_instructions(settings)
+
+    async def _migrate_default_instructions(
+        self, settings: PlatformSettings
+    ) -> PlatformSettings:
+        """Replace Agent instructions that still equal an old default seed."""
+        agent_ids = {
+            agent.id
+            for agent in settings.agents
+            if hashlib.sha256(
+                agent.instructions.encode("utf-8")
+            ).hexdigest()
+            in LEGACY_DEFAULT_INSTRUCTION_HASHES
+        }
+        if not agent_ids:
+            return settings
+
+        def mutate(data: dict[str, Any]) -> None:
+            updated_at = datetime.now(timezone.utc).isoformat()
+            for item in _list_section(data, "agents"):
+                if (
+                    isinstance(item, dict)
+                    and item.get("id") in agent_ids
+                ):
+                    item["instructions"] = DEFAULT_AGENT_INSTRUCTIONS
+                    item["updated_at"] = updated_at
+
+        try:
+            await self._json.update(mutate)
+        except Exception:
+            # A cosmetic instruction refresh must not abort startup.
+            logger.exception("updating legacy default instructions failed")
+            return settings
+        logger.info(
+            "updated legacy default instructions for %d agent(s)",
+            len(agent_ids),
+        )
+        return await self.get()
 
     async def update_agent(self, agent: AgentSection) -> None:
         def mutate(data: dict[str, Any]) -> None:
