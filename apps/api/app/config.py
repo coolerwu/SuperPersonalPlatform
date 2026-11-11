@@ -114,8 +114,8 @@ class Settings(BaseSettings):
     weixin_qr_timeout_ms: int = 35_000
 
     # Personal knowledge base mirrored from a WebDAV folder (Nutstore).
-    # The mirror is mounted as /knowledge/ for Agents that enable the
-    # knowledge-base skill; a background task syncs it every few minutes.
+    # Agents read and write the mirror with file tools; a background task
+    # syncs it every few minutes.
     kb_webdav_url: str = ""
     kb_webdav_username: str = ""
     kb_webdav_password: str = ""

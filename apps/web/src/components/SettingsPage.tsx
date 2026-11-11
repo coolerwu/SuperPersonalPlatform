@@ -375,7 +375,7 @@ export function SettingsPage(props: SettingsPageProps) {
             <div className="settings-card-head">
               <div>
                 <h2>知识库</h2>
-                <p>坚果云 WebDAV 镜像；启用 knowledge-base 技能的 Agent 可通过 /knowledge/ 读写笔记。</p>
+                <p>坚果云 WebDAV 镜像；Agent 用文件工具直接读写知识库目录。</p>
               </div>
             </div>
             <KnowledgeSettings />

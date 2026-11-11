@@ -159,9 +159,12 @@ def test_seeded_skills_do_not_declare_platform_tools() -> None:
 def test_default_skills_seeded(client) -> None:
     body = client.get("/api/skills").json()
     skills = {item["name"]: item for item in body["skills"]}
-    assert (settings.skills_dir / "knowledge-base" / "SKILL.md").is_file()
-    assert skills["knowledge-base"]["include_tools"] == []
-    assert skills["knowledge-base"]["source"] == "builtin"
+    assert (settings.skills_dir / "quant-backtest" / "SKILL.md").is_file()
+    assert skills["quant-backtest"]["include_tools"] == []
+    assert skills["quant-backtest"]["source"] == "builtin"
+    # The knowledge-base skill was retired; the mirror and its sync runtime
+    # stay, and Agents use plain file tools on it.
+    assert "knowledge-base" not in skills
     # Web search/fetch moved to Claude Code's built-in WebSearch/WebFetch;
     # browser automation comes from the official Playwright plugin.
     assert "web-search" not in skills

@@ -97,7 +97,7 @@ npm run dev
 - **技能**：列出全局技能库，按「系统技能」和「交互创建」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（只删技能目录）。
 - **工具**：如实展示当前接入状态。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）已通过进程内 `platform_tools` MCP 接入，以 `mcp__platform_tools__*` 出现在运行时 init frame；插件自带的 MCP 继续并存。平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入：浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。
 - **插件**：管理 Claude Code 官方集市与插件，见下节。
-- 内置技能在技能库中 seed：`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作使用官方集市 `playwright` 插件，均不再单独 seed 技能）。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
+- 内置技能在技能库中 seed：`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作使用官方集市 `playwright` 插件，均不再单独 seed 技能；`knowledge-base` 已退役，知识库镜像仍会同步，Agent 直接用文件工具读写）。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
 
 ### 插件集市
 

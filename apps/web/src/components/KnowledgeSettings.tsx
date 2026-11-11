@@ -245,7 +245,7 @@ export function KnowledgeSettings() {
       </form>
       <div className="hint">
         WebDAV 密码保存在 app.db，与 Provider 密钥相同，不会回传前端、不写日志；留空表示不修改。
-        保存后立即唤醒同步；Agent 要在「技能」页启用 knowledge-base 才能看到 /knowledge/。
+        保存后立即唤醒同步；Agent 用文件工具直接读写知识库镜像目录。
       </div>
       <div className="hint">
         坚果云免费账号限制约每 30 分钟 600 次 WebDAV 请求（所有第三方应用共享），平台已自动限速；

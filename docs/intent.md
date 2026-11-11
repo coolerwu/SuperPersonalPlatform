@@ -222,7 +222,7 @@
 #### 功能点
 
 1. 技能库 `~/.super-personal-platform/claude/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `builtin` / `ai` / `manual`。
-2. 内置技能 seed：`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取改用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作改用官方集市 `playwright` 插件，对应技能已退役）。`.seed_state.json` 记录内置内容哈希：未修改的内置技能随版本更新；用户改过的保留；已从默认列表移除且未被修改的内置技能在启动 seed 时只删除被跟踪的 `SKILL.md`，目录内用户附加文件保留，只有目录为空时才移除目录；用户改过的保留并停止跟踪（例如旧 home 的 `memory-organizer`、`web-search`、`web-fetch`、`web-browser`）。
+2. 内置技能 seed：`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取改用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作改用官方集市 `playwright` 插件，对应技能已退役）。`.seed_state.json` 记录内置内容哈希：未修改的内置技能随版本更新；用户改过的保留；已从默认列表移除且未被修改的内置技能在启动 seed 时只删除被跟踪的 `SKILL.md`，目录内用户附加文件保留，只有目录为空时才移除目录；用户改过的保留并停止跟踪（例如旧 home 的 `memory-organizer`、`web-search`、`web-fetch`、`web-browser`、`knowledge-base`；`knowledge-base` 退役后知识库镜像仍同步，Agent 直接用文件工具读写）。
 3. 技能页按「系统技能 / 交互创建」分组，可查看和编辑 SKILL.md；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关；非系统技能可删除（只删技能目录）。
 4. 平台业务工具已通过进程内 MCP 接入 chat：回测 4 个（`backtest_*`）、行情 2 个（`market_*`）、交易记录 5 个（`trade_journal_*`）、资产配置 6 个（`allocation_*`）、缠论 2 个（`chan_analyze` / `chan_backtest`），共 19 个。runner 为每个缓存的 SDK client 挂一个 `platform_tools` SDK MCP server，工具以 `mcp__platform_tools__*` 出现在 init frame；插件自带的 MCP 继续并存。server 配置 `timeout`（至少 180 秒）和 `disableAutoBackground`，覆盖 `backtest_run` 最长约 90 秒的等待。交易记录与资产配置的写入工具对 Agent 开放。
 5. 平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入；浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。工具页按 `wired` 展示实际接入状态。

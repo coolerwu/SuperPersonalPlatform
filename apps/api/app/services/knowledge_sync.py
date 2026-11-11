@@ -1,9 +1,8 @@
 """Two-way sync between a WebDAV folder (Nutstore) and a local mirror.
 
-The mirror is mounted as ``/knowledge/`` for Agents that enable the
-``knowledge-base`` skill, so the Agent reads and writes it with the normal
-file tools. A background task reconciles the mirror with WebDAV every few
-minutes; credentials never leave this process.
+Agents reach the mirror at ``~/.super-personal-platform/knowledge/`` with the
+normal file tools; a background task reconciles it with WebDAV every few
+minutes. Credentials never leave this process.
 """
 
 from __future__ import annotations
@@ -31,7 +30,6 @@ from app.services.settings_store import get_settings_store
 
 logger = logging.getLogger(__name__)
 
-KNOWLEDGE_SKILL_NAME = "knowledge-base"
 STATE_VERSION = 1
 CHUNK_SIZE = 1024 * 1024
 MAX_REMOTE_DIRS = 5_000
