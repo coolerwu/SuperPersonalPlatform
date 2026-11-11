@@ -237,7 +237,6 @@ export type SystemInfo = {
   workspace_root: string;
   skills_root: string;
   run_timeout_seconds: number;
-  max_history_messages: number;
   counts: {
     providers: number;
     agents: number;
@@ -287,7 +286,6 @@ export type KnowledgeState = {
 
 export type AppSettings = {
   session_retention_days: number;
-  session_cleanup_interval_seconds: number;
 };
 
 export type DrawerTab = "run" | "agent";

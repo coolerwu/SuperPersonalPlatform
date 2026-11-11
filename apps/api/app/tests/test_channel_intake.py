@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 
 from app.db import SessionLocal, engine, init_db
 from app.models import ChannelDelivery, ChannelInbound
-from app.services import commands
+from app.services import channel_delivery, commands
 from app.services.channel_intake import (
     claim_inbound,
     inbound_seen,
@@ -507,12 +507,21 @@ async def test_deleted_transcript_rebinding_creates_new_session():
     store = FakeStore()
     registry = FakeRegistry()
     stale_session = str(uuid.uuid4())
+    stale_delivery = None
     store.settings.channel_conversations[_conversation_key("ch1", "wx-1")] = ConversationSection(
         session_id=stale_session,
         channel_id="ch1",
         display_name="张三",
         context_token="ctx-old",
     )
+    async with SessionLocal() as db:
+        stale_delivery = await channel_delivery.create_pending(
+            db,
+            channel_id="ch1",
+            external_id="wx-1",
+            session_id=stale_session,
+        )
+        await db.commit()
     try:
         result = await _ingest(store, registry, message_ids=["stale-1"], context_token=None)
         assert result.session_id
@@ -521,8 +530,53 @@ async def test_deleted_transcript_rebinding_creates_new_session():
         assert conversation.session_id == result.session_id
         assert conversation.context_token == "ctx-old"
         assert registry.turns[0].session_id == result.session_id
+        # Claude deletes the expired transcript; the platform still owns the
+        # delivery rows of the dead binding and drops them on rebind.
+        assert await channel_delivery.get(stale_delivery) is None
     finally:
+        if stale_delivery is not None:
+            async with SessionLocal() as db:
+                await db.execute(
+                    delete(ChannelDelivery).where(ChannelDelivery.id == stale_delivery)
+                )
+                await db.commit()
         await _cleanup("ch1", ["stale-1"])
+
+
+@pytest.mark.asyncio
+async def test_valid_binding_keeps_its_deliveries():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    session_id = str(uuid.uuid4())
+    path = _create_transcript("default", session_id)
+    delivery_id = None
+    store.settings.channel_conversations[_conversation_key("ch1", "wx-1")] = ConversationSection(
+        session_id=session_id,
+        channel_id="ch1",
+        display_name="张三",
+        context_token="ctx-old",
+    )
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_pending(
+            db,
+            channel_id="ch1",
+            external_id="wx-1",
+            session_id=session_id,
+        )
+        await db.commit()
+    try:
+        await _ingest(store, registry, message_ids=["live-1"], context_token=None)
+        assert await channel_delivery.get(delivery_id) is not None
+    finally:
+        if delivery_id is not None:
+            async with SessionLocal() as db:
+                await db.execute(
+                    delete(ChannelDelivery).where(ChannelDelivery.id == delivery_id)
+                )
+                await db.commit()
+        path.unlink(missing_ok=True)
+        await _cleanup("ch1", ["live-1"])
 
 
 @pytest.mark.asyncio

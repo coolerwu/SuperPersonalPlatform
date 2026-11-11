@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
-import type { Agent, AgentSavePayload, AppSettings, Provider, SystemInfo } from "../types";
+import type { Agent, AgentSavePayload, Provider, SystemInfo } from "../types";
 import { AgentEditor } from "./AgentEditor";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { KnowledgeSettings } from "./KnowledgeSettings";
@@ -55,7 +55,6 @@ export function SettingsPage(props: SettingsPageProps) {
   const [deleting, setDeleting] = useState(false);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [systemError, setSystemError] = useState("");
-  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const [retentionDays, setRetentionDays] = useState(30);
   const [savingRetention, setSavingRetention] = useState(false);
   const [retentionNotice, setRetentionNotice] = useState("");
@@ -103,7 +102,6 @@ export function SettingsPage(props: SettingsPageProps) {
       .getSettings()
       .then((next) => {
         if (!active) return;
-        setAppSettings(next);
         setRetentionDays(next.session_retention_days);
       })
       .catch((exc) => {
@@ -127,9 +125,8 @@ export function SettingsPage(props: SettingsPageProps) {
           Math.min(3650, Math.round(retentionDays || 0)),
         ),
       });
-      setAppSettings(next);
       setRetentionDays(next.session_retention_days);
-      setRetentionNotice("已保存；会话清理在下一轮扫描生效。");
+      setRetentionNotice("已保存；Claude Code 会按新的保留期清理超期会话。");
     } catch (exc) {
       setRetentionError(errorText(exc));
     } finally {
@@ -424,8 +421,8 @@ export function SettingsPage(props: SettingsPageProps) {
             <div className="settings-subhead">会话与记忆维护</div>
             <form className="editor" onSubmit={saveRuntimeSettings}>
               <p className="hint">
-                超过保留天数没有更新的会话会被自动删除，并清理截图、投递记录与渠道绑定；
-                运行中的会话会跳过；0 表示不清理。
+                超过保留天数没有更新的会话由 Claude Code 自己清理；平台只保存这个设置，不单独扫描
+                transcript。0 表示不清理。
               </p>
               <label className="field-label" htmlFor="retention-days">保留天数</label>
               <input
@@ -446,11 +443,6 @@ export function SettingsPage(props: SettingsPageProps) {
                   {savingRetention ? "保存中…" : "保存运行环境设置"}
                 </button>
               </div>
-              {appSettings && (
-                <div className="hint">
-                  清理任务每 {appSettings.session_cleanup_interval_seconds} 秒扫描一次。
-                </div>
-              )}
             </form>
           </section>
           )}

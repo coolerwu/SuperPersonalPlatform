@@ -294,15 +294,17 @@ def _choose_conversation(
     agent_id: str,
     command: str | None,
     registry: Any,
-) -> tuple[str, str | None, ConversationSection]:
+) -> tuple[str, str | None, ConversationSection, str | None]:
     """Pick the session binding to write for this inbound message.
 
     Also returns the session id the decision was based on, so the store can
     compare-and-set and let the caller retry when a concurrent turn rebinds
-    the contact first.
+    the contact first, plus the dead session a stale binding pointed at (if
+    any) so its delivery rows can be dropped after the rebind commits.
     """
     key = _conversation_key(channel_id, external_id)
     existing = settings.channel_conversations.get(key)
+    stale_session_id: str | None = None
     if existing is not None and existing.channel_id == channel_id:
         token = context_token or existing.context_token
         name = display_name or existing.display_name
@@ -315,6 +317,7 @@ def _choose_conversation(
                 }
             )
         else:
+            stale_session_id = existing.session_id
             conversation = _new_conversation(channel_id, name, token)
     else:
         # Unknown key or a binding owned by another channel: never reuse its
@@ -322,13 +325,46 @@ def _choose_conversation(
         conversation = _new_conversation(channel_id, display_name, context_token)
 
     if command in ("/new", "/clear"):
+        # An explicit rebind keeps the old session (and its deliveries) even
+        # when it is no longer the active one.
         conversation = _new_conversation(
             channel_id,
             conversation.display_name,
             context_token or conversation.context_token,
         )
     expected = existing.session_id if existing is not None else None
-    return key, expected, conversation
+    return key, expected, conversation, stale_session_id
+
+
+async def _discard_stale_session_deliveries(
+    session_id: str, agent_id: str, registry: Any
+) -> None:
+    """Drop delivery rows owned by a dead binding after it was replaced.
+
+    Claude deletes expired transcripts itself; the platform still owns these
+    rows. A session that is running or whose transcript still exists is never
+    touched (for example a /new rebind of a live conversation).
+    """
+    if not is_canonical_uuid(session_id):
+        return
+    try:
+        if registry is not None and registry.is_busy(session_id):
+            return
+        if transcript_path(session_id, agent_id).is_file():
+            return
+        async with SessionLocal() as db:
+            await db.execute(
+                delete(ChannelDelivery).where(
+                    ChannelDelivery.session_id == session_id
+                )
+            )
+            await db.commit()
+    except Exception:
+        logger.warning(
+            "failed to delete deliveries for stale session=%s",
+            session_id,
+            exc_info=True,
+        )
 
 
 async def ingest(
@@ -374,7 +410,7 @@ async def ingest(
             )
             if agent is None or agent.status != "active":
                 raise ValueError("agent is not available")
-            key, expected, candidate = _choose_conversation(
+            key, expected, candidate, stale_session_id = _choose_conversation(
                 settings,
                 channel_id=channel_id,
                 external_id=external_id,
@@ -388,6 +424,10 @@ async def ingest(
                 key, expected, candidate
             ):
                 conversation = candidate
+                if stale_session_id is not None:
+                    await _discard_stale_session_deliveries(
+                        stale_session_id, agent.id, registry
+                    )
                 break
         if conversation is None:
             raise RuntimeError("conversation binding changed concurrently")

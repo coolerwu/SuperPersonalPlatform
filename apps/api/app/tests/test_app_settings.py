@@ -1,21 +1,15 @@
 from __future__ import annotations
 
-import os
-import time
-import uuid
+import json
 
-from app.services import sdk_bridge
-from app.services.claude_runner import transcript_dir
-from app.services.session_service import SessionCleanupRuntime
+from app.services.claude_settings import CLEANUP_DISABLED_DAYS, settings_path
 
 
-async def test_settings_api_default_and_update(client) -> None:
-    store = client.app.state.settings_store
-    await store.update_runtime(session_retention_days=30)
+def test_settings_api_default_and_update(client) -> None:
+    client.put("/api/settings", json={"session_retention_days": 30})
 
     body = client.get("/api/settings").json()
-    assert body["session_retention_days"] == 30
-    assert body["session_cleanup_interval_seconds"] >= 60
+    assert body == {"session_retention_days": 30}
 
     response = client.put("/api/settings", json={"session_retention_days": 7})
     assert response.status_code == 200
@@ -42,8 +36,6 @@ def test_settings_roundtrip(client) -> None:
 
 
 def test_settings_persist_to_settings_file(client) -> None:
-    import json
-
     store = client.app.state.settings_store
     client.put("/api/settings", json={"session_retention_days": 9})
     assert store.path.is_file()
@@ -52,37 +44,37 @@ def test_settings_persist_to_settings_file(client) -> None:
     client.put("/api/settings", json={"session_retention_days": 30})
 
 
-async def test_cleanup_reads_configured_retention(client, monkeypatch) -> None:
-    store = client.app.state.settings_store
-    original = (await store.get()).runtime.session_retention_days
-    old_id = str(uuid.uuid4())
-    fresh_id = str(uuid.uuid4())
-    directory = transcript_dir("default")
-    directory.mkdir(parents=True, exist_ok=True)
-    old_path = directory / f"{old_id}.jsonl"
-    fresh_path = directory / f"{fresh_id}.jsonl"
-    old_path.write_text("{}", "utf-8")
-    fresh_path.write_text("{}", "utf-8")
-    stamp = time.time() - 400 * 86400
-    os.utime(old_path, (stamp, stamp))
-    deleted: list[str] = []
-
-    def fake_delete(session_id: str) -> None:
-        deleted.append(session_id)
-        (directory / f"{session_id}.jsonl").unlink(missing_ok=True)
-
-    monkeypatch.setattr(sdk_bridge, "delete_session", fake_delete)
-    await store.update_runtime(session_retention_days=1)
+def test_settings_sync_cleanup_period_to_claude(client) -> None:
+    path = settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"enabledPlugins": {"a@b": True}}), "utf-8")
     try:
-        runtime = SessionCleanupRuntime(store=store, interval_seconds=60)
-        removed = await runtime.run_once()
+        client.put("/api/settings", json={"session_retention_days": 7})
+        data = json.loads(path.read_text("utf-8"))
+        assert data["cleanupPeriodDays"] == 7
+        assert data["enabledPlugins"] == {"a@b": True}
 
-        assert removed >= 1
-        assert old_id in deleted
-        assert fresh_id not in deleted
-        assert not old_path.exists()
-        assert fresh_path.exists()
+        client.put("/api/settings", json={"session_retention_days": 0})
+        assert json.loads(path.read_text("utf-8"))["cleanupPeriodDays"] == (
+            CLEANUP_DISABLED_DAYS
+        )
+
+        client.put("/api/settings", json={"session_retention_days": 30})
+        assert json.loads(path.read_text("utf-8"))["cleanupPeriodDays"] == 30
     finally:
-        await store.update_runtime(session_retention_days=original)
-        old_path.unlink(missing_ok=True)
-        fresh_path.unlink(missing_ok=True)
+        # Do not leak a fake plugin into the shared test home.
+        path.write_text("{}\n", "utf-8")
+        client.put("/api/settings", json={"session_retention_days": 30})
+
+
+def test_settings_update_reports_unwritable_claude_settings(client) -> None:
+    path = settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", "utf-8")
+    try:
+        response = client.put("/api/settings", json={"session_retention_days": 7})
+        assert response.status_code == 500
+        assert "Claude 设置" in response.json()["detail"]
+    finally:
+        path.write_text("{}\n", "utf-8")
+        client.put("/api/settings", json={"session_retention_days": 30})

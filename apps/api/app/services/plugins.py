@@ -13,6 +13,7 @@ from typing import Any
 
 from app.services import sdk_bridge
 from app.services.claude_env import claude_paths
+from app.services.claude_settings import config_lock
 from app.services.subprocess_utils import kill_process_group
 
 OFFICIAL_REPO = "anthropics/claude-plugins-official"
@@ -110,19 +111,10 @@ class PluginCatalog:
 
 
 # CLI mutations rewrite ``claude/settings.json`` and ``installed_plugins.json``;
-# serialize every invocation so two requests cannot interleave. The lock is
-# rebuilt when the running loop changes so tests can use fresh event loops.
-_cli_lock: asyncio.Lock | None = None
-_cli_lock_loop: asyncio.AbstractEventLoop | None = None
-
-
+# serialize every invocation so two requests cannot interleave. The retention
+# sync writes settings.json too, so it shares the same lock.
 def _lock() -> asyncio.Lock:
-    global _cli_lock, _cli_lock_loop
-    loop = asyncio.get_running_loop()
-    if _cli_lock is None or _cli_lock_loop is not loop:
-        _cli_lock = asyncio.Lock()
-        _cli_lock_loop = loop
-    return _cli_lock
+    return config_lock()
 
 
 @asynccontextmanager

@@ -22,7 +22,7 @@
 - 网页聊天：`POST /api/chat/messages` → `{session_id, turn_id, accepted}`；SSE `GET /api/sessions/{uuid}/stream?turn_id=...`；历史 `GET /api/sessions/{uuid}/messages?agent_id=...`；中断 `POST /api/sessions/{uuid}/interrupt`；命令 `POST /api/chat/commands`（`/new` `/clear` `/stop` `/status` `/help`）。网页提交校验 Agent 为 active 且 session 属于该 Agent。同进程刷新会在数秒内通过 `current_turn_id` 重放当前轮缓冲；进程重启或断线才丢失，历史从 transcript 重建。Agent 回复里的相对图片/文件链接按当前 Agent 工作区解析，经 `GET /api/agents/{agent_id}/files/{path}` 读取（可执行类型强制下载）；assistant 消息附带「产物」列表，来自 tool_use 的 `file_path` 与截图类工具 `filename`，实时事件 `tool_call.artifact`，工作区外路径不展示。
 - 渠道：配置与 `channel_conversations`（key `"{channel_id}:{external_id}"`，含 `context_token`）在 `settings.json`；`channel_inbounds` 幂等去重；`channel_deliveries` 在 turn 开始写 pending、结束回填并发送，重启补发；同一联系人 5 秒打包；文本/图片/文件、引用找回与渠道命令都保留；运行期截图实时推送等平台浏览器工具接入（当前 `channel_images` 无调用方）。
 - 定时：`cron_jobs.session_id` 是 SDK 会话 UUID；每次触发在专属会话入队一个 turn；会话忙时跳过并写 `audit_log`；启动补跑最多一次；推送目标是当前 Agent 的 active 微信渠道下已有 1:1 联系人，复用渠道投递。
-- 清理：`SessionCleanupRuntime` 按 transcript mtime 与 `runtime.session_retention_days`（默认 30，0 关闭）删除；删除前用 registry 的 `begin_delete` 原子标记，跳过租约/忙碌/删除中的会话；后台清理先清产物（截图、投递、渠道绑定）再删 transcript，手动删除会话先调用 SDK `delete_session` 再尽力清理产物；`claude/` 下 auto memory 保留。
+- 清理：Claude Code 按其 `cleanupPeriodDays` 清理 transcript；平台把 `runtime.session_retention_days`（默认 30，0 写成 36500）同步到运行时 `claude/settings.json`，不跑扫描或删除任务。手动删除会话走 SDK `delete_session` 并尽力清理产物（截图、投递、渠道绑定）；渠道绑定指向已删除会话时，下一条入站自动新建会话并清掉旧投递行；`claude/` 下 auto memory 保留。
 - 记忆：记忆页有两张卡片——用户画像 = `claude/CLAUDE.md`（用户级 memory，跨 Agent，编辑后留 `.bak`，mtime/size 入 client 配置指纹）；Agent 记忆 = `workspaces/<agent_id>/CLAUDE.md`（记忆页按侧栏 Agent 编辑，作为项目级 CLAUDE.md 只对该 Agent 生效，mtime/size 入指纹）。Agent 指令在 `settings.json`；Claude auto memory（`claude/projects/<agent_id>/memory/`）由 Claude 管理，记忆页只读展示；`agents[].auto_memory` 仅为兼容保留。平台没有记忆表、记忆工具、`/memory` 指令或整理记忆。
 - 技能：全局 `claude/skills/<name>/SKILL.md`；初始化模板在 `apps/api/app/seed_skills/`（`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`），按「工具清单 + 组合方式 + 硬契约」组织。技能只是初始化参考：`.seed_state.json` 记录初始化哈希，未修改的随版本更新，改过的永久跳过，用户删除保留墓碑不复活（模板先退役再回归时除外），模板移除只删记录保留本地文件；保留的副本归入「其他技能」。来源分 `initial` / `ai` / `manual`，技能页显示「已调整」，任何技能都可删除；技能没有启用开关，所有 Agent 自动共享；平台没有给 Agent 定时任务工具，也不提供技能创作工具。
 - 插件集市：「插件」页（`/plugins`）管理 Claude Code 官方集市 `anthropics/claude-plugins-official`；插件以 user scope 装进运行时 `claude/`（`settings.json` 的 `enabledPlugins`、`plugins/`），所有 Agent 共享。平台调用 SDK 内置 CLI（与 runner 同一二进制）执行 `plugin` 命令，启动与读取不联网；`settings.json`、`plugins/installed_plugins.json` 与 `.plugins-revision` 纳入 client 配置指纹，安装/启停/更新/卸载后下一轮对话重建。插件可带 hooks/MCP，平台不提供沙箱。
@@ -42,7 +42,7 @@
 - 附件保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片浏览器端缩到最长边 1600 px；消息里写文件名、相对工作区路径（`uploads/<name>`）和字节数，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 兼容解析。
 - 渠道入站按 `(channel_id, external_message_id)` 幂等；打包窗口内不保存 `sync_buf`；命令不进 Agent。
 - 定时调度在单进程内；不要为 API 启动多个 worker。
-- 会话删除/清理：后台清理先清平台产物（截图、投递、渠道绑定）再删 transcript；手动删除先删 transcript 再清理产物。两条路径都幂等，删除期间新提交会被拒绝。
+- 会话删除：手动删除先调用 SDK `delete_session`，再尽力清理平台产物（截图、投递、渠道绑定），删除期间新提交会被拒绝；过期 transcript 由 Claude Code 清理，平台不再有后台清理路径。渠道绑定指向已删除会话时，下一条入站自动新建会话并清掉旧投递行。
 - 平台配置只写 `data/settings.json`；不要恢复 `app_configs` / `providers` / `agents` / `channels` 等旧表。
 - 密钥只通过环境变量/`settings.json` 提供，不写入仓库、日志或前端响应。
 

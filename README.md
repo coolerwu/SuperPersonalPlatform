@@ -85,7 +85,7 @@ npm run dev
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
 - **Agent**：列出全部 Agent 摘要（Provider/model、记忆开关、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
 - **知识库**：启用开关、WebDAV 地址、账号、应用密码、根目录、同步间隔；密码只写入 `settings.json`，接口只返回 `has_password`。
-- **运行环境**：版本、执行核、数据库类型、单轮执行超时（`RUN_TIMEOUT_SECONDS`）、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 关闭，`GET/PUT /api/settings`）。
+- **运行环境**：版本、执行核、数据库类型、单轮执行超时（`RUN_TIMEOUT_SECONDS`）、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 不清理，`GET/PUT /api/settings`）。平台把它写成 Claude 的 `cleanupPeriodDays`，由 Claude 自己清理 transcript，平台不跑清理任务。
 - Agent 彻底删除：有活动 turn 时 409；确认后删除该 Agent 的 transcript、工作区目录、渠道与绑定、定时任务、投递/入站记录和渠道登录态。归档只改状态，不删文件，之后可在配置页把状态改回 active 恢复。
 
 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent 列表只能切换这个全局选中的 Agent，不持有第二套选择状态。
@@ -109,7 +109,7 @@ npm run dev
 
 ### Skills 文件格式
 
-全局技能库存放在 `~/.super-personal-platform/claude/skills/`（`APP_SKILLS_DIR` 可覆盖），每个技能一个目录：
+全局技能库存放在 `~/.super-personal-platform/claude/skills/`，每个技能一个目录：
 
 ```text
 claude/skills/
@@ -275,7 +275,6 @@ metadata:
 | `APP_DATABASE_URL` | SQLAlchemy 数据库 URL | `sqlite+aiosqlite:///$APP_HOME/data/app.db` |
 | `APP_DATA_DIR` | 数据目录 | `$APP_HOME/data` |
 | `APP_WORKSPACES_DIR` | 工作区根目录 | `$APP_HOME/workspaces` |
-| `APP_SKILLS_DIR` | 全局技能库根目录 | `$APP_HOME/claude/skills` |
 | `APP_KNOWLEDGE_DIR` | 知识库本地镜像目录 | `$APP_HOME/knowledge` |
 | `LLM_BASE_URL` | 首次种子：Provider 端点（自动补 `/anthropic`） | `https://api.deepseek.com` |
 | `LLM_API_KEY` | 首次种子：模型密钥 | 空 |
@@ -287,8 +286,7 @@ metadata:
 | `CLAUDE_CLIENT_SWEEP_SECONDS` | 空闲 client 清扫间隔（秒） | `60` |
 | `CLAUDE_CONNECT_TIMEOUT_SECONDS` | 连接 SDK CLI 的超时（秒） | `60` |
 | `BROWSER_CONCURRENCY` | 跨 session 并发上限（同时是浏览器标签页上限，供平台浏览器工具使用） | `5` |
-| `SESSION_RETENTION_DAYS` | 首次种子：会话保留天数；之后由配置页管理，0 关闭 | `30` |
-| `SESSION_CLEANUP_INTERVAL_SECONDS` | 会话清理扫描间隔（秒，最小 60） | `3600` |
+| `SESSION_RETENTION_DAYS` | 首次种子：会话保留天数；之后由配置页管理，0 表示不清理（写成 Claude 的 `cleanupPeriodDays`） | `30` |
 | `CRON_TICK_SECONDS` | 定时任务扫描间隔（秒） | `20` |
 | `CRON_DEFAULT_TIMEZONE` | 新建定时任务的默认 IANA 时区 | `Asia/Shanghai` |
 | `CHANNEL_REPLY_MAX_CHARS` | 微信回复单块字符上限 | `1800` |
@@ -298,7 +296,7 @@ metadata:
 | `CHANNEL_INBOUND_BATCH_MAX_SECONDS` | 连续消息不断刷新时的最长打包时间（秒） | `15` |
 | `CHANNEL_MEDIA_MAX_BYTES` | 单个微信图片/文件下载上限 | `20971520` |
 | `CHANNEL_MEDIA_MAX_ITEMS` | 单条微信消息最多下载的媒体数 | `4` |
-| `VISION_MAX_IMAGES` / `VISION_MAX_IMAGE_BYTES` / `VISION_MAX_IMAGE_EDGE` | 图片附件压缩参数（保留给平台浏览器工具与旧附件流程） | `4` / `4194304` / `1600` |
+| `VISION_MAX_IMAGE_EDGE` | 图片附件压缩后的最长边（像素） | `1600` |
 | `WEIXIN_LONG_POLL_TIMEOUT_MS` | iLink `getupdates` 长轮询窗口 | `35000` |
 | `WEIXIN_API_TIMEOUT_MS` | iLink `sendmessage` 请求超时 | `15000` |
 | `WEIXIN_QR_TIMEOUT_MS` | iLink 二维码请求/状态轮询超时 | `35000` |

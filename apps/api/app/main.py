@@ -32,9 +32,9 @@ from app.routers.skills import router as skills_router
 from app.routers.system import router as system_router
 from app.routers.tools import router as tools_router
 from app.routers.trade_journal import router as trade_journal_router
+from app.services.claude_settings import client_ttl_exceeds_retention, sync_cleanup_period
 from app.services.cron_service import CronRuntime
 from app.services.knowledge_sync import KnowledgeSyncRuntime
-from app.services.session_service import SessionCleanupRuntime
 from app.services.market_data import market_service
 from app.services.backtest_worker import BacktestWorker, set_active_worker
 from app.services.skills import seed_default_skills
@@ -64,6 +64,26 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
             store = get_settings_store()
             await store.ensure_seeded()
             app.state.settings_store = store
+            # Claude Code owns transcript retention. The platform only keeps
+            # its cleanupPeriodDays in sync with the configured retention.
+            snapshot = await store.get()
+            try:
+                await sync_cleanup_period(snapshot.runtime.session_retention_days)
+            except Exception:
+                logger.warning(
+                    "failed to sync cleanupPeriodDays into claude settings",
+                    exc_info=True,
+                )
+            if client_ttl_exceeds_retention(
+                settings.claude_client_ttl_seconds,
+                snapshot.runtime.session_retention_days,
+            ):
+                logger.warning(
+                    "claude client TTL (%ss) is not shorter than retention (%sd); "
+                    "a cached session could outlive Claude's transcript cleanup",
+                    settings.claude_client_ttl_seconds,
+                    snapshot.runtime.session_retention_days,
+                )
             seed_default_skills()
             await init_db()
             await init_market_db()
@@ -107,11 +127,6 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 set_active_worker(backtest_worker)
                 await backtest_worker.start()
                 await knowledge.start()
-                session_cleanup = SessionCleanupRuntime(
-                    store=store, registry=registry
-                )
-                app.state.session_cleanup = session_cleanup
-                await session_cleanup.start()
             yield
         finally:
             # A startup failure must still tear down whatever did start. Each
@@ -150,12 +165,6 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                             await runner.close_all()
                         except Exception:
                             logger.exception("runner shutdown failed")
-                    session_cleanup = getattr(app.state, "session_cleanup", None)
-                    if session_cleanup is not None:
-                        try:
-                            await session_cleanup.stop()
-                        except Exception:
-                            logger.exception("session cleanup shutdown failed")
                     knowledge = getattr(app.state, "knowledge", None)
                     if knowledge is not None:
                         try:

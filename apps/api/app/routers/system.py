@@ -45,7 +45,6 @@ async def system_info(request: Request) -> dict[str, object]:
         "workspace_root": str(settings.workspaces_dir.expanduser().resolve()),
         "skills_root": str(settings.skills_dir.expanduser().resolve()),
         "run_timeout_seconds": settings.run_timeout_seconds,
-        "max_history_messages": settings.max_history_messages,
         "counts": {
             "providers": 1 if active_agents else 0,
             "agents": len(active_agents),

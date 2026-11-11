@@ -110,15 +110,15 @@
 2. 会话列表由 SDK `list_sessions()` 扫描全部项目目录，再按 `cwd == workspaces/<agent>` 过滤；标题取 SDK summary（最多 80 字），`last_modified` 用于排序和展示。
 3. 会话历史由 `get_session_messages(session_id)` 读取；重命名、删除走 SDK（删除同时移除 transcript 与子 Agent transcript 目录）。
 4. 删除会话前拒绝正在执行的会话（409）；删除开始时原子标记会话（新的提交在删除完成前被拒绝），删除完成后释放标记。删除时清理 `workspaces/<agent>/screenshots/<session_id>/`、该会话的 `channel_deliveries` 行和 `channel_conversations` 绑定。
-5. 后台清理 `SessionCleanupRuntime`：启动后立即执行首轮，之后每 `SESSION_CLEANUP_INTERVAL_SECONDS`（默认 3600，最小 60）扫描；按 transcript mtime 早于保留天数（`settings.runtime.session_retention_days`，默认 30，0 关闭）删除。
-6. 清理跳过：有租约的会话、registry 中忙碌或正在删除的会话、非 UUID 文件名；先清产物再删 transcript；`claude/` 下的 auto memory 不清理。
-7. 微信绑定指向已删除会话时，下一条入站消息自动生成新 UUID 重新绑定；定时任务在 transcript 不存在时下次触发重新生成 session id。
+5. 会话保留由 Claude Code 自己执行：平台把 `settings.runtime.session_retention_days`（默认 30，0 表示不清理）写成运行时 `claude/settings.json` 的 `cleanupPeriodDays`（0 写成 36500），启动时和保存设置时同步；平台不扫描 transcript，也不再有后台清理任务。
+6. 手动删除会话仍需先原子标记并拒绝新提交，再走 SDK `delete_session`，并尽力清理该会话的截图目录、`channel_deliveries` 行和 `channel_conversations` 绑定；`claude/` 下的 auto memory 不清理。
+7. 微信绑定指向已删除会话时，下一条入站消息自动生成新 UUID 重新绑定，并删除旧会话遗留的 `channel_deliveries` 行（正在运行或 transcript 仍存在的会话不动）；定时任务在 transcript 不存在时下次触发重新生成 session id。
 
 #### 验收标准
 
-- 超过保留天数的会话被清理，运行中的不被清理，`claude/projects/*/memory/` 保留。
+- 超过保留天数的会话由 Claude Code 按其 `cleanupPeriodDays` 清理，平台不执行清理任务；最近有活动的会话不会被命中，`claude/projects/*/memory/` 保留。
 - 删除会话后，对应截图、投递记录与渠道绑定一并清理。
-- 渠道/定时任务不会因会话删除而报错，而是自动重建会话。
+- 渠道/定时任务不会因会话删除而报错，而是自动重建会话；重建时旧会话的投递行被清理。
 
 ### F4 配置、Provider 与 Agent
 
@@ -221,7 +221,7 @@
 
 #### 功能点
 
-1. 技能库 `~/.super-personal-platform/claude/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `initial` / `ai` / `manual`。
+1. 技能库 `~/.super-personal-platform/claude/skills/<name>/SKILL.md`；frontmatter 校验、来源分 `initial` / `ai` / `manual`。
 2. 初始化模板在 `apps/api/app/seed_skills/<name>/SKILL.md`：`quant-backtest`、`chanlun`、`trade-journal`、`allocation`、`cron-scheduler`。模板按「工具清单 + 组合方式 + 硬契约」组织；平台没有给 Agent 定时任务工具，`cron-scheduler` 只说明页面入口和定时触发会话的语义。启动 seed 规则：从未初始化过的缺失技能写入；未修改（哈希等于 `.seed_state.json` 记录）的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑，只要模板仍在就不再生成；模板移除时只删记录、保留本地文件；保留的副本不再计入「初始化技能」，页面归入「其他技能」。
 3. 技能页按「初始化技能 / 其他技能」分组，可查看和编辑 SKILL.md；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关；任何技能都可删除（只删技能目录），初始化技能删除后不复活；改过的初始化技能标「已调整」。
 4. 平台业务工具已通过进程内 MCP 接入 chat：回测 4 个（`backtest_*`）、行情 2 个（`market_*`）、交易记录 5 个（`trade_journal_*`）、资产配置 6 个（`allocation_*`）、缠论 2 个（`chan_analyze` / `chan_backtest`），共 19 个。runner 为每个缓存的 SDK client 挂一个 `platform_tools` SDK MCP server，工具以 `mcp__platform_tools__*` 出现在 init frame；插件自带的 MCP 继续并存。server 配置 `timeout`（至少 180 秒）和 `disableAutoBackground`，覆盖 `backtest_run` 最长约 90 秒的等待。交易记录与资产配置的写入工具对 Agent 开放。
@@ -387,8 +387,9 @@
 8. Run 历史。
 9. 渠道运行期截图实时推送（等平台浏览器工具接入）。
 10. `/memory` 指令与整理记忆。
+11. 过期会话的 transcript 由 Claude Code 删除，但平台不再随保留期清理其投递历史与旧截图目录；渠道绑定在下次入站时重建并清掉旧投递行。
 
-已知能力损失（已接受）：进程重启或订阅断开后丢当前流式输出（同进程刷新会在数秒内从 `current_turn_id` 重放缓冲）、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失；`langchain-core` 暂留。
+已知能力损失（已接受）：进程重启或订阅断开后丢当前流式输出（同进程刷新会在数秒内从 `current_turn_id` 重放缓冲）、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失、过期会话的投递历史与旧截图目录不再自动清理；`langchain-core` 暂留。
 
 ### F17 官方插件集市
 

@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     app_database_url: str = f"sqlite+aiosqlite:///{APP_HOME / 'data' / 'app.db'}"
     app_data_dir: Path = APP_HOME / "data"
     app_workspaces_dir: Path | None = None
-    app_skills_dir: Path | None = None
     app_cors_origins: str = "http://localhost:5173"
 
     # Standard outbound proxy settings. One proxy applies to every HTTP client
@@ -36,7 +35,6 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com"
     llm_api_key: str = ""
     llm_model: str = "deepseek-v4-flash"
-    llm_temperature: float = 0.7
 
     # The runner currently sets neither ``tools`` nor ``allowed_tools``, so the
     # full built-in toolset runs under bypassPermissions. This is not a
@@ -55,22 +53,16 @@ class Settings(BaseSettings):
     claude_client_max_clients: int = 8
     claude_client_sweep_seconds: int = 60
     claude_connect_timeout_seconds: int = 60
-    run_recursion_limit: int = 500
-    max_history_messages: int = 40
-    vision_max_images: int = 4
-    vision_max_image_bytes: int = 4 * 1024 * 1024
     # Oversized attachments are re-encoded down to this longest edge before
     # they are sent to the model; the file on disk keeps its original bytes.
     vision_max_image_edge: int = 1600
 
-    # Sessions whose last message is older than the retention window are
-    # deleted by a background task; 0 disables the cleanup.
+    # Claude Code owns transcript retention: the platform writes this value as
+    # ``cleanupPeriodDays`` into the runtime ``claude/settings.json`` and does
+    # not scan transcripts itself. 0 means "keep"; Claude requires at least one
+    # day, so 0 is written as a very long period. A startup check keeps
+    # ``claude_client_ttl_seconds`` shorter than this window.
     session_retention_days: int = 30
-    session_cleanup_interval_seconds: int = 3600
-
-    # Deprecated: automatic consolidation was removed. The value only seeds the
-    # legacy app_configs column so old databases keep loading; nothing reads it.
-    memory_consolidate_every_turns: int = 10
 
     # Cron jobs run inside the API process. The tick only needs to be shorter
     # than the smallest supported interval (one minute).
@@ -156,7 +148,9 @@ class Settings(BaseSettings):
 
     @property
     def skills_dir(self) -> Path:
-        return self.app_skills_dir or (APP_HOME / "claude" / "skills")
+        # Must stay inside the Claude config dir (``CLAUDE_CONFIG_DIR``), or
+        # Claude Code will not discover skills the platform seeds here.
+        return APP_HOME / "claude" / "skills"
 
     @property
     def knowledge_dir(self) -> Path:

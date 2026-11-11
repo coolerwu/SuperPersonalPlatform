@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import stat
 
@@ -10,9 +11,9 @@ from app.config import APP_HOME, settings as app_settings
 from app.main import create_app
 from app.services import claude_runner, recovery, session_registry
 from app.services.backtest_worker import BacktestWorker
+from app.services.claude_settings import cleanup_period_days
 from app.services.cron_service import CronRuntime
 from app.services.knowledge_sync import KnowledgeSyncRuntime
-from app.services.session_service import SessionCleanupRuntime
 from app.services.settings_store import get_settings_store
 from app.services.weixin_runtime import WeixinRuntime
 
@@ -29,7 +30,6 @@ def quiet_background_workers(monkeypatch):
         CronRuntime,
         KnowledgeSyncRuntime,
         BacktestWorker,
-        SessionCleanupRuntime,
     ):
         monkeypatch.setattr(worker_class, "start", noop)
 
@@ -75,6 +75,12 @@ def test_settings_file_and_claude_dirs_seeded(client):
     assert (APP_HOME / "workspaces").is_dir()
     mode = stat.S_IMODE((APP_HOME / "claude").stat().st_mode)
     assert mode == 0o700
+    claude_settings = json.loads(
+        (APP_HOME / "claude" / "settings.json").read_text("utf-8")
+    )
+    assert claude_settings["cleanupPeriodDays"] == cleanup_period_days(
+        settings.runtime.session_retention_days
+    )
 
 
 def test_worker_app_wires_runtime_state(quiet_background_workers):

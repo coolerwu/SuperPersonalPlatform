@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth import require_auth
-from app.config import settings
 from app.schemas import AppSettingsUpdate
+from app.services.claude_settings import ClaudeSettingsError, sync_cleanup_period
 from app.services.settings_store import SettingsStore, get_settings_store
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], dependencies=[Depends(require_auth)])
@@ -16,12 +16,7 @@ def _store(request: Request) -> SettingsStore:
 
 
 def _settings_out(retention_days: int) -> dict[str, int]:
-    return {
-        "session_retention_days": int(retention_days),
-        "session_cleanup_interval_seconds": max(
-            60, settings.session_cleanup_interval_seconds
-        ),
-    }
+    return {"session_retention_days": int(retention_days)}
 
 
 @router.get("")
@@ -37,4 +32,11 @@ async def update_settings(
     store = _store(request)
     await store.update_runtime(session_retention_days=payload.session_retention_days)
     runtime = (await store.get()).runtime
+    try:
+        await sync_cleanup_period(runtime.session_retention_days)
+    except ClaudeSettingsError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"保留天数已保存，但写入 Claude 设置失败：{exc}",
+        ) from exc
     return _settings_out(runtime.session_retention_days)
