@@ -130,17 +130,30 @@ export type SessionSummary = {
   busy: boolean;
 };
 
+export type MessageArtifact = {
+  path: string;
+  name: string;
+  size: number | null;
+  kind: "image" | "file";
+};
+
 export type TranscriptMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   blocks: Array<{ type: string; [key: string]: unknown }>;
+  artifacts?: MessageArtifact[];
 };
 
 export type TurnStreamEvent =
   | { type: "assistant_delta"; delta: string }
   | { type: "reasoning_delta"; delta: string }
-  | { type: "tool_call"; name: string; input: Record<string, unknown> }
+  | {
+      type: "tool_call";
+      name: string;
+      input: Record<string, unknown>;
+      artifact?: MessageArtifact | null;
+    }
   | {
       type: "turn_end";
       status?: "completed" | "failed" | "cancelled";

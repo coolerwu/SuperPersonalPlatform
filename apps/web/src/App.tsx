@@ -6,6 +6,7 @@ import type {
   AgentSavePayload,
   Attachment,
   DrawerTab,
+  MessageArtifact,
   Provider,
   SessionSummary,
   SkillInfo,
@@ -45,6 +46,7 @@ type SessionLive = {
   streamText: string;
   streamReasoning: string;
   activity: string[];
+  artifacts: MessageArtifact[];
   notice: string;
   tracking: boolean;
 };
@@ -53,9 +55,21 @@ const EMPTY_LIVE: SessionLive = {
   streamText: "",
   streamReasoning: "",
   activity: [],
+  artifacts: [],
   notice: "",
   tracking: false,
 };
+
+function mergeArtifact(
+  list: MessageArtifact[],
+  artifact: MessageArtifact,
+): MessageArtifact[] {
+  const index = list.findIndex((item) => item.path === artifact.path);
+  if (index < 0) return [...list, artifact];
+  const next = list.slice();
+  next[index] = artifact;
+  return next;
+}
 
 type FocusTarget = {
   sessionId: string;
@@ -622,6 +636,9 @@ export default function App() {
         updateLive(forSession, (current) => ({
           ...current,
           activity: [...current.activity, event.name],
+          artifacts: event.artifact
+            ? mergeArtifact(current.artifacts, event.artifact)
+            : current.artifacts,
           notice: "",
         }));
         break;
@@ -783,6 +800,7 @@ export default function App() {
         streamText: streaming ? current.streamText : "",
         streamReasoning: streaming ? current.streamReasoning : "",
         activity: streaming ? current.activity : [],
+        artifacts: streaming ? current.artifacts : [],
         notice: failure || current.notice,
         // Keep the lane marked while a queued turn is about to be attached.
         tracking: streaming || followUp,
@@ -1786,6 +1804,7 @@ export default function App() {
               streamText={live.streamText}
               streamReasoning={live.streamReasoning}
               activity={live.activity}
+              liveArtifacts={live.artifacts}
               sending={chatSending}
               tracking={tracking}
               pendingSend={pendingHere}

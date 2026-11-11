@@ -3854,6 +3854,28 @@ textarea {
   font-size: 11px;
 }
 
+.message-artifacts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.message-artifacts-label {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+
+.message-artifacts .message-files,
+.message-artifacts .message-images {
+  margin: 0;
+}
+
+.message-artifacts .message-file {
+  text-decoration: none;
+}
+
 .message-row.system {
   align-items: stretch;
 }
