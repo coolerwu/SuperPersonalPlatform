@@ -345,7 +345,8 @@ export const api = {
     request<{ deleted: boolean }>(`/api/skills/${encodeURIComponent(directory)}`, {
       method: "DELETE",
     }),
-  listTools: () => request<ToolsCatalog>("/api/tools"),
+  listTools: (agentId: string) =>
+    request<ToolsCatalog>(`/api/tools?agent_id=${encodeURIComponent(agentId)}`),
   listPlugins: () => request<PluginsCatalog>("/api/plugins"),
   addPluginMarketplace: () =>
     request<PluginsCatalog>("/api/plugins/marketplace", { method: "POST" }),

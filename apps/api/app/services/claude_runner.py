@@ -25,6 +25,7 @@ teardown (or discarded when no reply is owed), and handed to
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -208,6 +209,30 @@ def transcript_path(session_id: str, agent_id: str, *, home: Path | None = None)
     return transcript_dir(agent_id, home=home) / f"{session_id}.jsonl"
 
 
+def _strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _rows(value: Any, keys: tuple[str, ...]) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        rows.append({key: str(item.get(key) or "") for key in keys})
+    return rows
+
+
 class ClaudeTurnRunner:
     def __init__(
         self,
@@ -255,10 +280,10 @@ class ClaudeTurnRunner:
             else connect_timeout_seconds
         )
         self._sweeper: asyncio.Task[None] | None = None
-        # Slash commands reported by the CLI's init frame, per Agent. Claude
-        # Code owns this list; the chat palette only mirrors it. Terminal-bound
-        # commands cannot run through the SDK and are excluded.
-        self._slash_commands: dict[str, tuple[str, ...]] = {}
+        # Last init frame reported by the CLI, per Agent. Claude Code owns the
+        # tool, MCP, plugin, skill and slash-command lists; the web UI mirrors
+        # them instead of keeping its own copies.
+        self._init_frames: dict[str, dict[str, Any]] = {}
         # Clients whose disconnect exceeded the shutdown budget. They must be
         # kept referenced so the CLI process is not silently orphaned; the
         # process dies with this one.
@@ -272,12 +297,9 @@ class ClaudeTurnRunner:
         return lock
 
     def _capture_init(self, agent_id: str, message: Any) -> None:
-        """Remember the slash commands a CLI init frame reports for an Agent."""
+        """Remember the runtime capabilities a CLI init frame reports."""
         data = getattr(message, "data", None)
         if not isinstance(data, dict) or getattr(message, "subtype", "") != "init":
-            return
-        raw = data.get("slash_commands")
-        if not isinstance(raw, list):
             return
         terminal = data.get("terminal_slash_commands")
         blocked = (
@@ -290,18 +312,39 @@ class ClaudeTurnRunner:
             else set()
         )
         commands: list[str] = []
-        for item in raw:
+        raw_commands = data.get("slash_commands")
+        for item in raw_commands if isinstance(raw_commands, list) else []:
             if not isinstance(item, str):
                 continue
             name = item.strip().lstrip("/")
             if not name or name in blocked or name in commands:
                 continue
             commands.append(name)
-        self._slash_commands[agent_id] = tuple(commands)
+        self._init_frames[agent_id] = {
+            "slash_commands": commands,
+            "tools": _strings(data.get("tools")),
+            "mcp_servers": _rows(
+                data.get("mcp_servers"), ("name", "status", "source")
+            ),
+            "plugins": _rows(data.get("plugins"), ("name", "version")),
+            "plugin_errors": _rows(
+                data.get("plugin_errors"), ("plugin", "type", "message")
+            ),
+            "skills": _strings(data.get("skills")),
+            "claude_code_version": str(data.get("claude_code_version") or ""),
+            "model": str(data.get("model") or ""),
+            "permission_mode": str(data.get("permissionMode") or ""),
+        }
 
     def slash_commands(self, agent_id: str) -> list[str]:
         """Slash commands the CLI currently exposes for ``agent_id``."""
-        return list(self._slash_commands.get(agent_id, ()))
+        frame = self._init_frames.get(agent_id) or {}
+        return list(frame.get("slash_commands", ()))
+
+    def runtime_snapshot(self, agent_id: str) -> dict[str, Any] | None:
+        """Latest init-frame capabilities for ``agent_id``, if any."""
+        frame = self._init_frames.get(agent_id)
+        return copy.deepcopy(frame) if frame is not None else None
 
     def _keys_for_session(self, session_id: str) -> list[ClientKey]:
         keys = set(self._clients) | self._active | self._cancel_requested

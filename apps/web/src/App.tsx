@@ -1753,7 +1753,7 @@ export default function App() {
           onClose={() => openView("chat")}
         />
       ) : view === "tools" ? (
-        <ToolsPage onClose={() => openView("chat")} />
+        <ToolsPage agentId={agentId} onClose={() => openView("chat")} />
       ) : view === "plugins" ? (
         <PluginsPage onClose={() => openView("chat")} />
       ) : view === "channels" ? (

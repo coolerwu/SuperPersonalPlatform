@@ -204,6 +204,67 @@ async def test_runner_records_slash_commands_from_init_frame(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_runner_records_runtime_init_snapshot(tmp_path):
+    await init_db()
+    init = SimpleNamespace(
+        subtype="init",
+        data={
+            "slash_commands": ["compact", "exit"],
+            "terminal_slash_commands": ["exit"],
+            "tools": ["Read", "mcp__platform_tools__backtest_run"],
+            "mcp_servers": [
+                {"name": "platform_tools", "status": "connected", "source": "sdk"},
+                {"name": "playwright", "status": "failed"},
+            ],
+            "plugins": [
+                {"name": "playwright", "version": "1.0.0", "path": "/tmp/p"}
+            ],
+            "plugin_errors": [
+                {
+                    "plugin": "bad@market",
+                    "type": "manifest-validation-error",
+                    "message": "boom",
+                    "path": "/tmp/b",
+                }
+            ],
+            "skills": ["quant-backtest", "plugin:playwright"],
+            "claude_code_version": "2.1.321",
+            "model": "deepseek",
+            "permissionMode": "bypassPermissions",
+        },
+    )
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient([init, ResultMessage()]),
+    )
+
+    await runner.run(make_turn(), TurnStream())
+
+    snapshot = runner.runtime_snapshot("default")
+    assert snapshot is not None
+    assert snapshot["slash_commands"] == ["compact"]
+    assert snapshot["tools"] == ["Read", "mcp__platform_tools__backtest_run"]
+    assert snapshot["mcp_servers"] == [
+        {"name": "platform_tools", "status": "connected", "source": "sdk"},
+        {"name": "playwright", "status": "failed", "source": ""},
+    ]
+    assert snapshot["plugins"] == [{"name": "playwright", "version": "1.0.0"}]
+    assert snapshot["plugin_errors"] == [
+        {
+            "plugin": "bad@market",
+            "type": "manifest-validation-error",
+            "message": "boom",
+        }
+    ]
+    assert snapshot["skills"] == ["quant-backtest", "plugin:playwright"]
+    assert snapshot["claude_code_version"] == "2.1.321"
+    assert snapshot["model"] == "deepseek"
+    assert snapshot["permission_mode"] == "bypassPermissions"
+    assert runner.runtime_snapshot("other") is None
+
+
+@pytest.mark.asyncio
 async def test_runner_publishes_result_text_when_the_stream_had_none(tmp_path):
     await init_db()
     client = FakeClient([ResultMessage(result="compacted")])

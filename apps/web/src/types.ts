@@ -100,17 +100,41 @@ export type PluginsCatalog = {
 export type ToolInfo = {
   name: string;
   description: string;
-  registered: boolean;
-  skills: string[];
-  source: "claude-code" | "platform" | "skill" | string;
-  wired: boolean;
+  raw_name: string;
+  server: string;
+  source: "claude-code" | "mcp" | string;
+};
+
+export type McpServerInfo = {
+  name: string;
+  status: string;
+  source: string;
+};
+
+export type RuntimePluginInfo = {
+  name: string;
+  version: string;
+};
+
+export type RuntimePluginErrorInfo = {
+  plugin: string;
+  type: string;
+  message: string;
 };
 
 export type ToolsCatalog = {
-  platform_tools: ToolInfo[];
-  filesystem_tools: ToolInfo[];
-  skill_tools: ToolInfo[];
-  claude_code_note: string;
+  loaded: boolean;
+  agent_id: string;
+  claude_code_version: string;
+  model: string;
+  permission_mode: string;
+  claude_tools: ToolInfo[];
+  mcp_tools: ToolInfo[];
+  mcp_servers: McpServerInfo[];
+  skills: string[];
+  plugins: RuntimePluginInfo[];
+  plugin_errors: RuntimePluginErrorInfo[];
+  note: string;
 };
 
 export type Provider = {

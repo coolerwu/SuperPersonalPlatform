@@ -139,20 +139,44 @@ class PluginInstallRequest(BaseModel):
 class ToolOut(BaseModel):
     name: str
     description: str = ""
-    registered: bool = False
-    skills: list[str] = Field(default_factory=list)
-    # "claude-code" for SDK built-ins, "platform" for platform tools,
-    # "skill" for tools from the skill registry.
+    # Full runtime name, e.g. ``mcp__platform_tools__backtest_run``.
+    raw_name: str = ""
+    # MCP server name for MCP tools; empty for Claude Code built-ins.
+    server: str = ""
+    # "claude-code" or "mcp".
     source: str = ""
-    # Whether this version actually exposes the tool to the Agent.
-    wired: bool = False
+
+
+class McpServerOut(BaseModel):
+    name: str
+    status: str = ""
+    source: str = ""
+
+
+class RuntimePluginOut(BaseModel):
+    name: str
+    version: str = ""
+
+
+class RuntimePluginErrorOut(BaseModel):
+    plugin: str
+    type: str = ""
+    message: str = ""
 
 
 class ToolsOut(BaseModel):
-    platform_tools: list[ToolOut] = Field(default_factory=list)
-    filesystem_tools: list[ToolOut] = Field(default_factory=list)
-    skill_tools: list[ToolOut] = Field(default_factory=list)
-    claude_code_note: str = ""
+    loaded: bool = False
+    agent_id: str = ""
+    claude_code_version: str = ""
+    model: str = ""
+    permission_mode: str = ""
+    claude_tools: list[ToolOut] = Field(default_factory=list)
+    mcp_tools: list[ToolOut] = Field(default_factory=list)
+    mcp_servers: list[McpServerOut] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    plugins: list[RuntimePluginOut] = Field(default_factory=list)
+    plugin_errors: list[RuntimePluginErrorOut] = Field(default_factory=list)
+    note: str = ""
 
 
 class CronJobCreate(BaseModel):

@@ -226,14 +226,14 @@
 2. 初始化模板在 `apps/api/app/seed_skills/<name>/SKILL.md`：`quant-backtest`、`chanlun`、`trade-journal`、`allocation`、`cron-scheduler`。模板按「工具清单 + 组合方式 + 硬契约」组织；平台没有给 Agent 定时任务工具，`cron-scheduler` 只说明页面入口和定时触发会话的语义。启动 seed 规则：从未初始化过的缺失技能写入；未修改（哈希等于 `.seed_state.json` 记录）的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑，只要模板仍在就不再生成；模板移除时只删记录、保留本地文件；保留的副本不再计入「初始化技能」，页面归入「其他技能」。
 3. 技能页按「初始化技能 / 其他技能」分组，可查看和编辑 SKILL.md；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关；任何技能都可删除（只删技能目录），初始化技能删除后不复活；改过的初始化技能标「已调整」。
 4. 平台业务工具已通过进程内 MCP 接入 chat：回测 4 个（`backtest_*`）、行情 2 个（`market_*`）、交易记录 5 个（`trade_journal_*`）、资产配置 6 个（`allocation_*`）、缠论 2 个（`chan_analyze` / `chan_backtest`），共 19 个。runner 为每个缓存的 SDK client 挂一个 `platform_tools` SDK MCP server，工具以 `mcp__platform_tools__*` 出现在 init frame；插件自带的 MCP 继续并存。server 配置 `timeout`（至少 180 秒）和 `disableAutoBackground`，覆盖 `backtest_run` 最长约 90 秒的等待。交易记录与资产配置的写入工具对 Agent 开放。
-5. 平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入；浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。工具页按 `wired` 展示实际接入状态。
+5. 工具页读取当前 Agent 最近一轮对话的运行时 init frame：`tools` 按内置 / `mcp__<server>__<tool>` 分类，`mcp_servers` 展示连接状态与来源，`skills`、`plugins`、`plugin_errors` 分别展示；平台业务工具的描述来自注册表。平台不再维护 Claude Code 工具清单；没有运行时数据时提示先发一条消息。平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入；浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。
 6. `langchain-core` 暂留：业务工具仍以 `StructuredTool` 注册，runner 把它们适配成 SDK MCP 工具。
 
 #### 验收标准
 
 - 启动 seed 不覆盖已修改（含 Agent 修改）的初始化技能；用户删除后不复活；模板移除时本地文件保留。
-- 技能页正确显示来源与「已调整」，初始化技能可删除；工具页状态与实际一致。
-- Agent 只能调用工具页标为「已接入」的平台工具和 Claude Code 默认工具集。
+- 技能页正确显示来源与「已调整」，初始化技能可删除；工具页展示的内容与该 Agent 最近一轮 init frame 一致。
+- Agent 只能调用运行时 init frame 中实际出现的工具；平台业务工具以 `mcp__platform_tools__*` 出现。
 
 ### F9 知识库镜像
 

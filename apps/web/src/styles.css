@@ -2755,6 +2755,21 @@ textarea {
   line-height: 1.5;
 }
 
+.tool-mcp-group {
+  margin-top: 12px;
+}
+
+.tool-mcp-group + .tool-mcp-group {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.tool-mcp-group h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .memory-toolbar {
   display: flex;
   align-items: center;
