@@ -407,6 +407,8 @@ EOF
 )"
 ```
 
+**评审后补充：** `seed_default_skills` 在「当前哈希 != 记录」时先判断是否等于当前模板，等于则刷新记录（崩溃自愈），否则才视为已调整；状态写失败只记 warning、不阻断启动。`_write_seed_state` 使用带 uuid 的临时文件名并在 `os.replace` 后 `finally` 清理；读取现有 `SKILL.md` 前先按 `MAX_SKILL_FILE_SIZE` 跳过超大文件；模板目录存在但没有 `SKILL.md` 时 `load_seed_skills` 返回 `None`，seed 放弃本轮。对应测试已补充在 `test_seed_skills.py`。
+
 ---
 
 ### Task 2: 来源值改为 `initial`，允许删除初始化技能

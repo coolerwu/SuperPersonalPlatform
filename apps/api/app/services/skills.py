@@ -85,10 +85,19 @@ def load_seed_skills(root: Path | None = None) -> dict[str, str] | None:
 
     templates: dict[str, str] = {}
     for entry in entries:
+        if entry.name.startswith("."):
+            continue
         target = entry / "SKILL.md"
         try:
-            if not entry.is_dir() or not target.is_file():
+            if not entry.is_dir():
                 continue
+            if not target.is_file():
+                logger.warning(
+                    "seed skill directory %s has no SKILL.md; "
+                    "treating templates as unavailable",
+                    entry,
+                )
+                return None
             templates[entry.name] = target.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             logger.warning("cannot read seed skill %s: %s", target, exc)
@@ -562,6 +571,9 @@ def seed_default_skills(
             continue
 
         try:
+            if target.stat().st_size > MAX_SKILL_FILE_SIZE:
+                logger.warning("skill %s is too large; leaving it untouched", target)
+                continue
             current_hash = _content_hash(target.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError) as exc:
             logger.warning("cannot read skill %s: %s", target, exc)
@@ -573,7 +585,14 @@ def seed_default_skills(
                 changed = True
             continue
         if current_hash != recorded:
-            logger.info("skill %s has edits; leaving it untouched", name)
+            if current_hash == template_hash:
+                logger.info(
+                    "skill %s matches the current template; refreshing its record", name
+                )
+                state[name] = template_hash
+                changed = True
+            else:
+                logger.info("skill %s has edits; leaving it untouched", name)
             continue
         if current_hash != template_hash:
             try:
@@ -591,7 +610,10 @@ def seed_default_skills(
         logger.info("skill %s is no longer an initialization template; tracking dropped", name)
 
     if changed:
-        _write_seed_state(base, state)
+        try:
+            _write_seed_state(base, state)
+        except OSError as exc:
+            logger.warning("cannot write seed state for %s: %s", base, exc)
 
 
 def _write_skill_text(target: Path, content: str) -> None:
@@ -625,14 +647,17 @@ def _load_seed_state(root: Path) -> dict[str, str]:
 
 def _write_seed_state(root: Path, skills: dict[str, str]) -> None:
     path = root / SEED_STATE_FILENAME
-    temp = root / f"{SEED_STATE_FILENAME}.tmp"
+    temp = root / f"{SEED_STATE_FILENAME}.{uuid.uuid4().hex}.tmp"
     payload = json.dumps(
         {"version": 1, "skills": dict(sorted(skills.items()))},
         ensure_ascii=False,
         indent=2,
     )
-    with temp.open("w", encoding="utf-8") as handle:
-        handle.write(payload + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temp, path)
+    try:
+        with temp.open("w", encoding="utf-8") as handle:
+            handle.write(payload + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)

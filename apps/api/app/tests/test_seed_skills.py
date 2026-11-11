@@ -175,10 +175,17 @@ def test_load_seed_skills_reads_skill_md_files(tmp_path: Path) -> None:
     (tmp_path / "demo-skill" / "SKILL.md").write_text(
         TEMPLATES["demo-skill"], encoding="utf-8"
     )
-    (tmp_path / "no-skill-md").mkdir()
     (tmp_path / "note.txt").write_text("ignore me", encoding="utf-8")
 
     assert load_seed_skills(tmp_path) == {"demo-skill": TEMPLATES["demo-skill"]}
+
+
+def test_load_seed_skills_returns_none_for_directory_without_skill_md(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "empty-skill").mkdir()
+
+    assert load_seed_skills(tmp_path) is None
 
 
 def test_load_seed_skills_returns_none_when_directory_missing(tmp_path: Path) -> None:
@@ -229,6 +236,62 @@ def test_seed_writes_state_only_when_changed(tmp_path: Path, monkeypatch) -> Non
     seed_default_skills(tmp_path, TEMPLATES)
 
     assert calls == []
+
+
+def test_seed_refreshes_record_when_content_matches_template(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    new_content = TEMPLATES["demo-skill"] + "\nnew template\n"
+    # Simulate a crash between rewriting the file and persisting the state.
+    (tmp_path / "demo-skill" / "SKILL.md").write_text(new_content, encoding="utf-8")
+
+    seed_default_skills(tmp_path, {**TEMPLATES, "demo-skill": new_content})
+
+    assert _state(tmp_path)["skills"]["demo-skill"] == _hash(new_content)
+
+
+def test_seed_survives_state_write_failure(tmp_path: Path, monkeypatch) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+
+    def _fail(base: Path, state: dict[str, str]) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("app.services.skills._write_seed_state", _fail)
+    updated = {**TEMPLATES, "demo-skill": TEMPLATES["demo-skill"] + "\nupdated\n"}
+
+    seed_default_skills(tmp_path, updated)
+
+    assert (
+        tmp_path / "demo-skill" / "SKILL.md"
+    ).read_text(encoding="utf-8") == updated["demo-skill"]
+
+
+def test_seed_reinitializes_after_template_retirement_and_return(
+    tmp_path: Path,
+) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    (tmp_path / "demo-skill" / "SKILL.md").unlink()
+
+    seed_default_skills(tmp_path, {"other-skill": TEMPLATES["other-skill"]})
+    assert "demo-skill" not in _state(tmp_path)["skills"]
+
+    seed_default_skills(tmp_path, TEMPLATES)
+
+    assert (tmp_path / "demo-skill" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == TEMPLATES["demo-skill"]
+
+
+def test_seed_ignores_plain_file_at_skill_path(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    directory = tmp_path / "demo-skill"
+    (directory / "SKILL.md").unlink()
+    directory.rmdir()
+    directory.write_text("not a directory", encoding="utf-8")
+
+    seed_default_skills(tmp_path, {**TEMPLATES, "demo-skill": "changed\n"})
+
+    assert directory.is_file()
+    assert directory.read_text(encoding="utf-8") == "not a directory"
 
 
 def test_real_seed_templates_cover_platform_domains() -> None:
