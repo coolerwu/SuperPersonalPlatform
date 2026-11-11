@@ -497,3 +497,23 @@ async def test_close_agent_clients_has_a_total_budget(monkeypatch):
         assert elapsed < 0.5
     finally:
         await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_second_delete_marker_is_refused_until_the_first_finishes():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    try:
+        assert registry.begin_delete("s1") is True
+        assert registry.begin_delete("s1") is False
+        registry.finish_delete("s1")
+        assert registry.begin_delete("s1") is True
+        registry.finish_delete("s1")
+
+        assert registry.begin_agent_delete("agent-a") is True
+        assert registry.begin_agent_delete("agent-a") is False
+        registry.finish_agent_delete("agent-a")
+        assert registry.begin_agent_delete("agent-a") is True
+        registry.finish_agent_delete("agent-a")
+    finally:
+        await registry.close()

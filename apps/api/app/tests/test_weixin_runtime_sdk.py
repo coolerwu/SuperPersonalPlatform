@@ -18,6 +18,7 @@ from app.services.settings_store import (
 )
 from app.services.weixin_client import WeixinSessionExpired
 from app.services.weixin_runtime import (
+    INFLIGHT_BUSY_TEXT,
     MAX_FLUSH_RETRIES,
     RECOVERED_PREFIX,
     ChannelCredentials,
@@ -1284,3 +1285,39 @@ async def test_wait_inflight_times_out_and_returns_false(monkeypatch):
     finally:
         runtime._inflight_events.pop(key, None)
         await runtime.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["/new", "/stop"])
+async def test_inflight_timeout_refuses_command_without_rebinding(
+    monkeypatch, command
+):
+    channel = _channel()
+    conversation = _conversation(channel, context_token="ctx")
+    store = FakeStore([channel], {f"{channel.id}:wx-1": conversation})
+    registry = FakeRegistry()
+    client = FakeClient()
+    runtime = _runtime(store, registry, client=client)
+    credentials = _credentials(channel)
+    key = (channel.id, "wx-1")
+    runtime._inflight_events[key] = asyncio.Event()  # never completes
+    monkeypatch.setattr(weixin_runtime_module, "INFLIGHT_WAIT_SECONDS", 0.01)
+    old_session = conversation.session_id
+    message_id = f"cmd-{command.strip('/')}"
+    try:
+        await runtime._handle_message(
+            credentials,
+            _text_message(message_id, command, context_token="ctx"),
+            client,
+        )
+
+        assert client.sent[-1][1] == INFLIGHT_BUSY_TEXT
+        assert registry.turns == []
+        assert registry.interrupted == []
+        assert store.settings.channel_conversations[
+            f"{channel.id}:wx-1"
+        ].session_id == old_session
+    finally:
+        runtime._inflight_events.pop(key, None)
+        await runtime.stop()
+        await _cleanup_inbound(channel.id, [message_id])

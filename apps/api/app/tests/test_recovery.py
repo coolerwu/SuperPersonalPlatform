@@ -330,7 +330,40 @@ async def test_recovery_keeps_orphan_deliveries_when_lease_is_kept(tmp_path):
             FakeRegistry(), PausedAgentStore(), home=tmp_path
         )
         assert await turn_lease.is_running(session_id) is True
-        assert await channel_delivery.get(empty_id) is not None
+        row = await channel_delivery.get(empty_id)
+        assert row is not None
+        assert row.content == ""
     finally:
         await _cleanup_deliveries(session_id)
         await turn_lease.remove(session_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_answers_lease_less_empty_delivery(tmp_path):
+    await init_db()
+    session_id = "bbbbbbbb-ffff-ffff-ffff-ffffffffffff"
+    delivery_id = None
+    try:
+        delivery_id = await _create_delivery(session_id)
+        # No lease and no transcript: this row can never be completed by a
+        # turn, so startup must answer it instead of leaving it empty forever.
+        await recovery.recover_running_sessions(
+            FakeRegistry(), FakeStore(), home=tmp_path
+        )
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        assert row.status == "pending"
+        assert recovery.LOST_TURN_TEXT in (row.content or "")
+        assert "尚未开始处理" in (row.content or "")
+    finally:
+        if delivery_id is not None:
+            await _cleanup_deliveries_by_id(delivery_id)
+        await turn_lease.remove(session_id)
+
+
+async def _cleanup_deliveries_by_id(delivery_id: int) -> None:
+    async with SessionLocal() as db:
+        await db.execute(
+            delete(ChannelDelivery).where(ChannelDelivery.id == delivery_id)
+        )
+        await db.commit()

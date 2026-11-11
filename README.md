@@ -65,12 +65,12 @@ npm run dev
 - 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。
 - 刷新或断线后当前流式输出可能丢失：同一进程内前端会在数秒内通过 `current_turn_id` 重新订阅并重放当前轮缓冲；进程重启或 SSE 断开且错过缓冲时只能从 transcript 读回历史，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
 - `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示「已停止」。
-- 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，网页来源写 `audit_log`。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
+- 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源写 `audit_log`。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
 - 命令：`/new`（或 `/clear`）、`/stop`、`/status`、`/help`，不区分大小写。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾的临时卡片显示；输入框以 `/` 开头时弹出命令面板，支持前缀过滤、↑/↓ 选择、Enter/Tab 填入、Esc 关闭。
 - `CLAUDE.md` 用户画像由 SDK 作为用户级说明加载；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
 - assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、链接、`$$...$$` 数学公式（KaTeX；单 `$` 按普通文本处理）。
 - 消息操作：复制、引用；按钮位于气泡下方，引用内容显示在输入框上方并可单独取消，发送时以 `> ` 引用块写入消息；失败或停止后显示提示，重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成或删除单条消息。
-- 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；支持选择、粘贴、拖拽图片，大图在浏览器端缩到最长边 1600 px。发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 仍兼容解析。图片由 Agent 用 Read 工具查看。上传文件通过 `GET /api/agents/{agent_id}/uploads/{filename}` 读取。
+- 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；支持选择、粘贴、拖拽图片，大图在浏览器端缩到最长边 1600 px。发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 仍兼容解析。图片由 Agent 用 Read 工具查看。上传文件通过 `GET /api/agents/{agent_id}/uploads/{filename}` 读取；Agent 为 paused/archived 时上传与读取接口返回 409。
 - 草稿、附件和引用按会话隔离（key 为 `agent_id + session_id`，未创建会话时用 `__new__`）；切换会话恢复各自内容。发送时强制滚到底部，输出期间上滑显示「回到最新」。
 - 会话列表由 SDK `list_sessions()` 生成：标题取 SDK summary，按最后修改时间倒序；微信会话带「微信」徽标，忙碌会话显示「忙碌」。删除会话前会拒绝正在执行的会话。
 - 空状态提供建议提示词；顶部轻量栏显示当前 Agent 和会话标题。
@@ -126,7 +126,7 @@ metadata:
 
 侧栏「Agent 能力 → 记忆」是单文档编辑器：
 
-- **用户画像**：`~/.super-personal-platform/claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent。保存时旧版本保留为同目录 `CLAUDE.md.bak`，文件权限 0600；新会话生效。
+- **用户画像**：`~/.super-personal-platform/claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent。保存时旧版本保留为同目录 `CLAUDE.md.bak`，文件权限 0600；文件 mtime/size 纳入 client 配置指纹，下一次 turn 自动重建受影响的缓存 client（已有会话下一次发消息即生效）。
 - **Agent 指令**：在 `settings.json` 的 `agents[].instructions`，通过 preset+append 追加到系统提示词。
 - **Agent 笔记**：由 Claude auto memory 管理（`claude/projects/<project>/memory/`），平台只读不注入。Agent 配置里的「允许 Agent 写入记忆」开关为兼容保留，运行时不再读取。
 - 平台不再提供用户/Agent 记忆表、`/memory` 指令、整理记忆技能或记忆工具。
@@ -140,7 +140,7 @@ metadata:
 - 入站支持文字、图片、文件与文本引用：图片/文件从 iLink CDN 下载、AES-128-ECB 解密后保存到该 Agent 的 `uploads/`，并以附件清单进入会话（消息里是相对路径 `uploads/<name>`）；引用回包通常不含原文，平台按 `msg_id` / `create_time_ms` 在本地入站记录与机器人回复中反查，查不到时标注「引用原文不可用」。语音/视频不下载、不落盘；纯语音/视频直接回固定提示且不创建对话，混合消息只处理文字/图片/文件。Agent 为 paused/archived 时该 Agent 的渠道轮询暂停并保留 `sync_buf`，恢复 active 后继续；渠道页仍可查看、编辑和删除这些渠道。
 - 同一联系人的连续消息在 5 秒窗口内合并成一个 turn（最长 15 秒）；打包窗口内不保存 `sync_buf`，服务重启时由 iLink 重放消息，重复消息按 `external_message_id` 幂等吸收。
 - 回复在 turn 结束时立即发送，按 1800 字在段落/代码围栏边界切块（最多 10 块，超出截断并标注）；发送失败按 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 重试。服务崩溃后启动时补发未完成回复；`attempting` 行补发时加「♻️ 上一条回复可能已部分送达，以下为完整内容：」前缀。一次发送在至少一块已送达后失败（含登录过期）也保持 `attempting`，后续补发同样带前缀；发送 claim 已计入 attempts，达到 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 后标记终态 `failed`、不再自动补发（已知限制：部分送达前缀只在重试期间保留）。只有一块都没发出才回到 pending。取消的 turn 不回信。
-- 微信里可以发命令：`/new`（或 `/clear`）为当前联系人开始新会话（旧会话保留）、`/stop` 取消并丢弃待打包消息、`/status` 查看 Agent/会话/忙闲、`/help`。命令不经过 Agent、不产生消息或 turn，确认回复直接通过 iLink 发送（进程崩溃时可能丢失确认）。
+- 微信里可以发命令：`/new`（或 `/clear`）为当前联系人开始新会话（旧会话保留）、`/stop` 取消并丢弃待打包消息、`/status` 查看 Agent/会话/忙闲、`/help`。命令不经过 Agent、不产生消息或 turn，确认回复直接通过 iLink 发送（进程崩溃时可能丢失确认）。上一批仍在入库时，命令最多等待 30 秒；超时回复「正在处理上一条消息，请稍后重试」，本次 `/new` 不重绑、`/stop` 不取消。
 - 网页聊天框支持同一套命令；网页里在渠道会话中手动发消息不会推回微信。
 - 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；点「重新扫码」重新登录，未发送任何分块（pending）的回复在恢复后补发；部分送达行（attempting）仍受 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 约束，达到上限后为 `failed`，不再自动补发。
 - 渠道暂停后停止收发；删除渠道会删除登录凭据、渠道绑定、入站/投递记录并清空定时任务的推送目标，已产生的会话与 transcript 保留。

@@ -56,6 +56,10 @@ _INTERRUPT_LOCK_TIMEOUT_SECONDS = 5
 # Big tool results and file reads must not overflow the SDK's default 1 MB
 # CLI frame buffer and fail the turn.
 _MAX_BUFFER_SIZE = 16 * 1024 * 1024
+# Clients whose disconnect timed out are kept referenced; bound that list so a
+# long-running process cannot grow it without limit.
+_MAX_ORPHANED_CLIENTS = 32
+_ORPHAN_RETRY_BUDGET_SECONDS = 10
 
 # Channel users get a reply even when the turn produced no text at all.
 _EMPTY_REPLY_TEXT = "（无回复）"
@@ -72,7 +76,17 @@ class _CachedClient:
     last_used: float
 
 
-def _config_fingerprint(agent: Any) -> str:
+def _memory_stamp(home: Path | None) -> str:
+    """Identity of the shared user profile loaded from ``claude/CLAUDE.md``."""
+    path = claude_paths(home)["config"] / "CLAUDE.md"
+    try:
+        stat = path.stat()
+    except OSError:
+        return ""
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
+def _config_fingerprint(agent: Any, memory_stamp: str = "") -> str:
     """Hash the settings that are baked into a connected SDK client."""
     provider = agent.provider
     payload = json.dumps(
@@ -81,6 +95,7 @@ def _config_fingerprint(agent: Any) -> str:
             "base_url": provider.base_url,
             "model": provider.model,
             "api_key": provider.api_key,
+            "memory": memory_stamp,
         },
         sort_keys=True,
     )
@@ -213,10 +228,11 @@ class ClaudeTurnRunner:
     async def _client(self, turn: Turn, agent: Any) -> Any:
         lock = self._client_lock(turn.session_id)
         key = (agent.id, turn.session_id)
+        memory_stamp = _memory_stamp(self._home)
         async with lock:
             cached = self._clients.get(key)
             if cached is not None:
-                fingerprint = _config_fingerprint(agent)
+                fingerprint = _config_fingerprint(agent, memory_stamp)
                 if cached.fingerprint != fingerprint:
                     # The Agent or Provider changed while this session was
                     # busy; rebuild instead of running with stale settings.
@@ -225,7 +241,7 @@ class ClaudeTurnRunner:
                         await self._disconnect(cached.client, turn.session_id)
                     except asyncio.CancelledError:
                         # Keep the reference so shutdown can still close it.
-                        self._orphaned_clients.append(cached.client)
+                        self._retain_orphan(cached.client)
                         raise
                 else:
                     self._touch(key)
@@ -288,7 +304,7 @@ class ClaudeTurnRunner:
             self._clients[key] = _CachedClient(
                 client=client,
                 agent_id=agent.id,
-                fingerprint=_config_fingerprint(agent),
+                fingerprint=_config_fingerprint(agent, memory_stamp),
                 last_used=time.monotonic(),
             )
         self._ensure_sweeper()
@@ -328,24 +344,32 @@ class ClaudeTurnRunner:
         except asyncio.CancelledError:
             raise
 
-    def _idle_keys(self, *, now: float | None = None) -> list[ClientKey]:
+    def _idle_entries(self, *, now: float | None = None) -> list[tuple[ClientKey, _CachedClient]]:
         moment = time.monotonic() if now is None else now
         return [
-            key
+            (key, cached)
             for key, cached in self._clients.items()
             if key not in self._active
             and moment - cached.last_used >= self._client_ttl
         ]
 
     async def sweep_idle_clients(self) -> int:
-        """Evict clients whose session has been idle past the TTL."""
-        expired = self._idle_keys()
-        for key in expired:
-            await self._evict_key(key)
+        """Evict clients whose session has been idle past the TTL.
+
+        Entries are revalidated under the session lock: a turn may start (and
+        mark itself active) while an earlier entry's disconnect is in flight,
+        so a stale snapshot must never disconnect a live session.
+        """
+        expired = self._idle_entries()
+        evicted = 0
+        for key, cached in expired:
+            if await self._evict_key(key, expected=cached):
+                evicted += 1
         await self._enforce_capacity()
-        if expired:
-            logger.info("evicted %d idle SDK client(s)", len(expired))
-        return len(expired)
+        await self._retry_orphans()
+        if evicted:
+            logger.info("evicted %d idle SDK client(s)", evicted)
+        return evicted
 
     async def _enforce_capacity(self) -> None:
         overflow = len(self._clients) - max(1, self._max_clients)
@@ -353,14 +377,14 @@ class ClaudeTurnRunner:
             return
         idle = sorted(
             (
-                (cached.last_used, key)
+                (cached.last_used, key, cached)
                 for key, cached in self._clients.items()
                 if key not in self._active
             ),
             key=lambda item: item[0],
         )
-        for _, key in idle[:overflow]:
-            await self._evict_key(key)
+        for _, key, cached in idle[:overflow]:
+            await self._evict_key(key, expected=cached)
 
     async def run(
         self,
@@ -610,6 +634,15 @@ class ClaudeTurnRunner:
         except TimeoutError:
             # A connect holding the lock must not make /stop hang forever; the
             # marker still makes the turn abort after it acquires the client.
+            # Recompute keys because the session may have started or ended
+            # while this call was waiting.
+            keys = [
+                key
+                for key in self._keys_for_session(session_id)
+                if agent_id is None or key[0] == agent_id
+            ]
+            if agent_id is not None and not keys:
+                keys = [(agent_id, session_id)]
             logger.warning(
                 "interrupt lock timed out session=%s agent=%s",
                 session_id,
@@ -653,25 +686,78 @@ class ClaudeTurnRunner:
                 "client disconnect timed out session=%s; keeping reference",
                 session_id,
             )
-            self._orphaned_clients.append(client)
+            self._retain_orphan(client)
             return False
         except Exception:
             logger.exception("client disconnect failed session=%s", session_id)
             return True
 
-    async def _evict_key(self, key: ClientKey) -> None:
+    async def _evict_key(
+        self, key: ClientKey, *, expected: _CachedClient | None = None
+    ) -> bool:
+        """Evict one cached client if it is still the one we meant to remove.
+
+        The check and the pop happen with no await between them while holding
+        the session lock, so a turn starting during a prior entry's disconnect
+        can never be disconnected by a stale sweep snapshot.
+        """
         session_id = key[1]
         lock = self._client_lock(session_id)
         async with lock:
-            cached = self._clients.pop(key, None)
-        if cached is not None:
+            if key in self._active:
+                return False
+            cached = self._clients.get(key)
+            if cached is None or (expected is not None and cached is not expected):
+                return False
+            self._clients.pop(key, None)
+        try:
+            await self._disconnect(cached.client, session_id)
+        except asyncio.CancelledError:
+            # The entry is already out of the cache; retain the reference
+            # so the shutdown path can still report/close the CLI.
+            self._retain_orphan(cached.client)
+            raise
+        return True
+
+    def _retain_orphan(self, client: Any) -> None:
+        if any(item is client for item in self._orphaned_clients):
+            return
+        self._orphaned_clients.append(client)
+        overflow = len(self._orphaned_clients) - _MAX_ORPHANED_CLIENTS
+        if overflow > 0:
+            logger.warning(
+                "orphan client list exceeded %d; dropping %d oldest reference(s)",
+                _MAX_ORPHANED_CLIENTS,
+                overflow,
+            )
+            del self._orphaned_clients[:overflow]
+
+    async def _retry_orphans(self) -> int:
+        """Give retained clients one more bounded disconnect attempt."""
+        released = 0
+        deadline = asyncio.get_running_loop().time() + _ORPHAN_RETRY_BUDGET_SECONDS
+        for client in list(self._orphaned_clients):
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                logger.warning("orphan retry budget exhausted; keeping references")
+                break
             try:
-                await self._disconnect(cached.client, session_id)
-            except asyncio.CancelledError:
-                # The entry is already out of the cache; retain the reference
-                # so the shutdown path can still report/close the CLI.
-                self._orphaned_clients.append(cached.client)
-                raise
+                async with asyncio.timeout(
+                    min(_DISCONNECT_TIMEOUT_SECONDS, remaining)
+                ):
+                    await client.disconnect()
+            except TimeoutError:
+                logger.warning("orphan client still cannot disconnect")
+                continue
+            except Exception:
+                logger.exception("orphan client disconnect failed")
+            self._orphaned_clients = [
+                item for item in self._orphaned_clients if item is not client
+            ]
+            released += 1
+        if released:
+            logger.info("released %d orphaned SDK client(s)", released)
+        return released
 
     async def _evict(self, session_id: str) -> None:
         for key in self._keys_for_session(session_id):
@@ -702,7 +788,7 @@ class ClaudeTurnRunner:
                     "shutdown budget exhausted; keeping client reference session=%s",
                     key[1],
                 )
-                self._orphaned_clients.append(cached.client)
+                self._retain_orphan(cached.client)
                 continue
             try:
                 async with asyncio.timeout(
@@ -718,7 +804,7 @@ class ClaudeTurnRunner:
                     "keeping reference",
                     key[1],
                 )
-                self._orphaned_clients.append(cached.client)
+                self._retain_orphan(cached.client)
             except Exception:
                 logger.exception(
                     "client disconnect failed during shutdown session=%s", key[1]

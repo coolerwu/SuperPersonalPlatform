@@ -192,7 +192,7 @@ class SessionRegistry:
         delete the transcript under it. Once True, ``submit`` rejects new turns
         for this session until ``finish_delete`` runs.
         """
-        if self.is_busy(session_id):
+        if self.is_busy(session_id) or session_id in self._deleting:
             return False
         self._deleting.add(session_id)
         return True
@@ -207,7 +207,7 @@ class SessionRegistry:
         While set, every submit for the Agent is rejected, closing the window
         between the busy check and workspace/transcript removal.
         """
-        if self.is_agent_busy(agent_id):
+        if self.is_agent_busy(agent_id) or agent_id in self._deleting_agents:
             return False
         self._deleting_agents.add(agent_id)
         return True

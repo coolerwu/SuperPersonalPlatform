@@ -6,9 +6,10 @@ holds content is only sent by the delivery worker/sweep. ``sent`` and
 ``failed`` are terminal and never rewritten.
 
 Known limitation: a hard crash between lease removal and ``complete`` can
-leave an unfilled row with no owning lease. Recovery answers it with an
-explicit failure text (``fail_unfilled_for_session``) instead of dropping the
-channel user's message silently.
+leave an unfilled row with no owning lease. Recovery answers rows that still
+have a lease; startup backfill (``list_unfilled_session_ids`` +
+``fail_unfilled_for_session``) fills lease-less empty rows with the same
+explicit failure text so the startup sweep can deliver it.
 """
 
 from __future__ import annotations
@@ -95,6 +96,20 @@ async def discard(delivery_id: int) -> bool:
         )
         await db.commit()
         return (result.rowcount or 0) > 0
+
+
+async def list_unfilled_session_ids() -> list[str]:
+    """Session ids of live delivery rows that still have no answer."""
+    async with SessionLocal() as db:
+        rows = await db.scalars(
+            select(ChannelDelivery.session_id)
+            .where(
+                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+                ChannelDelivery.content == "",
+            )
+            .distinct()
+        )
+        return [str(item) for item in rows.all()]
 
 
 async def fail_unfilled_for_session(

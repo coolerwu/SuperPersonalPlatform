@@ -50,6 +50,7 @@ DELIVERY_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 # A command must not rebind the contact while its previous batch is still
 # being ingested; wait bounded for that batch to land in the old conversation.
 INFLIGHT_WAIT_SECONDS = 30.0
+INFLIGHT_BUSY_TEXT = "正在处理上一条消息，请稍后重试。"
 
 # A channel that is inactive or whose login expired must not burn through the
 # delivery retry budget: the obligation stays pending until the channel is
@@ -734,14 +735,34 @@ class WeixinRuntime:
             command = parse_command(text)
             if command in ("/new", "/clear"):
                 # Let the previous packet finish ingesting into the old
-                # session before the command rebinds the contact.
-                await self._wait_inflight(key)
+                # session before the command rebinds the contact. If it does
+                # not finish in time, refuse this command instead of rebinding
+                # while the batch is still landing.
+                if not await self._wait_inflight(key):
+                    await self._reply_inflight_busy(
+                        credentials,
+                        sender_id=sender_id,
+                        message_id=message_id,
+                        text=text,
+                        context_token=context_token,
+                        client=client,
+                    )
+                    return
                 # Start the new session with nothing buffered from before.
                 await self.flush_pending(key)
             elif command == "/stop":
                 # Wait so an already-submitted batch has a session to
                 # interrupt; then discard any follow-up that has not run yet.
-                await self._wait_inflight(key)
+                if not await self._wait_inflight(key):
+                    await self._reply_inflight_busy(
+                        credentials,
+                        sender_id=sender_id,
+                        message_id=message_id,
+                        text=text,
+                        context_token=context_token,
+                        client=client,
+                    )
+                    return
                 # A stop means the buffered follow-up should not run at all.
                 self._drop_pending(key)
             # /help, /status and unknown commands must not disturb the batch
@@ -874,6 +895,32 @@ class WeixinRuntime:
         )
         if text:
             self._remember_text(dedup_key)
+
+    async def _reply_inflight_busy(
+        self,
+        credentials: ChannelCredentials,
+        *,
+        sender_id: str,
+        message_id: str,
+        text: str,
+        context_token: str | None,
+        client: WeixinClient | None,
+    ) -> None:
+        """Claim and answer a command that arrived during an in-flight batch."""
+        claimed = await channel_intake.claim_inbound(
+            credentials.channel_id, [message_id], text, sender_id
+        )
+        if not claimed:
+            return
+        await self._send_text(
+            credentials,
+            to_user_id=sender_id,
+            text=INFLIGHT_BUSY_TEXT,
+            context_token=context_token,
+            client=client,
+            label="command-busy",
+        )
+        await self._save_sync_if_idle(credentials.channel_id)
 
     async def _render_quote(
         self,
@@ -1033,8 +1080,10 @@ class WeixinRuntime:
         except asyncio.CancelledError:
             raise
         except WeixinSessionExpired as exc:
-            # Keep the obligation for after the next login; it must not fail
-            # just because the stored token expired.
+            # Pending rows survive the login expiration and are swept after
+            # relogin. A partially delivered row still obeys
+            # CHANNEL_DELIVERY_MAX_ATTEMPTS: below the limit it keeps the
+            # partial-send prefix, at the limit it becomes failed.
             await self._mark_failed_chunks(
                 delivery_id, sent_chunks, _error_text(exc), unbounded=True
             )

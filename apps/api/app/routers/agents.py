@@ -365,8 +365,14 @@ async def upload_attachment(
     filename: str = Query(..., min_length=1, max_length=200),
 ) -> AttachmentOut:
     snapshot = await _store(request).get()
-    if _find_agent(snapshot.agents, agent_id) is None:
+    agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
+    if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
+    if agent.status != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Agent 已暂停或归档，不能上传附件；请先在配置页恢复为 active。",
+        )
 
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > MAX_ATTACHMENT_BYTES:
@@ -389,8 +395,14 @@ async def get_upload(
     agent_id: str, filename: str, request: Request
 ) -> FileResponse:
     snapshot = await _store(request).get()
-    if _find_agent(snapshot.agents, agent_id) is None:
+    agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
+    if agent is None:
         raise HTTPException(status_code=404, detail="agent not found")
+    if agent.status != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Agent 已暂停或归档，不能读取附件；请先在配置页恢复为 active。",
+        )
     path = resolve_upload_file(agent_id, filename)
     if path is None:
         raise HTTPException(status_code=404, detail="attachment not found")

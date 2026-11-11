@@ -1449,7 +1449,7 @@ git commit -m "Document SDK-native channels and cron"
 
 ## 合并前最终审查修复（2026-11-11）
 
-在分支 `feature/claude-sdk-migration` 合并前，对整个分支与 SDK 用法做最终审查，落地以下修复；后端测试从 579 passed / 3 skipped 增至 663 passed / 3 skipped。
+在分支 `feature/claude-sdk-migration` 合并前，对整个分支与 SDK 用法做最终审查，落地以下修复；后端测试从 579 passed / 3 skipped 增至 672 passed / 3 skipped。
 
 | 项 | 修复 |
 |---|---|

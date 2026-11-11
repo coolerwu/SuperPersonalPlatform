@@ -77,10 +77,10 @@
 2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`、`turn_end`）。
 3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。
 4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示已停止。
-5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；网页来源没有投递行时写 `audit_log`；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。
+5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 `audit_log`；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。
 6. 命令：`/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示；`/memory` 与「整理记忆」已删除。
 7. 输入框 `/` 前缀弹出命令面板：↑/↓ 选择，Enter/Tab 填入，Esc 关闭；面板只填入不执行。
-8. 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片支持选择、粘贴、拖拽，浏览器端缩到最长边 1600 px；发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具读取。图片作为文件由 Agent 的 Read 工具查看；本版不再单独构造 `image_url` 模型输入。旧 transcript 里的绝对 `/uploads/<name>` 仍按兼容路径解析，但可能失效，优先在 `uploads/` 下查找。
+8. 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片支持选择、粘贴、拖拽，浏览器端缩到最长边 1600 px；发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具读取。图片作为文件由 Agent 的 Read 工具查看；本版不再单独构造 `image_url` 模型输入。旧 transcript 里的绝对 `/uploads/<name>` 仍按兼容路径解析，但可能失效，优先在 `uploads/` 下查找。Agent 为 paused/archived 时上传与读取接口返回 409。
 9. 消息操作：复制、引用；失败或停止后显示提示，用户重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成、删除单条消息。
 10. assistant 消息按 Markdown 渲染（GFM、代码高亮、KaTeX `$$...$$`）；流式文本约 80ms 节流。
 11. 消息不显示时间戳。同一进程内刷新或重连会在数秒内通过 `current_turn_id` 重放当前轮缓冲；进程重启或订阅断开后才丢失当前输出。
@@ -144,7 +144,7 @@
 
 #### 功能点
 
-1. 用户画像 = `claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent；记忆页只编辑这一个 Markdown 文档，保存时保留 `CLAUDE.md.bak`，原子写入，权限 0600。
+1. 用户画像 = `claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent；记忆页只编辑这一个 Markdown 文档，保存时保留 `CLAUDE.md.bak`，原子写入，权限 0600。文件 mtime/size 纳入 client 配置指纹，保存后下一次 turn 自动重建受影响的缓存 client。
 2. Agent 指令在 `settings.json` 的 `agents[].instructions`，通过 preset+append 注入系统提示词。
 3. Agent 笔记由 Claude auto memory 管理（`claude/projects/<project>/memory/`），平台不注入、不整理、不提供记忆工具；`agents[].auto_memory` 仅为兼容保留，运行时不再读取。
 4. 平台记忆系统（user/agent memory 表、`/memory` 指令、整理记忆技能与工具、`memory_save` / `memory_search` / `memory_read`）全部删除。
@@ -170,7 +170,7 @@
    - 同一联系人连续消息在 `CHANNEL_INBOUND_BATCH_SECONDS`（默认 5 秒，最长 15 秒）内打包成一个 turn。
    - 入站按 `(channel_id, external_message_id)` 幂等；打包窗口内不保存 `sync_buf`，崩溃后由 iLink 重放、幂等表吸收。
    - 引用回包通常只有 `msg_id` / `create_time_ms`：先按消息 id 查 `channel_inbounds`，再在目标时间前 2 秒、后 30 秒窗口内查入站文本与机器人回复；查不到写「引用原文不可用」。
-   - 命令 `/new`、`/clear`、`/stop`、`/status`、`/help`：`/new` 先等待在途打包批次落库到旧会话，再 flush 待打包消息并新建 UUID 重绑；`/stop` 先等待在途批次完成，再丢弃待打包消息并中断当前会话；等待有界（30 秒超时后继续并记日志）。`/status` 返回 Agent、会话 UUID、忙闲；命令不进 Agent、不建 turn，确认消息直接 `sendmessage`。
+   - 命令 `/new`、`/clear`、`/stop`、`/status`、`/help`：`/new` 先等待在途打包批次落库到旧会话，再 flush 待打包消息并新建 UUID 重绑；`/stop` 先等待在途批次完成，再丢弃待打包消息并中断当前会话；等待有界（30 秒），超时后回复「正在处理上一条消息，请稍后重试」并放弃本次命令，不重绑也不丢弃。`/status` 返回 Agent、会话 UUID、忙闲；命令不进 Agent、不建 turn，确认消息直接 `sendmessage`。
 4. 出站：
    - turn 开始时在同一事务写 `running_sessions` 租约与 `channel_deliveries` pending 行；结束时回填最终答复并发送；取消的 turn 不发送并删除空投递行。
    - 回复按 1800 字在段落/代码围栏边界切块，最多 10 块，超出截断并标注。

@@ -139,6 +139,38 @@ async def _recover_session(
     )
 
 
+async def _answer_orphan_deliveries() -> int:
+    """Fill empty delivery rows that have no lease at all.
+
+    A crash between lease removal and completion can leave such a row behind;
+    ``recover_running_sessions`` only sees lease-backed rows, so startup also
+    scans unfilled rows and answers those without a lease using the same
+    explicit failure text. A live lease is left to its resumed turn.
+    """
+    try:
+        session_ids = await channel_delivery.list_unfilled_session_ids()
+    except Exception:
+        logger.exception("recovery could not list unfilled deliveries")
+        return 0
+    answered = 0
+    for session_id in session_ids:
+        try:
+            if await turn_lease.is_running(session_id):
+                continue
+            answered += await channel_delivery.fail_unfilled_for_session(
+                session_id,
+                LOST_TURN_TEXT,
+                "delivery has no owning turn lease",
+            )
+        except Exception:
+            logger.exception(
+                "recovery could not answer orphan delivery session=%s", session_id
+            )
+    if answered:
+        logger.warning("recovery answered %d orphan channel delivery row(s)", answered)
+    return answered
+
+
 async def recover_running_sessions(
     registry: Any, store: Any, *, home: Path | None = None
 ) -> None:
@@ -164,3 +196,7 @@ async def recover_running_sessions(
             await _recover_session(registry, agents, session_id, home)
         except Exception:
             logger.exception("recovery failed session=%s", session_id)
+    try:
+        await _answer_orphan_deliveries()
+    except Exception:
+        logger.exception("recovery orphan delivery backfill failed")

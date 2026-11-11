@@ -23,7 +23,7 @@
 - 渠道：配置与 `channel_conversations`（key `"{channel_id}:{external_id}"`，含 `context_token`）在 `settings.json`；`channel_inbounds` 幂等去重；`channel_deliveries` 在 turn 开始写 pending、结束回填并发送，重启补发；同一联系人 5 秒打包；文本/图片/文件、引用找回与渠道命令都保留；运行期截图实时推送等工具层接入（当前 `channel_images` 无调用方）。
 - 定时：`cron_jobs.session_id` 是 SDK 会话 UUID；每次触发在专属会话入队一个 turn；会话忙时跳过并写 `audit_log`；启动补跑最多一次；推送目标是当前 Agent 的 active 微信渠道下已有 1:1 联系人，复用渠道投递。
 - 清理：`SessionCleanupRuntime` 按 transcript mtime 与 `runtime.session_retention_days`（默认 30，0 关闭）删除；删除前用 registry 的 `begin_delete` 原子标记，跳过租约/忙碌/删除中的会话；后台清理先清产物（截图、投递、渠道绑定）再删 transcript，手动删除会话先调用 SDK `delete_session` 再尽力清理产物；`claude/` 下 auto memory 保留。
-- 记忆：用户画像 = `claude/CLAUDE.md`（记忆页单文档编辑，保存留 `.bak`）；Agent 指令在 `settings.json`；Agent 笔记由 Claude auto memory 管理；`agents[].auto_memory` 仅为兼容保留，运行时不再读取。平台没有记忆表、记忆工具、`/memory` 指令或整理记忆。
+- 记忆：用户画像 = `claude/CLAUDE.md`（记忆页单文档编辑，保存留 `.bak`；文件 mtime/size 纳入 client 配置指纹，下一次 turn 重建受影响的缓存 client）；Agent 指令在 `settings.json`；Agent 笔记由 Claude auto memory 管理；`agents[].auto_memory` 仅为兼容保留，运行时不再读取。平台没有记忆表、记忆工具、`/memory` 指令或整理记忆。
 - 技能：全局 `skills/<name>/SKILL.md`；`DEFAULT_SKILLS` 为 `web-fetch`、`web-search`、`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`；`.seed_state.json` 记录内置内容哈希，只更新用户未修改的内置技能；已从默认列表移除且未修改的技能只删除被跟踪的 SKILL.md，保留用户附加文件；启用列表本版只保存偏好，不门控工具。
 - 工具层未迁移：平台注册表中的技能工具、`add_dirs`、MCP、搜索/浏览器/回测/定时/交易/资产/缠论/知识库工具都没有接入 SDK；WebFetch/WebSearch 等只是 Claude Code 默认工具集的一部分。runner 未显式设置 `tools`，默认工具集随 bundled CLI 版本和插件环境变化，以工具页/运行时 init frame 为准（例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。工具页按 API 展示，平台与技能工具标记为未接入。`langchain-core` 暂留。
 - 知识库：`KnowledgeSyncRuntime` 在进程内把 WebDAV 目录双向同步到 `knowledge/`；配置在 `settings.json` 的 `knowledge` 节；本版不挂载给 Agent。

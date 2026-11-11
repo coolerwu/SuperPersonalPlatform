@@ -18,6 +18,21 @@ from app.services.turn_stream import TurnStream
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
 
 
+@pytest.fixture(autouse=True)
+async def _cancel_client_sweepers():
+    """Do not leave background sweep tasks behind between tests."""
+    yield
+    current = asyncio.current_task()
+    for task in asyncio.all_tasks():
+        if task is current or task.get_name() != "claude-client-sweep":
+            continue
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 class FakeClient:
     def __init__(self, messages=None, *, fail=False):
         self._messages = list(messages or [])
@@ -776,6 +791,8 @@ async def test_capacity_evicts_the_oldest_idle_client(tmp_path):
     first_turn = make_turn(session_id="14141414-1414-1414-1414-141414141414")
     second_turn = make_turn(session_id="15151515-1515-1515-1515-151515151515")
     await runner.run(first_turn, TurnStream())
+    # Make the LRU order deterministic instead of relying on clock resolution.
+    runner._clients[(first_turn.agent_id, first_turn.session_id)].last_used -= 10
     await runner.run(second_turn, TurnStream())
 
     assert first.disconnected is True
@@ -992,3 +1009,138 @@ async def test_idle_eviction_timeout_retains_an_orphan_reference(
     assert any(
         "keeping reference" in record.getMessage() for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_a_session_that_starts_during_another_disconnect(
+    tmp_path, monkeypatch
+):
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 1)
+    release_first = asyncio.Event()
+    first_disconnect_started = asyncio.Event()
+    second_run_started = asyncio.Event()
+    release_second = asyncio.Event()
+
+    class GatedDisconnectClient(FakeClient):
+        async def disconnect(self):
+            first_disconnect_started.set()
+            await release_first.wait()
+
+    class SecondTurnHoldingClient(FakeClient):
+        def __init__(self, messages=None, *, fail=False):
+            super().__init__(messages, fail=fail)
+            self.runs = 0
+
+        async def receive_messages(self):
+            self.runs += 1
+            if self.runs >= 2:
+                second_run_started.set()
+                await release_second.wait()
+            for message in self._messages:
+                yield message
+
+    first = GatedDisconnectClient([ResultMessage()])
+    second = SecondTurnHoldingClient([ResultMessage()])
+    clients = [first, second]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: clients.pop(0),
+        client_ttl_seconds=0,
+        sweep_seconds=3600,
+    )
+    first_turn = make_turn(session_id="25252525-2525-2525-2525-252525252525")
+    second_turn = make_turn(session_id="26262626-2626-2626-2626-262626262626")
+    await runner.run(first_turn, TurnStream())
+    await runner.run(second_turn, TurnStream())
+
+    sweep = asyncio.create_task(runner.sweep_idle_clients())
+    try:
+        await asyncio.wait_for(first_disconnect_started.wait(), 1)
+
+        # The second session starts a turn while the first disconnect blocks.
+        second_key = (second_turn.agent_id, second_turn.session_id)
+        running = asyncio.create_task(runner.run(second_turn, TurnStream()))
+        await asyncio.wait_for(second_run_started.wait(), 1)
+
+        release_first.set()
+        assert await asyncio.wait_for(sweep, 1) == 1
+        # The stale sweep snapshot must not disconnect the now-active client.
+        assert second_key in runner._clients
+        assert second.disconnected is False
+
+        release_second.set()
+        outcome = await asyncio.wait_for(running, 1)
+        assert outcome.status == "completed"
+        assert second.disconnected is False
+    finally:
+        release_first.set()
+        release_second.set()
+        if not sweep.done():
+            sweep.cancel()
+        await runner.close_all()
+
+
+@pytest.mark.asyncio
+async def test_orphan_retry_releases_a_client_that_recovers(tmp_path, monkeypatch):
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 0.01)
+
+    class RecoveringClient(FakeClient):
+        def __init__(self, messages=None, *, fail=False):
+            super().__init__(messages, fail=fail)
+            self.disconnect_calls = 0
+
+        async def disconnect(self):
+            self.disconnect_calls += 1
+            if self.disconnect_calls == 1:
+                await asyncio.Event().wait()
+
+    client = RecoveringClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        client_ttl_seconds=0.01,
+        sweep_seconds=3600,
+    )
+    turn = make_turn(session_id="27272727-2727-2727-2727-272727272727")
+    await runner.run(turn, TurnStream())
+    await asyncio.sleep(0.02)
+
+    assert await runner.sweep_idle_clients() == 1
+    assert client.disconnect_calls == 2
+    assert runner._orphaned_clients == []
+
+
+def test_orphan_list_is_bounded():
+    runner = ClaudeTurnRunner(store=FakeStore(make_agent()))
+    for index in range(claude_runner._MAX_ORPHANED_CLIENTS + 5):
+        runner._retain_orphan(object())
+    assert len(runner._orphaned_clients) == claude_runner._MAX_ORPHANED_CLIENTS
+
+
+@pytest.mark.asyncio
+async def test_memory_profile_change_rebuilds_a_cached_client(tmp_path):
+    await init_db()
+    captured = []
+    clients = [FakeClient([ResultMessage()]), FakeClient([ResultMessage()])]
+
+    def factory(options):
+        captured.append(options)
+        return clients[len(captured) - 1]
+
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()), home=tmp_path, client_factory=factory
+    )
+    turn = make_turn(session_id="28282828-2828-2828-2828-282828282828")
+    await runner.run(turn, TurnStream())
+
+    memory = tmp_path / "claude" / "CLAUDE.md"
+    memory.parent.mkdir(parents=True, exist_ok=True)
+    memory.write_text("用户画像", "utf-8")
+
+    await runner.run(turn, TurnStream())
+    assert len(captured) == 2
+    assert clients[0].disconnected is True
