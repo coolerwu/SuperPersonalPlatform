@@ -49,6 +49,7 @@ class SkillInfo:
     can_enable: bool = True
     warnings: tuple[str, ...] = ()
     source: str = SKILL_SOURCE_MANUAL
+    modified: bool = False
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class SkillDocument:
     content: str
     warnings: tuple[str, ...] = ()
     source: str = SKILL_SOURCE_MANUAL
+    modified: bool = False
 
 
 def load_seed_skills(root: Path | None = None) -> dict[str, str] | None:
@@ -120,7 +122,7 @@ def normalize_skill_names(names: Iterable[str]) -> list[str]:
 
 
 def _parse_skill(
-    directory: Path, root: Path, seed_names: frozenset[str] = frozenset()
+    directory: Path, root: Path, seed_state: dict[str, str] | None = None
 ) -> tuple[SkillInfo | None, str | None]:
     skill_md = directory / "SKILL.md"
     if not skill_md.is_file():
@@ -197,12 +199,16 @@ def _parse_skill(
             elif raw_tools is not None:
                 warnings.append("metadata.include_tools must be a space-separated string of tool names")
 
-    if directory.name in seed_names:
+    tracked = seed_state or {}
+    if directory.name in tracked:
         source = SKILL_SOURCE_INITIAL
     elif metadata_source == SKILL_SOURCE_AI:
         source = SKILL_SOURCE_AI
     else:
         source = SKILL_SOURCE_MANUAL
+
+    tracked_hash = tracked.get(directory.name)
+    modified = tracked_hash is not None and _content_hash(text) != tracked_hash
 
     return (
         SkillInfo(
@@ -214,6 +220,7 @@ def _parse_skill(
             can_enable=can_enable,
             warnings=tuple(warnings),
             source=source,
+            modified=modified,
         ),
         None,
     )
@@ -228,7 +235,7 @@ def scan_skills(root: Path | None = None) -> SkillCatalog:
     if not base.is_dir():
         return SkillCatalog()
 
-    seed_names = frozenset(_load_seed_state(base))
+    seed_state = _load_seed_state(base)
     try:
         entries = sorted(base.iterdir(), key=lambda item: item.name)
     except OSError as exc:
@@ -244,7 +251,7 @@ def scan_skills(root: Path | None = None) -> SkillCatalog:
                 continue
         except OSError:
             continue
-        info, error = _parse_skill(entry, base, seed_names)
+        info, error = _parse_skill(entry, base, seed_state)
         if error is not None:
             logger.warning("%s", error)
             errors.append(error)
@@ -336,7 +343,7 @@ def read_skill(directory: str) -> SkillDocument:
     folder = _resolve_skill_directory(directory)
     _, content = _read_skill_text(directory)
     root = _skills_root()
-    info, error = _parse_skill(folder, root, frozenset(_load_seed_state(root)))
+    info, error = _parse_skill(folder, root, _load_seed_state(root))
     if info is None:
         raise SkillValidationError(error or "SKILL.md is invalid")
     return SkillDocument(
@@ -346,6 +353,7 @@ def read_skill(directory: str) -> SkillDocument:
         content=content,
         warnings=info.warnings,
         source=info.source,
+        modified=info.modified,
     )
 
 
@@ -365,7 +373,7 @@ def update_skill(directory: str, content: str) -> SkillDocument:
         raise SkillValidationError(f"cannot save SKILL.md: {exc}") from exc
 
     root = _skills_root()
-    info, error = _parse_skill(folder, root, frozenset(_load_seed_state(root)))
+    info, error = _parse_skill(folder, root, _load_seed_state(root))
     if info is None:
         raise SkillValidationError(error or "SKILL.md is invalid")
     return SkillDocument(
@@ -375,6 +383,7 @@ def update_skill(directory: str, content: str) -> SkillDocument:
         content=content,
         warnings=_warnings_for(name, description, directory),
         source=info.source,
+        modified=info.modified,
     )
 
 
@@ -484,7 +493,7 @@ def delete_skill(directory: str, root: Path | None = None) -> str:
     """
     base = _skills_root() if root is None else root.expanduser().resolve()
     folder = _resolve_skill_directory(directory, base)
-    info, _ = _parse_skill(folder, base, frozenset(_load_seed_state(base)))
+    info, _ = _parse_skill(folder, base, _load_seed_state(base))
     declared_name = info.name if info is not None else directory
     try:
         shutil.rmtree(folder)

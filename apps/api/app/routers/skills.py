@@ -25,6 +25,7 @@ def _detail_out(document: SkillDocument) -> SkillDetailOut:
         content=document.content,
         warnings=list(document.warnings),
         source=document.source,
+        modified=document.modified,
     )
 
 
@@ -42,6 +43,7 @@ async def list_skills() -> SkillCatalogOut:
                 can_enable=skill.can_enable,
                 warnings=list(skill.warnings),
                 source=skill.source,
+                modified=skill.modified,
             )
             for skill in catalog.skills
         ],

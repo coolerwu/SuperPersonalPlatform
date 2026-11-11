@@ -77,6 +77,7 @@ class SkillOut(BaseModel):
     can_enable: bool = True
     warnings: list[str] = Field(default_factory=list)
     source: str = "manual"
+    modified: bool = False
 
 
 class SkillCatalogOut(BaseModel):
@@ -91,6 +92,7 @@ class SkillDetailOut(BaseModel):
     content: str
     warnings: list[str] = Field(default_factory=list)
     source: str = "manual"
+    modified: bool = False
 
 
 class SkillUpdate(BaseModel):

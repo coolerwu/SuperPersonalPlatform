@@ -208,3 +208,21 @@ def test_delete_initialized_skill_keeps_tombstone(client) -> None:
 
     seed_default_skills()
     assert not (settings.skills_dir / "chanlun").exists()
+
+
+def test_modified_flag_marks_edited_initial_skill(client) -> None:
+    target = settings.skills_dir / "quant-backtest" / "SKILL.md"
+    original = target.read_text(encoding="utf-8")
+    if not original.endswith("\nagent edit\n"):
+        target.write_text(original + "\nagent edit\n", encoding="utf-8")
+
+    listed = client.get("/api/skills").json()
+    skill = next(item for item in listed["skills"] if item["name"] == "quant-backtest")
+    assert skill["source"] == "initial"
+    assert skill["modified"] is True
+
+    detail = client.get("/api/skills/quant-backtest").json()
+    assert detail["modified"] is True
+
+    untouched = next(item for item in listed["skills"] if item["name"] == "trade-journal")
+    assert untouched["modified"] is False
