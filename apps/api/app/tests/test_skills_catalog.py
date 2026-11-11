@@ -156,15 +156,17 @@ def test_seeded_skills_do_not_declare_platform_tools() -> None:
     assert "memory-organizer" not in {skill.name for skill in catalog.skills}
 
 
-def test_default_web_skills_seeded(client) -> None:
+def test_default_skills_seeded(client) -> None:
     body = client.get("/api/skills").json()
     skills = {item["name"]: item for item in body["skills"]}
-    assert (settings.skills_dir / "web-browser" / "SKILL.md").is_file()
-    assert skills["web-browser"]["include_tools"] == []
-    assert skills["web-browser"]["source"] == "builtin"
-    # Web search/fetch moved to Claude Code's built-in WebSearch/WebFetch.
+    assert (settings.skills_dir / "knowledge-base" / "SKILL.md").is_file()
+    assert skills["knowledge-base"]["include_tools"] == []
+    assert skills["knowledge-base"]["source"] == "builtin"
+    # Web search/fetch moved to Claude Code's built-in WebSearch/WebFetch;
+    # browser automation comes from the official Playwright plugin.
     assert "web-search" not in skills
     assert "web-fetch" not in skills
+    assert "web-browser" not in skills
     assert "memory-organizer" not in skills
 
 

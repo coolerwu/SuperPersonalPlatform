@@ -27,7 +27,7 @@ def test_seed_creates_missing_skills_and_state(tmp_path) -> None:
 
 def test_seed_updates_unmodified_builtin_skill(tmp_path, monkeypatch) -> None:
     seed_default_skills(tmp_path)
-    name = "web-browser"
+    name = "knowledge-base"
     updated = DEFAULT_SKILLS[name] + "\nupdated built-in content\n"
     monkeypatch.setitem(DEFAULT_SKILLS, name, updated)
 
@@ -39,9 +39,9 @@ def test_seed_updates_unmodified_builtin_skill(tmp_path, monkeypatch) -> None:
 
 def test_seed_preserves_user_edited_skill(tmp_path, monkeypatch) -> None:
     seed_default_skills(tmp_path)
-    target = tmp_path / "web-browser" / "SKILL.md"
+    target = tmp_path / "knowledge-base" / "SKILL.md"
     target.write_text("user customized content", encoding="utf-8")
-    monkeypatch.setitem(DEFAULT_SKILLS, "web-browser", "new built-in content")
+    monkeypatch.setitem(DEFAULT_SKILLS, "knowledge-base", "new built-in content")
 
     seed_default_skills(tmp_path)
 
@@ -49,7 +49,7 @@ def test_seed_preserves_user_edited_skill(tmp_path, monkeypatch) -> None:
 
 
 def test_seed_adopts_existing_file_that_matches_default(tmp_path, monkeypatch) -> None:
-    name = "web-browser"
+    name = "knowledge-base"
     target = tmp_path / name / "SKILL.md"
     target.parent.mkdir(parents=True)
     target.write_text(DEFAULT_SKILLS[name], encoding="utf-8")
@@ -66,19 +66,19 @@ def test_seed_adopts_existing_file_that_matches_default(tmp_path, monkeypatch) -
 
 def test_seed_survives_corrupt_state_file(tmp_path) -> None:
     seed_default_skills(tmp_path)
-    target = tmp_path / "web-browser" / "SKILL.md"
+    target = tmp_path / "knowledge-base" / "SKILL.md"
     original = target.read_text(encoding="utf-8")
     (tmp_path / SEED_STATE_FILENAME).write_text("{not json", encoding="utf-8")
 
     seed_default_skills(tmp_path)
 
     assert target.read_text(encoding="utf-8") == original
-    assert _state(tmp_path)["skills"]["web-browser"] == _hash(original)
+    assert _state(tmp_path)["skills"]["knowledge-base"] == _hash(original)
 
 
 def test_seed_removes_unmodified_retired_builtin_skill(tmp_path, monkeypatch) -> None:
     seed_default_skills(tmp_path)
-    name = "web-browser"
+    name = "knowledge-base"
     monkeypatch.delitem(DEFAULT_SKILLS, name)
 
     seed_default_skills(tmp_path)
@@ -89,7 +89,7 @@ def test_seed_removes_unmodified_retired_builtin_skill(tmp_path, monkeypatch) ->
 
 def test_seed_keeps_user_edited_retired_builtin_skill(tmp_path, monkeypatch) -> None:
     seed_default_skills(tmp_path)
-    name = "web-browser"
+    name = "knowledge-base"
     target = tmp_path / name / "SKILL.md"
     edited = "user customized retired skill"
     target.write_text(edited, encoding="utf-8")
@@ -107,7 +107,7 @@ def test_seed_keeps_user_edited_retired_builtin_skill(tmp_path, monkeypatch) -> 
 
 def test_seed_retired_skill_keeps_user_added_files(tmp_path, monkeypatch) -> None:
     seed_default_skills(tmp_path)
-    name = "web-browser"
+    name = "knowledge-base"
     directory = tmp_path / name
     extra = directory / "notes.txt"
     extra.write_text("user notes", encoding="utf-8")
@@ -123,7 +123,7 @@ def test_seed_retired_skill_keeps_user_added_files(tmp_path, monkeypatch) -> Non
 
 def test_seed_retired_skill_missing_skill_md_drops_state_only(tmp_path, monkeypatch) -> None:
     seed_default_skills(tmp_path)
-    name = "web-browser"
+    name = "knowledge-base"
     directory = tmp_path / name
     (directory / "SKILL.md").unlink()
     extra = directory / "notes.txt"
@@ -139,7 +139,7 @@ def test_seed_retired_skill_missing_skill_md_drops_state_only(tmp_path, monkeypa
 
 def test_seed_retired_unreadable_skill_keeps_state(tmp_path, monkeypatch) -> None:
     seed_default_skills(tmp_path)
-    name = "web-browser"
+    name = "knowledge-base"
     target = tmp_path / name / "SKILL.md"
     unreadable = b"\xff\xfe\x00"
     target.write_bytes(unreadable)
@@ -172,7 +172,7 @@ def test_seed_drops_invalid_state_entries(tmp_path) -> None:
 
 def test_seed_corrupt_state_keeps_retired_directory(tmp_path, monkeypatch) -> None:
     seed_default_skills(tmp_path)
-    name = "web-browser"
+    name = "knowledge-base"
     target = tmp_path / name / "SKILL.md"
     original = target.read_text(encoding="utf-8")
     (tmp_path / SEED_STATE_FILENAME).write_text("{not json", encoding="utf-8")
@@ -186,9 +186,9 @@ def test_seed_corrupt_state_keeps_retired_directory(tmp_path, monkeypatch) -> No
 
 def test_seed_retired_symlinked_directory_is_left_untouched(tmp_path, monkeypatch) -> None:
     seed_default_skills(tmp_path)
-    name = "web-browser"
+    name = "knowledge-base"
     directory = tmp_path / name
-    real = tmp_path / "real-web-browser"
+    real = tmp_path / "real-knowledge-base"
     directory.rename(real)
     directory.symlink_to(real, target_is_directory=True)
     monkeypatch.delitem(DEFAULT_SKILLS, name)
@@ -204,7 +204,7 @@ def test_seed_retired_skill_md_symlink_is_unlinked_not_followed(
     tmp_path, monkeypatch
 ) -> None:
     seed_default_skills(tmp_path)
-    name = "web-browser"
+    name = "knowledge-base"
     directory = tmp_path / name
     target = directory / "SKILL.md"
     external = tmp_path / "external.md"

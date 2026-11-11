@@ -29,16 +29,10 @@ Use this skill to finish changes in `/Users/wulang/Desktop/AI/SuperPersonalPlatf
 7. Commit with a concise imperative message.
 8. Push the current branch with `git push origin HEAD`.
 
-## Remotes and rc-clone
+## Remotes
 
 - The only configured remote is `origin` → `git@github.com:coolerwu/SuperPersonalPlatform.git`.
 - Push only to `origin`; do not add/remove remotes or rewrite history.
-- A local `rc-clone` is a separate checkout. Pushing to GitHub does not modify it,
-  so there is no write conflict. If it needs the new commit, pull it explicitly
-  inside that checkout; never run `git pull` or `git reset` in `rc-clone` from
-  this repository.
-- If deploying from `rc-clone`, pull it first, verify its HEAD equals the pushed
-  SHA, then run the deployment commands there.
 
 ## Deployment (v1)
 
@@ -112,7 +106,6 @@ If the user explicitly asks to deploy v1 on the target machine:
   virtualenvs, caches, or dependency directories.
 - `apps/web/dist/` **is** committed; include the rebuilt assets.
 - Do not reset or overwrite existing changes unless the user explicitly asks.
-- Do not assume a push synchronized `rc-clone`; it is an independent checkout.
 - Current runtime facts:
   - execution core is `ClaudeSDKClient`; sessions/messages are SDK transcripts
     under `claude/projects/<agent_id>/<uuid>.jsonl`; there are no

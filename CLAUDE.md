@@ -24,7 +24,7 @@
 - 定时：`cron_jobs.session_id` 是 SDK 会话 UUID；每次触发在专属会话入队一个 turn；会话忙时跳过并写 `audit_log`；启动补跑最多一次；推送目标是当前 Agent 的 active 微信渠道下已有 1:1 联系人，复用渠道投递。
 - 清理：`SessionCleanupRuntime` 按 transcript mtime 与 `runtime.session_retention_days`（默认 30，0 关闭）删除；删除前用 registry 的 `begin_delete` 原子标记，跳过租约/忙碌/删除中的会话；后台清理先清产物（截图、投递、渠道绑定）再删 transcript，手动删除会话先调用 SDK `delete_session` 再尽力清理产物；`claude/` 下 auto memory 保留。
 - 记忆：用户画像 = `claude/CLAUDE.md`（记忆页单文档编辑，保存留 `.bak`；文件 mtime/size 纳入 client 配置指纹，下一次 turn 重建受影响的缓存 client）；Agent 指令在 `settings.json`；Agent 笔记由 Claude auto memory 管理；`agents[].auto_memory` 仅为兼容保留，运行时不再读取。平台没有记忆表、记忆工具、`/memory` 指令或整理记忆。
-- 技能：全局 `claude/skills/<name>/SKILL.md`；`DEFAULT_SKILLS` 为 `web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取改用 Claude Code 自带的 WebSearch/WebFetch）；`.seed_state.json` 记录内置内容哈希，只更新用户未修改的内置技能；已从默认列表移除且未修改的技能只删除被跟踪的 SKILL.md，保留用户附加文件；技能没有启用开关，所有 Agent 自动共享；平台技能工具尚未接入 SDK。
+- 技能：全局 `claude/skills/<name>/SKILL.md`；`DEFAULT_SKILLS` 为 `knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取改用 Claude Code 自带的 WebSearch/WebFetch；浏览器操作改用官方集市 `playwright` 插件，不再 seed `web-browser` 技能）；`.seed_state.json` 记录内置内容哈希，只更新用户未修改的内置技能；已从默认列表移除且未修改的技能只删除被跟踪的 SKILL.md，保留用户附加文件；技能没有启用开关，所有 Agent 自动共享；平台技能工具尚未接入 SDK。
 - 插件集市：「插件」页（`/plugins`）管理 Claude Code 官方集市 `anthropics/claude-plugins-official`；插件以 user scope 装进运行时 `claude/`（`settings.json` 的 `enabledPlugins`、`plugins/`），所有 Agent 共享。平台调用 SDK 内置 CLI（与 runner 同一二进制）执行 `plugin` 命令，启动与读取不联网；`settings.json`、`plugins/installed_plugins.json` 与 `.plugins-revision` 纳入 client 配置指纹，安装/启停/更新/卸载后下一轮对话重建。插件可带 hooks/MCP，平台不提供沙箱。
 - 工具层未迁移：平台注册表中的技能工具、`add_dirs`、MCP、搜索/浏览器/回测/定时/交易/资产/缠论/知识库工具都没有接入 SDK；WebFetch/WebSearch 等只是 Claude Code 默认工具集的一部分。runner 未显式设置 `tools`，默认工具集随 bundled CLI 版本和插件环境变化，以工具页/运行时 init frame 为准（例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。工具页按 API 展示，平台与技能工具标记为未接入。`langchain-core` 暂留。
 - 知识库：`KnowledgeSyncRuntime` 在进程内把 WebDAV 目录双向同步到 `knowledge/`；配置在 `settings.json` 的 `knowledge` 节；本版不挂载给 Agent。
@@ -74,7 +74,7 @@ cd apps/web && npm run build
 - 提交前先跑后端测试与前端构建。
 - `git status --short` 确认范围；不要提交 `.super-personal-platform/`、`.env`、`data/`。
 - 需要提交时执行 `.claude/skills/project-commit/SKILL.md`；该技能需要随新栈更新。
-- 只 push `origin`（GitHub）。本地的 `rc-clone` 是独立 checkout，需要同步时在 `rc-clone` 里单独 `git pull`。
+- 只 push `origin`（GitHub）。
 - 生产：`qiuqiu@192.168.1.3:~/SuperPersonalPlatform-v1-deploy`，用户级 systemd 服务 `agent-command-center.service`，venv + SQLite，监听 8888；从 GitHub `main` pull，`~/.super-personal-platform/.env` 只在目标机本地。
 - 部署与升级步骤见 `README.md`。
 

@@ -96,7 +96,7 @@ npm run dev
 - **技能**：列出全局技能库，按「系统技能」和「交互创建」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（只删技能目录）。
 - **工具**：如实展示当前接入状态。runner 未显式限制 `tools`，Agent 使用 Claude Code 默认工具集（以工具页/运行时 init frame 为准，随 bundled CLI 版本和插件环境变化；例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。WebFetch/WebSearch 是 Claude Code 自带工具，不代表平台注册表中的搜索/浏览器工具已接入；平台工具与技能工具标记为未接入，等待工具层迁移。本版 Agent 不能调用平台注册表中的搜索、浏览器、回测、定时、交易记录、资产配置、缠论或知识库工具。
 - **插件**：管理 Claude Code 官方集市与插件，见下节。
-- 内置技能在技能库中 seed：`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，不再单独 seed 技能）。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
+- 内置技能在技能库中 seed：`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作使用官方集市 `playwright` 插件，均不再单独 seed 技能）。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
 
 ### 插件集市
 
@@ -104,6 +104,7 @@ npm run dev
 - 平台调用 SDK 自带的内置 CLI（与 chat 运行时同一个二进制，随 venv 安装）执行 `claude plugin` 命令；启动和页面读取不联网，只有添加/更新集市与安装/更新插件需要访问 GitHub。添加集市会克隆官方仓库、安装/更新插件会先刷新集市，慢链路可能需要数分钟。
 - 安装、启停、更新或卸载插件后，下一轮对话会重建受影响会话的缓存 client 并加载最新插件；进行中的 turn 不受影响。
 - 插件可能包含 skills、命令、hooks 与 MCP server，其中 hooks/MCP 会以宿主机用户权限执行代码，平台不提供沙箱。只安装可信插件；移除集市前必须先卸载其下的插件。
+- 官方集市的 `playwright` 插件（Microsoft，`npx @playwright/mcp`）用于浏览器操作；启用后 CLI 会自动加载它自带的 MCP server，平台自带的 `browser_tools` 仍未接入 SDK。
 
 ### Skills 文件格式
 
