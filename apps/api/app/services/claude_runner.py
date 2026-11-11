@@ -40,7 +40,14 @@ from app.db import SessionLocal
 from app.services import channel_delivery, platform_mcp, sdk_bridge, turn_lease
 from app.services.claude_env import build_claude_env, claude_paths, workspace_for
 from app.services.identifiers import valid_agent_id
-from app.services.sdk_events import StreamMapper, TurnOutcome, outcome_from_result
+from app.services.sdk_events import (
+    StreamMapper,
+    TurnOutcome,
+    origin_kind,
+    outcome_from_result,
+    subagent_message_events,
+    task_event,
+)
 from app.services.settings_store import SettingsStore
 from app.services.skill_tools import SkillToolContext
 from app.services.tool_artifacts import artifact_from_tool
@@ -393,6 +400,10 @@ class ClaudeTurnRunner:
                 "cwd": str(workspace),
                 "env": build_claude_env(agent, home=self._home),
                 "include_partial_messages": True,
+                # Subagent text/thinking arrives as messages tagged with the
+                # spawning tool_use id; without this only its tool calls are
+                # forwarded and the chat cannot follow what it is doing.
+                "forward_subagent_text": True,
                 "setting_sources": ["user", "project"],
                 "permission_mode": app_settings.claude_permission_mode,
                 "max_buffer_size": _MAX_BUFFER_SIZE,
@@ -615,15 +626,88 @@ class ClaudeTurnRunner:
                 # Drain the full stream: receive_response() would stop at the
                 # first ResultMessage, which may be an injected background
                 # task notification rather than this turn's result.
+                injected = False
+                subagent_mappers: dict[str, StreamMapper] = {}
+                subagent_streamed: set[str] = set()
                 async for message in client.receive_messages():
-                    if getattr(message, "parent_tool_use_id", None):
+                    mapped_task = task_event(message)
+                    if mapped_task is not None:
+                        # Task lifecycle is a fact even when the surrounding
+                        # notification turn is not shown in this chat.
+                        stream.publish(mapped_task)
                         continue
+
+                    if type(message).__name__ == "UserMessage":
+                        kind = origin_kind(message)
+                        if kind == "human":
+                            injected = False
+                        elif kind is not None and kind != "auto-continuation":
+                            injected = True
+                        # origin=None covers tool results and our own prompt;
+                        # auto-continuation is displayed as part of this turn.
+                        continue
+
                     if (
                         getattr(message, "subtype", "") == "init"
                         and isinstance(getattr(message, "data", None), dict)
                     ):
                         self._capture_init(turn.agent_id, message)
                         continue
+
+                    if injected:
+                        # Injected turns (task notifications, peer messages,
+                        # ...) must not leak their text into this turn.
+                        if type(message).__name__ == "ResultMessage":
+                            injected = False
+                        continue
+
+                    parent_id = getattr(message, "parent_tool_use_id", None)
+                    if parent_id:
+                        parent_id = str(parent_id)
+                        event = getattr(message, "event", None)
+                        if isinstance(event, dict):
+                            sub_mapper = subagent_mappers.get(parent_id)
+                            if sub_mapper is None:
+                                sub_mapper = StreamMapper()
+                                subagent_mappers[parent_id] = sub_mapper
+                            for mapped in sub_mapper.feed(event):
+                                if mapped["type"] == "assistant_delta":
+                                    stream.publish(
+                                        {
+                                            "type": "subagent_text",
+                                            "parent_tool_use_id": parent_id,
+                                            "text": mapped["delta"],
+                                        }
+                                    )
+                                    subagent_streamed.add(parent_id)
+                                elif mapped["type"] == "tool_call":
+                                    artifact = artifact_from_tool(
+                                        mapped["name"], mapped["input"], workspace
+                                    )
+                                    if artifact is not None:
+                                        mapped["artifact"] = artifact
+                                    mapped["type"] = "subagent_tool_call"
+                                    mapped["parent_tool_use_id"] = parent_id
+                                    stream.publish(mapped)
+                                    subagent_streamed.add(parent_id)
+                                # Subagent thinking is dropped to keep the
+                                # live trace readable.
+                        elif (
+                            parent_id not in subagent_streamed
+                            and type(message).__name__ == "AssistantMessage"
+                        ):
+                            # Complete-message fallback for CLIs that do not
+                            # emit partial events for subagents.
+                            for mapped in subagent_message_events(message):
+                                if mapped["type"] == "subagent_tool_call":
+                                    artifact = artifact_from_tool(
+                                        mapped["name"], mapped["input"], workspace
+                                    )
+                                    if artifact is not None:
+                                        mapped["artifact"] = artifact
+                                stream.publish(mapped)
+                        continue
+
                     event = getattr(message, "event", None)
                     if isinstance(event, dict):
                         for mapped in mapper.feed(event):
@@ -643,14 +727,11 @@ class ClaudeTurnRunner:
                         continue
                     # Background task notifications can surface as result
                     # messages too; keep draining until this turn's own result.
-                    origin = getattr(message, "origin", None)
-                    kind = (
-                        origin.get("kind")
-                        if isinstance(origin, dict)
-                        else getattr(origin, "kind", None)
-                    )
+                    kind = origin_kind(message)
                     if kind not in (None, "human"):
+                        injected = False
                         continue
+                    injected = False
                     outcome = outcome_from_result(
                         message, fallback_text="".join(text_parts)
                     )

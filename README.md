@@ -63,7 +63,7 @@ npm run dev
 ## Chat
 
 - 执行核为 `ClaudeSDKClient`：每个平台会话一个 UUID，直接作为 SDK `session_id`；transcript 在 `claude/projects/<agent_id>/<uuid>.jsonl`。同一会话的 turn 串行，不同会话并发（上限 `BROWSER_CONCURRENCY`，默认 5）。
-- 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。
+- 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。执行过程中，子 Agent 的工具/文本和后台任务状态实时显示在「执行过程」；它们只存在于实时流里，刷新后只重建主 Agent 的 thinking/tool_use。
 - 刷新或断线后当前流式输出可能丢失：同一进程内前端会在数秒内通过 `current_turn_id` 重新订阅并重放当前轮缓冲；进程重启或 SSE 断开且错过缓冲时只能从 transcript 读回历史，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
 - `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示「已停止」。
 - 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源写 `audit_log`。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。

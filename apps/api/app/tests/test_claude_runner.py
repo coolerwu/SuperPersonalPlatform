@@ -824,6 +824,8 @@ async def test_options_raise_frame_buffer_and_wire_stderr_logging(tmp_path):
     )
     await runner.run(make_turn(), TurnStream())
     assert captured[0].max_buffer_size == 16 * 1024 * 1024
+    assert captured[0].include_partial_messages is True
+    assert captured[0].forward_subagent_text is True
     assert callable(captured[0].stderr)
     servers = captured[0].mcp_servers
     assert servers["platform_tools"]["type"] == "sdk"
@@ -1407,3 +1409,183 @@ async def test_tool_call_events_without_files_have_no_artifact(tmp_path):
     events = await drain_until_end(queue)
     tool_call = next(event for event in events if event["type"] == "tool_call")
     assert "artifact" not in tool_call
+
+
+class UserMessage:
+    def __init__(self, content, origin=None):
+        self.content = content
+        self.origin = origin
+
+
+class AssistantMessage:
+    def __init__(self, content, parent_tool_use_id=None):
+        self.content = content
+        self.parent_tool_use_id = parent_tool_use_id
+
+
+@pytest.mark.asyncio
+async def test_runner_publishes_subagent_text_and_tools(tmp_path):
+    await init_db()
+    messages = [
+        AssistantMessage(
+            [
+                {"type": "thinking", "thinking": "hidden"},
+                {"type": "text", "text": "child working"},
+                {
+                    "type": "tool_use",
+                    "id": "s1",
+                    "name": "Read",
+                    "input": {"file_path": "a.txt"},
+                },
+            ],
+            parent_tool_use_id="parent-1",
+        ),
+        ResultMessage(result="main"),
+    ]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient(messages),
+    )
+    stream = TurnStream()
+    queue = await stream.subscribe()
+
+    outcome = await runner.run(make_turn(), stream)
+    events = await drain_until_end(queue)
+
+    text = next(event for event in events if event["type"] == "subagent_text")
+    assert text["parent_tool_use_id"] == "parent-1"
+    assert text["text"] == "child working"
+    tool = next(event for event in events if event["type"] == "subagent_tool_call")
+    assert tool["parent_tool_use_id"] == "parent-1"
+    assert tool["id"] == "s1"
+    assert tool["name"] == "Read"
+    assert not any(event["type"] == "reasoning_delta" for event in events)
+    assert outcome.output == "main"
+
+
+@pytest.mark.asyncio
+async def test_runner_publishes_task_lifecycle(tmp_path):
+    await init_db()
+    messages = [
+        SimpleNamespace(
+            subtype="task_started",
+            task_id="task-1",
+            description="background job",
+            tool_use_id="tool-1",
+            task_type="bash",
+            data={},
+        ),
+        SimpleNamespace(
+            subtype="task_progress",
+            task_id="task-1",
+            description="background job",
+            tool_use_id="tool-1",
+            last_tool_name="Bash",
+            usage={"total_tokens": 3, "tool_uses": 1, "duration_ms": 2},
+            data={},
+        ),
+        SimpleNamespace(
+            subtype="task_notification",
+            task_id="task-1",
+            tool_use_id="tool-1",
+            status="completed",
+            summary="finished",
+            usage=None,
+            data={},
+        ),
+        ResultMessage(result="main"),
+    ]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient(messages),
+    )
+    stream = TurnStream()
+    queue = await stream.subscribe()
+
+    await runner.run(make_turn(), stream)
+    events = await drain_until_end(queue)
+
+    started = next(event for event in events if event["type"] == "task_started")
+    assert started["task_id"] == "task-1"
+    assert started["description"] == "background job"
+    progress = next(event for event in events if event["type"] == "task_progress")
+    assert progress["last_tool_name"] == "Bash"
+    notification = next(
+        event for event in events if event["type"] == "task_notification"
+    )
+    assert notification["status"] == "completed"
+    assert notification["summary"] == "finished"
+
+
+@pytest.mark.asyncio
+async def test_runner_suppresses_injected_turn_text(tmp_path):
+    await init_db()
+    messages = [
+        UserMessage("notification", origin={"kind": "task-notification"}),
+        SimpleNamespace(
+            event={
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "LEAK"},
+            }
+        ),
+        ResultMessage(origin={"kind": "task-notification"}, result="notified"),
+        SimpleNamespace(
+            event={
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "real"},
+            }
+        ),
+        ResultMessage(result="real answer"),
+    ]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient(messages),
+    )
+    stream = TurnStream()
+    queue = await stream.subscribe()
+
+    outcome = await runner.run(make_turn(), stream)
+    events = await drain_until_end(queue)
+
+    deltas = [
+        event["delta"]
+        for event in events
+        if event["type"] == "assistant_delta"
+    ]
+    assert deltas == ["real"]
+    assert outcome.output == "real answer"
+
+
+@pytest.mark.asyncio
+async def test_subagent_stream_events_are_not_duplicated_by_message(tmp_path):
+    await init_db()
+    messages = [
+        SimpleNamespace(
+            parent_tool_use_id="parent-1",
+            event={
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "streamed"},
+            },
+        ),
+        AssistantMessage(
+            [{"type": "text", "text": "streamed"}],
+            parent_tool_use_id="parent-1",
+        ),
+        ResultMessage(result="main"),
+    ]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient(messages),
+    )
+    stream = TurnStream()
+    queue = await stream.subscribe()
+
+    await runner.run(make_turn(), stream)
+    events = await drain_until_end(queue)
+
+    texts = [event["text"] for event in events if event["type"] == "subagent_text"]
+    assert texts == ["streamed"]

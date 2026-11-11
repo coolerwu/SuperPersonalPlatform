@@ -943,6 +943,90 @@ textarea {
   font-size: 10px;
 }
 
+.run-trace-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.run-trace-task {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.run-trace-task-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.run-trace-task.completed .run-trace-task-dot {
+  background: #3fb950;
+}
+
+.run-trace-task.failed .run-trace-task-dot {
+  background: #f85149;
+}
+
+.run-trace-task.paused .run-trace-task-dot {
+  background: #d29922;
+}
+
+.run-trace-task.stopped .run-trace-task-dot,
+.run-trace-task.killed .run-trace-task-dot {
+  background: var(--faint);
+}
+
+.run-trace-task-status {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.run-trace-task-summary {
+  flex-basis: 100%;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.run-trace-subagent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 0 8px 12px;
+  border-left: 2px solid var(--border);
+}
+
+.run-trace-subagent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-trace-subagent-text {
+  max-height: 220px;
+  overflow: auto;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.run-trace-tool.nested {
+  margin-left: 14px;
+}
+
 .message-content.plain {
   white-space: pre-wrap;
   line-height: 1.7;
@@ -4803,6 +4887,35 @@ body:has(.app-shell.pearl) .select-empty {
   margin-left: 0;
   color: #8a93a0;
   font-size: 9.5px;
+}
+
+.pearl .run-trace-tasks,
+.pearl .run-trace-task,
+.pearl .run-trace-subagent {
+  flex: 0 0 100%;
+  width: 100%;
+}
+
+.pearl .run-trace-task {
+  border-color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 3px 10px rgba(28, 34, 52, 0.04);
+}
+
+.pearl .run-trace-task-status,
+.pearl .run-trace-task-summary {
+  color: #8a93a0;
+}
+
+.pearl .run-trace-subagent {
+  padding: 10px 12px;
+  border-left: 2px solid rgba(122, 108, 255, 0.25);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.pearl .run-trace-subagent-text {
+  color: #5b6472;
 }
 
 .pearl .message-thinking:not(.run-trace) summary {

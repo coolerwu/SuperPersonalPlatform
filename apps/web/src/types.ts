@@ -171,14 +171,84 @@ export type TranscriptMessage = {
   artifacts?: MessageArtifact[];
 };
 
+export type LiveToolCall = {
+  id: string;
+  name: string;
+  input: Record<string, unknown> | null;
+};
+
+export type LiveSubagent = {
+  parent: string;
+  text: string;
+  tools: LiveToolCall[];
+};
+
+export type LiveTaskUsage = {
+  total_tokens?: number;
+  tool_uses?: number;
+  duration_ms?: number;
+};
+
+export type LiveTask = {
+  id: string;
+  toolUseId: string | null;
+  description: string;
+  status: string;
+  summary: string;
+  lastToolName: string;
+  usage: LiveTaskUsage | null;
+};
+
 export type TurnStreamEvent =
   | { type: "assistant_delta"; delta: string }
   | { type: "reasoning_delta"; delta: string }
   | {
       type: "tool_call";
+      id?: string;
       name: string;
       input: Record<string, unknown>;
       artifact?: MessageArtifact | null;
+    }
+  | {
+      type: "subagent_text";
+      parent_tool_use_id: string;
+      text: string;
+    }
+  | {
+      type: "subagent_tool_call";
+      parent_tool_use_id: string;
+      id?: string;
+      name: string;
+      input: Record<string, unknown>;
+      artifact?: MessageArtifact | null;
+    }
+  | {
+      type: "task_started";
+      task_id: string;
+      tool_use_id?: string | null;
+      description?: string;
+      task_type?: string | null;
+    }
+  | {
+      type: "task_progress";
+      task_id: string;
+      tool_use_id?: string | null;
+      description?: string;
+      last_tool_name?: string | null;
+      usage?: LiveTaskUsage | null;
+    }
+  | {
+      type: "task_updated";
+      task_id: string;
+      status?: string | null;
+    }
+  | {
+      type: "task_notification";
+      task_id: string;
+      tool_use_id?: string | null;
+      status?: string;
+      summary?: string;
+      usage?: LiveTaskUsage | null;
     }
   | {
       type: "turn_end";

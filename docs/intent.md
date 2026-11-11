@@ -74,8 +74,8 @@
 #### 功能点
 
 1. 每条用户消息创建一个 turn，在 `SessionRegistry` 中按 session 串行执行；不同 session 并发，上限为 `BROWSER_CONCURRENCY`（默认 5）。同一会话在运行中可继续发送，新 turn 排队。
-2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`、`turn_end`）。
-3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。
+2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`（带 tool_use id）、`subagent_text`、`subagent_tool_call`、`task_started`、`task_progress`、`task_updated`、`task_notification`、`turn_end`）。子 Agent 事件带 `parent_tool_use_id`，用于挂到对应的 Task 工具调用下；后台任务事件按 `task_id` 合并状态。
+3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。子 Agent 与后台任务只实时显示，不写入主 transcript；刷新后只保留主 Agent 的执行过程（子 Agent 历史需单独读取 subagent transcript，本版未接入）。
 4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示已停止。
 5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 `audit_log`；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。
 6. 命令：平台处理 `/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示。其余以 `/` 开头的裸命令只有出现在 Claude Code 运行时 init frame 的 `slash_commands` 中才由 `forward=true` 指示前端作为普通用户消息转发给 Agent；不在列表中的回复「未知命令」并列出当前可用命令，列表尚未加载时提示先发送一条普通消息。`GET /api/chat/slash-commands?agent_id=...` 返回该列表（排除 `terminal_slash_commands` 与平台命令重名项），按 Agent 进程内缓存，首次 turn 后可用。
@@ -93,6 +93,7 @@
 
 - 新建会话 → 发消息 → 流式回复 → 会话出现在列表；刷新后历史可读。
 - 执行中停止 → 状态为已停止，租约删除。
+- Agent 派生子 Agent 时，实时「执行过程」出现标注父 Task 工具的子 Agent 文本和工具调用；后台任务显示运行状态、最近工具和完成摘要；刷新后这些实时区消失，主 Agent 的思考/工具仍在。
 - 执行中重启服务 → 会话自动 resume 并完成，`running_sessions` 清空。
 - 同一会话第二个 turn 排队，不同会话可并发。
 - 输入 `/` 能看到平台命令和 Claude Code 运行时命令；选择 Claude Code 命令后作为消息发送并产生 turn；不在运行时长列表中的 `/` 命令会收到「未知命令」并列出当前可用命令。
@@ -390,7 +391,7 @@
 10. `/memory` 指令与整理记忆。
 11. 过期会话的 transcript 由 Claude Code 删除，但平台不再随保留期清理其投递历史与旧截图目录；渠道绑定在下次入站时重建并清掉旧投递行。
 
-已知能力损失（已接受）：进程重启或订阅断开后丢当前流式输出（同进程刷新会在数秒内从 `current_turn_id` 重放缓冲）、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失、过期会话的投递历史与旧截图目录不再自动清理；`langchain-core` 暂留。
+已知能力损失（已接受）：进程重启或订阅断开后丢当前流式输出（同进程刷新会在数秒内从 `current_turn_id` 重放缓冲）、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失、过期会话的投递历史与旧截图目录不再自动清理、子 Agent 与后台任务只实时可见且刷新后不保留；`langchain-core` 暂留。
 
 ### F17 官方插件集市
 

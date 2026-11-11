@@ -8,7 +8,14 @@ import {
 } from "react";
 
 import { api } from "../api";
-import type { Attachment, MessageArtifact, TranscriptMessage } from "../types";
+import type {
+  Attachment,
+  LiveSubagent,
+  LiveTask,
+  LiveToolCall,
+  MessageArtifact,
+  TranscriptMessage,
+} from "../types";
 import { truncate } from "../format";
 import { copyText } from "../clipboard";
 import {
@@ -33,7 +40,9 @@ type ChatPanelProps = {
   onReload: () => void;
   streamText: string;
   streamReasoning: string;
-  activity: string[];
+  activity: LiveToolCall[];
+  subagents: Record<string, LiveSubagent>;
+  tasks: Record<string, LiveTask>;
   liveArtifacts: MessageArtifact[];
   sending: boolean;
   tracking: boolean;
@@ -262,20 +271,59 @@ function AssistantProcess({
   );
 }
 
+function taskStatusLabel(status: string): string {
+  switch (status) {
+    case "running":
+      return "运行中";
+    case "pending":
+      return "等待中";
+    case "paused":
+      return "已暂停";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    case "stopped":
+    case "killed":
+      return "已停止";
+    default:
+      return status || "进行中";
+  }
+}
+
+function taskStatusClass(status: string): string {
+  return ["completed", "failed", "stopped", "killed", "paused"].includes(status)
+    ? status
+    : "running";
+}
+
 function LiveProcess({
   reasoning,
   activity,
+  subagents,
+  tasks,
   streamingText,
   agentId,
 }: {
   reasoning: string;
-  activity: string[];
+  activity: LiveToolCall[];
+  subagents: Record<string, LiveSubagent>;
+  tasks: Record<string, LiveTask>;
   streamingText: boolean;
   agentId: string;
 }) {
   const [open, setOpen] = useState(true);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef(true);
+  const taskList = Object.values(tasks);
+  const subagentList = Object.values(subagents);
+  const subagentTextLength = subagentList.reduce(
+    (total, item) => total + item.text.length,
+    0,
+  );
+  const totalTools =
+    activity.length +
+    subagentList.reduce((total, item) => total + item.tools.length, 0);
   useEffect(() => {
     // Collapse once the answer starts, like the previous run trace.
     if (streamingText) setOpen(false);
@@ -284,9 +332,16 @@ function LiveProcess({
     const body = bodyRef.current;
     if (!body || !open || !followRef.current) return;
     body.scrollTop = body.scrollHeight;
-  }, [reasoning, activity.length, open]);
+  }, [reasoning, activity.length, taskList.length, subagentTextLength, open]);
   const hasReasoning = Boolean(reasoning.trim());
-  if (!hasReasoning && activity.length === 0) return null;
+  if (
+    !hasReasoning &&
+    activity.length === 0 &&
+    taskList.length === 0 &&
+    subagentList.length === 0
+  ) {
+    return null;
+  }
   return (
     <details
       className="message-thinking run-trace"
@@ -296,10 +351,39 @@ function LiveProcess({
       <summary>
         <span>执行过程</span>
         <span className="run-trace-count">
-          {activity.length > 0 ? `${activity.length} 个工具` : "思考"}
+          {[
+            totalTools > 0 ? `${totalTools} 个工具` : "",
+            taskList.length > 0 ? `${taskList.length} 个任务` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ") || "思考"}
         </span>
       </summary>
       <div className="run-trace-steps">
+        {taskList.length > 0 && (
+          <div className="run-trace-tasks">
+            {taskList.map((task) => (
+              <div
+                className={`run-trace-task ${taskStatusClass(task.status)}`}
+                key={task.id}
+              >
+                <span className="run-trace-task-dot" aria-hidden="true" />
+                <span className="run-trace-tool-label">
+                  {task.description || task.id}
+                </span>
+                <span className="run-trace-task-status">
+                  {taskStatusLabel(task.status)}
+                </span>
+                {task.lastToolName && (
+                  <span className="run-trace-tool-name">{task.lastToolName}</span>
+                )}
+                {task.summary && (
+                  <small className="run-trace-task-summary">{task.summary}</small>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {hasReasoning && (
           <div className="run-trace-reasoning">
             <div className="run-trace-step-label">思考</div>
@@ -317,12 +401,52 @@ function LiveProcess({
             </div>
           </div>
         )}
-        {activity.map((name, index) => (
-          <div className="run-trace-tool" key={`${name}-${index}`}>
+        {activity.map((tool, index) => (
+          <div className="run-trace-tool" key={`${tool.id || tool.name}-${index}`}>
             <span className="run-trace-tool-dot" aria-hidden="true" />
-            <span className="run-trace-tool-label">{name}</span>
+            <span className="run-trace-tool-label">{tool.name}</span>
+            {toolSummary(tool.input) && (
+              <span className="run-trace-tool-name">
+                {toolSummary(tool.input)}
+              </span>
+            )}
           </div>
         ))}
+        {subagentList.map((subagent) => {
+          const parent = activity.find((tool) => tool.id === subagent.parent);
+          return (
+            <div className="run-trace-subagent" key={subagent.parent}>
+              <div className="run-trace-subagent-head">
+                <span className="run-trace-step-label">子 Agent</span>
+                <span className="run-trace-tool-label">
+                  {parent ? parent.name : "子 Agent"}
+                </span>
+                <span className="run-trace-tool-name">
+                  {subagent.tools.length} 个工具
+                </span>
+              </div>
+              {subagent.text && (
+                <div className="run-trace-subagent-text">
+                  <Markdown content={subagent.text} agentId={agentId} />
+                </div>
+              )}
+              {subagent.tools.map((tool, index) => (
+                <div
+                  className="run-trace-tool nested"
+                  key={`${tool.id || tool.name}-${index}`}
+                >
+                  <span className="run-trace-tool-dot" aria-hidden="true" />
+                  <span className="run-trace-tool-label">{tool.name}</span>
+                  {toolSummary(tool.input) && (
+                    <span className="run-trace-tool-name">
+                      {toolSummary(tool.input)}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        })}
       </div>
     </details>
   );
@@ -580,7 +704,8 @@ export function ChatPanel(props: ChatPanelProps) {
       props.quote.trim().length > 0);
 
   const showStreaming = props.tracking || Boolean(props.streamText);
-  const latestActivity = props.activity[props.activity.length - 1] ?? "";
+  const latestActivity =
+    props.activity[props.activity.length - 1]?.name ?? "";
 
   async function submit() {
     if (!canSubmit) return;
@@ -789,6 +914,8 @@ export function ChatPanel(props: ChatPanelProps) {
               <LiveProcess
                 reasoning={throttledStreamReasoning}
                 activity={props.activity}
+                subagents={props.subagents}
+                tasks={props.tasks}
                 streamingText={Boolean(props.streamText)}
                 agentId={props.agentId}
               />

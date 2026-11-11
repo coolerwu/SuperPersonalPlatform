@@ -6,6 +6,9 @@ import type {
   AgentSavePayload,
   Attachment,
   DrawerTab,
+  LiveSubagent,
+  LiveTask,
+  LiveToolCall,
   MessageArtifact,
   Provider,
   SessionSummary,
@@ -50,7 +53,9 @@ type CommandOutcome =
 type SessionLive = {
   streamText: string;
   streamReasoning: string;
-  activity: string[];
+  activity: LiveToolCall[];
+  subagents: Record<string, LiveSubagent>;
+  tasks: Record<string, LiveTask>;
   artifacts: MessageArtifact[];
   notice: string;
   tracking: boolean;
@@ -60,10 +65,32 @@ const EMPTY_LIVE: SessionLive = {
   streamText: "",
   streamReasoning: "",
   activity: [],
+  subagents: {},
+  tasks: {},
   artifacts: [],
   notice: "",
   tracking: false,
 };
+
+function emptySubagent(parent: string): LiveSubagent {
+  return { parent, text: "", tools: [] };
+}
+
+function emptyTask(
+  id: string,
+  toolUseId: string | null,
+  description = "",
+): LiveTask {
+  return {
+    id,
+    toolUseId,
+    description,
+    status: "running",
+    summary: "",
+    lastToolName: "",
+    usage: null,
+  };
+}
 
 function mergeArtifact(
   list: MessageArtifact[],
@@ -641,13 +668,141 @@ export default function App() {
       case "tool_call":
         updateLive(forSession, (current) => ({
           ...current,
-          activity: [...current.activity, event.name],
+          activity: [
+            ...current.activity,
+            {
+              id: event.id ?? "",
+              name: event.name,
+              input: event.input ?? null,
+            },
+          ],
           artifacts: event.artifact
             ? mergeArtifact(current.artifacts, event.artifact)
             : current.artifacts,
           notice: "",
         }));
         break;
+      case "subagent_text": {
+        const parent = event.parent_tool_use_id;
+        updateLive(forSession, (current) => {
+          const existing = current.subagents[parent] ?? emptySubagent(parent);
+          return {
+            ...current,
+            subagents: {
+              ...current.subagents,
+              [parent]: { ...existing, text: existing.text + event.text },
+            },
+            notice: "",
+          };
+        });
+        break;
+      }
+      case "subagent_tool_call": {
+        const parent = event.parent_tool_use_id;
+        updateLive(forSession, (current) => {
+          const existing = current.subagents[parent] ?? emptySubagent(parent);
+          return {
+            ...current,
+            subagents: {
+              ...current.subagents,
+              [parent]: {
+                ...existing,
+                tools: [
+                  ...existing.tools,
+                  {
+                    id: event.id ?? "",
+                    name: event.name,
+                    input: event.input ?? null,
+                  },
+                ],
+              },
+            },
+            artifacts: event.artifact
+              ? mergeArtifact(current.artifacts, event.artifact)
+              : current.artifacts,
+            notice: "",
+          };
+        });
+        break;
+      }
+      case "task_started": {
+        const id = event.task_id;
+        updateLive(forSession, (current) => ({
+          ...current,
+          tasks: {
+            ...current.tasks,
+            [id]: emptyTask(
+              id,
+              event.tool_use_id ?? null,
+              event.description ?? "",
+            ),
+          },
+          notice: "",
+        }));
+        break;
+      }
+      case "task_progress": {
+        const id = event.task_id;
+        updateLive(forSession, (current) => {
+          const existing =
+            current.tasks[id] ??
+            emptyTask(id, event.tool_use_id ?? null, event.description ?? "");
+          return {
+            ...current,
+            tasks: {
+              ...current.tasks,
+              [id]: {
+                ...existing,
+                description: event.description || existing.description,
+                lastToolName: event.last_tool_name || existing.lastToolName,
+                usage: event.usage ?? existing.usage,
+              },
+            },
+            notice: "",
+          };
+        });
+        break;
+      }
+      case "task_updated": {
+        const id = event.task_id;
+        updateLive(forSession, (current) => {
+          const existing = current.tasks[id];
+          if (!existing) return current;
+          return {
+            ...current,
+            tasks: {
+              ...current.tasks,
+              [id]: {
+                ...existing,
+                status: event.status || existing.status,
+              },
+            },
+            notice: "",
+          };
+        });
+        break;
+      }
+      case "task_notification": {
+        const id = event.task_id;
+        updateLive(forSession, (current) => {
+          const existing =
+            current.tasks[id] ?? emptyTask(id, event.tool_use_id ?? null);
+          return {
+            ...current,
+            tasks: {
+              ...current.tasks,
+              [id]: {
+                ...existing,
+                status: event.status || existing.status,
+                summary: event.summary || existing.summary,
+                usage: event.usage ?? existing.usage,
+              },
+            },
+            notice: "",
+          };
+        });
+        break;
+      }
       case "turn_end": {
         if (streamsRef.current.get(forSession) !== source) return;
         const endedTurnId = activeTurnRef.current[forSession] ?? null;
@@ -808,6 +963,8 @@ export default function App() {
         streamText: streaming ? current.streamText : "",
         streamReasoning: streaming ? current.streamReasoning : "",
         activity: streaming ? current.activity : [],
+        subagents: streaming ? current.subagents : {},
+        tasks: streaming ? current.tasks : {},
         artifacts: streaming ? current.artifacts : [],
         notice: failure || current.notice,
         // Keep the lane marked while a queued turn is about to be attached.
@@ -1835,6 +1992,8 @@ export default function App() {
               streamText={live.streamText}
               streamReasoning={live.streamReasoning}
               activity={live.activity}
+              subagents={live.subagents}
+              tasks={live.tasks}
               liveArtifacts={live.artifacts}
               sending={chatSending}
               tracking={tracking}
@@ -1871,7 +2030,7 @@ export default function App() {
         <Drawer
           tab={drawerTab}
           onTab={setDrawerTab}
-          activity={live.activity}
+          activity={live.activity.map((item) => item.name)}
           reasoning={live.streamReasoning}
           agent={agent}
           providers={providers}
