@@ -321,7 +321,7 @@ export function SettingsPage(props: SettingsPageProps) {
                   >
                     <span className="settings-provider-name">{item.name}</span>
                     <span className="settings-provider-meta">
-                      {item.provider_name} · {item.model} · 技能 {item.enabled_skills.length}
+                      {item.provider_name} · {item.model}
                     </span>
                     <span className="agent-row-badges">
                       <span className="agent-status">记忆 {item.auto_memory ? "开" : "关"}</span>

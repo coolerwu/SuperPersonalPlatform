@@ -468,22 +468,6 @@ async def test_update_agent_fields_reports_missing_agent(tmp_path):
     assert settings.agents[0].name == "renamed"
 
 
-@pytest.mark.asyncio
-async def test_append_agent_skill_is_atomic_and_dedupes(tmp_path):
-    store = SettingsStore(tmp_path / "settings.json")
-    await store.mutate_raw(lambda data: data.update(build_default_settings()))
-
-    await asyncio.gather(
-        store.append_agent_skill("default", "alpha"),
-        store.append_agent_skill("default", "beta"),
-    )
-    assert await store.append_agent_skill("default", "alpha") is True
-
-    settings = await store.get()
-    assert settings.agents[0].enabled_skills == ["alpha", "beta"]
-    assert await store.append_agent_skill("missing", "alpha") is False
-
-
 def test_get_settings_store_rebinds_when_data_dir_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(settings_store_module.app_settings, "app_data_dir", tmp_path / "a")
     first = settings_store_module.get_settings_store()

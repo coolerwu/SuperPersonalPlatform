@@ -7,7 +7,6 @@ export type Agent = {
   model: string;
   status: string;
   auto_memory: boolean;
-  enabled_skills: string[];
   created_at: string;
   updated_at: string;
 };

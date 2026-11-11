@@ -131,12 +131,11 @@ export const api = {
     instructions: string;
     provider_id?: string;
     auto_memory?: boolean;
-    enabled_skills?: string[];
   }) => request<Agent>("/api/agents", { method: "POST", body: JSON.stringify(payload) }),
   updateAgent: (
     id: string,
     payload: Partial<
-      Pick<Agent, "name" | "instructions" | "provider_id" | "status" | "auto_memory" | "enabled_skills">
+      Pick<Agent, "name" | "instructions" | "provider_id" | "status" | "auto_memory">
     >,
   ) => request<Agent>(`/api/agents/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   archiveAgent: (id: string) => request<{ archived: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),

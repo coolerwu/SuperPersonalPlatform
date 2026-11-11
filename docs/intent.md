@@ -126,7 +126,7 @@
 1. 平台配置单文件 `data/settings.json`：`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`。单 `asyncio.Lock`；写临时文件 → fsync → `os.replace`；写前保留 `.bak`；主文件损坏时回退 `.bak`。启动种子在主文件不可解析且 `.bak` 也不可用、或文件中没有合法 `agents` 列表时重写默认 sections（保留仍可读的 runtime/knowledge/channels），并记 warning；解析成功且显式 `agents: []` 的文件视为用户主动清空，保留并 warning。
 2. 环境变量只做首次种子（默认 Agent 与提示词、`SESSION_RETENTION_DAYS`、`KB_WEBDAV_*`）；文件存在后不再读取。旧库 `app_configs.session_retention_days` 在首次启动迁移一次，用 `runtime.legacy_import_done` 标记。
 3. Provider 为单例（id=`default`），编辑的是 default Agent 的 Provider；`base_url` 自动补 `/anthropic`；接口只返回 `has_api_key`。
-4. Agent：id、名称、instructions、状态（active/paused/archived）、`enabled_skills`、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。状态语义统一为：`active` 正常接收网页、渠道和定时任务；`paused` 与 `archived` 都拒绝网页新消息（409）、拒绝渠道入站并暂停该 Agent 的渠道轮询（保留 cursor，恢复 active 后继续）、跳过定时任务；`GET /api/agents` 包含 archived，配置页可把 archived/paused 改回 active 恢复，恢复后渠道轮询自动重启、定时任务从下一次匹配时间继续；两种非 active 状态下渠道页仍可查看/编辑/删除渠道。
+4. Agent：id、名称、instructions、状态（active/paused/archived）、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。状态语义统一为：`active` 正常接收网页、渠道和定时任务；`paused` 与 `archived` 都拒绝网页新消息（409）、拒绝渠道入站并暂停该 Agent 的渠道轮询（保留 cursor，恢复 active 后继续）、跳过定时任务；`GET /api/agents` 包含 archived，配置页可把 archived/paused 改回 active 恢复，恢复后渠道轮询自动重启、定时任务从下一次匹配时间继续；两种非 active 状态下渠道页仍可查看/编辑/删除渠道。
 5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，忙碌会话在下一次 turn 开始时按配置指纹自动重建 client，因此配置变更不会永久丢失。
 6. Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区与 transcript，彻底删除会同时删除工作区目录和 transcript 目录，并级联删除渠道、渠道绑定、投递/入站记录与定时任务；有活动 turn 时 409。
 7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers` 读写 `settings.json`；`/api/memories` 只读写 `claude/CLAUDE.md`；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`。
@@ -218,7 +218,7 @@
 
 1. 技能库 `~/.super-personal-platform/claude/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `builtin` / `ai` / `manual`。
 2. 内置技能 seed：`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取改用 Claude Code 自带的 WebSearch/WebFetch，对应技能已退役）。`.seed_state.json` 记录内置内容哈希：未修改的内置技能随版本更新；用户改过的保留；已从默认列表移除且未被修改的内置技能在启动 seed 时只删除被跟踪的 `SKILL.md`，目录内用户附加文件保留，只有目录为空时才移除目录；用户改过的保留并停止跟踪（例如旧 home 的 `memory-organizer`、`web-search`、`web-fetch`）。
-3. 技能页按「系统技能 / 交互创建」分组，可查看和编辑 SKILL.md、启用/停用；启用列表本版只保存偏好，不门控工具；非系统技能可删除（同时从所有 Agent 的启用列表移除）。
+3. 技能页按「系统技能 / 交互创建」分组，可查看和编辑 SKILL.md；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关；非系统技能可删除（只删技能目录）。
 4. 本版工具层未迁移：平台注册表中的技能、`add_dirs`、MCP、平台工具、搜索/浏览器/回测/定时/交易/资产/缠论/知识库工具都没有接入 SDK；WebFetch/WebSearch 等只是 Claude Code 默认工具集的一部分。runner 未显式设置 `tools`，默认工具集随 bundled CLI 版本和插件环境变化，以工具页/运行时 init frame 为准（例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。工具页按 API 展示，平台工具与技能工具标记为未接入。
 5. `langchain-core` 依赖暂留，等工具层迁移完成后删除。
 

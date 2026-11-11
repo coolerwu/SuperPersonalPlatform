@@ -278,27 +278,7 @@ def _make_search_tool(context: SkillToolContext) -> BaseTool:
     )
 
 
-async def _enable_skill_for_agent(agent_id: str, skill_name: str) -> bool:
-    """Append a newly created skill to the agent's enabled list.
-
-    Each turn reloads the Agent's settings, so the change takes effect on the
-    next turn of the same session. The store applies the append atomically so a
-    concurrent skills-page edit cannot be overwritten.
-    """
-    if not agent_id or not skill_name:
-        return False
-    try:
-        from app.services.settings_store import get_settings_store
-
-        return await get_settings_store().append_agent_skill(agent_id, skill_name)
-    except Exception:
-        logger.exception(
-            "failed to enable skill %s for agent %s", skill_name, agent_id
-        )
-        return False
-
-
-def build_skill_save_tool(context: SkillToolContext) -> BaseTool:
+async def build_skill_save_tool(context: SkillToolContext) -> BaseTool:
     """Always-available tool that lets the agent author a skill file."""
 
     async def skill_save(
@@ -324,15 +304,9 @@ def build_skill_save_tool(context: SkillToolContext) -> BaseTool:
         except SkillValidationError as exc:
             return f"Error: {exc}"
         context.created_skills.append(document.directory)
-        enabled = await _enable_skill_for_agent(context.agent_id, document.name)
-        if enabled:
-            return (
-                f"已创建技能 {document.name}（{document.path}），"
-                "并已加入当前 Agent 的启用列表；下一次对话生效。"
-            )
         return (
             f"已创建技能 {document.name}（{document.path}）。"
-            "未找到当前 Agent，未能自动启用，请在技能页手动启用。"
+            "技能库全局共享，新会话会看到它。"
         )
 
     return StructuredTool.from_function(

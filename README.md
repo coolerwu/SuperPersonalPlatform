@@ -92,7 +92,7 @@ npm run dev
 
 侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、渠道、定时、记忆；「平台」组放配置和退出登录。功能工作区放回测、交易记录、资产配置、缠论图，不显示 Agent 选择器和会话。
 
-- **技能**：列出全局技能库，按「系统技能」和「交互创建」分组，按当前 Agent 勾选/取消启用（立即保存）；启用列表本版只保存偏好，不门控工具。展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（删除技能目录并从所有 Agent 的启用列表移除）。
+- **技能**：列出全局技能库，按「系统技能」和「交互创建」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（只删技能目录）。
 - **工具**：如实展示当前接入状态。runner 未显式限制 `tools`，Agent 使用 Claude Code 默认工具集（以工具页/运行时 init frame 为准，随 bundled CLI 版本和插件环境变化；例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。WebFetch/WebSearch 是 Claude Code 自带工具，不代表平台注册表中的搜索/浏览器工具已接入；平台工具与技能工具标记为未接入，等待工具层迁移。本版 Agent 不能调用平台注册表中的搜索、浏览器、回测、定时、交易记录、资产配置、缠论或知识库工具。
 - 内置技能在技能库中 seed：`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，不再单独 seed 技能）。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
 
@@ -233,7 +233,7 @@ metadata:
 
 生产数据都在 `~/.super-personal-platform/data/`：
 
-- `settings.json`：平台配置（0600）：`runtime`（会话保留天数、旧配置迁移标记）、`knowledge`（WebDAV 配置，含密码）、`agents`（instructions、Provider、`enabled_skills`、状态）、`channels`（iLink 凭据与同步游标）、`channel_conversations`（`"{channel_id}:{external_id}"` → session_id、display_name、context_token）。写前保留 `.bak`，主文件损坏时回退。
+- `settings.json`：平台配置（0600）：`runtime`（会话保留天数、旧配置迁移标记）、`knowledge`（WebDAV 配置，含密码）、`agents`（instructions、Provider、状态）、`channels`（iLink 凭据与同步游标）、`channel_conversations`（`"{channel_id}:{external_id}"` → session_id、display_name、context_token）。写前保留 `.bak`，主文件损坏时回退。
 - `app.db`：SQLite（WAL，busy_timeout=5000）。新库只创建六张表；从旧版升级的库会保留未使用的旧表：
   - `audit_log`：审计流水（定时跳过、触发失败等）；
   - `cron_jobs`：定时任务定义、`session_id`（UUID）、`next_run_at`、最近运行/跳过、推送目标；
@@ -364,7 +364,7 @@ curl --noproxy '*' http://127.0.0.1:8888/api/health
 
 升级后的行为与损失范围：
 
-- 本版**不做数据迁移**：旧库里的自定义 Agent 名称/instructions/`enabled_skills`、Provider 配置、知识库配置、旧用户记忆和旧聊天历史都不会导入。`data/settings.json` 用环境变量和默认值重新种子（仅首次启动读取旧 `app_configs.session_retention_days` 一次），之后在配置页重新填写 Provider、Agent 与知识库。
+- 本版**不做数据迁移**：旧库里的自定义 Agent 名称/instructions、Provider 配置、知识库配置、旧用户记忆和旧聊天历史都不会导入。`data/settings.json` 用环境变量和默认值重新种子（仅首次启动读取旧 `app_configs.session_retention_days` 一次），之后在配置页重新填写 Provider、Agent 与知识库。
 - 旧 `app.db` 可以直接沿用。启动时会检测旧结构的 `channel_deliveries`、`channel_inbounds` 并重建：旧待投递和入站去重记录会丢失，iLink 可能重放一次已处理的消息。
 - 旧 `providers`/`agents`/`channels`/`sessions`/`messages`/`runs`/`run_events`/`memory_items` 等表会留在库里但不再读写；`app_configs` 仅在首次启动读取一次保留天数后不再使用；可以在备份后手动删除旧表。
 - 旧版本把微信渠道凭据和联系人绑定存在 `app.db`，它们不会迁移到 `settings.json`，升级后需要在「渠道」页重新扫码绑定。

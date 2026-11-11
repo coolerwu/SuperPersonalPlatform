@@ -101,7 +101,6 @@ def _agent_out(agent: AgentSection) -> AgentOut:
         model=agent.provider.model,
         status=agent.status,
         auto_memory=agent.auto_memory,
-        enabled_skills=list(agent.enabled_skills),
         created_at=created,
         updated_at=agent.updated_at or created,
     )
@@ -195,7 +194,6 @@ async def create_agent(payload: AgentCreate, request: Request) -> AgentOut:
         name=name,
         instructions=payload.instructions.strip() or DEFAULT_AGENT_INSTRUCTIONS,
         status="active",
-        enabled_skills=payload.enabled_skills,
         provider=_fallback_provider(snapshot.agents),
         auto_memory=payload.auto_memory,
         created_at=now,
@@ -240,8 +238,6 @@ async def update_agent(
         fields["status"] = str(data["status"])
     if "auto_memory" in data and data["auto_memory"] is not None:
         fields["auto_memory"] = bool(data["auto_memory"])
-    if "enabled_skills" in data and data["enabled_skills"] is not None:
-        fields["enabled_skills"] = list(data["enabled_skills"])
     if fields:
         fields["updated_at"] = _now_iso()
         await store.update_agent_fields(agent_id, **fields)

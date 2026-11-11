@@ -1518,12 +1518,6 @@ export default function App() {
     setAgents((current) => current.map((item) => (item.id === updated.id ? updated : item)));
   }
 
-  async function saveEnabledSkills(names: string[]) {
-    if (!agent) return;
-    const updated = await api.updateAgent(agent.id, { enabled_skills: names });
-    setAgents((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-  }
-
   async function saveProvider(
     providerId: string,
     payload: { name: string; base_url: string; model: string; api_key?: string },
@@ -1695,11 +1689,9 @@ export default function App() {
         <MemoryPage onClose={() => openView("chat")} />
       ) : view === "skills" ? (
         <SkillsPage
-          agent={agent}
           skills={skills}
           skillsErrors={skillsErrors}
           onRefresh={refreshSkills}
-          onSaveEnabled={saveEnabledSkills}
           onClose={() => openView("chat")}
         />
       ) : view === "tools" ? (

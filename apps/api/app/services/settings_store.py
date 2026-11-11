@@ -48,7 +48,6 @@ class AgentSection(BaseModel):
     name: str
     instructions: str = ""
     status: str = "active"
-    enabled_skills: list[str] = Field(default_factory=list)
     provider: ProviderSection = Field(default_factory=ProviderSection)
     # Kept for the existing Agent API/UI. The SDK manages auto memory itself,
     # so the runtime does not consult this flag.
@@ -492,36 +491,6 @@ class SettingsStore:
 
         await self._json.update(mutate)
         return updated
-
-    async def append_agent_skill(self, agent_id: str, skill_name: str) -> bool:
-        """Append one skill to an Agent's enabled list atomically.
-
-        The read-modify-write happens inside the store lock and always starts
-        from the latest list, so enabling a skill cannot overwrite a concurrent
-        change from the skills page. Returns whether the agent exists.
-        """
-        if not agent_id or not skill_name:
-            return False
-        found = False
-
-        def mutate(data: dict[str, Any]) -> None:
-            nonlocal found
-            agents = _list_section(data, "agents")
-            for index, item in enumerate(agents):
-                if not isinstance(item, dict) or item.get("id") != agent_id:
-                    continue
-                found = True
-                current = item.get("enabled_skills")
-                current = list(current) if isinstance(current, list) else []
-                if skill_name in current:
-                    return
-                agents[index] = AgentSection.model_validate(
-                    {**item, "enabled_skills": [*current, skill_name]}
-                ).model_dump()
-                return
-
-        await self._json.update(mutate)
-        return found
 
     async def update_runtime(self, **values: Any) -> None:
         validated = _validated_update(RuntimeSection, values)

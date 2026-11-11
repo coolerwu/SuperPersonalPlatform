@@ -5,7 +5,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.services.skills import normalize_skill_names
 from app.services.timeframes import validate_granularity
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9]{3,30}$")
@@ -46,12 +45,6 @@ class AgentCreate(BaseModel):
     instructions: str = ""
     provider_id: str | None = None
     auto_memory: bool = True
-    enabled_skills: list[str] = Field(default_factory=list)
-
-    @field_validator("enabled_skills")
-    @classmethod
-    def _validate_enabled_skills(cls, value: list[str]) -> list[str]:
-        return normalize_skill_names(value)
 
 
 class AgentUpdate(BaseModel):
@@ -60,12 +53,6 @@ class AgentUpdate(BaseModel):
     provider_id: str | None = None
     status: str | None = None
     auto_memory: bool | None = None
-    enabled_skills: list[str] | None = None
-
-    @field_validator("enabled_skills")
-    @classmethod
-    def _validate_enabled_skills(cls, value: list[str] | None) -> list[str] | None:
-        return None if value is None else normalize_skill_names(value)
 
 
 class AgentOut(BaseModel):
@@ -77,7 +64,6 @@ class AgentOut(BaseModel):
     model: str = ""
     status: str
     auto_memory: bool = True
-    enabled_skills: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
