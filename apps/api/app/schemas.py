@@ -269,6 +269,7 @@ class TranscriptMessageOut(BaseModel):
     role: str
     content: str = ""
     blocks: list[dict] = []
+    artifacts: list[dict] = []
 
 
 class ChatCommandRequest(BaseModel):

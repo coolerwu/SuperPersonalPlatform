@@ -19,6 +19,7 @@ from app.services.claude_env import workspace_for
 from app.services.claude_runner import transcript_path
 from app.services.identifiers import is_canonical_uuid, valid_agent_id
 from app.services.session_service import cleanup_session_artifacts
+from app.services.tool_artifacts import collect_artifacts
 
 _TITLE_LIMIT = 80
 
@@ -46,6 +47,15 @@ def _session_title(summary: Any) -> str:
     if len(title) > _TITLE_LIMIT:
         return title[:_TITLE_LIMIT] + "…"
     return title
+
+
+def _merge_artifacts(
+    existing: list[dict[str, Any]], incoming: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {item["path"]: item for item in existing}
+    for item in incoming:
+        merged[item["path"]] = item
+    return list(merged.values())
 
 
 class SessionCatalog:
@@ -96,6 +106,9 @@ class SessionCatalog:
         if agent_id is not None and not self._owns(agent_id, session_id):
             return []
         rows: list[dict[str, Any]] = []
+        workspace = (
+            workspace_for(agent_id, self._home) if agent_id is not None else None
+        )
         raw_messages = await asyncio.to_thread(
             sdk_bridge.get_session_messages, session_id
         )
@@ -112,6 +125,7 @@ class SessionCatalog:
                         "role": "user",
                         "content": content,
                         "blocks": [],
+                        "artifacts": [],
                     }
                 )
             elif str(getattr(message, "type", "")) == "assistant":
@@ -120,6 +134,11 @@ class SessionCatalog:
                 )
                 if not content.strip() and not blocks:
                     continue
+                artifacts = (
+                    collect_artifacts(blocks, workspace)
+                    if workspace is not None
+                    else []
+                )
                 # One turn can emit several assistant messages (thinking first,
                 # then the answer, and one per tool round). The chat renders a
                 # bubble per entry, so merge consecutive assistant messages
@@ -131,6 +150,9 @@ class SessionCatalog:
                     )
                     previous["content"] = merged
                     previous["blocks"].extend(blocks)
+                    previous["artifacts"] = _merge_artifacts(
+                        previous["artifacts"], artifacts
+                    )
                     continue
                 rows.append(
                     {
@@ -138,6 +160,7 @@ class SessionCatalog:
                         "role": "assistant",
                         "content": content,
                         "blocks": blocks,
+                        "artifacts": artifacts,
                     }
                 )
         return rows

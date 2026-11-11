@@ -119,7 +119,13 @@ async def test_messages_extract_text_and_blocks(monkeypatch):
     )
     catalog = session_catalog.SessionCatalog(FakeStore(), home=Path("/tmp"))
     rows = await catalog.messages("s1")
-    assert rows[0] == {"id": "u1", "role": "user", "content": "hi", "blocks": []}
+    assert rows[0] == {
+        "id": "u1",
+        "role": "user",
+        "content": "hi",
+        "blocks": [],
+        "artifacts": [],
+    }
     assert rows[1]["content"] == "hello"
     assert rows[1]["blocks"][0]["type"] == "thinking"
 
@@ -391,3 +397,75 @@ async def test_delete_cascades_screenshots_and_channel_bindings(tmp_path, monkey
     assert not screenshots.exists()
     assert list(store.raw["channel_conversations"]) == ["wx-2"]
     assert store.mutations == 1
+
+
+@pytest.mark.asyncio
+async def test_messages_include_workspace_artifacts(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspaces" / "default"
+    workspace.mkdir(parents=True)
+    (workspace / "chart.png").write_bytes(b"png")
+    path = transcript_path(SESSION_ID, "default", home=tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}", "utf-8")
+    monkeypatch.setattr(
+        sdk_bridge,
+        "get_session_messages",
+        lambda session_id: [
+            SimpleNamespace(
+                type="assistant",
+                uuid="a1",
+                parent_tool_use_id=None,
+                message={
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "done"},
+                        {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "Write",
+                            "input": {"file_path": str(workspace / "chart.png")},
+                        },
+                    ],
+                },
+            )
+        ],
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=tmp_path)
+    rows = await catalog.messages(SESSION_ID, agent_id="default")
+    assert rows[0]["artifacts"] == [
+        {
+            "path": "chart.png",
+            "name": "chart.png",
+            "size": 3,
+            "kind": "image",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_messages_without_agent_id_have_no_artifacts(monkeypatch):
+    monkeypatch.setattr(
+        sdk_bridge,
+        "get_session_messages",
+        lambda session_id: [
+            SimpleNamespace(
+                type="assistant",
+                uuid="a1",
+                parent_tool_use_id=None,
+                message={
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "Write",
+                            "input": {"file_path": "/tmp/x.png"},
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=Path("/tmp"))
+    rows = await catalog.messages("s1")
+    assert rows[0]["artifacts"] == []
