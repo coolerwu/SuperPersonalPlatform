@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import shutil
-import signal
 import sys
 import time
 from pathlib import Path
@@ -15,6 +14,7 @@ from app.db import SessionLocal
 from app.models import Backtest
 from app.services import backtest_service
 from app.services.market_data import MarketDataError, market_service
+from app.services.subprocess_utils import kill_process_group
 
 logger = logging.getLogger(__name__)
 
@@ -334,11 +334,11 @@ async def run_backtest_subprocess(
             process.communicate(), timeout=settings.backtest_timeout_seconds
         )
     except asyncio.TimeoutError:
-        _kill_process_group(process)
+        kill_process_group(process)
         await process.wait()
         return 1, {"error": "回测执行超时，请缩短区间或简化策略"}
     except asyncio.CancelledError:
-        _kill_process_group(process)
+        kill_process_group(process)
         await process.wait()
         raise
 
@@ -358,16 +358,6 @@ async def run_backtest_subprocess(
             "detail": message or stdout.decode("utf-8", errors="replace")[-2000:],
         }
     return process.returncode or 0, payload
-
-
-def _kill_process_group(process: asyncio.subprocess.Process) -> None:
-    try:
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
 
 
 def cleanup_backtest_dirs() -> None:

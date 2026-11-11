@@ -44,6 +44,39 @@ export type SkillDetail = {
   source: "builtin" | "ai" | "manual" | string;
 };
 
+export type PluginMarketplace = {
+  name: string;
+  repo: string;
+  install_location: string;
+};
+
+export type InstalledPlugin = {
+  id: string;
+  name: string;
+  marketplace: string;
+  version: string;
+  enabled: boolean;
+  scope: string;
+  installed_at: string;
+  last_updated: string;
+};
+
+export type AvailablePlugin = {
+  name: string;
+  description: string;
+  author: string;
+  category: string;
+  homepage: string;
+};
+
+export type PluginsCatalog = {
+  cli_available: boolean;
+  marketplaces: PluginMarketplace[];
+  installed: InstalledPlugin[];
+  available: AvailablePlugin[];
+  errors: string[];
+};
+
 export type ToolInfo = {
   name: string;
   description: string;

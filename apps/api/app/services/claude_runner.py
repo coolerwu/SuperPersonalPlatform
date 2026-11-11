@@ -86,7 +86,32 @@ def _memory_stamp(home: Path | None) -> str:
     return f"{stat.st_mtime_ns}:{stat.st_size}"
 
 
-def _config_fingerprint(agent: Any, memory_stamp: str = "") -> str:
+def _plugin_stamp(home: Path | None) -> str:
+    """Identity of the plugin state baked into a connected SDK client.
+
+    ``settings.json`` changes when plugins are enabled/disabled and
+    ``installed_plugins.json`` when they are installed/updated/removed. The
+    revision marker covers updates whose CLI writes do not touch either file.
+    """
+    config = claude_paths(home)["config"]
+    parts: list[str] = []
+    for path in (
+        config / "settings.json",
+        config / "plugins" / "installed_plugins.json",
+        config / ".plugins-revision",
+    ):
+        try:
+            stat = path.stat()
+        except OSError:
+            parts.append("")
+            continue
+        parts.append(f"{stat.st_mtime_ns}:{stat.st_size}")
+    return "|".join(parts)
+
+
+def _config_fingerprint(
+    agent: Any, memory_stamp: str = "", plugin_stamp: str = ""
+) -> str:
     """Hash the settings that are baked into a connected SDK client."""
     provider = agent.provider
     payload = json.dumps(
@@ -96,6 +121,7 @@ def _config_fingerprint(agent: Any, memory_stamp: str = "") -> str:
             "model": provider.model,
             "api_key": provider.api_key,
             "memory": memory_stamp,
+            "plugins": plugin_stamp,
         },
         sort_keys=True,
     )
@@ -229,10 +255,13 @@ class ClaudeTurnRunner:
         lock = self._client_lock(turn.session_id)
         key = (agent.id, turn.session_id)
         memory_stamp = _memory_stamp(self._home)
+        plugin_stamp = _plugin_stamp(self._home)
         async with lock:
             cached = self._clients.get(key)
             if cached is not None:
-                fingerprint = _config_fingerprint(agent, memory_stamp)
+                fingerprint = _config_fingerprint(
+                    agent, memory_stamp, plugin_stamp
+                )
                 if cached.fingerprint != fingerprint:
                     # The Agent or Provider changed while this session was
                     # busy; rebuild instead of running with stale settings.
@@ -304,7 +333,9 @@ class ClaudeTurnRunner:
             self._clients[key] = _CachedClient(
                 client=client,
                 agent_id=agent.id,
-                fingerprint=_config_fingerprint(agent, memory_stamp),
+                fingerprint=_config_fingerprint(
+                    agent, memory_stamp, plugin_stamp
+                ),
                 last_used=time.monotonic(),
             )
         self._ensure_sweeper()

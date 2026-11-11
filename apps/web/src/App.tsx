@@ -27,6 +27,7 @@ import { Drawer } from "./components/Drawer";
 import { Login } from "./components/Login";
 import { MemoryPage } from "./components/MemoryPage";
 import { NewAgentDialog } from "./components/NewAgentDialog";
+import { PluginsPage } from "./components/PluginsPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
 import { SkillsPage } from "./components/SkillsPage";
@@ -219,7 +220,9 @@ export default function App() {
           ? "技能"
           : view === "tools"
             ? "工具"
-            : view === "channels"
+            : view === "plugins"
+              ? "插件"
+              : view === "channels"
               ? "渠道"
               : view === "cron"
                 ? "定时"
@@ -1666,6 +1669,7 @@ export default function App() {
         onOpenMemory={() => openView("memory")}
         onOpenSkills={() => openView("skills")}
         onOpenTools={() => openView("tools")}
+        onOpenPlugins={() => openView("plugins")}
         onOpenChannels={() => openView("channels")}
         onOpenCron={() => openView("cron")}
         onOpenBacktest={() => openView("backtest")}
@@ -1676,6 +1680,7 @@ export default function App() {
         memoryActive={view === "memory"}
         skillsActive={view === "skills"}
         toolsActive={view === "tools"}
+        pluginsActive={view === "plugins"}
         channelsActive={view === "channels"}
         cronActive={view === "cron"}
         backtestActive={view === "backtest"}
@@ -1696,6 +1701,8 @@ export default function App() {
         />
       ) : view === "tools" ? (
         <ToolsPage onClose={() => openView("chat")} />
+      ) : view === "plugins" ? (
+        <PluginsPage onClose={() => openView("chat")} />
       ) : view === "channels" ? (
         <ChannelsPage agent={agent} agentId={agentId} onClose={() => openView("chat")} />
       ) : view === "cron" ? (

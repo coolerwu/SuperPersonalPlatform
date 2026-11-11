@@ -97,6 +97,43 @@ class SkillUpdate(BaseModel):
     content: str = Field(min_length=1)
 
 
+class PluginMarketplaceOut(BaseModel):
+    name: str
+    repo: str
+    install_location: str = ""
+
+
+class InstalledPluginOut(BaseModel):
+    id: str
+    name: str
+    marketplace: str
+    version: str = ""
+    enabled: bool = True
+    scope: str = ""
+    installed_at: str = ""
+    last_updated: str = ""
+
+
+class AvailablePluginOut(BaseModel):
+    name: str
+    description: str = ""
+    author: str = ""
+    category: str = ""
+    homepage: str = ""
+
+
+class PluginsCatalogOut(BaseModel):
+    cli_available: bool = False
+    marketplaces: list[PluginMarketplaceOut] = Field(default_factory=list)
+    installed: list[InstalledPluginOut] = Field(default_factory=list)
+    available: list[AvailablePluginOut] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class PluginInstallRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
 class ToolOut(BaseModel):
     name: str
     description: str = ""

@@ -4,7 +4,7 @@
 
 ## 需求与方案
 
-- `docs/intent.md` 是需求唯一来源（F1–F16，2026-11-11 按 SDK 迁移后的实现重写）；没有它覆盖的改动不进入实现。
+- `docs/intent.md` 是需求唯一来源（F1–F17，2026-11-11 按 SDK 迁移后的实现重写）；没有它覆盖的改动不进入实现。
 - 方案先定后做；涉及新依赖、破坏性接口、数据迁移或 schema 变更时，动手前先列出并等确认。
 - 每次修改代码后，按用户要求做 3 次自我 code review，并如实标注发现。
 - 迁移设计与计划见 `docs/superpowers/specs/2026-11-10-claude-agent-sdk-migration-design.md` 与 `docs/superpowers/plans/`。
@@ -25,13 +25,14 @@
 - 清理：`SessionCleanupRuntime` 按 transcript mtime 与 `runtime.session_retention_days`（默认 30，0 关闭）删除；删除前用 registry 的 `begin_delete` 原子标记，跳过租约/忙碌/删除中的会话；后台清理先清产物（截图、投递、渠道绑定）再删 transcript，手动删除会话先调用 SDK `delete_session` 再尽力清理产物；`claude/` 下 auto memory 保留。
 - 记忆：用户画像 = `claude/CLAUDE.md`（记忆页单文档编辑，保存留 `.bak`；文件 mtime/size 纳入 client 配置指纹，下一次 turn 重建受影响的缓存 client）；Agent 指令在 `settings.json`；Agent 笔记由 Claude auto memory 管理；`agents[].auto_memory` 仅为兼容保留，运行时不再读取。平台没有记忆表、记忆工具、`/memory` 指令或整理记忆。
 - 技能：全局 `claude/skills/<name>/SKILL.md`；`DEFAULT_SKILLS` 为 `web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取改用 Claude Code 自带的 WebSearch/WebFetch）；`.seed_state.json` 记录内置内容哈希，只更新用户未修改的内置技能；已从默认列表移除且未修改的技能只删除被跟踪的 SKILL.md，保留用户附加文件；技能没有启用开关，所有 Agent 自动共享；平台技能工具尚未接入 SDK。
+- 插件集市：「插件」页（`/plugins`）管理 Claude Code 官方集市 `anthropics/claude-plugins-official`；插件以 user scope 装进运行时 `claude/`（`settings.json` 的 `enabledPlugins`、`plugins/`），所有 Agent 共享。平台调用 SDK 内置 CLI（与 runner 同一二进制）执行 `plugin` 命令，启动与读取不联网；`settings.json`、`plugins/installed_plugins.json` 与 `.plugins-revision` 纳入 client 配置指纹，安装/启停/更新/卸载后下一轮对话重建。插件可带 hooks/MCP，平台不提供沙箱。
 - 工具层未迁移：平台注册表中的技能工具、`add_dirs`、MCP、搜索/浏览器/回测/定时/交易/资产/缠论/知识库工具都没有接入 SDK；WebFetch/WebSearch 等只是 Claude Code 默认工具集的一部分。runner 未显式设置 `tools`，默认工具集随 bundled CLI 版本和插件环境变化，以工具页/运行时 init frame 为准（例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。工具页按 API 展示，平台与技能工具标记为未接入。`langchain-core` 暂留。
 - 知识库：`KnowledgeSyncRuntime` 在进程内把 WebDAV 目录双向同步到 `knowledge/`；配置在 `settings.json` 的 `knowledge` 节；本版不挂载给 Agent。
 - 业务页面（回测、交易记录、资产配置、缠论图）不绑定 Agent，逻辑与旧版一致：`backtests` 表、`trade-journal.jsonl`、`allocation.json` + `allocation-ledger.jsonl`、`market.db`。
 - Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区，彻底删除会删除工作区与 transcript 目录。
-- 运行时目录 `~/.super-personal-platform/`：`claude/`（含 `skills/` 技能库与 `CLAUDE.md` 画像）、`workspaces/<agent>/`、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
+- 运行时目录 `~/.super-personal-platform/`：`claude/`（含 `skills/` 技能库、`plugins/` 集市与插件、`settings.json`、`CLAUDE.md` 画像）、`workspaces/<agent>/`、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
 - 生产：宿主机 systemd 用户服务 + venv + SQLite，单进程 8888；FastAPI 直接托管 `apps/web/dist`。
-- UI 沿用珍珠冷光 + 极光 + 玻璃风格；路由为自建 History API（`apps/web/src/routes.ts`），页面 `/chat`、`/config`、`/memory`、`/skills`、`/tools`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；≤860px 顶部栏 + 抽屉。
+- UI 沿用珍珠冷光 + 极光 + 玻璃风格；路由为自建 History API（`apps/web/src/routes.ts`），页面 `/chat`、`/config`、`/memory`、`/skills`、`/tools`、`/plugins`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；≤860px 顶部栏 + 抽屉。
 
 ## 运行约定
 

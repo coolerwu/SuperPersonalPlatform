@@ -4,6 +4,7 @@ export type View =
   | "memory"
   | "skills"
   | "tools"
+  | "plugins"
   | "channels"
   | "cron"
   | "backtest"
@@ -17,6 +18,7 @@ const VIEW_PATHS: Record<View, string> = {
   memory: "/memory",
   skills: "/skills",
   tools: "/tools",
+  plugins: "/plugins",
   channels: "/channels",
   cron: "/cron",
   backtest: "/backtest",

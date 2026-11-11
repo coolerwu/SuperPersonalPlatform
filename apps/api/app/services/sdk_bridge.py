@@ -1,6 +1,25 @@
 from __future__ import annotations
 
+import os
+import shutil
+from pathlib import Path
 from typing import Any
+
+
+def cli_path() -> str | None:
+    """Resolve the CLI binary the SDK spawns.
+
+    The SDK prefers the wheel-bundled binary; platform-side plugin management
+    must use the same one so marketplace/plugin files stay compatible.
+    """
+    import claude_agent_sdk
+
+    package = Path(claude_agent_sdk.__file__).resolve().parent
+    name = "claude.exe" if os.name == "nt" else "claude"
+    bundled = package / "_bundled" / name
+    if bundled.is_file():
+        return str(bundled)
+    return shutil.which("claude")
 
 
 def sdk_version() -> str:

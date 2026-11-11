@@ -32,6 +32,7 @@ import type {
   SkillDetail,
   SystemInfo,
   ToolsCatalog,
+  PluginsCatalog,
   TradeJournalClosePayload,
   TradeJournalCreatePayload,
   TradeJournalQuery,
@@ -335,6 +336,40 @@ export const api = {
       method: "DELETE",
     }),
   listTools: () => request<ToolsCatalog>("/api/tools"),
+  listPlugins: () => request<PluginsCatalog>("/api/plugins"),
+  addPluginMarketplace: () =>
+    request<PluginsCatalog>("/api/plugins/marketplace", { method: "POST" }),
+  updatePluginMarketplace: () =>
+    request<PluginsCatalog>("/api/plugins/marketplace/update", {
+      method: "POST",
+    }),
+  removePluginMarketplace: () =>
+    request<PluginsCatalog>("/api/plugins/marketplace", { method: "DELETE" }),
+  installPlugin: (name: string) =>
+    request<PluginsCatalog>("/api/plugins/install", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  enablePlugin: (pluginId: string) =>
+    request<PluginsCatalog>(
+      `/api/plugins/${encodeURIComponent(pluginId)}/enable`,
+      { method: "POST" },
+    ),
+  disablePlugin: (pluginId: string) =>
+    request<PluginsCatalog>(
+      `/api/plugins/${encodeURIComponent(pluginId)}/disable`,
+      { method: "POST" },
+    ),
+  updatePlugin: (pluginId: string) =>
+    request<PluginsCatalog>(
+      `/api/plugins/${encodeURIComponent(pluginId)}/update`,
+      { method: "POST" },
+    ),
+  uninstallPlugin: (pluginId: string) =>
+    request<PluginsCatalog>(
+      `/api/plugins/${encodeURIComponent(pluginId)}`,
+      { method: "DELETE" },
+    ),
 
   getMemory: () => request<{ content: string }>("/api/memories"),
   saveMemory: (content: string) =>

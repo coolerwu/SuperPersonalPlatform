@@ -38,6 +38,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
   shell: "Shell",
   browser: "浏览器工具（未接入）",
   skills: "Skills",
+  plugins: "插件集市",
   memory: "Memory",
 };
 

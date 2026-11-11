@@ -1144,3 +1144,28 @@ async def test_memory_profile_change_rebuilds_a_cached_client(tmp_path):
     await runner.run(turn, TurnStream())
     assert len(captured) == 2
     assert clients[0].disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_plugin_change_rebuilds_a_cached_client(tmp_path):
+    await init_db()
+    captured = []
+    clients = [FakeClient([ResultMessage()]), FakeClient([ResultMessage()])]
+
+    def factory(options):
+        captured.append(options)
+        return clients[len(captured) - 1]
+
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()), home=tmp_path, client_factory=factory
+    )
+    turn = make_turn(session_id="29292929-2929-2929-2929-292929292929")
+    await runner.run(turn, TurnStream())
+
+    revision = tmp_path / "claude" / ".plugins-revision"
+    revision.parent.mkdir(parents=True, exist_ok=True)
+    revision.write_text("changed", "utf-8")
+
+    await runner.run(turn, TurnStream())
+    assert len(captured) == 2
+    assert clients[0].disconnected is True

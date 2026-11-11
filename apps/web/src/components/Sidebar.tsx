@@ -30,6 +30,7 @@ type SidebarProps = {
   onOpenMemory: () => void;
   onOpenSkills: () => void;
   onOpenTools: () => void;
+  onOpenPlugins: () => void;
   onOpenChannels: () => void;
   onOpenCron: () => void;
   onOpenBacktest: () => void;
@@ -40,6 +41,7 @@ type SidebarProps = {
   memoryActive: boolean;
   skillsActive: boolean;
   toolsActive: boolean;
+  pluginsActive: boolean;
   channelsActive: boolean;
   cronActive: boolean;
   backtestActive: boolean;
@@ -208,6 +210,20 @@ export function Sidebar(props: SidebarProps) {
                   </svg>
                 </span>
                 <span>工具</span>
+              </button>
+              <button
+                className={`sidebar-action ${props.pluginsActive ? "active" : ""}`}
+                onClick={props.onOpenPlugins}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M9 3v4" />
+                    <path d="M15 3v4" />
+                    <path d="M6 7h12v4a6 6 0 0 1-12 0V7z" />
+                    <path d="M12 17v4" />
+                  </svg>
+                </span>
+                <span>插件</span>
               </button>
               <button
                 className={`sidebar-action ${props.channelsActive ? "active" : ""}`}

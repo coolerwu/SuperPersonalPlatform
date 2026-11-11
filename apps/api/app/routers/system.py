@@ -65,6 +65,7 @@ async def system_info(request: Request) -> dict[str, object]:
             # runtime; the tool-layer migration will turn this on.
             "browser": False,
             "skills": True,
+            "plugins": True,
             "memory": True,
         },
         "knowledge": knowledge.status()

@@ -19,8 +19,9 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 ├── .env                    # APP_AUTH_TOKEN、LLM_* 等配置
 ├── claude/                 # CLAUDE_CONFIG_DIR（权限 0700）
 │   ├── CLAUDE.md           # 用户画像，跨 Agent 生效（记忆页编辑）
-│   ├── settings.json       # Claude Code 自身配置
+│   ├── settings.json       # Claude Code 自身配置（插件启用状态等）
 │   ├── skills/             # 全局技能库（.seed_state.json 记录内置技能哈希）
+│   ├── plugins/            # 官方集市与已安装插件（插件页管理）
 │   └── projects/<agent_id>/
 │       ├── <uuid>.jsonl    # SDK 会话 transcript
 │       └── memory/         # Claude auto memory
@@ -88,13 +89,21 @@ npm run dev
 
 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent 列表只能切换这个全局选中的 Agent，不持有第二套选择状态。
 
-## 技能与工具页面
+## 技能、工具与插件页面
 
-侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、渠道、定时、记忆；「平台」组放配置和退出登录。功能工作区放回测、交易记录、资产配置、缠论图，不显示 Agent 选择器和会话。
+侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、插件、渠道、定时、记忆；「平台」组放配置和退出登录。功能工作区放回测、交易记录、资产配置、缠论图，不显示 Agent 选择器和会话。
 
 - **技能**：列出全局技能库，按「系统技能」和「交互创建」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；非系统技能可删除（只删技能目录）。
 - **工具**：如实展示当前接入状态。runner 未显式限制 `tools`，Agent 使用 Claude Code 默认工具集（以工具页/运行时 init frame 为准，随 bundled CLI 版本和插件环境变化；例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。WebFetch/WebSearch 是 Claude Code 自带工具，不代表平台注册表中的搜索/浏览器工具已接入；平台工具与技能工具标记为未接入，等待工具层迁移。本版 Agent 不能调用平台注册表中的搜索、浏览器、回测、定时、交易记录、资产配置、缠论或知识库工具。
+- **插件**：管理 Claude Code 官方集市与插件，见下节。
 - 内置技能在技能库中 seed：`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，不再单独 seed 技能）。`.seed_state.json` 记录内置内容的哈希：用户未修改的内置技能随版本自动更新，改过的保持不动；已从默认列表移除且未被修改的内置技能会在启动 seed 时删除被跟踪的 SKILL.md，目录内用户附加文件保留，只有目录为空时才移除目录。
+
+### 插件集市
+
+- 只接入官方集市 `anthropics/claude-plugins-official`；插件以 user scope 安装，写入运行时 `claude/settings.json` 的 `enabledPlugins` 和 `claude/plugins/`，所有 Agent 共享，没有按 Agent 的启用开关。
+- 平台调用 SDK 自带的内置 CLI（与 chat 运行时同一个二进制，随 venv 安装）执行 `claude plugin` 命令；启动和页面读取不联网，只有添加/更新集市与安装/更新插件需要访问 GitHub。添加集市会克隆官方仓库、安装/更新插件会先刷新集市，慢链路可能需要数分钟。
+- 安装、启停、更新或卸载插件后，下一轮对话会重建受影响会话的缓存 client 并加载最新插件；进行中的 turn 不受影响。
+- 插件可能包含 skills、命令、hooks 与 MCP server，其中 hooks/MCP 会以宿主机用户权限执行代码，平台不提供沙箱。只安装可信插件；移除集市前必须先卸载其下的插件。
 
 ### Skills 文件格式
 
@@ -249,6 +258,7 @@ metadata:
 - `~/.super-personal-platform/claude/`：SDK 配置、用户画像 `CLAUDE.md`、会话 transcript 与 auto memory；权限 0700。SDK transcript 是会话历史的唯一来源。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区；归档 Agent 不会删除这里的文件，彻底删除会连同工作区目录一起删除。
 - `~/.super-personal-platform/claude/skills/`：全局技能库（Claude Code 用户级技能目录）。
+- `~/.super-personal-platform/claude/plugins/`：官方插件集市与已安装插件的缓存；启用状态在 `claude/settings.json` 的 `enabledPlugins`，由插件页调用 Claude Code CLI 维护。
 - `~/.super-personal-platform/knowledge/`：坚果云知识库的本地镜像。
 
 备份时停服务后复制 `data/app.db`、`data/settings.json`、`claude/`、`workspaces/`、`skills/`，以及 `data/trade-journal.jsonl`、`data/allocation.json`、`data/allocation-ledger.jsonl`；`data/market.db` 可按需重建；`knowledge/` 是镜像，可不备份。删除会话会同时删除其 transcript、截图、投递记录与渠道绑定。
@@ -262,7 +272,7 @@ metadata:
 | `APP_DATABASE_URL` | SQLAlchemy 数据库 URL | `sqlite+aiosqlite:///$APP_HOME/data/app.db` |
 | `APP_DATA_DIR` | 数据目录 | `$APP_HOME/data` |
 | `APP_WORKSPACES_DIR` | 工作区根目录 | `$APP_HOME/workspaces` |
-| `APP_SKILLS_DIR` | 全局技能库根目录 | `$APP_HOME/skills` |
+| `APP_SKILLS_DIR` | 全局技能库根目录 | `$APP_HOME/claude/skills` |
 | `APP_KNOWLEDGE_DIR` | 知识库本地镜像目录 | `$APP_HOME/knowledge` |
 | `LLM_BASE_URL` | 首次种子：Provider 端点（自动补 `/anthropic`） | `https://api.deepseek.com` |
 | `LLM_API_KEY` | 首次种子：模型密钥 | 空 |
