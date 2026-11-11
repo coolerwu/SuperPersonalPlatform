@@ -85,7 +85,9 @@ export function SkillEditorDialog({ skill, onClose, onSaved }: SkillEditorDialog
                     ? "AI 创建"
                     : "手动创建"}
               </span>
-              {detail?.modified && <span className="skill-source modified">已调整</span>}
+              {(detail ?? skill).modified && (
+                <span className="skill-source modified">已调整</span>
+              )}
             </div>
           </div>
           <button type="button" className="icon-button" onClick={onClose} disabled={saving}>

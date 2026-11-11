@@ -155,7 +155,7 @@ export function SkillsPage({
                 <div className="skill-list">{createdSkills.map(renderSkill)}</div>
               ) : (
                 <div className="empty-note">
-                  还没有交互创建的技能。可以让 Agent 用文件工具在
+                  还没有其他技能。可以让 Agent 用文件工具在
                   ~/.super-personal-platform/claude/skills 下写入 SKILL.md，或直接编辑现有技能。
                 </div>
               )}
@@ -179,7 +179,11 @@ export function SkillsPage({
       <ConfirmDialog
         open={deleting !== null}
         title={deleting ? `删除技能 ${deleting.name}？` : ""}
-        description="会删除整个技能目录；初始化技能删除后不会再自动生成。"
+        description={
+          deleting?.modified
+            ? "该技能已被调整，删除后无法恢复；初始化技能删除后也不会再自动生成。"
+            : "会删除整个技能目录；初始化技能删除后不会再自动生成。"
+        }
         confirmLabel={deleteBusy ? "删除中…" : "删除"}
         cancelLabel="取消"
         danger
