@@ -205,10 +205,17 @@ function LiveProcess({
   streamingText: boolean;
 }) {
   const [open, setOpen] = useState(true);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const followRef = useRef(true);
   useEffect(() => {
     // Collapse once the answer starts, like the previous run trace.
     if (streamingText) setOpen(false);
   }, [streamingText]);
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || !open || !followRef.current) return;
+    body.scrollTop = body.scrollHeight;
+  }, [reasoning, activity.length, open]);
   const hasReasoning = Boolean(reasoning.trim());
   if (!hasReasoning && activity.length === 0) return null;
   return (
@@ -227,7 +234,16 @@ function LiveProcess({
         {hasReasoning && (
           <div className="run-trace-reasoning">
             <div className="run-trace-step-label">思考</div>
-            <div className="message-thinking-body">
+            <div
+              className="message-thinking-body"
+              ref={bodyRef}
+              onScroll={() => {
+                const body = bodyRef.current;
+                if (!body) return;
+                followRef.current =
+                  body.scrollHeight - body.scrollTop - body.clientHeight < 48;
+              }}
+            >
               <Markdown content={reasoning} />
             </div>
           </div>
