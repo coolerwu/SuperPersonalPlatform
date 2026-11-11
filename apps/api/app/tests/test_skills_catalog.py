@@ -161,7 +161,7 @@ def test_default_skills_seeded(client) -> None:
     skills = {item["name"]: item for item in body["skills"]}
     assert (settings.skills_dir / "quant-backtest" / "SKILL.md").is_file()
     assert skills["quant-backtest"]["include_tools"] == []
-    assert skills["quant-backtest"]["source"] == "builtin"
+    assert skills["quant-backtest"]["source"] == "initial"
     # The knowledge-base skill was retired; the mirror and its sync runtime
     # stay, and Agents use plain file tools on it.
     assert "knowledge-base" not in skills
@@ -197,3 +197,14 @@ def test_skills_api_returns_catalog(client) -> None:
     assert skill["include_tools"] == ["alpha"]
     assert skill["can_enable"] is True
     assert any("api-broken" in error for error in body["errors"])
+
+
+def test_delete_initialized_skill_keeps_tombstone(client) -> None:
+    response = client.delete("/api/skills/chanlun")
+    assert response.status_code == 200
+    assert not (settings.skills_dir / "chanlun").exists()
+
+    from app.services.skills import seed_default_skills
+
+    seed_default_skills()
+    assert not (settings.skills_dir / "chanlun").exists()

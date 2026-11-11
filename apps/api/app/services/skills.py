@@ -24,7 +24,7 @@ MAX_SKILL_TOOL_NAME_LENGTH = 64
 SEED_STATE_FILENAME = ".seed_state.json"
 SEED_SKILLS_DIR = Path(__file__).resolve().parent.parent / "seed_skills"
 
-SKILL_SOURCE_BUILTIN = "builtin"
+SKILL_SOURCE_INITIAL = "initial"
 SKILL_SOURCE_AI = "ai"
 SKILL_SOURCE_MANUAL = "manual"
 
@@ -198,7 +198,7 @@ def _parse_skill(
                 warnings.append("metadata.include_tools must be a space-separated string of tool names")
 
     if directory.name in seed_names:
-        source = SKILL_SOURCE_BUILTIN
+        source = SKILL_SOURCE_INITIAL
     elif metadata_source == SKILL_SOURCE_AI:
         source = SKILL_SOURCE_AI
     else:
@@ -477,11 +477,13 @@ def create_skill(
 
 
 def delete_skill(directory: str, root: Path | None = None) -> str:
-    """Delete a non-built-in skill directory and return its declared name."""
+    """Delete a skill directory and return its declared name.
+
+    Deleting an initialized skill keeps its seed-state entry on purpose: the
+    entry is a tombstone, so later seeds never bring the skill back.
+    """
     base = _skills_root() if root is None else root.expanduser().resolve()
     folder = _resolve_skill_directory(directory, base)
-    if folder.name in _load_seed_state(base):
-        raise SkillValidationError("cannot delete a built-in skill")
     info, _ = _parse_skill(folder, base, frozenset(_load_seed_state(base)))
     declared_name = info.name if info is not None else directory
     try:
