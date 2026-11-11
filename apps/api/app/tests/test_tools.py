@@ -53,7 +53,11 @@ def test_tools_api_declares_claude_code_and_unwired_tools(client) -> None:
         assert skills[name]["source"] == "skill"
         # Registry code is kept, but no skill tool is wired to the SDK yet.
         assert skills[name]["wired"] is False
-    assert skills["web_search"]["skills"] == ["web-search"]
+    # The web-search/web-fetch skills were retired in favour of Claude Code's
+    # built-in WebFetch/WebSearch; their tool modules stay registered for the
+    # tool-layer migration but no skill declares them any more.
+    assert skills["web_search"]["skills"] == []
+    assert skills["web_fetch"]["skills"] == []
 
     # cron tools lost their module in the legacy-stack removal; the skill still
     # declares them until the tool-layer migration rewrites the contract.

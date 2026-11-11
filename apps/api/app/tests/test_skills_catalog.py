@@ -158,8 +158,6 @@ def test_default_web_skills_seeded(client) -> None:
     body = client.get("/api/skills").json()
     skills = {item["name"]: item for item in body["skills"]}
     expected = {
-        "web-fetch": ["web_fetch"],
-        "web-search": ["web_search", "web_fetch"],
         "web-browser": [
             "browser_open",
             "browser_snapshot",
@@ -174,6 +172,10 @@ def test_default_web_skills_seeded(client) -> None:
         assert (settings.skills_dir / name / "SKILL.md").is_file()
         assert skills[name]["include_tools"] == tool_names
         assert skills[name]["source"] == "builtin"
+    # Web search/fetch moved to Claude Code's built-in WebSearch/WebFetch.
+    assert "web-search" not in skills
+    assert "web-fetch" not in skills
+    assert "memory-organizer" not in skills
 
 
 def test_skills_api_requires_auth() -> None:

@@ -38,37 +38,6 @@ class SkillValidationError(ValueError):
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 DEFAULT_SKILLS = {
-    "web-fetch": """---
-name: web-fetch
-description: 读取网页、文章或在线文档内容时使用。读取本技能后解锁 web_fetch 工具，可抓取 http/https 链接并返回页面标题与 Markdown 正文；需要最新网页信息、阅读链接内容或引用在线文档时优先使用。
-metadata:
-  include_tools: web_fetch
----
-
-# Web Fetch
-
-1. 确认用户给出的 URL，或先从 web-search 的结果中选择要读取的链接。
-2. 调用 `web_fetch`，`url` 必须是完整的 http/https 地址。
-3. 工具返回页面标题和 Markdown 正文；引用内容时保留来源 URL。
-4. 抓取失败时根据返回的 HTTP 错误码说明原因，不要假装已经读取页面；同一链接不要反复重试，同一站点连续两次失败就停止，换来源或直接告诉用户。
-5. 每次成功抓取都按 DeepSeek Fetch 计费（每 1000 次 5 元），不要重复抓取同一页面。
-""",
-    "web-search": """---
-name: web-search
-description: 需要查最新信息、新闻、事实核验或寻找资料时使用。读取本技能后解锁 web_search 和 web_fetch 工具，可按关键词搜索网页并返回标题、链接、摘要、来源和权威性评分；需要正文时再调用 web_fetch 抓取具体链接。
-metadata:
-  include_tools: web_search web_fetch
----
-
-# Web Search
-
-1. 把用户问题改写成 1-128 字的关键词；可使用 site:、-、引号、lang:、after:、before: 等搜索语法。
-2. 调用 `web_search`，`count` 取 1-50（默认 10）；需要正文时把 `need_content` 设为 true，或改用 `web_fetch` 抓取具体链接。
-3. 优先参考 rerank 分高、authority 高、date 新的结果；摘要不足以回答时，用 `web_fetch` 抓取具体链接（本技能已同时解锁该工具）。
-4. 引用时保留标题和 URL，不要把摘要当成全文。
-5. 每次成功搜索都按 DeepSeek Search 计费（每 1000 次 5 元），不要重复搜索同一问题；web_fetch 按 Fetch 请求另计费。
-6. 只需要抓取网页、不需要搜索时，也可以启用独立的 `web-fetch` 技能。
-""",
     "web-browser": """---
 name: web-browser
 description: 需要在真实网页上点击、填写表单、登录或读取 JS 渲染内容时使用。读取本技能后解锁浏览器工具，默认返回页面文字和可交互元素引用；用户明确要求截图时可返回页面图片。只访问公开 http/https 地址。
