@@ -1691,7 +1691,11 @@ export default function App() {
       />
 
       {view === "memory" ? (
-        <MemoryPage onClose={() => openView("chat")} />
+        <MemoryPage
+          agent={agent}
+          agentId={agentId}
+          onClose={() => openView("chat")}
+        />
       ) : view === "skills" ? (
         <SkillsPage
           skills={skills}

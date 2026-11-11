@@ -116,8 +116,10 @@ If the user explicitly asks to deploy v1 on the target machine:
     per-agent `enabled_skills` list does not gate anything in this version;
   - skills are file documents under `skills/`; editing them does not require a
     form, but the skill tools they declare are unavailable;
-  - memory is `claude/CLAUDE.md` plus Claude auto memory; there is no `/memory`
-    command, memory table, memory tool or consolidation skill;
+  - memory is the shared user profile `claude/CLAUDE.md` plus per-Agent
+    `workspaces/<agent_id>/CLAUDE.md`; Claude auto memory is displayed read-only;
+    there is no `/memory` command, memory table, memory tool or consolidation
+    skill;
   - rubric evaluation, QuickJS `eval`, session full-text search and Run history
     are removed;
   - browser screenshots are not pushed to WeChat until the tool layer is wired.

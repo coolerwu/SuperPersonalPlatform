@@ -50,6 +50,24 @@ export type PluginMarketplace = {
   install_location: string;
 };
 
+export type MemoryDocument = {
+  content: string;
+  saved?: boolean;
+};
+
+export type AutoMemoryFile = {
+  name: string;
+  content: string;
+  size: number;
+  updated_at: string;
+};
+
+export type AgentAutoMemory = {
+  directory: string;
+  files: AutoMemoryFile[];
+  errors: string[];
+};
+
 export type InstalledPlugin = {
   id: string;
   name: string;

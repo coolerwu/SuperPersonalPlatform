@@ -1169,3 +1169,53 @@ async def test_plugin_change_rebuilds_a_cached_client(tmp_path):
     await runner.run(turn, TurnStream())
     assert len(captured) == 2
     assert clients[0].disconnected is True
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_change_rebuilds_a_cached_client(tmp_path):
+    await init_db()
+    captured = []
+    clients = [FakeClient([ResultMessage()]), FakeClient([ResultMessage()])]
+
+    def factory(options):
+        captured.append(options)
+        return clients[len(captured) - 1]
+
+    agent = make_agent()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(agent), home=tmp_path, client_factory=factory
+    )
+    turn = make_turn(session_id="30303030-3030-3030-3030-303030303030")
+    await runner.run(turn, TurnStream())
+
+    memory = tmp_path / "workspaces" / agent.id / "CLAUDE.md"
+    memory.parent.mkdir(parents=True, exist_ok=True)
+    memory.write_text("Agent memory", "utf-8")
+
+    await runner.run(turn, TurnStream())
+    assert len(captured) == 2
+    assert clients[0].disconnected is True
+
+
+def test_agent_memory_stamp_is_scoped_and_guarded(tmp_path):
+    assert claude_runner._agent_memory_stamp("../escape", tmp_path) == ""
+    first = tmp_path / "workspaces" / "agent-a" / "CLAUDE.md"
+    second = tmp_path / "workspaces" / "agent-b" / "CLAUDE.md"
+    for path in (first, second):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("memory", "utf-8")
+
+    first_stamp = claude_runner._agent_memory_stamp("agent-a", tmp_path)
+    second_stamp = claude_runner._agent_memory_stamp("agent-b", tmp_path)
+    first.write_text("changed", "utf-8")
+    assert claude_runner._agent_memory_stamp("agent-a", tmp_path) != first_stamp
+    assert claude_runner._agent_memory_stamp("agent-b", tmp_path) == second_stamp
+
+
+def test_config_fingerprint_includes_agent_memory():
+    agent = make_agent()
+    assert claude_runner._config_fingerprint(
+        agent, "memory", "plugins", "agent-a"
+    ) != claude_runner._config_fingerprint(
+        agent, "memory", "plugins", "agent-b"
+    )

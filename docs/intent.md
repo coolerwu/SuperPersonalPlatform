@@ -37,7 +37,7 @@
 6. 微信个人号渠道：扫码登录、iLink 长轮询、5 秒打包、命令、引用找回、图片/文件、回复投递与补发。
 7. 定时任务：5 字段 cron、IANA 时区、专属会话、忙时跳过并审计、可选推送到微信联系人、停机后最多补跑一次。
 8. 会话保留清理：按 transcript mtime 与保留天数删除，跳过运行中会话，保留 auto memory。
-9. 记忆：用户画像 = `claude/CLAUDE.md`（记忆页单文档编辑）；Agent 指令 = `settings.json`；Agent 笔记由 Claude auto memory 管理。
+9. 记忆：记忆页有用户画像（`claude/CLAUDE.md`，跨 Agent）与 Agent 记忆（`workspaces/<agent_id>/CLAUDE.md`）；Agent 指令 = `settings.json`；Claude auto memory 在记忆页只读展示。
 10. 配置页：Provider、Agent、知识库、运行环境；所有平台配置写入 `data/settings.json`，密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。
 11. 技能库：全局 `claude/skills/` 目录（Claude Code 用户级技能），内置技能 seed 与哈希跟踪；本版技能工具尚未接入 Agent。
 12. 知识库：WebDAV 双向镜像到 `knowledge/`，配置与同步状态在设置接口；本版尚未挂载给 Agent。
@@ -129,7 +129,7 @@
 4. Agent：id、名称、instructions、状态（active/paused/archived）、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。状态语义统一为：`active` 正常接收网页、渠道和定时任务；`paused` 与 `archived` 都拒绝网页新消息（409）、拒绝渠道入站并暂停该 Agent 的渠道轮询（保留 cursor，恢复 active 后继续）、跳过定时任务；`GET /api/agents` 包含 archived，配置页可把 archived/paused 改回 active 恢复，恢复后渠道轮询自动重启、定时任务从下一次匹配时间继续；两种非 active 状态下渠道页仍可查看/编辑/删除渠道。
 5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，忙碌会话在下一次 turn 开始时按配置指纹自动重建 client，因此配置变更不会永久丢失。
 6. Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区与 transcript，彻底删除会同时删除工作区目录和 transcript 目录，并级联删除渠道、渠道绑定、投递/入站记录与定时任务；有活动 turn 时 409。
-7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers` 读写 `settings.json`；`/api/memories` 只读写 `claude/CLAUDE.md`；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`。
+7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers` 读写 `settings.json`；`GET/PUT /api/memories` 读写 `claude/CLAUDE.md`，`GET/PUT /api/memories/agents/{id}` 读写该 Agent 的 `workspaces/<id>/CLAUDE.md`，`GET /api/memories/agents/{id}/auto-memory` 只读列出 auto memory；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`。
 
 #### 验收标准
 
@@ -137,23 +137,24 @@
 - 配置文件写入原子、损坏可回退；密钥不出现在接口响应和日志。
 - 彻底删除 Agent 后其会话、工作区、渠道、定时任务被清理；归档只改状态，不删文件。
 
-### F5 记忆与用户画像
+### F5 记忆、用户画像与 Agent 记忆
 
 - 状态：现行
 - 日期：2026-11-11
 
 #### 功能点
 
-1. 用户画像 = `claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent；记忆页只编辑这一个 Markdown 文档，保存时保留 `CLAUDE.md.bak`，原子写入，权限 0600。文件 mtime/size 纳入 client 配置指纹，保存后下一次 turn 自动重建受影响的缓存 client。
-2. Agent 指令在 `settings.json` 的 `agents[].instructions`，通过 preset+append 注入系统提示词。
-3. Agent 笔记由 Claude auto memory 管理（`claude/projects/<project>/memory/`），平台不注入、不整理、不提供记忆工具；`agents[].auto_memory` 仅为兼容保留，运行时不再读取。
-4. 平台记忆系统（user/agent memory 表、`/memory` 指令、整理记忆技能与工具、`memory_save` / `memory_search` / `memory_read`）全部删除。
+1. 用户画像 = `claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent；记忆页编辑这个 Markdown 文档，保存时保留 `CLAUDE.md.bak`，原子写入，权限 0600。文件 mtime/size 纳入 client 配置指纹，保存后下一次 turn 自动重建受影响的缓存 client。
+2. Agent 记忆 = `workspaces/<agent_id>/CLAUDE.md`，由记忆页按侧栏选中的 Agent 编辑。runner 以该工作区为 cwd 并启用 `project` setting source，CLI 把它作为项目级 CLAUDE.md 只加载给这个 Agent；保存同样保留 `.bak`、权限 0600，mtime/size 纳入 client 配置指纹。
+3. Agent 指令在 `settings.json` 的 `agents[].instructions`，通过 preset+append 注入系统提示词，与 Agent 记忆是两份不同内容。
+4. Claude auto memory 由 Claude 管理（`claude/projects/<project>/memory/`，`MEMORY.md` 索引 + 主题文件），记忆页只读展示，平台不写入、不整理、不提供记忆工具；单文件 128 KB、总量 1 MB、最多 200 个文件，超出部分跳过并在页面提示。`agents[].auto_memory` 仅为兼容保留，运行时不再读取。
+5. 平台记忆系统（user/agent memory 表、`/memory` 指令、整理记忆技能与工具、`memory_save` / `memory_search` / `memory_read`）全部删除。
 
 #### 验收标准
 
-- `claude/CLAUDE.md` 的内容在新会话中生效。
-- 记忆页保存后下一会话生效，旧版本保留为 `.bak`。
-- 平台不存在记忆表、记忆工具或整理记忆入口。
+- 记忆页有两张卡片：「用户画像」跨 Agent 生效；「Agent 记忆」跟随侧栏选中的 Agent，只影响该 Agent。
+- 用户画像与 Agent 记忆保存后下一轮对话生效，旧版本保留为 `.bak`；切换 Agent 时 Agent 卡片重新加载，未保存的 Agent 修改丢弃。
+- Claude auto memory 在 Agent 卡片内只读展示；平台不存在记忆表、记忆工具或整理记忆入口。
 
 ### F6 微信个人号渠道
 

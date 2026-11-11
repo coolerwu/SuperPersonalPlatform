@@ -26,6 +26,8 @@ import type {
   KnowledgeStatus,
   MarketProbe,
   MarketStatus,
+  MemoryDocument,
+  AgentAutoMemory,
   Provider,
   SessionSummary,
   SkillCatalog,
@@ -371,12 +373,28 @@ export const api = {
       { method: "DELETE" },
     ),
 
-  getMemory: () => request<{ content: string }>("/api/memories"),
+  getMemory: () => request<MemoryDocument>("/api/memories"),
   saveMemory: (content: string) =>
-    request<{ content: string; saved: boolean }>("/api/memories", {
+    request<MemoryDocument>("/api/memories", {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
+  getAgentMemory: (agentId: string) =>
+    request<MemoryDocument>(
+      `/api/memories/agents/${encodeURIComponent(agentId)}`,
+    ),
+  saveAgentMemory: (agentId: string, content: string) =>
+    request<MemoryDocument>(
+      `/api/memories/agents/${encodeURIComponent(agentId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ content }),
+      },
+    ),
+  getAgentAutoMemory: (agentId: string) =>
+    request<AgentAutoMemory>(
+      `/api/memories/agents/${encodeURIComponent(agentId)}/auto-memory`,
+    ),
 
   listBacktests: (limit = 50) => request<BacktestSummary[]>(`/api/backtests?limit=${limit}`),
   getBacktestMeta: () => request<BacktestMeta>("/api/backtests/meta"),

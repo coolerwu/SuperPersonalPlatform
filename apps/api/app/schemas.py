@@ -299,6 +299,19 @@ class MemoryFileUpdate(BaseModel):
     content: str
 
 
+class AutoMemoryFileOut(BaseModel):
+    name: str
+    content: str
+    size: int
+    updated_at: str
+
+
+class AgentAutoMemoryOut(BaseModel):
+    directory: str
+    files: list[AutoMemoryFileOut] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
 class BacktestCreate(BaseModel):
     symbol: str = Field(min_length=3, max_length=30)
     granularity: str = Field(min_length=2, max_length=10)

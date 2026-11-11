@@ -2926,6 +2926,77 @@ textarea {
   padding: 8px 16px;
 }
 
+.memory-auto {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.memory-auto-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.memory-auto-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.memory-auto-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.memory-auto-dir {
+  margin: 8px 0 0;
+  color: var(--faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.memory-auto-file {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.memory-auto-file summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.memory-auto-meta {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.memory-auto-file pre {
+  margin: 10px 0 0;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .link-button {
   border: none;
   background: transparent;
@@ -3533,6 +3604,14 @@ textarea {
 
   .memory-editor-actions button {
     flex: 1;
+  }
+
+  .memory-auto-head {
+    flex-direction: column;
+  }
+
+  .memory-auto-head .ghost-button {
+    align-self: flex-end;
   }
 
   .danger-zone {
@@ -4231,6 +4310,7 @@ textarea {
 .pearl .toggle-row,
 .pearl .skill-row,
 .pearl .plugin-row,
+.pearl .memory-auto-file,
 .pearl .channel-row {
   border-color: rgba(255, 255, 255, 0.8);
   background: rgba(255, 255, 255, 0.5);

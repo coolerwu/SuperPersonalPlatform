@@ -25,7 +25,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 │   └── projects/<agent_id>/
 │       ├── <uuid>.jsonl    # SDK 会话 transcript
 │       └── memory/         # Claude auto memory
-├── workspaces/<agent_id>/  # SDK 的 cwd；uploads/、screenshots/
+├── workspaces/<agent_id>/  # SDK 的 cwd；uploads/、screenshots/、CLAUDE.md（Agent 记忆）
 ├── knowledge/              # 坚果云知识库的本地镜像
 ├── tmp/                    # SDK 的 TMPDIR
 └── data/
@@ -68,7 +68,7 @@ npm run dev
 - `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示「已停止」。
 - 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源写 `audit_log`。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
 - 命令：`/new`（或 `/clear`）、`/stop`、`/status`、`/help`，不区分大小写。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾的临时卡片显示；输入框以 `/` 开头时弹出命令面板，支持前缀过滤、↑/↓ 选择、Enter/Tab 填入、Esc 关闭。
-- `CLAUDE.md` 用户画像由 SDK 作为用户级说明加载；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
+- `CLAUDE.md` 用户画像由 SDK 作为用户级说明加载；Agent 记忆是工作区的项目级 `CLAUDE.md`，只加载给该 Agent；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
 - assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、链接、`$$...$$` 数学公式（KaTeX；单 `$` 按普通文本处理）。
 - 消息操作：复制、引用；按钮位于气泡下方，引用内容显示在输入框上方并可单独取消，发送时以 `> ` 引用块写入消息；失败或停止后显示提示，重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成或删除单条消息。
 - 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；支持选择、粘贴、拖拽图片，大图在浏览器端缩到最长边 1600 px。发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 仍兼容解析。图片由 Agent 用 Read 工具查看。上传文件通过 `GET /api/agents/{agent_id}/uploads/{filename}` 读取；Agent 为 paused/archived 时上传返回 409，读取历史附件仍放行（只读）。
@@ -134,11 +134,12 @@ metadata:
 
 ## 记忆
 
-侧栏「Agent 能力 → 记忆」是单文档编辑器：
+侧栏「Agent 能力 → 记忆」有两张卡片，跟随左上角选中的 Agent：
 
-- **用户画像**：`~/.super-personal-platform/claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent。保存时旧版本保留为同目录 `CLAUDE.md.bak`，文件权限 0600；文件 mtime/size 纳入 client 配置指纹，下一次 turn 自动重建受影响的缓存 client（已有会话下一次发消息即生效）。
-- **Agent 指令**：在 `settings.json` 的 `agents[].instructions`，通过 preset+append 追加到系统提示词。
-- **Agent 笔记**：由 Claude auto memory 管理（`claude/projects/<project>/memory/`），平台只读不注入。Agent 配置里的「允许 Agent 写入记忆」开关为兼容保留，运行时不再读取。
+- **用户画像**：`~/.super-personal-platform/claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent，跨 Agent 生效。保存时旧版本保留为同目录 `CLAUDE.md.bak`，文件权限 0600；文件 mtime/size 纳入 client 配置指纹，下一次 turn 自动重建受影响的缓存 client（已有会话下一次发消息即生效）。
+- **Agent 记忆**：`~/.super-personal-platform/workspaces/<agent_id>/CLAUDE.md`，作为项目级 CLAUDE.md 只加载给当前 Agent。保存同样保留 `.bak`、权限 0600，mtime/size 纳入 client 配置指纹；切换 Agent 时卡片重新加载，未保存的修改丢弃。
+- **Claude auto memory**：`claude/projects/<agent_id>/memory/`（`MEMORY.md` 索引 + 主题文件），由 Claude 在对话中自动维护；记忆页只读展示，单文件 128 KB、总量 1 MB、最多 200 个文件，平台不写入、不整理。
+- **Agent 指令**：在 `settings.json` 的 `agents[].instructions`，通过 preset+append 追加到系统提示词，和 Agent 记忆是两份不同内容。
 - 平台不再提供用户/Agent 记忆表、`/memory` 指令、整理记忆技能或记忆工具。
 
 ## 渠道（微信个人号）

@@ -86,6 +86,20 @@ def _memory_stamp(home: Path | None) -> str:
     return f"{stat.st_mtime_ns}:{stat.st_size}"
 
 
+def _agent_memory_stamp(agent_id: str, home: Path | None) -> str:
+    """Identity of the project memory in ``workspaces/<agent>/CLAUDE.md``."""
+    if not valid_agent_id(agent_id):
+        return ""
+    path = workspace_for(agent_id, home) / "CLAUDE.md"
+    if path.is_symlink() or not path.is_file():
+        return ""
+    try:
+        stat = path.stat()
+    except OSError:
+        return ""
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
 def _plugin_stamp(home: Path | None) -> str:
     """Identity of the plugin state baked into a connected SDK client.
 
@@ -110,7 +124,10 @@ def _plugin_stamp(home: Path | None) -> str:
 
 
 def _config_fingerprint(
-    agent: Any, memory_stamp: str = "", plugin_stamp: str = ""
+    agent: Any,
+    memory_stamp: str = "",
+    plugin_stamp: str = "",
+    agent_memory_stamp: str = "",
 ) -> str:
     """Hash the settings that are baked into a connected SDK client."""
     provider = agent.provider
@@ -121,6 +138,7 @@ def _config_fingerprint(
             "model": provider.model,
             "api_key": provider.api_key,
             "memory": memory_stamp,
+            "agent_memory": agent_memory_stamp,
             "plugins": plugin_stamp,
         },
         sort_keys=True,
@@ -256,11 +274,12 @@ class ClaudeTurnRunner:
         key = (agent.id, turn.session_id)
         memory_stamp = _memory_stamp(self._home)
         plugin_stamp = _plugin_stamp(self._home)
+        agent_memory_stamp = _agent_memory_stamp(agent.id, self._home)
         async with lock:
             cached = self._clients.get(key)
             if cached is not None:
                 fingerprint = _config_fingerprint(
-                    agent, memory_stamp, plugin_stamp
+                    agent, memory_stamp, plugin_stamp, agent_memory_stamp
                 )
                 if cached.fingerprint != fingerprint:
                     # The Agent or Provider changed while this session was
@@ -334,7 +353,7 @@ class ClaudeTurnRunner:
                 client=client,
                 agent_id=agent.id,
                 fingerprint=_config_fingerprint(
-                    agent, memory_stamp, plugin_stamp
+                    agent, memory_stamp, plugin_stamp, agent_memory_stamp
                 ),
                 last_used=time.monotonic(),
             )
