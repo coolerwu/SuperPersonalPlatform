@@ -67,15 +67,19 @@ class SkillDocument:
     source: str = SKILL_SOURCE_MANUAL
 
 
-def load_seed_skills(root: Path | None = None) -> dict[str, str]:
-    """Read initialization templates from ``seed_skills/<name>/SKILL.md``."""
+def load_seed_skills(root: Path | None = None) -> dict[str, str] | None:
+    """Read initialization templates from ``seed_skills/<name>/SKILL.md``.
+
+    Returns ``None`` when the template set cannot be read completely; an
+    empty dict means the directory holds no templates.
+    """
     base = (root or SEED_SKILLS_DIR).expanduser()
     try:
         base = base.resolve()
         entries = sorted(base.iterdir(), key=lambda item: item.name)
     except OSError as exc:
         logger.warning("cannot read seed skills directory %s: %s", base, exc)
-        return {}
+        return None
 
     templates: dict[str, str] = {}
     for entry in entries:
@@ -86,6 +90,7 @@ def load_seed_skills(root: Path | None = None) -> dict[str, str]:
             templates[entry.name] = target.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             logger.warning("cannot read seed skill %s: %s", target, exc)
+            return None
     return templates
 
 
@@ -499,18 +504,32 @@ def seed_default_skills(
     """
     base = (root or settings.skills_dir).expanduser()
     base.mkdir(parents=True, exist_ok=True)
-    seed_templates = load_seed_skills() if templates is None else dict(templates)
-    state = _load_seed_state(base)
-    changed = False
-
+    if templates is None:
+        loaded = load_seed_skills()
+        if loaded is None:
+            logger.warning("initialization templates unavailable; leaving seed state untouched")
+            return
+        seed_templates = loaded
+    else:
+        seed_templates = dict(templates)
+    valid_templates: dict[str, str] = {}
     for name, content in seed_templates.items():
         if not is_valid_skill_name(name):
             logger.warning("ignoring seed skill with invalid name %r", name)
             continue
-        if (base / name).is_symlink():
+        valid_templates[name] = content
+    state = _load_seed_state(base)
+    changed = False
+
+    for name, content in valid_templates.items():
+        directory = base / name
+        if directory.is_symlink():
             logger.warning("seed skill %s is a symlinked directory; leaving it untouched", name)
             continue
-        target = base / name / "SKILL.md"
+        if directory.exists() and not directory.is_dir():
+            logger.warning("seed skill %s is not a directory; leaving it untouched", name)
+            continue
+        target = directory / "SKILL.md"
         if target.is_symlink():
             logger.warning("seed skill %s/SKILL.md is a symlink; leaving it untouched", name)
             continue
@@ -521,8 +540,12 @@ def seed_default_skills(
             if recorded is not None:
                 logger.info("skill %s was deleted by the user; not re-adding it", name)
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _write_skill_text(target, content)
+            except OSError as exc:
+                logger.warning("cannot write seed skill %s: %s", target, exc)
+                continue
             state[name] = template_hash
             changed = True
             continue
@@ -542,18 +565,31 @@ def seed_default_skills(
             logger.info("skill %s has edits; leaving it untouched", name)
             continue
         if current_hash != template_hash:
-            target.write_text(content, encoding="utf-8")
+            try:
+                _write_skill_text(target, content)
+            except OSError as exc:
+                logger.warning("cannot update seed skill %s: %s", target, exc)
+                continue
             state[name] = template_hash
             changed = True
             logger.info("updated unmodified initialization skill %s", name)
 
-    for name in [item for item in state if item not in seed_templates]:
+    for name in [item for item in state if item not in valid_templates]:
         state.pop(name, None)
         changed = True
         logger.info("skill %s is no longer an initialization template; tracking dropped", name)
 
     if changed:
         _write_seed_state(base, state)
+
+
+def _write_skill_text(target: Path, content: str) -> None:
+    temp = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
+    try:
+        temp.write_text(content, encoding="utf-8")
+        os.replace(temp, target)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _content_hash(content: str) -> str:
@@ -584,5 +620,8 @@ def _write_seed_state(root: Path, skills: dict[str, str]) -> None:
         ensure_ascii=False,
         indent=2,
     )
-    temp.write_text(payload + "\n", encoding="utf-8")
+    with temp.open("w", encoding="utf-8") as handle:
+        handle.write(payload + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temp, path)

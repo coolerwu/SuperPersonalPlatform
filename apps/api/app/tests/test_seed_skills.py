@@ -149,6 +149,7 @@ def test_seed_ignores_symlinked_skill_entry(tmp_path: Path) -> None:
     seed_default_skills(tmp_path, {**TEMPLATES, "demo-skill": "changed\n"})
 
     assert (real / "SKILL.md").read_text(encoding="utf-8") == TEMPLATES["demo-skill"]
+    assert _state(tmp_path)["skills"]["demo-skill"] == _hash(TEMPLATES["demo-skill"])
 
 
 def test_seed_drops_invalid_state_entries(tmp_path: Path) -> None:
@@ -178,6 +179,56 @@ def test_load_seed_skills_reads_skill_md_files(tmp_path: Path) -> None:
     (tmp_path / "note.txt").write_text("ignore me", encoding="utf-8")
 
     assert load_seed_skills(tmp_path) == {"demo-skill": TEMPLATES["demo-skill"]}
+
+
+def test_load_seed_skills_returns_none_when_directory_missing(tmp_path: Path) -> None:
+    assert load_seed_skills(tmp_path / "missing") is None
+
+
+def test_load_seed_skills_returns_none_on_unreadable_template(tmp_path: Path) -> None:
+    (tmp_path / "bad-skill").mkdir()
+    (tmp_path / "bad-skill" / "SKILL.md").write_bytes(b"\xff\xfe\x00")
+    assert load_seed_skills(tmp_path) is None
+
+
+def test_seed_leaves_state_untouched_when_templates_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    (tmp_path / "demo-skill" / "SKILL.md").unlink()
+    before = _state(tmp_path)
+    monkeypatch.setattr("app.services.skills.load_seed_skills", lambda root=None: None)
+
+    seed_default_skills(tmp_path)
+
+    assert _state(tmp_path) == before
+    assert not (tmp_path / "demo-skill" / "SKILL.md").exists()
+
+
+def test_seed_ignores_symlinked_skill_md(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    target = tmp_path / "demo-skill" / "SKILL.md"
+    external = tmp_path / "external.md"
+    external.write_text("external content", encoding="utf-8")
+    target.unlink()
+    target.symlink_to(external)
+
+    seed_default_skills(tmp_path, {**TEMPLATES, "demo-skill": "changed\n"})
+
+    assert external.read_text(encoding="utf-8") == "external content"
+    assert _state(tmp_path)["skills"]["demo-skill"] == _hash(TEMPLATES["demo-skill"])
+
+
+def test_seed_writes_state_only_when_changed(tmp_path: Path, monkeypatch) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "app.services.skills._write_seed_state", lambda base, state: calls.append(1)
+    )
+
+    seed_default_skills(tmp_path, TEMPLATES)
+
+    assert calls == []
 
 
 def test_real_seed_templates_cover_platform_domains() -> None:
