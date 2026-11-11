@@ -409,7 +409,13 @@ def test_messages_returns_transcript(client):
     )
     assert response.status_code == 200
     assert response.json() == [
-        {"id": "m1", "role": "user", "content": "hi", "blocks": []}
+        {
+            "id": "m1",
+            "role": "user",
+            "content": "hi",
+            "blocks": [],
+            "artifacts": [],
+        }
     ]
     assert catalog.message_calls == [(SESSION_ID, "default")]
 

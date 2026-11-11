@@ -41,6 +41,7 @@ from app.services.claude_env import build_claude_env, claude_paths, workspace_fo
 from app.services.identifiers import valid_agent_id
 from app.services.sdk_events import StreamMapper, TurnOutcome, outcome_from_result
 from app.services.settings_store import SettingsStore
+from app.services.tool_artifacts import artifact_from_tool
 from app.services.turn_stream import TurnStream
 
 logger = logging.getLogger(__name__)
@@ -449,6 +450,7 @@ class ClaudeTurnRunner:
         self._active.add(key)
         self._touch(key)
         mapper = StreamMapper()
+        workspace = workspace_for(turn.agent_id, self._home)
         text_parts: list[str] = []
         outcome = TurnOutcome(status="failed", error="run ended without result")
         lease_added = False
@@ -529,6 +531,12 @@ class ClaudeTurnRunner:
                         for mapped in mapper.feed(event):
                             if mapped["type"] == "assistant_delta":
                                 text_parts.append(mapped["delta"])
+                            elif mapped["type"] == "tool_call":
+                                artifact = artifact_from_tool(
+                                    mapped["name"], mapped["input"], workspace
+                                )
+                                if artifact is not None:
+                                    mapped["artifact"] = artifact
                             stream.publish(mapped)
                         continue
                     # SystemMessage also carries .subtype; match the class name so

@@ -1219,3 +1219,85 @@ def test_config_fingerprint_includes_agent_memory():
     ) != claude_runner._config_fingerprint(
         agent, "memory", "plugins", "agent-b"
     )
+
+
+@pytest.mark.asyncio
+async def test_tool_call_events_carry_workspace_artifacts(tmp_path):
+    await init_db()
+    workspace = tmp_path / "workspaces" / "default"
+    workspace.mkdir(parents=True)
+    (workspace / "shot.png").write_bytes(b"png")
+    messages = [
+        SimpleNamespace(
+            event={
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use",
+                    "name": "mcp__playwright__browser_take_screenshot",
+                },
+            }
+        ),
+        SimpleNamespace(
+            event={
+                "type": "content_block_delta",
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": '{"filename": "shot.png"}',
+                },
+            }
+        ),
+        SimpleNamespace(event={"type": "content_block_stop"}),
+        ResultMessage(),
+    ]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient(messages),
+    )
+    stream = TurnStream()
+    queue = await stream.subscribe()
+    await runner.run(make_turn(), stream)
+    events = await drain_until_end(queue)
+    tool_call = next(event for event in events if event["type"] == "tool_call")
+    assert tool_call["name"] == "mcp__playwright__browser_take_screenshot"
+    assert tool_call["artifact"] == {
+        "path": "shot.png",
+        "name": "shot.png",
+        "size": 3,
+        "kind": "image",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_call_events_without_files_have_no_artifact(tmp_path):
+    await init_db()
+    messages = [
+        SimpleNamespace(
+            event={
+                "type": "content_block_start",
+                "content_block": {"type": "tool_use", "name": "Bash"},
+            }
+        ),
+        SimpleNamespace(
+            event={
+                "type": "content_block_delta",
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": '{"command": "ls"}',
+                },
+            }
+        ),
+        SimpleNamespace(event={"type": "content_block_stop"}),
+        ResultMessage(),
+    ]
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: FakeClient(messages),
+    )
+    stream = TurnStream()
+    queue = await stream.subscribe()
+    await runner.run(make_turn(), stream)
+    events = await drain_until_end(queue)
+    tool_call = next(event for event in events if event["type"] == "tool_call")
+    assert "artifact" not in tool_call
