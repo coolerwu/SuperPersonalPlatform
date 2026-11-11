@@ -183,11 +183,11 @@ export function SkillsPage({
             {agent && (
               <>
                 <div className="hint">
-                  技能库：~/.super-personal-platform/skills。技能是文件说明，启用列表仅为后续工具层
+                  技能库：~/.super-personal-platform/claude/skills。技能是文件说明，启用列表仅为后续工具层
                   准备并保存到当前 Agent；本版平台技能工具与 skill_save 尚未接入 SDK，启用不会改变
                   当前可用工具。Claude Code 自带的 Skill 工具可用，但它不读取这里的平台技能库。
                   Agent 可以在对话中用文件工具访问
-                  ~/.super-personal-platform/skills 下的 SKILL.md。
+                  ~/.super-personal-platform/claude/skills 下的 SKILL.md。
                 </div>
 
                 <div className="skill-group">
@@ -212,7 +212,7 @@ export function SkillsPage({
                   ) : (
                     <div className="empty-note">
                       还没有交互创建的技能。可以让 Agent 用文件工具在
-                      ~/.super-personal-platform/skills 下写入 SKILL.md，或直接编辑现有技能。
+                      ~/.super-personal-platform/claude/skills 下写入 SKILL.md，或直接编辑现有技能。
                     </div>
                   )}
                 </div>

@@ -156,7 +156,7 @@ class Settings(BaseSettings):
 
     @property
     def skills_dir(self) -> Path:
-        return self.app_skills_dir or (APP_HOME / "skills")
+        return self.app_skills_dir or (APP_HOME / "claude" / "skills")
 
     @property
     def knowledge_dir(self) -> Path:

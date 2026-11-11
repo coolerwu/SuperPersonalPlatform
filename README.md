@@ -20,11 +20,11 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 ├── claude/                 # CLAUDE_CONFIG_DIR（权限 0700）
 │   ├── CLAUDE.md           # 用户画像，跨 Agent 生效（记忆页编辑）
 │   ├── settings.json       # Claude Code 自身配置
+│   ├── skills/             # 全局技能库（.seed_state.json 记录内置技能哈希）
 │   └── projects/<agent_id>/
 │       ├── <uuid>.jsonl    # SDK 会话 transcript
 │       └── memory/         # Claude auto memory
 ├── workspaces/<agent_id>/  # SDK 的 cwd；uploads/、screenshots/
-├── skills/                 # 全局技能库（.seed_state.json 记录内置技能哈希）
 ├── knowledge/              # 坚果云知识库的本地镜像
 ├── tmp/                    # SDK 的 TMPDIR
 └── data/
@@ -98,10 +98,10 @@ npm run dev
 
 ### Skills 文件格式
 
-全局技能库存放在 `~/.super-personal-platform/skills/`（`APP_SKILLS_DIR` 可覆盖），每个技能一个目录：
+全局技能库存放在 `~/.super-personal-platform/claude/skills/`（`APP_SKILLS_DIR` 可覆盖），每个技能一个目录：
 
 ```text
-skills/
+claude/skills/
 └── <skill-name>/
     ├── SKILL.md
     └── 其他辅助文件（可选）
@@ -248,7 +248,7 @@ metadata:
 - `backtests/`：回测策略临时文件。
 - `~/.super-personal-platform/claude/`：SDK 配置、用户画像 `CLAUDE.md`、会话 transcript 与 auto memory；权限 0700。SDK transcript 是会话历史的唯一来源。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区；归档 Agent 不会删除这里的文件，彻底删除会连同工作区目录一起删除。
-- `~/.super-personal-platform/skills/`：全局技能库。
+- `~/.super-personal-platform/claude/skills/`：全局技能库（Claude Code 用户级技能目录）。
 - `~/.super-personal-platform/knowledge/`：坚果云知识库的本地镜像。
 
 备份时停服务后复制 `data/app.db`、`data/settings.json`、`claude/`、`workspaces/`、`skills/`，以及 `data/trade-journal.jsonl`、`data/allocation.json`、`data/allocation-ledger.jsonl`；`data/market.db` 可按需重建；`knowledge/` 是镜像，可不备份。删除会话会同时删除其 transcript、截图、投递记录与渠道绑定。

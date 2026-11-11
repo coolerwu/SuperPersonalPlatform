@@ -121,7 +121,7 @@ def test_normalize_skill_names_dedupes_and_validates() -> None:
             normalize_skill_names([invalid])
 
 
-def test_seeded_skill_tool_declarations_match_registry() -> None:
+def test_seeded_skills_do_not_declare_platform_tools() -> None:
     from app.services import (  # noqa: F401 - import registers tool factories
         allocation_tools,
         backtest_tools,
@@ -138,40 +138,30 @@ def test_seeded_skill_tool_declarations_match_registry() -> None:
     declared = {tool for skill in catalog.skills for tool in skill.include_tools}
     registered = {spec.name for spec in SKILL_TOOL_REGISTRY.specs()}
 
-    # Cron tools lost their module with the legacy stack; the skill keeps
-    # declaring them until the tool-layer migration rewrites the contract.
-    pending = {
-        "cron_list",
-        "cron_targets",
-        "cron_create",
-        "cron_update",
-        "cron_delete",
-        "cron_run",
-    }
-    assert declared - registered == pending
-    cron_skill = next(skill for skill in catalog.skills if skill.name == "cron-scheduler")
-    assert set(cron_skill.include_tools) == pending
+    # Native Claude Code skills do not declare platform tools; availability is
+    # decided by which MCP tools the runner mounts.
+    assert declared == set()
+    assert {
+        "web_search",
+        "web_fetch",
+        "backtest_run",
+        "browser_open",
+        "chan_analyze",
+        "trade_journal_record",
+        "allocation_overview",
+    } <= registered
+    # Cron tools lost their module with the legacy stack.
+    assert "cron_list" not in registered
+    assert "cron_run" not in registered
     assert "memory-organizer" not in {skill.name for skill in catalog.skills}
 
 
 def test_default_web_skills_seeded(client) -> None:
     body = client.get("/api/skills").json()
     skills = {item["name"]: item for item in body["skills"]}
-    expected = {
-        "web-browser": [
-            "browser_open",
-            "browser_snapshot",
-            "browser_click",
-            "browser_fill",
-            "browser_press",
-            "browser_screenshot",
-            "browser_close",
-        ],
-    }
-    for name, tool_names in expected.items():
-        assert (settings.skills_dir / name / "SKILL.md").is_file()
-        assert skills[name]["include_tools"] == tool_names
-        assert skills[name]["source"] == "builtin"
+    assert (settings.skills_dir / "web-browser" / "SKILL.md").is_file()
+    assert skills["web-browser"]["include_tools"] == []
+    assert skills["web-browser"]["source"] == "builtin"
     # Web search/fetch moved to Claude Code's built-in WebSearch/WebFetch.
     assert "web-search" not in skills
     assert "web-fetch" not in skills

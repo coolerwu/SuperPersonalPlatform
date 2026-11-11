@@ -39,7 +39,7 @@
 8. 会话保留清理：按 transcript mtime 与保留天数删除，跳过运行中会话，保留 auto memory。
 9. 记忆：用户画像 = `claude/CLAUDE.md`（记忆页单文档编辑）；Agent 指令 = `settings.json`；Agent 笔记由 Claude auto memory 管理。
 10. 配置页：Provider、Agent、知识库、运行环境；所有平台配置写入 `data/settings.json`，密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。
-11. 技能库：全局 `skills/` 目录，内置技能 seed 与哈希跟踪；本版技能工具尚未接入 Agent。
+11. 技能库：全局 `claude/skills/` 目录（Claude Code 用户级技能），内置技能 seed 与哈希跟踪；本版技能工具尚未接入 Agent。
 12. 知识库：WebDAV 双向镜像到 `knowledge/`，配置与同步状态在设置接口；本版尚未挂载给 Agent。
 13. 业务页面：回测、交易记录、资产配置、缠论图，均不绑定 Agent。
 14. 前端路由自建（History API），刷新/直达/前进后退可用。
@@ -216,7 +216,7 @@
 
 #### 功能点
 
-1. 技能库 `~/.super-personal-platform/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `builtin` / `ai` / `manual`。
+1. 技能库 `~/.super-personal-platform/claude/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `builtin` / `ai` / `manual`。
 2. 内置技能 seed：`web-browser`、`knowledge-base`、`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`（网页搜索/抓取改用 Claude Code 自带的 WebSearch/WebFetch，对应技能已退役）。`.seed_state.json` 记录内置内容哈希：未修改的内置技能随版本更新；用户改过的保留；已从默认列表移除且未被修改的内置技能在启动 seed 时只删除被跟踪的 `SKILL.md`，目录内用户附加文件保留，只有目录为空时才移除目录；用户改过的保留并停止跟踪（例如旧 home 的 `memory-organizer`、`web-search`、`web-fetch`）。
 3. 技能页按「系统技能 / 交互创建」分组，可查看和编辑 SKILL.md、启用/停用；启用列表本版只保存偏好，不门控工具；非系统技能可删除（同时从所有 Agent 的启用列表移除）。
 4. 本版工具层未迁移：平台注册表中的技能、`add_dirs`、MCP、平台工具、搜索/浏览器/回测/定时/交易/资产/缠论/知识库工具都没有接入 SDK；WebFetch/WebSearch 等只是 Claude Code 默认工具集的一部分。runner 未显式设置 `tools`，默认工具集随 bundled CLI 版本和插件环境变化，以工具页/运行时 init frame 为准（例如 Read/Write/Edit/Bash/Task/WebFetch/WebSearch/Skill）。工具页按 API 展示，平台工具与技能工具标记为未接入。
@@ -352,11 +352,11 @@
 #### 功能点
 
 1. 生产：宿主机 systemd 用户服务 + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`（SPA fallback），没有 nginx/Postgres 容器。
-2. 运行时目录 `~/.super-personal-platform/`：`claude/`、`workspaces/<agent>/`、`skills/`、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
+2. 运行时目录 `~/.super-personal-platform/`：`claude/`（含 `skills/`）、`workspaces/<agent>/`、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
 3. 新库的 `app.db` 只创建六张表：`audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留旧表，旧 `providers`/`agents`/`channels`/`sessions`/`messages`/`runs`/`run_events`/`memory_items` 等表不再读写，`app_configs` 仅在首次启动读取一次保留天数后不再使用。
 4. 升级：本版不做数据迁移。先备份 `data/app.db` 与 `data/settings.json`；旧库可直接沿用，启动时检测并重建旧结构 `channel_deliveries` / `channel_inbounds`（旧待投递与入站去重记录丢失，iLink 可能重放一次）；旧 `providers` / `agents` / `channels` / `knowledge_configs` 配置不会导入，`settings.json` 用环境变量和默认值重新种子（仅首次启动读取旧 `app_configs.session_retention_days` 一次）；旧用户记忆与旧 `sessions/messages/runs/...` 聊天历史不会导入；旧微信渠道凭据不在 settings.json，需重新扫码绑定；旧定时任务列结构不兼容时，定时 tick 会持续记录 `cron tick failed`、任务列表接口可能 500，先备份再决定删除重建；回测历史保留。
 5. 彻底重建：删除 `data/app.db` 后重启，会丢失回测历史、定时任务、审计、未完成投递与入站去重记录；`data/settings.json` 和会话 transcript 不受影响，微信绑定在 settings.json 中，不需要因此重新扫码。
-6. 备份：`data/app.db`、`data/settings.json`、`claude/`、`workspaces/`、`data/trade-journal.jsonl`、`data/allocation*.json*`、`skills/`、`knowledge/`。
+6. 备份：`data/app.db`、`data/settings.json`、`claude/`、`workspaces/`、`data/trade-journal.jsonl`、`data/allocation*.json*`、`knowledge/`。
 7. 旧 home 的 `memory-organizer` 技能由启动 seed 清理（未修改时删除，用户改过的保留但停止跟踪）。
 
 #### 验收标准

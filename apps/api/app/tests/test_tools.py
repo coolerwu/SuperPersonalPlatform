@@ -58,16 +58,5 @@ def test_tools_api_declares_claude_code_and_unwired_tools(client) -> None:
     # tool-layer migration but no skill declares them any more.
     assert skills["web_search"]["skills"] == []
     assert skills["web_fetch"]["skills"] == []
-
-    # cron tools lost their module in the legacy-stack removal; the skill still
-    # declares them until the tool-layer migration rewrites the contract.
-    for name in (
-        "cron_list",
-        "cron_targets",
-        "cron_create",
-        "cron_update",
-        "cron_delete",
-        "cron_run",
-    ):
-        assert skills[name]["registered"] is False, name
-        assert skills[name]["skills"] == ["cron-scheduler"]
+    # Cron tools have no module and no skill declares them.
+    assert "cron_list" not in skills
