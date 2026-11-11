@@ -66,7 +66,7 @@
   - **组合方式**：典型任务到调用序列。例如回测是 `market_probe` → 写策略 → `backtest_run` → 必要时 `backtest_status` / `backtest_result`。
   - **硬契约**：不看就会用错的规则。例如 `strategy(df)` 返回 `[-1, 1]`、cron 是 5 字段且默认 `Asia/Shanghai`、交易记录 `thesis` 必填、缠论是「老笔近似」不能宣称严格理论。
 - frontmatter 只保留 `name` 和 `description`；description 写触发条件，保持简短（系统提示里的技能索引会截断长描述）。
-- 新增测试：初始化技能正文中出现的平台工具名（`backtest_`、`market_`、`trade_journal_`、`allocation_`、`chan_` 前缀）必须存在于 `SKILL_TOOL_REGISTRY`，防止工具改名后清单过时。
+- 新增测试：初始化技能正文中出现的平台工具名（`backtest_`、`market_`、`trade_journal_`、`allocation_`、`chan_`、`cron_` 前缀）必须存在于 `platform_mcp.BUSINESS_TOOL_NAMES`（运行时实际挂载的工具集），并且每个已挂载工具都至少被一个模板提到，防止工具改名或清单漏项。
 
 ## 6. 可观测性
 

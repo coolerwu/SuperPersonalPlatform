@@ -7,7 +7,7 @@ description: 记录、查询、复盘真实或模拟交易，或统计胜率/平
 
 ## 工具清单
 
-- `trade_journal_record`：记录一笔交易（开仓或缺字段的补记）。
+- `trade_journal_record`：记录一笔交易（开仓或缺字段的补记）（写操作）。
 - `trade_journal_close`：平仓并补 `review`、`tags`（写操作）。
 - `trade_journal_update`：修改错误或补复盘，只传要改的字段（写操作）。
 - `trade_journal_query`：按 id、市场、代码、状态、标签、时间或关键词查询。
@@ -23,7 +23,7 @@ description: 记录、查询、复盘真实或模拟交易，或统计胜率/平
 ## 硬契约
 
 - 数据在 `data/trade-journal.jsonl`，每行一笔交易；不要用文件工具直接改写，统一走工具。
-- 必填：`symbol`、`direction`、`entry_at`、`entry_price`、`thesis`。平仓补 `exit_at`、`exit_price`；可选 `fees`、`review`、`tags`、`followed_plan`、`stop_loss`、`quantity`、`market`、`currency`、`instrument_type`、`meta`。
+- 必填：`symbol`、`entry_at`、`entry_price`、`thesis`；`direction` 默认 `long`，做空必须显式传 `short`。平仓补 `exit_at`、`exit_price`；可选 `fees`、`review`、`tags`、`followed_plan`、`stop_loss`、`quantity`、`market`、`currency`、`instrument_type`、`meta`。
 - 时间是 ISO 8601：crypto 如 `2026-11-02T02:15:00Z`，A 股如 `2026-11-02T10:15:00+08:00`。
 - `thesis` 写开仓前「我在赌什么、什么证明我错了」；`review` 写平仓后「执行问题还是判断问题、重来会怎么做」。要被分组统计的内容放进 `tags`，推荐命名空间：`setup:`、`mistake:`、`emotion:`、`regime:`、`board:`、`sector:`、`limit:`。
 - crypto 代码如 `BTCUSDT`，默认 `currency=USDT`、`instrument_type=spot`；A 股代码用 `600519.SH`、`000001.SZ` 等，默认 `currency=CNY`、`instrument_type=stock`，ETF/可转债/基金用 `etf`/`convertible_bond`/`fund`。`market` 可省略，平台会从代码推断。

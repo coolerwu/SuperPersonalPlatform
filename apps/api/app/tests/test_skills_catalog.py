@@ -234,14 +234,20 @@ def test_initialization_skills_reference_only_mounted_tools() -> None:
     from app.services.skills import load_seed_skills
 
     pattern = re.compile(
-        r"\b(?:backtest|market|trade_journal|allocation|chan)_[a-z_]+\b"
+        r"(?<![A-Za-z0-9_])(?:backtest|market|trade_journal|allocation|chan|cron)_[a-z_]+"
+        r"(?![A-Za-z0-9_])"
     )
+    templates = load_seed_skills()
+    assert templates, "seed templates unreadable"
+
     referenced = set()
-    for content in load_seed_skills().values():
+    for content in templates.values():
         referenced |= set(pattern.findall(content))
         assert "## 工具清单" in content
         assert "## 组合方式" in content
         assert "## 硬契约" in content
 
+    mounted = set(BUSINESS_TOOL_NAMES)
     assert referenced
-    assert referenced <= set(BUSINESS_TOOL_NAMES), referenced - set(BUSINESS_TOOL_NAMES)
+    assert referenced <= mounted, referenced - mounted
+    assert mounted <= referenced, mounted - referenced
