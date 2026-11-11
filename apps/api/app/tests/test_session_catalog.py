@@ -125,6 +125,46 @@ async def test_messages_extract_text_and_blocks(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_messages_merge_consecutive_assistant_messages(monkeypatch):
+    monkeypatch.setattr(
+        sdk_bridge,
+        "get_session_messages",
+        lambda session_id: [
+            SimpleNamespace(
+                type="user",
+                uuid="u1",
+                message={"role": "user", "content": "hi"},
+                parent_tool_use_id=None,
+            ),
+            SimpleNamespace(
+                type="assistant",
+                uuid="a1",
+                message={
+                    "role": "assistant",
+                    "content": [{"type": "thinking", "thinking": "hm"}],
+                },
+                parent_tool_use_id=None,
+            ),
+            SimpleNamespace(
+                type="assistant",
+                uuid="a2",
+                message={
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hello"}],
+                },
+                parent_tool_use_id=None,
+            ),
+        ],
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=Path("/tmp"))
+    rows = await catalog.messages("s1")
+    assert len(rows) == 2
+    assert rows[1]["id"] == "a1"
+    assert rows[1]["content"] == "hello"
+    assert [block["type"] for block in rows[1]["blocks"]] == ["thinking"]
+
+
+@pytest.mark.asyncio
 async def test_messages_skips_tool_results_and_subagents(monkeypatch):
     monkeypatch.setattr(
         sdk_bridge,

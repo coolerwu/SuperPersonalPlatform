@@ -120,6 +120,18 @@ class SessionCatalog:
                 )
                 if not content.strip() and not blocks:
                     continue
+                # One turn can emit several assistant messages (thinking first,
+                # then the answer, and one per tool round). The chat renders a
+                # bubble per entry, so merge consecutive assistant messages
+                # into the turn's single bubble.
+                if rows and rows[-1]["role"] == "assistant":
+                    previous = rows[-1]
+                    merged = "\n\n".join(
+                        part for part in (previous["content"], content) if part
+                    )
+                    previous["content"] = merged
+                    previous["blocks"].extend(blocks)
+                    continue
                 rows.append(
                     {
                         "id": str(getattr(message, "uuid", "")),
