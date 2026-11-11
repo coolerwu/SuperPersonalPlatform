@@ -5,6 +5,7 @@ import mimetypes
 import shutil
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -33,6 +34,7 @@ from app.services.settings_store import (
     build_default_settings,
     get_settings_store,
 )
+from app.services.workspace_files import media_type_for, resolve_workspace_file
 
 logger = logging.getLogger(__name__)
 
@@ -406,6 +408,35 @@ async def get_upload(
         media_type=media_type,
         headers={"Cache-Control": "private, max-age=86400"},
     )
+
+
+@router.get("/{agent_id}/files/{path:path}")
+async def get_workspace_file(
+    agent_id: str, path: str, request: Request
+) -> FileResponse:
+    """Serve a file the Agent produced in its workspace, read-only.
+
+    Only workspace-relative paths resolve; the agent itself writes with the
+    SDK cwd set to this workspace, so markdown like ``![图](chart.png)`` maps
+    here. Paused and archived Agents keep old files viewable.
+    """
+    snapshot = await _store(request).get()
+    agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    target = resolve_workspace_file(agent_id, path)
+    if target is None:
+        raise HTTPException(status_code=404, detail="file not found")
+    media_type, download = media_type_for(target)
+    headers = {
+        "Cache-Control": "private, no-cache",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if download:
+        headers["Content-Disposition"] = (
+            f"attachment; filename*=UTF-8''{quote(target.name)}"
+        )
+    return FileResponse(target, media_type=media_type, headers=headers)
 
 
 @router.delete("/{agent_id}")
