@@ -79,12 +79,13 @@ export function SkillEditorDialog({ skill, onClose, onSaved }: SkillEditorDialog
             <div className="skill-editor-path">
               {skill.path}
               <span className={`skill-source ${skill.source}`}>
-                {skill.source === "builtin"
-                  ? "系统"
+                {skill.source === "initial"
+                  ? "初始化"
                   : skill.source === "ai"
                     ? "AI 创建"
                     : "手动创建"}
               </span>
+              {detail?.modified && <span className="skill-source modified">已调整</span>}
             </div>
           </div>
           <button type="button" className="icon-button" onClick={onClose} disabled={saving}>

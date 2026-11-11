@@ -13,7 +13,7 @@ type SkillsPageProps = {
 };
 
 const SOURCE_LABELS: Record<string, string> = {
-  builtin: "系统",
+  initial: "初始化",
   ai: "AI 创建",
   manual: "手动创建",
 };
@@ -34,8 +34,8 @@ export function SkillsPage({
   const [deleting, setDeleting] = useState<SkillInfo | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  const builtinSkills = skills.filter((skill) => skill.source === "builtin");
-  const createdSkills = skills.filter((skill) => skill.source !== "builtin");
+  const initialSkills = skills.filter((skill) => skill.source === "initial");
+  const createdSkills = skills.filter((skill) => skill.source !== "initial");
 
   useEffect(() => {
     void onRefresh();
@@ -73,6 +73,7 @@ export function SkillsPage({
           <strong>
             {skill.name}
             <span className={`skill-source ${skill.source}`}>{sourceLabel(skill.source)}</span>
+            {skill.modified && <span className="skill-source modified">已调整</span>}
           </strong>
           <small>{skill.description}</small>
           {skill.include_tools.length > 0 && (
@@ -91,15 +92,13 @@ export function SkillsPage({
           >
             查看
           </button>
-          {skill.source !== "builtin" && (
-            <button
-              type="button"
-              className="skill-open skill-delete"
-              onClick={() => setDeleting(skill)}
-            >
-              删除
-            </button>
-          )}
+          <button
+            type="button"
+            className="skill-open skill-delete"
+            onClick={() => setDeleting(skill)}
+          >
+            删除
+          </button>
         </span>
       </div>
     );
@@ -137,20 +136,20 @@ export function SkillsPage({
 
             <div className="skill-group">
               <div className="skill-group-head">
-                <h3>系统技能</h3>
-                <small>平台内置，随版本更新；不可删除。</small>
+                <h3>初始化技能</h3>
+                <small>平台首次启动时写入的参考；未修改时随版本更新，改过就归 Agent 所有。</small>
               </div>
-              {builtinSkills.length > 0 ? (
-                <div className="skill-list">{builtinSkills.map(renderSkill)}</div>
+              {initialSkills.length > 0 ? (
+                <div className="skill-list">{initialSkills.map(renderSkill)}</div>
               ) : (
-                <div className="empty-note">还没有系统技能。</div>
+                <div className="empty-note">还没有初始化技能。</div>
               )}
             </div>
 
             <div className="skill-group">
               <div className="skill-group-head">
-                <h3>交互创建</h3>
-                <small>通过对话中的文件工具创建或编辑。</small>
+                <h3>其他技能</h3>
+                <small>通过对话或手工创建、编辑的技能。</small>
               </div>
               {createdSkills.length > 0 ? (
                 <div className="skill-list">{createdSkills.map(renderSkill)}</div>
@@ -180,7 +179,7 @@ export function SkillsPage({
       <ConfirmDialog
         open={deleting !== null}
         title={deleting ? `删除技能 ${deleting.name}？` : ""}
-        description="会删除整个技能目录；系统技能不能删除。"
+        description="会删除整个技能目录；初始化技能删除后不会再自动生成。"
         confirmLabel={deleteBusy ? "删除中…" : "删除"}
         cancelLabel="取消"
         danger

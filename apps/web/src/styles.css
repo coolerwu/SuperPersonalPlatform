@@ -2258,10 +2258,16 @@ textarea {
   vertical-align: middle;
 }
 
-.skill-source.builtin {
+.skill-source.initial {
   border-color: rgb(var(--accent-rgb) / 0.2);
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.skill-source.modified {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-ink);
 }
 
 .skill-source.ai {

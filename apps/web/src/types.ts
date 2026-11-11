@@ -27,7 +27,8 @@ export type SkillInfo = {
   include_tools: string[];
   can_enable: boolean;
   warnings: string[];
-  source: "builtin" | "ai" | "manual" | string;
+  source: "initial" | "ai" | "manual" | string;
+  modified: boolean;
 };
 
 export type SkillCatalog = {
@@ -41,7 +42,8 @@ export type SkillDetail = {
   path: string;
   content: string;
   warnings: string[];
-  source: "builtin" | "ai" | "manual" | string;
+  source: "initial" | "ai" | "manual" | string;
+  modified: boolean;
 };
 
 export type PluginMarketplace = {
