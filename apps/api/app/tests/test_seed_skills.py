@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
-from app.services.skills import DEFAULT_SKILLS, SEED_STATE_FILENAME, scan_skills, seed_default_skills
+from app.services.skills import (
+    SEED_STATE_FILENAME,
+    load_seed_skills,
+    scan_skills,
+    seed_default_skills,
+)
+
+TEMPLATES = {
+    "demo-skill": "---\nname: demo-skill\ndescription: Demo\n---\n\n# demo\n",
+    "other-skill": "---\nname: other-skill\ndescription: Other\n---\n\n# other\n",
+}
 
 
-def _state(root) -> dict:
+def _state(root: Path) -> dict:
     return json.loads((root / SEED_STATE_FILENAME).read_text(encoding="utf-8"))
 
 
@@ -14,145 +25,133 @@ def _hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def test_seed_creates_missing_skills_and_state(tmp_path) -> None:
-    seed_default_skills(tmp_path)
+def test_seed_creates_missing_skills_and_state(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
 
-    for name, content in DEFAULT_SKILLS.items():
+    for name, content in TEMPLATES.items():
         assert (tmp_path / name / "SKILL.md").read_text(encoding="utf-8") == content
     state = _state(tmp_path)
     assert state["version"] == 1
-    assert state["skills"] == {name: _hash(content) for name, content in DEFAULT_SKILLS.items()}
-    assert {skill.name for skill in scan_skills(tmp_path).skills} == set(DEFAULT_SKILLS)
+    assert state["skills"] == {name: _hash(content) for name, content in TEMPLATES.items()}
+    assert {skill.name for skill in scan_skills(tmp_path).skills} == set(TEMPLATES)
 
 
-def test_seed_updates_unmodified_builtin_skill(tmp_path, monkeypatch) -> None:
-    seed_default_skills(tmp_path)
-    name = "quant-backtest"
-    updated = DEFAULT_SKILLS[name] + "\nupdated built-in content\n"
-    monkeypatch.setitem(DEFAULT_SKILLS, name, updated)
+def test_seed_updates_unmodified_skill(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    updated = {**TEMPLATES, "demo-skill": TEMPLATES["demo-skill"] + "\nupdated\n"}
 
-    seed_default_skills(tmp_path)
+    seed_default_skills(tmp_path, updated)
 
-    assert (tmp_path / name / "SKILL.md").read_text(encoding="utf-8") == updated
-    assert _state(tmp_path)["skills"][name] == _hash(updated)
+    assert (
+        tmp_path / "demo-skill" / "SKILL.md"
+    ).read_text(encoding="utf-8") == updated["demo-skill"]
+    assert _state(tmp_path)["skills"]["demo-skill"] == _hash(updated["demo-skill"])
 
 
-def test_seed_preserves_user_edited_skill(tmp_path, monkeypatch) -> None:
-    seed_default_skills(tmp_path)
-    target = tmp_path / "quant-backtest" / "SKILL.md"
+def test_seed_preserves_edited_skill(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    target = tmp_path / "demo-skill" / "SKILL.md"
     target.write_text("user customized content", encoding="utf-8")
-    monkeypatch.setitem(DEFAULT_SKILLS, "quant-backtest", "new built-in content")
+    updated = {**TEMPLATES, "demo-skill": "new initialization content\n"}
 
-    seed_default_skills(tmp_path)
+    seed_default_skills(tmp_path, updated)
 
     assert target.read_text(encoding="utf-8") == "user customized content"
+    assert _state(tmp_path)["skills"]["demo-skill"] == _hash(TEMPLATES["demo-skill"])
 
 
-def test_seed_adopts_existing_file_that_matches_default(tmp_path, monkeypatch) -> None:
-    name = "quant-backtest"
-    target = tmp_path / name / "SKILL.md"
+def test_seed_does_not_resurrect_deleted_skill(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    (tmp_path / "demo-skill" / "SKILL.md").unlink()
+
+    seed_default_skills(tmp_path, TEMPLATES)
+
+    assert not (tmp_path / "demo-skill" / "SKILL.md").exists()
+    assert _state(tmp_path)["skills"]["demo-skill"] == _hash(TEMPLATES["demo-skill"])
+
+
+def test_seed_adopts_existing_file_that_matches_template(tmp_path: Path) -> None:
+    target = tmp_path / "demo-skill" / "SKILL.md"
     target.parent.mkdir(parents=True)
-    target.write_text(DEFAULT_SKILLS[name], encoding="utf-8")
+    target.write_text(TEMPLATES["demo-skill"], encoding="utf-8")
+
+    seed_default_skills(tmp_path, {"demo-skill": TEMPLATES["demo-skill"]})
+    assert _state(tmp_path)["skills"]["demo-skill"] == _hash(TEMPLATES["demo-skill"])
+
+    updated = {**TEMPLATES, "demo-skill": TEMPLATES["demo-skill"] + "\nnext\n"}
+    seed_default_skills(tmp_path, updated)
+    assert target.read_text(encoding="utf-8") == updated["demo-skill"]
+
+
+def test_seed_leaves_untracked_skill_that_differs_from_template(tmp_path: Path) -> None:
+    target = tmp_path / "demo-skill" / "SKILL.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("my own version\n", encoding="utf-8")
+
+    seed_default_skills(tmp_path, {"demo-skill": TEMPLATES["demo-skill"]})
+
+    assert target.read_text(encoding="utf-8") == "my own version\n"
     assert not (tmp_path / SEED_STATE_FILENAME).exists()
 
-    seed_default_skills(tmp_path)
-    assert _state(tmp_path)["skills"][name] == _hash(DEFAULT_SKILLS[name])
 
-    updated = DEFAULT_SKILLS[name] + "\nnext\n"
-    monkeypatch.setitem(DEFAULT_SKILLS, name, updated)
-    seed_default_skills(tmp_path)
-    assert target.read_text(encoding="utf-8") == updated
+def test_seed_drops_retired_tracking_but_keeps_files(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+
+    seed_default_skills(tmp_path, {"demo-skill": TEMPLATES["demo-skill"]})
+
+    retired = tmp_path / "other-skill" / "SKILL.md"
+    assert retired.read_text(encoding="utf-8") == TEMPLATES["other-skill"]
+    assert "other-skill" not in _state(tmp_path)["skills"]
+
+    seed_default_skills(tmp_path, {"demo-skill": TEMPLATES["demo-skill"]})
+    assert retired.read_text(encoding="utf-8") == TEMPLATES["other-skill"]
 
 
-def test_seed_survives_corrupt_state_file(tmp_path) -> None:
-    seed_default_skills(tmp_path)
-    target = tmp_path / "quant-backtest" / "SKILL.md"
+def test_seed_drops_tombstone_when_template_is_retired(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    (tmp_path / "other-skill" / "SKILL.md").unlink()
+
+    seed_default_skills(tmp_path, {"demo-skill": TEMPLATES["demo-skill"]})
+
+    assert "other-skill" not in _state(tmp_path)["skills"]
+
+
+def test_seed_survives_corrupt_state_file(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    target = tmp_path / "demo-skill" / "SKILL.md"
     original = target.read_text(encoding="utf-8")
     (tmp_path / SEED_STATE_FILENAME).write_text("{not json", encoding="utf-8")
 
-    seed_default_skills(tmp_path)
+    seed_default_skills(tmp_path, TEMPLATES)
 
     assert target.read_text(encoding="utf-8") == original
-    assert _state(tmp_path)["skills"]["quant-backtest"] == _hash(original)
+    assert _state(tmp_path)["skills"]["demo-skill"] == _hash(original)
 
 
-def test_seed_removes_unmodified_retired_builtin_skill(tmp_path, monkeypatch) -> None:
-    seed_default_skills(tmp_path)
-    name = "quant-backtest"
-    monkeypatch.delitem(DEFAULT_SKILLS, name)
-
-    seed_default_skills(tmp_path)
-
-    assert not (tmp_path / name).exists()
-    assert name not in _state(tmp_path)["skills"]
-
-
-def test_seed_keeps_user_edited_retired_builtin_skill(tmp_path, monkeypatch) -> None:
-    seed_default_skills(tmp_path)
-    name = "quant-backtest"
-    target = tmp_path / name / "SKILL.md"
-    edited = "user customized retired skill"
-    target.write_text(edited, encoding="utf-8")
-    monkeypatch.delitem(DEFAULT_SKILLS, name)
-
-    seed_default_skills(tmp_path)
-
-    assert target.read_text(encoding="utf-8") == edited
-    assert name not in _state(tmp_path)["skills"]
-    # Once tracking is dropped, later seeds never delete or rewrite the copy.
-    seed_default_skills(tmp_path)
-    assert target.read_text(encoding="utf-8") == edited
-    assert name not in _state(tmp_path)["skills"]
-
-
-def test_seed_retired_skill_keeps_user_added_files(tmp_path, monkeypatch) -> None:
-    seed_default_skills(tmp_path)
-    name = "quant-backtest"
-    directory = tmp_path / name
-    extra = directory / "notes.txt"
-    extra.write_text("user notes", encoding="utf-8")
-    monkeypatch.delitem(DEFAULT_SKILLS, name)
-
-    seed_default_skills(tmp_path)
-
-    assert not (directory / "SKILL.md").exists()
-    assert extra.read_text(encoding="utf-8") == "user notes"
-    assert directory.is_dir()
-    assert name not in _state(tmp_path)["skills"]
-
-
-def test_seed_retired_skill_missing_skill_md_drops_state_only(tmp_path, monkeypatch) -> None:
-    seed_default_skills(tmp_path)
-    name = "quant-backtest"
-    directory = tmp_path / name
-    (directory / "SKILL.md").unlink()
-    extra = directory / "notes.txt"
-    extra.write_text("user notes", encoding="utf-8")
-    monkeypatch.delitem(DEFAULT_SKILLS, name)
-
-    seed_default_skills(tmp_path)
-
-    assert extra.read_text(encoding="utf-8") == "user notes"
-    assert directory.is_dir()
-    assert name not in _state(tmp_path)["skills"]
-
-
-def test_seed_retired_unreadable_skill_keeps_state(tmp_path, monkeypatch) -> None:
-    seed_default_skills(tmp_path)
-    name = "quant-backtest"
-    target = tmp_path / name / "SKILL.md"
+def test_seed_keeps_state_when_skill_is_unreadable(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    target = tmp_path / "demo-skill" / "SKILL.md"
     unreadable = b"\xff\xfe\x00"
     target.write_bytes(unreadable)
-    recorded = _state(tmp_path)["skills"][name]
-    monkeypatch.delitem(DEFAULT_SKILLS, name)
 
-    seed_default_skills(tmp_path)
+    seed_default_skills(tmp_path, {**TEMPLATES, "demo-skill": "changed\n"})
 
     assert target.read_bytes() == unreadable
-    assert _state(tmp_path)["skills"][name] == recorded
+    assert _state(tmp_path)["skills"]["demo-skill"] == _hash(TEMPLATES["demo-skill"])
 
 
-def test_seed_drops_invalid_state_entries(tmp_path) -> None:
+def test_seed_ignores_symlinked_skill_entry(tmp_path: Path) -> None:
+    seed_default_skills(tmp_path, TEMPLATES)
+    real = tmp_path / "real-demo"
+    (tmp_path / "demo-skill").rename(real)
+    (tmp_path / "demo-skill").symlink_to(real, target_is_directory=True)
+
+    seed_default_skills(tmp_path, {**TEMPLATES, "demo-skill": "changed\n"})
+
+    assert (real / "SKILL.md").read_text(encoding="utf-8") == TEMPLATES["demo-skill"]
+
+
+def test_seed_drops_invalid_state_entries(tmp_path: Path) -> None:
     (tmp_path / SEED_STATE_FILENAME).write_text(
         json.dumps(
             {
@@ -163,59 +162,33 @@ def test_seed_drops_invalid_state_entries(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    seed_default_skills(tmp_path)
+    seed_default_skills(tmp_path, TEMPLATES)
 
     state = _state(tmp_path)["skills"]
     assert "../escape" not in state
     assert "Bad Name" not in state
 
 
-def test_seed_corrupt_state_keeps_retired_directory(tmp_path, monkeypatch) -> None:
-    seed_default_skills(tmp_path)
-    name = "quant-backtest"
-    target = tmp_path / name / "SKILL.md"
-    original = target.read_text(encoding="utf-8")
-    (tmp_path / SEED_STATE_FILENAME).write_text("{not json", encoding="utf-8")
-    monkeypatch.delitem(DEFAULT_SKILLS, name)
+def test_load_seed_skills_reads_skill_md_files(tmp_path: Path) -> None:
+    (tmp_path / "demo-skill").mkdir()
+    (tmp_path / "demo-skill" / "SKILL.md").write_text(
+        TEMPLATES["demo-skill"], encoding="utf-8"
+    )
+    (tmp_path / "no-skill-md").mkdir()
+    (tmp_path / "note.txt").write_text("ignore me", encoding="utf-8")
 
-    seed_default_skills(tmp_path)
-
-    assert target.read_text(encoding="utf-8") == original
-    assert name not in _state(tmp_path)["skills"]
+    assert load_seed_skills(tmp_path) == {"demo-skill": TEMPLATES["demo-skill"]}
 
 
-def test_seed_retired_symlinked_directory_is_left_untouched(tmp_path, monkeypatch) -> None:
-    seed_default_skills(tmp_path)
-    name = "quant-backtest"
-    directory = tmp_path / name
-    real = tmp_path / "real-quant-backtest"
-    directory.rename(real)
-    directory.symlink_to(real, target_is_directory=True)
-    monkeypatch.delitem(DEFAULT_SKILLS, name)
-
-    seed_default_skills(tmp_path)
-
-    assert directory.is_symlink()
-    assert (real / "SKILL.md").is_file()
-    assert name not in _state(tmp_path)["skills"]
-
-
-def test_seed_retired_skill_md_symlink_is_unlinked_not_followed(
-    tmp_path, monkeypatch
-) -> None:
-    seed_default_skills(tmp_path)
-    name = "quant-backtest"
-    directory = tmp_path / name
-    target = directory / "SKILL.md"
-    external = tmp_path / "external.md"
-    external.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
-    target.unlink()
-    target.symlink_to(external)
-    monkeypatch.delitem(DEFAULT_SKILLS, name)
-
-    seed_default_skills(tmp_path)
-
-    assert not target.exists()
-    assert external.is_file()
-    assert not directory.exists()
-    assert name not in _state(tmp_path)["skills"]
+def test_real_seed_templates_cover_platform_domains() -> None:
+    templates = load_seed_skills()
+    assert set(templates) == {
+        "quant-backtest",
+        "cron-scheduler",
+        "trade-journal",
+        "allocation",
+        "chanlun",
+    }
+    for name, content in templates.items():
+        assert content.startswith("---\n")
+        assert f"name: {name}" in content
