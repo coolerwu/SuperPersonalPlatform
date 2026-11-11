@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -226,3 +227,21 @@ def test_modified_flag_marks_edited_initial_skill(client) -> None:
 
     untouched = next(item for item in listed["skills"] if item["name"] == "trade-journal")
     assert untouched["modified"] is False
+
+
+def test_initialization_skills_reference_only_mounted_tools() -> None:
+    from app.services.platform_mcp import BUSINESS_TOOL_NAMES
+    from app.services.skills import load_seed_skills
+
+    pattern = re.compile(
+        r"\b(?:backtest|market|trade_journal|allocation|chan)_[a-z_]+\b"
+    )
+    referenced = set()
+    for content in load_seed_skills().values():
+        referenced |= set(pattern.findall(content))
+        assert "## 工具清单" in content
+        assert "## 组合方式" in content
+        assert "## 硬契约" in content
+
+    assert referenced
+    assert referenced <= set(BUSINESS_TOOL_NAMES), referenced - set(BUSINESS_TOOL_NAMES)
