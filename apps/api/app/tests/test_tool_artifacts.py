@@ -80,3 +80,18 @@ def test_collect_dedupes_by_path_and_keeps_the_last(tmp_path):
     artifacts = collect_artifacts(blocks, workspace)
     assert [artifact["path"] for artifact in artifacts] == ["a.txt"]
     assert artifacts[0]["size"] == 1
+
+
+def test_symlinked_artifacts_are_skipped(tmp_path):
+    workspace = _workspace(tmp_path)
+    (tmp_path / "outside.txt").write_text("x")
+    (workspace / "link.txt").symlink_to(tmp_path / "outside.txt")
+    assert artifact_from_tool("Write", {"file_path": "link.txt"}, workspace) is None
+
+
+def test_svg_is_listed_as_a_file_not_an_image(tmp_path):
+    workspace = _workspace(tmp_path)
+    (workspace / "chart.svg").write_text("<svg/>")
+    artifact = artifact_from_tool("Write", {"file_path": "chart.svg"}, workspace)
+    assert artifact is not None
+    assert artifact["kind"] == "file"

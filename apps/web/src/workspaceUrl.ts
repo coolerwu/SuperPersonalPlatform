@@ -16,7 +16,13 @@ export function isRelativeWorkspaceUrl(value: string): boolean {
 /** `/api/agents/<id>/files/<workspace-relative path>` or null. */
 export function workspaceFileUrl(agentId: string, raw: string): string | null {
   if (!agentId || !isRelativeWorkspaceUrl(raw)) return null;
-  const relative = raw.trim().replace(/^\.\//, "").replace(/^\//, "");
+  let relative = raw.trim().replace(/^\.\//, "");
+  if (relative.startsWith("/")) {
+    // Old attachments were written as /uploads/<name>; any other rooted
+    // path is a server filesystem path, not a workspace file.
+    if (!relative.startsWith("/uploads/")) return null;
+    relative = relative.slice(1);
+  }
   if (!relative) return null;
   const encoded = relative.split("/").map(encodeURIComponent).join("/");
   return `/api/agents/${encodeURIComponent(agentId)}/files/${encoded}`;

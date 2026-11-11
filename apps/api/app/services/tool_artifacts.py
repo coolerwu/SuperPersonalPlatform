@@ -67,6 +67,10 @@ def artifact_from_tool(
     if relative is None:
         return None
     target = workspace.resolve() / relative
+    # The download route refuses symlinks; listing one here would only
+    # produce an artifact chip that 404s when clicked.
+    if target.is_symlink():
+        return None
     return {
         "path": relative,
         "name": Path(relative).name,

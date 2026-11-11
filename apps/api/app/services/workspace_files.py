@@ -25,7 +25,10 @@ _UNSAFE_INLINE = {
     "application/xhtml+xml",
     "image/svg+xml",
     "application/javascript",
+    "application/x-javascript",
     "text/javascript",
+    "application/ecmascript",
+    "text/ecmascript",
     "application/xml",
     "text/xml",
 }

@@ -86,6 +86,8 @@
 11. 消息不显示时间戳。同一进程内刷新或重连会在数秒内通过 `current_turn_id` 重放当前轮缓冲；进程重启或订阅断开后才丢失当前输出。
 12. 网页消息只接受 active Agent；paused 与 archived 都返回 409 和中文提示。`session_id` 必须属于该 Agent：已有 transcript 必须是同一 Agent 的，否则 409；同一个 session id 不会跨 Agent 复用 client。
 13. 每个 Agent 的 SDK client 缓存有上限（默认 8 个）和空闲 TTL（默认 300 秒），每 60 秒清扫；同一会话配置（instructions/Provider）变化后下一轮重建 client。
+14. 工作区文件只读下载：`GET /api/agents/{agent_id}/files/{path}` 以工作区相对路径读取 `workspaces/<agent_id>/` 下的文件；拒绝绝对路径、`..`、符号链接逃逸、目录与不存在的文件。HTML、SVG、JS、XML 等可执行脚本的类型强制以 `application/octet-stream` + `Content-Disposition: attachment` 下载，避免在平台 origin 内联渲染。
+15. assistant 回复里的相对图片/文件链接按当前 Agent 工作区解析（`![图](x.png)`、`[报告](report.md)`），图片直接显示、文件可点开；外部 URL（含协议、`//`、`/api/`）与锚点保持原样。每条 assistant 回复另附「产物」列表：从 `Write`/`Edit`/`MultiEdit`/`NotebookEdit` 的 `file_path` 与截图/存 PDF 类 MCP 工具的 `filename` 提取工作区内文件；历史来自 transcript 的 tool_use 块，实时来自带 `artifact` 字段的 `tool_call` 事件；同一路径去重、后写覆盖先写；工作区外的路径不展示。
 
 #### 验收标准
 
@@ -94,6 +96,8 @@
 - 执行中重启服务 → 会话自动 resume 并完成，`running_sessions` 清空。
 - 同一会话第二个 turn 排队，不同会话可并发。
 - 附件上传后可被 Agent 读取；引用以 `> ` 块进入消息。
+- Agent 在工作区保存截图并在回复中用相对路径引用时，页面直接显示图片；点击可在新标签打开原文件。
+- Agent 写入工作区文件后，回复下方出现「产物」列表（图片为缩略图，其他文件为文件卡片），流式过程中出现，刷新后仍在。
 
 ### F3 会话目录与保留清理
 
