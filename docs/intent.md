@@ -222,7 +222,7 @@
 #### 功能点
 
 1. 技能库 `~/.super-personal-platform/claude/skills/<name>/SKILL.md`（`APP_SKILLS_DIR` 可覆盖）；frontmatter 校验、来源分 `initial` / `ai` / `manual`。
-2. 初始化模板在 `apps/api/app/seed_skills/<name>/SKILL.md`：`quant-backtest`、`chanlun`、`trade-journal`、`allocation`、`cron-scheduler`。模板按「工具清单 + 组合方式 + 硬契约」组织；平台没有给 Agent 定时任务工具，`cron-scheduler` 只说明页面入口和定时触发会话的语义。启动 seed 规则：从未初始化过的缺失技能写入；未修改（哈希等于 `.seed_state.json` 记录）的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑、不再生成；模板移除时只删记录、保留本地文件。
+2. 初始化模板在 `apps/api/app/seed_skills/<name>/SKILL.md`：`quant-backtest`、`chanlun`、`trade-journal`、`allocation`、`cron-scheduler`。模板按「工具清单 + 组合方式 + 硬契约」组织；平台没有给 Agent 定时任务工具，`cron-scheduler` 只说明页面入口和定时触发会话的语义。启动 seed 规则：从未初始化过的缺失技能写入；未修改（哈希等于 `.seed_state.json` 记录）的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑，只要模板仍在就不再生成；模板移除时只删记录、保留本地文件；保留的副本不再计入「初始化技能」，页面归入「其他技能」。
 3. 技能页按「初始化技能 / 其他技能」分组，可查看和编辑 SKILL.md；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关；任何技能都可删除（只删技能目录），初始化技能删除后不复活；改过的初始化技能标「已调整」。
 4. 平台业务工具已通过进程内 MCP 接入 chat：回测 4 个（`backtest_*`）、行情 2 个（`market_*`）、交易记录 5 个（`trade_journal_*`）、资产配置 6 个（`allocation_*`）、缠论 2 个（`chan_analyze` / `chan_backtest`），共 19 个。runner 为每个缓存的 SDK client 挂一个 `platform_tools` SDK MCP server，工具以 `mcp__platform_tools__*` 出现在 init frame；插件自带的 MCP 继续并存。server 配置 `timeout`（至少 180 秒）和 `disableAutoBackground`，覆盖 `backtest_run` 最长约 90 秒的等待。交易记录与资产配置的写入工具对 Agent 开放。
 5. 平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入；浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。工具页按 `wired` 展示实际接入状态。
@@ -268,7 +268,7 @@
 5. `warmup_bars` 预热；截断前缀重跑检测未来函数，不一致时告警（`BACKTEST_FUTURE_CHECK` 默认开启）。
 6. `BacktestWorker` 进程内串行执行；状态 `queued/fetching/running/completed/failed/cancelled`；启动时重新排队未完成任务；结果存 `backtests` 表，曲线/交易按上限截断。
 7. 接口：`POST/GET /api/backtests`、`GET /api/backtests/meta`、`GET /api/backtests/{id}`、`GET /api/backtests/{id}/result`、`POST /api/backtests/{id}/cancel`、`GET /api/market/candles/status`、`GET /api/market/probe`。
-8. Agent 的 `quant-backtest` 技能与 `backtest_*` / `market_*` 工具已通过 `platform` MCP 接入。
+8. Agent 可使用 `quant-backtest` 初始化技能；`backtest_*` / `market_*` 工具已通过进程内 `platform_tools` MCP 接入。
 
 #### 验收标准
 
@@ -286,7 +286,7 @@
 2. 支持 `crypto` / `a_share`；`status`、`return_pct`、`r_multiple`、`pnl`、`win` 由服务层计算，不落盘。
 3. 页面支持筛选、新建/编辑、平仓和统计；不提供删除、图表、附件或回测导入。
 4. 接口：`GET/POST /api/trade-journal`、`GET /api/trade-journal/stats`、`GET/PUT /api/trade-journal/{id}`、`POST /api/trade-journal/{id}/close`。
-5. `trade-journal` 技能与五个工具已通过 `platform` MCP 接入。
+5. Agent 可使用 `trade-journal` 初始化技能；五个 `trade_journal_*` 工具已通过进程内 `platform_tools` MCP 接入。
 
 #### 验收标准
 
@@ -305,7 +305,7 @@
 4. 支持固定收益计息（年化、起息日、复投），计息标的跳过行情抓取。
 5. 顶栏「总览」按 USD 折算合并全部组合（USD≈USDT），显示合并持仓与近似 XIRR。
 6. 接口：`GET /api/allocation`、`POST /api/allocation/refresh`、`POST/PUT/DELETE /api/allocation/portfolios...`、`GET/POST /api/allocation/portfolios/{id}/entries`、`PUT/DELETE /api/allocation/portfolios/{id}/entries/{entry_id}`。
-7. `allocation` 技能与六个工具已通过 `platform` MCP 接入。
+7. Agent 可使用 `allocation` 初始化技能；六个 `allocation_*` 工具已通过进程内 `platform_tools` MCP 接入。
 
 #### 验收标准
 
@@ -325,7 +325,7 @@
 4. `POST /api/chan/analyze` 返回 candles/merged/fractals/strokes/pending_strokes/zones/points/macd/divergences/rules/warnings，不建表。
 5. `POST /api/chan/backtest` 因果前缀回放、下一根开盘进场、固定止损/R 目标/时间止损与费用。
 6. 页面参数写入 `/chan` 查询串（`replaceState`），刷新/直达恢复并自动分析。
-7. `chanlun` 技能与 `chan_analyze` / `chan_backtest` 已通过 `platform` MCP 接入。
+7. Agent 可使用 `chanlun` 初始化技能；`chan_analyze` / `chan_backtest` 已通过进程内 `platform_tools` MCP 接入。
 
 #### 验收标准
 

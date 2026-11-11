@@ -83,7 +83,7 @@ npm run dev
 侧栏「平台 → 配置」进入配置页，顶部用 `Provider / Agent / 知识库 / 运行环境` 四个 tab 切换。
 
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
-- **Agent**：列出全部 Agent 摘要（Provider/model、启用技能数、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
+- **Agent**：列出全部 Agent 摘要（Provider/model、记忆开关、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
 - **知识库**：启用开关、WebDAV 地址、账号、应用密码、根目录、同步间隔；密码只写入 `settings.json`，接口只返回 `has_password`。
 - **运行环境**：版本、执行核、数据库类型、单轮执行超时（`RUN_TIMEOUT_SECONDS`）、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 关闭，`GET/PUT /api/settings`）。
 - Agent 彻底删除：有活动 turn 时 409；确认后删除该 Agent 的 transcript、工作区目录、渠道与绑定、定时任务、投递/入站记录和渠道登录态。归档只改状态，不删文件，之后可在配置页把状态改回 active 恢复。
@@ -97,7 +97,7 @@ npm run dev
 - **技能**：列出全局技能库，按「初始化技能」和「其他技能」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、「已调整」标记、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；任何技能都可删除（只删技能目录）。
 - **工具**：如实展示当前接入状态。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）已通过进程内 `platform_tools` MCP 接入，以 `mcp__platform_tools__*` 出现在运行时 init frame；插件自带的 MCP 继续并存。平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入：浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。
 - **插件**：管理 Claude Code 官方集市与插件，见下节。
-- 初始化技能模板在 `apps/api/app/seed_skills/`：`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。技能只是初始化参考：`.seed_state.json` 记录初始化内容哈希；从未初始化过的缺失技能写入；未修改的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑、不再生成；模板移除时只删记录、保留本地文件。网页搜索/抓取使用 Claude Code 自带的 WebSearch/WebFetch，浏览器操作使用官方集市 `playwright` 插件。
+- 初始化技能模板在 `apps/api/app/seed_skills/`：`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。技能只是初始化参考：`.seed_state.json` 记录初始化内容哈希；从未初始化过的缺失技能写入；未修改的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑，只要模板仍在就不再生成；模板移除时只删记录、保留本地文件；保留的副本不再计入「初始化技能」，页面归入「其他技能」。
 
 ### 插件集市
 
@@ -118,7 +118,7 @@ claude/skills/
     └── 其他辅助文件（可选）
 ```
 
-`SKILL.md` 必须有 YAML frontmatter，`name` 建议与目录名一致；不一致时技能页会告警，但仍可保存和启用。
+`SKILL.md` 必须有 YAML frontmatter，`name` 建议与目录名一致；不一致时技能页会告警，但仍可保存。
 
 ```markdown
 ---
@@ -174,7 +174,7 @@ metadata:
 - 暂停或删除任务不会取消已经产生的 turn；删除任务保留会话与 transcript；暂停/归档 Agent 时不触发，恢复后从下一个匹配时间继续。
 - 可选推送到微信：任务可以显式选择一个当前 Agent 的 active 微信渠道下已有 1:1 联系人（`GET /api/channels/{id}/conversations` 列出候选）；触发时与租约同一事务写 pending 投递，复用渠道分块、重试和补发。删除渠道会清空该渠道相关任务的推送目标；删除会话或联系人只移除绑定，任务保留目标但届时静默不推送。未配置目标则只留在网页会话里，群聊不支持，取消的 turn 不发送。
 - 任务页显示下次触发、最近运行时间、上次跳过提示和「打开会话」入口，支持暂停/启用、编辑、立即运行和删除。
-- Agent 的 `cron-scheduler` 技能与平台定时工具仍未接入 SDK。
+- 平台不向 Agent 提供定时任务工具；`cron-scheduler` 只是初始化技能，说明「定时」页面入口和定时触发会话的语义。
 
 接口：`GET/POST /api/cron-jobs`、`PUT/DELETE /api/cron-jobs/{id}`、`POST /api/cron-jobs/{id}/run`；响应为任务对象（`last_run_at` / `last_skipped_at`，不含 `last_run_id` / `last_run_status`）。
 
@@ -200,7 +200,7 @@ metadata:
 - 结果：总收益、年化、最大回撤、Sharpe、Sortino、胜率、交易次数、盈亏比、基准买入持有；价格 K 线与买卖点、净值、回撤、交易明细。净值/回撤/价格曲线下采样到约 2000 点，交易明细最多保存 5000 笔。结果持久化在 `backtests` 表，可在历史列表回看。
 - 任务：`queued/fetching/running/completed/failed/cancelled`；服务重启后未完成任务重新排队；同时只执行一个回测，其余排队。
 - 限制：单次回测最多 `BACKTEST_MAX_BARS`（默认 200000）根 K 线；缺口超过修复预算时保留为空仓并在结果里告警；模拟做空不含借币成本、资金费率与强平。
-- Agent 的 `quant-backtest` 技能与 `backtest_*` / `market_*` 工具已通过 `platform` MCP 接入。
+- Agent 可使用 `quant-backtest` 初始化技能；`backtest_*` / `market_*` 工具已通过进程内 `platform_tools` MCP 接入。
 
 ## 交易记录
 
@@ -211,7 +211,7 @@ metadata:
 - 计算：`status`、价格收益、R 倍数、净盈亏、胜负由平台计算，不写入文件；没有 `quantity` 时只有价格收益和 R，没有金额盈亏。
 - 写入：服务层按进程内事件循环串行写入，更新用临时文件原子替换，文件权限 0600；文件损坏行会被跳过。
 - 接口：`GET/POST /api/trade-journal`、`GET /api/trade-journal/stats`、`GET/PUT /api/trade-journal/{id}`、`POST /api/trade-journal/{id}/close`。
-- Agent 的 `trade-journal` 技能与五个工具已通过 `platform` MCP 接入。
+- Agent 可使用 `trade-journal` 初始化技能；五个 `trade_journal_*` 工具已通过进程内 `platform_tools` MCP 接入。
 - 边界：不接交易所、不自动下单、不计算实时浮盈、不删除记录。
 
 ## 资产配置
@@ -227,7 +227,7 @@ metadata:
 - 总览：顶部「总览」把所有组合折算成 USD 合并：显示总资产、现金、投入本金、浮盈、已实现、总收益、总收益率和近似 XIRR（历史现金流按当前汇率折算），以及合并持仓明细（同一标的跨组合合并）。不支持的币种不计入并提示。
 - 页面：功能 → 资产配置；不分 tab。上面是总览和合并持仓，中间是所有组合合并的流水（可按组合/标的筛选），最下面是组合设置（目标、再平衡、编辑/记一笔入口）。
 - 接口：`GET /api/allocation`、`POST /api/allocation/refresh`、`POST/PUT/DELETE /api/allocation/portfolios...`、`GET/POST /api/allocation/portfolios/{id}/entries`、`PUT/DELETE /api/allocation/portfolios/{id}/entries/{entry_id}`。
-- Agent 的 `allocation` 技能与六个工具已通过 `platform` MCP 接入。
+- Agent 可使用 `allocation` 初始化技能；六个 `allocation_*` 工具已通过进程内 `platform_tools` MCP 接入。
 - 边界：不接券商/交易所、不自动下单、不自动再平衡；没有每日估值快照，不做净值曲线、最大回撤和收益归因；总览的汇率和 XIRR 为近似值；不做税务批次、做空、保证金或借币成本。
 
 ## 缠论图
@@ -239,7 +239,7 @@ metadata:
 - 算法：确定性程序计算，不调用 AI。包含处理（向上取高高、向下取低低）、严格三根分型、老笔（顶底交替且至少 5 根合并 K 线含两端）、完整中枢（进入段 + 连续三笔重叠 + 确认离开段）、笔级别 1/2/3 买卖点（带失效标记）、MACD(12,26,9) 与简化背离。笔一旦成立不会因后续价格越过起点而回滚；未成笔分型不标注；最后一笔之后的未确认走势用虚线画出，不计入笔数、不参与中枢/背离/买卖点。买卖点和背离是笔级别近似，不是严格缠论背驰，也不是交易建议。
 - 接口：`POST /api/chan/analyze` 返回 candles/merged/fractals/strokes/pending_strokes/zones/points/macd/divergences/rules/warnings，不建表、不落库；`POST /api/chan/backtest` 用因果前缀回放、下一根开盘进场、固定止损/R 目标/时间止损和费用，输出胜率、平均 R、回撤和按信号类型统计。
 - 页面：交易 → 缠论图；顶部工具栏直接显示参数和显示项；中枢用半透明色块，买卖点标为 1买/2买/3买、1卖/2卖/3卖；MACD 副图与主图时间轴、十字线同步，背离标为「底背 / 顶背」。交易对、周期、时间窗口、结构/回测模式和各显示开关写入 `/chan?...` 查询串，刷新或直达后恢复并自动分析。
-- Agent 的 `chanlun` 技能与 `chan_analyze` / `chan_backtest` 已通过 `platform` MCP 接入。
+- Agent 可使用 `chanlun` 初始化技能；`chan_analyze` / `chan_backtest` 已通过进程内 `platform_tools` MCP 接入。
 
 ## 数据存储
 
