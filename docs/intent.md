@@ -35,7 +35,7 @@
 4. 执行核：`ClaudeSDKClient`；会话 UUID 即 SDK `session_id`；transcript 存 `claude/projects/<agent_id>/<uuid>.jsonl`；会话列表/历史/重命名/删除走 SDK。
 5. 重启恢复：`running_sessions` 运行时租约 + SDK `resume`；启动时自动续跑，恢复提示要求不重复已完成步骤。
 6. 微信个人号渠道：扫码登录、iLink 长轮询、5 秒打包、命令、引用找回、图片/文件、回复投递与补发。
-7. 定时任务：5 字段 cron、IANA 时区、专属会话、忙时跳过并更新 last_skipped_at、可选推送到微信联系人、停机后最多补跑一次。
+7. 定时任务：5 字段 cron、IANA 时区、专属会话、忙时跳过并更新 `last_skipped_at`、可选推送到微信联系人、停机后最多补跑一次。
 8. 会话保留清理：按 transcript mtime 与保留天数删除，跳过运行中会话，保留 auto memory。
 9. 记忆：记忆页有用户画像（`claude/CLAUDE.md`，跨 Agent）与 Agent 记忆（`workspaces/<agent_id>/CLAUDE.md`）；Agent 指令 = `settings.json`；Claude auto memory 在记忆页只读展示。
 10. 配置页：Provider、Agent、知识库、运行环境；所有平台配置写入 `data/settings.json`，密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。
@@ -420,9 +420,9 @@
 
 #### 功能点
 
-1. 删除 `audit_log` 表与全部写入路径（`AuditLog` 模型、定时任务跳过/提交失败写入、重启恢复丢轮写入）；新库 `app.db` 只创建五张表：`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`。
+1. 新库不再创建 `audit_log` 表，删除全部写入路径（`AuditLog` 模型、定时任务跳过/提交失败写入、重启恢复丢轮写入）；新库 `app.db` 只创建五张表：`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`。
 2. 原审计信息由现有可见性替代：定时任务忙时跳过只更新 `cron_jobs.last_skipped_at`（定时任务页展示「上次触发因会话忙被跳过」）；定时提交失败与网页丢轮各写一条 warning 日志。
-3. 已存在的库不迁移：`audit_log` 空表原样保留，平台不再读写。
+3. 已存在的库不迁移：`audit_log` 表原样保留（平台不再读写）。
 
 #### 验收标准
 

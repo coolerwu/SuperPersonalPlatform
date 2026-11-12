@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app import main as main_module
 from app.config import APP_HOME, settings as app_settings
+from app.db import Base
 from app.main import create_app
 from app.services import claude_runner, recovery, session_registry
 from app.services.backtest_worker import BacktestWorker
@@ -155,6 +156,5 @@ def test_startup_failure_still_tears_down_runtime(
 
 
 def test_database_metadata_has_no_audit_log_table():
-    from app.db import Base
-
+    assert "cron_jobs" in Base.metadata.tables
     assert "audit_log" not in Base.metadata.tables

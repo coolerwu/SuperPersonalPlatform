@@ -423,7 +423,6 @@ class CronTriggerFailed(RuntimeError):
 
 
 async def prepare_trigger(
-    db: AsyncSession,
     job: CronJob,
     *,
     store: Any,
@@ -433,11 +432,11 @@ async def prepare_trigger(
 ) -> Turn | None:
     """Apply trigger state and return the turn that should be submitted.
 
-    The caller must commit ``db`` before submitting the returned turn. This
-    keeps the schedule consumed exactly once: a crash between commit and
-    submission loses one occurrence instead of replaying it, which would
-    duplicate a channel push. Scheduled triggers with a busy session are
-    skipped; manual triggers raise :class:`CronBusy` instead.
+    The caller must commit the job-state changes before submitting the
+    returned turn. This keeps the schedule consumed exactly once: a crash
+    between commit and submission loses one occurrence instead of replaying
+    it, which would duplicate a channel push. Scheduled triggers with a busy
+    session are skipped; manual triggers raise :class:`CronBusy` instead.
     """
     moment = now or utcnow()
     snapshot = await store.get()
@@ -522,7 +521,7 @@ async def run_due_jobs(
                     continue
                 try:
                     turn = await prepare_trigger(
-                        db, job, store=store, registry=registry, now=moment
+                        job, store=store, registry=registry, now=moment
                     )
                     # Consume the schedule before handing the turn to the
                     # registry so a crash cannot replay it and duplicate a push.
@@ -559,7 +558,6 @@ async def run_job_now(
             if job is None or (agent_id is not None and job.agent_id != agent_id):
                 raise CronNotFound("cron job not found")
             turn = await prepare_trigger(
-                db,
                 job,
                 store=store,
                 registry=registry,
