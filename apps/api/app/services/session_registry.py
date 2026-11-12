@@ -75,6 +75,9 @@ class SessionRegistry:
         self._pending: dict[str, tuple[Turn, TurnStream]] = {}
         self._current: dict[str, str] = {}
         self._running: set[str] = set()
+        # Workers in the after_turn teardown (deferred eviction) are not
+        # cancellable by a user stop; cancelling them would drop the eviction.
+        self._finishing: set[str] = set()
         self._started: set[str] = set()
         self._cancelled: set[str] = set()
         # Session -> Agent, so destructive Agent operations can tell whether a
@@ -168,17 +171,21 @@ class SessionRegistry:
                 self._running.discard(session_id)
                 self._current.pop(session_id, None)
                 queue.task_done()
-                # A slow CLI disconnect must not hold the concurrency permit;
-                # the runner deferred it until now.
-                after_turn = getattr(self._runner, "after_turn", None)
-                if after_turn is not None:
-                    try:
-                        await after_turn(turn.session_id, turn.agent_id)
-                    except Exception:
-                        logger.exception(
-                            "deferred client eviction failed session=%s",
-                            session_id,
-                        )
+                self._finishing.add(session_id)
+                try:
+                    # A slow CLI disconnect must not hold the concurrency permit;
+                    # the runner deferred it until now.
+                    after_turn = getattr(self._runner, "after_turn", None)
+                    if after_turn is not None:
+                        try:
+                            await after_turn(turn.session_id, turn.agent_id)
+                        except Exception:
+                            logger.exception(
+                                "deferred client eviction failed session=%s",
+                                session_id,
+                            )
+                finally:
+                    self._finishing.discard(session_id)
             self._evict_closed_streams()
             if queue.empty():
                 # Retire atomically with the empty check and with submit (which
@@ -312,7 +319,11 @@ class SessionRegistry:
                 queue.task_done()
                 dropped.append(queued_turn)
                 cancelled = True
-        if cancelled and session_id not in self._running:
+        if (
+            cancelled
+            and session_id not in self._running
+            and session_id not in self._finishing
+        ):
             # The worker is idle (or never started) and would otherwise stay
             # blocked on an empty queue forever. Retire it before any await.
             worker = self._workers.pop(session_id, None)
@@ -325,7 +336,9 @@ class SessionRegistry:
         for turn in dropped:
             await _discard_delivery(turn)
         active = await self._runner.interrupt(
-            session_id, self._session_agents.get(session_id)
+            session_id,
+            self._session_agents.get(session_id),
+            turn_id=self._current.get(session_id),
         )
         return bool(active or cancelled)
 
@@ -360,6 +373,7 @@ class SessionRegistry:
             self._pending.clear()
             self._current.clear()
             self._running.clear()
+            self._finishing.clear()
             self._started.clear()
             self._cancelled.clear()
             self._session_agents.clear()

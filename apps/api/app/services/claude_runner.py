@@ -267,6 +267,9 @@ class ClaudeTurnRunner:
         self._deliver_callback = deliver_callback
         self._locks: dict[str, asyncio.Lock] = {}
         self._active: set[ClientKey] = set()
+        # Turn id currently attached to each cached client key. /stop uses it
+        # so a late interrupt cannot hit the session's next turn.
+        self._active_turns: dict[ClientKey, str] = {}
         self._cancel_requested: set[ClientKey] = set()
         # Turns that ended in a state that must not be resumed reuse; the
         # registry drains these after releasing its concurrency permit.
@@ -556,6 +559,7 @@ class ClaudeTurnRunner:
         # Mark active before any await so /stop can reach a turn that is still
         # loading settings or connecting its client.
         self._active.add(key)
+        self._active_turns[key] = turn.id
         self._touch(key)
         mapper = StreamMapper()
         workspace = workspace_for(turn.agent_id, self._home)
@@ -787,6 +791,8 @@ class ClaudeTurnRunner:
             # delivery decision can still see it.
             interrupted = key in self._cancel_requested
             self._active.discard(key)
+            if self._active_turns.get(key) == turn.id:
+                self._active_turns.pop(key, None)
             self._touch(key)
             if not result_received:
                 evict = True
@@ -882,10 +888,20 @@ class ClaudeTurnRunner:
             if key[1] == session_id and (agent_id is None or key[0] == agent_id)
         ]
         for key in keys:
+            try:
+                await self._evict_key(key)
+            except asyncio.CancelledError:
+                # Keep the key for the next after_turn; the client was not
+                # evicted and must not be reused silently.
+                raise
             self._evict_pending.discard(key)
-            await self._evict_key(key)
 
-    async def interrupt(self, session_id: str, agent_id: str | None = None) -> bool:
+    async def interrupt(
+        self,
+        session_id: str,
+        agent_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> bool:
         lock = self._client_lock(session_id)
         keys = [
             key
@@ -894,23 +910,25 @@ class ClaudeTurnRunner:
         ]
         if agent_id is not None and not keys:
             keys = [(agent_id, session_id)]
+
+        def matching() -> list[ClientKey]:
+            return [
+                key
+                for key in keys
+                if key in self._active
+                and (turn_id is None or self._active_turns.get(key) == turn_id)
+            ]
+
         try:
             async with asyncio.timeout(_INTERRUPT_LOCK_TIMEOUT_SECONDS):
                 async with lock:
-                    # Re-check under the lock: the turn may have ended while
-                    # this call waited, and a stale marker would cancel the
-                    # session's next turn.
-                    if not any(key in self._active for key in keys):
+                    active = matching()
+                    if not active:
                         return False
-                    # Remember the request so a turn still starting up aborts
-                    # before it ever queries the client.
-                    for key in keys:
+                    for key in active:
                         self._cancel_requested.add(key)
         except TimeoutError:
-            # A connect holding the lock must not make /stop hang forever; the
-            # marker still makes the turn abort after it acquires the client.
-            # Recompute keys because the session may have started or ended
-            # while this call was waiting.
+            # The session may have started or ended while this call waited.
             keys = [
                 key
                 for key in self._keys_for_session(session_id)
@@ -918,14 +936,15 @@ class ClaudeTurnRunner:
             ]
             if agent_id is not None and not keys:
                 keys = [(agent_id, session_id)]
+            active = matching()
             logger.warning(
                 "interrupt lock timed out session=%s agent=%s",
                 session_id,
                 agent_id,
             )
-            if not any(key in self._active for key in keys):
+            if not active:
                 return False
-            for key in keys:
+            for key in active:
                 self._cancel_requested.add(key)
         client = next(
             (
@@ -933,6 +952,7 @@ class ClaudeTurnRunner:
                 for key, cached in self._clients.items()
                 if key[1] == session_id
                 and (agent_id is None or key[0] == agent_id)
+                and (turn_id is None or self._active_turns.get(key) == turn_id)
             ),
             None,
         )

@@ -39,6 +39,7 @@ class FakeRunner:
         self.started = []
         self.finished = []
         self.interrupted = []
+        self.interrupt_turn_ids: list[str | None] = []
         self.closed = []
         self.after_turns = []
         self.interrupt_result = False
@@ -67,8 +68,9 @@ class FakeRunner:
     async def after_turn(self, session_id, agent_id=None):
         self.after_turns.append((session_id, agent_id))
 
-    async def interrupt(self, session_id, agent_id=None):
+    async def interrupt(self, session_id, agent_id=None, turn_id=None):
         self.interrupted.append(session_id)
+        self.interrupt_turn_ids.append(turn_id)
         return self.interrupt_result
 
     async def close(self, session_id):
@@ -437,6 +439,52 @@ async def test_after_turn_runs_after_the_session_turn_finishes():
     await registry.submit(turn(prompt="a"))
     await wait_until(lambda: runner.finished == ["a"])
     await wait_until(lambda: runner.after_turns == [("s1", "default")])
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_passes_the_running_turn_id():
+    runner = FakeRunner()
+    runner.interrupt_result = True
+    registry = SessionRegistry(runner, concurrency=2)
+    turn_id = await registry.submit(turn(prompt="a"))
+    await wait_until(lambda: runner.started == ["a"])
+
+    assert await registry.interrupt("s1") is True
+    assert runner.interrupt_turn_ids == [turn_id]
+
+    runner.release("a")
+    await wait_until(lambda: runner.finished == ["a"])
+    await registry.close()
+
+
+class SlowAfterTurnRunner(FakeRunner):
+    def __init__(self):
+        super().__init__()
+        self.after_started = asyncio.Event()
+        self.after_release = asyncio.Event()
+
+    async def after_turn(self, session_id, agent_id=None):
+        self.after_started.set()
+        await self.after_release.wait()
+        self.after_turns.append((session_id, agent_id))
+
+
+@pytest.mark.asyncio
+async def test_interrupt_does_not_cancel_a_finishing_worker():
+    runner = SlowAfterTurnRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    await registry.submit(turn(prompt="a"))
+    runner.release("a")
+    await wait_until(lambda: runner.after_started.is_set())
+
+    await registry.submit(turn(prompt="b"))
+    assert await registry.interrupt("s1") is True
+
+    runner.after_release.set()
+    await wait_until(lambda: runner.after_turns == [("s1", "default")])
+    await wait_until(lambda: not registry._workers)
+    assert runner.started == ["a"]
     await registry.close()
 
 

@@ -666,6 +666,56 @@ async def test_interrupt_reaches_client_only_while_turn_is_active(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_interrupt_with_a_stale_turn_id_is_ignored(tmp_path):
+    await init_db()
+    client = HangingClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="abababab-abab-abab-abab-abababababab")
+    stream = TurnStream()
+    task = asyncio.create_task(runner.run(turn, stream))
+    await asyncio.wait_for(client.queried.wait(), 1)
+    try:
+        assert (
+            await runner.interrupt(
+                turn.session_id, turn.agent_id, turn_id="stale-turn"
+            )
+            is False
+        )
+        assert client.interrupted is False
+        assert (
+            await runner.interrupt(
+                turn.session_id, turn.agent_id, turn_id=turn.id
+            )
+            is True
+        )
+        assert client.interrupted is True
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await turn_lease.remove(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_after_turn_keeps_pending_eviction_when_cancelled(tmp_path, monkeypatch):
+    runner = ClaudeTurnRunner(store=FakeStore(make_agent()), home=tmp_path)
+    key = ("default", "session")
+
+    async def cancelled_evict(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    runner._evict_pending.add(key)
+    monkeypatch.setattr(runner, "_evict_key", cancelled_evict)
+    with pytest.raises(asyncio.CancelledError):
+        await runner.after_turn("session", "default")
+    assert key in runner._evict_pending
+
+
+@pytest.mark.asyncio
 async def test_interrupt_during_store_wait_cancels_before_query(tmp_path):
     await init_db()
     client = FakeClient([ResultMessage()])
