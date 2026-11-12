@@ -1,8 +1,10 @@
+import logging
+
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 
 from app.db import SessionLocal, init_db
-from app.models import AuditLog, ChannelDelivery
+from app.models import ChannelDelivery
 from app.services import channel_delivery, recovery, turn_lease
 from app.services.claude_runner import transcript_path
 
@@ -290,29 +292,22 @@ async def test_recovery_answers_orphan_deliveries_with_dropped_lease(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_recovery_audits_a_lost_web_turn(tmp_path):
+async def test_recovery_logs_a_lost_web_turn(tmp_path, caplog):
     await init_db()
     session_id = "bbbbbbbb-eeee-eeee-eeee-eeeeeeeeeeee"
     await turn_lease.add(session_id)
     try:
-        await recovery.recover_running_sessions(
-            FakeRegistry(), FakeStore(), home=tmp_path
-        )
+        with caplog.at_level(logging.WARNING, logger="app.services.recovery"):
+            await recovery.recover_running_sessions(
+                FakeRegistry(), FakeStore(), home=tmp_path
+            )
         assert await turn_lease.is_running(session_id) is False
-        async with SessionLocal() as db:
-            row = await db.scalar(
-                select(AuditLog).where(
-                    AuditLog.action == "turn_lost_on_restart",
-                    AuditLog.entity_id == session_id,
-                )
-            )
-            assert row is not None
+        assert any(
+            "web turn lost on restart" in record.getMessage()
+            and session_id in record.getMessage()
+            for record in caplog.records
+        )
     finally:
-        async with SessionLocal() as db:
-            await db.execute(
-                delete(AuditLog).where(AuditLog.entity_id == session_id)
-            )
-            await db.commit()
         await turn_lease.remove(session_id)
 
 

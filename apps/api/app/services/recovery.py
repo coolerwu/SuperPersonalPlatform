@@ -25,7 +25,7 @@ leases.
 A lease without a transcript is dropped, but never silently: an empty channel
 obligation is filled with an explicit failure text so the normal startup
 sweep can tell that contact their message was not processed, and a web turn
-(which has no delivery row) leaves an ``audit_log`` entry.
+(which has no delivery row) is reported with a warning log entry.
 """
 
 from __future__ import annotations
@@ -34,8 +34,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.db import SessionLocal
-from app.models import AuditLog
 from app.services import channel_delivery, turn_lease
 from app.services.claude_runner import Turn, transcript_path
 from app.services.identifiers import is_canonical_uuid, valid_agent_id
@@ -48,31 +46,13 @@ LOST_TURN_TEXT = (
 )
 
 
-async def _audit_lost_turn(session_id: str) -> None:
-    try:
-        async with SessionLocal() as db:
-            db.add(
-                AuditLog(
-                    actor="system",
-                    action="turn_lost_on_restart",
-                    entity="session",
-                    entity_id=session_id,
-                )
-            )
-            await db.commit()
-    except Exception:
-        logger.exception(
-            "recovery could not write audit entry session=%s", session_id
-        )
-
-
 async def _drop_lease(session_id: str) -> None:
     """Remove a lease after answering any obligation it left behind.
 
     A crash before the SDK wrote a transcript means the turn never ran. A
     channel message still has an empty delivery row; filling it with an
     explicit failure keeps it deliverable. Filled rows are left to the sender;
-    a web turn has no delivery row, so its loss is recorded in ``audit_log``.
+    a web turn has no delivery row, so its loss is recorded as a warning log.
     """
     answered = 0
     try:
@@ -92,7 +72,7 @@ async def _drop_lease(session_id: str) -> None:
                 "recovery could not inspect deliveries session=%s", session_id
             )
         if not has_delivery:
-            await _audit_lost_turn(session_id)
+            logger.warning("web turn lost on restart session=%s", session_id)
     await turn_lease.remove(session_id)
 
 
