@@ -75,17 +75,6 @@ class CronJob(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
 
-class AuditLog(Base):
-    __tablename__ = "audit_log"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    actor: Mapped[str] = mapped_column(String(120), default="user")
-    action: Mapped[str] = mapped_column(String(120))
-    entity: Mapped[str] = mapped_column(String(120))
-    entity_id: Mapped[str] = mapped_column(String(64), default="")
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-
-
 class ChannelInbound(Base):
     """Idempotency record for an inbound WeChat message id.
 
