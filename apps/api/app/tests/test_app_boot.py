@@ -155,6 +155,11 @@ def test_startup_failure_still_tears_down_runtime(
     assert market_closed == [True]
 
 
-def test_database_metadata_has_no_audit_log_table():
-    assert "cron_jobs" in Base.metadata.tables
-    assert "audit_log" not in Base.metadata.tables
+def test_database_metadata_has_five_tables():
+    assert set(Base.metadata.tables) == {
+        "backtests",
+        "channel_deliveries",
+        "channel_inbounds",
+        "cron_jobs",
+        "running_sessions",
+    }
