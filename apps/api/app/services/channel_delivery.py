@@ -1,5 +1,12 @@
 """Channel reply obligations.
 
+Channel intake creates a ``queued`` row before submitting the turn; the runner
+promotes it to ``pending`` in the same transaction as the lease when the turn
+actually starts. A crash while the turn is still queued leaves a queued row
+with no lease, which startup answers with an explicit failure text; a crash
+after the turn started leaves a lease plus a pending row and recovery resumes
+that session.
+
 Rows are created with empty content at turn start. An empty row is only
 claimed by a resumed turn (``find_unfilled_for_session``); a row that already
 holds content is only sent by the delivery worker/sweep. ``sent`` and
@@ -21,6 +28,45 @@ from app.db import SessionLocal
 from app.models import ChannelDelivery, utcnow
 
 _DELIVERABLE_STATUSES = ("pending", "attempting")
+# Rows the platform may still cancel: the queued obligation created at ingest
+# plus the live deliverable states.
+_CANCELLABLE_STATUSES = ("queued", "pending", "attempting")
+
+
+async def create_queued(
+    db: AsyncSession, *, channel_id: str, external_id: str, session_id: str
+) -> int:
+    """Record the reply this inbound channel message will owe.
+
+    Called by channel intake before the turn is submitted so a crash while the
+    turn is still queued cannot lose the message silently.
+    """
+    row = ChannelDelivery(
+        channel_id=channel_id,
+        external_id=external_id,
+        session_id=session_id,
+        status="queued",
+    )
+    db.add(row)
+    await db.flush()
+    return int(row.id)
+
+
+async def mark_started_in(db: AsyncSession, delivery_id: int) -> bool:
+    """Promote a queued obligation to ``pending`` in the caller's transaction.
+
+    Returns False when the row is no longer queued (already promoted, answered
+    or removed), so the turn runs without owning an obligation.
+    """
+    result = await db.execute(
+        update(ChannelDelivery)
+        .where(
+            ChannelDelivery.id == delivery_id,
+            ChannelDelivery.status == "queued",
+        )
+        .values(status="pending", updated_at=utcnow())
+    )
+    return (result.rowcount or 0) > 0
 
 
 async def create_pending(
@@ -85,13 +131,14 @@ async def discard(delivery_id: int) -> bool:
     """Drop an obligation that will never be sent (the user stopped the turn).
 
     Only live rows are removed; a row the sender already claimed or finished
-    is left as delivery history.
+    is left as delivery history. A ``queued`` row has no lease yet, so this is
+    also the cleanup path for a turn that failed to submit.
     """
     async with SessionLocal() as db:
         result = await db.execute(
             delete(ChannelDelivery).where(
                 ChannelDelivery.id == delivery_id,
-                ChannelDelivery.status.in_(_DELIVERABLE_STATUSES),
+                ChannelDelivery.status.in_(_CANCELLABLE_STATUSES),
             )
         )
         await db.commit()
@@ -110,6 +157,46 @@ async def list_unfilled_session_ids() -> list[str]:
             .distinct()
         )
         return [str(item) for item in rows.all()]
+
+
+async def list_queued_session_ids() -> list[str]:
+    """Session ids of queued rows whose turn never started."""
+    async with SessionLocal() as db:
+        rows = await db.scalars(
+            select(ChannelDelivery.session_id)
+            .where(
+                ChannelDelivery.status == "queued",
+                ChannelDelivery.content == "",
+            )
+            .distinct()
+        )
+        return [str(item) for item in rows.all()]
+
+
+async def fail_queued_for_session(session_id: str, content: str, error: str) -> int:
+    """Answer queued obligations whose turn never started before a restart.
+
+    The row was created at ingest but never promoted, so no lease exists for
+    it. Moving it to ``pending`` with the failure text lets the normal startup
+    sweep tell the contact instead of losing the message to iLink dedup.
+    """
+    async with SessionLocal() as db:
+        result = await db.execute(
+            update(ChannelDelivery)
+            .where(
+                ChannelDelivery.session_id == session_id,
+                ChannelDelivery.status == "queued",
+                ChannelDelivery.content == "",
+            )
+            .values(
+                status="pending",
+                content=content,
+                last_error=str(error)[:2000],
+                updated_at=utcnow(),
+            )
+        )
+        await db.commit()
+        return int(result.rowcount or 0)
 
 
 async def fail_unfilled_for_session(

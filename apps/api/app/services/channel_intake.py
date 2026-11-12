@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db import SessionLocal
 from app.models import ChannelDelivery, ChannelInbound
+from app.services import channel_delivery
 from app.services.claude_runner import DeliveryRequest, Turn, transcript_path
 from app.services.commands import (
     HELP_TEXT,
@@ -390,6 +391,7 @@ async def ingest(
     if not await claim_inbound(channel_id, message_ids, text, external_id):
         return IngestResult(duplicate=True)
 
+    delivery_id: int | None = None
     try:
         conversation: ConversationSection | None = None
         agent: Any = None
@@ -445,13 +447,29 @@ async def ingest(
             await _record_inbound(channel_id, message_ids, conversation.session_id)
             return IngestResult(session_id=conversation.session_id, reply=reply)
 
+        # Record the reply this message will owe before it enters the queue, so
+        # a crash or graceful shutdown while it waits cannot lose it silently
+        # (iLink dedups the replay against the inbound claim). The runner
+        # promotes the row to pending when the turn actually starts.
+        async with SessionLocal() as db:
+            delivery_id = await channel_delivery.create_queued(
+                db,
+                channel_id=channel_id,
+                external_id=external_id,
+                session_id=conversation.session_id,
+            )
+            await db.commit()
         await registry.submit(
             Turn(
                 session_id=conversation.session_id,
                 agent_id=agent.id,
                 prompt=text,
                 source="wechat",
-                delivery=DeliveryRequest(channel_id=channel_id, external_id=external_id),
+                delivery=DeliveryRequest(
+                    channel_id=channel_id,
+                    external_id=external_id,
+                    delivery_id=delivery_id,
+                ),
             )
         )
         # The turn is already submitted, so a bookkeeping failure here must not
@@ -468,6 +486,16 @@ async def ingest(
             )
         return IngestResult(session_id=conversation.session_id)
     except BaseException:
+        # The turn never entered the queue, so drop its queued obligation too.
+        if delivery_id is not None:
+            try:
+                await channel_delivery.discard(delivery_id)
+            except Exception:
+                logger.warning(
+                    "failed to discard queued delivery delivery=%s",
+                    delivery_id,
+                    exc_info=True,
+                )
         # Leave no claimed ids behind: the channel runtime retries the whole
         # batch after a failure, and claimed-but-unprocessed ids would be
         # silently dropped as duplicates.

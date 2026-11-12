@@ -298,6 +298,73 @@ async def test_find_unfilled_for_session_skips_filled_rows():
 
 
 @pytest.mark.asyncio
+async def test_find_unfilled_ignores_queued_rows():
+    await init_db()
+    queued_id = pending_id = None
+    try:
+        async with SessionLocal() as db:
+            queued_id = await channel_delivery.create_queued(
+                db, channel_id="ch1", external_id="wx-q", session_id="queued-session"
+            )
+            pending_id = await channel_delivery.create_pending(
+                db, channel_id="ch1", external_id="wx-p", session_id="queued-session"
+            )
+            await db.commit()
+        found = await channel_delivery.find_unfilled_for_session("queued-session")
+        assert found is not None
+        assert found.id == pending_id
+        assert await channel_delivery.get(queued_id) is not None
+    finally:
+        await _cleanup(queued_id, pending_id)
+
+
+@pytest.mark.asyncio
+async def test_mark_started_promotes_only_a_queued_row():
+    await init_db()
+    delivery_id = None
+    try:
+        async with SessionLocal() as db:
+            delivery_id = await channel_delivery.create_queued(
+                db, channel_id="ch1", external_id="wx-s", session_id="s1"
+            )
+            await db.commit()
+        async with SessionLocal() as db:
+            assert await channel_delivery.mark_started_in(db, delivery_id) is True
+            await db.commit()
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None and row.status == "pending"
+        async with SessionLocal() as db:
+            assert await channel_delivery.mark_started_in(db, delivery_id) is False
+            await db.rollback()
+    finally:
+        await _cleanup(delivery_id)
+
+
+@pytest.mark.asyncio
+async def test_fail_queued_for_session_answers_only_queued_rows():
+    await init_db()
+    queued_id = pending_id = None
+    try:
+        async with SessionLocal() as db:
+            queued_id = await channel_delivery.create_queued(
+                db, channel_id="ch1", external_id="wx-q", session_id="s1"
+            )
+            pending_id = await channel_delivery.create_pending(
+                db, channel_id="ch1", external_id="wx-p", session_id="s1"
+            )
+            await db.commit()
+        assert await channel_delivery.fail_queued_for_session(
+            "s1", "lost", "queued turn lost"
+        ) == 1
+        row = await channel_delivery.get(queued_id)
+        assert row is not None and row.status == "pending" and row.content == "lost"
+        other = await channel_delivery.get(pending_id)
+        assert other is not None and other.status == "pending" and other.content == ""
+    finally:
+        await _cleanup(queued_id, pending_id)
+
+
+@pytest.mark.asyncio
 async def test_init_db_rebuilds_stale_channel_deliveries_table():
     async with engine.begin() as conn:
         await conn.exec_driver_sql("DROP TABLE IF EXISTS channel_deliveries")

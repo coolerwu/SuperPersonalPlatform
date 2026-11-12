@@ -25,6 +25,7 @@ import asyncio
 import logging
 from typing import Any
 
+from app.services import channel_delivery
 from app.services.claude_runner import Turn
 from app.services.turn_stream import TurnStream
 
@@ -33,6 +34,20 @@ logger = logging.getLogger(__name__)
 # Saving an Agent setting closes every idle client for that Agent. Bound the
 # whole loop because a wedged CLI disconnect already has its own timeout.
 _AGENT_CLOSE_BUDGET_SECONDS = 20.0
+
+
+async def _discard_delivery(turn: Turn) -> None:
+    """Drop a queued obligation whose turn the user cancelled before it ran."""
+    if turn.delivery is None or turn.delivery.delivery_id is None:
+        return
+    try:
+        await channel_delivery.discard(turn.delivery.delivery_id)
+    except Exception:
+        logger.warning(
+            "failed to discard queued delivery delivery=%s",
+            turn.delivery.delivery_id,
+            exc_info=True,
+        )
 
 
 class SessionDeletingError(RuntimeError):
@@ -273,6 +288,7 @@ class SessionRegistry:
 
     async def interrupt(self, session_id: str) -> bool:
         cancelled = False
+        dropped: list[Turn] = []
         pending = self._pending.get(session_id)
         if pending is not None and session_id not in self._started:
             # The worker dequeued this turn but is still waiting for the global
@@ -282,17 +298,19 @@ class SessionRegistry:
             self._cancelled.add(turn.id)
             stream.publish({"type": "turn_end", "status": "cancelled"})
             stream.close()
+            dropped.append(turn)
             cancelled = True
         queue = self._queues.get(session_id)
         if queue is not None:
             while True:
                 try:
-                    _, stream = queue.get_nowait()
+                    queued_turn, stream = queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
                 stream.publish({"type": "turn_end", "status": "cancelled"})
                 stream.close()
                 queue.task_done()
+                dropped.append(queued_turn)
                 cancelled = True
         if cancelled and session_id not in self._running:
             # The worker is idle (or never started) and would otherwise stay
@@ -302,6 +320,10 @@ class SessionRegistry:
                 worker.cancel()
             self._queues.pop(session_id, None)
             self._current.pop(session_id, None)
+        # These turns never started, so their pre-created delivery rows still
+        # exist; a turn the user stopped owes no reply.
+        for turn in dropped:
+            await _discard_delivery(turn)
         active = await self._runner.interrupt(
             session_id, self._session_agents.get(session_id)
         )

@@ -543,6 +543,42 @@ async def test_turn_without_delivery_creates_no_row_or_callback(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_precreated_delivery_is_discarded_when_the_turn_never_starts(tmp_path):
+    await init_db()
+    session_id = "12121212-1212-1212-1212-121212121212"
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_queued(
+            db, channel_id="ch1", external_id="wx", session_id=session_id
+        )
+        await db.commit()
+    try:
+        def unused_factory(options):
+            raise AssertionError("client must not be created")
+
+        runner = ClaudeTurnRunner(
+            store=FakeStore(),
+            home=tmp_path,
+            client_factory=unused_factory,
+        )
+        turn = Turn(
+            session_id=session_id,
+            agent_id="missing",
+            prompt="hi",
+            source="wechat",
+            delivery=DeliveryRequest("ch1", "wx", delivery_id),
+        )
+        outcome = await runner.run(turn, TurnStream())
+        assert outcome.status == "failed"
+        assert await channel_delivery.get(delivery_id) is None
+    finally:
+        async with SessionLocal() as db:
+            await db.execute(
+                delete(ChannelDelivery).where(ChannelDelivery.id == delivery_id)
+            )
+            await db.commit()
+
+
+@pytest.mark.asyncio
 async def test_resume_never_creates_delivery_even_when_requested(tmp_path):
     await init_db()
     delivered: list[int] = []

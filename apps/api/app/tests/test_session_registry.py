@@ -1,8 +1,12 @@
 import asyncio
 
 import pytest
+from sqlalchemy import delete
 
-from app.services.claude_runner import Turn
+from app.db import SessionLocal, init_db
+from app.models import ChannelDelivery
+from app.services import channel_delivery
+from app.services.claude_runner import DeliveryRequest, Turn
 from app.services.session_registry import (
     AgentDeletingError,
     SessionDeletingError,
@@ -278,6 +282,64 @@ async def test_submit_after_close_raises_and_close_is_idempotent():
     await registry.close()
     with pytest.raises(RuntimeError, match="registry is closed"):
         await registry.submit(turn())
+
+
+@pytest.mark.asyncio
+async def test_interrupt_discards_a_queued_delivery():
+    await init_db()
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    await registry.submit(turn(prompt="a"))
+    await wait_until(lambda: runner.started == ["a"])
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_queued(
+            db, channel_id="ch1", external_id="wx", session_id="s1"
+        )
+        await db.commit()
+    queued = Turn(
+        session_id="s1",
+        agent_id="default",
+        prompt="b",
+        delivery=DeliveryRequest("ch1", "wx", delivery_id),
+    )
+    await registry.submit(queued)
+    try:
+        assert await registry.interrupt("s1") is True
+        assert await channel_delivery.get(delivery_id) is None
+    finally:
+        runner.release("a")
+        await wait_until(lambda: runner.finished == ["a"])
+        await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_close_keeps_a_queued_delivery_for_startup():
+    await init_db()
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    await registry.submit(turn(prompt="a"))
+    await wait_until(lambda: runner.started == ["a"])
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_queued(
+            db, channel_id="ch1", external_id="wx", session_id="s1"
+        )
+        await db.commit()
+    queued = Turn(
+        session_id="s1",
+        agent_id="default",
+        prompt="b",
+        delivery=DeliveryRequest("ch1", "wx", delivery_id),
+    )
+    await registry.submit(queued)
+    try:
+        await registry.close()
+        assert await channel_delivery.get(delivery_id) is not None
+    finally:
+        async with SessionLocal() as db:
+            await db.execute(
+                delete(ChannelDelivery).where(ChannelDelivery.id == delivery_id)
+            )
+            await db.commit()
 
 
 @pytest.mark.asyncio

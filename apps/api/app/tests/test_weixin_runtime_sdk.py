@@ -9,7 +9,6 @@ from sqlalchemy import delete
 from app.db import SessionLocal, init_db
 from app.models import ChannelDelivery, ChannelInbound
 from app.services import channel_delivery, channel_intake
-from app.services.claude_runner import DeliveryRequest
 from app.services.settings_store import (
     AgentSection,
     ChannelSection,
@@ -289,9 +288,10 @@ async def test_flush_pending_submits_one_turn_for_the_batch():
         turn = registry.turns[0]
         assert turn.source == "wechat"
         assert turn.prompt == "第一句\n\n第二句"
-        assert turn.delivery == DeliveryRequest(
-            channel_id=channel.id, external_id="wx-1"
-        )
+        # Intake pre-creates the queued delivery row it hands to the turn.
+        assert turn.delivery.channel_id == channel.id
+        assert turn.delivery.external_id == "wx-1"
+        assert turn.delivery.delivery_id is not None
         conversation = store.settings.channel_conversations[
             f"{channel.id}:wx-1"
         ]

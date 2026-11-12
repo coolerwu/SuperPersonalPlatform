@@ -77,7 +77,7 @@
 2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`（带 tool_use id）、`subagent_text`、`subagent_tool_call`、`task_started`、`task_progress`、`task_updated`、`task_notification`、`turn_end`）。子 Agent 事件带 `parent_tool_use_id`，用于挂到对应的 Task 工具调用下；后台任务事件按 `task_id` 合并状态。
 3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。子 Agent 与后台任务只实时显示，不写入主 transcript；刷新后只保留主 Agent 的执行过程（子 Agent 历史需单独读取 subagent transcript，本版未接入）。
 4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示已停止。
-5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。
+5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。渠道消息在入站时先写 `queued` 投递行再入队；turn 开始时提升为 `pending`。排队期间服务重启或优雅关闭时，启动后由 `_answer_queued_deliveries` 填入「服务重启时这条消息尚未开始处理，请重新发送」并发送；用户 `/stop` 会丢弃排队 turn 的投递行。
 6. 命令：平台处理 `/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示。其余以 `/` 开头的裸命令只有出现在 Claude Code 运行时 init frame 的 `slash_commands` 中才由 `forward=true` 指示前端作为普通用户消息转发给 Agent；不在列表中的回复「未知命令」并列出当前可用命令，列表尚未加载时提示先发送一条普通消息。`GET /api/chat/slash-commands?agent_id=...` 返回该列表（排除 `terminal_slash_commands` 与平台命令重名项），按 Agent 进程内缓存，首次 turn 后可用。
 7. 输入框 `/` 前缀弹出命令面板：列出平台命令和 Claude Code 运行时命令，↑/↓ 选择，Enter/Tab 填入，Esc 关闭；面板只填入不执行。
 8. 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片支持选择、粘贴、拖拽，浏览器端缩到最长边 1600 px；发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具读取。图片作为文件由 Agent 的 Read 工具查看；本版不再单独构造 `image_url` 模型输入。旧 transcript 里的绝对 `/uploads/<name>` 仍按兼容路径解析，但可能失效，优先在 `uploads/` 下查找。Agent 为 paused/archived 时上传接口返回 409；读取历史附件放行（只读）。
@@ -179,7 +179,7 @@
    - 引用回包通常只有 `msg_id` / `create_time_ms`：先按消息 id 查 `channel_inbounds`，再在目标时间前 2 秒、后 30 秒窗口内查入站文本与机器人回复；查不到写「引用原文不可用」。
    - 命令 `/new`、`/clear`、`/stop`、`/status`、`/help`：`/new` 先等待在途打包批次落库到旧会话，再 flush 待打包消息并新建 UUID 重绑；`/stop` 先等待在途批次完成，再丢弃待打包消息并中断当前会话；等待有界（30 秒），超时后回复「正在处理上一条消息，请稍后重试」并放弃本次命令，不重绑也不丢弃。`/status` 返回 Agent、会话 UUID、忙闲；命令不进 Agent、不建 turn，确认消息直接 `sendmessage`。
 4. 出站：
-   - turn 开始时在同一事务写 `running_sessions` 租约与 `channel_deliveries` pending 行；结束时回填最终答复并发送；取消的 turn 不发送并删除空投递行。
+   - turn 开始时在同一事务写 `running_sessions` 租约，并把入站时创建的 `queued` 投递行提升为 `pending`（定时推送没有 `queued` 行时在此创建 `pending` 行）；结束时回填最终答复并发送；取消的 turn 不发送并删除空投递行。入站消息在入队前创建 `queued` 投递行；排队中重启由启动兜底答复，不会静默丢失。
    - 回复按 1800 字在段落/代码围栏边界切块，最多 10 块，超出截断并标注。
    - 崩溃重启后按 pending/attempting 行补发；attempting 行补发文案为「♻️ 上一条回复可能已部分送达，以下为完整内容：」。如果一次发送在至少一块已送达后失败（含登录过期），行保持 attempting，后续补发保留该前缀；发送 claim 已计入 attempts，达到 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 后标记终态 `failed` 并停止自动补发（已知限制：前缀只在重试期间保留）。只有一块都没发出时才回到 pending。渠道暂停/登录过期时保留 pending，恢复后继续；部分送达行仍受尝试上限约束。
    - 网页里在渠道会话中手动发消息不推回微信；定时推送复用同一投递机制。

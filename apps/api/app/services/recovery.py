@@ -151,6 +151,37 @@ async def _answer_orphan_deliveries() -> int:
     return answered
 
 
+async def _answer_queued_deliveries() -> int:
+    """Answer obligations whose turn never started before a restart.
+
+    A row stays ``queued`` from ingest until the runner adopts it at turn
+    start. A crash or graceful shutdown in that window leaves no lease behind,
+    so recovery fills the row with the explicit failure text and lets the
+    startup sweep tell the contact instead of losing the message to iLink
+    dedup (which would treat the replayed inbound id as a duplicate).
+    """
+    try:
+        session_ids = await channel_delivery.list_queued_session_ids()
+    except Exception:
+        logger.exception("recovery could not list queued deliveries")
+        return 0
+    answered = 0
+    for session_id in session_ids:
+        try:
+            answered += await channel_delivery.fail_queued_for_session(
+                session_id,
+                LOST_TURN_TEXT,
+                "queued turn lost on restart",
+            )
+        except Exception:
+            logger.exception(
+                "recovery could not answer queued delivery session=%s", session_id
+            )
+    if answered:
+        logger.warning("recovery answered %d queued channel delivery row(s)", answered)
+    return answered
+
+
 async def recover_running_sessions(
     registry: Any, store: Any, *, home: Path | None = None
 ) -> None:
@@ -176,6 +207,10 @@ async def recover_running_sessions(
             await _recover_session(registry, agents, session_id, home)
         except Exception:
             logger.exception("recovery failed session=%s", session_id)
+    try:
+        await _answer_queued_deliveries()
+    except Exception:
+        logger.exception("recovery queued delivery backfill failed")
     try:
         await _answer_orphan_deliveries()
     except Exception:

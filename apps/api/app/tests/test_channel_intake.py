@@ -150,6 +150,14 @@ async def _ingest(
     )
 
 
+@pytest.fixture(autouse=True)
+async def _clean_deliveries():
+    yield
+    async with SessionLocal() as db:
+        await db.execute(delete(ChannelDelivery))
+        await db.commit()
+
+
 async def _cleanup(channel_id, message_ids):
     """Remove only the idempotency rows this test created."""
     async with SessionLocal() as db:
@@ -486,6 +494,50 @@ async def test_submit_failure_releases_claim():
 
 
 @pytest.mark.asyncio
+async def test_ingest_creates_a_queued_delivery_before_turn_starts():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    try:
+        result = await _ingest(store, registry, message_ids=["pre-1"])
+        assert result.session_id
+        turn = registry.turns[0]
+        assert turn.delivery is not None
+        assert turn.delivery.delivery_id is not None
+        row = await channel_delivery.get(turn.delivery.delivery_id)
+        assert row is not None
+        assert row.status == "queued"
+        assert row.content == ""
+        assert row.session_id == result.session_id
+        assert row.channel_id == "ch1"
+        assert row.external_id == "wx-1"
+    finally:
+        await _cleanup("ch1", ["pre-1"])
+
+
+@pytest.mark.asyncio
+async def test_submit_failure_discards_delivery_and_releases_claim():
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    registry.submit_error = RuntimeError("deleting")
+    try:
+        with pytest.raises(RuntimeError):
+            await _ingest(store, registry, message_ids=["fail-1"])
+        assert await _rows("ch1", ["fail-1"]) == []
+        async with SessionLocal() as db:
+            rows = await db.scalars(
+                select(ChannelDelivery).where(
+                    ChannelDelivery.channel_id == "ch1",
+                    ChannelDelivery.external_id == "wx-1",
+                )
+            )
+            assert list(rows) == []
+    finally:
+        await _cleanup("ch1", ["fail-1"])
+
+
+@pytest.mark.asyncio
 async def test_empty_inputs_are_rejected_before_claim():
     await init_db()
     store = FakeStore()
@@ -531,8 +583,10 @@ async def test_deleted_transcript_rebinding_creates_new_session():
         assert conversation.context_token == "ctx-old"
         assert registry.turns[0].session_id == result.session_id
         # Claude deletes the expired transcript; the platform still owns the
-        # delivery rows of the dead binding and drops them on rebind.
-        assert await channel_delivery.get(stale_delivery) is None
+        # delivery rows of the dead binding and drops them on rebind. Assert by
+        # owning session, not by id: SQLite reuses a deleted max rowid for the
+        # new queued delivery this ingest creates.
+        assert await channel_delivery.has_for_session(stale_session) is False
     finally:
         if stale_delivery is not None:
             async with SessionLocal() as db:

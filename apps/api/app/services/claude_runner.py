@@ -158,14 +158,19 @@ def _config_fingerprint(
 
 @dataclass
 class DeliveryRequest:
-    """Channel obligation to create when this turn starts.
+    """Channel obligation for this turn.
 
-    ``session_id`` comes from the turn; the row is filled with the final
-    answer and handed to ``deliver_callback`` at teardown.
+    ``delivery_id`` is the ``queued`` row channel intake created before the
+    turn was submitted; the runner promotes it to ``pending`` when the turn
+    actually starts, in the same transaction as the lease. A request without
+    an id (a legacy caller or a cron push) makes the runner create the row
+    itself at turn start. The row is filled with the final answer and handed
+    to ``deliver_callback`` at teardown.
     """
 
     channel_id: str
     external_id: str
+    delivery_id: int | None = None
 
 
 @dataclass
@@ -574,21 +579,34 @@ class ClaudeTurnRunner:
                     outcome = TurnOutcome(status="failed", error="agent not found")
                     return outcome
                 lease_added = True
+                # Channel intake already created this obligation as ``queued``
+                # before submitting the turn; adopt it now that the turn is
+                # really starting.
+                if turn.delivery is not None and turn.source != "resume":
+                    delivery_id = turn.delivery.delivery_id
                 # Lease and delivery obligation are written together so a
                 # crash can never leave a turn marked running without the
                 # reply it owes, or vice versa.
                 async with SessionLocal() as db:
                     await turn_lease.add_in(db, turn.session_id)
-                    # A resumed turn must attach to an obligation created before
-                    # the crash, never create another one (that would double
-                    # reply); the lookup below is its only source.
-                    if turn.delivery is not None and turn.source != "resume":
+                    if delivery_id is not None:
+                        # Promote the pre-created row; if it is no longer
+                        # queued the turn simply owes no reply.
+                        if not await channel_delivery.mark_started_in(
+                            db, delivery_id
+                        ):
+                            delivery_id = None
+                    elif turn.delivery is not None and turn.source != "resume":
+                        # Legacy or cron request without a pre-created row.
                         delivery_id = await channel_delivery.create_pending(
                             db,
                             channel_id=turn.delivery.channel_id,
                             external_id=turn.delivery.external_id,
                             session_id=turn.session_id,
                         )
+                    # A resumed turn must attach to an obligation created before
+                    # the crash, never create another one (that would double
+                    # reply); the lookup below is its only source.
                     await db.commit()
                 # A resumed turn reuses the empty obligation created by the
                 # interrupted turn; a filled row already belongs to the sender
@@ -840,6 +858,19 @@ class ClaudeTurnRunner:
                             lambda: self._deliver_callback(delivery_id),
                             f"delivery send delivery={delivery_id}",
                         )
+            if (
+                delivery_id is None
+                and not keep_lease
+                and turn.delivery is not None
+                and turn.delivery.delivery_id is not None
+            ):
+                # The pre-created queued row was never adopted (the turn
+                # aborted before starting), so no answer is owed and the row
+                # must not be left for startup to answer.
+                await _best_effort(
+                    lambda: channel_delivery.discard(turn.delivery.delivery_id),
+                    f"queued delivery discard delivery={turn.delivery.delivery_id}",
+                )
             self._cancel_requested.discard(key)
         return outcome
 

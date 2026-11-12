@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 import pytest
 from sqlalchemy import delete
@@ -354,6 +355,32 @@ async def test_recovery_answers_lease_less_empty_delivery(tmp_path):
         if delivery_id is not None:
             await _cleanup_deliveries_by_id(delivery_id)
         await turn_lease.remove(session_id)
+
+
+@pytest.mark.asyncio
+async def test_queued_delivery_is_answered_at_startup():
+    await init_db()
+    session_id = str(uuid.uuid4())
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_queued(
+            db,
+            channel_id="ch1",
+            external_id="wx-1",
+            session_id=session_id,
+        )
+        await db.commit()
+    try:
+        await recovery.recover_running_sessions(FakeRegistry(), FakeStore())
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        assert row.status == "pending"
+        assert row.content == recovery.LOST_TURN_TEXT
+    finally:
+        async with SessionLocal() as db:
+            await db.execute(
+                delete(ChannelDelivery).where(ChannelDelivery.id == delivery_id)
+            )
+            await db.commit()
 
 
 async def _cleanup_deliveries_by_id(delivery_id: int) -> None:
