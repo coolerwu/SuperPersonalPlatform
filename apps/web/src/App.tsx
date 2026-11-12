@@ -19,6 +19,7 @@ import type {
 import { isBareSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
 import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
+import { sessionSummariesEqual } from "./sessionSummary";
 import { ChatPanel } from "./components/ChatPanel";
 import { AllocationPage } from "./components/AllocationPage";
 import { BacktestPage } from "./components/BacktestPage";
@@ -309,7 +310,9 @@ export default function App() {
 
   function applySessions(list: SessionSummary[]) {
     sessionsRef.current = list;
-    setSessions(list);
+    setSessions((current) =>
+      sessionSummariesEqual(current, list) ? current : list,
+    );
   }
 
   function setMessagesFor(id: string, list: TranscriptMessage[]) {
