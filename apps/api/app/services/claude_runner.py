@@ -55,11 +55,15 @@ from app.services.turn_stream import TurnStream
 
 logger = logging.getLogger(__name__)
 
-# Shared shutdown budget; bounds systemd ``TimeoutStopSec`` exposure.
-_DISCONNECT_TIMEOUT_SECONDS = 10
+# The SDK's transport close closes stdin, waits, sends SIGTERM, waits, then
+# SIGKILL, with roughly a 20 s worst-case bound. An asyncio.timeout shorter
+# than that raw-cancels the SDK's shielded cleanup and skips the escalation,
+# so wait longer than the SDK itself before treating a close as an orphan.
+_DISCONNECT_TIMEOUT_SECONDS = 25
 # Total time ``close_all`` may spend disconnecting cached clients. The deploy
-# unit allows 60 s for the whole shutdown, leaving room for the other runtimes.
-_SHUTDOWN_BUDGET_SECONDS = 20
+# unit allows 60 s for the whole shutdown; ``SessionRegistry.close`` may take
+# up to 10 s, leaving room for the other runtimes.
+_SHUTDOWN_BUDGET_SECONDS = 30
 # A connect that wedges would otherwise hold a concurrency permit forever.
 _CONNECT_TIMEOUT_SECONDS = 60
 _INTERRUPT_LOCK_TIMEOUT_SECONDS = 5
@@ -968,9 +972,10 @@ class ClaudeTurnRunner:
     async def _disconnect(self, client: Any, session_id: str) -> bool:
         """Disconnect one client within the shared timeout.
 
-        A timed-out client is retained in ``_orphaned_clients`` (the SDK has no
-        process-termination API) so the reference is never silently dropped;
-        exceptions are logged and treated as a completed teardown.
+        A timed-out client is retained in ``_orphaned_clients``: timing out
+        raw-cancels the SDK's shielded cleanup, skipping its SIGTERM/SIGKILL
+        escalation, so the reference is never silently dropped; exceptions are
+        logged and treated as a completed teardown.
         """
         try:
             async with asyncio.timeout(_DISCONNECT_TIMEOUT_SECONDS):
@@ -1091,9 +1096,10 @@ class ClaudeTurnRunner:
                 ):
                     await cached.client.disconnect()
             except TimeoutError:
-                # The SDK client has no process-termination API; keep the
-                # reference so the CLI is not silently orphaned in the cache
-                # and report it. The process exits with ours.
+                # Timing out raw-cancels the SDK's shielded cleanup and skips
+                # its SIGTERM/SIGKILL escalation; keep the reference so the CLI
+                # is not silently orphaned in the cache and report it. The
+                # process exits with ours.
                 logger.warning(
                     "client disconnect exceeded shutdown budget session=%s; "
                     "keeping reference",

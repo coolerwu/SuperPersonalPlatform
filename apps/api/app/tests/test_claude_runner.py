@@ -591,6 +591,14 @@ async def test_close_all_bounds_each_disconnect_and_keeps_orphans(
     )
 
 
+def test_disconnect_budget_covers_the_sdk_close():
+    assert claude_runner._DISCONNECT_TIMEOUT_SECONDS >= 20
+    assert (
+        claude_runner._SHUTDOWN_BUDGET_SECONDS
+        > claude_runner._DISCONNECT_TIMEOUT_SECONDS
+    )
+
+
 @pytest.mark.asyncio
 async def test_shutdown_cancellation_keeps_lease_for_recovery(tmp_path):
     await init_db()
