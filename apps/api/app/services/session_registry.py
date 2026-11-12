@@ -319,6 +319,11 @@ class SessionRegistry:
                 queue.task_done()
                 dropped.append(queued_turn)
                 cancelled = True
+        # Bind the interrupt to the turn that is running right now, before the
+        # delivery-discard awaits below. Otherwise the running turn could end
+        # and a new turn start in the same session during those awaits, and
+        # /stop would cancel the new turn instead.
+        running_turn_id = self._current.get(session_id)
         if (
             cancelled
             and session_id not in self._running
@@ -338,7 +343,7 @@ class SessionRegistry:
         active = await self._runner.interrupt(
             session_id,
             self._session_agents.get(session_id),
-            turn_id=self._current.get(session_id),
+            turn_id=running_turn_id,
         )
         return bool(active or cancelled)
 

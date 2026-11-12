@@ -315,6 +315,69 @@ async def test_interrupt_discards_a_queued_delivery():
 
 
 @pytest.mark.asyncio
+async def test_interrupt_binds_the_turn_id_captured_before_discarding(monkeypatch):
+    from app.services import session_registry as registry_module
+
+    await init_db()
+    runner = FakeRunner()
+    runner.interrupt_result = True
+    registry = SessionRegistry(runner, concurrency=2)
+    await registry.submit(turn(prompt="a"))
+    await wait_until(lambda: runner.started == ["a"])
+    first_id = registry.current_turn_id("s1")
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_queued(
+            db, channel_id="ch1", external_id="wx", session_id="s1"
+        )
+        await db.commit()
+    queued = Turn(
+        session_id="s1",
+        agent_id="default",
+        prompt="b",
+        delivery=DeliveryRequest("ch1", "wx", delivery_id),
+    )
+    await registry.submit(queued)
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_discard(_turn):
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(registry_module, "_discard_delivery", blocking_discard)
+    interrupting = asyncio.create_task(registry.interrupt("s1"))
+    try:
+        await wait_until(entered.is_set)
+        # The running turn ends and a new turn starts while interrupt is
+        # still inside the queued delivery discard await.
+        runner.release("a")
+        await wait_until(lambda: runner.finished == ["a"])
+        await wait_until(lambda: not registry._workers)
+
+        third_id = await registry.submit(turn(prompt="c"))
+        await wait_until(lambda: runner.started == ["a", "c"])
+
+        release.set()
+        assert await asyncio.wait_for(interrupting, 1) is True
+        assert runner.interrupt_turn_ids[-1] == first_id
+        assert runner.interrupt_turn_ids[-1] != third_id
+
+        runner.release("c")
+        await wait_until(lambda: runner.finished == ["a", "c"])
+    finally:
+        release.set()
+        if not interrupting.done():
+            await asyncio.wait_for(interrupting, 1)
+        await registry.close()
+        async with SessionLocal() as db:
+            await db.execute(
+                delete(ChannelDelivery).where(ChannelDelivery.id == delivery_id)
+            )
+            await db.commit()
+
+
+@pytest.mark.asyncio
 async def test_close_keeps_a_queued_delivery_for_startup():
     await init_db()
     runner = FakeRunner()
