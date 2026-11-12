@@ -4,7 +4,7 @@
 
 ## 需求与方案
 
-- `docs/intent.md` 是需求唯一来源（F1–F17，2026-11-11 按 SDK 迁移后的实现重写）；没有它覆盖的改动不进入实现。
+- `docs/intent.md` 是需求唯一来源（F1–F22，2026-11-11 按 SDK 迁移后的实现重写，F22 于 2026-11-12 追加）；没有它覆盖的改动不进入实现。
 - 方案先定后做；涉及新依赖、破坏性接口、数据迁移或 schema 变更时，动手前先列出并等确认。
 - 每次修改代码后，按用户要求做 3 次自我 code review，并如实标注发现。
 - 迁移设计与计划见 `docs/superpowers/specs/2026-11-10-claude-agent-sdk-migration-design.md` 与 `docs/superpowers/plans/`。
@@ -12,7 +12,7 @@
 ## 当前架构
 
 - v1 从 0 到 1 重建；`apps/api` 使用 FastAPI + Claude Agent SDK（Python，`ClaudeSDKClient`），模型走 DeepSeek 的 Anthropic 兼容端点；`apps/web` 使用 React + Vite + TypeScript。
-- 执行核：`SessionRegistry`（按 session 串行、跨 session 并发，并发数 = `BROWSER_CONCURRENCY`）+ `ClaudeTurnRunner`。缓存 client 按 `(agent_id, session_id)` 区分，默认空闲 TTL 300 秒、上限 8 个、每 60 秒清扫；轮末逐出在并发信号量释放后执行，断开有超时；`close_all` 每个 client 限时断开并把超时对象保留在 `_orphaned_clients` 并记 warning。断开每个 client 最多等 25 秒（SDK 自身约 20 秒的 SIGTERM→SIGKILL 升级），关机总预算 30 秒。client 开启 `forward_subagent_text`；每个子 Agent 用独立 `StreamMapper`，其文本/工具按 `parent_tool_use_id` 映射为 `subagent_*` 事件，注入轮（origin 非 human 的通知/peer/channel）不进入当前轮展示。
+- 执行核：`SessionRegistry`（按 session 串行、跨 session 并发，并发数 = `BROWSER_CONCURRENCY`）+ `ClaudeTurnRunner`。缓存 client 按 `(agent_id, session_id)` 区分，默认空闲 TTL 300 秒、上限 8 个、每 60 秒清扫；轮末逐出在并发信号量释放后执行，断开有超时；`close_all` 每个 client 限时断开并把超时对象保留在 `_orphaned_clients` 并记 warning。断开每个 client 最多等 25 秒（SDK 自身约 20 秒的 SIGTERM→SIGKILL 升级），关机总预算 30 秒。client 开启 `forward_subagent_text`；每个子 Agent 用独立 `StreamMapper`，其文本/工具按 `parent_tool_use_id` 映射为 `subagent_*` 事件，注入轮（origin 非 human 的通知/peer/channel）不进入当前轮展示。每个 turn 可按 `runtime.task_budget_tokens`（默认 0，非 0 时 20000–1000000）向 SDK 传入 `task_budget`，让模型按剩余 token 预算自行收敛；该值纳入 client 配置指纹，与 900 秒硬超时互补。
 - 会话/消息由 SDK transcript 管理：`~/.super-personal-platform/claude/projects/<agent_id>/<uuid>.jsonl`；会话列表/历史/重命名/删除走 `sdk_bridge` / `session_catalog`，平台不建 sessions/messages/runs 表。
 - 平台配置在 `data/settings.json`（`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`）；单文件、单锁、临时文件 + fsync + `os.replace`，写前留 `.bak`；密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。`.env` 密钥仅在首次种子时复制到 `settings.json`，之后以文件为准，平台不回写 `.env`。
 - 新库的 `app.db` 只创建五张表：`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留未使用的旧表。`market.db` 行情缓存不变。

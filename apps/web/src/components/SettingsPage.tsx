@@ -42,6 +42,12 @@ const CAPABILITY_LABELS: Record<string, string> = {
   memory: "Memory",
 };
 
+// Mirrors TASK_BUDGET_MIN/MAX in apps/api/app/services/settings_store.py.
+function clampTaskBudget(value: number): number {
+  const rounded = Math.max(0, Math.min(1_000_000, Math.round(value || 0)));
+  return rounded > 0 && rounded < 20000 ? 20000 : rounded;
+}
+
 export function SettingsPage(props: SettingsPageProps) {
   const [tab, setTab] = useState<"provider" | "agent" | "knowledge" | "runtime">("provider");
   const [providerId, setProviderId] = useState("");
@@ -56,9 +62,10 @@ export function SettingsPage(props: SettingsPageProps) {
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [systemError, setSystemError] = useState("");
   const [retentionDays, setRetentionDays] = useState(30);
-  const [savingRetention, setSavingRetention] = useState(false);
-  const [retentionNotice, setRetentionNotice] = useState("");
-  const [retentionError, setRetentionError] = useState("");
+  const [taskBudgetTokens, setTaskBudgetTokens] = useState(0);
+  const [savingRuntime, setSavingRuntime] = useState(false);
+  const [runtimeNotice, setRuntimeNotice] = useState("");
+  const [runtimeError, setRuntimeError] = useState("");
 
   const provider = props.providers.find((item) => item.id === providerId) ?? props.providers[0];
   const agent = props.agents.find((item) => item.id === props.agentId);
@@ -103,9 +110,10 @@ export function SettingsPage(props: SettingsPageProps) {
       .then((next) => {
         if (!active) return;
         setRetentionDays(next.session_retention_days);
+        setTaskBudgetTokens(next.task_budget_tokens);
       })
       .catch((exc) => {
-        if (active) setRetentionError(errorText(exc));
+        if (active) setRuntimeError(errorText(exc));
       });
     return () => {
       active = false;
@@ -114,23 +122,25 @@ export function SettingsPage(props: SettingsPageProps) {
 
   async function saveRuntimeSettings(event: FormEvent) {
     event.preventDefault();
-    if (savingRetention) return;
-    setSavingRetention(true);
-    setRetentionError("");
-    setRetentionNotice("");
+    if (savingRuntime) return;
+    setSavingRuntime(true);
+    setRuntimeError("");
+    setRuntimeNotice("");
     try {
       const next = await api.updateSettings({
         session_retention_days: Math.max(
           0,
           Math.min(3650, Math.round(retentionDays || 0)),
         ),
+        task_budget_tokens: clampTaskBudget(taskBudgetTokens),
       });
       setRetentionDays(next.session_retention_days);
-      setRetentionNotice("已保存；Claude Code 会按新的保留期清理超期会话。");
+      setTaskBudgetTokens(next.task_budget_tokens);
+      setRuntimeNotice("已保存运行环境设置。");
     } catch (exc) {
-      setRetentionError(errorText(exc));
+      setRuntimeError(errorText(exc));
     } finally {
-      setSavingRetention(false);
+      setSavingRuntime(false);
     }
   }
 
@@ -418,7 +428,7 @@ export function SettingsPage(props: SettingsPageProps) {
               </>
             )}
 
-            <div className="settings-subhead">会话与记忆维护</div>
+            <div className="settings-subhead">会话与运行参数</div>
             <form className="editor" onSubmit={saveRuntimeSettings}>
               <p className="hint">
                 超过保留天数没有更新的会话由 Claude Code 自己清理；平台只保存这个设置，不单独扫描
@@ -436,11 +446,30 @@ export function SettingsPage(props: SettingsPageProps) {
                   setRetentionDays(Number(event.target.value) || 0)
                 }
               />
-              {retentionError && <div className="error-banner">{retentionError}</div>}
-              {retentionNotice && <div className="hint">{retentionNotice}</div>}
+              <label className="field-label" htmlFor="task-budget">
+                单轮任务预算（tokens）
+              </label>
+              <input
+                id="task-budget"
+                type="number"
+                min={0}
+                max={1_000_000}
+                step={1}
+                value={taskBudgetTokens}
+                onChange={(event) =>
+                  setTaskBudgetTokens(Number(event.target.value) || 0)
+                }
+              />
+              <p className="hint">
+                本轮可用的 token 预算；0 表示不设置，非 0 时最小 20000（低于 20000
+                会按 20000 保存，上限 1000000）。该预算依赖 Anthropic beta，当前
+                Provider 不支持时请保持 0。
+              </p>
+              {runtimeError && <div className="error-banner">{runtimeError}</div>}
+              {runtimeNotice && <div className="hint">{runtimeNotice}</div>}
               <div className="form-actions">
-                <button className="primary" type="submit" disabled={savingRetention}>
-                  {savingRetention ? "保存中…" : "保存运行环境设置"}
+                <button className="primary" type="submit" disabled={savingRuntime}>
+                  {savingRuntime ? "保存中…" : "保存运行环境设置"}
                 </button>
               </div>
             </form>

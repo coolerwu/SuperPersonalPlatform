@@ -85,7 +85,7 @@ npm run dev
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
 - **Agent**：列出全部 Agent 摘要（Provider/model、记忆开关、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
 - **知识库**：启用开关、WebDAV 地址、账号、应用密码、根目录、同步间隔；密码只写入 `settings.json`，接口只返回 `has_password`。
-- **运行环境**：版本、执行核、数据库类型、单轮执行超时（`RUN_TIMEOUT_SECONDS`）、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 不清理，`GET/PUT /api/settings`）。平台把它写成 Claude 的 `cleanupPeriodDays`，由 Claude 自己清理 transcript，平台不跑清理任务。
+- **运行环境**：版本、执行核、数据库类型、单轮执行超时（`RUN_TIMEOUT_SECONDS`）、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 不清理，`GET/PUT /api/settings`）。平台把它写成 Claude 的 `cleanupPeriodDays`，由 Claude 自己清理 transcript，平台不跑清理任务。另可设置单轮任务预算 `task_budget_tokens`（默认 0 关闭，非 0 时 20000–1000000），作为 `task_budget` 传给模型；它依赖 Anthropic beta，Provider 不支持时保持 0。`PUT /api/settings` 是整对象替换，请求需同时携带 `session_retention_days` 与 `task_budget_tokens`。
 - Agent 彻底删除：有活动 turn 时 409；确认后删除该 Agent 的 transcript、工作区目录、渠道与绑定、定时任务、投递/入站记录和渠道登录态。归档只改状态，不删文件，之后可在配置页把状态改回 active 恢复。
 
 所有 per-agent 配置都以左上角侧边栏的 Agent 状态为唯一来源；配置页的 Agent 列表只能切换这个全局选中的 Agent，不持有第二套选择状态。

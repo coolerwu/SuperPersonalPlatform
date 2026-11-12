@@ -5,6 +5,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.services.settings_store import TASK_BUDGET_MAX, TASK_BUDGET_MIN
 from app.services.timeframes import validate_granularity
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9]{3,30}$")
@@ -466,6 +467,16 @@ class KnowledgeConfigUpdate(BaseModel):
 
 class AppSettingsUpdate(BaseModel):
     session_retention_days: int = Field(ge=0, le=3650)
+    task_budget_tokens: int = Field(default=0, ge=0, le=TASK_BUDGET_MAX)
+
+    @field_validator("task_budget_tokens")
+    @classmethod
+    def _check_task_budget(cls, value: int) -> int:
+        if 0 < value < TASK_BUDGET_MIN:
+            raise ValueError(
+                f"任务预算需为 0，或 {TASK_BUDGET_MIN}–{TASK_BUDGET_MAX} 之间的 token 数"
+            )
+        return value
 
 
 class TradeJournalCreate(BaseModel):

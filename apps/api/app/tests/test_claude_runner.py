@@ -12,7 +12,12 @@ from app.services.claude_runner import (
     Turn,
     transcript_path,
 )
-from app.services.settings_store import AgentSection, PlatformSettings, ProviderSection
+from app.services.settings_store import (
+    AgentSection,
+    PlatformSettings,
+    ProviderSection,
+    RuntimeSection,
+)
 from app.services.turn_stream import TurnStream
 
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
@@ -80,12 +85,16 @@ class StopsAfterResultClient(FakeClient):
 
 
 class FakeStore:
-    def __init__(self, *agents):
+    def __init__(self, *agents, runtime=None):
         self._agents = [agent for agent in agents if agent is not None]
+        self._runtime = runtime if runtime is not None else RuntimeSection()
 
     async def get(self):
         return PlatformSettings(
-            agents=self._agents, channels=[], channel_conversations={}
+            runtime=self._runtime,
+            agents=self._agents,
+            channels=[],
+            channel_conversations={},
         )
 
 
@@ -1647,3 +1656,74 @@ async def test_subagent_stream_events_are_not_duplicated_by_message(tmp_path):
 
     texts = [event["text"] for event in events if event["type"] == "subagent_text"]
     assert texts == ["streamed"]
+
+
+@pytest.mark.asyncio
+async def test_task_budget_option_is_set_from_runtime_settings(tmp_path):
+    await init_db()
+    captured = []
+    runner = ClaudeTurnRunner(
+        store=FakeStore(
+            make_agent(), runtime=RuntimeSection(task_budget_tokens=32000)
+        ),
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options)
+        or FakeClient([ResultMessage()]),
+    )
+    await runner.run(make_turn(), TurnStream())
+    assert captured[0].task_budget == {"total": 32000}
+
+
+@pytest.mark.asyncio
+async def test_task_budget_option_is_absent_when_disabled(tmp_path):
+    await init_db()
+    captured = []
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options)
+        or FakeClient([ResultMessage()]),
+    )
+    await runner.run(make_turn(), TurnStream())
+    assert captured[0].task_budget is None
+
+
+@pytest.mark.asyncio
+async def test_changed_task_budget_rebuilds_a_cached_client(tmp_path):
+    await init_db()
+    captured = []
+    clients = [
+        FakeClient([ResultMessage()]),
+        FakeClient([ResultMessage()]),
+        FakeClient([ResultMessage()]),
+    ]
+
+    def factory(options):
+        captured.append(options)
+        return clients[len(captured) - 1]
+
+    store = FakeStore(
+        make_agent(), runtime=RuntimeSection(task_budget_tokens=20000)
+    )
+    runner = ClaudeTurnRunner(store=store, home=tmp_path, client_factory=factory)
+    turn = make_turn(session_id="19191919-1919-1919-1919-191919191919")
+    await runner.run(turn, TurnStream())
+    store._runtime = RuntimeSection(task_budget_tokens=40000)
+    await runner.run(turn, TurnStream())
+    store._runtime = RuntimeSection(task_budget_tokens=0)
+    await runner.run(turn, TurnStream())
+
+    assert len(captured) == 3
+    assert clients[0].disconnected is True
+    assert clients[1].disconnected is True
+    assert captured[1].task_budget == {"total": 40000}
+    assert captured[2].task_budget is None
+
+
+def test_config_fingerprint_includes_task_budget():
+    agent = make_agent()
+    assert claude_runner._config_fingerprint(
+        agent, "memory", "plugins", "agent-memory", task_budget_tokens=20000
+    ) != claude_runner._config_fingerprint(
+        agent, "memory", "plugins", "agent-memory", task_budget_tokens=40000
+    )

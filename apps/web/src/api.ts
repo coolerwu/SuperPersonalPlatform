@@ -310,6 +310,7 @@ export const api = {
   getSettings: () => request<AppSettings>("/api/settings"),
   updateSettings: (payload: {
     session_retention_days: number;
+    task_budget_tokens: number;
   }) =>
     request<AppSettings>("/api/settings", {
       method: "PUT",

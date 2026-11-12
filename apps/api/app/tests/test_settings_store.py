@@ -6,6 +6,7 @@ import sqlite3
 import stat
 
 import pytest
+from pydantic import ValidationError
 
 import app.services.settings_store as settings_store_module
 from app.services.settings_store import JsonStore, SettingsStore, build_default_settings
@@ -563,3 +564,28 @@ async def test_ensure_seeded_leaves_a_complete_valid_file_unchanged(
     assert path.read_text("utf-8") == before
     assert [agent.id for agent in settings.agents] == ["default"]
     assert settings.knowledge.root == "/kb"
+
+
+@pytest.mark.asyncio
+async def test_update_runtime_rejects_small_task_budget(tmp_path):
+    store = SettingsStore(tmp_path / "settings.json")
+    with pytest.raises(ValidationError):
+        await store.update_runtime(task_budget_tokens=100)
+    assert (await store.get()).runtime.task_budget_tokens == 0
+    await store.update_runtime(task_budget_tokens=20000)
+    assert (await store.get()).runtime.task_budget_tokens == 20000
+    await store.update_runtime(task_budget_tokens=1_000_000)
+    assert (await store.get()).runtime.task_budget_tokens == 1_000_000
+    with pytest.raises(ValidationError):
+        await store.update_runtime(task_budget_tokens=1_000_001)
+
+
+@pytest.mark.asyncio
+async def test_runtime_section_without_task_budget_defaults_to_zero(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"runtime": {"session_retention_days": 7}}), "utf-8"
+    )
+    settings = await SettingsStore(path).get()
+    assert settings.runtime.task_budget_tokens == 0
+    assert settings.runtime.session_retention_days == 7
