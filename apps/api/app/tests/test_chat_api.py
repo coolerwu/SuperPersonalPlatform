@@ -4,7 +4,7 @@ import pytest
 
 from app.services import commands
 from app.services.claude_runner import transcript_path
-from app.services.session_registry import SessionDeletingError
+from app.services.session_registry import InterruptResult, SessionDeletingError
 from app.services.turn_stream import TurnStream
 
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
@@ -44,7 +44,7 @@ class RecordingRegistry:
 
     async def interrupt(self, session_id):
         self.interrupt_calls.append(session_id)
-        return self.interrupted
+        return InterruptResult(self.interrupted)
 
     async def close_session(self, session_id):
         self.closed.append(session_id)
@@ -221,7 +221,7 @@ def test_interrupt_endpoint(client):
     client.app.state.registry = RecordingRegistry(interrupted=True)
     response = client.post(f"/api/sessions/{SESSION_ID}/interrupt")
     assert response.status_code == 200
-    assert response.json() == {"interrupted": True}
+    assert response.json() == {"interrupted": True, "cancelled_turn_ids": []}
 
 
 def test_interrupt_without_registry_is_503(client):

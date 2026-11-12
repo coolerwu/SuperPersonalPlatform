@@ -226,6 +226,60 @@ async def test_messages_skips_tool_results_and_subagents(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_messages_render_interrupt_marker_as_system_row(monkeypatch):
+    monkeypatch.setattr(
+        sdk_bridge,
+        "get_session_messages",
+        lambda session_id: [
+            SimpleNamespace(
+                type="user",
+                uuid="u1",
+                message={"role": "user", "content": "do it"},
+                parent_tool_use_id=None,
+            ),
+            SimpleNamespace(
+                type="user",
+                uuid="u2",
+                message={"role": "user", "content": "[Request interrupted by user]"},
+                parent_tool_use_id=None,
+            ),
+            SimpleNamespace(
+                type="assistant",
+                uuid="a1",
+                message={
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "No response requested."}],
+                },
+                parent_tool_use_id=None,
+            ),
+            SimpleNamespace(
+                type="user",
+                uuid="u3",
+                message={"role": "user", "content": "again"},
+                parent_tool_use_id=None,
+            ),
+            SimpleNamespace(
+                type="assistant",
+                uuid="a2",
+                message={
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "done"}],
+                },
+                parent_tool_use_id=None,
+            ),
+        ],
+    )
+    catalog = session_catalog.SessionCatalog(FakeStore(), home=Path("/tmp"))
+    rows = await catalog.messages("s1")
+    assert [(row["role"], row["content"]) for row in rows] == [
+        ("user", "do it"),
+        ("system", "本轮对话已被中断"),
+        ("user", "again"),
+        ("assistant", "done"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_messages_scope_to_agent_rejects_missing_transcript(
     tmp_path, monkeypatch
 ):

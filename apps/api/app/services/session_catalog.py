@@ -22,6 +22,12 @@ from app.services.session_service import cleanup_session_artifacts
 from app.services.tool_artifacts import collect_artifacts
 
 _TITLE_LIMIT = 80
+# Claude Code writes these two synthetic messages into the transcript when the
+# user stops a turn. They are protocol noise, not conversation: the marker is
+# shown as a system line and the acknowledgement is dropped.
+INTERRUPT_MARKER = "[Request interrupted by user]"
+NO_REPLY_TEXT = "No response requested."
+INTERRUPT_SYSTEM_TEXT = "本轮对话已被中断"
 
 
 def _text_from_message(message: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -119,6 +125,17 @@ class SessionCatalog:
                 content, _ = _text_from_message(getattr(message, "message", {}) or {})
                 if not content.strip():
                     continue
+                if content.strip() == INTERRUPT_MARKER:
+                    rows.append(
+                        {
+                            "id": str(getattr(message, "uuid", "")),
+                            "role": "system",
+                            "content": INTERRUPT_SYSTEM_TEXT,
+                            "blocks": [],
+                            "artifacts": [],
+                        }
+                    )
+                    continue
                 rows.append(
                     {
                         "id": str(getattr(message, "uuid", "")),
@@ -132,6 +149,8 @@ class SessionCatalog:
                 content, blocks = _text_from_message(
                     getattr(message, "message", {}) or {}
                 )
+                if content.strip() == NO_REPLY_TEXT and not blocks:
+                    continue
                 if not content.strip() and not blocks:
                     continue
                 artifacts = (

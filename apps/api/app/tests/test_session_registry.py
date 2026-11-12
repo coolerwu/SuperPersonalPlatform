@@ -185,7 +185,10 @@ async def test_running_stream_is_never_evicted():
 async def test_interrupt_idle_session_returns_false():
     runner = FakeRunner()
     registry = SessionRegistry(runner, concurrency=2)
-    assert await registry.interrupt("idle") is False
+    result = await registry.interrupt("idle")
+    assert result.cancelled is False
+    assert result.cancelled_turn_ids == ()
+    assert not result
     await registry.close()
     assert runner.interrupted == ["idle"]
 
@@ -195,10 +198,12 @@ async def test_interrupt_delegates_to_active_runner():
     runner = FakeRunner()
     runner.interrupt_result = True
     registry = SessionRegistry(runner, concurrency=2)
-    await registry.submit(turn(prompt="a"))
+    running_id = await registry.submit(turn(prompt="a"))
     await wait_until(lambda: runner.started == ["a"])
 
-    assert await registry.interrupt("s1") is True
+    result = await registry.interrupt("s1")
+    assert result.cancelled is True
+    assert result.cancelled_turn_ids == (running_id,)
     assert runner.interrupted == ["s1"]
 
     runner.release("a")
@@ -215,7 +220,9 @@ async def test_interrupt_cancels_queued_turns_and_terminates_their_streams():
     await wait_until(lambda: runner.started == ["a"])
 
     queued_stream = registry.stream(queued_id)
-    assert await registry.interrupt("s1") is True
+    result = await registry.interrupt("s1")
+    assert result.cancelled is True
+    assert queued_id in result.cancelled_turn_ids
     assert runner.interrupted == ["s1"]
     assert queued_stream.closed
     assert await drain_terminal(queued_stream) == [
@@ -234,7 +241,7 @@ async def test_interrupt_before_worker_starts_cancels_queued_turn():
     turn_id = await registry.submit(turn(prompt="a"))
     stream = registry.stream(turn_id)
 
-    assert await registry.interrupt("s1") is True
+    assert (await registry.interrupt("s1")).cancelled is True
     assert stream.closed
     assert await drain_terminal(stream) == [
         {"type": "turn_end", "status": "cancelled"}
@@ -257,7 +264,7 @@ async def test_interrupt_cancels_turn_waiting_for_concurrency_permit():
     )
     waiting_stream = registry.stream(waiting_id)
 
-    assert await registry.interrupt("s2") is True
+    assert (await registry.interrupt("s2")).cancelled is True
     assert waiting_stream.closed
     assert await drain_terminal(waiting_stream) == [
         {"type": "turn_end", "status": "cancelled"}
@@ -306,7 +313,7 @@ async def test_interrupt_discards_a_queued_delivery():
     )
     await registry.submit(queued)
     try:
-        assert await registry.interrupt("s1") is True
+        assert (await registry.interrupt("s1")).cancelled is True
         assert await channel_delivery.get(delivery_id) is None
     finally:
         runner.release("a")
@@ -359,7 +366,7 @@ async def test_interrupt_binds_the_turn_id_captured_before_discarding(monkeypatc
         await wait_until(lambda: runner.started == ["a", "c"])
 
         release.set()
-        assert await asyncio.wait_for(interrupting, 1) is True
+        assert (await asyncio.wait_for(interrupting, 1)).cancelled is True
         assert runner.interrupt_turn_ids[-1] == first_id
         assert runner.interrupt_turn_ids[-1] != third_id
 
@@ -513,7 +520,7 @@ async def test_interrupt_passes_the_running_turn_id():
     turn_id = await registry.submit(turn(prompt="a"))
     await wait_until(lambda: runner.started == ["a"])
 
-    assert await registry.interrupt("s1") is True
+    assert (await registry.interrupt("s1")).cancelled is True
     assert runner.interrupt_turn_ids == [turn_id]
 
     runner.release("a")
@@ -542,7 +549,7 @@ async def test_interrupt_does_not_cancel_a_finishing_worker():
     await wait_until(lambda: runner.after_started.is_set())
 
     await registry.submit(turn(prompt="b"))
-    assert await registry.interrupt("s1") is True
+    assert (await registry.interrupt("s1")).cancelled is True
 
     runner.after_release.set()
     await wait_until(lambda: runner.after_turns == [("s1", "default")])

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from app.services import channel_delivery
@@ -56,6 +57,23 @@ class SessionDeletingError(RuntimeError):
 
 class AgentDeletingError(SessionDeletingError):
     """A turn was submitted while its Agent was being deleted."""
+
+
+@dataclass(frozen=True)
+class InterruptResult:
+    """Outcome of ``/stop``: whether anything stopped, and what exactly.
+
+    ``cancelled_turn_ids`` lets the web client drop only the optimistic
+    messages whose turns really were cancelled; a turn that raced in after the
+    drain keeps running and must stay visible. Truthiness mirrors the old
+    boolean return value for callers that only ask "did this stop anything?".
+    """
+
+    cancelled: bool = False
+    cancelled_turn_ids: tuple[str, ...] = ()
+
+    def __bool__(self) -> bool:
+        return self.cancelled
 
 
 class SessionRegistry:
@@ -293,7 +311,7 @@ class SessionRegistry:
             if owner == agent_id
         )
 
-    async def interrupt(self, session_id: str) -> bool:
+    async def interrupt(self, session_id: str) -> InterruptResult:
         cancelled = False
         dropped: list[Turn] = []
         pending = self._pending.get(session_id)
@@ -345,7 +363,10 @@ class SessionRegistry:
             self._session_agents.get(session_id),
             turn_id=running_turn_id,
         )
-        return bool(active or cancelled)
+        cancelled_ids = [turn.id for turn in dropped]
+        if active and running_turn_id:
+            cancelled_ids.append(running_turn_id)
+        return InterruptResult(bool(active or cancelled), tuple(cancelled_ids))
 
     async def close(self) -> None:
         self._closed = True

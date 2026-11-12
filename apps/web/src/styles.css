@@ -779,6 +779,21 @@ textarea {
   align-items: flex-start;
 }
 
+/* Platform annotation such as "本轮对话已被中断": a quiet line, not a bubble. */
+.message-row.system {
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.message-row.system .message-system {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(120, 130, 160, 0.1);
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
 .message-avatar {
   flex: 0 0 auto;
   width: 32px;

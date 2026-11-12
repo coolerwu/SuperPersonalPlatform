@@ -1575,16 +1575,27 @@ export default function App() {
       closeStream(id);
       delete activeTurnRef.current[id];
       if (result.interrupted) {
-        dropPendingUsers(id);
-        clearQueuedTurns(id);
+        // Drop only the questions whose turns the server really cancelled.
+        // A turn that raced in after the queue drain keeps running; its
+        // message must stay visible, so the lane keeps following it.
+        const cancelled = new Set(result.cancelled_turn_ids ?? []);
+        for (const item of pendingUsersRef.current[id] ?? []) {
+          if (item.turnId && cancelled.has(item.turnId)) {
+            dropPendingForTurn(id, item.turnId);
+          }
+        }
+        const key = sessionQueueKey(id);
+        const surviving = (queuedTurnsRef.current[key] ?? []).filter(
+          (turnId) => !cancelled.has(turnId),
+        );
+        if (surviving.length > 0) {
+          queuedTurnsRef.current = { ...queuedTurnsRef.current, [key]: surviving };
+        } else {
+          clearQueuedTurns(id);
+        }
       }
-      updateLive(id, (current) => ({
-        ...current,
-        tracking: false,
-        notice: result.interrupted ? "已请求停止当前任务。" : "当前没有正在执行的任务。",
-      }));
       void refreshSessions();
-      // Let the server publish the terminal event and flush the transcript
+      // Let the server publish terminal events and flush the transcript
       // before the lane is rebuilt from history.
       const timer = window.setTimeout(() => {
         deferredRefreshRef.current.delete(id);
@@ -1596,6 +1607,24 @@ export default function App() {
         }
       }, 600);
       deferredRefreshRef.current.set(id, timer);
+      // A surviving queued turn keeps the lane: subscribe to it and let its
+      // turn_end hand off to anything queued after it.
+      const nextTurnId = shiftQueuedTurn(id);
+      if (nextTurnId) {
+        markPendingTurnActive(id, nextTurnId);
+        updateLive(id, (current) => ({
+          ...current,
+          tracking: true,
+          notice: "已请求停止当前任务。",
+        }));
+        openStream(id, nextTurnId);
+        return;
+      }
+      updateLive(id, (current) => ({
+        ...current,
+        tracking: false,
+        notice: result.interrupted ? "已请求停止当前任务。" : "当前没有正在执行的任务。",
+      }));
     } catch (exc) {
       setSessionError(describeApiError(exc), id);
     }

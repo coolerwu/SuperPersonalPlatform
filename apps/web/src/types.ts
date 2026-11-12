@@ -165,7 +165,8 @@ export type MessageArtifact = {
 
 export type TranscriptMessage = {
   id: string;
-  role: "user" | "assistant";
+  /** System rows are platform annotations such as "本轮对话已被中断". */
+  role: "user" | "assistant" | "system";
   content: string;
   blocks: Array<{ type: string; [key: string]: unknown }>;
   artifacts?: MessageArtifact[];

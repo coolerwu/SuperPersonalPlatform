@@ -199,7 +199,7 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}/messages?agent_id=${encodeURIComponent(agentId)}`,
     ),
   interruptSession: (sessionId: string) =>
-    request<{ interrupted: boolean }>(
+    request<{ interrupted: boolean; cancelled_turn_ids: string[] }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/interrupt`,
       { method: "POST" },
     ),

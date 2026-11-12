@@ -2,7 +2,7 @@
 
 - 状态：现行
 - 最后更新：2026-11-12
-- 编号水位：F19
+- 编号水位：F20
 
 本文件是新项目的需求唯一来源。2026-11-11 已按 Claude Agent SDK 迁移后的实现重写；旧的 F1–F90 需求记录（deepagents/LangGraph、记忆系统、rubric、eval、会话全文搜索、Run 历史）随迁移废止，历史文本见 git 历史（cf67560 及之前）。编号从 F1 重新起算。
 
@@ -75,8 +75,8 @@
 
 1. 每条用户消息创建一个 turn，在 `SessionRegistry` 中按 session 串行执行；不同 session 并发，上限为 `BROWSER_CONCURRENCY`（默认 5）。同一会话在运行中可继续发送，新 turn 排队。
 2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`（带 tool_use id）、`subagent_text`、`subagent_tool_call`、`task_started`、`task_progress`、`task_updated`、`task_notification`、`turn_end`）。子 Agent 事件带 `parent_tool_use_id`，用于挂到对应的 Task 工具调用下；后台任务事件按 `task_id` 合并状态。
-3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。子 Agent 与后台任务只实时显示，不写入主 transcript；刷新后只保留主 Agent 的执行过程（子 Agent 历史需单独读取 subagent transcript，本版未接入）。
-4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示已停止。
+3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。子 Agent 与后台任务只实时显示，不写入主 transcript；刷新后只保留主 Agent 的执行过程（子 Agent 历史需单独读取 subagent transcript，本版未接入）。Claude Code 的中断合成消息不进聊天气泡：`[Request interrupted by user]` 返回为 `system` 行「本轮对话已被中断」，`No response requested.` 不返回。
+4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；返回 `{interrupted, cancelled_turn_ids}`，前端只丢弃这些 turn 的本地占位消息；与中断竞争、未被取消的排队 turn 继续执行并保持流式订阅。未取消任何 turn 时 `interrupted=false`。
 5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。渠道消息在入站时先写 `queued` 投递行再入队；turn 开始时提升为 `pending`。排队期间服务重启或优雅关闭时，启动后由 `_answer_queued_deliveries` 填入「服务重启时这条消息尚未开始处理，请重新发送」并发送；用户 `/stop` 会丢弃排队 turn 的投递行。
 6. 命令：平台处理 `/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示。其余以 `/` 开头的裸命令只有出现在 Claude Code 运行时 init frame 的 `slash_commands` 中才由 `forward=true` 指示前端作为普通用户消息转发给 Agent；不在列表中的回复「未知命令」并列出当前可用命令，列表尚未加载时提示先发送一条普通消息。`GET /api/chat/slash-commands?agent_id=...` 返回该列表（排除 `terminal_slash_commands` 与平台命令重名项），按 Agent 进程内缓存，首次 turn 后可用。
 7. 输入框 `/` 前缀弹出命令面板：列出平台命令和 Claude Code 运行时命令，↑/↓ 选择，Enter/Tab 填入，Esc 关闭；面板只填入不执行。
@@ -449,3 +449,19 @@
 - 本地移动一个已同步文件，两个周期后远端只剩新路径。
 - 一次删除 20 个以上且超过一半已跟踪文件时远端不变，本地副本被恢复。
 - 远端删除、冲突、限流等原有规则不变；后端测试与前端构建通过。
+
+### F20 中断后的消息可见性
+
+- 状态：现行
+- 日期：2026-11-12
+
+#### 功能点
+
+1. 中断接口返回被取消的 turn id 列表；网页只移除这些 turn 的本地占位消息，与中断竞争、未被取消的排队追问继续显示并继续流式跟随。
+2. transcript 重建时把 `[Request interrupted by user]` 显示为系统行「本轮对话已被中断」，不显示 `No response requested.`；系统行没有复制/引用操作。
+
+#### 验收标准
+
+- `/stop` 后追问气泡不消失；被真正取消的 turn 的占位消息被移除，排队中的追问按原顺序继续执行。
+- 历史里中断标记显示为系统行，`No response requested.` 不再出现。
+- 后端测试与前端构建通过。

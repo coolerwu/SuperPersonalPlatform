@@ -849,6 +849,13 @@ export function ChatPanel(props: ChatPanelProps) {
         )}
 
         {props.messages.map((message) => {
+          if (message.role === "system") {
+            return (
+              <div key={message.id} className="message-row system" role="note">
+                <span className="message-system">{message.content}</span>
+              </div>
+            );
+          }
           if (message.role === "user") {
             return (
               <UserMessageRow

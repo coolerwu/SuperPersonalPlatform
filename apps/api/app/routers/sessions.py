@@ -78,11 +78,15 @@ async def stream_session(
 
 
 @router.post("/sessions/{session_id}/interrupt")
-async def interrupt_session(session_id: str, request: Request) -> dict[str, bool]:
+async def interrupt_session(session_id: str, request: Request) -> dict[str, object]:
     registry = getattr(request.app.state, "registry", None)
     if registry is None:
         raise HTTPException(status_code=503, detail="agent runtime is not running")
-    return {"interrupted": await registry.interrupt(session_id)}
+    result = await registry.interrupt(session_id)
+    return {
+        "interrupted": result.cancelled,
+        "cancelled_turn_ids": list(result.cancelled_turn_ids),
+    }
 
 
 @router.delete("/sessions/{session_id}")
