@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api, errorText } from "../api";
+import { peekPageCache, storePageCache } from "../pageCache";
 import type { PluginsCatalog } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -22,10 +23,18 @@ export function PluginsPage({ onClose }: PluginsPageProps) {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
 
   async function load() {
-    setLoading(true);
+    const cached = peekPageCache<PluginsCatalog>("plugins:catalog");
+    if (cached) {
+      setCatalog(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     setError("");
     try {
-      setCatalog(await api.listPlugins());
+      const next = await api.listPlugins();
+      setCatalog(next);
+      storePageCache("plugins:catalog", next);
     } catch (exc) {
       setError(errorText(exc));
     } finally {
@@ -40,7 +49,9 @@ export function PluginsPage({ onClose }: PluginsPageProps) {
 
   async function reloadQuietly() {
     try {
-      setCatalog(await api.listPlugins());
+      const next = await api.listPlugins();
+      setCatalog(next);
+      storePageCache("plugins:catalog", next);
     } catch {
       // Keep the original action error visible.
     }
@@ -55,7 +66,9 @@ export function PluginsPage({ onClose }: PluginsPageProps) {
     setError("");
     setNotice("");
     try {
-      setCatalog(await action());
+      const next = await action();
+      setCatalog(next);
+      storePageCache("plugins:catalog", next);
       setNotice(done);
     } catch (exc) {
       setError(errorText(exc));

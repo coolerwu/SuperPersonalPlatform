@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "./api";
 import type {
@@ -21,22 +21,78 @@ import { describeApiError } from "./errors";
 import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
 import { sessionSummariesEqual } from "./sessionSummary";
 import { ChatPanel } from "./components/ChatPanel";
-import { AllocationPage } from "./components/AllocationPage";
-import { BacktestPage } from "./components/BacktestPage";
-import { ChanPage } from "./components/ChanPage";
-import { TradeJournalPage } from "./components/TradeJournalPage";
-import { ChannelsPage } from "./components/ChannelsPage";
-import { CronPage } from "./components/CronPage";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Drawer } from "./components/Drawer";
 import { Login } from "./components/Login";
-import { MemoryPage } from "./components/MemoryPage";
 import { NewAgentDialog } from "./components/NewAgentDialog";
-import { PluginsPage } from "./components/PluginsPage";
-import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
-import { SkillsPage } from "./components/SkillsPage";
-import { ToolsPage } from "./components/ToolsPage";
+
+const PAGE_LOADERS = {
+  settings: () =>
+    import("./components/SettingsPage").then((module) => ({
+      default: module.SettingsPage,
+    })),
+  memory: () =>
+    import("./components/MemoryPage").then((module) => ({
+      default: module.MemoryPage,
+    })),
+  skills: () =>
+    import("./components/SkillsPage").then((module) => ({
+      default: module.SkillsPage,
+    })),
+  tools: () =>
+    import("./components/ToolsPage").then((module) => ({
+      default: module.ToolsPage,
+    })),
+  plugins: () =>
+    import("./components/PluginsPage").then((module) => ({
+      default: module.PluginsPage,
+    })),
+  channels: () =>
+    import("./components/ChannelsPage").then((module) => ({
+      default: module.ChannelsPage,
+    })),
+  cron: () =>
+    import("./components/CronPage").then((module) => ({
+      default: module.CronPage,
+    })),
+  backtest: () =>
+    import("./components/BacktestPage").then((module) => ({
+      default: module.BacktestPage,
+    })),
+  journal: () =>
+    import("./components/TradeJournalPage").then((module) => ({
+      default: module.TradeJournalPage,
+    })),
+  chan: () =>
+    import("./components/ChanPage").then((module) => ({
+      default: module.ChanPage,
+    })),
+  allocation: () =>
+    import("./components/AllocationPage").then((module) => ({
+      default: module.AllocationPage,
+    })),
+} as const;
+
+const SettingsPage = lazy(PAGE_LOADERS.settings);
+const MemoryPage = lazy(PAGE_LOADERS.memory);
+const SkillsPage = lazy(PAGE_LOADERS.skills);
+const ToolsPage = lazy(PAGE_LOADERS.tools);
+const PluginsPage = lazy(PAGE_LOADERS.plugins);
+const ChannelsPage = lazy(PAGE_LOADERS.channels);
+const CronPage = lazy(PAGE_LOADERS.cron);
+const BacktestPage = lazy(PAGE_LOADERS.backtest);
+const TradeJournalPage = lazy(PAGE_LOADERS.journal);
+const ChanPage = lazy(PAGE_LOADERS.chan);
+const AllocationPage = lazy(PAGE_LOADERS.allocation);
+
+function PageFallback() {
+  return (
+    <div className="page-loading" role="status" aria-label="页面加载中">
+      正在打开…
+    </div>
+  );
+}
 
 /** A slash-command reply shown once in the current chat lane, never persisted. */
 type CommandReply = {
@@ -1388,6 +1444,27 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth, agentId]);
 
+  // Warm the lazy page chunks after the chat is interactive so switching
+  // pages does not wait on a download.
+  useEffect(() => {
+    if (!auth) return;
+    const connection = (
+      navigator as Navigator & { connection?: { saveData?: boolean } }
+    ).connection;
+    if (connection?.saveData) return;
+    const prefetch = () => {
+      for (const load of Object.values(PAGE_LOADERS)) {
+        void load().catch(() => undefined);
+      }
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(prefetch, { timeout: 3000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const timer = window.setTimeout(prefetch, 2000);
+    return () => window.clearTimeout(timer);
+  }, [auth]);
+
   async function runCommand(
     command: string,
     sendKey: string,
@@ -1928,6 +2005,7 @@ export default function App() {
         onLogout={() => void logout()}
       />
 
+      <Suspense fallback={<PageFallback />}>
       {view === "memory" ? (
         <MemoryPage
           agent={agent}
@@ -2057,6 +2135,7 @@ export default function App() {
           )}
         </main>
       )}
+      </Suspense>
 
       {view === "chat" && drawerOpen && (
         <Drawer

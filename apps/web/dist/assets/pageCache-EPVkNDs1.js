@@ -1,0 +1,1 @@
+const e=new Map,s=60;function o(a){const t=e.get(a);return t?t.data:null}function c(a,t){if(!e.has(a)&&e.size>=s){const n=e.keys().next().value;n!==void 0&&e.delete(n)}e.set(a,{data:t,at:Date.now()})}function i(a){for(const t of e.keys())t.startsWith(a)&&e.delete(t)}export{i,o as p,c as s};

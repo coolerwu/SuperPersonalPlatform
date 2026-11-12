@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
+import {
+  invalidatePageCache,
+  peekPageCache,
+  storePageCache,
+} from "../pageCache";
 import type {
   AllocationEntry,
   AllocationEntryPayload,
@@ -67,11 +72,18 @@ export function AllocationPage() {
   const autoRefreshAttempted = useRef(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const cached = peekPageCache<AllocationSnapshot>("allocation:snapshot");
+    if (cached) {
+      setSnapshot(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     setError("");
     try {
       const data = await api.getAllocation();
       setSnapshot(data);
+      storePageCache("allocation:snapshot", data);
     } catch (exc) {
       setError(errorText(exc));
     } finally {
@@ -80,12 +92,16 @@ export function AllocationPage() {
   }, []);
 
   const loadEntries = useCallback(async (portfolioId: string) => {
+    const key = `allocation:entries:${portfolioId}`;
+    const cached = peekPageCache<
+      Awaited<ReturnType<typeof api.listAllocationEntries>>
+    >(key);
     setEntriesByPortfolio((current) => ({
       ...current,
       [portfolioId]: {
-        items: current[portfolioId]?.items ?? [],
-        total: current[portfolioId]?.total ?? 0,
-        loading: true,
+        items: cached?.items ?? current[portfolioId]?.items ?? [],
+        total: cached?.total ?? current[portfolioId]?.total ?? 0,
+        loading: !cached,
       },
     }));
     try {
@@ -94,6 +110,7 @@ export function AllocationPage() {
         ...current,
         [portfolioId]: { items: data.items, total: data.total, loading: false },
       }));
+      storePageCache(key, data);
     } catch (exc) {
       setError(errorText(exc));
       setEntriesByPortfolio((current) => ({
@@ -153,6 +170,7 @@ export function AllocationPage() {
     try {
       const data = await api.refreshAllocation();
       setSnapshot(data);
+      storePageCache("allocation:snapshot", data);
       const failed = data.price_errors?.length ?? 0;
       setNotice(
         failed
@@ -170,6 +188,7 @@ export function AllocationPage() {
     setPortfolioModalOpen(false);
     setConfigTarget(null);
     setNotice("组合配置已保存");
+    invalidatePageCache("allocation:");
     await load();
   }
 
@@ -179,6 +198,7 @@ export function AllocationPage() {
     setEditingEntry(null);
     setEntryInitial(undefined);
     setNotice("流水已保存");
+    invalidatePageCache("allocation:");
     await load();
     if (target) await loadEntries(target.id);
   }
@@ -227,6 +247,7 @@ export function AllocationPage() {
     try {
       await api.deleteAllocationEntry(target.portfolio.id, target.entry.id);
       setNotice("流水已删除");
+      invalidatePageCache("allocation:");
       await load();
       await loadEntries(target.portfolio.id);
     } catch (exc) {
@@ -243,6 +264,7 @@ export function AllocationPage() {
       setPortfolioModalOpen(false);
       setConfigTarget(null);
       setNotice("组合已删除");
+      invalidatePageCache("allocation:");
       await load();
     } catch (exc) {
       setError(errorText(exc));

@@ -15,5 +15,41 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (
+            id.includes("/react/") ||
+            id.includes("react-dom") ||
+            id.includes("scheduler") ||
+            id.includes("@tanstack/react-virtual")
+          ) {
+            return "react-vendor";
+          }
+          if (
+            id.includes("react-markdown") ||
+            id.includes("remark-") ||
+            id.includes("rehype-") ||
+            id.includes("katex") ||
+            id.includes("highlight.js") ||
+            id.includes("micromark") ||
+            id.includes("mdast") ||
+            id.includes("hast") ||
+            id.includes("unified") ||
+            id.includes("unist") ||
+            id.includes("parse5") ||
+            id.includes("vfile") ||
+            id.includes("property-information") ||
+            id.includes("space-separated-tokens") ||
+            id.includes("comma-separated-tokens")
+          ) {
+            return "markdown";
+          }
+          if (id.includes("lightweight-charts")) return "charts";
+          return undefined;
+        },
+      },
+    },
   },
 });

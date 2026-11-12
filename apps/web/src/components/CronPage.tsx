@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { api, errorText } from "../api";
+import { peekPageCache, storePageCache } from "../pageCache";
 import { formatTime } from "../format";
 import type { Agent, Channel, ChannelConversation, CronJob } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -89,12 +90,22 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
       setJobs([]);
       return;
     }
+    const key = `cron:jobs:${id}`;
+    if (!silent) {
+      const cached = peekPageCache<CronJob[]>(key);
+      if (cached) {
+        setJobs(cached);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+    }
     const requestId = ++requestRef.current;
-    if (!silent) setLoading(true);
     try {
       const list = await api.listCronJobs(id);
       if (requestId !== requestRef.current || id !== agentIdRef.current) return;
       setJobs(list);
+      storePageCache(key, list);
     } catch (exc) {
       if (requestId !== requestRef.current || id !== agentIdRef.current) return;
       // A background refresh failure keeps the current list; an explicit load
@@ -112,10 +123,14 @@ export function CronPage({ agent, agentId, onOpenSession, onClose }: CronPagePro
       setChannels([]);
       return;
     }
+    const key = `channels:${id}`;
+    const cached = peekPageCache<Awaited<ReturnType<typeof api.listChannels>>>(key);
+    if (cached) setChannels(cached);
     try {
       const list = await api.listChannels(id);
       if (id !== agentIdRef.current) return;
       setChannels(list);
+      storePageCache(key, list);
     } catch {
       // Jobs still load; the push target picker stays empty.
     }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError, errorText } from "../api";
+import { peekPageCache, storePageCache } from "../pageCache";
 import {
   dateInputToUtcMs,
   defaultDateRange,
@@ -94,7 +95,9 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
 
   const refreshHistory = useCallback(async () => {
     try {
-      setHistory(await api.listBacktests(50));
+      const list = await api.listBacktests(50);
+      setHistory(list);
+      storePageCache("backtest:history", list);
     } catch {
       // Keep the previous list; the page-level error is enough.
     }
@@ -102,24 +105,33 @@ export function BacktestPage({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     let active = true;
+    const cachedMeta = peekPageCache<BacktestMeta>("backtest:meta");
+    const cachedHistory = peekPageCache<BacktestSummary[]>("backtest:history");
+    const applyMeta = (metaData: BacktestMeta) => {
+      setMeta(metaData);
+      setForm((value) =>
+        metaData.granularities.some((item) => item.value === value.granularity)
+          ? value
+          : {
+              ...value,
+              granularity: metaData.granularities[0]?.value ?? value.granularity,
+            },
+      );
+    };
+    if (cachedMeta) applyMeta(cachedMeta);
+    if (cachedHistory) setHistory(cachedHistory);
+    if (!cachedMeta || !cachedHistory) setLoading(true);
     void (async () => {
-      setLoading(true);
       try {
         const [metaData, list] = await Promise.all([
           api.getBacktestMeta(),
           api.listBacktests(50),
         ]);
         if (!active) return;
-        setMeta(metaData);
+        applyMeta(metaData);
         setHistory(list);
-        setForm((value) =>
-          metaData.granularities.some((item) => item.value === value.granularity)
-            ? value
-            : {
-                ...value,
-                granularity: metaData.granularities[0]?.value ?? value.granularity,
-              },
-        );
+        storePageCache("backtest:meta", metaData);
+        storePageCache("backtest:history", list);
       } catch (exc) {
         if (active) setError(errorText(exc));
       } finally {

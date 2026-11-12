@@ -617,6 +617,16 @@ textarea {
   flex-direction: column;
 }
 
+.page-loading {
+  grid-column: 2;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
 .chat-topbar {
   flex: 0 0 auto;
   display: flex;

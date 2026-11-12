@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, errorText } from "../api";
+import { peekPageCache, storePageCache } from "../pageCache";
 import { parseUtcInput } from "../timeRange";
 import type { ChanAnalysis } from "../types";
 import { ChanBacktestPanel } from "./ChanBacktestPanel";
@@ -144,7 +145,14 @@ export function ChanPage() {
         setError("开始时间必须早于结束时间");
         return;
       }
-      setLoading(true);
+      const cacheKey = `chan:${symbol.trim().toUpperCase()}|${granularity}|${nextStart}|${nextEnd}`;
+      const cached = peekPageCache<ChanAnalysis>(cacheKey);
+      if (cached) {
+        setAnalysis(cached);
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
       setError("");
       try {
         const result = await api.analyzeChan({
@@ -154,6 +162,7 @@ export function ChanPage() {
           ...(nextEnd ? { end_date: nextEnd } : {}),
         });
         setAnalysis(result);
+        storePageCache(cacheKey, result);
       } catch (exc) {
         setError(errorText(exc));
       } finally {

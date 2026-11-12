@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
 import { api, errorText } from "../api";
+import { peekPageCache, storePageCache } from "../pageCache";
 import { copyText } from "../clipboard";
 import { formatTime } from "../format";
 import type { Agent, Channel, ChannelLogin } from "../types";
@@ -48,9 +49,18 @@ export function ChannelsPage({ agent, agentId, onClose }: ChannelsPageProps) {
       setChannels([]);
       return;
     }
-    setLoading(true);
+    const key = `channels:${id}`;
+    const cached = peekPageCache<Channel[]>(key);
+    if (cached) {
+      setChannels(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     try {
-      setChannels(await api.listChannels(id));
+      const list = await api.listChannels(id);
+      setChannels(list);
+      storePageCache(key, list);
     } catch (exc) {
       setError(errorText(exc));
     } finally {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api, errorText } from "../api";
+import { peekPageCache, storePageCache } from "../pageCache";
 import type { McpServerInfo, ToolInfo, ToolsCatalog } from "../types";
 
 type ToolsPageProps = {
@@ -32,9 +33,19 @@ export function ToolsPage({ agentId, onClose }: ToolsPageProps) {
       setData(null);
       return;
     }
-    setLoading(true);
+    const key = `tools:${agentId}`;
+    const cached = peekPageCache<ToolsCatalog>(key);
+    if (cached) {
+      setData(cached);
+      setLoading(false);
+    } else {
+      setData(null);
+      setLoading(true);
+    }
     try {
-      setData(await api.listTools(agentId));
+      const next = await api.listTools(agentId);
+      setData(next);
+      storePageCache(key, next);
     } catch (exc) {
       setError(errorText(exc));
     } finally {
@@ -43,7 +54,6 @@ export function ToolsPage({ agentId, onClose }: ToolsPageProps) {
   }
 
   useEffect(() => {
-    setData(null);
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);

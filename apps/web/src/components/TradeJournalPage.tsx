@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api, errorText } from "../api";
+import {
+  invalidatePageCache,
+  peekPageCache,
+  storePageCache,
+} from "../pageCache";
 import type {
   TradeJournalCreatePayload,
   TradeJournalRecord,
@@ -162,15 +167,25 @@ export function TradeJournalPage({ onClose }: { onClose: () => void }) {
   const [formError, setFormError] = useState("");
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const query = {
+      status: filters.status,
+      market: filters.market,
+      search: filters.search,
+      limit: 50,
+    };
+    const cacheKey = `journal:${query.status}|${query.market}|${query.search}`;
+    const cached = peekPageCache<{
+      items: TradeJournalRecord[];
+      stats: TradeJournalStats;
+    }>(cacheKey);
+    if (cached) {
+      setRecords(cached.items);
+      setStats(cached.stats);
+      setLoading(false);
+    }
     setError("");
+    if (!cached) setLoading(true);
     try {
-      const query = {
-        status: filters.status,
-        market: filters.market,
-        search: filters.search,
-        limit: 50,
-      };
       const [list, nextStats] = await Promise.all([
         api.listTradeJournal(query),
         api.getTradeJournalStats({
@@ -179,6 +194,7 @@ export function TradeJournalPage({ onClose }: { onClose: () => void }) {
       ]);
       setRecords(list.items);
       setStats(nextStats);
+      storePageCache(cacheKey, { items: list.items, stats: nextStats });
     } catch (exc) {
       setError(errorText(exc));
     } finally {
@@ -275,6 +291,7 @@ export function TradeJournalPage({ onClose }: { onClose: () => void }) {
         setNotice("交易记录已保存");
       }
       setModalOpen(false);
+      invalidatePageCache("journal:");
       await load();
     } catch (exc) {
       setFormError(errorText(exc));
