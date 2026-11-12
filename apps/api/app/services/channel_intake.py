@@ -392,6 +392,7 @@ async def ingest(
         return IngestResult(duplicate=True)
 
     delivery_id: int | None = None
+    submitted = False
     try:
         conversation: ConversationSection | None = None
         agent: Any = None
@@ -472,6 +473,7 @@ async def ingest(
                 ),
             )
         )
+        submitted = True
         # The turn is already submitted, so a bookkeeping failure here must not
         # release the claim: a replay would run the turn a second time. The
         # channel runtime gets the session id in the return value regardless.
@@ -486,23 +488,28 @@ async def ingest(
             )
         return IngestResult(session_id=conversation.session_id)
     except BaseException:
-        # The turn never entered the queue, so drop its queued obligation too.
-        if delivery_id is not None:
+        if not submitted:
+            # The turn never entered the queue, so drop its queued obligation
+            # and leave no claimed ids behind: the channel runtime retries the
+            # whole batch after a failure, and claimed-but-unprocessed ids
+            # would be silently dropped as duplicates.
+            if delivery_id is not None:
+                try:
+                    await channel_delivery.discard(delivery_id)
+                except Exception:
+                    logger.warning(
+                        "failed to discard queued delivery delivery=%s",
+                        delivery_id,
+                        exc_info=True,
+                    )
             try:
-                await channel_delivery.discard(delivery_id)
+                await _release_inbound(channel_id, message_ids)
             except Exception:
                 logger.warning(
-                    "failed to discard queued delivery delivery=%s",
-                    delivery_id,
+                    "failed to release inbound claim channel=%s",
+                    channel_id,
                     exc_info=True,
                 )
-        # Leave no claimed ids behind: the channel runtime retries the whole
-        # batch after a failure, and claimed-but-unprocessed ids would be
-        # silently dropped as duplicates.
-        try:
-            await _release_inbound(channel_id, message_ids)
-        except Exception:
-            logger.warning(
-                "failed to release inbound claim channel=%s", channel_id, exc_info=True
-            )
+        # A submitted turn owns its inbound claim and queued obligation; a
+        # cancellation here must not hand them to a replay or drop the row.
         raise

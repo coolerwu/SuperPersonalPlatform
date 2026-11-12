@@ -579,6 +579,49 @@ async def test_precreated_delivery_is_discarded_when_the_turn_never_starts(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_precreated_queued_delivery_is_completed_and_sent(tmp_path):
+    await init_db()
+    session_id = "13131313-1313-1313-1313-131313131313"
+    delivered: list[int] = []
+
+    async def deliver(delivery_id: int) -> None:
+        delivered.append(delivery_id)
+
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_queued(
+            db, channel_id="ch1", external_id="wx", session_id=session_id
+        )
+        await db.commit()
+    client = FakeClient([ResultMessage(result="hello")])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        deliver_callback=deliver,
+    )
+    turn = Turn(
+        session_id=session_id,
+        agent_id="default",
+        prompt="hi",
+        source="wechat",
+        delivery=DeliveryRequest("ch1", "wx", delivery_id),
+    )
+    try:
+        outcome = await runner.run(turn, TurnStream())
+
+        assert outcome.status == "completed"
+        row = await channel_delivery.get(delivery_id)
+        assert row is not None
+        # The pre-created queued row was promoted and then filled in place;
+        # no second obligation was created.
+        assert row.status == "pending"
+        assert row.content == "hello"
+        assert delivered == [delivery_id]
+    finally:
+        await _cleanup(session_id)
+
+
+@pytest.mark.asyncio
 async def test_resume_never_creates_delivery_even_when_requested(tmp_path):
     await init_db()
     delivered: list[int] = []

@@ -7,10 +7,11 @@ with no lease, which startup answers with an explicit failure text; a crash
 after the turn started leaves a lease plus a pending row and recovery resumes
 that session.
 
-Rows are created with empty content at turn start. An empty row is only
-claimed by a resumed turn (``find_unfilled_for_session``); a row that already
-holds content is only sent by the delivery worker/sweep. ``sent`` and
-``failed`` are terminal and never rewritten.
+Rows are created ``queued`` at ingest and carry empty content until the turn
+starts or completes. An empty row is only claimed by a resumed turn
+(``find_unfilled_for_session``); a row that already holds content is only sent
+by the delivery worker/sweep. ``sent`` and ``failed`` are terminal and never
+rewritten.
 
 Known limitation: a hard crash between lease removal and ``complete`` can
 leave an unfilled row with no owning lease. Recovery answers rows that still

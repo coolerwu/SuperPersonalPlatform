@@ -300,6 +300,7 @@ async def test_flush_pending_submits_one_turn_for_the_batch():
     finally:
         await runtime.stop()
         await _cleanup_inbound(channel.id, ["batch-1", "batch-2"])
+        await _cleanup_channel_deliveries(channel.id)
 
 
 @pytest.mark.asyncio

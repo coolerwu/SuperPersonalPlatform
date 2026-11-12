@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -758,6 +759,32 @@ async def test_record_inbound_failure_keeps_claim(monkeypatch):
         rows = await _rows("ch1", ids)
         assert len(rows) == 1
         assert rows[0].session_id is None
+    finally:
+        await _cleanup("ch1", ids)
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_submit_keeps_delivery_and_claim(monkeypatch):
+    await init_db()
+    store = FakeStore()
+    registry = FakeRegistry()
+    ids = ["cancel-1"]
+
+    async def cancel(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr("app.services.channel_intake._record_inbound", cancel)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await _ingest(store, registry, message_ids=ids)
+        # The turn was already queued, so cancellation must leave both its
+        # queued obligation and the inbound claim for it (a startup backfill
+        # answers the row; a replay must not run the turn twice).
+        assert len(registry.turns) == 1
+        delivery_id = registry.turns[0].delivery.delivery_id
+        assert delivery_id is not None
+        assert await channel_delivery.get(delivery_id) is not None
+        assert len(await _rows("ch1", ids)) == 1
     finally:
         await _cleanup("ch1", ids)
 
