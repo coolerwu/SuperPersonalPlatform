@@ -6,7 +6,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 - `apps/web`：React + Vite + TypeScript
 - `deploy/`：systemd unit 与 `.env` 模板（生产）
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`
-- 会话与消息由 SDK transcript 管理；平台配置在 `data/settings.json`；新库的 `app.db` 只创建 `audit_log`、`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions` 六张表（从旧版升级的库会保留未使用的旧表）
+- 会话与消息由 SDK transcript 管理；平台配置在 `data/settings.json`；新库的 `app.db` 只创建 `cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions` 五张表（从旧版升级的库会保留未使用的旧表）
 
 本版明确不包含：平台自带浏览器/搜索工具、`add_dirs`、技能创作工具、知识库工具接入 Agent；rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、进程重启后继续看当前输出、消息时间戳、Run 历史。平台业务工具（回测、行情、交易记录、资产配置、缠论）已通过进程内 MCP 接入。同一进程内刷新会在数秒内重放当前轮缓冲；进程重启或断线才丢失。`langchain-core` 暂留，用于工具包装。
 
@@ -30,7 +30,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 ├── tmp/                    # SDK 的 TMPDIR
 └── data/
     ├── settings.json       # 平台配置（0600，写前留 .bak）
-    ├── app.db              # SQLite（新库六张表；升级库保留旧表）
+    ├── app.db              # SQLite（新库五张表；升级库保留旧表）
     ├── market.db           # Bitget 行情缓存
     ├── knowledge_sync_state.json
     ├── trade-journal.jsonl
@@ -66,7 +66,7 @@ npm run dev
 - 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。执行过程中，子 Agent 的工具/文本和后台任务状态实时显示在「执行过程」；它们只存在于实时流里，刷新后只重建主 Agent 的 thinking/tool_use。
 - 刷新或断线后当前流式输出可能丢失：同一进程内前端会在数秒内通过 `current_turn_id` 重新订阅并重放当前轮缓冲；进程重启或 SSE 断开且错过缓冲时只能从 transcript 读回历史，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
 - `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；前端显示「已停止」。
-- 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源写 `audit_log`。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
+- 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
 - 命令：平台处理 `/new`（或 `/clear`）、`/stop`、`/status`、`/help`，不区分大小写；网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾的临时卡片显示。输入框以 `/` 开头时弹出命令面板，除平台命令外还列出 Claude Code 运行时 init frame 里的 `slash_commands`（排除终端绑定项与重名项）；只有列表里的 Claude Code 命令才作为普通消息转发给 Agent，未知命令会回复当前可用命令列表，列表未加载时提示先发送一条普通消息。
 - `CLAUDE.md` 用户画像由 SDK 作为用户级说明加载；Agent 记忆是工作区的项目级 `CLAUDE.md`，只加载给该 Agent；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
 - assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、链接、`$$...$$` 数学公式（KaTeX；单 `$` 按普通文本处理）。
@@ -169,8 +169,8 @@ metadata:
 - 新建任务时填写名称、任务内容（每轮发给 Agent 的消息）、5 字段 cron 表达式（分 时 日 月 周）、IANA 时区和是否启用；表达式非法、无法计算下一次触发、名称或内容为空、同一 Agent 重名都会被拒绝并显示中文错误。
 - 每个任务保存一个 UUID 作为专属 SDK 会话；每次触发在同一 transcript 上入队一个 turn，用户在该会话的追问共享上下文。transcript 不存在时（会话被删除）下次触发重新生成 session id。
 - `CronRuntime` 在 API 进程内每 `CRON_TICK_SECONDS`（默认 20 秒）扫描到期任务，复用 `SessionRegistry` 与并发上限。调度器按单进程部署设计，不要为 API 启动多个 uvicorn worker，否则可能重复触发。
-- 到点时如果任务会话已有排队/运行中的 turn，本次触发跳过并写 `audit_log`；「立即运行」遇到忙返回 409。
-- 调度在提交 turn 前先提交数据库（消费本次计划）；提交失败写审计，不重试。服务停机跨过多个触发点后恢复，每个任务最多补跑一次，随后按表达式继续。
+- 到点时如果任务会话已有排队/运行中的 turn，本次触发跳过并更新 `last_skipped_at`（页面显示「上次触发因会话忙被跳过」）；「立即运行」遇到忙返回 409。
+- 调度在提交 turn 前先提交数据库（消费本次计划）；提交失败写 warning 日志，不重试。服务停机跨过多个触发点后恢复，每个任务最多补跑一次，随后按表达式继续。
 - 暂停或删除任务不会取消已经产生的 turn；删除任务保留会话与 transcript；暂停/归档 Agent 时不触发，恢复后从下一个匹配时间继续。
 - 可选推送到微信：任务可以显式选择一个当前 Agent 的 active 微信渠道下已有 1:1 联系人（`GET /api/channels/{id}/conversations` 列出候选）；触发时与租约同一事务写 pending 投递，复用渠道分块、重试和补发。删除渠道会清空该渠道相关任务的推送目标；删除会话或联系人只移除绑定，任务保留目标但届时静默不推送。未配置目标则只留在网页会话里，群聊不支持，取消的 turn 不发送。
 - 任务页显示下次触发、最近运行时间、上次跳过提示和「打开会话」入口，支持暂停/启用、编辑、立即运行和删除。
@@ -246,8 +246,7 @@ metadata:
 生产数据都在 `~/.super-personal-platform/data/`：
 
 - `settings.json`：平台配置（0600）：`runtime`（会话保留天数、旧配置迁移标记）、`knowledge`（WebDAV 配置，含密码）、`agents`（instructions、Provider、状态）、`channels`（iLink 凭据与同步游标）、`channel_conversations`（`"{channel_id}:{external_id}"` → session_id、display_name、context_token）。写前保留 `.bak`，主文件损坏时回退。
-- `app.db`：SQLite（WAL，busy_timeout=5000）。新库只创建六张表；从旧版升级的库会保留未使用的旧表：
-  - `audit_log`：审计流水（定时跳过、触发失败等）；
+- `app.db`：SQLite（WAL，busy_timeout=5000）。新库只创建五张表；从旧版升级的库会保留未使用的旧表：
   - `cron_jobs`：定时任务定义、`session_id`（UUID）、`next_run_at`、最近运行/跳过、推送目标；
   - `channel_inbounds`：入站幂等键（渠道 + 外部消息 id），同时保存入站文本/联系人供引用找回；
   - `channel_deliveries`：出站投递义务与重试（pending/attempting/sent/failed）；
@@ -383,7 +382,7 @@ curl --noproxy '*' http://127.0.0.1:8888/api/health
 - 回测历史保留（`backtests` 表结构兼容）。
 - 旧 home 里遗留的已退役技能（如 `memory-organizer`、`knowledge-base`）不再由 seed 删除：模板移除时只删 `.seed_state.json` 记录，本地文件保留，由用户自行清理。
 
-如果选择彻底重建 `data/app.db`：停止服务，删除 `~/.super-personal-platform/data/app.db` 后重启即可。会丢失回测历史、定时任务、审计记录、未完成投递与入站去重记录；`data/settings.json`（含渠道配置与联系人绑定）和会话 transcript 不受影响，微信不需要因此重新扫码。
+如果选择彻底重建 `data/app.db`：停止服务，删除 `~/.super-personal-platform/data/app.db` 后重启即可。会丢失回测历史、定时任务、未完成投递与入站去重记录；`data/settings.json`（含渠道配置与联系人绑定）和会话 transcript 不受影响，微信不需要因此重新扫码。
 
 ### 日常更新
 

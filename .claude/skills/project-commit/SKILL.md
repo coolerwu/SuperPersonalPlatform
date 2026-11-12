@@ -45,7 +45,7 @@ Runtime state lives in `~/.super-personal-platform/`:
 
 - `data/settings.json` — platform config, including providers, agents, channels,
   knowledge; written atomically with a `.bak` backup.
-- `data/app.db` — SQLite. New installs create only `audit_log`, `cron_jobs`,
+- `data/app.db` — SQLite. New installs create only `cron_jobs`,
   `channel_inbounds`, `channel_deliveries`, `backtests`, `running_sessions`;
   upgraded databases keep unused legacy tables.
 - `claude/` — SDK config, user profile `CLAUDE.md`, session transcripts and
@@ -95,7 +95,7 @@ If the user explicitly asks to deploy v1 on the target machine:
 - WeChat channels must be re-scanned because their credentials lived in the old
   `channels` table, not in `settings.json`.
 - Old legacy tables stay in `app.db` but are no longer read or written.
-- Rebuilding `app.db` loses backtest history, cron jobs, audit rows, pending
+- Rebuilding `app.db` loses backtest history, cron jobs, pending
   deliveries and inbound dedup records, but not `settings.json` or transcripts.
 
 ## Guardrails
