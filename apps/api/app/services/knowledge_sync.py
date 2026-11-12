@@ -2,7 +2,9 @@
 
 Agents reach the mirror at ``~/.super-personal-platform/knowledge/`` with the
 normal file tools; a background task reconciles it with WebDAV every few
-minutes. Credentials never leave this process.
+minutes. Deletions propagate both ways, but a local deletion is only applied
+to the remote after two consecutive syncs confirm it, and bulk deletions are
+restored instead of propagated. Credentials never leave this process.
 """
 
 from __future__ import annotations
@@ -35,6 +37,9 @@ CHUNK_SIZE = 1024 * 1024
 MAX_REMOTE_DIRS = 5_000
 MAX_REMOTE_FILES = 50_000
 MIN_SYNC_INTERVAL_SECONDS = 30
+# A sync that would delete at least this many files *and* more than half of
+# the tracked set is treated as a local mirror accident, never as intent.
+MASS_DELETE_MIN_FILES = 20
 
 DAV_NS = "{DAV:}"
 PROPFIND_BODY = (
@@ -90,6 +95,7 @@ class SyncResult:
     uploaded: int = 0
     conflicts: int = 0
     removed_local: int = 0
+    removed_remote: int = 0
     skipped: int = 0
     errors: int = 0
 
@@ -413,6 +419,14 @@ class WebDavClient:
             return None
         return RemoteEntry(rel, etag, response.headers.get("last-modified", ""), len(data))
 
+    async def delete(self, rel: str) -> None:
+        await self._throttle()
+        response = await self._client.request("DELETE", self._url(rel))
+        if response.status_code in (429, 503):
+            raise self._unavailable(response, rel)
+        if response.status_code not in (200, 202, 204, 404):
+            raise WebDavError(response.status_code, rel)
+
     async def stat(self, rel: str) -> RemoteEntry | None:
         for path, entry, is_dir in await self._propfind(rel, 0):
             if path == rel and not is_dir:
@@ -481,6 +495,8 @@ class KnowledgeSync:
         local = self._scan_local(previous)
         next_state: dict[str, dict] = {}
 
+        allow_deletions = self._deletions_allowed(remote, local, previous)
+
         for rel in sorted(remote):
             entry = remote[rel]
             prev = previous.get(rel)
@@ -489,6 +505,22 @@ class KnowledgeSync:
             local_changed = local_entry is not None and (
                 prev is None or local_entry.digest != prev.get("local_hash", "")
             )
+
+            if local_entry is None and prev is not None and not remote_changed:
+                # A mirrored file vanished locally while the remote copy is
+                # untouched: a local deletion. Only act on the second
+                # consecutive sighting, so a transient disappearance cannot
+                # cost remote data.
+                if not prev.get("local_missing"):
+                    next_state[rel] = {**prev, "local_missing": True}
+                    continue
+                if allow_deletions:
+                    if await self._delete_remote(rel, result):
+                        result.removed_remote += 1
+                        continue
+                    next_state[rel] = {**prev, "local_missing": True}
+                    continue
+                # Bulk deletions are never propagated; fall through to restore.
 
             if entry.size > self.max_file_bytes:
                 logger.warning(
@@ -503,8 +535,8 @@ class KnowledgeSync:
                 state = await self._download(rel, entry, result)
                 if state is not None:
                     next_state[rel] = state
-                elif prev is not None:
-                    next_state[rel] = prev
+                # A failed download keeps no baseline: the next sync must
+                # retry it, never read the absence as a deletion.
                 continue
 
             if not remote_changed:
@@ -614,6 +646,45 @@ class KnowledgeSync:
 
         self._save_state(next_state)
         return result
+
+    def _deletions_allowed(
+        self,
+        remote: dict[str, RemoteEntry],
+        local: dict[str, LocalEntry],
+        previous: dict[str, dict],
+    ) -> bool:
+        """Refuse to propagate a local wipe as a batch of remote deletes."""
+        candidates = 0
+        for rel, entry in remote.items():
+            prev = previous.get(rel)
+            if (
+                prev is not None
+                and prev.get("local_missing")
+                and rel not in local
+                and _remote_signature(entry) == _state_signature(prev)
+            ):
+                candidates += 1
+        tracked = len(previous)
+        if candidates >= MASS_DELETE_MIN_FILES and candidates * 2 > tracked:
+            logger.warning(
+                "knowledge sync: refusing to delete %d of %d tracked remote files "
+                "as a likely local loss; restoring them instead",
+                candidates,
+                tracked,
+            )
+            return False
+        return True
+
+    async def _delete_remote(self, rel: str, result: SyncResult) -> bool:
+        try:
+            await self.client.delete(rel)
+        except WebDavUnavailable:
+            raise
+        except Exception as exc:
+            logger.warning("knowledge sync: cannot delete remote %s: %s", rel, exc)
+            result.errors += 1
+            return False
+        return True
 
     def _local_path(self, rel: str) -> Path | None:
         if not rel or rel.startswith("/") or "\\" in rel:
@@ -802,6 +873,7 @@ class KnowledgeSync:
                 "local_hash": str(entry.get("local_hash") or ""),
                 "local_size": local_size,
                 "local_mtime_ns": local_mtime_ns,
+                "local_missing": bool(entry.get("local_missing")),
             }
         return state
 
@@ -1036,13 +1108,16 @@ class KnowledgeSyncRuntime:
                         or result.uploaded
                         or result.conflicts
                         or result.removed_local
+                        or result.removed_remote
                     ):
                         logger.info(
-                            "knowledge sync: downloaded=%d uploaded=%d conflicts=%d removed=%d",
+                            "knowledge sync: downloaded=%d uploaded=%d conflicts=%d "
+                            "removed_local=%d removed_remote=%d",
                             result.downloaded,
                             result.uploaded,
                             result.conflicts,
                             result.removed_local,
+                            result.removed_remote,
                         )
             except asyncio.CancelledError:
                 raise

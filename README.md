@@ -183,7 +183,7 @@ metadata:
 平台在生产机维护一份本地镜像（默认 `~/.super-personal-platform/knowledge/`），由 `KnowledgeSyncRuntime` 在 API 进程内与坚果云 WebDAV 双向同步：服务启动后立即同步一次（已配置时），之后按配置页的间隔增量同步（默认 300 秒）。只传输新增或变化的文件，不监听文件系统。
 
 - 配置在「配置」页的「知识库」tab：启用开关、WebDAV 地址（例如 `https://dav.jianguoyun.com/dav/`）、账号、应用密码（坚果云「第三方应用密码」，不是登录密码）、根目录、同步间隔。保存后立即唤醒同步，不需要重启服务；密码只写入 `settings.json`，接口只返回 `has_password`。`.env` 的 `KB_WEBDAV_*` 只在还没有配置时作为首次种子。
-- 同步规则：远端和本地都改过同一文件时，远端版本保留原名，本地版本另存为 `<name>.conflict-local-<时间戳>` 并上传；远端删除且本地未修改时删除本地；本地删除不传播，远端文件会在下一轮恢复。单文件默认上限 50 MB（`KB_MAX_FILE_BYTES`），超出跳过；路径限制在配置的根目录内，拒绝 `..` 和符号链接。
+- 同步规则：远端和本地都改过同一文件时，远端版本保留原名，本地版本另存为 `<name>.conflict-local-<时间戳>` 并上传；远端删除且本地未修改时删除本地；本地删除或移动传播到远端，但要连续两次同步都确认文件仍缺失且远端未变化才执行（第一次同步只记录待确认，不删除也不恢复），移动表现为远端旧路径删除、新路径上传；单轮待传播删除达到 20 个且超过已跟踪文件一半时按本地镜像事故处理，不删远端并恢复本地副本。单文件默认上限 50 MB（`KB_MAX_FILE_BYTES`），超出跳过；路径限制在配置的根目录内，拒绝 `..` 和符号链接。
 - 坚果云限流：免费账号每 30 分钟约 600 次 WebDAV 请求（所有第三方应用共享），单次 `PROPFIND` 最多 750 项，且不支持 `Depth: infinity`。平台默认每 4.5 秒最多发一个请求（`KB_REQUEST_INTERVAL_SECONDS`），默认跳过 `.obsidian`、`.git`、`.trash`、`node_modules`、`.DS_Store`（`KB_EXCLUDE_DIRS`）；收到 `BlockedTemporarily` 时暂停约 30 分钟（`KB_BLOCKED_RETRY_SECONDS`）。列表达到 750 项、被截断或某个子目录读取失败时，本轮不做删除判断。
 - 更改 WebDAV 地址、账号或根目录时，本地镜像和同步状态会移到 `.old-<时间戳>` 备份后按新配置重建，避免旧文件被上传到新根目录。
 - 本版知识库镜像不挂载给 Agent（知识库工具未接入）；页面配置与同步正常运行。
@@ -255,7 +255,7 @@ metadata:
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles` 和 `market_sync_state`；可以独立删除，下次回测会重新抓取。
 - `trade-journal.jsonl`、`allocation.json`、`allocation-ledger.jsonl`：交易记录与资产配置数据，权限 0600，不建数据库表。
 - `browser_state.json`：浏览器 cookies/localStorage（0600）；平台浏览器工具接入后用于跨会话、跨轮次保持登录态。
-- `knowledge_sync_state.json`：知识库同步状态（etag + 本地哈希）。
+- `knowledge_sync_state.json`：知识库同步状态（etag + 本地哈希 + 待确认删除标记）。
 - `backtests/`：回测策略临时文件。
 - `~/.super-personal-platform/claude/`：SDK 配置、用户画像 `CLAUDE.md`、会话 transcript 与 auto memory；权限 0700。SDK transcript 是会话历史的唯一来源。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区；归档 Agent 不会删除这里的文件，彻底删除会连同工作区目录一起删除。

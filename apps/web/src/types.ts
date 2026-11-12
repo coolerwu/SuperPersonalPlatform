@@ -356,6 +356,7 @@ export type KnowledgeSyncResult = {
   uploaded: number;
   conflicts: number;
   removed_local: number;
+  removed_remote: number;
   skipped: number;
   errors: number;
 };

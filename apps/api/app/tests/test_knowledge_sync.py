@@ -25,6 +25,9 @@ class FakeDav:
     def __init__(self, files: dict[str, bytes] | None = None) -> None:
         self.files = dict(files or {})
         self.uploads: list[str] = []
+        self.deletes: list[str] = []
+        self.fail_gets: set[str] = set()
+        self.fail_deletes: set[str] = set()
         self.listing_incomplete = False
 
     def _etag(self, rel: str) -> str:
@@ -37,12 +40,20 @@ class FakeDav:
         }
 
     async def get(self, rel: str) -> bytes:
+        if rel in self.fail_gets:
+            raise WebDavError(500, rel)
         return self.files[rel]
 
     async def put(self, rel: str, data: bytes) -> RemoteEntry:
         self.files[rel] = data
         self.uploads.append(rel)
         return RemoteEntry(rel, self._etag(rel), "", len(data))
+
+    async def delete(self, rel: str) -> None:
+        if rel in self.fail_deletes:
+            raise WebDavError(500, rel)
+        del self.files[rel]
+        self.deletes.append(rel)
 
     async def stat(self, rel: str) -> RemoteEntry | None:
         if rel not in self.files:
@@ -154,15 +165,142 @@ async def test_remote_delete_keeps_modified_local(tmp_path: Path) -> None:
     assert dav.files["keep.md"] == b"edited locally"
 
 
-async def test_local_delete_is_restored_from_remote(tmp_path: Path) -> None:
-    sync, _, local = make_sync(tmp_path, {"restore.md": b"content"})
+async def test_local_delete_is_propagated_after_confirmation(tmp_path: Path) -> None:
+    sync, dav, local = make_sync(tmp_path, {"note.md": b"content"})
     await sync.sync_once()
 
-    (local / "restore.md").unlink()
+    (local / "note.md").unlink()
+    armed = await sync.sync_once()
+    assert armed.removed_remote == 0
+    assert "note.md" in dav.files
+
+    confirmed = await sync.sync_once()
+    assert confirmed.removed_remote == 1
+    assert "note.md" not in dav.files
+    assert not (local / "note.md").exists()
+
+
+async def test_local_move_replaces_the_remote_path(tmp_path: Path) -> None:
+    sync, dav, local = make_sync(tmp_path, {"00Inbox/note.md": "content".encode()})
+    await sync.sync_once()
+
+    (local / "00Inbox" / "note.md").unlink()
+    (local / "01Cards").mkdir()
+    (local / "01Cards" / "note.md").write_bytes("content".encode())
+
+    await sync.sync_once()
+    assert dav.files["01Cards/note.md"] == "content".encode()
+    assert "00Inbox/note.md" in dav.files
+
+    await sync.sync_once()
+    assert "00Inbox/note.md" not in dav.files
+    assert dav.files["01Cards/note.md"] == "content".encode()
+
+
+async def test_remote_edit_wins_over_a_local_deletion(tmp_path: Path) -> None:
+    sync, dav, local = make_sync(tmp_path, {"note.md": b"base"})
+    await sync.sync_once()
+
+    (local / "note.md").unlink()
+    dav.files["note.md"] = b"remote moved on"
     result = await sync.sync_once()
 
-    assert result.downloaded == 1
-    assert (local / "restore.md").read_bytes() == b"content"
+    assert result.removed_remote == 0
+    assert dav.files["note.md"] == b"remote moved on"
+    assert (local / "note.md").read_bytes() == b"remote moved on"
+
+
+async def test_armed_deletion_is_cancelled_by_a_remote_edit(tmp_path: Path) -> None:
+    sync, dav, local = make_sync(tmp_path, {"note.md": b"base"})
+    await sync.sync_once()
+
+    (local / "note.md").unlink()
+    await sync.sync_once()
+    assert "note.md" in dav.files
+
+    dav.files["note.md"] = b"newer remote"
+    result = await sync.sync_once()
+
+    assert result.removed_remote == 0
+    assert dav.files["note.md"] == b"newer remote"
+    assert (local / "note.md").read_bytes() == b"newer remote"
+
+
+async def test_returning_local_file_cancels_an_armed_deletion(tmp_path: Path) -> None:
+    sync, dav, local = make_sync(tmp_path, {"note.md": b"content"})
+    await sync.sync_once()
+
+    (local / "note.md").unlink()
+    await sync.sync_once()
+    (local / "note.md").write_bytes(b"content")
+
+    result = await sync.sync_once()
+    assert result.removed_remote == 0
+    assert "note.md" in dav.files
+
+    (local / "note.md").unlink()
+    await sync.sync_once()
+    assert "note.md" in dav.files
+
+    confirmed = await sync.sync_once()
+    assert confirmed.removed_remote == 1
+    assert "note.md" not in dav.files
+
+
+async def test_bulk_local_delete_is_restored_instead_of_propagated(tmp_path: Path) -> None:
+    files = {f"note-{index}.md": f"content {index}".encode() for index in range(24)}
+    sync, dav, local = make_sync(tmp_path, files)
+    await sync.sync_once()
+
+    for name in files:
+        (local / name).unlink()
+    await sync.sync_once()
+    result = await sync.sync_once()
+
+    assert result.removed_remote == 0
+    assert dav.deletes == []
+    assert set(dav.files) == set(files)
+    assert all((local / name).exists() for name in files)
+    assert result.downloaded == len(files)
+
+
+async def test_failed_remote_delete_retries_on_the_next_sync(tmp_path: Path) -> None:
+    sync, dav, local = make_sync(tmp_path, {"note.md": b"content"})
+    await sync.sync_once()
+
+    (local / "note.md").unlink()
+    await sync.sync_once()
+
+    dav.fail_deletes.add("note.md")
+    failed = await sync.sync_once()
+    assert failed.errors == 1
+    assert failed.removed_remote == 0
+    assert "note.md" in dav.files
+
+    dav.fail_deletes.clear()
+    retried = await sync.sync_once()
+    assert retried.removed_remote == 1
+    assert "note.md" not in dav.files
+
+
+async def test_failed_download_is_retried_instead_of_read_as_a_deletion(
+    tmp_path: Path,
+) -> None:
+    sync, dav, local = make_sync(tmp_path, {"note.md": b"content"})
+    dav.fail_gets.add("note.md")
+
+    failed = await sync.sync_once()
+    assert failed.errors == 1
+    assert "note.md" in dav.files
+
+    dav.fail_gets.clear()
+    downloaded = await sync.sync_once()
+    assert downloaded.downloaded == 1
+    assert (local / "note.md").read_bytes() == b"content"
+
+    settled = await sync.sync_once()
+    assert settled.removed_remote == 0
+    assert "note.md" in dav.files
 
 
 async def test_unsafe_remote_path_is_skipped(tmp_path: Path) -> None:
@@ -384,6 +522,35 @@ async def test_webdav_client_writes_chinese_paths() -> None:
         for request in seen
     )
     assert await client.get("笔记/new.md") == b"payload"
+    await http.aclose()
+
+
+async def test_webdav_client_deletes_and_tolerates_missing_files() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if "gone.md" in request.url.path:
+            return httpx.Response(404)
+        return httpx.Response(204)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = WebDavClient(
+        "https://dav.example.com/dav/",
+        "user",
+        "pass",
+        root="知识库",
+        http_client=http,
+        request_interval=0,
+    )
+
+    await client.delete("笔记/旧.md")
+    await client.delete("gone.md")
+
+    assert [request.method for request in requests] == ["DELETE", "DELETE"]
+    assert "/dav/%E7%9F%A5%E8%AF%86%E5%BA%93/%E7%AC%94%E8%AE%B0/%E6%97%A7.md" in str(
+        requests[0].url
+    )
     await http.aclose()
 
 

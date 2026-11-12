@@ -135,7 +135,7 @@ export function KnowledgeSettings() {
             : "已停用";
   const result = status?.last_result;
   const resultLabel = result
-    ? `下载 ${result.downloaded} · 上传 ${result.uploaded} · 冲突 ${result.conflicts}`
+    ? `下载 ${result.downloaded} · 上传 ${result.uploaded} · 冲突 ${result.conflicts} · 远端删除 ${result.removed_remote}`
     : "—";
 
   return (
