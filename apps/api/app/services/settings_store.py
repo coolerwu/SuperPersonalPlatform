@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError
 
 from app.config import Settings, settings as app_settings
 from app.prompts import (
@@ -24,28 +24,11 @@ from app.prompts import (
 logger = logging.getLogger(__name__)
 
 
-TASK_BUDGET_MIN = 20000
-TASK_BUDGET_MAX = 1_000_000
-
-
 class RuntimeSection(BaseModel):
     session_retention_days: int = Field(default=30, ge=0)
-    # The runner passes this to the SDK as ``task_budget=TaskBudget(total=N)``
-    # and ``None`` when 0. A nonzero total must be at least 20000 tokens. The
-    # budget paces token spend; the wall-clock timeout remains the hard stop.
-    task_budget_tokens: int = Field(default=0, ge=0, le=TASK_BUDGET_MAX)
     # One-way marker: the legacy app_configs retention value has been imported
     # (or the legacy table was absent) on a previous boot.
     legacy_import_done: bool = False
-
-    @field_validator("task_budget_tokens")
-    @classmethod
-    def _check_task_budget(cls, value: int) -> int:
-        if 0 < value < TASK_BUDGET_MIN:
-            raise ValueError(
-                f"task_budget_tokens must be 0 or at least {TASK_BUDGET_MIN}"
-            )
-        return value
 
 
 class KnowledgeSection(BaseModel):

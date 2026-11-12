@@ -142,8 +142,6 @@ def _config_fingerprint(
     memory_stamp: str = "",
     plugin_stamp: str = "",
     agent_memory_stamp: str = "",
-    *,
-    task_budget_tokens: int = 0,
 ) -> str:
     """Hash the settings that are baked into a connected SDK client."""
     provider = agent.provider
@@ -156,7 +154,6 @@ def _config_fingerprint(
             "memory": memory_stamp,
             "agent_memory": agent_memory_stamp,
             "plugins": plugin_stamp,
-            "task_budget_tokens": task_budget_tokens,
         },
         sort_keys=True,
     )
@@ -372,9 +369,7 @@ class ClaudeTurnRunner:
         keys = set(self._clients) | self._active | self._cancel_requested
         return [key for key in keys if key[1] == session_id]
 
-    async def _client(
-        self, turn: Turn, agent: Any, *, task_budget_tokens: int
-    ) -> Any:
+    async def _client(self, turn: Turn, agent: Any) -> Any:
         lock = self._client_lock(turn.session_id)
         key = (agent.id, turn.session_id)
         memory_stamp = _memory_stamp(self._home)
@@ -384,15 +379,11 @@ class ClaudeTurnRunner:
             cached = self._clients.get(key)
             if cached is not None:
                 fingerprint = _config_fingerprint(
-                    agent,
-                    memory_stamp,
-                    plugin_stamp,
-                    agent_memory_stamp,
-                    task_budget_tokens=task_budget_tokens,
+                    agent, memory_stamp, plugin_stamp, agent_memory_stamp
                 )
                 if cached.fingerprint != fingerprint:
-                    # The client-visible settings changed while this session
-                    # was busy; rebuild instead of running with stale settings.
+                    # The Agent or Provider changed while this session was
+                    # busy; rebuild instead of running with stale settings.
                     self._clients.pop(key, None)
                     try:
                         await self._disconnect(cached.client, turn.session_id)
@@ -434,10 +425,6 @@ class ClaudeTurnRunner:
                     "cli[%s] %s", turn.session_id, line
                 ),
             }
-            # An API-side token budget lets the model pace tool use and wrap
-            # up on its own; the wall-clock timeout stays the hard stop.
-            if task_budget_tokens > 0:
-                kwargs["task_budget"] = {"total": task_budget_tokens}
             tool_context = SkillToolContext(
                 api_key=agent.provider.api_key,
                 base_url=agent.provider.base_url,
@@ -482,11 +469,7 @@ class ClaudeTurnRunner:
                 client=client,
                 agent_id=agent.id,
                 fingerprint=_config_fingerprint(
-                    agent,
-                    memory_stamp,
-                    plugin_stamp,
-                    agent_memory_stamp,
-                    task_budget_tokens=task_budget_tokens,
+                    agent, memory_stamp, plugin_stamp, agent_memory_stamp
                 ),
                 last_used=time.monotonic(),
             )
@@ -650,11 +633,7 @@ class ClaudeTurnRunner:
                         status="cancelled", output="".join(text_parts)
                     )
                     return outcome
-                client = await self._client(
-                    turn,
-                    agent,
-                    task_budget_tokens=settings.runtime.task_budget_tokens,
-                )
+                client = await self._client(turn, agent)
                 self._touch(key)
                 if turn.source == "resume":
                     prompt = (

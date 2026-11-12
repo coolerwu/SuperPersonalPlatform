@@ -382,7 +382,6 @@ export type KnowledgeState = {
 
 export type AppSettings = {
   session_retention_days: number;
-  task_budget_tokens: number;
 };
 
 export type DrawerTab = "run" | "agent";
