@@ -4,10 +4,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import AuditLog, CronJob, utcnow
+from app.models import CronJob, utcnow
 from app.services.claude_runner import DeliveryRequest, transcript_path
 from app.services.cron_service import (
     CronBusy,
@@ -159,7 +158,7 @@ async def test_due_job_submits_one_cron_turn(client) -> None:
     )
 
 
-async def test_busy_job_is_skipped_and_audited(client) -> None:
+async def test_busy_job_is_skipped(client) -> None:
     now = utcnow()
     session_id = str(uuid.uuid4())
     job_id = await _make_job(
@@ -176,16 +175,6 @@ async def test_busy_job_is_skipped_and_audited(client) -> None:
     assert job.last_skipped_at is not None
     assert job.last_run_at is None
     assert job.next_run_at is not None and job.next_run_at > now
-    async with SessionLocal() as db:
-        audits = (
-            await db.scalars(
-                select(AuditLog).where(
-                    AuditLog.action == "cron_skipped",
-                    AuditLog.entity_id == job_id,
-                )
-            )
-        ).all()
-        assert len(audits) == 1
 
 
 async def test_manual_run_rejects_busy_session(client) -> None:
@@ -262,7 +251,7 @@ async def test_existing_transcript_keeps_session_id(client) -> None:
         transcript.unlink(missing_ok=True)
 
 
-async def test_submit_failure_consumes_schedule_and_audits(client) -> None:
+async def test_submit_failure_consumes_schedule(client) -> None:
     now = utcnow()
     session_id = str(uuid.uuid4())
     job_id = await _make_job(
@@ -279,30 +268,10 @@ async def test_submit_failure_consumes_schedule_and_audits(client) -> None:
     assert job.last_run_at is not None
     assert job.next_run_at is not None and job.next_run_at > now
 
-    async with SessionLocal() as db:
-        audits = (
-            await db.scalars(
-                select(AuditLog).where(
-                    AuditLog.action == "cron_trigger_failed",
-                    AuditLog.entity_id == job_id,
-                )
-            )
-        ).all()
-        assert len(audits) == 1
-
     # The schedule was consumed, so the same tick cannot retry (and duplicate
     # a channel push).
     await run_due_jobs(now, store=store, registry=registry)
-    async with SessionLocal() as db:
-        audits = (
-            await db.scalars(
-                select(AuditLog).where(
-                    AuditLog.action == "cron_trigger_failed",
-                    AuditLog.entity_id == job_id,
-                )
-            )
-        ).all()
-        assert len(audits) == 1
+    assert registry.turns == []
 
 
 async def test_non_uuid_session_id_is_replaced(client) -> None:

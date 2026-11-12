@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import AuditLog, CronJob, utcnow
+from app.models import CronJob, utcnow
 from app.services.claude_runner import DeliveryRequest, Turn, transcript_path
 from app.services.identifiers import is_canonical_uuid
 
@@ -422,25 +422,6 @@ class CronTriggerFailed(RuntimeError):
     """The schedule was consumed but the turn could not be handed to the registry."""
 
 
-async def _record_trigger_failure(job_id: str) -> None:
-    """Audit a consumed trigger whose turn could not be submitted."""
-    try:
-        async with SessionLocal() as db:
-            db.add(
-                AuditLog(
-                    actor="system",
-                    action="cron_trigger_failed",
-                    entity="cron_job",
-                    entity_id=job_id,
-                )
-            )
-            await db.commit()
-    except Exception:
-        logger.exception(
-            "cron job %s failed to record trigger failure", job_id
-        )
-
-
 async def prepare_trigger(
     db: AsyncSession,
     job: CronJob,
@@ -456,7 +437,7 @@ async def prepare_trigger(
     keeps the schedule consumed exactly once: a crash between commit and
     submission loses one occurrence instead of replaying it, which would
     duplicate a channel push. Scheduled triggers with a busy session are
-    skipped (and audited); manual triggers raise :class:`CronBusy` instead.
+    skipped; manual triggers raise :class:`CronBusy` instead.
     """
     moment = now or utcnow()
     snapshot = await store.get()
@@ -474,14 +455,6 @@ async def prepare_trigger(
 
     if registry.is_busy(job.session_id):
         job.last_skipped_at = moment
-        db.add(
-            AuditLog(
-                actor="system",
-                action="cron_skipped",
-                entity="cron_job",
-                entity_id=job.id,
-            )
-        )
         if immediate:
             raise CronBusy(job.session_id, "busy")
         _advance(job, moment)
@@ -563,7 +536,6 @@ async def run_due_jobs(
                 try:
                     await registry.submit(turn)
                 except Exception:
-                    await _record_trigger_failure(job_id)
                     logger.warning(
                         "cron job %s failed to submit turn", job_id, exc_info=True
                     )
@@ -594,14 +566,13 @@ async def run_job_now(
                 now=now,
                 immediate=True,
             )
-            # Consume the run before dispatch. A later submit failure is audited
-            # and reported but never retried, matching the scheduler.
+            # Consume the run before dispatch. A later submit failure is
+            # reported (and never retried), matching the scheduler.
             await db.commit()
             await db.refresh(job)
             try:
                 await registry.submit(turn)
             except Exception as exc:
-                await _record_trigger_failure(job.id)
                 logger.warning(
                     "cron job %s failed to submit turn", job.id, exc_info=True
                 )
