@@ -24,7 +24,6 @@ export function useAutoFollow(
   const shrinkUntilRef = useRef(0);
   const lastHeightRef = useRef(0);
   const lastTopRef = useRef(0);
-  const frameRef = useRef<number | null>(null);
 
   const setStick = useCallback((next: boolean) => {
     if (stickRef.current === next) return;
@@ -52,10 +51,12 @@ export function useAutoFollow(
     setStick(false);
   }, [setStick]);
 
-  const scheduleFollow = useCallback(() => {
-    if (!stickRef.current || frameRef.current !== null) return;
-    frameRef.current = window.requestAnimationFrame(() => {
-      frameRef.current = null;
+  const followNow = useCallback(() => {
+    if (!stickRef.current) return;
+    scrollToBottom();
+    // The virtualizer may adjust scrollTop after re-measuring rows; one more
+    // pinned pass keeps the newest content in view.
+    window.requestAnimationFrame(() => {
       if (stickRef.current) scrollToBottom();
     });
   }, [scrollToBottom]);
@@ -118,31 +119,29 @@ export function useAutoFollow(
         shrinkUntilRef.current = performance.now() + SHRINK_WINDOW_MS;
       }
       lastHeightRef.current = height;
-      if (stickRef.current) scheduleFollow();
+      followNow();
     });
     observer.observe(content);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [contentRef, scrollRef, scheduleFollow]);
+  }, [contentRef, scrollRef, followNow]);
 
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
-    const onResize = () => {
-      if (stickRef.current) scheduleFollow();
-    };
+    const onResize = () => followNow();
     viewport.addEventListener("resize", onResize);
     return () => viewport.removeEventListener("resize", onResize);
-  }, [scheduleFollow]);
+  }, [followNow]);
 
-  useEffect(
-    () => () => {
-      if (frameRef.current !== null) {
-        window.cancelAnimationFrame(frameRef.current);
-      }
-    },
-    [],
-  );
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") followNow();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    followNow();
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [followNow]);
 
   return { atBottom, follow, pauseFollow };
 }

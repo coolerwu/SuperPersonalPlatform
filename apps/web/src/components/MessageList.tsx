@@ -1,4 +1,13 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { RefObject } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { api } from "../api";
 import type {
@@ -610,11 +619,133 @@ export type MessageListProps = {
   commandReply: { command: string; text: string } | null;
   agentId: string;
   agentName: string;
-  highlightId: string;
   onQuote: (text: string) => void;
+  scrollRef: RefObject<HTMLDivElement | null>;
+  pauseFollow: () => void;
+  focusMessageId: string;
+  focusMessageNonce: number;
 };
 
+function MessageRow({
+  message,
+  agentId,
+  agentName,
+  highlighted,
+  onQuote,
+}: {
+  message: TranscriptMessage;
+  agentId: string;
+  agentName: string;
+  highlighted: boolean;
+  onQuote: (text: string) => void;
+}) {
+  if (message.role === "system") {
+    return (
+      <div className="message-row system" role="note">
+        <span className="message-system">{message.content}</span>
+      </div>
+    );
+  }
+  if (message.role === "user") {
+    return (
+      <UserMessageRow
+        message={message}
+        agentId={agentId}
+        highlighted={highlighted}
+        onQuote={onQuote}
+      />
+    );
+  }
+  return (
+    <AssistantMessageRow
+      message={message}
+      agentId={agentId}
+      agentName={agentName}
+      highlighted={highlighted}
+      onQuote={onQuote}
+    />
+  );
+}
+
 export const MessageList = memo(function MessageList(props: MessageListProps) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+  const [highlightId, setHighlightId] = useState("");
+  const focusAppliedRef = useRef(0);
+  const highlightTimerRef = useRef<number | null>(null);
+
+  const virtualizer = useVirtualizer({
+    count: props.messages.length,
+    getScrollElement: () => props.scrollRef.current,
+    estimateSize: () => 120,
+    overscan: 8,
+    getItemKey: (index) => props.messages[index]?.id ?? index,
+    scrollMargin,
+  });
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const scroll = props.scrollRef.current;
+    if (!list || !scroll) return;
+    const update = () => {
+      const next =
+        list.getBoundingClientRect().top -
+        scroll.getBoundingClientRect().top -
+        scroll.clientTop +
+        scroll.scrollTop;
+      setScrollMargin((current) =>
+        Math.abs(current - next) < 1 ? current : next,
+      );
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(list);
+    if (list.parentElement) observer.observe(list.parentElement);
+    return () => observer.disconnect();
+  }, [props.scrollRef]);
+
+  useEffect(() => {
+    const target = props.focusMessageId;
+    if (!target) return;
+    if (focusAppliedRef.current === props.focusMessageNonce) return;
+    focusAppliedRef.current = props.focusMessageNonce;
+    props.pauseFollow();
+    const index = props.messages.findIndex((message) => message.id === target);
+    if (index >= 0) {
+      virtualizer.scrollToIndex(index, { align: "center" });
+      window.requestAnimationFrame(() => {
+        virtualizer.scrollToIndex(index, { align: "center" });
+      });
+    } else {
+      document
+        .getElementById(`message-${target}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    setHighlightId(target);
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+    }
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightId("");
+      highlightTimerRef.current = null;
+    }, 2400);
+  }, [
+    props.focusMessageId,
+    props.focusMessageNonce,
+    props.messages,
+    props.pauseFollow,
+    virtualizer,
+  ]);
+
+  useEffect(
+    () => () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+    },
+    [],
+  );
+
   const showStreaming = props.tracking || Boolean(props.streamText);
   return (
     <>
@@ -652,36 +783,33 @@ export const MessageList = memo(function MessageList(props: MessageListProps) {
           </div>
         )}
 
-      {props.messages.map((message) => {
-        if (message.role === "system") {
+      <div
+        ref={listRef}
+        className="message-virtual"
+        style={{ height: virtualizer.getTotalSize() }}
+      >
+        {virtualizer.getVirtualItems().map((item) => {
+          const message = props.messages[item.index];
+          if (!message) return null;
           return (
-            <div key={message.id} className="message-row system" role="note">
-              <span className="message-system">{message.content}</span>
+            <div
+              key={item.key}
+              data-index={item.index}
+              ref={virtualizer.measureElement}
+              className="message-virtual-row"
+              style={{ transform: `translateY(${item.start - scrollMargin}px)` }}
+            >
+              <MessageRow
+                message={message}
+                agentId={props.agentId}
+                agentName={props.agentName}
+                highlighted={highlightId === message.id}
+                onQuote={props.onQuote}
+              />
             </div>
           );
-        }
-        if (message.role === "user") {
-          return (
-            <UserMessageRow
-              key={message.id}
-              message={message}
-              agentId={props.agentId}
-              highlighted={props.highlightId === message.id}
-              onQuote={props.onQuote}
-            />
-          );
-        }
-        return (
-          <AssistantMessageRow
-            key={message.id}
-            message={message}
-            agentId={props.agentId}
-            agentName={props.agentName}
-            highlighted={props.highlightId === message.id}
-            onQuote={props.onQuote}
-          />
-        );
-      })}
+        })}
+      </div>
 
       {showStreaming && (
         <StreamingRow
@@ -701,7 +829,7 @@ export const MessageList = memo(function MessageList(props: MessageListProps) {
           key={message.id}
           message={message}
           agentId={props.agentId}
-          highlighted={props.highlightId === message.id}
+          highlighted={highlightId === message.id}
           onQuote={props.onQuote}
         />
       ))}
@@ -730,3 +858,4 @@ export const MessageList = memo(function MessageList(props: MessageListProps) {
     </>
   );
 });
+

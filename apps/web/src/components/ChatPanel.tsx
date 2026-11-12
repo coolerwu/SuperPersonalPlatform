@@ -99,9 +99,6 @@ export function ChatPanel(props: ChatPanelProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
   const [commandMenuDismissed, setCommandMenuDismissed] = useState(false);
-  const [highlightId, setHighlightId] = useState("");
-  const focusAppliedRef = useRef(0);
-  const highlightTimerRef = useRef<number | null>(null);
   const throttledStreamText = useThrottledText(props.streamText);
   const throttledStreamReasoning = useThrottledText(props.streamReasoning);
 
@@ -128,32 +125,6 @@ export function ChatPanel(props: ChatPanelProps) {
   useEffect(() => {
     if (props.focusSignal > 0) textareaRef.current?.focus();
   }, [props.focusSignal]);
-
-  useEffect(() => {
-    return () => {
-      if (highlightTimerRef.current !== null) {
-        window.clearTimeout(highlightTimerRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!props.focusMessageId) return;
-    const element = document.getElementById(`message-${props.focusMessageId}`);
-    if (!element) return;
-    if (focusAppliedRef.current === props.focusMessageNonce) return;
-    focusAppliedRef.current = props.focusMessageNonce;
-    pauseFollow();
-    element.scrollIntoView({ behavior: "smooth", block: "center" });
-    setHighlightId(props.focusMessageId);
-    if (highlightTimerRef.current !== null) {
-      window.clearTimeout(highlightTimerRef.current);
-    }
-    highlightTimerRef.current = window.setTimeout(() => {
-      setHighlightId("");
-      highlightTimerRef.current = null;
-    }, 2400);
-  }, [props.focusMessageId, props.focusMessageNonce, props.messages, pauseFollow]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -330,8 +301,11 @@ export function ChatPanel(props: ChatPanelProps) {
             commandReply={props.commandReply}
             agentId={props.agentId}
             agentName={props.agentName}
-            highlightId={highlightId}
             onQuote={quoteFromMessage}
+            scrollRef={scrollRef}
+            pauseFollow={pauseFollow}
+            focusMessageId={props.focusMessageId}
+            focusMessageNonce={props.focusMessageNonce}
           />
         </div>
       </div>

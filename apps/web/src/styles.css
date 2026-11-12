@@ -745,6 +745,25 @@ textarea {
   display: flow-root;
 }
 
+.message-virtual {
+  position: relative;
+  width: 100%;
+}
+
+.message-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  display: flow-root;
+}
+
+/* Virtual rows mount and unmount while scrolling; replaying the entry
+   animation makes long sessions blink. */
+.message-virtual-row .message-row {
+  animation: none;
+}
+
 .message-row {
   display: flex;
   flex-direction: column;

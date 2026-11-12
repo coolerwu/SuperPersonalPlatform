@@ -42,6 +42,7 @@
 - 附件保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片浏览器端缩到最长边 1600 px；消息里写文件名、相对工作区路径（`uploads/<name>`）和字节数，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 兼容解析。
 - 渠道入站按 `(channel_id, external_message_id)` 幂等；打包窗口内不保存 `sync_buf`；命令不进 Agent。
 - 聊天滚动跟随按用户意图判定：只有主动上滚才暂停跟随，布局变化和程序性滚动不改变跟随状态；消息行与消息列表按引用 memo，侧栏轮询结果等值时不更新状态。
+- 长会话消息列表使用 `@tanstack/react-virtual` 窗口化；历史消息只渲染可视区附近，定位消息通过 `scrollToIndex`，DOM 查找只用于窗口外的排队消息。
 - 定时调度在单进程内；不要为 API 启动多个 worker。
 - 会话删除：手动删除先调用 SDK `delete_session`，再尽力清理平台产物（截图、投递、渠道绑定），删除期间新提交会被拒绝；过期 transcript 由 Claude Code 清理，平台不再有后台清理路径。渠道绑定指向已删除会话时，下一条入站自动新建会话并清掉旧投递行。
 - 平台配置只写 `data/settings.json`；不要恢复 `app_configs` / `providers` / `agents` / `channels` 等旧表。
