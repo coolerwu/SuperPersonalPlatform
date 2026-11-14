@@ -101,6 +101,17 @@ async def session_turn(
     }
 
 
+@router.post("/sessions/{session_id}/turns/{turn_id}/cancel")
+async def cancel_queued_turn(
+    session_id: str, turn_id: str, request: Request
+) -> dict[str, bool]:
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="agent runtime is not running")
+    cancelled = await registry.cancel_queued(session_id, turn_id)
+    return {"cancelled": bool(cancelled)}
+
+
 @router.post("/sessions/{session_id}/interrupt")
 async def interrupt_session(session_id: str, request: Request) -> dict[str, object]:
     registry = getattr(request.app.state, "registry", None)

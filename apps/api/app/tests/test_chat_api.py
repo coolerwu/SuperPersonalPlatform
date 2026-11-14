@@ -26,6 +26,8 @@ class RecordingRegistry:
         self.busy = busy
         self.interrupted = interrupted
         self.interrupt_calls = []
+        self.cancel_calls = []
+        self.cancel_result = True
         self.closed = []
         self.submit_error = submit_error
         self.session_owner = session_owner
@@ -53,6 +55,10 @@ class RecordingRegistry:
     async def interrupt(self, session_id):
         self.interrupt_calls.append(session_id)
         return InterruptResult(self.interrupted)
+
+    async def cancel_queued(self, session_id, turn_id):
+        self.cancel_calls.append((session_id, turn_id))
+        return self.cancel_result
 
     async def close_session(self, session_id):
         self.closed.append(session_id)
@@ -640,3 +646,26 @@ def test_session_turn_reports_whether_a_turn_is_alive(client, fake_registry):
 
     response = client.get(f"/api/sessions/{SESSION_ID}/turn?turn_id=missing")
     assert response.json()["alive"] is False
+
+
+def test_cancel_queued_turn_returns_result(client, fake_registry):
+    response = client.post(
+        f"/api/sessions/{SESSION_ID}/turns/turn-2/cancel"
+    )
+    assert response.status_code == 200
+    assert response.json() == {"cancelled": True}
+    assert fake_registry.cancel_calls == [(SESSION_ID, "turn-2")]
+
+    fake_registry.cancel_result = False
+    response = client.post(
+        f"/api/sessions/{SESSION_ID}/turns/turn-2/cancel"
+    )
+    assert response.json() == {"cancelled": False}
+
+
+def test_cancel_queued_turn_without_registry_is_503(client):
+    client.app.state.registry = None
+    response = client.post(
+        f"/api/sessions/{SESSION_ID}/turns/turn-2/cancel"
+    )
+    assert response.status_code == 503
