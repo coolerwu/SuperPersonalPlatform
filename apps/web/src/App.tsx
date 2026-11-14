@@ -185,6 +185,8 @@ type PendingUser = {
 };
 
 const QUEUED_NOTICE = "已排队，前面的任务完成后会自动执行";
+const RECONNECT_NOTICE = "连接中断，正在重连…";
+const RECONNECT_LOST_NOTICE = "连接已断开，已刷新为最新历史";
 const SIDEBAR_POLL_MS = 5000;
 
 function queuedNotice(count: number): string {
@@ -302,6 +304,8 @@ export default function App() {
   const commandPendingRef = useRef(false);
   // A /chat/<id> deep link is applied once the agent's sessions load.
   const restoreSessionRef = useRef(initialRoute?.sessionId ?? "");
+  const lastEventIndexRef = useRef<Record<string, number>>({});
+  const reconnectAttemptsRef = useRef<Record<string, number>>({});
   const cancelQueuedRef = useRef(cancelQueued);
   cancelQueuedRef.current = cancelQueued;
   const cancelQueuedMessage = useCallback((messageId: string) => {
@@ -983,11 +987,25 @@ export default function App() {
       } catch {
         return;
       }
+      if (message.lastEventId !== "") {
+        const index = Number(message.lastEventId);
+        if (Number.isFinite(index)) {
+          lastEventIndexRef.current[forSession] = index;
+          reconnectAttemptsRef.current[forSession] = 0;
+        }
+      }
       applyStreamEvent(forSession, source, event);
+    };
+    source.onopen = () => {
+      updateLive(forSession, (current) =>
+        current.notice === RECONNECT_NOTICE
+          ? { ...current, notice: "" }
+          : current,
+      );
     };
   }
 
-  function openStream(forSession: string, turnId?: string) {
+  function openStream(forSession: string, turnId?: string, after = 0) {
     // One subscription per turn: re-subscribing replays the stream buffer and
     // would append the same deltas twice.
     if (streamsRef.current.has(forSession)) return;
@@ -995,17 +1013,148 @@ export default function App() {
     if (!sessionAgentRef.current[forSession]) {
       sessionAgentRef.current[forSession] = agentIdRef.current;
     }
-    const source = new EventSource(api.sessionStreamUrl(forSession, turnId));
+    lastEventIndexRef.current[forSession] = after > 0 ? after - 1 : -1;
+    const source = new EventSource(
+      api.sessionStreamUrl(forSession, turnId, after),
+    );
     streamsRef.current.set(forSession, source);
     if (turnId) activeTurnRef.current[forSession] = turnId;
+    else delete activeTurnRef.current[forSession];
     updateLive(forSession, (current) => ({ ...current, tracking: true }));
     bindStreamSource(forSession, source);
 
     source.onerror = () => {
       if (streamsRef.current.get(forSession) !== source) return;
+      const reconnectTurnId = activeTurnRef.current[forSession] ?? null;
+      const attachMode = reconnectTurnId === null;
+      const attempt = (reconnectAttemptsRef.current[forSession] ?? 0) + 1;
+      reconnectAttemptsRef.current[forSession] = attempt;
       closeStream(forSession);
-      void refreshTranscript(forSession);
+      void reconnectStream(forSession, reconnectTurnId, attachMode, attempt);
     };
+  }
+
+  async function reconnectStream(
+    forSession: string,
+    turnId: string | null,
+    attachMode: boolean,
+    attempt: number,
+  ) {
+    if (streamsRef.current.has(forSession)) return;
+    let status: {
+      turn_id: string | null;
+      busy: boolean;
+      alive: boolean;
+    } | null = null;
+    try {
+      status = await api.getSessionTurn(forSession, turnId ?? undefined);
+    } catch {
+      status = null;
+    }
+    if (status && attachMode) {
+      if (status.busy) {
+        if (attempt > 8) {
+          abandonStream(forSession);
+          return;
+        }
+        scheduleStreamAttach(forSession, attempt);
+      } else {
+        reconnectAttemptsRef.current[forSession] = 0;
+        updateLive(forSession, (current) => ({
+          ...current,
+          tracking: false,
+          notice: "",
+        }));
+        void refreshTranscript(forSession);
+      }
+      return;
+    }
+    if (status && turnId && status.alive) {
+      if (attempt > 8) {
+        abandonStream(forSession);
+        return;
+      }
+      scheduleStreamReconnect(forSession, turnId, attempt);
+      return;
+    }
+    if (status && turnId) {
+      // The turn ended (or its stream was evicted) while disconnected.
+      reconnectAttemptsRef.current[forSession] = 0;
+      updateLive(forSession, (current) => ({ ...current, tracking: false }));
+      void refreshTranscript(forSession).then(() => {
+        if (status?.busy && !streamsRef.current.has(forSession)) {
+          scheduleStreamAttach(forSession, attempt);
+        }
+      });
+      return;
+    }
+    if (attempt > 8) {
+      abandonStream(forSession);
+      return;
+    }
+    scheduleStreamProbe(forSession, turnId, attachMode, attempt + 1);
+  }
+
+  function scheduleStreamAttach(forSession: string, attempt: number) {
+    updateLive(forSession, (current) => ({
+      ...current,
+      notice: RECONNECT_NOTICE,
+    }));
+    const delay = Math.min(500 * 2 ** Math.min(attempt, 4), 5000);
+    const timer = window.setTimeout(() => {
+      retryTimersRef.current.delete(forSession);
+      if (streamsRef.current.has(forSession)) return;
+      openStream(forSession);
+    }, delay);
+    retryTimersRef.current.set(forSession, timer);
+  }
+
+  function scheduleStreamReconnect(
+    forSession: string,
+    turnId: string,
+    attempt: number,
+  ) {
+    updateLive(forSession, (current) => ({
+      ...current,
+      notice: RECONNECT_NOTICE,
+    }));
+    const delay = Math.min(500 * 2 ** Math.min(attempt, 4), 5000);
+    const timer = window.setTimeout(() => {
+      retryTimersRef.current.delete(forSession);
+      if (streamsRef.current.has(forSession)) return;
+      const after = (lastEventIndexRef.current[forSession] ?? -1) + 1;
+      openStream(forSession, turnId, after);
+    }, delay);
+    retryTimersRef.current.set(forSession, timer);
+  }
+
+  function scheduleStreamProbe(
+    forSession: string,
+    turnId: string | null,
+    attachMode: boolean,
+    attempt: number,
+  ) {
+    updateLive(forSession, (current) => ({
+      ...current,
+      notice: RECONNECT_NOTICE,
+    }));
+    const delay = Math.min(500 * 2 ** Math.min(attempt, 4), 5000);
+    const timer = window.setTimeout(() => {
+      retryTimersRef.current.delete(forSession);
+      if (streamsRef.current.has(forSession)) return;
+      void reconnectStream(forSession, turnId, attachMode, attempt);
+    }, delay);
+    retryTimersRef.current.set(forSession, timer);
+  }
+
+  function abandonStream(forSession: string) {
+    reconnectAttemptsRef.current[forSession] = 0;
+    updateLive(forSession, (current) => ({
+      ...current,
+      tracking: false,
+      notice: RECONNECT_LOST_NOTICE,
+    }));
+    void refreshTranscript(forSession);
   }
 
   /**
@@ -1029,9 +1178,11 @@ export default function App() {
       // Keep the lane marked as tracking across retry gaps.
       updateLive(forSession, (current) => ({ ...current, tracking: true }));
       let opened = false;
-      source.onopen = () => {
+      // A listener (not `onopen`) so bindStreamSource's own open handler keeps
+      // working alongside this one.
+      source.addEventListener("open", () => {
         opened = true;
-      };
+      });
       bindStreamSource(forSession, source);
       source.onerror = () => {
         if (streamsRef.current.get(forSession) !== source) return;
