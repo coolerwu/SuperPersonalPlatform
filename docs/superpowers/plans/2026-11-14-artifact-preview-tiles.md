@@ -1153,6 +1153,8 @@ git commit -m "Add artifact preview tile grid
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
+> 落地加固（提交 `40925bd`）：hook 状态绑定缓存键，key 变化立即返回 loading，避免闪旧内容；tile 内 Markdown 关闭语法高亮并使用服务端 `format` 判断是否渲染；错误态显示文件图标；grid/body 增加 `role="group"` 与 `aria-busy`；grid 轨道改为 `minmax(min(100%, 150px), 1fr)`，窄容器退化为单列。
+
 ---
 
 ## Task 6: 接入消息列表
