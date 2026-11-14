@@ -1422,7 +1422,9 @@ export default function App() {
 
   useEffect(() => {
     if (!sessionId) return;
-    if (document.visibilityState === "visible") clearUnread(sessionId);
+    if (document.visibilityState === "visible" && document.hasFocus()) {
+      clearUnread(sessionId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -2142,6 +2144,7 @@ export default function App() {
       forgetPendingUsers(session);
       setLoadErrorFor(session, "");
       delete sessionAgentRef.current[session];
+      clearUnread(session);
     }
     setAttachmentsByKey((current) => {
       const next = { ...current };
@@ -2184,6 +2187,7 @@ export default function App() {
       delete sessionAgentRef.current[id];
       forgetPendingUsers(id);
       setLoadErrorFor(id, "");
+      clearUnread(id);
       setAttachmentsByKey((current) => {
         if (!current[key]) return current;
         const next = { ...current };
@@ -2285,6 +2289,7 @@ export default function App() {
     setLoadedSessions({});
     setLoadErrorBySession({});
     setPendingUserBySession({});
+    setUnreadBySession({});
     followUpRef.current.clear();
     draftsRef.current = {};
     sessionAgentRef.current = {};
