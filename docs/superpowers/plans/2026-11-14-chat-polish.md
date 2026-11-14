@@ -1506,16 +1506,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: App 的 SessionLive 增加 frozen**
 
-把 `SessionLive` 定义改为：
+把 `SessionLive` 定义改为复用冻结类型，避免字段漂移：
 
 ```ts
-type SessionLive = {
-  streamText: string;
-  streamReasoning: string;
-  activity: LiveToolCall[];
-  subagents: Record<string, LiveSubagent>;
-  tasks: Record<string, LiveTask>;
-  artifacts: MessageArtifact[];
+type SessionLive = FrozenLive & {
   notice: string;
   tracking: boolean;
   frozen: FrozenLive | null;
