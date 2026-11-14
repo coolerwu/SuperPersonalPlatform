@@ -452,7 +452,7 @@ const TEXT_SUFFIXES = new Set([
 
 export function artifactSuffix(name: string): string {
   const dot = name.lastIndexOf(".");
-  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+  return dot > 0 ? name.slice(dot).toLowerCase() : "";
 }
 
 export function isMarkdownArtifact(name: string): boolean {
@@ -466,7 +466,7 @@ export function isTextArtifact(name: string): boolean {
 export function artifactBadge(name: string): string {
   const suffix = artifactSuffix(name);
   if (suffix === ".md" || suffix === ".markdown") return "MD";
-  if (!suffix) return "FILE";
+  if (!suffix || suffix === ".") return "FILE";
   return suffix.slice(1).toUpperCase().slice(0, 4);
 }
 ```
@@ -490,13 +490,30 @@ export function resolveRelativeToFile(
     ? basePath.slice(0, basePath.lastIndexOf("/") + 1)
     : "";
   if (!dir) return raw;
+  const split = value.search(/[?#]/);
+  const pathPart = split >= 0 ? value.slice(0, split) : value;
+  if (!pathPart) return raw;
+  const decodeSegment = (segment: string) => {
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return segment;
+    }
+  };
+  const encodeSegment = (segment: string) =>
+    encodeURIComponent(decodeSegment(segment));
+  const normalizePath = (input: string) =>
+    input.split("/").map(encodeSegment).join("/");
   try {
-    const resolved = new URL(value, `http://workspace/${dir}`);
-    return (
-      decodeURIComponent(resolved.pathname.replace(/^\//, "")) +
-      resolved.search +
-      resolved.hash
+    const resolved = new URL(
+      normalizePath(pathPart),
+      `http://workspace/${normalizePath(dir)}`,
     );
+    return resolved.pathname
+      .replace(/^\//, "")
+      .split("/")
+      .map(decodeSegment)
+      .join("/");
   } catch {
     return raw;
   }
@@ -523,10 +540,17 @@ function buildComponents(agentId?: string, basePath?: string): Components {
     agentId && src
       ? workspaceFileUrl(agentId, resolveRelativeToFile(basePath, src)) ?? src
       : src;
-  const linkHref = (href?: string) =>
-    agentId && href
-      ? workspaceLinkUrl(agentId, resolveRelativeToFile(basePath, href)) ?? href
-      : href;
+  const linkHref = (href?: string) => {
+    if (!agentId || !href) return href;
+    const hashIndex = href.indexOf("#");
+    const pathPart = hashIndex >= 0 ? href.slice(0, hashIndex) : href;
+    const hash = hashIndex >= 0 ? href.slice(hashIndex) : "";
+    const resolved = workspaceLinkUrl(
+      agentId,
+      resolveRelativeToFile(basePath, pathPart),
+    );
+    return resolved ? `${resolved}${hash}` : href;
+  };
 ```
 
 3. 把 `Markdown` 组件的签名与 `useMemo` 改为：
