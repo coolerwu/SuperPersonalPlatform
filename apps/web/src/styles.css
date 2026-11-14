@@ -1092,6 +1092,15 @@ textarea {
   color: var(--text);
 }
 
+.message-stopped {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(var(--ink-rgb) / 0.08);
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
 .message-footer {
   display: flex;
   align-items: center;

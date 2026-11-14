@@ -14,6 +14,7 @@ import type {
   AgentSavePayload,
   Attachment,
   DrawerTab,
+  FrozenLive,
   LiveSubagent,
   LiveTask,
   LiveToolCall,
@@ -116,15 +117,10 @@ type CommandOutcome =
   | { outcome: "error" };
 
 /** Live turn state is kept per session so switching away never drops it. */
-type SessionLive = {
-  streamText: string;
-  streamReasoning: string;
-  activity: LiveToolCall[];
-  subagents: Record<string, LiveSubagent>;
-  tasks: Record<string, LiveTask>;
-  artifacts: MessageArtifact[];
+type SessionLive = FrozenLive & {
   notice: string;
   tracking: boolean;
+  frozen: FrozenLive | null;
 };
 
 const EMPTY_LIVE: SessionLive = {
@@ -136,6 +132,7 @@ const EMPTY_LIVE: SessionLive = {
   artifacts: [],
   notice: "",
   tracking: false,
+  frozen: null,
 };
 
 function emptySubagent(parent: string): LiveSubagent {
@@ -239,6 +236,35 @@ function transcriptMessage(
   id: string,
 ): TranscriptMessage {
   return { id, role, content, blocks: [] };
+}
+
+/** Whether the transcript contains a non-empty assistant reply after the last user question. */
+function transcriptHasReply(list: TranscriptMessage[]): boolean {
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const message = list[index];
+    if (message.role === "user") return false;
+    if (message.role === "assistant" && message.content.trim()) return true;
+  }
+  return false;
+}
+
+/** Whether the interrupted partial already landed in the transcript. */
+function frozenReplyPersisted(
+  list: TranscriptMessage[],
+  frozen: FrozenLive,
+): boolean {
+  const text = frozen.streamText.trim();
+  if (!text) return transcriptHasReply(list);
+  const head = text.slice(0, 120);
+  return list.some((message) => {
+    if (message.role !== "assistant") return false;
+    const content = message.content.trim();
+    if (!content) return false;
+    return (
+      content.startsWith(head) ||
+      (content.length >= 20 && head.startsWith(content))
+    );
+  });
 }
 
 export default function App() {
@@ -1246,6 +1272,7 @@ export default function App() {
     transcriptRequestRef.current[forSession] = requestId;
     setLoadingFor(forSession, true);
     let failure = "";
+    let loaded: TranscriptMessage[] | null = null;
     try {
       const owner = sessionAgentRef.current[forSession] ?? agentIdRef.current;
       const list = await api.listSessionMessages(forSession, owner);
@@ -1258,6 +1285,7 @@ export default function App() {
       }
       transcriptUserCountsRef.current[forSession] = counts;
       settlePendingUsers(forSession, list);
+      loaded = list;
       setMessagesFor(forSession, list);
       setLoadErrorFor(forSession, "");
       // Only a session owned by this agent (new, opened from its list, or
@@ -1300,6 +1328,10 @@ export default function App() {
         notice: failure || current.notice,
         // Keep the lane marked while a queued turn is about to be attached.
         tracking: streaming || followUp,
+        frozen:
+          current.frozen && loaded && frozenReplyPersisted(loaded, current.frozen)
+            ? null
+            : current.frozen,
       }));
     }
   }
@@ -1501,6 +1533,11 @@ export default function App() {
   }
 
   function openSession(id: string) {
+    setLiveBySession((current) => {
+      const session = current[id];
+      if (!session?.frozen) return current;
+      return { ...current, [id]: { ...session, frozen: null } };
+    });
     setFocus(null);
     setCommandReply(null);
     if (!id) {
@@ -1930,6 +1967,27 @@ export default function App() {
     if (!id) return;
     try {
       const result = await api.interruptSession(id);
+      if (result.interrupted) {
+        updateLive(id, (current) => ({
+          ...current,
+          tracking: false,
+          notice: "已请求停止当前任务。",
+          frozen: {
+            streamText: current.streamText,
+            streamReasoning: current.streamReasoning,
+            activity: current.activity,
+            subagents: current.subagents,
+            tasks: current.tasks,
+            artifacts: current.artifacts,
+          },
+          streamText: "",
+          streamReasoning: "",
+          activity: [],
+          subagents: {},
+          tasks: {},
+          artifacts: [],
+        }));
+      }
       closeStream(id);
       delete activeTurnRef.current[id];
       if (result.interrupted) {
@@ -1971,9 +2029,10 @@ export default function App() {
       if (nextTurnId) {
         markPendingTurnActive(id, nextTurnId);
         updateLive(id, (current) => ({
-          ...current,
+          ...EMPTY_LIVE,
           tracking: true,
           notice: "已请求停止当前任务。",
+          frozen: current.frozen,
         }));
         openStream(id, nextTurnId);
         return;
@@ -2383,6 +2442,7 @@ export default function App() {
               subagents={live.subagents}
               tasks={live.tasks}
               liveArtifacts={live.artifacts}
+              frozen={live.frozen}
               sending={chatSending}
               tracking={tracking}
               pendingSend={pendingHere}

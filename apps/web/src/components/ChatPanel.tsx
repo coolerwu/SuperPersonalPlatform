@@ -11,6 +11,7 @@ import {
 import { api } from "../api";
 import type {
   Attachment,
+  FrozenLive,
   LiveSubagent,
   LiveTask,
   LiveToolCall,
@@ -45,6 +46,7 @@ type ChatPanelProps = {
   subagents: Record<string, LiveSubagent>;
   tasks: Record<string, LiveTask>;
   liveArtifacts: MessageArtifact[];
+  frozen: FrozenLive | null;
   sending: boolean;
   tracking: boolean;
   pendingSend: boolean;
@@ -302,6 +304,7 @@ export function ChatPanel(props: ChatPanelProps) {
             subagents={props.subagents}
             tasks={props.tasks}
             liveArtifacts={props.liveArtifacts}
+            frozen={props.frozen}
             sending={props.sending}
             tracking={props.tracking}
             error={props.error}

@@ -11,6 +11,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { api } from "../api";
 import type {
+  FrozenLive,
   LiveSubagent,
   LiveTask,
   LiveToolCall,
@@ -593,6 +594,7 @@ function StreamingRow({
   liveArtifacts,
   agentId,
   agentName,
+  stopped = false,
 }: {
   streamText: string;
   streamReasoning: string;
@@ -602,6 +604,7 @@ function StreamingRow({
   liveArtifacts: MessageArtifact[];
   agentId: string;
   agentName: string;
+  stopped?: boolean;
 }) {
   const latestActivity = activity[activity.length - 1]?.name ?? "";
   return (
@@ -609,8 +612,9 @@ function StreamingRow({
       <div className="message-bubble assistant streaming">
         <div className="message-head">
           <span className="message-author">{agentName || "Agent"}</span>
+          {stopped && <span className="message-stopped">已停止</span>}
         </div>
-        {latestActivity && (
+        {!stopped && latestActivity && (
           <div className="run-activity" role="status">
             <span className="run-activity-dot" aria-hidden="true" />
             <span className="run-activity-text">{latestActivity}</span>
@@ -627,10 +631,10 @@ function StreamingRow({
         {streamText ? (
           <Markdown content={streamText} streaming agentId={agentId} />
         ) : (
-          <div className="muted">正在生成…</div>
+          <div className="muted">{stopped ? "已停止" : "正在生成…"}</div>
         )}
         <ArtifactStrip artifacts={liveArtifacts} agentId={agentId} />
-        <span className="cursor" />
+        {!stopped && <span className="cursor" />}
       </div>
     </div>
   );
@@ -652,6 +656,7 @@ export type MessageListProps = {
   subagents: Record<string, LiveSubagent>;
   tasks: Record<string, LiveTask>;
   liveArtifacts: MessageArtifact[];
+  frozen: FrozenLive | null;
   sending: boolean;
   tracking: boolean;
   error: string;
@@ -849,6 +854,20 @@ export const MessageList = memo(function MessageList(props: MessageListProps) {
           );
         })}
       </div>
+
+      {props.frozen && (
+        <StreamingRow
+          streamText={props.frozen.streamText}
+          streamReasoning={props.frozen.streamReasoning}
+          activity={props.frozen.activity}
+          subagents={props.frozen.subagents}
+          tasks={props.frozen.tasks}
+          liveArtifacts={props.frozen.artifacts}
+          agentId={props.agentId}
+          agentName={props.agentName}
+          stopped
+        />
+      )}
 
       {showStreaming && (
         <StreamingRow
