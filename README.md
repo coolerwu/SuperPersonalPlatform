@@ -73,6 +73,7 @@ npm run dev
 - 消息操作：复制、引用；按钮位于气泡下方，引用内容显示在输入框上方并可单独取消，发送时以 `> ` 引用块写入消息；失败或停止后显示提示，重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成或删除单条消息。
 - 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；支持选择、粘贴、拖拽图片，大图在浏览器端缩到最长边 1600 px。发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 仍兼容解析。图片由 Agent 用 Read 工具查看。上传文件通过 `GET /api/agents/{agent_id}/uploads/{filename}` 读取；Agent 为 paused/archived 时上传返回 409，读取历史附件仍放行（只读）。
 - Agent 产物：回复里的相对图片/文件链接按当前 Agent 工作区解析，图片直接显示、文件可点开；文件通过 `GET /api/agents/{agent_id}/files/{path}` 只读读取，HTML/SVG/JS/XML 等类型强制下载。回复下方另列「产物」（来自 `Write`/`Edit`/`MultiEdit`/`NotebookEdit` 与截图/存 PDF 类 MCP 工具），同一路径去重；工作区外文件与 MCP 直接返回的图片不在列表中。
+- 产物方块：回复末尾的「产物」以方块网格展示。文本文件在方块内展示内容并滚动（`.md` 渲染 Markdown，其他文本等宽原样）；内容由 `GET /api/agents/{agent_id}/file-preview/{path}` 提供，服务端做文本扩展名白名单与 512 KB 截断。图片显示缩略图（不裁切），PDF、Office、压缩包显示类型图标；点击「打开」走现有文件下载接口。预览按可见方块懒加载并缓存，文件删除或读取失败时回落到图标。
 - 草稿、附件和引用按会话隔离（key 为 `agent_id + session_id`，未创建会话时用 `__new__`）；切换会话恢复各自内容。发送时强制滚到底部，输出期间上滑显示「回到最新」。
 - 会话列表由 SDK `list_sessions()` 生成：标题取 SDK summary，按最后修改时间倒序；微信会话带「微信」徽标，忙碌会话显示「忙碌」。删除会话前会拒绝正在执行的会话。
 - 空状态提供建议提示词；顶部轻量栏显示当前 Agent 和会话标题。
