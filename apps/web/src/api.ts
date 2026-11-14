@@ -203,15 +203,36 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}/interrupt`,
       { method: "POST" },
     ),
+  cancelQueuedTurn: (sessionId: string, turnId: string) =>
+    request<{ cancelled: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/cancel`,
+      { method: "POST" },
+    ),
+  getSessionTurn: (sessionId: string, turnId?: string) => {
+    const query = turnId ? `?turn_id=${encodeURIComponent(turnId)}` : "";
+    return request<{ turn_id: string | null; busy: boolean; alive: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/turn${query}`,
+    );
+  },
+  renameSession: (sessionId: string, agentId: string, title: string) =>
+    request<{ renamed: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/rename?agent_id=${encodeURIComponent(agentId)}`,
+      { method: "POST", body: JSON.stringify({ title }) },
+    ),
   deleteSession: (sessionId: string, agentId: string) =>
     request<{ deleted: boolean }>(
       `/api/sessions/${encodeURIComponent(sessionId)}?agent_id=${encodeURIComponent(agentId)}`,
       { method: "DELETE" },
     ),
-  sessionStreamUrl: (sessionId: string, turnId?: string) =>
-    `/api/sessions/${encodeURIComponent(sessionId)}/stream${
-      turnId ? `?turn_id=${encodeURIComponent(turnId)}` : ""
-    }`,
+  sessionStreamUrl: (sessionId: string, turnId?: string, after?: number) => {
+    const params = new URLSearchParams();
+    if (turnId) params.set("turn_id", turnId);
+    if (after && after > 0) params.set("after", String(after));
+    const query = params.toString();
+    return `/api/sessions/${encodeURIComponent(sessionId)}/stream${
+      query ? `?${query}` : ""
+    }`;
+  },
   uploadUrl: (agentId: string, path: string) => {
     // Attachments written by newer runs use a workspace-relative path
     // ("uploads/x"); transcripts from before the SDK migration may still

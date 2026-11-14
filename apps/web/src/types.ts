@@ -200,6 +200,15 @@ export type LiveTask = {
   usage: LiveTaskUsage | null;
 };
 
+export type FrozenLive = {
+  streamText: string;
+  streamReasoning: string;
+  activity: LiveToolCall[];
+  subagents: Record<string, LiveSubagent>;
+  tasks: Record<string, LiveTask>;
+  artifacts: MessageArtifact[];
+};
+
 export type TurnStreamEvent =
   | { type: "assistant_delta"; delta: string }
   | { type: "reasoning_delta"; delta: string }
