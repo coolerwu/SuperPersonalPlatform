@@ -204,23 +204,26 @@ def test_file_preview_rejects_binary_types(client):
     for name in ("doc.pdf", "bundle.zip"):
         response = client.get(f"/api/agents/{agent_id}/file-preview/{name}")
         assert response.status_code == 415
+        assert response.json() == {"detail": "file type cannot be previewed"}
+        assert response.headers["cache-control"] == "no-store"
 
 
 def test_file_preview_rejects_missing_and_traversal(client):
     agent_id = client.get("/api/agents").json()[0]["id"]
-    assert (
-        client.get(f"/api/agents/{agent_id}/file-preview/missing.md").status_code
-        == 404
+    missing = client.get(f"/api/agents/{agent_id}/file-preview/missing.md")
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "file not found"}
+    assert missing.headers["cache-control"] == "no-store"
+
+    traversal = client.get(
+        f"/api/agents/{agent_id}/file-preview/..%2F..%2Fdata%2Fsettings.json"
     )
-    assert (
-        client.get(
-            f"/api/agents/{agent_id}/file-preview/..%2F..%2Fdata%2Fsettings.json"
-        ).status_code
-        == 404
-    )
-    assert (
-        client.get("/api/agents/missing/file-preview/a.md").status_code == 404
-    )
+    assert traversal.status_code == 404
+    assert traversal.json() == {"detail": "file not found"}
+
+    unknown = client.get("/api/agents/missing/file-preview/a.md")
+    assert unknown.status_code == 404
+    assert unknown.json() == {"detail": "agent not found"}
 
 
 def test_file_preview_allows_paused_agent(client):
@@ -245,3 +248,28 @@ def test_file_preview_requires_auth():
             "/api/agents/default/file-preview/a.md"
         )
         assert response.status_code == 401
+
+
+def test_file_preview_allows_archived_agent(client):
+    agent = client.post("/api/agents", json={"name": "ArchivedPreview"}).json()
+    assert client.delete(f"/api/agents/{agent['id']}").status_code == 200
+    workspace = settings.workspaces_dir / agent["id"]
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "old.txt").write_text("archived but readable", "utf-8")
+    response = client.get(f"/api/agents/{agent['id']}/file-preview/old.txt")
+    assert response.status_code == 200
+    assert response.json()["content"] == "archived but readable"
+
+
+def test_file_preview_maps_read_errors_to_404(client, monkeypatch):
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    workspace = settings.workspaces_dir / agent_id
+    (workspace / "race.md").write_text("x", "utf-8")
+
+    def boom(_path):
+        raise FileNotFoundError("gone")
+
+    monkeypatch.setattr("app.routers.agents.read_text_preview", boom)
+    response = client.get(f"/api/agents/{agent_id}/file-preview/race.md")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "file not found"}

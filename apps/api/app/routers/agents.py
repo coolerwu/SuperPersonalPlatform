@@ -456,19 +456,35 @@ async def preview_workspace_file(
     snapshot = await _store(request).get()
     agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
     if agent is None:
-        raise HTTPException(status_code=404, detail="agent not found")
+        raise HTTPException(
+            status_code=404,
+            detail="agent not found",
+            headers={"Cache-Control": "no-store"},
+        )
     target = resolve_workspace_file(agent_id, path)
     if target is None:
-        raise HTTPException(status_code=404, detail="file not found")
+        raise HTTPException(
+            status_code=404,
+            detail="file not found",
+            headers={"Cache-Control": "no-store"},
+        )
     fmt = preview_format(target)
     if fmt is None:
-        raise HTTPException(status_code=415, detail="file type cannot be previewed")
+        raise HTTPException(
+            status_code=415,
+            detail="file type cannot be previewed",
+            headers={"Cache-Control": "no-store"},
+        )
     try:
         content, truncated, size = await asyncio.to_thread(
             read_text_preview, target
         )
     except OSError as exc:
-        raise HTTPException(status_code=404, detail="file not found") from exc
+        raise HTTPException(
+            status_code=404,
+            detail="file not found",
+            headers={"Cache-Control": "no-store"},
+        ) from exc
     response.headers["Cache-Control"] = "private, no-cache"
     return {
         "content": content,
