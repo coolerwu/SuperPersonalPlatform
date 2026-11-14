@@ -1153,7 +1153,11 @@ export default function App() {
         updateLive(forSession, (current) => ({
           ...current,
           tracking: false,
-          notice: "",
+          notice:
+            current.notice === RECONNECT_NOTICE ||
+            current.notice === RECONNECT_LOST_NOTICE
+              ? ""
+              : current.notice,
         }));
         void refreshTranscript(forSession);
       }

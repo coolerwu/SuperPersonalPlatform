@@ -53,8 +53,8 @@ async def cancel_queued(self, session_id: str, turn_id: str) -> bool
 
 行为：
 
-- 先检查 `_pending`：如果该会话的 pending turn 就是目标 turn，且会话不在 `_started` 中，则把 turn id 加入 `_cancelled`，向它的流发布 `{"type": "turn_end", "status": "cancelled"}` 并 `close()`，然后丢弃这条 turn。
-- 否则把该会话的 `asyncio.Queue` 一次性 drain 到列表，按 `turn.id` 找到目标项并移除，其余项按原顺序放回；被移除项的流同样发布 cancelled 的 `turn_end` 并关闭。drain 时每个取出的项都调用一次 `task_done()`，放回的项会重新增加未完成计数，净效果是取消项 −1。
+- 先检查 `_pending`：如果该会话的 pending turn 就是目标 turn，且会话不在 `_started` 中，则把 turn id 加入 `_cancelled`，向它的流发布带 `scope: "turn"` 的 cancelled `turn_end` 并 `close()`，然后丢弃这条 turn。
+- 否则把该会话的 `asyncio.Queue` 一次性 drain 到列表，按 `turn.id` 找到目标项并移除，其余项按原顺序放回；被移除项的流发布带 `scope: "turn"` 的 cancelled `turn_end`（与 `/stop` 的会话级取消区分）并关闭。drain 时每个取出的项都调用一次 `task_done()`，放回的项会重新增加未完成计数，净效果是取消项 −1。
 - drain 与放回之间不能有 `await`，保持与 worker 退休逻辑的原子性；投递义务的清理（`_discard_delivery`）在所有无等待操作完成后再执行。
 - 目标 turn 已经开始执行时返回 `False`，不影响正在执行的 turn。
 - 移除后如果队列为空、没有运行中或收尾中的 turn，沿用 `interrupt()` 的 worker 退休逻辑；否则交给现有 worker 在队列耗尽后自行退休。
@@ -108,7 +108,7 @@ POST /api/sessions/{session_id}/turns/{turn_id}/cancel
 - `SessionLive` 新增 `frozen` 快照：`{text, reasoning, activity, subagents, tasks, artifacts}`，初始为 `null`。
 - `cancel()` 在中断接口返回 `interrupted: true` 后，用一次 `updateLive()` 原子地完成：把当前实时字段复制到 `frozen`、`tracking` 置 false；随后关闭流。返回 `false` 时说明没有可中断的轮次，不冻结，走现有「当前没有正在执行的任务」提示。
 - `refreshTranscript()` 拿到新历史后判断：从列表末尾向前找最后一条 user 消息，如果其后存在非空 content 的 assistant 消息，说明半截回复已落盘，丢弃 frozen；否则保留 frozen，渲染成带「已停止」标记的行（无光标、不显示「正在生成…」）。判断和消息替换在同一次状态更新里完成，避免同一帧出现历史行与 frozen 行。
-- frozen 在下一次在该会话发送、重新打开该会话（`openSession`）或该会话进入新的执行时清空。
+- frozen 在下一次在该会话发送或重新打开该会话（`openSession`）时清空；如果停止时还有幸存的排队 turn，已停止行保留在新 turn 的流式行上方，直到历史确认半截回复已落盘或用户下次发送。
 - 停止时如果还有未被取消的排队追问，下一条 turn 开始前先把 `streamText`、`streamReasoning`、`activity`、`subagents`、`tasks`、`artifacts` 清空再订阅。这同时修掉一个现有缺陷：当前 `/stop` 后幸存队列直接开新流，新 turn 的增量会追加在上一轮的半截文本后面。
 
 **验收**
