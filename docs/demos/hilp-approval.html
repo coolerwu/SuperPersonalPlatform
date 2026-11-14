@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HILP 审批卡片 · 静态演示</title>
+<style>
+  :root {
+    --pearl: #f6f4ef;
+    --ink: #1b1e26;
+    --muted: #69707d;
+    --line: rgba(27, 30, 38, 0.12);
+    --glass: rgba(255, 255, 255, 0.62);
+    --mint: #7cd3c4;
+    --ice: #8fb8f7;
+    --lilac: #c7a8f5;
+    --amber: #b07a35;
+    --rose: #b4576a;
+    --shadow: 0 18px 50px rgba(31, 41, 66, 0.12);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    color: var(--ink);
+    background:
+      radial-gradient(60% 50% at 12% 8%, rgba(124, 211, 196, 0.2), transparent 70%),
+      radial-gradient(55% 45% at 88% 18%, rgba(143, 184, 247, 0.18), transparent 70%),
+      radial-gradient(60% 50% at 70% 92%, rgba(199, 168, 245, 0.16), transparent 70%),
+      var(--pearl);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+      "Microsoft YaHei", "Segoe UI", sans-serif;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 48px 20px 64px;
+  }
+
+  .app-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 4px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .app-head h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .app-head p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .chat {
+    margin-top: 26px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .msg { max-width: 82%; }
+  .msg.user { align-self: flex-end; }
+
+  .msg .who {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 0 6px 6px;
+  }
+
+  .bubble {
+    padding: 12px 16px;
+    border-radius: 16px;
+    font-size: 14.5px;
+  }
+
+  .user .bubble {
+    background: var(--ink);
+    color: #f6f4ef;
+    border-bottom-right-radius: 5px;
+  }
+
+  .agent .bubble {
+    background: var(--glass);
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    box-shadow: 0 6px 20px rgba(31, 41, 66, 0.06);
+    backdrop-filter: blur(14px);
+    border-bottom-left-radius: 5px;
+  }
+
+  /* tool row */
+  .tool-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.45);
+    font-size: 13px;
+  }
+
+  .tool-row .tool-name {
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: 6px;
+    background: rgba(27, 30, 38, 0.06);
+  }
+
+  .tool-row code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    color: #3c4350;
+    overflow-wrap: anywhere;
+  }
+
+  .pill {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+
+  .pill.waiting {
+    color: var(--amber);
+    border-color: rgba(176, 122, 53, 0.28);
+    background: rgba(176, 122, 53, 0.08);
+  }
+
+  .pill.waiting .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--amber);
+    animation: breathe 1.8s ease-in-out infinite;
+  }
+
+  .pill.allowed {
+    color: #2f7d6d;
+    border-color: rgba(47, 125, 109, 0.25);
+    background: rgba(124, 211, 196, 0.16);
+  }
+
+  .pill.denied {
+    color: var(--rose);
+    border-color: rgba(180, 87, 106, 0.25);
+    background: rgba(180, 87, 106, 0.08);
+  }
+
+  @keyframes breathe {
+    0%, 100% { opacity: 0.35; transform: scale(0.9); }
+    50% { opacity: 1; transform: scale(1.1); }
+  }
+
+  /* approval card */
+  .approval {
+    position: relative;
+    margin-top: 12px;
+    border-radius: 18px;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(124, 211, 196, 0.55), rgba(143, 184, 247, 0.5), rgba(199, 168, 245, 0.5));
+    box-shadow: var(--shadow);
+    animation: settle 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .approval-body {
+    border-radius: 17px;
+    background: rgba(252, 251, 248, 0.92);
+    backdrop-filter: blur(18px);
+    padding: 18px 18px 16px;
+  }
+
+  @keyframes settle {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  .approval h2 {
+    margin: 0 0 4px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+
+  .approval .sub {
+    margin: 0 0 14px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .cmd {
+    margin: 0 0 12px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: #191c24;
+    color: #e8e6df;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    overflow-x: auto;
+  }
+
+  .cmd .prompt { color: #7cd3c4; user-select: none; }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin: 0 0 16px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .meta .clock { color: var(--amber); font-variant-numeric: tabular-nums; }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  button {
+    font: inherit;
+    font-size: 13.5px;
+    border-radius: 10px;
+    padding: 9px 16px;
+    cursor: pointer;
+    transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+  }
+
+  button:active { transform: translateY(1px); }
+
+  button:focus-visible {
+    outline: 2px solid var(--ice);
+    outline-offset: 2px;
+  }
+
+  .primary {
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: #f6f4ef;
+  }
+  .primary:hover { background: #2b3040; }
+
+  .ghost {
+    border: 1px solid rgba(27, 30, 38, 0.22);
+    background: rgba(255, 255, 255, 0.5);
+    color: var(--ink);
+  }
+  .ghost:hover { border-color: rgba(27, 30, 38, 0.4); background: #fff; }
+
+  .danger {
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--rose);
+    margin-left: auto;
+  }
+  .danger:hover { background: rgba(180, 87, 106, 0.08); }
+
+  .resolved {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 13px;
+  }
+
+  .resolved .why { color: var(--muted); }
+
+  .foot {
+    margin-top: 34px;
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  @media (max-width: 560px) {
+    .shell { padding: 28px 14px 48px; }
+    .msg { max-width: 100%; }
+    .danger { margin-left: 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+  <main class="shell">
+    <header class="app-head">
+      <h1>Agent Command Center</h1>
+      <p>HILP 审批 · 静态演示</p>
+    </header>
+
+    <section class="chat" aria-live="polite">
+      <div class="msg user">
+        <p class="who">你</p>
+        <div class="bubble">跑一下后端测试，失败就修。</div>
+      </div>
+
+      <div class="msg agent">
+        <p class="who">Assistant</p>
+        <div class="bubble">先跑全量测试确认基线，再决定改哪里。</div>
+
+        <div class="tool-row" style="margin-top: 10px" id="firstTool">
+          <span class="tool-name">Bash</span>
+          <code>pytest apps/api/app/tests -q</code>
+          <span class="pill waiting" id="firstPill"><span class="dot"></span>等待审批</span>
+        </div>
+
+        <div class="approval" id="approvalCard">
+          <div class="approval-body">
+            <h2>这次命令需要你确认</h2>
+            <p class="sub">在 Agent 工作区里执行，只读测试，不会修改文件。</p>
+
+            <pre class="cmd"><span class="prompt">$</span> pytest apps/api/app/tests -q</pre>
+
+            <div class="meta">
+              <span>工作区 workspaces/default</span>
+              <span>预计 40 秒</span>
+              <span class="clock" id="clock">5 分钟后按拒绝处理</span>
+            </div>
+
+            <div class="actions">
+              <button class="primary" type="button" data-decision="once">允许一次</button>
+              <button class="ghost" type="button" data-decision="session">本会话总是允许</button>
+              <button class="danger" type="button" data-decision="deny">拒绝</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tool-row" style="margin-top: 10px" id="secondTool" hidden>
+          <span class="tool-name" id="secondName">Bash</span>
+          <code id="secondCmd">pytest apps/api/app/tests -q</code>
+          <span class="pill allowed" id="secondPill">已允许 · 仅这一次</span>
+        </div>
+
+        <div class="msg agent" style="margin-top: 10px" id="follow" hidden>
+          <div class="bubble" id="followText"></div>
+        </div>
+      </div>
+    </section>
+
+    <p class="foot">点一下按钮看结果。演示不连接后端，也不发送任何消息。</p>
+  </main>
+
+  <script>
+    (() => {
+      const card = document.getElementById("approvalCard");
+      const firstPill = document.getElementById("firstPill");
+      const second = document.getElementById("secondTool");
+      const secondPill = document.getElementById("secondPill");
+      const follow = document.getElementById("follow");
+      const followText = document.getElementById("followText");
+      const clock = document.getElementById("clock");
+
+      let remaining = 300;
+      const timer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          finish("deny", true);
+          return;
+        }
+        clock.textContent = `${Math.ceil(remaining / 60)} 分钟后按拒绝处理`;
+      }, 1000);
+
+      function finish(kind, timedOut = false) {
+        clearInterval(timer);
+        card.remove();
+        second.hidden = false;
+        follow.hidden = false;
+
+        if (kind === "deny") {
+          secondPill.className = "pill denied";
+          secondPill.textContent = timedOut ? "已超时 · 按拒绝处理" : "已拒绝";
+          followText.textContent = timedOut
+            ? "超时没有收到确认，这次命令按拒绝处理。我换用只读方式来收集信息。"
+            : "好，这次命令不执行。我改用只读方式继续排查。";
+          return;
+        }
+
+        secondPill.className = "pill allowed";
+        secondPill.textContent = kind === "session" ? "已允许 · 本会话" : "已允许 · 仅这一次";
+        followText.textContent = kind === "session"
+          ? "已允许，本会话后续的 Bash 调用不再询问。测试跑起来了，大约 40 秒。"
+          : "已允许。测试跑起来了，大约 40 秒。";
+      }
+
+      card.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-decision]");
+        if (!button) return;
+        finish(button.dataset.decision);
+      });
+    })();
+  </script>
+</body>
+</html>
