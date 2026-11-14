@@ -697,3 +697,109 @@ async def test_second_delete_marker_is_refused_until_the_first_finishes():
         registry.finish_agent_delete("agent-a")
     finally:
         await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_removes_only_that_turn_and_preserves_order():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    first_id = await registry.submit(turn(prompt="a"))
+    second_id = await registry.submit(turn(prompt="b"))
+    third_id = await registry.submit(turn(prompt="c"))
+    await wait_until(lambda: runner.started == ["a"])
+
+    second_stream = registry.stream(second_id)
+    assert await registry.cancel_queued("s1", second_id) is True
+    assert second_stream.closed
+    assert await drain_terminal(second_stream) == [
+        {"type": "turn_end", "status": "cancelled"}
+    ]
+
+    runner.release("a")
+    await wait_until(lambda: runner.started == ["a", "c"])
+    runner.release("c")
+    await wait_until(lambda: runner.finished == ["a", "c"])
+    assert "b" not in runner.started
+    assert registry.stream(first_id) is not None
+    assert registry.stream(third_id) is not None
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_ignores_a_running_turn():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    running_id = await registry.submit(turn(prompt="a"))
+    await wait_until(lambda: runner.started == ["a"])
+
+    assert await registry.cancel_queued("s1", running_id) is False
+    assert not registry.stream(running_id).closed
+    runner.release("a")
+    await wait_until(lambda: runner.finished == ["a"])
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_cancels_turn_waiting_for_concurrency_permit():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=1)
+    await registry.submit(turn(session_id="s1", prompt="a"))
+    await wait_until(lambda: runner.started == ["a"])
+    waiting_id = await registry.submit(turn(session_id="s2", prompt="b"))
+    await wait_until(
+        lambda: "s2" in registry._pending and "s2" not in registry._started
+    )
+    waiting_stream = registry.stream(waiting_id)
+
+    assert await registry.cancel_queued("s2", waiting_id) is True
+    assert waiting_stream.closed
+    assert await drain_terminal(waiting_stream) == [
+        {"type": "turn_end", "status": "cancelled"}
+    ]
+
+    runner.release("a")
+    await wait_until(lambda: runner.finished == ["a"])
+    await wait_until(lambda: "s2" not in registry._workers)
+    assert "b" not in runner.started
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_returns_false_for_unknown_turn():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    await registry.submit(turn(prompt="a"))
+    await wait_until(lambda: runner.started == ["a"])
+
+    assert await registry.cancel_queued("s1", "missing") is False
+    runner.release("a")
+    await wait_until(lambda: runner.finished == ["a"])
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_discards_a_queued_delivery():
+    await init_db()
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    await registry.submit(turn(prompt="a"))
+    await wait_until(lambda: runner.started == ["a"])
+    async with SessionLocal() as db:
+        delivery_id = await channel_delivery.create_queued(
+            db, channel_id="ch1", external_id="wx", session_id="s1"
+        )
+        await db.commit()
+    queued = Turn(
+        session_id="s1",
+        agent_id="default",
+        prompt="b",
+        delivery=DeliveryRequest("ch1", "wx", delivery_id),
+    )
+    queued_id = await registry.submit(queued)
+    try:
+        assert await registry.cancel_queued("s1", queued_id) is True
+        assert await channel_delivery.get(delivery_id) is None
+    finally:
+        runner.release("a")
+        await wait_until(lambda: runner.finished == ["a"])
+        await registry.close()

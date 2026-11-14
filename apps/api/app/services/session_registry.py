@@ -368,6 +368,55 @@ class SessionRegistry:
             cancelled_ids.append(running_turn_id)
         return InterruptResult(bool(active or cancelled), tuple(cancelled_ids))
 
+    async def cancel_queued(self, session_id: str, turn_id: str) -> bool:
+        """Cancel one queued turn, leaving the running turn and the rest intact.
+
+        Returns False when the turn has already started or is unknown. The
+        drain and re-put below must not await: a submit can only land between
+        awaits, and the worker relies on the queue staying consistent.
+        """
+        dropped: tuple[Turn, TurnStream] | None = None
+        pending = self._pending.get(session_id)
+        if (
+            pending is not None
+            and pending[0].id == turn_id
+            and session_id not in self._started
+        ):
+            dropped = pending
+            self._cancelled.add(turn_id)
+        else:
+            queue = self._queues.get(session_id)
+            if queue is not None:
+                kept: list[tuple[Turn, TurnStream]] = []
+                while True:
+                    try:
+                        item = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    queue.task_done()
+                    if dropped is None and item[0].id == turn_id:
+                        dropped = item
+                    else:
+                        kept.append(item)
+                for item in kept:
+                    queue.put_nowait(item)
+        if dropped is None:
+            return False
+
+        turn, stream = dropped
+        stream.publish({"type": "turn_end", "status": "cancelled"})
+        stream.close()
+        if session_id not in self._running and session_id not in self._finishing:
+            queue = self._queues.get(session_id)
+            if queue is None or queue.empty():
+                worker = self._workers.pop(session_id, None)
+                if worker is not None:
+                    worker.cancel()
+                self._queues.pop(session_id, None)
+                self._current.pop(session_id, None)
+        await _discard_delivery(turn)
+        return True
+
     async def close(self) -> None:
         self._closed = True
         for queue in self._queues.values():
