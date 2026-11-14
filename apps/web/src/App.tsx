@@ -34,6 +34,7 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Drawer } from "./components/Drawer";
 import { Login } from "./components/Login";
 import { NewAgentDialog } from "./components/NewAgentDialog";
+import { RenameSessionDialog } from "./components/RenameSessionDialog";
 import { Sidebar } from "./components/Sidebar";
 
 const PAGE_LOADERS = {
@@ -300,6 +301,9 @@ export default function App() {
   const [creatingAgent, setCreatingAgent] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<SessionSummary | null>(null);
+  const [sessionToRename, setSessionToRename] = useState<SessionSummary | null>(
+    null,
+  );
   const [focus, setFocus] = useState<FocusTarget | null>(null);
   const [cancellingQueued, setCancellingQueued] = useState<Record<string, true>>({});
   const [unreadBySession, setUnreadBySession] = useState<
@@ -2177,6 +2181,18 @@ export default function App() {
     pushPath(DEFAULT_PATH);
   }
 
+  async function renameSession(sessionId: string, title: string) {
+    const owner = sessionAgentRef.current[sessionId] ?? agentId;
+    await api.renameSession(sessionId, owner, title);
+    applySessions(
+      sessionsRef.current.map((item) =>
+        item.id === sessionId ? { ...item, title } : item,
+      ),
+    );
+    setSessionToRename(null);
+    void refreshSessions();
+  }
+
   async function deleteSession(id: string) {
     const forAgent = agentId;
     const key = sessionKey(forAgent, id);
@@ -2390,6 +2406,9 @@ export default function App() {
         onDeleteSession={(id) => {
           setSessionToDelete(sessions.find((item) => item.id === id) ?? null);
         }}
+        onRenameSession={(id) => {
+          setSessionToRename(sessions.find((item) => item.id === id) ?? null);
+        }}
         onOpenSettings={() => openView("settings")}
         onOpenMemory={() => openView("memory")}
         onOpenSkills={() => openView("skills")}
@@ -2576,6 +2595,17 @@ export default function App() {
           setSessionToDelete(null);
           if (target) void deleteSession(target.id);
         }}
+      />
+
+      <RenameSessionDialog
+        open={sessionToRename !== null}
+        title={sessionToRename?.title || "新会话"}
+        onClose={() => setSessionToRename(null)}
+        onRename={(title) =>
+          sessionToRename
+            ? renameSession(sessionToRename.id, title)
+            : Promise.resolve()
+        }
       />
 
       <NewAgentDialog

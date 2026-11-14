@@ -537,6 +537,26 @@ textarea {
   background: var(--danger);
 }
 
+.session-rename {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.session-item:hover .session-rename,
+.session-item:focus-within .session-rename,
+.session-item.selected .session-rename {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .session-rename {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .session-channel {
   display: inline-block;
   margin-right: 5px;

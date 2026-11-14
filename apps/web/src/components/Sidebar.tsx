@@ -27,6 +27,7 @@ type SidebarProps = {
   onNewSession: () => void;
   newSessionActive: boolean;
   onDeleteSession: (id: string) => void;
+  onRenameSession: (id: string) => void;
   onOpenSettings: () => void;
   onOpenMemory: () => void;
   onOpenSkills: () => void;
@@ -185,6 +186,30 @@ export function Sidebar(props: SidebarProps) {
                     {sessionTime(session.last_modified)}
                   </div>
                 </div>
+                <button
+                  className="icon-button subtle session-rename"
+                  title="重命名会话"
+                  aria-label="重命名会话"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onRenameSession(session.id);
+                  }}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="13"
+                    height="13"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.7"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                  </svg>
+                </button>
                 <button
                   className="icon-button subtle"
                   title="删除会话"
