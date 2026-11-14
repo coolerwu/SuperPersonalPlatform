@@ -163,6 +163,13 @@ export type MessageArtifact = {
   kind: "image" | "file";
 };
 
+export type ArtifactPreview = {
+  content: string;
+  format: "markdown" | "text";
+  truncated: boolean;
+  size: number;
+};
+
 export type TranscriptMessage = {
   id: string;
   /** System rows are platform annotations such as "本轮对话已被中断". */

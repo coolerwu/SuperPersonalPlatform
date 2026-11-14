@@ -8,7 +8,11 @@ import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 
 import { copyText } from "../clipboard";
-import { workspaceFileUrl, workspaceLinkUrl } from "../workspaceUrl";
+import {
+  resolveRelativeToFile,
+  workspaceFileUrl,
+  workspaceLinkUrl,
+} from "../workspaceUrl";
 
 function textOf(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -43,14 +47,18 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
-function buildComponents(agentId?: string): Components {
+function buildComponents(agentId?: string, basePath?: string): Components {
   // Relative image paths are the Agent's workspace files. Without the
   // rewrite the browser asks the SPA route for them and gets index.html,
   // so the image silently degrades to its alt text.
   const imageSrc = (src?: string) =>
-    agentId && src ? workspaceFileUrl(agentId, src) ?? src : src;
+    agentId && src
+      ? workspaceFileUrl(agentId, resolveRelativeToFile(basePath, src)) ?? src
+      : src;
   const linkHref = (href?: string) =>
-    agentId && href ? workspaceLinkUrl(agentId, href) ?? href : href;
+    agentId && href
+      ? workspaceLinkUrl(agentId, resolveRelativeToFile(basePath, href)) ?? href
+      : href;
   return {
     pre({ children }) {
       return <CodeBlock>{children}</CodeBlock>;
@@ -72,13 +80,19 @@ export const Markdown = memo(function Markdown({
   content,
   streaming = false,
   agentId,
+  basePath,
 }: {
   content: string;
   streaming?: boolean;
   /** Owner of workspace-relative image and file links. */
   agentId?: string;
+  /** Workspace path of the file this Markdown came from, for relative links. */
+  basePath?: string;
 }) {
-  const components = useMemo(() => buildComponents(agentId), [agentId]);
+  const components = useMemo(
+    () => buildComponents(agentId, basePath),
+    [agentId, basePath],
+  );
   return (
     <div className="markdown">
       <ReactMarkdown

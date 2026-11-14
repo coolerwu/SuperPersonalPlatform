@@ -9,6 +9,7 @@ import type {
   AllocationPortfolioUpdatePayload,
   AllocationSnapshot,
   AppSettings,
+  ArtifactPreview,
   Attachment,
   BacktestDetail,
   BacktestMeta,
@@ -130,6 +131,14 @@ export const api = {
   logout: () => request<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
 
   listAgents: () => request<Agent[]>("/api/agents"),
+  previewWorkspaceFile: (agentId: string, path: string, signal?: AbortSignal) =>
+    request<ArtifactPreview>(
+      `/api/agents/${encodeURIComponent(agentId)}/file-preview/${path
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`,
+      signal ? { signal } : {},
+    ),
   createAgent: (payload: {
     name: string;
     instructions: string;

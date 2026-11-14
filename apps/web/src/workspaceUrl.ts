@@ -33,3 +33,29 @@ export function workspaceLinkUrl(agentId: string, raw: string): string | null {
   if (!FILE_LINK.test(raw.trim())) return null;
   return workspaceFileUrl(agentId, raw);
 }
+
+/** Resolve a relative link inside a workspace file against that file's directory. */
+export function resolveRelativeToFile(
+  basePath: string | undefined,
+  raw: string,
+): string {
+  const value = (raw ?? "").trim();
+  if (!basePath || !value || value.startsWith("#") || value.startsWith("/")) {
+    return raw;
+  }
+  if (EXTERNAL_URL.test(value)) return raw;
+  const dir = basePath.includes("/")
+    ? basePath.slice(0, basePath.lastIndexOf("/") + 1)
+    : "";
+  if (!dir) return raw;
+  try {
+    const resolved = new URL(value, `http://workspace/${dir}`);
+    return (
+      decodeURIComponent(resolved.pathname.replace(/^\//, "")) +
+      resolved.search +
+      resolved.hash
+    );
+  } catch {
+    return raw;
+  }
+}
