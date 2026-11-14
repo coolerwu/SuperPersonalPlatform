@@ -1476,6 +1476,8 @@ const RECONNECT_LOST_NOTICE = "连接已断开，已刷新为最新历史";
 ```
 
 > `scheduleStreamReconnect` 在探测确认旧轮仍存活（`alive`）后按 `lastEventIndex + 1` 重连；`scheduleStreamProbe` 只用于探测请求失败后的退避重试；`scheduleStreamAttach` 在不知道 turn id 或旧轮结束后需要重新挂当前轮时使用，同样带退避。`alive` 回答的是「这个 turn 的流是否还能订阅」，而不是「它是不是当前轮」，因此排队中的 turn 不会被误判为已结束。
+>
+> 落地时的加固（提交 `a385787`）：`openStream` 在 `after === 0` 时先清空实时累加器（服务端会整段重放，避免 attach/轮询重连把旧文本叠一遍）；`onopen` 同时清除 `RECONNECT_NOTICE` 与 `RECONNECT_LOST_NOTICE`；三个 schedule 共用 `scheduleStreamRetry`，先清旧计时器并在回调里只删除自己的条目；`MAX_STREAM_RETRIES = 8`；`closeAllStreams` 递增 `streamGenerationRef` 并重置索引/次数，`reconnectStream` 在探测 await 之后校验 generation，防止登出后继续重连。
 
 - [ ] **Step 5: 构建并手工验证**
 
