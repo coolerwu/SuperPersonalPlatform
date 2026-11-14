@@ -520,6 +520,23 @@ textarea {
   white-space: nowrap;
 }
 
+.session-unread {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 1px;
+}
+
+.session-unread.done {
+  background: var(--ok);
+}
+
+.session-unread.failed {
+  background: var(--danger);
+}
+
 .session-channel {
   display: inline-block;
   margin-right: 5px;

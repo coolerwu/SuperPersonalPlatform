@@ -21,6 +21,7 @@ type SidebarProps = {
   agentId: string;
   onAgentChange: (id: string) => void;
   sessions: SessionSummary[];
+  unread: Record<string, "done" | "failed">;
   sessionId: string;
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
@@ -154,6 +155,22 @@ export function Sidebar(props: SidebarProps) {
               >
                 <div className="session-main">
                   <div className="session-title">
+                    {props.unread[session.id] && (
+                      <span
+                        className={`session-unread ${props.unread[session.id]}`}
+                        role="img"
+                        title={
+                          props.unread[session.id] === "failed"
+                            ? "执行失败"
+                            : "已完成"
+                        }
+                        aria-label={
+                          props.unread[session.id] === "failed"
+                            ? "执行失败"
+                            : "已完成"
+                        }
+                      />
+                    )}
                     {session.channel_type === "wechat" && (
                       <span className="session-channel" title={session.channel_name ?? "微信"}>
                         微信

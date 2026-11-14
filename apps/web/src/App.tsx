@@ -302,6 +302,9 @@ export default function App() {
   const [sessionToDelete, setSessionToDelete] = useState<SessionSummary | null>(null);
   const [focus, setFocus] = useState<FocusTarget | null>(null);
   const [cancellingQueued, setCancellingQueued] = useState<Record<string, true>>({});
+  const [unreadBySession, setUnreadBySession] = useState<
+    Record<string, "done" | "failed">
+  >({});
 
   const streamsRef = useRef<Map<string, EventSource>>(new Map());
   const retryTimersRef = useRef<Map<string, number>>(new Map());
@@ -436,6 +439,29 @@ export default function App() {
     sessionsRef.current = list;
     setSessions((current) =>
       sessionSummariesEqual(current, list) ? current : list,
+    );
+  }
+
+  function markUnread(id: string, status: "done" | "failed") {
+    setUnreadBySession((current) =>
+      current[id] === status ? current : { ...current, [id]: status },
+    );
+  }
+
+  function clearUnread(id: string) {
+    setUnreadBySession((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function shouldMarkUnread(id: string): boolean {
+    return (
+      id !== sessionIdRef.current ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus()
     );
   }
 
@@ -1385,8 +1411,46 @@ export default function App() {
       // awaiting; never mark that live lane as not tracking.
       updateLive(forSession, (current) => ({ ...current, tracking: false }));
     }
+    if (
+      (status === "completed" || status === "failed") &&
+      shouldMarkUnread(forSession)
+    ) {
+      markUnread(forSession, status === "completed" ? "done" : "failed");
+    }
     if (forSession === sessionIdRef.current) attachIfBusy(forSession);
   }
+
+  useEffect(() => {
+    if (!sessionId) return;
+    if (document.visibilityState === "visible") clearUnread(sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  useEffect(() => {
+    const clearActive = () => {
+      const id = sessionIdRef.current;
+      if (id) clearUnread(id);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") clearActive();
+    };
+    window.addEventListener("focus", clearActive);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", clearActive);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const count = sessions.reduce(
+      (total, session) => total + (unreadBySession[session.id] ? 1 : 0),
+      0,
+    );
+    document.title =
+      count > 0 ? `(${count}) Agent Command Center` : "Agent Command Center";
+  }, [sessions, unreadBySession]);
 
   useEffect(() => {
     const key = sessionKey(agentId, sessionId);
@@ -1533,6 +1597,7 @@ export default function App() {
   }
 
   function openSession(id: string) {
+    clearUnread(id);
     setLiveBySession((current) => {
       const session = current[id];
       if (!session?.frozen) return current;
@@ -2312,6 +2377,7 @@ export default function App() {
         agentId={agentId}
         onAgentChange={changeAgent}
         sessions={sessions}
+        unread={unreadBySession}
         sessionId={sessionId}
         onSelectSession={openSession}
         onNewSession={newSession}
