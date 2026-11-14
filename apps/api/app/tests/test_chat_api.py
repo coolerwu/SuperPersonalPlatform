@@ -29,6 +29,7 @@ class RecordingRegistry:
         self.closed = []
         self.submit_error = submit_error
         self.session_owner = session_owner
+        self.current_turn = None
 
     async def submit(self, turn):
         if self.submit_error is not None:
@@ -41,6 +42,9 @@ class RecordingRegistry:
 
     def session_agent(self, session_id):
         return self.session_owner
+
+    def current_turn_id(self, session_id):
+        return self.current_turn
 
     async def interrupt(self, session_id):
         self.interrupt_calls.append(session_id)
@@ -593,3 +597,28 @@ def test_send_message_allows_session_claimed_by_the_same_registry_owner(client):
     )
     assert response.status_code == 201
     assert len(registry.turns) == 1
+
+
+def test_session_turn_without_registry_is_503(client):
+    client.app.state.registry = None
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn")
+    assert response.status_code == 503
+
+
+def test_session_turn_reports_idle_session(client, fake_registry):
+    fake_registry.busy = False
+    fake_registry.current_turn = None
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn")
+    assert response.status_code == 200
+    assert response.json() == {"turn_id": None, "busy": False}
+
+
+def test_session_turn_reports_running_and_queued_sessions(client, fake_registry):
+    fake_registry.busy = True
+    fake_registry.current_turn = "turn-9"
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn")
+    assert response.json() == {"turn_id": "turn-9", "busy": True}
+
+    fake_registry.current_turn = None
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn")
+    assert response.json() == {"turn_id": None, "busy": True}

@@ -86,6 +86,17 @@ async def stream_session(
     )
 
 
+@router.get("/sessions/{session_id}/turn")
+async def session_turn(session_id: str, request: Request) -> dict[str, object]:
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="agent runtime is not running")
+    return {
+        "turn_id": registry.current_turn_id(session_id),
+        "busy": registry.is_busy(session_id),
+    }
+
+
 @router.post("/sessions/{session_id}/interrupt")
 async def interrupt_session(session_id: str, request: Request) -> dict[str, object]:
     registry = getattr(request.app.state, "registry", None)
