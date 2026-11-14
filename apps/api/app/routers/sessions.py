@@ -51,6 +51,7 @@ async def stream_session(
     registry = getattr(request.app.state, "registry", None)
     if registry is None:
         raise HTTPException(status_code=503, detail="agent runtime is not running")
+    # `after` is the buffer index of the first event to replay (inclusive).
     resolved = turn_id or registry.current_turn_id(session_id)
     stream = registry.stream(resolved, session_id) if resolved else None
     if stream is None:
@@ -58,6 +59,10 @@ async def stream_session(
 
     async def generator():
         queue = await stream.subscribe(after)
+        if stream.closed and queue.empty():
+            # The requested offset is past the terminal event; nothing will
+            # ever arrive, so do not hold the connection open with pings.
+            return
         try:
             while True:
                 if await request.is_disconnected():

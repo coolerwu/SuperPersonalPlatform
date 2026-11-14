@@ -414,6 +414,7 @@ def test_stream_after_skips_seen_events(client):
         body = "".join(response.iter_text())
     assert response.status_code == 200
     assert '"old"' not in body
+    assert "id: 0" not in body
     assert "id: 1" in body
     assert '"new"' in body
 

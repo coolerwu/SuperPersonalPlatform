@@ -42,7 +42,12 @@ class TurnStream:
             queue.put_nowait((index, event))
 
     async def subscribe(self, after: int = 0) -> asyncio.Queue[Event]:
-        """Replay buffered events from ``after`` and receive new ones."""
+        """Replay buffered events starting at index ``after`` (inclusive) and receive new ones.
+
+        ``after`` is clamped to ``[0, len(buffer)]``; a value past the end waits for
+        live events or, on a closed stream without a terminal in the buffer, yields the
+        synthetic terminal.
+        """
         queue: asyncio.Queue[Event] = asyncio.Queue()
         start = max(0, min(after, len(self._buffer)))
         for index in range(start, len(self._buffer)):
