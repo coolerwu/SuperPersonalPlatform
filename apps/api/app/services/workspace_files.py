@@ -35,6 +35,7 @@ _UNSAFE_INLINE = {
 
 _PREVIEW_LIMIT = 512 * 1024
 _MARKDOWN_EXTENSIONS = {".md", ".markdown"}
+# Mirrored in apps/web/src/artifactTypes.ts (TEXT_SUFFIXES).
 _TEXT_EXTENSIONS = {
     ".md", ".markdown", ".txt", ".log", ".csv", ".tsv",
     ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
@@ -56,14 +57,19 @@ def preview_format(path: Path) -> str | None:
 
 
 def read_text_preview(path: Path) -> tuple[str, bool, int]:
-    """Return ``(content, truncated, size)``; never raises on bad UTF-8."""
+    """Return ``(content, truncated, size)`` for a vetted regular file.
+
+    ``path`` must come from :func:`resolve_workspace_file`; filesystem errors
+    (missing, directory, permissions) propagate as ``OSError``. Invalid UTF-8
+    is replaced with U+FFFD instead of raising.
+    """
     size = path.stat().st_size
     with path.open("rb") as handle:
         raw = handle.read(_PREVIEW_LIMIT + 1)
     truncated = len(raw) > _PREVIEW_LIMIT
     if truncated:
         raw = raw[:_PREVIEW_LIMIT]
-    content = raw.decode("utf-8", errors="replace").lstrip("﻿")
+    content = raw.decode("utf-8-sig", errors="replace")
     return content, truncated, size
 
 

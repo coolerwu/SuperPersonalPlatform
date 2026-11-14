@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import settings
@@ -127,3 +128,31 @@ def test_read_text_preview_replaces_invalid_utf8_and_strips_bom(tmp_path):
     assert content == "ok�bad"
     assert truncated is False
     assert size == 9
+
+
+LIMIT = 512 * 1024
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected_truncated", "expected_len"),
+    [(-1, False, LIMIT - 1), (0, False, LIMIT), (1, True, LIMIT)],
+)
+def test_read_text_preview_at_the_truncation_boundary(
+    tmp_path, extra, expected_truncated, expected_len
+):
+    target = tmp_path / "edge.log"
+    target.write_bytes(b"x" * (LIMIT + extra))
+    content, truncated, _ = read_text_preview(target)
+    assert truncated is expected_truncated
+    assert len(content) == expected_len
+
+
+def test_read_text_preview_multibyte_split_only_adds_replacement(tmp_path):
+    target = tmp_path / "split.txt"
+    target.write_bytes(b"a" * (LIMIT - 1) + "中".encode("utf-8") + b"tail")
+    content, truncated, _ = read_text_preview(target)
+    assert truncated is True
+    assert content.endswith("�")
+    # The cap is on raw bytes read; one split sequence can re-encode 1-3
+    # consumed bytes as 3, so the decoded string can exceed LIMIT by at most 2.
+    assert len(content.encode("utf-8")) <= LIMIT + 2
