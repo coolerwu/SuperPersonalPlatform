@@ -87,13 +87,17 @@ async def stream_session(
 
 
 @router.get("/sessions/{session_id}/turn")
-async def session_turn(session_id: str, request: Request) -> dict[str, object]:
+async def session_turn(
+    session_id: str, request: Request, turn_id: str | None = None
+) -> dict[str, object]:
     registry = getattr(request.app.state, "registry", None)
     if registry is None:
         raise HTTPException(status_code=503, detail="agent runtime is not running")
+    probe = registry.stream(turn_id, session_id) if turn_id else None
     return {
         "turn_id": registry.current_turn_id(session_id),
         "busy": registry.is_busy(session_id),
+        "alive": bool(probe is not None and not probe.closed),
     }
 
 

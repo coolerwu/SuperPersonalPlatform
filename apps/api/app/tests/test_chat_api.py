@@ -30,6 +30,7 @@ class RecordingRegistry:
         self.submit_error = submit_error
         self.session_owner = session_owner
         self.current_turn = None
+        self.turn_streams: dict[tuple[str, str], TurnStream] = {}
 
     async def submit(self, turn):
         if self.submit_error is not None:
@@ -45,6 +46,9 @@ class RecordingRegistry:
 
     def current_turn_id(self, session_id):
         return self.current_turn
+
+    def stream(self, turn_id, session_id=None):
+        return self.turn_streams.get((turn_id, session_id))
 
     async def interrupt(self, session_id):
         self.interrupt_calls.append(session_id)
@@ -610,15 +614,29 @@ def test_session_turn_reports_idle_session(client, fake_registry):
     fake_registry.current_turn = None
     response = client.get(f"/api/sessions/{SESSION_ID}/turn")
     assert response.status_code == 200
-    assert response.json() == {"turn_id": None, "busy": False}
+    assert response.json() == {"turn_id": None, "busy": False, "alive": False}
 
 
 def test_session_turn_reports_running_and_queued_sessions(client, fake_registry):
     fake_registry.busy = True
     fake_registry.current_turn = "turn-9"
     response = client.get(f"/api/sessions/{SESSION_ID}/turn")
-    assert response.json() == {"turn_id": "turn-9", "busy": True}
+    assert response.json() == {"turn_id": "turn-9", "busy": True, "alive": False}
 
     fake_registry.current_turn = None
     response = client.get(f"/api/sessions/{SESSION_ID}/turn")
-    assert response.json() == {"turn_id": None, "busy": True}
+    assert response.json() == {"turn_id": None, "busy": True, "alive": False}
+
+
+def test_session_turn_reports_whether_a_turn_is_alive(client, fake_registry):
+    stream = TurnStream()
+    fake_registry.turn_streams[("turn-9", SESSION_ID)] = stream
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn?turn_id=turn-9")
+    assert response.json() == {"turn_id": None, "busy": False, "alive": True}
+
+    stream.close()
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn?turn_id=turn-9")
+    assert response.json()["alive"] is False
+
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn?turn_id=missing")
+    assert response.json()["alive"] is False
