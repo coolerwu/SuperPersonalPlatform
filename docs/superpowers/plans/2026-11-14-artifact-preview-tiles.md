@@ -187,7 +187,7 @@ def read_text_preview(path: Path) -> tuple[str, bool, int]:
     truncated = len(raw) > _PREVIEW_LIMIT
     if truncated:
         raw = raw[:_PREVIEW_LIMIT]
-    content = raw.decode("utf-8", errors="replace").lstrip("\ufeff")
+    content = raw.decode("utf-8-sig", errors="replace")
     return content, truncated, size
 ```
 
@@ -198,6 +198,8 @@ def read_text_preview(path: Path) -> tuple[str, bool, int]:
 ```
 
 Expected: PASS（新增 4 个用例）。
+
+> 落地加固（提交 4c07a9b）：用 `utf-8-sig` 解码以去掉源码中的不可见 BOM 字面量；补了截断边界（LIMIT−1/LIMIT/LIMIT+1）与多字节切分测试，文件共 16 个用例。
 
 - [ ] **Step 5: 提交**
 
