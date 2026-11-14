@@ -697,7 +697,9 @@ export default function App() {
 
   /**
    * A queued turn's user message only reaches the transcript when that turn
-   * starts, so keep unmatched sends visible until their text appears.
+   * starts, so keep unmatched sends visible until their text appears. A turn
+   * that reaches a terminal state retires its row by turn id in finishTurn,
+   * which also covers text that can never appear (transcript compaction).
    *
    * Known edge: a queued turn cancelled outside this tab (another client or a
    * command path we do not observe) can leave an unmatched pending row until a
@@ -1181,6 +1183,9 @@ export default function App() {
       }));
       void refreshTranscript(forSession).then(() => {
         if (generation !== streamGenerationRef.current) return;
+        // No turn_end reached this tab; retire its optimistic question here so
+        // it cannot linger after the refreshed answer (see finishTurn).
+        dropPendingForTurn(forSession, turnId);
         if (status?.busy && !streamsRef.current.has(forSession)) {
           scheduleStreamAttach(forSession, attempt);
         }
@@ -1398,9 +1403,14 @@ export default function App() {
     } finally {
       followUpRef.current.delete(forSession);
     }
-    if ((status === "failed" || status === "cancelled") && endedTurnId) {
-      // The turn never wrote a transcript row, so its optimistic question is
-      // a ghost; the error itself stays in the notice.
+    if (endedTurnId) {
+      // A failed/cancelled turn never wrote a transcript row; a completed turn
+      // normally did, and the refresh above already dropped its pending copy by
+      // content. The exception is a transcript compaction: history then starts
+      // at the compact boundary, so the question's row falls out of the list
+      // and content matching cannot retire the optimistic row — it would keep
+      // rendering after the answer. Terminal turns must leave no ghost either
+      // way; the error itself stays in the notice.
       dropPendingForTurn(forSession, endedTurnId);
       // Known edge: a no-turn-id fallback attach cannot attribute its pending
       // rows here; they are reconciled by a later transcript refresh.
