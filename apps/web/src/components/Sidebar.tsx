@@ -213,6 +213,7 @@ export function Sidebar(props: SidebarProps) {
                 <button
                   className="icon-button subtle"
                   title="删除会话"
+                  aria-label="删除会话"
                   onClick={(event) => {
                     event.stopPropagation();
                     props.onDeleteSession(session.id);

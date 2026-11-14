@@ -2189,7 +2189,7 @@ export default function App() {
         item.id === sessionId ? { ...item, title } : item,
       ),
     );
-    setSessionToRename(null);
+    setSessionToRename((current) => (current?.id === sessionId ? null : current));
     void refreshSessions();
   }
 
@@ -2407,6 +2407,7 @@ export default function App() {
           setSessionToDelete(sessions.find((item) => item.id === id) ?? null);
         }}
         onRenameSession={(id) => {
+          setSidebarOpen(false);
           setSessionToRename(sessions.find((item) => item.id === id) ?? null);
         }}
         onOpenSettings={() => openView("settings")}
@@ -2598,6 +2599,7 @@ export default function App() {
       />
 
       <RenameSessionDialog
+        key={sessionToRename?.id ?? "none"}
         open={sessionToRename !== null}
         title={sessionToRename?.title || "新会话"}
         onClose={() => setSessionToRename(null)}

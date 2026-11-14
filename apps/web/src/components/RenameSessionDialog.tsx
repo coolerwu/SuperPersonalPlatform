@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { describeApiError } from "../errors";
 
 type RenameSessionDialogProps = {
   open: boolean;
@@ -27,7 +28,7 @@ export function RenameSessionDialog({
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !event.isComposing) onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -46,7 +47,7 @@ export function RenameSessionDialog({
     try {
       await onRename(trimmed);
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      setError(describeApiError(exc));
       setBusy(false);
     }
   }
@@ -55,12 +56,20 @@ export function RenameSessionDialog({
     <div className="modal-backdrop" onClick={onClose}>
       <form
         className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rename-session-heading"
         onClick={(event) => event.stopPropagation()}
         onSubmit={submit}
       >
         <div className="modal-heading">
-          <h2>重命名会话</h2>
-          <button type="button" className="icon-button" onClick={onClose}>
+          <h2 id="rename-session-heading">重命名会话</h2>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="关闭"
+            onClick={onClose}
+          >
             ×
           </button>
         </div>
