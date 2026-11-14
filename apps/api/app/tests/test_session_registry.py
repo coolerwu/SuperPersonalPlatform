@@ -803,3 +803,43 @@ async def test_cancel_queued_discards_a_queued_delivery():
         runner.release("a")
         await wait_until(lambda: runner.finished == ["a"])
         await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_retires_a_worker_that_never_started():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    turn_id = await registry.submit(turn(prompt="a"))
+    stream = registry.stream(turn_id)
+
+    assert await registry.cancel_queued("s1", turn_id) is True
+    assert stream.closed
+    assert "s1" not in registry._workers
+    assert "s1" not in registry._queues
+    assert "s1" not in registry._current
+    assert runner.started == []
+
+    await registry.submit(turn(prompt="b"))
+    await wait_until(lambda: runner.started == ["b"])
+    runner.release("b")
+    await wait_until(lambda: runner.finished == ["b"])
+    await registry.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_queued_miss_with_nonempty_queue_preserves_order():
+    runner = FakeRunner()
+    registry = SessionRegistry(runner, concurrency=2)
+    await registry.submit(turn(prompt="a"))
+    await registry.submit(turn(prompt="b"))
+    await registry.submit(turn(prompt="c"))
+    await wait_until(lambda: runner.started == ["a"])
+
+    assert await registry.cancel_queued("s1", "missing") is False
+    runner.release("a")
+    await wait_until(lambda: runner.started == ["a", "b"])
+    runner.release("b")
+    await wait_until(lambda: runner.started == ["a", "b", "c"])
+    runner.release("c")
+    await wait_until(lambda: runner.finished == ["a", "b", "c"])
+    await registry.close()

@@ -374,6 +374,10 @@ class SessionRegistry:
         Returns False when the turn has already started or is unknown. The
         drain and re-put below must not await: a submit can only land between
         awaits, and the worker relies on the queue staying consistent.
+
+        A second cancel for a turn still parked in ``_pending`` returns True
+        again (it is still parked until the worker skips it); a turn already
+        removed from the queue returns False.
         """
         dropped: tuple[Turn, TurnStream] | None = None
         pending = self._pending.get(session_id)
@@ -393,6 +397,9 @@ class SessionRegistry:
                         item = queue.get_nowait()
                     except asyncio.QueueEmpty:
                         break
+                    # Every popped item is finished once; re-putting a kept
+                    # item increments the unfinished count again, so the net
+                    # effect is exactly -1 for the cancelled turn.
                     queue.task_done()
                     if dropped is None and item[0].id == turn_id:
                         dropped = item
