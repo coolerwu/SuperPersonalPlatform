@@ -86,11 +86,14 @@ function buildComponents(agentId?: string, basePath?: string): Components {
 export const Markdown = memo(function Markdown({
   content,
   streaming = false,
+  highlight = true,
   agentId,
   basePath,
 }: {
   content: string;
   streaming?: boolean;
+  /** Disable syntax highlighting (e.g. small artifact tiles). */
+  highlight?: boolean;
   /** Owner of workspace-relative image and file links. */
   agentId?: string;
   /** Workspace path of the file this Markdown came from, for relative links. */
@@ -111,7 +114,7 @@ export const Markdown = memo(function Markdown({
           remarkBreaks,
         ]}
         rehypePlugins={
-          streaming
+          streaming || !highlight
             ? [[rehypeKatex, { throwOnError: false, strict: false }]]
             : [
                 [rehypeKatex, { throwOnError: false, strict: false }],

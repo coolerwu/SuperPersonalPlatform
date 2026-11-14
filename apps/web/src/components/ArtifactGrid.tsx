@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api";
-import { artifactBadge, isMarkdownArtifact, isTextArtifact } from "../artifactTypes";
+import { artifactBadge, isTextArtifact } from "../artifactTypes";
 import { formatBytes } from "../messageContent";
 import type { ArtifactPreview, MessageArtifact } from "../types";
 import { workspaceFileUrl } from "../workspaceUrl";
@@ -27,28 +27,41 @@ type PreviewState =
   | { status: "ready"; preview: ArtifactPreview }
   | { status: "error" };
 
+type PreviewEntry = { key: string; state: PreviewState };
+
 function useArtifactPreview(
   agentId: string,
   artifact: MessageArtifact,
   enabled: boolean,
 ): PreviewState {
   const key = previewKey(agentId, artifact);
-  const [state, setState] = useState<PreviewState>(() => {
+  const [entry, setEntry] = useState<PreviewEntry>(() => {
     const cached = previewCache.get(key);
-    return cached ? { status: "ready", preview: cached } : { status: "loading" };
+    return {
+      key,
+      state: cached
+        ? { status: "ready", preview: cached }
+        : { status: "loading" },
+    };
   });
 
   useEffect(() => {
     if (!enabled) return;
     const cached = previewCache.get(key);
     if (cached) {
-      setState({ status: "ready", preview: cached });
+      setEntry((current) =>
+        current.key === key &&
+        current.state.status === "ready" &&
+        current.state.preview === cached
+          ? current
+          : { key, state: { status: "ready", preview: cached } },
+      );
       return;
     }
     let cancelled = false;
     let retry: number | undefined;
     const controller = new AbortController();
-    setState({ status: "loading" });
+    setEntry({ key, state: { status: "loading" } });
 
     const load = async (attempt: number) => {
       try {
@@ -59,14 +72,14 @@ function useArtifactPreview(
         );
         if (cancelled) return;
         cachePreview(key, preview);
-        setState({ status: "ready", preview });
+        setEntry({ key, state: { status: "ready", preview } });
       } catch {
         if (cancelled) return;
         if (attempt === 0) {
           retry = window.setTimeout(() => void load(1), 1000);
           return;
         }
-        setState({ status: "error" });
+        setEntry({ key, state: { status: "error" } });
       }
     };
 
@@ -78,7 +91,7 @@ function useArtifactPreview(
     };
   }, [agentId, artifact.path, enabled, key]);
 
-  return state;
+  return entry.key === key ? entry.state : { status: "loading" };
 }
 
 function FileGlyph() {
@@ -122,7 +135,9 @@ function TileFoot({
 }) {
   return (
     <div className="artifact-tile-foot">
-      <span className="artifact-size">{formatBytes(artifact.size)}</span>
+      {artifact.size !== null && (
+        <span className="artifact-size">{formatBytes(artifact.size)}</span>
+      )}
       {note && <span className="artifact-note">{note}</span>}
       <a
         className="artifact-open"
@@ -146,7 +161,6 @@ function TextArtifactTile({
   agentId: string;
   href: string;
 }) {
-  const markdown = isMarkdownArtifact(artifact.name);
   const preview = useArtifactPreview(agentId, artifact, true);
 
   return (
@@ -154,7 +168,9 @@ function TextArtifactTile({
       <TileHead artifact={artifact} />
       <div
         className="artifact-tile-body"
+        role="group"
         tabIndex={0}
+        aria-busy={preview.status === "loading"}
         aria-label={`${artifact.name} 内容预览`}
       >
         {preview.status === "loading" && (
@@ -165,16 +181,20 @@ function TextArtifactTile({
           </div>
         )}
         {preview.status === "error" && (
-          <div className="artifact-empty">无法预览</div>
+          <div className="artifact-error">
+            <FileGlyph />
+            <span>无法预览</span>
+          </div>
         )}
         {preview.status === "ready" &&
           (preview.preview.content ? (
-            markdown ? (
+            preview.preview.format === "markdown" ? (
               <div className="artifact-tile-markdown">
                 <Markdown
                   content={preview.preview.content}
                   agentId={agentId}
                   basePath={artifact.path}
+                  highlight={false}
                 />
               </div>
             ) : (
@@ -259,7 +279,7 @@ export function ArtifactGrid({
   return (
     <div className="message-artifacts">
       <div className="message-artifacts-label">产物</div>
-      <div className="artifact-grid" aria-label="产物文件">
+      <div className="artifact-grid" role="group" aria-label="产物文件">
         {artifacts.map((artifact) => {
           const href = workspaceFileUrl(agentId, artifact.path) ?? "";
           if (artifact.kind === "image") {
