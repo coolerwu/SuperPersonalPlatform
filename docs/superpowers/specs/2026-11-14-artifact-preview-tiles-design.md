@@ -147,7 +147,7 @@ export type ArtifactPreview = {
 
 ### 三种内容
 
-- **Markdown**：在滚动主体内用现有 `Markdown` 组件渲染，外层加 `.artifact-tile-markdown` 紧凑样式：字号 12px、标题缩小、段距收紧、代码块横向滚动、图片 `max-width: 100%`。不启用 `rehype-raw`，原始 HTML 不会执行。
+- **Markdown**：在滚动主体内用现有 `Markdown` 组件渲染，外层加 `.artifact-tile-markdown` 紧凑样式：字号 12px、标题缩小、段距收紧、代码块横向滚动、图片 `max-width: 100%`。不启用 `rehype-raw`，原始 HTML 不会执行。Markdown 内的相对图片与链接按该 Markdown 文件所在目录解析，而不是一律按工作区根目录。
 - **其他文本**：`<pre class="artifact-tile-text">`，等宽字体、`white-space: pre-wrap`、`word-break: break-word`。
 - **图片**：`<img>` + `object-fit: contain` + `--panel-2` 背景，不裁切；点图片或「打开」查看原图。
 - **图标**：居中的文件图标 + 扩展名，文件名和大小在底部；「打开」下载或新标签打开。
