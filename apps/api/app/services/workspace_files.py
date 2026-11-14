@@ -33,6 +33,39 @@ _UNSAFE_INLINE = {
     "text/xml",
 }
 
+_PREVIEW_LIMIT = 512 * 1024
+_MARKDOWN_EXTENSIONS = {".md", ".markdown"}
+_TEXT_EXTENSIONS = {
+    ".md", ".markdown", ".txt", ".log", ".csv", ".tsv",
+    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".xml", ".svg", ".html", ".htm", ".css", ".scss",
+    ".js", ".jsx", ".ts", ".tsx", ".py", ".sh", ".bash", ".zsh",
+    ".sql", ".rs", ".go", ".java", ".c", ".h", ".cpp", ".hpp",
+    ".rb", ".php", ".lua", ".swift", ".kt", ".r", ".m", ".tex",
+}
+
+
+def preview_format(path: Path) -> str | None:
+    """``"markdown"``/``"text"`` for previewable files, else ``None``."""
+    suffix = path.suffix.lower()
+    if suffix in _MARKDOWN_EXTENSIONS:
+        return "markdown"
+    if suffix in _TEXT_EXTENSIONS:
+        return "text"
+    return None
+
+
+def read_text_preview(path: Path) -> tuple[str, bool, int]:
+    """Return ``(content, truncated, size)``; never raises on bad UTF-8."""
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        raw = handle.read(_PREVIEW_LIMIT + 1)
+    truncated = len(raw) > _PREVIEW_LIMIT
+    if truncated:
+        raw = raw[:_PREVIEW_LIMIT]
+    content = raw.decode("utf-8", errors="replace").lstrip("﻿")
+    return content, truncated, size
+
 
 def resolve_workspace_file(
     agent_id: str, relative_path: str, *, home: Path | None = None

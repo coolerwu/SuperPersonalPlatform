@@ -4,7 +4,12 @@ from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.main import create_app
-from app.services.workspace_files import media_type_for, resolve_workspace_file
+from app.services.workspace_files import (
+    media_type_for,
+    preview_format,
+    read_text_preview,
+    resolve_workspace_file,
+)
 
 
 def _workspace(tmp_path, agent="default"):
@@ -85,3 +90,40 @@ def test_workspace_file_route_requires_auth():
     with TestClient(create_app(start_worker=False)) as unauthenticated:
         response = unauthenticated.get("/api/agents/default/files/a.png")
         assert response.status_code == 401
+
+
+def test_preview_format_recognizes_markdown_and_text():
+    assert preview_format(Path("a.md")) == "markdown"
+    assert preview_format(Path("a.MARKDOWN")) == "markdown"
+    assert preview_format(Path("a.py")) == "text"
+    assert preview_format(Path("a.json")) == "text"
+    assert preview_format(Path("a.svg")) == "text"
+    assert preview_format(Path("a.pdf")) is None
+    assert preview_format(Path("a.zip")) is None
+
+
+def test_read_text_preview_returns_content_and_size(tmp_path):
+    target = tmp_path / "note.md"
+    target.write_text("# 标题\n第二行", "utf-8")
+    content, truncated, size = read_text_preview(target)
+    assert content == "# 标题\n第二行"
+    assert truncated is False
+    assert size == target.stat().st_size
+
+
+def test_read_text_preview_truncates_at_512_kb(tmp_path):
+    target = tmp_path / "big.log"
+    target.write_bytes(b"x" * (512 * 1024 + 10))
+    content, truncated, size = read_text_preview(target)
+    assert truncated is True
+    assert len(content) == 512 * 1024
+    assert size == 512 * 1024 + 10
+
+
+def test_read_text_preview_replaces_invalid_utf8_and_strips_bom(tmp_path):
+    target = tmp_path / "bad.txt"
+    target.write_bytes(b"\xef\xbb\xbfok\xffbad")
+    content, truncated, size = read_text_preview(target)
+    assert content == "ok�bad"
+    assert truncated is False
+    assert size == 9
