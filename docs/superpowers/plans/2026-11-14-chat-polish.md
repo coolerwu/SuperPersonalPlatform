@@ -315,6 +315,17 @@ class TurnStream:
         self._subscribers.clear()
 ```
 
+- [ ] **Step 3b: 更新事件消费方（兼容迁移）**
+
+`subscribe()` 改为返回 `(index, event)` 后，以下消费者必须同时解包：
+
+1. `apps/api/app/routers/sessions.py` 的流生成器：`_, event = await asyncio.wait_for(queue.get(), timeout=15)`（本任务先保持 SSE 输出形状不变，Task 3 再加 `id:` 与 `after`）。
+2. `apps/api/app/tests/test_claude_runner.py::drain_until_end`：`_, event = await ...`。
+3. `apps/api/app/tests/test_session_registry.py::drain_terminal`：`_, event = await ...`。
+4. `apps/api/app/tests/test_claude_runner_delivery.py` 的内联 drain 循环：`_, event = await ...`。
+
+运行 `.venv/bin/python -m pytest apps/api/app/tests -q`，期望 806 passed, 3 skipped（turn-stream 用例从 7 个增加到 10 个）。
+
 - [ ] **Step 4: 运行测试确认通过**
 
 ```bash
@@ -326,11 +337,15 @@ Expected: PASS，全部用例通过。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add apps/api/app/services/turn_stream.py apps/api/app/tests/test_turn_stream.py
+git add apps/api/app/services/turn_stream.py apps/api/app/tests/test_turn_stream.py \
+  apps/api/app/routers/sessions.py apps/api/app/tests/test_claude_runner.py \
+  apps/api/app/tests/test_session_registry.py apps/api/app/tests/test_claude_runner_delivery.py
 git commit -m "Number turn stream events for gap-free resume
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
+
+> 拆成「实现提交 + 兼容提交」也可以，最终树必须全绿。
 
 ---
 
