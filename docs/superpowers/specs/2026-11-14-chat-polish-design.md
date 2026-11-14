@@ -54,7 +54,7 @@ async def cancel_queued(self, session_id: str, turn_id: str) -> bool
 行为：
 
 - 先检查 `_pending`：如果该会话的 pending turn 就是目标 turn，且会话不在 `_started` 中，则把 turn id 加入 `_cancelled`，向它的流发布 `{"type": "turn_end", "status": "cancelled"}` 并 `close()`，然后丢弃这条 turn。
-- 否则把该会话的 `asyncio.Queue` 一次性 drain 到列表，按 `turn.id` 找到目标项并移除，其余项按原顺序放回；被移除项的流同样发布 cancelled 的 `turn_end` 并关闭，`task_done()` 只对移除项调用。
+- 否则把该会话的 `asyncio.Queue` 一次性 drain 到列表，按 `turn.id` 找到目标项并移除，其余项按原顺序放回；被移除项的流同样发布 cancelled 的 `turn_end` 并关闭。drain 时每个取出的项都调用一次 `task_done()`，放回的项会重新增加未完成计数，净效果是取消项 −1。
 - drain 与放回之间不能有 `await`，保持与 worker 退休逻辑的原子性；投递义务的清理（`_discard_delivery`）在所有无等待操作完成后再执行。
 - 目标 turn 已经开始执行时返回 `False`，不影响正在执行的 turn。
 - 移除后如果队列为空、没有运行中或收尾中的 turn，沿用 `interrupt()` 的 worker 退休逻辑；否则交给现有 worker 在队列耗尽后自行退休。
