@@ -712,7 +712,7 @@ async def test_cancel_queued_removes_only_that_turn_and_preserves_order():
     assert await registry.cancel_queued("s1", second_id) is True
     assert second_stream.closed
     assert await drain_terminal(second_stream) == [
-        {"type": "turn_end", "status": "cancelled"}
+        {"type": "turn_end", "status": "cancelled", "scope": "turn"}
     ]
 
     runner.release("a")
@@ -754,7 +754,7 @@ async def test_cancel_queued_cancels_turn_waiting_for_concurrency_permit():
     assert await registry.cancel_queued("s2", waiting_id) is True
     assert waiting_stream.closed
     assert await drain_terminal(waiting_stream) == [
-        {"type": "turn_end", "status": "cancelled"}
+        {"type": "turn_end", "status": "cancelled", "scope": "turn"}
     ]
 
     runner.release("a")

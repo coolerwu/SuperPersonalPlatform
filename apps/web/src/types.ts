@@ -277,6 +277,8 @@ export type TurnStreamEvent =
   | {
       type: "turn_end";
       status?: "completed" | "failed" | "cancelled";
+      /** "turn" marks a single queued-turn cancel; absent means session-wide. */
+      scope?: "session" | "turn";
       error?: string | null;
       terminal_reason?: string | null;
       usage?: Record<string, unknown> | null;

@@ -8,7 +8,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`
 - 会话与消息由 SDK transcript 管理；平台配置在 `data/settings.json`；新库的 `app.db` 只创建 `cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions` 五张表（从旧版升级的库会保留未使用的旧表）
 
-本版明确不包含：平台自带浏览器/搜索工具、`add_dirs`、技能创作工具、知识库工具接入 Agent；rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、进程重启后继续看当前输出、消息时间戳、Run 历史。平台业务工具（回测、行情、交易记录、资产配置、缠论）已通过进程内 MCP 接入。同一进程内刷新会在数秒内重放当前轮缓冲；进程重启或断线才丢失。`langchain-core` 暂留，用于工具包装。
+本版明确不包含：平台自带浏览器/搜索工具、`add_dirs`、技能创作工具、知识库工具接入 Agent；rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、进程重启后继续看当前输出、消息时间戳、Run 历史。平台业务工具（回测、行情、交易记录、资产配置、缠论）已通过进程内 MCP 接入。同一进程内刷新会在数秒内重放当前轮缓冲；SSE 断线按事件序号续传，进程重启才丢失。`langchain-core` 暂留，用于工具包装。
 
 ## 运行时目录
 
@@ -64,7 +64,7 @@ npm run dev
 
 - 执行核为 `ClaudeSDKClient`：每个平台会话一个 UUID，直接作为 SDK `session_id`；transcript 在 `claude/projects/<agent_id>/<uuid>.jsonl`。同一会话的 turn 串行，不同会话并发（上限 `BROWSER_CONCURRENCY`，默认 5）。
 - 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。执行过程中，子 Agent 的工具/文本和后台任务状态实时显示在「执行过程」；它们只存在于实时流里，刷新后只重建主 Agent 的 thinking/tool_use。
-- 刷新或断线后当前流式输出可能丢失：同一进程内前端会在数秒内通过 `current_turn_id` 重新订阅并重放当前轮缓冲；进程重启或 SSE 断开且错过缓冲时只能从 transcript 读回历史，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
+- 刷新后当前流式输出可能丢失：同一进程内前端会在数秒内通过 `current_turn_id` 重新订阅并重放当前轮缓冲；SSE 断线会自动探测轮次并按事件序号续传，不重复、不清空。进程重启时只能从 transcript 读回历史，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
 - `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约，返回 `{interrupted, cancelled_turn_ids}`；前端只移除真正被取消的消息占位，与中断竞争、未被取消的排队追问继续执行并保持流式订阅。历史里的中断合成消息按系统行展示（「本轮对话已被中断」），`No response requested.` 不显示。
 - 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
 - 命令：平台处理 `/new`（或 `/clear`）、`/stop`、`/status`、`/help`，不区分大小写；网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾的临时卡片显示。输入框以 `/` 开头时弹出命令面板，除平台命令外还列出 Claude Code 运行时 init frame 里的 `slash_commands`（排除终端绑定项与重名项）；只有列表里的 Claude Code 命令才作为普通消息转发给 Agent，未知命令会回复当前可用命令列表，列表未加载时提示先发送一条普通消息。
@@ -77,6 +77,7 @@ npm run dev
 - 会话列表由 SDK `list_sessions()` 生成：标题取 SDK summary，按最后修改时间倒序；微信会话带「微信」徽标，忙碌会话显示「忙碌」。删除会话前会拒绝正在执行的会话。
 - 空状态提供建议提示词；顶部轻量栏显示当前 Agent 和会话标题。
 - 响应式：桌面为侧栏 + 对话；窄屏（≤860px）用顶部栏和汉堡菜单打开侧栏抽屉，输入区适配 `visualViewport` 与安全区。功能工作区（回测、交易记录、资产配置、缠论图）同样使用顶部栏和抽屉。
+- 聊天细节：运行中的追问按提交顺序显示「排队中 N/M」并可单条撤回；停止后保留已生成的半截回复，历史已落盘则与原历史行收敛；切走会话或页面不可见时，完成/失败会在侧栏显示未读点（成功绿色、失败红色）并在标签标题显示计数，仅存在内存；侧栏会话行可重命名。
 
 ## 配置页
 

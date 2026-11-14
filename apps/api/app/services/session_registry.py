@@ -411,7 +411,10 @@ class SessionRegistry:
             return False
 
         turn, stream = dropped
-        stream.publish({"type": "turn_end", "status": "cancelled"})
+        # ``scope`` tells the web client this single-turn cancel must not
+        # drain the rest of the session queue (unlike ``/stop``, whose
+        # cancelled terminals have no scope and keep the session-wide meaning).
+        stream.publish({"type": "turn_end", "status": "cancelled", "scope": "turn"})
         stream.close()
         if session_id not in self._running and session_id not in self._finishing:
             queue = self._queues.get(session_id)

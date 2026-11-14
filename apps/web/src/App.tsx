@@ -1022,6 +1022,7 @@ export default function App() {
       case "turn_end": {
         if (streamsRef.current.get(forSession) !== source) return;
         const endedTurnId = activeTurnRef.current[forSession] ?? null;
+        const singleTurnCancel = event.scope === "turn";
         delete activeTurnRef.current[forSession];
         closeStream(forSession);
         if (event.status === "failed") {
@@ -1030,9 +1031,17 @@ export default function App() {
             notice: event.error || "本轮执行失败。",
           }));
         } else if (event.status === "cancelled") {
-          updateLive(forSession, (current) => ({ ...current, notice: "已停止当前任务。" }));
+          updateLive(forSession, (current) => ({
+            ...current,
+            notice: singleTurnCancel ? "已撤回排队消息。" : "已停止当前任务。",
+          }));
         }
-        void finishTurn(forSession, event.status ?? null, endedTurnId);
+        void finishTurn(
+          forSession,
+          event.status ?? null,
+          endedTurnId,
+          singleTurnCancel,
+        );
         const owner = sessionAgentRef.current[forSession] ?? agentIdRef.current;
         if (owner) refreshClaudeCommands(owner);
         break;
@@ -1129,6 +1138,9 @@ export default function App() {
       status = null;
     }
     if (generation !== streamGenerationRef.current) return;
+    // A send, attach, or queued-turn handoff may have opened a stream while
+    // the probe was in flight; never let a stale probe clobber that stream.
+    if (streamsRef.current.has(forSession)) return;
     if (status && attachMode) {
       if (status.busy) {
         if (attempt > MAX_STREAM_RETRIES) {
@@ -1370,6 +1382,7 @@ export default function App() {
     forSession: string,
     status: "completed" | "failed" | "cancelled" | null,
     endedTurnId: string | null,
+    singleTurnCancel = false,
   ) {
     const pending = pendingUsersRef.current[forSession] ?? [];
     const hasQueuedTurn =
@@ -1388,8 +1401,10 @@ export default function App() {
       // Known edge: a no-turn-id fallback attach cannot attribute its pending
       // rows here; they are reconciled by a later transcript refresh.
     }
-    if (status === "cancelled") {
-      // Interrupt drains queued turns too, so their ids will never run.
+    if (status === "cancelled" && !singleTurnCancel) {
+      // Interrupt drains queued turns too, so their ids will never run. A
+      // single queued-turn cancel (`scope: "turn"`) leaves the rest queued;
+      // its own pending row was already removed above.
       const key = sessionQueueKey(forSession);
       for (const queuedId of queuedTurnsRef.current[key] ?? []) {
         dropPendingForTurn(forSession, queuedId);
