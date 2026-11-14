@@ -1330,6 +1330,7 @@ const RECONNECT_LOST_NOTICE = "连接已断开，已刷新为最新历史";
     );
     streamsRef.current.set(forSession, source);
     if (turnId) activeTurnRef.current[forSession] = turnId;
+    else delete activeTurnRef.current[forSession];
     updateLive(forSession, (current) => ({ ...current, tracking: true }));
     bindStreamSource(forSession, source);
 
