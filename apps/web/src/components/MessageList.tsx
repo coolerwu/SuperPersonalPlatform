@@ -27,7 +27,7 @@ import {
   parseUserContent,
   userMessageText,
 } from "../messageContent";
-import { workspaceFileUrl } from "../workspaceUrl";
+import { ArtifactGrid } from "./ArtifactGrid";
 import { Markdown } from "./Markdown";
 
 const SUGGESTIONS = [
@@ -88,64 +88,6 @@ function FileIcon() {
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
       <path d="M14 3v5h5" />
     </svg>
-  );
-}
-
-function ArtifactStrip({
-  artifacts,
-  agentId,
-}: {
-  artifacts: MessageArtifact[];
-  agentId: string;
-}) {
-  if (artifacts.length === 0) return null;
-  const images = artifacts.filter((artifact) => artifact.kind === "image");
-  const files = artifacts.filter((artifact) => artifact.kind !== "image");
-  return (
-    <div className="message-artifacts">
-      <div className="message-artifacts-label">产物</div>
-      {images.length > 0 && (
-        <div className="message-images">
-          {images.map((artifact) => {
-            const url = workspaceFileUrl(agentId, artifact.path) ?? "";
-            return (
-              <a
-                className="message-image"
-                key={artifact.path}
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                title={`打开 ${artifact.name}`}
-              >
-                <img src={url} alt={artifact.name} loading="lazy" />
-              </a>
-            );
-          })}
-        </div>
-      )}
-      {files.length > 0 && (
-        <div className="message-files">
-          {files.map((artifact) => (
-            <a
-              className="message-file"
-              key={artifact.path}
-              href={workspaceFileUrl(agentId, artifact.path) ?? ""}
-              target="_blank"
-              rel="noreferrer"
-              title={artifact.path}
-            >
-              <FileIcon />
-              <span className="message-file-name">{artifact.name}</span>
-              {artifact.size !== null && (
-                <span className="message-file-size">
-                  {formatBytes(artifact.size)}
-                </span>
-              )}
-            </a>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -567,7 +509,7 @@ const AssistantMessageRow = memo(function AssistantMessageRow({
         </div>
         <AssistantProcess steps={steps} agentId={agentId} />
         {message.content && <Markdown content={message.content} agentId={agentId} />}
-        <ArtifactStrip artifacts={message.artifacts ?? []} agentId={agentId} />
+        <ArtifactGrid artifacts={message.artifacts ?? []} agentId={agentId} />
       </div>
       <div className="message-footer assistant">
         <div className="message-actions">
@@ -637,7 +579,7 @@ function StreamingRow({
         ) : stopped ? null : (
           <div className="muted">正在生成…</div>
         )}
-        <ArtifactStrip artifacts={liveArtifacts} agentId={agentId} />
+        <ArtifactGrid artifacts={liveArtifacts} agentId={agentId} />
         {!stopped && <span className="cursor" />}
       </div>
     </div>
