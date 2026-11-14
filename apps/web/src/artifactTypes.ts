@@ -12,7 +12,7 @@ const TEXT_SUFFIXES = new Set([
 
 export function artifactSuffix(name: string): string {
   const dot = name.lastIndexOf(".");
-  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+  return dot > 0 ? name.slice(dot).toLowerCase() : "";
 }
 
 export function isMarkdownArtifact(name: string): boolean {
@@ -26,6 +26,6 @@ export function isTextArtifact(name: string): boolean {
 export function artifactBadge(name: string): string {
   const suffix = artifactSuffix(name);
   if (suffix === ".md" || suffix === ".markdown") return "MD";
-  if (!suffix) return "FILE";
+  if (!suffix || suffix === ".") return "FILE";
   return suffix.slice(1).toUpperCase().slice(0, 4);
 }

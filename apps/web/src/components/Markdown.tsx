@@ -55,10 +55,17 @@ function buildComponents(agentId?: string, basePath?: string): Components {
     agentId && src
       ? workspaceFileUrl(agentId, resolveRelativeToFile(basePath, src)) ?? src
       : src;
-  const linkHref = (href?: string) =>
-    agentId && href
-      ? workspaceLinkUrl(agentId, resolveRelativeToFile(basePath, href)) ?? href
-      : href;
+  const linkHref = (href?: string) => {
+    if (!agentId || !href) return href;
+    const hashIndex = href.indexOf("#");
+    const pathPart = hashIndex >= 0 ? href.slice(0, hashIndex) : href;
+    const hash = hashIndex >= 0 ? href.slice(hashIndex) : "";
+    const resolved = workspaceLinkUrl(
+      agentId,
+      resolveRelativeToFile(basePath, pathPart),
+    );
+    return resolved ? `${resolved}${hash}` : href;
+  };
   return {
     pre({ children }) {
       return <CodeBlock>{children}</CodeBlock>;

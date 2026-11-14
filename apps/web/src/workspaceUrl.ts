@@ -48,13 +48,29 @@ export function resolveRelativeToFile(
     ? basePath.slice(0, basePath.lastIndexOf("/") + 1)
     : "";
   if (!dir) return raw;
+  const split = value.search(/[?#]/);
+  const pathPart = split >= 0 ? value.slice(0, split) : value;
+  if (!pathPart) return raw;
+  const decodeSegment = (segment: string) => {
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return segment;
+    }
+  };
+  const encodeSegment = (segment: string) => encodeURIComponent(decodeSegment(segment));
+  const normalizePath = (input: string) =>
+    input.split("/").map(encodeSegment).join("/");
   try {
-    const resolved = new URL(value, `http://workspace/${dir}`);
-    return (
-      decodeURIComponent(resolved.pathname.replace(/^\//, "")) +
-      resolved.search +
-      resolved.hash
+    const resolved = new URL(
+      normalizePath(pathPart),
+      `http://workspace/${normalizePath(dir)}`,
     );
+    return resolved.pathname
+      .replace(/^\//, "")
+      .split("/")
+      .map(decodeSegment)
+      .join("/");
   } catch {
     return raw;
   }
