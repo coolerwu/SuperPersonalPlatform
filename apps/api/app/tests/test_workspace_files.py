@@ -156,3 +156,92 @@ def test_read_text_preview_multibyte_split_only_adds_replacement(tmp_path):
     # The cap is on raw bytes read; one split sequence can re-encode 1-3
     # consumed bytes as 3, so the decoded string can exceed LIMIT by at most 2.
     assert len(content.encode("utf-8")) <= LIMIT + 2
+
+
+def test_file_preview_returns_markdown_content(client):
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    workspace = settings.workspaces_dir / agent_id
+    (workspace / "report.md").write_text("# 标题\n正文", "utf-8")
+    response = client.get(f"/api/agents/{agent_id}/file-preview/report.md")
+    assert response.status_code == 200
+    assert response.json() == {
+        "content": "# 标题\n正文",
+        "format": "markdown",
+        "truncated": False,
+        "size": len("# 标题\n正文".encode()),
+    }
+    assert response.headers["cache-control"] == "private, no-cache"
+
+
+def test_file_preview_returns_plain_text_for_code(client):
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    workspace = settings.workspaces_dir / agent_id
+    (workspace / "run.py").write_text("print('hi')\n", "utf-8")
+    response = client.get(f"/api/agents/{agent_id}/file-preview/run.py")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["format"] == "text"
+    assert body["content"] == "print('hi')\n"
+
+
+def test_file_preview_truncates_large_text(client):
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    workspace = settings.workspaces_dir / agent_id
+    (workspace / "big.log").write_bytes(b"x" * (512 * 1024 + 1))
+    response = client.get(f"/api/agents/{agent_id}/file-preview/big.log")
+    body = response.json()
+    assert response.status_code == 200
+    assert body["truncated"] is True
+    assert len(body["content"]) == 512 * 1024
+    assert body["size"] == 512 * 1024 + 1
+
+
+def test_file_preview_rejects_binary_types(client):
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    workspace = settings.workspaces_dir / agent_id
+    (workspace / "doc.pdf").write_bytes(b"%PDF-1.4")
+    (workspace / "bundle.zip").write_bytes(b"PK\x03\x04")
+    for name in ("doc.pdf", "bundle.zip"):
+        response = client.get(f"/api/agents/{agent_id}/file-preview/{name}")
+        assert response.status_code == 415
+
+
+def test_file_preview_rejects_missing_and_traversal(client):
+    agent_id = client.get("/api/agents").json()[0]["id"]
+    assert (
+        client.get(f"/api/agents/{agent_id}/file-preview/missing.md").status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/api/agents/{agent_id}/file-preview/..%2F..%2Fdata%2Fsettings.json"
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get("/api/agents/missing/file-preview/a.md").status_code == 404
+    )
+
+
+def test_file_preview_allows_paused_agent(client):
+    agent = client.post("/api/agents", json={"name": "PausedPreview"}).json()
+    assert (
+        client.put(
+            f"/api/agents/{agent['id']}", json={"status": "paused"}
+        ).status_code
+        == 200
+    )
+    workspace = settings.workspaces_dir / agent["id"]
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "note.txt").write_text("still readable", "utf-8")
+    response = client.get(f"/api/agents/{agent['id']}/file-preview/note.txt")
+    assert response.status_code == 200
+    assert response.json()["content"] == "still readable"
+
+
+def test_file_preview_requires_auth():
+    with TestClient(create_app(start_worker=False)) as unauthenticated:
+        response = unauthenticated.get(
+            "/api/agents/default/file-preview/a.md"
+        )
+        assert response.status_code == 401

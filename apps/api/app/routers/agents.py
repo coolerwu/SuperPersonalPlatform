@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 import shutil
@@ -7,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +35,12 @@ from app.services.settings_store import (
     build_default_settings,
     get_settings_store,
 )
-from app.services.workspace_files import media_type_for, resolve_workspace_file
+from app.services.workspace_files import (
+    media_type_for,
+    preview_format,
+    read_text_preview,
+    resolve_workspace_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -437,6 +443,39 @@ async def get_workspace_file(
             f"attachment; filename*=UTF-8''{quote(target.name)}"
         )
     return FileResponse(target, media_type=media_type, headers=headers)
+
+
+@router.get("/{agent_id}/file-preview/{path:path}")
+async def preview_workspace_file(
+    agent_id: str,
+    path: str,
+    request: Request,
+    response: Response,
+) -> dict[str, object]:
+    """Return capped plain text for a workspace file the chat renders in a tile."""
+    snapshot = await _store(request).get()
+    agent = _find_agent(snapshot.agents, agent_id, include_archived=True)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    target = resolve_workspace_file(agent_id, path)
+    if target is None:
+        raise HTTPException(status_code=404, detail="file not found")
+    fmt = preview_format(target)
+    if fmt is None:
+        raise HTTPException(status_code=415, detail="file type cannot be previewed")
+    try:
+        content, truncated, size = await asyncio.to_thread(
+            read_text_preview, target
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="file not found") from exc
+    response.headers["Cache-Control"] = "private, no-cache"
+    return {
+        "content": content,
+        "format": fmt,
+        "truncated": truncated,
+        "size": size,
+    }
 
 
 @router.delete("/{agent_id}")
