@@ -43,7 +43,10 @@ async def list_messages(
 
 @router.get("/sessions/{session_id}/stream")
 async def stream_session(
-    session_id: str, request: Request, turn_id: str | None = None
+    session_id: str,
+    request: Request,
+    turn_id: str | None = None,
+    after: int = 0,
 ) -> StreamingResponse:
     registry = getattr(request.app.state, "registry", None)
     if registry is None:
@@ -54,17 +57,18 @@ async def stream_session(
         raise HTTPException(status_code=409, detail="no active turn for session")
 
     async def generator():
-        queue = await stream.subscribe()
+        queue = await stream.subscribe(after)
         try:
             while True:
                 if await request.is_disconnected():
                     return
                 try:
-                    _, event = await asyncio.wait_for(queue.get(), timeout=15)
+                    index, event = await asyncio.wait_for(queue.get(), timeout=15)
                 except TimeoutError:
                     yield ": ping\n\n"
                     continue
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                payload = json.dumps(event, ensure_ascii=False)
+                yield f"id: {index}\ndata: {payload}\n\n"
                 if event.get("type") == "turn_end":
                     return
         finally:

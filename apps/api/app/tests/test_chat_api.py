@@ -387,9 +387,35 @@ def test_stream_replays_events_and_unsubscribes(client):
     with client.stream("GET", f"/api/sessions/{SESSION_ID}/stream") as response:
         body = "".join(response.iter_text())
     assert response.status_code == 200
+    assert "id: 0" in body
+    assert "id: 1" in body
     assert "assistant_delta" in body
     assert "turn_end" in body
     assert stream._subscribers == set()
+
+
+def test_stream_after_skips_seen_events(client):
+    stream = TurnStream()
+    stream.publish({"type": "assistant_delta", "delta": "old"})
+    stream.publish({"type": "assistant_delta", "delta": "new"})
+    stream.publish({"type": "turn_end", "status": "completed"})
+
+    class StreamRegistry:
+        def current_turn_id(self, session_id):
+            return "turn-1"
+
+        def stream(self, turn_id, session_id=None):
+            return stream if turn_id == "turn-1" else None
+
+    client.app.state.registry = StreamRegistry()
+    with client.stream(
+        "GET", f"/api/sessions/{SESSION_ID}/stream?turn_id=turn-1&after=1"
+    ) as response:
+        body = "".join(response.iter_text())
+    assert response.status_code == 200
+    assert '"old"' not in body
+    assert "id: 1" in body
+    assert '"new"' in body
 
 
 def test_delete_busy_session_conflicts(client):
