@@ -30,6 +30,7 @@ import type {
   AgentAutoMemory,
   Provider,
   SessionSummary,
+  SessionTurnStatus,
   SkillCatalog,
   SkillDetail,
   SystemInfo,
@@ -210,7 +211,7 @@ export const api = {
     ),
   getSessionTurn: (sessionId: string, turnId?: string) => {
     const query = turnId ? `?turn_id=${encodeURIComponent(turnId)}` : "";
-    return request<{ turn_id: string | null; busy: boolean; alive: boolean }>(
+    return request<SessionTurnStatus>(
       `/api/sessions/${encodeURIComponent(sessionId)}/turn${query}`,
     );
   },
@@ -224,10 +225,11 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}?agent_id=${encodeURIComponent(agentId)}`,
       { method: "DELETE" },
     ),
+  /** `after` is the buffer index of the first event to replay (inclusive). */
   sessionStreamUrl: (sessionId: string, turnId?: string, after?: number) => {
     const params = new URLSearchParams();
     if (turnId) params.set("turn_id", turnId);
-    if (after && after > 0) params.set("after", String(after));
+    if (after !== undefined && after > 0) params.set("after", String(after));
     const query = params.toString();
     return `/api/sessions/${encodeURIComponent(sessionId)}/stream${
       query ? `?${query}` : ""

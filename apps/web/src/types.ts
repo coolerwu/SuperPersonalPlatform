@@ -209,6 +209,13 @@ export type FrozenLive = {
   artifacts: MessageArtifact[];
 };
 
+export type SessionTurnStatus = {
+  turn_id: string | null;
+  busy: boolean;
+  /** Only meaningful when the request supplied a turn id. */
+  alive: boolean;
+};
+
 export type TurnStreamEvent =
   | { type: "assistant_delta"; delta: string }
   | { type: "reasoning_delta"; delta: string }
