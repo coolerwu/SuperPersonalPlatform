@@ -1,4 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { api } from "./api";
 import type {
@@ -177,6 +185,13 @@ type PendingUser = {
 
 const QUEUED_NOTICE = "已排队，前面的任务完成后会自动执行";
 const SIDEBAR_POLL_MS = 5000;
+
+function queuedNotice(count: number): string {
+  return count > 0
+    ? `已排队 ${count} 条，前面的任务完成后依次执行`
+    : QUEUED_NOTICE;
+}
+
 const NEW_SESSION_KEY = "__new__";
 const AGENT_STORAGE_KEY = "acc.selectedAgent";
 
@@ -256,6 +271,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<SessionSummary | null>(null);
   const [focus, setFocus] = useState<FocusTarget | null>(null);
+  const [cancellingQueued, setCancellingQueued] = useState<Record<string, true>>({});
 
   const streamsRef = useRef<Map<string, EventSource>>(new Map());
   const retryTimersRef = useRef<Map<string, number>>(new Map());
@@ -285,6 +301,11 @@ export default function App() {
   const commandPendingRef = useRef(false);
   // A /chat/<id> deep link is applied once the agent's sessions load.
   const restoreSessionRef = useRef(initialRoute?.sessionId ?? "");
+  const cancelQueuedRef = useRef(cancelQueued);
+  cancelQueuedRef.current = cancelQueued;
+  const cancelQueuedMessage = useCallback((messageId: string) => {
+    void cancelQueuedRef.current(sessionIdRef.current, messageId);
+  }, []);
 
   const activeKey = sessionKey(agentId, sessionId);
   const visibleCommandReply =
@@ -313,6 +334,23 @@ export default function App() {
         .map((item) => transcriptMessage("user", item.content, item.id)),
     [pendingUserBySession, sessionId],
   );
+  const queuedInfo = useMemo(() => {
+    const items = (pendingUserBySession[sessionId] ?? []).filter(
+      (item) => item.queued,
+    );
+    const info: Record<
+      string,
+      { index: number; total: number; canCancel: boolean }
+    > = {};
+    items.forEach((item, index) => {
+      info[item.id] = {
+        index: index + 1,
+        total: items.length,
+        canCancel: Boolean(item.turnId),
+      };
+    });
+    return info;
+  }, [pendingUserBySession, sessionId]);
   const messagesLoading = loadingBySession[sessionId] ?? false;
   const sessionTitle = currentSession?.title || "新对话";
   const viewTitle =
@@ -530,6 +568,53 @@ export default function App() {
     const queued = { ...queuedTurnsRef.current };
     delete queued[key];
     queuedTurnsRef.current = queued;
+  }
+
+  async function cancelQueued(sessionId: string, messageId: string) {
+    const item = (pendingUsersRef.current[sessionId] ?? []).find(
+      (entry) => entry.id === messageId,
+    );
+    if (!item?.turnId) return;
+    const turnId = item.turnId;
+    setCancellingQueued((current) => ({ ...current, [messageId]: true }));
+    try {
+      const result = await api.cancelQueuedTurn(sessionId, turnId);
+      if (result.cancelled) {
+        removePendingUser(sessionId, messageId);
+        const key = sessionQueueKey(sessionId);
+        const remaining = (queuedTurnsRef.current[key] ?? []).filter(
+          (id) => id !== turnId,
+        );
+        if (remaining.length > 0) {
+          queuedTurnsRef.current = {
+            ...queuedTurnsRef.current,
+            [key]: remaining,
+          };
+        } else {
+          clearQueuedTurns(sessionId);
+        }
+        const live = pendingUsersRef.current[sessionId] ?? [];
+        const waiting = live.filter((entry) => entry.queued).length;
+        updateLive(sessionId, (current) => ({
+          ...current,
+          notice: waiting > 0 ? queuedNotice(waiting) : "",
+        }));
+      } else {
+        await refreshTranscript(sessionId);
+        updateLive(sessionId, (current) => ({
+          ...current,
+          notice: "这条已经开始或已经结束，队列已刷新",
+        }));
+      }
+    } catch (exc) {
+      setSessionError(describeApiError(exc), sessionId);
+    } finally {
+      setCancellingQueued((current) => {
+        const next = { ...current };
+        delete next[messageId];
+        return next;
+      });
+    }
   }
 
   function forgetQueuedTurns(id: string) {
@@ -1609,7 +1694,13 @@ export default function App() {
         // subscribe to this explicit turn id, so keep the current stream.
         setPendingQueued(targetSessionId, optimisticId, true);
         enqueueTurn(targetSessionId, response.turn_id);
-        updateLive(targetSessionId, (current) => ({ ...current, notice: QUEUED_NOTICE }));
+        const waiting = (pendingUsersRef.current[targetSessionId] ?? []).filter(
+          (item) => item.queued,
+        ).length;
+        updateLive(targetSessionId, (current) => ({
+          ...current,
+          notice: queuedNotice(waiting),
+        }));
       } else {
         markPendingTurnActive(targetSessionId, response.turn_id);
         openStream(targetSessionId, response.turn_id);
@@ -2117,6 +2208,9 @@ export default function App() {
               attachments={attachments}
               canSend={Boolean(agentId) && sessionLoaded}
               queuedMessages={queuedMessages}
+              queuedInfo={queuedInfo}
+              cancellingQueued={cancellingQueued}
+              onCancelQueued={cancelQueuedMessage}
               agentId={agentId}
               agentName={agent?.name ?? "Agent"}
               channelType={currentSession?.channel_type ?? ""}

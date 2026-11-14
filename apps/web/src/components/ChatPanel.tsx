@@ -32,6 +32,12 @@ import { MessageList } from "./MessageList";
 type ChatPanelProps = {
   messages: TranscriptMessage[];
   queuedMessages: TranscriptMessage[];
+  queuedInfo: Record<
+    string,
+    { index: number; total: number; canCancel: boolean }
+  >;
+  cancellingQueued: Record<string, true>;
+  onCancelQueued: (messageId: string) => void;
   loading: boolean;
   loadError: string;
   onReload: () => void;
@@ -285,6 +291,9 @@ export function ChatPanel(props: ChatPanelProps) {
           <MessageList
             messages={props.messages}
             queuedMessages={props.queuedMessages}
+            queuedInfo={props.queuedInfo}
+            cancellingQueued={props.cancellingQueued}
+            onCancelQueued={props.onCancelQueued}
             loading={props.loading}
             loadError={props.loadError}
             onReload={reloadSession}

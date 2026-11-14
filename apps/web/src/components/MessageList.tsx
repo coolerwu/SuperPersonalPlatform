@@ -422,11 +422,21 @@ const UserMessageRow = memo(function UserMessageRow({
   agentId,
   highlighted,
   onQuote,
+  queueIndex = 0,
+  queueTotal = 0,
+  queueCanCancel = false,
+  queueCancelling = false,
+  onCancelQueued,
 }: {
   message: TranscriptMessage;
   agentId: string;
   highlighted: boolean;
   onQuote: (text: string) => void;
+  queueIndex?: number;
+  queueTotal?: number;
+  queueCanCancel?: boolean;
+  queueCancelling?: boolean;
+  onCancelQueued?: (messageId: string) => void;
 }) {
   const parsed = useMemo(() => parseUserContent(message.content), [message.content]);
   const copyContent = useMemo(
@@ -438,6 +448,23 @@ const UserMessageRow = memo(function UserMessageRow({
       id={`message-${message.id}`}
       className={`message-row user ${highlighted ? "message-focus" : ""}`}
     >
+      {queueTotal > 0 && (
+        <div className="message-queue-state">
+          <span className="message-queue-label">
+            {queueCanCancel ? `排队中 ${queueIndex}/${queueTotal}` : "正在提交…"}
+          </span>
+          <button
+            type="button"
+            className="message-queue-cancel"
+            disabled={!queueCanCancel || queueCancelling}
+            title="撤回这条排队消息"
+            aria-label="撤回这条排队消息"
+            onClick={() => onCancelQueued?.(message.id)}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="message-bubble user">
         {parsed.kind === "attachments" ? (
           <>
@@ -603,6 +630,12 @@ function StreamingRow({
 export type MessageListProps = {
   messages: TranscriptMessage[];
   queuedMessages: TranscriptMessage[];
+  queuedInfo: Record<
+    string,
+    { index: number; total: number; canCancel: boolean }
+  >;
+  cancellingQueued: Record<string, true>;
+  onCancelQueued: (messageId: string) => void;
   loading: boolean;
   loadError: string;
   onReload: () => void;
@@ -831,6 +864,11 @@ export const MessageList = memo(function MessageList(props: MessageListProps) {
           agentId={props.agentId}
           highlighted={highlightId === message.id}
           onQuote={props.onQuote}
+          queueIndex={props.queuedInfo[message.id]?.index ?? 0}
+          queueTotal={props.queuedInfo[message.id]?.total ?? 0}
+          queueCanCancel={props.queuedInfo[message.id]?.canCancel ?? false}
+          queueCancelling={Boolean(props.cancellingQueued[message.id])}
+          onCancelQueued={props.onCancelQueued}
         />
       ))}
 

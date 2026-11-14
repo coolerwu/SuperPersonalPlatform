@@ -1105,6 +1105,36 @@ textarea {
   justify-content: flex-end;
 }
 
+.message-queue-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.message-queue-cancel {
+  border: 0;
+  border-radius: 6px;
+  padding: 2px 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.message-queue-cancel:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(var(--ink-rgb) / 0.06);
+}
+
+.message-queue-cancel:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .message-footer .message-actions {
   margin-left: 0;
 }
