@@ -612,7 +612,11 @@ function StreamingRow({
       <div className="message-bubble assistant streaming">
         <div className="message-head">
           <span className="message-author">{agentName || "Agent"}</span>
-          {stopped && <span className="message-stopped">已停止</span>}
+          {stopped && (
+            <span className="message-stopped" role="status">
+              已停止
+            </span>
+          )}
         </div>
         {!stopped && latestActivity && (
           <div className="run-activity" role="status">
@@ -630,8 +634,8 @@ function StreamingRow({
         />
         {streamText ? (
           <Markdown content={streamText} streaming agentId={agentId} />
-        ) : (
-          <div className="muted">{stopped ? "已停止" : "正在生成…"}</div>
+        ) : stopped ? null : (
+          <div className="muted">正在生成…</div>
         )}
         <ArtifactStrip artifacts={liveArtifacts} agentId={agentId} />
         {!stopped && <span className="cursor" />}

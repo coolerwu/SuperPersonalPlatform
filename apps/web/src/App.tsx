@@ -17,7 +17,6 @@ import type {
   FrozenLive,
   LiveSubagent,
   LiveTask,
-  LiveToolCall,
   MessageArtifact,
   Provider,
   QueuedInfo,
@@ -255,10 +254,11 @@ function frozenReplyPersisted(
 ): boolean {
   const text = frozen.streamText.trim();
   if (!text) return transcriptHasReply(list);
-  const head = text.slice(0, 120);
+  const normalize = (value: string) => value.replace(/\s+/g, "");
+  const head = normalize(text).slice(0, 120);
   return list.some((message) => {
     if (message.role !== "assistant") return false;
-    const content = message.content.trim();
+    const content = normalize(message.content);
     if (!content) return false;
     return (
       content.startsWith(head) ||
@@ -2011,6 +2011,8 @@ export default function App() {
         }
       }
       void refreshSessions();
+      // The idle path reconciles the frozen partial against history; when a
+      // queued turn survives, its finishTurn refresh does that instead.
       // Let the server publish terminal events and flush the transcript
       // before the lane is rebuilt from history.
       const timer = window.setTimeout(() => {
