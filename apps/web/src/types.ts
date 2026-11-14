@@ -172,6 +172,13 @@ export type TranscriptMessage = {
   artifacts?: MessageArtifact[];
 };
 
+/** Position metadata for an optimistic queued follow-up row. */
+export type QueuedInfo = {
+  index: number;
+  total: number;
+  canCancel: boolean;
+};
+
 export type LiveToolCall = {
   id: string;
   name: string;

@@ -15,6 +15,7 @@ import type {
   LiveTask,
   LiveToolCall,
   MessageArtifact,
+  QueuedInfo,
   TranscriptMessage,
 } from "../types";
 import { copyText } from "../clipboard";
@@ -457,8 +458,16 @@ const UserMessageRow = memo(function UserMessageRow({
             type="button"
             className="message-queue-cancel"
             disabled={!queueCanCancel || queueCancelling}
-            title="撤回这条排队消息"
-            aria-label="撤回这条排队消息"
+            aria-label={
+              queueCanCancel
+                ? `撤回第 ${queueIndex} 条排队消息`
+                : "正在提交，暂不可撤回"
+            }
+            title={
+              queueCanCancel
+                ? `撤回第 ${queueIndex} 条排队消息`
+                : "正在提交，暂不可撤回"
+            }
             onClick={() => onCancelQueued?.(message.id)}
           >
             ×
@@ -630,10 +639,7 @@ function StreamingRow({
 export type MessageListProps = {
   messages: TranscriptMessage[];
   queuedMessages: TranscriptMessage[];
-  queuedInfo: Record<
-    string,
-    { index: number; total: number; canCancel: boolean }
-  >;
+  queuedInfo: Record<string, QueuedInfo>;
   cancellingQueued: Record<string, true>;
   onCancelQueued: (messageId: string) => void;
   loading: boolean;

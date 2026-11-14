@@ -19,6 +19,7 @@ import type {
   LiveToolCall,
   MessageArtifact,
   Provider,
+  QueuedInfo,
   SessionSummary,
   SkillInfo,
   TranscriptMessage,
@@ -338,10 +339,7 @@ export default function App() {
     const items = (pendingUserBySession[sessionId] ?? []).filter(
       (item) => item.queued,
     );
-    const info: Record<
-      string,
-      { index: number; total: number; canCancel: boolean }
-    > = {};
+    const info: Record<string, QueuedInfo> = {};
     items.forEach((item, index) => {
       info[item.id] = {
         index: index + 1,
@@ -593,17 +591,26 @@ export default function App() {
         } else {
           clearQueuedTurns(sessionId);
         }
-        const live = pendingUsersRef.current[sessionId] ?? [];
-        const waiting = live.filter((entry) => entry.queued).length;
+        const pending = pendingUsersRef.current[sessionId] ?? [];
+        const waiting = pending.filter((entry) => entry.queued).length;
         updateLive(sessionId, (current) => ({
           ...current,
-          notice: waiting > 0 ? queuedNotice(waiting) : "",
+          notice:
+            current.notice && !current.notice.startsWith("已排队")
+              ? current.notice
+              : waiting > 0
+                ? queuedNotice(waiting)
+                : "",
         }));
+        void refreshSessions();
       } else {
         await refreshTranscript(sessionId);
         updateLive(sessionId, (current) => ({
           ...current,
-          notice: "这条已经开始或已经结束，队列已刷新",
+          notice:
+            current.notice && !current.notice.startsWith("已排队")
+              ? current.notice
+              : "这条已经开始或已经结束，队列已刷新",
         }));
       }
     } catch (exc) {

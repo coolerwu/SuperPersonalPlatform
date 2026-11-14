@@ -15,6 +15,7 @@ import type {
   LiveTask,
   LiveToolCall,
   MessageArtifact,
+  QueuedInfo,
   TranscriptMessage,
 } from "../types";
 import {
@@ -32,10 +33,7 @@ import { MessageList } from "./MessageList";
 type ChatPanelProps = {
   messages: TranscriptMessage[];
   queuedMessages: TranscriptMessage[];
-  queuedInfo: Record<
-    string,
-    { index: number; total: number; canCancel: boolean }
-  >;
+  queuedInfo: Record<string, QueuedInfo>;
   cancellingQueued: Record<string, true>;
   onCancelQueued: (messageId: string) => void;
   loading: boolean;
