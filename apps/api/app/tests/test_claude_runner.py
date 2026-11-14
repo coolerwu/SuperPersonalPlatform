@@ -146,7 +146,7 @@ def make_turn(session_id=SESSION_ID, agent_id="default", prompt="hi", source="ma
 async def drain_until_end(queue):
     events = []
     while True:
-        event = await asyncio.wait_for(queue.get(), 1)
+        _, event = await asyncio.wait_for(queue.get(), 1)
         events.append(event)
         if event["type"] == "turn_end":
             return events

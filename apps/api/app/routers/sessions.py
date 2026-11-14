@@ -60,7 +60,7 @@ async def stream_session(
                 if await request.is_disconnected():
                     return
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    _, event = await asyncio.wait_for(queue.get(), timeout=15)
                 except TimeoutError:
                     yield ": ping\n\n"
                     continue

@@ -26,7 +26,7 @@ async def drain_terminal(stream):
     queue = await stream.subscribe()
     events = []
     while True:
-        event = await asyncio.wait_for(queue.get(), 1.0)
+        _, event = await asyncio.wait_for(queue.get(), 1.0)
         events.append(event)
         if event.get("type") == "turn_end":
             return events

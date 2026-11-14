@@ -252,7 +252,7 @@ async def test_deliver_failure_does_not_mask_terminal_event_or_lease(tmp_path):
         assert outcome.status == "completed"
         events = []
         while True:
-            event = await asyncio.wait_for(queue.get(), 1)
+            _, event = await asyncio.wait_for(queue.get(), 1)
             events.append(event)
             if event["type"] == "turn_end":
                 break
