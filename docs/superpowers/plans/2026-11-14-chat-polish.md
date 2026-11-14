@@ -489,11 +489,14 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: 写失败测试**
 
-在 `RecordingRegistry.__init__` 中增加 `self.current_turn = None`，并加方法：
+在 `RecordingRegistry.__init__` 中增加 `self.current_turn = None` 与 `self.turn_streams: dict[tuple[str, str], TurnStream] = {}`，并加方法：
 
 ```python
     def current_turn_id(self, session_id):
         return self.current_turn
+
+    def stream(self, turn_id, session_id=None):
+        return self.turn_streams.get((turn_id, session_id))
 ```
 
 在 `test_chat_api.py` 末尾追加：
@@ -510,18 +513,32 @@ def test_session_turn_reports_idle_session(client, fake_registry):
     fake_registry.current_turn = None
     response = client.get(f"/api/sessions/{SESSION_ID}/turn")
     assert response.status_code == 200
-    assert response.json() == {"turn_id": None, "busy": False}
+    assert response.json() == {"turn_id": None, "busy": False, "alive": False}
 
 
 def test_session_turn_reports_running_and_queued_sessions(client, fake_registry):
     fake_registry.busy = True
     fake_registry.current_turn = "turn-9"
     response = client.get(f"/api/sessions/{SESSION_ID}/turn")
-    assert response.json() == {"turn_id": "turn-9", "busy": True}
+    assert response.json() == {"turn_id": "turn-9", "busy": True, "alive": False}
 
     fake_registry.current_turn = None
     response = client.get(f"/api/sessions/{SESSION_ID}/turn")
-    assert response.json() == {"turn_id": None, "busy": True}
+    assert response.json() == {"turn_id": None, "busy": True, "alive": False}
+
+
+def test_session_turn_reports_whether_a_turn_is_alive(client, fake_registry):
+    stream = TurnStream()
+    fake_registry.turn_streams[("turn-9", SESSION_ID)] = stream
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn?turn_id=turn-9")
+    assert response.json() == {"turn_id": None, "busy": False, "alive": True}
+
+    stream.close()
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn?turn_id=turn-9")
+    assert response.json()["alive"] is False
+
+    response = client.get(f"/api/sessions/{SESSION_ID}/turn?turn_id=missing")
+    assert response.json()["alive"] is False
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -538,13 +555,17 @@ Expected: FAIL，404（路由不存在）。
 
 ```python
 @router.get("/sessions/{session_id}/turn")
-async def session_turn(session_id: str, request: Request) -> dict[str, object]:
+async def session_turn(
+    session_id: str, request: Request, turn_id: str | None = None
+) -> dict[str, object]:
     registry = getattr(request.app.state, "registry", None)
     if registry is None:
         raise HTTPException(status_code=503, detail="agent runtime is not running")
+    probe = registry.stream(turn_id, session_id) if turn_id else None
     return {
         "turn_id": registry.current_turn_id(session_id),
         "busy": registry.is_busy(session_id),
+        "alive": bool(probe is not None and not probe.closed),
     }
 ```
 
@@ -889,10 +910,12 @@ export type FrozenLive = {
       `/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/cancel`,
       { method: "POST" },
     ),
-  getSessionTurn: (sessionId: string) =>
-    request<{ turn_id: string | null; busy: boolean }>(
-      `/api/sessions/${encodeURIComponent(sessionId)}/turn`,
-    ),
+  getSessionTurn: (sessionId: string, turnId?: string) => {
+    const query = turnId ? `?turn_id=${encodeURIComponent(turnId)}` : "";
+    return request<{ turn_id: string | null; busy: boolean; alive: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/turn${query}`,
+    );
+  },
   renameSession: (sessionId: string, agentId: string, title: string) =>
     request<{ renamed: boolean }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/rename?agent_id=${encodeURIComponent(agentId)}`,
@@ -1334,9 +1357,13 @@ const RECONNECT_LOST_NOTICE = "连接已断开，已刷新为最新历史";
     attempt: number,
   ) {
     if (streamsRef.current.has(forSession)) return;
-    let status: { turn_id: string | null; busy: boolean } | null = null;
+    let status: {
+      turn_id: string | null;
+      busy: boolean;
+      alive: boolean;
+    } | null = null;
     try {
-      status = await api.getSessionTurn(forSession);
+      status = await api.getSessionTurn(forSession, turnId ?? undefined);
     } catch {
       status = null;
     }
@@ -1346,7 +1373,7 @@ const RECONNECT_LOST_NOTICE = "连接已断开，已刷新为最新历史";
           abandonStream(forSession);
           return;
         }
-        openStream(forSession);
+        scheduleStreamAttach(forSession, attempt);
       } else {
         reconnectAttemptsRef.current[forSession] = 0;
         updateLive(forSession, (current) => ({
@@ -1358,7 +1385,7 @@ const RECONNECT_LOST_NOTICE = "连接已断开，已刷新为最新历史";
       }
       return;
     }
-    if (status && turnId && status.turn_id === turnId) {
+    if (status && turnId && status.alive) {
       if (attempt > 8) {
         abandonStream(forSession);
         return;
@@ -1367,21 +1394,35 @@ const RECONNECT_LOST_NOTICE = "连接已断开，已刷新为最新历史";
       return;
     }
     if (status && turnId) {
-      // The old turn ended while this tab was disconnected.
+      // The turn ended (or its stream was evicted) while disconnected.
       reconnectAttemptsRef.current[forSession] = 0;
       updateLive(forSession, (current) => ({ ...current, tracking: false }));
       void refreshTranscript(forSession).then(() => {
         if (status?.busy && !streamsRef.current.has(forSession)) {
-          openStream(forSession);
+          scheduleStreamAttach(forSession, attempt);
         }
       });
       return;
     }
-    if (attempt >= 8) {
+    if (attempt > 8) {
       abandonStream(forSession);
       return;
     }
     scheduleStreamProbe(forSession, turnId, attachMode, attempt + 1);
+  }
+
+  function scheduleStreamAttach(forSession: string, attempt: number) {
+    updateLive(forSession, (current) => ({
+      ...current,
+      notice: RECONNECT_NOTICE,
+    }));
+    const delay = Math.min(500 * 2 ** Math.min(attempt, 4), 5000);
+    const timer = window.setTimeout(() => {
+      retryTimersRef.current.delete(forSession);
+      if (streamsRef.current.has(forSession)) return;
+      openStream(forSession);
+    }, delay);
+    retryTimersRef.current.set(forSession, timer);
   }
 
   function scheduleStreamReconnect(
@@ -1433,7 +1474,7 @@ const RECONNECT_LOST_NOTICE = "连接已断开，已刷新为最新历史";
   }
 ```
 
-> `scheduleStreamReconnect` 在探测确认旧轮仍存活后按 `lastEventIndex + 1` 重连；`scheduleStreamProbe` 只用于探测失败后的退避重试。
+> `scheduleStreamReconnect` 在探测确认旧轮仍存活（`alive`）后按 `lastEventIndex + 1` 重连；`scheduleStreamProbe` 只用于探测请求失败后的退避重试；`scheduleStreamAttach` 在不知道 turn id 或旧轮结束后需要重新挂当前轮时使用，同样带退避。`alive` 回答的是「这个 turn 的流是否还能订阅」，而不是「它是不是当前轮」，因此排队中的 turn 不会被误判为已结束。
 
 - [ ] **Step 5: 构建并手工验证**
 

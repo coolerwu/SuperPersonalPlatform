@@ -88,16 +88,17 @@ POST /api/sessions/{session_id}/turns/{turn_id}/cancel
 - `TurnStream` 用缓冲下标作为事件序号。`publish()` 把 `(index, event)` 放入每个订阅者队列；`subscribe(after=0)` 只回放 `_buffer[after:]` 并带上各自下标；`close()` 合成的 `turn_end` 使用 `len(_buffer)` 作为下标。`after` 先夹到 `[0, len(_buffer)]`，防止越界。
 - `GET /api/sessions/{id}/stream` 新增 `after` 查询参数，默认 0（保持现有全量回放行为）；每条事件输出 `id: {index}`，然后 `data: {...}`。浏览器 `EventSource` 会把 id 放进 `event.lastEventId`。
 - `subscribe()` 的返回类型从 `Queue[dict]` 变为 `Queue[tuple[int, dict]]`，仅流路由使用，测试同步更新。
-- 新增轻量探测接口 `GET /api/sessions/{id}/turn`，返回 `{"turn_id": <当前轮 id 或 null>, "busy": bool}`。`EventSource` 读不到 HTTP 状态码，重连前先用这个普通 JSON 请求判断旧轮是否还活着，避免对已经结束的轮无限重连。
+- 新增轻量探测接口 `GET /api/sessions/{id}/turn?turn_id=...`，返回 `{"turn_id": <当前轮 id 或 null>, "busy": bool, "alive": bool}`。`alive` 表示请求里给出的 turn 的流是否还能订阅；不传 `turn_id` 时为 false。`EventSource` 读不到 HTTP 状态码，重连前先用这个普通 JSON 请求判断旧轮是否还活着，避免对已经结束的轮无限重连，也不会把排队中的轮误判为已结束。
 
 **前端：自动续传**
 
 - 每个会话维护 `lastEventIndex`，订阅新 turn 时清零；`openStream(forSession, turnId, after)` 在 `after > 0` 时把参数拼进 URL。
 - `source.onmessage` 解析 `event.lastEventId` 更新 `lastEventIndex`，再走现有 `applyStreamEvent()`。
 - `source.onerror` 不再静默，先探测再决定：
-  - 请求 `GET /api/sessions/{id}/turn`。探测失败（网络仍未恢复）：notice 显示「连接中断，正在重连…」，退避 500ms → 1s → 2s → 4s，之后封顶 5s，最多约 8 次后重新探测。
-  - 探测成功且返回的 `turn_id` 与当前轮相同：用同一个 turn id 和 `lastEventIndex + 1` 重连。
-  - 探测成功但 `turn_id` 为 `null` 或与当前轮不同：旧轮已经结束；关闭连接并刷新历史。`busy` 为真时按无 turn id 模式 attach 当前轮。
+  - 请求 `GET /api/sessions/{id}/turn?turn_id=<当前轮>`。探测失败（网络仍未恢复）：notice 显示「连接中断，正在重连…」，退避 500ms → 1s → 2s → 4s，之后封顶 5s，最多约 8 次后重新探测。
+  - 探测成功且 `alive` 为真：用同一个 turn id 和 `lastEventIndex + 1` 重连。
+  - 探测成功但 `alive` 为假：该轮已经结束；关闭连接并刷新历史。`busy` 为真时按无 turn id 模式 attach 当前轮。
+  - 不知道 turn id 的 attach 模式：`busy` 为真时带退避重新 attach；否则刷新历史。
   - `onopen` 成功后清掉重连 notice；连接已经恢复，即使暂时没有新数据也不该继续显示「正在重连」。
   - 探测重试耗尽仍未恢复：调用 `refreshTranscript()` 并显示「连接已断开，已刷新为最新历史」；后续轮询发现会话仍忙碌时会再次 attach。中途不刷新，避免清掉实时文本。
 - 同会话始终保持单个 `EventSource`：每次重试先关闭旧实例，再按 after 接上，避免重复追加。
