@@ -141,7 +141,7 @@ maps_stamp = json.dumps(
 
 ### 密钥安全
 
-- `settings.json` 权限 0600；`GET /api/maps` 只返回 `has_api_key`，不返回 Key。
+- `settings.json` 权限 0600；`GET/PUT /api/maps` 只返回 `enabled`、`provider`、`has_api_key`，不返回 Key。
 - Key 会进入 SDK 的 MCP URL。Runner 对 CLI stderr 的 debug 日志做脱敏：
 
 ```python
@@ -224,7 +224,7 @@ updateMapsConfig: (payload: {
 - 配置有效 Key 并启用后，新会话问「重庆九龙坡区彩玉湖附近 15 万左右的 4S 店」或「从彩玉湖到解放碑怎么开车」，Agent 调用 `mcp__amap__*` 并给出真实 POI/路线/天气结果。
 - 工具页能看到 `amap` MCP 服务及其工具；停用后新会话不再出现。
 - 无效 Key 时普通聊天不受影响，地图工具调用失败；工具页按真实连接结果显示 `amap` 状态。
-- `GET /api/maps` 只返回 `has_api_key`；`settings.json` 保存 Key；CLI 日志中的 Key 已脱敏。
+- `GET/PUT /api/maps` 只返回 `enabled`、`provider`、`has_api_key`，不含 Key；`settings.json` 保存 Key；CLI 日志中的 Key 已脱敏。
 - 修改 Key 或开关后，下一轮对话生效；正在执行的轮次不受影响。
 - 后端全量测试与前端构建通过。
 
