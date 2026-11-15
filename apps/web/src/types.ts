@@ -416,6 +416,12 @@ export type AppSettings = {
   session_retention_days: number;
 };
 
+export type MapsConfig = {
+  enabled: boolean;
+  provider: "amap";
+  has_api_key: boolean;
+};
+
 export type DrawerTab = "run" | "agent";
 
 export type BacktestStatus =

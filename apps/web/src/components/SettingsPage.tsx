@@ -5,6 +5,7 @@ import type { Agent, AgentSavePayload, Provider, SystemInfo } from "../types";
 import { AgentEditor } from "./AgentEditor";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { KnowledgeSettings } from "./KnowledgeSettings";
+import { MapsSettings } from "./MapsSettings";
 import { ProviderCreateForm } from "./ProviderCreateForm";
 import { ProviderSettings } from "./ProviderSettings";
 
@@ -43,7 +44,9 @@ const CAPABILITY_LABELS: Record<string, string> = {
 };
 
 export function SettingsPage(props: SettingsPageProps) {
-  const [tab, setTab] = useState<"provider" | "agent" | "knowledge" | "runtime">("provider");
+  const [tab, setTab] = useState<
+    "provider" | "agent" | "knowledge" | "maps" | "runtime"
+  >("provider");
   const [providerId, setProviderId] = useState("");
   const [providerEditing, setProviderEditing] = useState(false);
   const [agentEditing, setAgentEditing] = useState(false);
@@ -176,7 +179,7 @@ export function SettingsPage(props: SettingsPageProps) {
         <div>
           <div className="eyebrow">CONFIGURATION</div>
           <h1>配置</h1>
-          <p>Provider、Agent、知识库和运行环境都集中在这里。</p>
+          <p>Provider、Agent、知识库、地图和运行环境都集中在这里。</p>
         </div>
         <button className="ghost-button" onClick={props.onClose}>返回对话</button>
       </header>
@@ -204,6 +207,13 @@ export function SettingsPage(props: SettingsPageProps) {
               onClick={() => setTab("knowledge")}
             >
               知识库
+            </button>
+            <button
+              type="button"
+              className={tab === "maps" ? "active" : ""}
+              onClick={() => setTab("maps")}
+            >
+              地图
             </button>
             <button
               type="button"
@@ -376,6 +386,18 @@ export function SettingsPage(props: SettingsPageProps) {
               </div>
             </div>
             <KnowledgeSettings />
+          </section>
+          )}
+
+          {tab === "maps" && (
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <div>
+                <h2>地图</h2>
+                <p>高德地图工具；全局配置，所有 Agent 共享。</p>
+              </div>
+            </div>
+            <MapsSettings />
           </section>
           )}
 

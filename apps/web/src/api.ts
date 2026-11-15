@@ -25,6 +25,7 @@ import type {
   CronJob,
   KnowledgeState,
   KnowledgeStatus,
+  MapsConfig,
   MarketProbe,
   MarketStatus,
   MemoryDocument,
@@ -364,6 +365,16 @@ export const api = {
   syncKnowledge: () =>
     request<{ queued: boolean; status: KnowledgeStatus }>("/api/knowledge/sync", {
       method: "POST",
+    }),
+  getMapsConfig: () => request<MapsConfig>("/api/maps"),
+  updateMapsConfig: (payload: {
+    enabled?: boolean;
+    api_key?: string;
+    clear_api_key?: boolean;
+  }) =>
+    request<MapsConfig>("/api/maps", {
+      method: "PUT",
+      body: JSON.stringify(payload),
     }),
   listSkills: () => request<SkillCatalog>("/api/skills"),
   getSkill: (directory: string) =>
