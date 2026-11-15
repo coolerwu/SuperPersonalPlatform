@@ -156,7 +156,7 @@ def _redact_cli_line(line: str) -> str:
 
 ### 错误处理
 
-- 高德 MCP 连接失败或 Key 无效：SDK 仍能启动，普通聊天继续；init frame 的 `mcp_servers` 会显示 `amap` 的失败状态，工具页可查看。
+- 高德 MCP 连接失败或 Key 无效：SDK 仍能启动，普通聊天继续；init frame 的 `mcp_servers` 会按实际连接结果显示 `amap` 的状态，工具页可查看。若连接成功但工具调用失败，错误体现在工具调用结果中（当前执行过程只显示工具行，不展开结果）。
 - 远程 MCP 首次连接会增加一点 client 启动时间；现有 `claude_connect_timeout_seconds`（默认 60 秒）覆盖。
 - 配置页保存只做格式校验，不因网络问题阻塞保存。
 
@@ -223,7 +223,7 @@ updateMapsConfig: (payload: {
 
 - 配置有效 Key 并启用后，新会话问「重庆九龙坡区彩玉湖附近 15 万左右的 4S 店」或「从彩玉湖到解放碑怎么开车」，Agent 调用 `mcp__amap__*` 并给出真实 POI/路线/天气结果。
 - 工具页能看到 `amap` MCP 服务及其工具；停用后新会话不再出现。
-- 无效 Key 时普通聊天不受影响，工具页显示 amap 连接/工具错误。
+- 无效 Key 时普通聊天不受影响，地图工具调用失败；工具页按真实连接结果显示 `amap` 状态。
 - `GET /api/maps` 只返回 `has_api_key`；`settings.json` 保存 Key；CLI 日志中的 Key 已脱敏。
 - 修改 Key 或开关后，下一轮对话生效；正在执行的轮次不受影响。
 - 后端全量测试与前端构建通过。
