@@ -80,13 +80,21 @@ npm run dev
 - 响应式：桌面为侧栏 + 对话；窄屏（≤860px）用顶部栏和汉堡菜单打开侧栏抽屉，输入区适配 `visualViewport` 与安全区。功能工作区（回测、交易记录、资产配置、缠论图）同样使用顶部栏和抽屉。
 - 聊天细节：运行中的追问按提交顺序显示「排队中 N/M」并可单条撤回；turn 进入终态后按 turn id 清理未被历史匹配的乐观用户行（上下文压缩后历史从压缩摘要行开始，内容匹配会失效；断线错过 `turn_end` 的轮次在重连探活确认结束后同样清理），避免提问残留在回答下面；停止后保留已生成的半截回复，历史已落盘则与原历史行收敛；切走会话或页面不可见时，完成/失败会在侧栏显示未读点（成功绿色、失败红色）并在标签标题显示计数，仅存在内存；侧栏会话行可重命名。
 
+### 地图
+
+1. 在高德开放平台创建 **Web 服务** Key（不是 JS API Key）：`https://lbs.amap.com/api/mcp-server/create-project-and-key`。
+2. 登录平台 → 配置 → 地图，填入 Key 并启用，保存。
+3. 下一轮对话起，Agent 可以调用高德 MCP 的 POI、地理编码、路线、距离和天气工具；在「工具」页可以查看 `amap` 服务的连接状态。
+4. Key 只保存在后端；清除 Key 会同时停用地图工具。地图工具失败不影响普通聊天。
+
 ## 配置页
 
-侧栏「平台 → 配置」进入配置页，顶部用 `Provider / Agent / 知识库 / 运行环境` 四个 tab 切换。
+侧栏「平台 → 配置」进入配置页，顶部用 `Provider / Agent / 知识库 / 地图 / 运行环境` 五个 tab 切换。
 
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
 - **Agent**：列出全部 Agent 摘要（Provider/model、记忆开关、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
 - **知识库**：启用开关、WebDAV 地址、账号、应用密码、根目录、同步间隔；密码只写入 `settings.json`，接口只返回 `has_password`。
+- **地图**：全局启用高德官方 HTTP MCP（`amap`），填写高德 Web 服务 Key；所有 Agent 共用，与当前选中的 Agent 无关。接口只返回 `enabled`、`provider`、`has_api_key`；启用但无 Key 时保存返回 400，空白 Key 保留原值，清除 Key 会同时停用。保存后同一已缓存会话的下一轮对话重建 client 并生效。本期不做聊天内地图渲染或独立地图页面。
 - **运行环境**：版本、执行核、数据库类型、单轮执行超时（`RUN_TIMEOUT_SECONDS`）、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 不清理，`GET/PUT /api/settings`）。平台把它写成 Claude 的 `cleanupPeriodDays`，由 Claude 自己清理 transcript，平台不跑清理任务。
 - Agent 彻底删除：有活动 turn 时 409；确认后删除该 Agent 的 transcript、工作区目录、渠道与绑定、定时任务、投递/入站记录和渠道登录态。归档只改状态，不删文件，之后可在配置页把状态改回 active 恢复。
 

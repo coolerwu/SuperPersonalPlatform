@@ -427,7 +427,7 @@ class SettingsStore:
         elif not isinstance(data.get("agents"), list):
             # Parseable but the agents section is absent/corrupt (for example
             # a legacy partial file). Fill in defaults while preserving the
-            # readable runtime/knowledge/channels sections.
+            # readable runtime/knowledge/maps/channels sections.
             merged = _merge_with_defaults(data)
             logger.warning(
                 "settings file %s has no agents section; re-seeding defaults",

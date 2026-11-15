@@ -129,7 +129,7 @@
 
 #### 功能点
 
-1. 平台配置单文件 `data/settings.json`：`runtime`、`knowledge`、`maps`、`agents`、`channels`、`channel_conversations`。单 `asyncio.Lock`；写临时文件 → fsync → `os.replace`；写前保留 `.bak`；主文件损坏时回退 `.bak`。启动种子在主文件不可解析且 `.bak` 也不可用、或文件中没有合法 `agents` 列表时重写默认 sections（保留仍可读的 runtime/knowledge/channels），并记 warning；解析成功且显式 `agents: []` 的文件视为用户主动清空，保留并 warning。
+1. 平台配置单文件 `data/settings.json`：`runtime`、`knowledge`、`maps`、`agents`、`channels`、`channel_conversations`。单 `asyncio.Lock`；写临时文件 → fsync → `os.replace`；写前保留 `.bak`；主文件损坏时回退 `.bak`。启动种子在主文件不可解析且 `.bak` 也不可用、或文件中没有合法 `agents` 列表时重写默认 sections（保留仍可读的 runtime/knowledge/maps/channels），并记 warning；解析成功且显式 `agents: []` 的文件视为用户主动清空，保留并 warning。
 2. 环境变量只做首次种子（默认 Agent 与提示词、`SESSION_RETENTION_DAYS`、`KB_WEBDAV_*`）；文件存在后不再读取。旧库 `app_configs.session_retention_days` 在首次启动迁移一次，用 `runtime.legacy_import_done` 标记。
 3. Provider 为单例（id=`default`），编辑的是 default Agent 的 Provider；`base_url` 自动补 `/anthropic`；接口只返回 `has_api_key`。
 4. Agent：id、名称、instructions、状态（active/paused/archived）、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。状态语义统一为：`active` 正常接收网页、渠道和定时任务；`paused` 与 `archived` 都拒绝网页新消息（409）、拒绝渠道入站并暂停该 Agent 的渠道轮询（保留 cursor，恢复 active 后继续）、跳过定时任务；`GET /api/agents` 包含 archived，配置页可把 archived/paused 改回 active 恢复，恢复后渠道轮询自动重启、定时任务从下一次匹配时间继续；两种非 active 状态下渠道页仍可查看/编辑/删除渠道。

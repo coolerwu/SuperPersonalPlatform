@@ -8,6 +8,8 @@ export function MapsSettings() {
   const [config, setConfig] = useState<MapsConfig | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [apiKey, setApiKey] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
@@ -16,6 +18,8 @@ export function MapsSettings() {
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError("");
     void api
       .getMapsConfig()
       .then((next) => {
@@ -25,11 +29,14 @@ export function MapsSettings() {
       })
       .catch((exc) => {
         if (active) setError(errorText(exc));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [loadAttempt]);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -156,9 +163,20 @@ export function MapsSettings() {
         )}
 
         <div className="form-actions">
-          <button className="primary" type="submit" disabled={saveDisabled}>
-            {!config ? "加载中…" : saving ? "保存中…" : "保存地图配置"}
-          </button>
+          {config ? (
+            <button className="primary" type="submit" disabled={saveDisabled}>
+              {saving ? "保存中…" : "保存地图配置"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => setLoadAttempt((value) => value + 1)}
+              disabled={loading}
+            >
+              {loading ? "加载中…" : "重新加载"}
+            </button>
+          )}
         </div>
       </form>
 
