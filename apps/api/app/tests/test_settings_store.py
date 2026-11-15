@@ -525,6 +525,34 @@ async def test_update_agent_fields_reports_missing_agent(tmp_path):
     assert settings.agents[0].name == "renamed"
 
 
+@pytest.mark.asyncio
+async def test_update_maps_returns_state_and_enforces_key(tmp_path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+
+    # Enabling with no key must fail without writing anything.
+    with pytest.raises(ValueError):
+        await store.update_maps(enabled=True)
+    assert not path.exists()
+
+    section = await store.update_maps(api_key="  key-a  ")
+    assert section.api_key == "key-a"
+    assert section.enabled is False
+
+    section = await store.update_maps(enabled=True)
+    assert section.enabled is True
+    assert section.api_key == "key-a"
+
+    # A key-only update keeps the enabled flag.
+    section = await store.update_maps(api_key="key-b")
+    assert section.enabled is True
+    assert section.api_key == "key-b"
+
+    section = await store.update_maps(clear_api_key=True)
+    assert section.enabled is False
+    assert section.api_key == ""
+
+
 def test_get_settings_store_rebinds_when_data_dir_changes(tmp_path, monkeypatch):
     monkeypatch.setattr(settings_store_module.app_settings, "app_data_dir", tmp_path / "a")
     first = settings_store_module.get_settings_store()

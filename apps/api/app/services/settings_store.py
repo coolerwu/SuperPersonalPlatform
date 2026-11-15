@@ -562,13 +562,44 @@ class SettingsStore:
 
         await self._json.update(mutate)
 
-    async def update_maps(self, **values: Any) -> None:
-        validated = _validated_update(MapsSection, values)
+    async def update_maps(
+        self,
+        *,
+        enabled: bool | None = None,
+        api_key: str | None = None,
+        clear_api_key: bool = False,
+    ) -> MapsSection:
+        """Apply a maps update under the store lock.
+
+        The "enabled requires a key" invariant is checked against the state
+        inside the lock so two concurrent updates cannot leave maps enabled
+        with an empty key.
+        """
+        result = MapsSection()
 
         def mutate(data: dict[str, Any]) -> None:
-            _dict_section(data, "maps").update(validated)
+            nonlocal result
+            raw = _dict_section(data, "maps")
+            current = _section(MapsSection, raw)
+            if clear_api_key:
+                fields: dict[str, Any] = {"api_key": "", "enabled": False}
+            else:
+                fields = {}
+                if api_key is not None and api_key.strip():
+                    fields["api_key"] = api_key.strip()
+                if enabled is not None:
+                    fields["enabled"] = bool(enabled)
+                next_key = str(
+                    fields.get("api_key", current.api_key) or ""
+                ).strip()
+                next_enabled = bool(fields.get("enabled", current.enabled))
+                if next_enabled and not next_key:
+                    raise ValueError("请先填写高德 Web 服务 Key")
+            raw.update(_validated_update(MapsSection, fields))
+            result = _section(MapsSection, raw)
 
         await self._json.update(mutate)
+        return result
 
     async def update_channel(self, channel: ChannelSection) -> None:
         def mutate(data: dict[str, Any]) -> None:

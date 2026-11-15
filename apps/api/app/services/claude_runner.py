@@ -140,11 +140,18 @@ def _plugin_stamp(home: Path | None) -> str:
 
 
 _AMAP_MCP_URL = "https://mcp.amap.com/mcp"
-_AMAP_KEY_RE = re.compile(re.escape(_AMAP_MCP_URL) + r"\?key=[^&\s]+")
+_AMAP_MCP_PATH = _AMAP_MCP_URL.removeprefix("https://")
+# Match the URL with or without a scheme, case-insensitively, and stop at a
+# quote, whitespace, or the next query parameter so JSON-embedded URLs keep
+# their surrounding punctuation.
+_AMAP_KEY_RE = re.compile(
+    r"((?:https?://)?)" + re.escape(_AMAP_MCP_PATH) + r"\?key=[^\"\s&]+",
+    re.IGNORECASE,
+)
 
 
 def _redact_cli_line(line: str) -> str:
-    return _AMAP_KEY_RE.sub(_AMAP_MCP_URL + "?key=***", line)
+    return _AMAP_KEY_RE.sub(r"\1" + _AMAP_MCP_PATH + "?key=***", line)
 
 
 def _maps_stamp(maps: Any) -> str:
@@ -855,7 +862,12 @@ class ClaudeTurnRunner:
                 {
                     "type": "turn_end",
                     "status": outcome.status,
-                    "error": outcome.error,
+                    # Result-message errors are formed outside the exception
+                    # handlers above; redact at the single publish point so no
+                    # error source can put the Amap key into the chat.
+                    "error": _redact_cli_line(outcome.error)
+                    if outcome.error
+                    else outcome.error,
                     "terminal_reason": outcome.terminal_reason,
                     "usage": outcome.usage,
                 }

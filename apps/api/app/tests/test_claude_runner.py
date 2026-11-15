@@ -1729,7 +1729,7 @@ async def test_maps_config_change_rebuilds_client(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_amap_url_trims_key_and_respects_provider(tmp_path):
+async def test_amap_url_trims_key(tmp_path):
     await init_db()
     captured = []
     runner = ClaudeTurnRunner(
@@ -1760,3 +1760,48 @@ def test_redact_cli_line_masks_amap_key():
         claude_runner._redact_cli_line(line)
         == "connect https://mcp.amap.com/mcp?key=***&foo=1 failed"
     )
+
+
+def test_redact_cli_line_masks_other_amap_url_forms():
+    assert (
+        claude_runner._redact_cli_line("mcp.amap.com/mcp?key=secret123 failed")
+        == "mcp.amap.com/mcp?key=*** failed"
+    )
+    assert (
+        claude_runner._redact_cli_line(
+            '{"url": "https://MCP.AMAP.COM/mcp?key=secret123"}'
+        )
+        == '{"url": "https://mcp.amap.com/mcp?key=***"}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_result_error_redacts_amap_key(tmp_path):
+    await init_db()
+    client = FakeClient(
+        [
+            ResultMessage(
+                subtype="error_during_execution",
+                terminal_reason=None,
+                result=None,
+                errors=[
+                    "connect failed: https://mcp.amap.com/mcp?key=secret123"
+                ],
+                is_error=True,
+            )
+        ]
+    )
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    stream = TurnStream()
+    queue = await stream.subscribe()
+    turn = make_turn(session_id="12121212-1212-1212-1212-121212121212")
+    outcome = await runner.run(turn, stream)
+    end = (await drain_until_end(queue))[-1]
+    assert outcome.status == "failed"
+    assert end["type"] == "turn_end"
+    assert "secret123" not in (end["error"] or "")
+    assert "key=***" in (end["error"] or "")

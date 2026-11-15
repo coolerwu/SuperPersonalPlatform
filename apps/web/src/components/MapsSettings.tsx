@@ -40,7 +40,7 @@ export function MapsSettings() {
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (!config || saving || clearing) return;
+    if (!config || saving || clearing || clearOpen) return;
     const trimmed = apiKey.trim();
     if (enabled && !config?.has_api_key && !trimmed) {
       setError("请先填写高德 Web 服务 Key");
