@@ -11,7 +11,7 @@ import tempfile
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -38,6 +38,12 @@ class KnowledgeSection(BaseModel):
     password: str = ""
     root: str = ""
     interval_seconds: int = Field(default=300, gt=0)
+
+
+class MapsSection(BaseModel):
+    enabled: bool = False
+    provider: Literal["amap"] = "amap"
+    api_key: str = ""
 
 
 class ProviderSection(BaseModel):
@@ -88,6 +94,7 @@ class ConversationSection(BaseModel):
 class PlatformSettings(BaseModel):
     runtime: RuntimeSection = Field(default_factory=RuntimeSection)
     knowledge: KnowledgeSection = Field(default_factory=KnowledgeSection)
+    maps: MapsSection = Field(default_factory=MapsSection)
     agents: list[AgentSection] = Field(default_factory=list)
     channels: list[ChannelSection] = Field(default_factory=list)
     channel_conversations: dict[str, ConversationSection] = Field(default_factory=dict)
@@ -282,6 +289,7 @@ def _parse(raw: dict[str, Any]) -> PlatformSettings:
     return PlatformSettings(
         runtime=_section(RuntimeSection, raw.get("runtime")),
         knowledge=_section(KnowledgeSection, raw.get("knowledge")),
+        maps=_section(MapsSection, raw.get("maps")),
         agents=agents,
         channels=channels,
         channel_conversations=conversations,
@@ -316,6 +324,7 @@ def build_default_settings() -> dict[str, Any]:
             root=current.kb_webdav_root,
             interval_seconds=max(30, current.kb_sync_interval_seconds),
         ),
+        maps=MapsSection(),
         agents=[agent],
     )
     return defaults.model_dump()
@@ -546,6 +555,14 @@ class SettingsStore:
 
         def mutate(data: dict[str, Any]) -> None:
             _dict_section(data, "knowledge").update(validated)
+
+        await self._json.update(mutate)
+
+    async def update_maps(self, **values: Any) -> None:
+        validated = _validated_update(MapsSection, values)
+
+        def mutate(data: dict[str, Any]) -> None:
+            _dict_section(data, "maps").update(validated)
 
         await self._json.update(mutate)
 

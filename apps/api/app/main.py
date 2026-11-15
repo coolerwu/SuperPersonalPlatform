@@ -23,6 +23,7 @@ from app.routers.chat import router as chat_router
 from app.routers.chan import router as chan_router
 from app.routers.cron import router as cron_router
 from app.routers.knowledge import router as knowledge_router
+from app.routers.maps import router as maps_router
 from app.routers.memories import router as memories_router
 from app.routers.market import router as market_router
 from app.routers.plugins import router as plugins_router
@@ -204,6 +205,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(chat_router)
     app.include_router(cron_router)
     app.include_router(knowledge_router)
+    app.include_router(maps_router)
     app.include_router(memories_router)
     app.include_router(skills_router)
     app.include_router(tools_router)
