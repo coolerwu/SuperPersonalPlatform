@@ -38,7 +38,7 @@
 7. 定时任务：5 字段 cron、IANA 时区、专属会话、忙时跳过并更新 `last_skipped_at`、可选推送到微信联系人、停机后最多补跑一次。
 8. 会话保留清理：按 transcript mtime 与保留天数删除，跳过运行中会话，保留 auto memory。
 9. 记忆：记忆页有用户画像（`claude/CLAUDE.md`，跨 Agent）与 Agent 记忆（`workspaces/<agent_id>/CLAUDE.md`）；Agent 指令 = `settings.json`；Claude auto memory 在记忆页只读展示。
-10. 配置页：Provider、Agent、知识库、运行环境；所有平台配置写入 `data/settings.json`，密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。
+10. 配置页：Provider、Agent、知识库、地图、运行环境；所有平台配置写入 `data/settings.json`，密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。
 11. 技能库：全局 `claude/skills/` 目录（Claude Code 用户级技能），初始化技能 seed 与哈希跟踪；技能是说明文档，没有技能创作工具。
 12. 知识库：WebDAV 双向镜像到 `knowledge/`，配置与同步状态在设置接口；本版尚未挂载给 Agent。
 13. 业务页面：回测、交易记录、资产配置、缠论图，均不绑定 Agent。
@@ -129,13 +129,13 @@
 
 #### 功能点
 
-1. 平台配置单文件 `data/settings.json`：`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`。单 `asyncio.Lock`；写临时文件 → fsync → `os.replace`；写前保留 `.bak`；主文件损坏时回退 `.bak`。启动种子在主文件不可解析且 `.bak` 也不可用、或文件中没有合法 `agents` 列表时重写默认 sections（保留仍可读的 runtime/knowledge/channels），并记 warning；解析成功且显式 `agents: []` 的文件视为用户主动清空，保留并 warning。
+1. 平台配置单文件 `data/settings.json`：`runtime`、`knowledge`、`maps`、`agents`、`channels`、`channel_conversations`。单 `asyncio.Lock`；写临时文件 → fsync → `os.replace`；写前保留 `.bak`；主文件损坏时回退 `.bak`。启动种子在主文件不可解析且 `.bak` 也不可用、或文件中没有合法 `agents` 列表时重写默认 sections（保留仍可读的 runtime/knowledge/channels），并记 warning；解析成功且显式 `agents: []` 的文件视为用户主动清空，保留并 warning。
 2. 环境变量只做首次种子（默认 Agent 与提示词、`SESSION_RETENTION_DAYS`、`KB_WEBDAV_*`）；文件存在后不再读取。旧库 `app_configs.session_retention_days` 在首次启动迁移一次，用 `runtime.legacy_import_done` 标记。
 3. Provider 为单例（id=`default`），编辑的是 default Agent 的 Provider；`base_url` 自动补 `/anthropic`；接口只返回 `has_api_key`。
 4. Agent：id、名称、instructions、状态（active/paused/archived）、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。状态语义统一为：`active` 正常接收网页、渠道和定时任务；`paused` 与 `archived` 都拒绝网页新消息（409）、拒绝渠道入站并暂停该 Agent 的渠道轮询（保留 cursor，恢复 active 后继续）、跳过定时任务；`GET /api/agents` 包含 archived，配置页可把 archived/paused 改回 active 恢复，恢复后渠道轮询自动重启、定时任务从下一次匹配时间继续；两种非 active 状态下渠道页仍可查看/编辑/删除渠道。
 5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，忙碌会话在下一次 turn 开始时按配置指纹自动重建 client，因此配置变更不会永久丢失。
 6. Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区与 transcript，彻底删除会同时删除工作区目录和 transcript 目录，并级联删除渠道、渠道绑定、投递/入站记录与定时任务；有活动 turn 时 409。
-7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/agents`、`/api/providers` 读写 `settings.json`；`GET/PUT /api/memories` 读写 `claude/CLAUDE.md`，`GET/PUT /api/memories/agents/{id}` 读写该 Agent 的 `workspaces/<id>/CLAUDE.md`，`GET /api/memories/agents/{id}/auto-memory` 只读列出 auto memory；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`。
+7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/maps`、`/api/agents`、`/api/providers` 读写 `settings.json`；`GET/PUT /api/memories` 读写 `claude/CLAUDE.md`，`GET/PUT /api/memories/agents/{id}` 读写该 Agent 的 `workspaces/<id>/CLAUDE.md`，`GET /api/memories/agents/{id}/auto-memory` 只读列出 auto memory；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`，地图只返回 `has_api_key`。
 
 #### 验收标准
 
@@ -543,16 +543,20 @@
 
 #### 功能点
 
-1. 配置页提供全局「地图」配置：启用开关与高德 Web 服务 Key；Key 只保存在后端，接口只返回是否已配置。
+1. 配置页提供全局「地图」配置：启用开关与高德 Web 服务 Key；所有 Agent 共用，与当前选中的 Agent 无关。Key 只保存在后端；`GET/PUT /api/maps` 只返回 `enabled`、`provider`、`has_api_key`，不返回 Key。
 2. 启用且有 Key 时，Agent 可调用高德官方 MCP 的工具（POI、地理/逆地理编码、驾车/公交/步行/骑行路线、距离、天气等）；停用或无 Key 时不连接。
-3. 修改 Key 或开关后，下一轮对话生效；正在执行的轮次不受影响。
-4. 高德 MCP 不可用或 Key 无效时，普通聊天继续，地图工具失败；工具页能看到 amap 服务与错误。
-5. Key 不写入前端响应、`.env`、仓库或普通日志；CLI 调试日志中的 Key 脱敏。
+3. 启用但没有可用 Key 时保存返回 400；提交空白 Key 保留已保存 Key；清除 Key 会把开关置为停用并优先于新提交的 Key。
+4. 修改 Key 或开关后，同一已缓存会话的下一轮对话按新配置重建 client 并生效；修改时正在执行的 turn 仍按旧配置完成。
+5. 高德 MCP 不可用或 Key 无效时，普通聊天继续，地图工具失败；该 Agent 完成一轮对话后，工具页的 MCP 服务列表出现 `amap`，连接失败时状态显示「连接失败」；工具调用错误在执行过程中显示。
+6. Key 不写入前端响应、`.env`、仓库或运行日志；CLI stderr 调试日志中的 Key 显示为 `***`。
+7. 本期不做聊天内地图渲染、路线可视化或独立地图页面，也不接其他地图提供商。
 
 #### 验收标准
 
-- 配置有效 Key 并启用后，新会话能通过高德工具回答附近 POI、路线、天气问题。
-- 停用后新会话不再出现 amap 工具；工具页不再显示 amap。
-- 无效 Key 时普通聊天正常，工具页显示 amap 错误。
-- `GET /api/maps` 只返回 `has_api_key`；`settings.json` 含 Key；日志中的 Key 已脱敏。
+- 使用真实高德 Web 服务 Key 手工验证（需联网）：启用后，在同一会话的下一轮对话或新会话中提问附近 POI、路线、天气，Agent 调用 `mcp__amap__*` 并返回真实结果；自动化测试只验证 `amap` MCP 已注入且 URL 编码正确。
+- 停用后创建新会话，init frame 不含 `amap` 和 `mcp__amap__*`；同一已缓存会话的下一轮对话也不再注入 `amap`；该 Agent 完成一轮新对话后，工具页不再显示 `amap`。
+- 启用但无可用 Key 时 `PUT /api/maps` 返回 400；空白 `api_key` 保留原 Key；`clear_api_key: true` 清空 Key 并停用。
+- 修改 Key 或开关后，已缓存会话的下一轮对话使用新配置；进行中的 turn 不受影响。
+- 无效 Key（需联网）时普通聊天正常，工具页的 `amap` 服务状态显示「连接失败」。
+- `GET/PUT /api/maps` 的响应只含 `enabled`、`provider`、`has_api_key`，不含 Key；Key 写入 `data/settings.json`（0600）；CLI stderr 调试日志中的 Key 显示为 `***`，前端响应与运行日志中不出现 Key。
 - 后端测试与前端构建通过。
