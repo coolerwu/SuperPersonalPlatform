@@ -12,7 +12,12 @@ from app.services.claude_runner import (
     Turn,
     transcript_path,
 )
-from app.services.settings_store import AgentSection, PlatformSettings, ProviderSection
+from app.services.settings_store import (
+    AgentSection,
+    MapsSection,
+    PlatformSettings,
+    ProviderSection,
+)
 from app.services.turn_stream import TurnStream
 
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
@@ -80,12 +85,16 @@ class StopsAfterResultClient(FakeClient):
 
 
 class FakeStore:
-    def __init__(self, *agents):
+    def __init__(self, *agents, maps=None):
         self._agents = [agent for agent in agents if agent is not None]
+        self._maps = maps or MapsSection()
 
     async def get(self):
         return PlatformSettings(
-            agents=self._agents, channels=[], channel_conversations={}
+            agents=self._agents,
+            maps=self._maps,
+            channels=[],
+            channel_conversations={},
         )
 
 
@@ -1647,3 +1656,84 @@ async def test_subagent_stream_events_are_not_duplicated_by_message(tmp_path):
 
     texts = [event["text"] for event in events if event["type"] == "subagent_text"]
     assert texts == ["streamed"]
+
+
+@pytest.mark.asyncio
+async def test_options_include_amap_mcp_when_enabled(tmp_path):
+    await init_db()
+    captured = []
+    store = FakeStore(
+        make_agent(),
+        maps=MapsSection(enabled=True, api_key="amap test&key"),
+    )
+    runner = ClaudeTurnRunner(
+        store=store,
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options)
+        or FakeClient([ResultMessage()]),
+    )
+    await runner.run(make_turn(), TurnStream())
+    servers = captured[0].mcp_servers
+    assert servers["platform_tools"]["type"] == "sdk"
+    assert servers["amap"] == {
+        "type": "http",
+        "url": "https://mcp.amap.com/mcp?key=amap%20test%26key",
+    }
+    assert "mcp__platform_tools__backtest_run" in captured[0].allowed_tools
+
+
+@pytest.mark.asyncio
+async def test_options_omit_amap_without_enable_or_key(tmp_path):
+    await init_db()
+    for maps in (
+        MapsSection(enabled=False, api_key="amap-key"),
+        MapsSection(enabled=True, api_key=""),
+    ):
+        captured = []
+        runner = ClaudeTurnRunner(
+            store=FakeStore(make_agent(), maps=maps),
+            home=tmp_path,
+            client_factory=lambda options: captured.append(options)
+            or FakeClient([ResultMessage()]),
+        )
+        await runner.run(make_turn(), TurnStream())
+        assert "amap" not in captured[0].mcp_servers
+
+
+@pytest.mark.asyncio
+async def test_maps_config_change_rebuilds_client(tmp_path):
+    await init_db()
+    captured = []
+    store = FakeStore(
+        make_agent(), maps=MapsSection(enabled=True, api_key="key-a")
+    )
+    runner = ClaudeTurnRunner(
+        store=store,
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options)
+        or FakeClient([ResultMessage()]),
+    )
+    await runner.run(make_turn(), TurnStream())
+    assert captured[0].mcp_servers["amap"]["url"].endswith("key=key-a")
+
+    store._maps = MapsSection(enabled=True, api_key="key-b")
+    await runner.run(make_turn(), TurnStream())
+    assert len(captured) == 2
+    assert captured[1].mcp_servers["amap"]["url"].endswith("key=key-b")
+
+
+def test_config_fingerprint_includes_maps():
+    agent = make_agent()
+    assert claude_runner._config_fingerprint(
+        agent, "memory", "plugins", "agent-memory", "maps-a"
+    ) != claude_runner._config_fingerprint(
+        agent, "memory", "plugins", "agent-memory", "maps-b"
+    )
+
+
+def test_redact_cli_line_masks_amap_key():
+    line = "connect https://mcp.amap.com/mcp?key=secret123&foo=1 failed"
+    assert (
+        claude_runner._redact_cli_line(line)
+        == "connect https://mcp.amap.com/mcp?key=***&foo=1 failed"
+    )

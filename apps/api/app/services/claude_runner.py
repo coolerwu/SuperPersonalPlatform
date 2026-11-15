@@ -29,11 +29,13 @@ import copy
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from urllib.parse import quote
 
 from app.config import settings as app_settings
 from app.db import SessionLocal
@@ -137,11 +139,30 @@ def _plugin_stamp(home: Path | None) -> str:
     return "|".join(parts)
 
 
+_AMAP_KEY_RE = re.compile(r"(mcp\.amap\.com/mcp\?key=)[^&\s]+")
+
+
+def _redact_cli_line(line: str) -> str:
+    return _AMAP_KEY_RE.sub(r"\1***", line)
+
+
+def _maps_stamp(maps: Any) -> str:
+    return json.dumps(
+        {
+            "enabled": bool(maps.enabled),
+            "provider": maps.provider,
+            "api_key": maps.api_key,
+        },
+        sort_keys=True,
+    )
+
+
 def _config_fingerprint(
     agent: Any,
     memory_stamp: str = "",
     plugin_stamp: str = "",
     agent_memory_stamp: str = "",
+    maps_stamp: str = "",
 ) -> str:
     """Hash the settings that are baked into a connected SDK client."""
     provider = agent.provider
@@ -154,6 +175,7 @@ def _config_fingerprint(
             "memory": memory_stamp,
             "agent_memory": agent_memory_stamp,
             "plugins": plugin_stamp,
+            "maps": maps_stamp,
         },
         sort_keys=True,
     )
@@ -369,17 +391,22 @@ class ClaudeTurnRunner:
         keys = set(self._clients) | self._active | self._cancel_requested
         return [key for key in keys if key[1] == session_id]
 
-    async def _client(self, turn: Turn, agent: Any) -> Any:
+    async def _client(self, turn: Turn, agent: Any, maps: Any) -> Any:
         lock = self._client_lock(turn.session_id)
         key = (agent.id, turn.session_id)
         memory_stamp = _memory_stamp(self._home)
         plugin_stamp = _plugin_stamp(self._home)
         agent_memory_stamp = _agent_memory_stamp(agent.id, self._home)
+        maps_stamp = _maps_stamp(maps)
         async with lock:
             cached = self._clients.get(key)
             if cached is not None:
                 fingerprint = _config_fingerprint(
-                    agent, memory_stamp, plugin_stamp, agent_memory_stamp
+                    agent,
+                    memory_stamp,
+                    plugin_stamp,
+                    agent_memory_stamp,
+                    maps_stamp,
                 )
                 if cached.fingerprint != fingerprint:
                     # The Agent or Provider changed while this session was
@@ -422,7 +449,7 @@ class ClaudeTurnRunner:
                 # Surface CLI stderr at debug level so a failed turn is
                 # diagnosable without exposing it to the chat.
                 "stderr": lambda line: logger.debug(
-                    "cli[%s] %s", turn.session_id, line
+                    "cli[%s] %s", turn.session_id, _redact_cli_line(line)
                 ),
             }
             tool_context = SkillToolContext(
@@ -431,11 +458,21 @@ class ClaudeTurnRunner:
                 agent_id=agent.id,
                 session_id=turn.session_id,
             )
-            kwargs["mcp_servers"] = {
+            mcp_servers: dict[str, Any] = {
                 platform_mcp.SERVER_NAME: platform_mcp.build_server(
                     tool_context
                 )
             }
+            amap_key = (maps.api_key or "").strip()
+            if maps.enabled and amap_key:
+                mcp_servers["amap"] = {
+                    "type": "http",
+                    "url": (
+                        "https://mcp.amap.com/mcp?key="
+                        + quote(amap_key, safe="")
+                    ),
+                }
+            kwargs["mcp_servers"] = mcp_servers
             kwargs["allowed_tools"] = platform_mcp.allowed_tool_names()
             # Keep Claude Code's default system prompt and append the Agent's
             # own instructions. The preset without ``append`` adds no CLI flag,
@@ -469,7 +506,11 @@ class ClaudeTurnRunner:
                 client=client,
                 agent_id=agent.id,
                 fingerprint=_config_fingerprint(
-                    agent, memory_stamp, plugin_stamp, agent_memory_stamp
+                    agent,
+                    memory_stamp,
+                    plugin_stamp,
+                    agent_memory_stamp,
+                    maps_stamp,
                 ),
                 last_used=time.monotonic(),
             )
@@ -633,7 +674,7 @@ class ClaudeTurnRunner:
                         status="cancelled", output="".join(text_parts)
                     )
                     return outcome
-                client = await self._client(turn, agent)
+                client = await self._client(turn, agent, settings.maps)
                 self._touch(key)
                 if turn.source == "resume":
                     prompt = (
