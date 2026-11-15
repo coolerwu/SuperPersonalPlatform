@@ -33,7 +33,7 @@ export function MapsSettings() {
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (saving) return;
+    if (!config || saving || clearing) return;
     const trimmed = apiKey.trim();
     if (enabled && !config?.has_api_key && !trimmed) {
       setError("请先填写高德 Web 服务 Key");
@@ -67,7 +67,7 @@ export function MapsSettings() {
     try {
       const next = await api.updateMapsConfig({ clear_api_key: true });
       setConfig(next);
-      setEnabled(false);
+      setEnabled(next.enabled);
       setApiKey("");
       setNotice("已清除高德 Key 并停用地图工具。");
     } catch (exc) {
@@ -78,8 +78,10 @@ export function MapsSettings() {
   }
 
   const saveDisabled =
+    !config ||
     saving ||
-    (enabled && !config?.has_api_key && !apiKey.trim());
+    clearing ||
+    (enabled && !config.has_api_key && !apiKey.trim());
 
   return (
     <>
@@ -89,6 +91,7 @@ export function MapsSettings() {
             id="maps-enabled"
             type="checkbox"
             checked={enabled}
+            disabled={!config || saving || clearing}
             onChange={(event) => setEnabled(event.target.checked)}
           />
           <span>
@@ -103,7 +106,10 @@ export function MapsSettings() {
         <input
           id="maps-key"
           type="password"
+          maxLength={200}
+          autoComplete="off"
           value={apiKey}
+          disabled={!config || saving || clearing}
           onChange={(event) => setApiKey(event.target.value)}
           placeholder={
             config?.has_api_key
@@ -138,12 +144,20 @@ export function MapsSettings() {
           </div>
         )}
 
-        {error && <div className="error-banner">{error}</div>}
-        {notice && <div className="hint">{notice}</div>}
+        {error && (
+          <div className="error-banner" role="alert">
+            {error}
+          </div>
+        )}
+        {notice && (
+          <div className="hint" role="status">
+            {notice}
+          </div>
+        )}
 
         <div className="form-actions">
           <button className="primary" type="submit" disabled={saveDisabled}>
-            {saving ? "保存中…" : "保存地图配置"}
+            {!config ? "加载中…" : saving ? "保存中…" : "保存地图配置"}
           </button>
         </div>
       </form>
