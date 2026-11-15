@@ -153,6 +153,7 @@ def _redact_cli_line(line: str) -> str:
 
 - `stderr` 回调改为 `logger.debug("cli[%s] %s", turn.session_id, _redact_cli_line(line))`。
 - 平台不把 Key 写入 `.env`、前端响应、仓库或普通日志。
+- 清除 Key 后，写入前的 settings.json.bak 仍可能保留上一版 Key，直到下一次写入覆盖；这与 Provider、知识库密钥的备份行为一致。
 
 ### 错误处理
 

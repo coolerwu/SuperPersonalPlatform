@@ -371,7 +371,11 @@ def _merge_with_defaults(raw: dict[str, Any]) -> dict[str, Any]:
     deliberate choice and is never passed through here.
     """
     defaults = build_default_settings()
-    for key, model in (("runtime", RuntimeSection), ("knowledge", KnowledgeSection)):
+    for key, model in (
+        ("runtime", RuntimeSection),
+        ("knowledge", KnowledgeSection),
+        ("maps", MapsSection),
+    ):
         current = raw.get(key)
         if isinstance(current, dict):
             try:

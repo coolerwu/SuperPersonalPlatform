@@ -249,7 +249,12 @@ async def test_ensure_seeded_fills_missing_agents_but_keeps_readable_sections(
                 "runtime": {
                     "session_retention_days": 12,
                     "legacy_import_done": True,
-                }
+                },
+                "maps": {
+                    "enabled": True,
+                    "provider": "amap",
+                    "api_key": "keep-key",
+                },
             }
         ),
         "utf-8",
@@ -260,6 +265,8 @@ async def test_ensure_seeded_fills_missing_agents_but_keeps_readable_sections(
     # platform with no Agent forever.
     assert data["runtime"]["session_retention_days"] == 12
     assert data["agents"][0]["id"] == "default"
+    assert data["maps"]["enabled"] is True
+    assert data["maps"]["api_key"] == "keep-key"
 
 
 @pytest.mark.asyncio

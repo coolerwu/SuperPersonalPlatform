@@ -82,3 +82,9 @@ def test_maps_preserve_other_settings(client):
 def test_maps_requires_auth():
     with TestClient(create_app(start_worker=False)) as unauthenticated:
         assert unauthenticated.get("/api/maps").status_code == 401
+        assert (
+            unauthenticated.put(
+                "/api/maps", json={"enabled": False}
+            ).status_code
+            == 401
+        )
