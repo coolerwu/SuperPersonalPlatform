@@ -139,11 +139,12 @@ def _plugin_stamp(home: Path | None) -> str:
     return "|".join(parts)
 
 
-_AMAP_KEY_RE = re.compile(r"(mcp\.amap\.com/mcp\?key=)[^&\s]+")
+_AMAP_MCP_URL = "https://mcp.amap.com/mcp"
+_AMAP_KEY_RE = re.compile(re.escape(_AMAP_MCP_URL) + r"\?key=[^&\s]+")
 
 
 def _redact_cli_line(line: str) -> str:
-    return _AMAP_KEY_RE.sub(r"\1***", line)
+    return _AMAP_KEY_RE.sub(_AMAP_MCP_URL + "?key=***", line)
 
 
 def _maps_stamp(maps: Any) -> str:
@@ -464,15 +465,13 @@ class ClaudeTurnRunner:
                 )
             }
             amap_key = (maps.api_key or "").strip()
-            if maps.enabled and amap_key:
+            if maps.provider == "amap" and maps.enabled and amap_key:
                 mcp_servers["amap"] = {
                     "type": "http",
-                    "url": (
-                        "https://mcp.amap.com/mcp?key="
-                        + quote(amap_key, safe="")
-                    ),
+                    "url": f"{_AMAP_MCP_URL}?key={quote(amap_key, safe='')}",
                 }
             kwargs["mcp_servers"] = mcp_servers
+            # Map MCP tools are available; bypassPermissions auto-approves them.
             kwargs["allowed_tools"] = platform_mcp.allowed_tool_names()
             # Keep Claude Code's default system prompt and append the Agent's
             # own instructions. The preset without ``append`` adds no CLI flag,
@@ -827,7 +826,9 @@ class ClaudeTurnRunner:
                 turn.agent_id,
             )
             outcome = TurnOutcome(
-                status="failed", output="".join(text_parts), error=str(exc)
+                status="failed",
+                output="".join(text_parts),
+                error=_redact_cli_line(str(exc)),
             )
             evict = True
         finally:

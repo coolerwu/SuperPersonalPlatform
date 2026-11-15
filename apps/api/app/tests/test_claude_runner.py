@@ -1688,6 +1688,7 @@ async def test_options_omit_amap_without_enable_or_key(tmp_path):
     for maps in (
         MapsSection(enabled=False, api_key="amap-key"),
         MapsSection(enabled=True, api_key=""),
+        MapsSection(enabled=True, api_key="   "),
     ):
         captured = []
         runner = ClaudeTurnRunner(
@@ -1720,6 +1721,28 @@ async def test_maps_config_change_rebuilds_client(tmp_path):
     await runner.run(make_turn(), TurnStream())
     assert len(captured) == 2
     assert captured[1].mcp_servers["amap"]["url"].endswith("key=key-b")
+
+    store._maps = MapsSection(enabled=False, api_key="key-b")
+    await runner.run(make_turn(), TurnStream())
+    assert len(captured) == 3
+    assert "amap" not in captured[2].mcp_servers
+
+
+@pytest.mark.asyncio
+async def test_amap_url_trims_key_and_respects_provider(tmp_path):
+    await init_db()
+    captured = []
+    runner = ClaudeTurnRunner(
+        store=FakeStore(
+            make_agent(),
+            maps=MapsSection(enabled=True, api_key="  key-a  "),
+        ),
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options)
+        or FakeClient([ResultMessage()]),
+    )
+    await runner.run(make_turn(), TurnStream())
+    assert captured[0].mcp_servers["amap"]["url"].endswith("key=key-a")
 
 
 def test_config_fingerprint_includes_maps():

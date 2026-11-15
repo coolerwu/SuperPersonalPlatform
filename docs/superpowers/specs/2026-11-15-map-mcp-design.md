@@ -142,16 +142,18 @@ maps_stamp = json.dumps(
 ### 密钥安全
 
 - `settings.json` 权限 0600；`GET/PUT /api/maps` 只返回 `enabled`、`provider`、`has_api_key`，不返回 Key。
-- Key 会进入 SDK 的 MCP URL。Runner 对 CLI stderr 的 debug 日志做脱敏：
+- Key 会进入 SDK 的 MCP URL。Runner 对 CLI stderr 的 debug 日志做脱敏，URL 构造与脱敏共用 `_AMAP_MCP_URL`：
 
 ```python
-_AMAP_KEY_RE = re.compile(r"(mcp\.amap\.com/mcp\?key=)[^&\s]+")
+_AMAP_MCP_URL = "https://mcp.amap.com/mcp"
+_AMAP_KEY_RE = re.compile(re.escape(_AMAP_MCP_URL) + r"\?key=[^&\s]+")
 
 def _redact_cli_line(line: str) -> str:
-    return _AMAP_KEY_RE.sub(r"\1***", line)
+    return _AMAP_KEY_RE.sub(_AMAP_MCP_URL + "?key=***", line)
 ```
 
-- `stderr` 回调改为 `logger.debug("cli[%s] %s", turn.session_id, _redact_cli_line(line))`。
+- `stderr` 回调改为 `logger.debug("cli[%s] %s", turn.session_id, _redact_cli_line(line))`；失败 turn 写回前端的异常文本同样过 `_redact_cli_line`。
+- Key 会出现在 SDK 启动 Claude Code 的 --mcp-config 参数中，单用户宿主机上本机用户可通过 ps 或 /proc 查看；平台不额外写入日志。
 - 平台不把 Key 写入 `.env`、前端响应、仓库或普通日志。
 - 清除 Key 后，写入前的 settings.json.bak 仍可能保留上一版 Key，直到下一次写入覆盖；这与 Provider、知识库密钥的备份行为一致。
 
