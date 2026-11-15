@@ -135,7 +135,7 @@
 4. Agent：id、名称、instructions、状态（active/paused/archived）、Provider、`auto_memory`。新建 Agent 未填 instructions 时使用默认中文助手提示词。状态语义统一为：`active` 正常接收网页、渠道和定时任务；`paused` 与 `archived` 都拒绝网页新消息（409）、拒绝渠道入站并暂停该 Agent 的渠道轮询（保留 cursor，恢复 active 后继续）、跳过定时任务；`GET /api/agents` 包含 archived，配置页可把 archived/paused 改回 active 恢复，恢复后渠道轮询自动重启、定时任务从下一次匹配时间继续；两种非 active 状态下渠道页仍可查看/编辑/删除渠道。
 5. `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 追加到 Claude Code 默认系统提示词；修改 Agent 或 Provider 后关闭该 Agent 的空闲缓存 client，忙碌会话在下一次 turn 开始时按配置指纹自动重建 client，因此配置变更不会永久丢失。
 6. Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区与 transcript，彻底删除会同时删除工作区目录和 transcript 目录，并级联删除渠道、渠道绑定、投递/入站记录与定时任务；有活动 turn 时 409。
-7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/maps`、`/api/agents`、`/api/providers` 读写 `settings.json`；`GET/PUT /api/memories` 读写 `claude/CLAUDE.md`，`GET/PUT /api/memories/agents/{id}` 读写该 Agent 的 `workspaces/<id>/CLAUDE.md`，`GET /api/memories/agents/{id}/auto-memory` 只读列出 auto memory；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`，地图只返回 `has_api_key`。
+7. 接口：`GET/PUT /api/settings`、`/api/knowledge`、`/api/maps`、`/api/agents`、`/api/providers` 读写 `settings.json`；`GET/PUT /api/memories` 读写 `claude/CLAUDE.md`，`GET/PUT /api/memories/agents/{id}` 读写该 Agent 的 `workspaces/<id>/CLAUDE.md`，`GET /api/memories/agents/{id}/auto-memory` 只读列出 auto memory；`/api/skills` 读写技能目录；`/api/channels` 读写 `settings.json` 的渠道节；`/api/cron-jobs` 读写 `cron_jobs` 表；Provider 只返回 `has_api_key`，知识库只返回 `has_password`，渠道只返回 `has_credentials`，地图的 Key 只返回 `has_api_key`。
 
 #### 验收标准
 
@@ -547,16 +547,16 @@
 2. 启用且有 Key 时，Agent 可调用高德官方 MCP 的工具（POI、地理/逆地理编码、驾车/公交/步行/骑行路线、距离、天气等）；停用或无 Key 时不连接。
 3. 启用但没有可用 Key 时保存返回 400；提交空白 Key 保留已保存 Key；清除 Key 会把开关置为停用并优先于新提交的 Key。
 4. 修改 Key 或开关后，同一已缓存会话的下一轮对话按新配置重建 client 并生效；修改时正在执行的 turn 仍按旧配置完成。
-5. 高德 MCP 不可用或 Key 无效时，普通聊天继续，地图工具失败；该 Agent 完成一轮对话后，工具页的 MCP 服务列表出现 `amap`，连接失败时状态显示「连接失败」；工具调用错误在执行过程中显示。
+5. 高德 MCP 不可用或 Key 无效时，普通聊天继续，地图工具失败；该 Agent 完成一轮对话后，工具页的 MCP 服务列表出现 `amap`，连接失败时状态显示「连接失败」。
 6. Key 不写入前端响应、`.env`、仓库或运行日志；CLI stderr 调试日志中的 Key 显示为 `***`。
 7. 本期不做聊天内地图渲染、路线可视化或独立地图页面，也不接其他地图提供商。
 
 #### 验收标准
 
 - 使用真实高德 Web 服务 Key 手工验证（需联网）：启用后，在同一会话的下一轮对话或新会话中提问附近 POI、路线、天气，Agent 调用 `mcp__amap__*` 并返回真实结果；自动化测试只验证 `amap` MCP 已注入且 URL 编码正确。
-- 停用后创建新会话，init frame 不含 `amap` 和 `mcp__amap__*`；同一已缓存会话的下一轮对话也不再注入 `amap`；该 Agent 完成一轮新对话后，工具页不再显示 `amap`。
+- 停用后创建新会话，init frame 不含 `amap` 和 `mcp__amap__*`；同一已缓存会话的下一轮对话也不再注入 `amap`；该 Agent 为 active 并完成一轮新对话后，工具页不再显示 `amap`。
 - 启用但无可用 Key 时 `PUT /api/maps` 返回 400；空白 `api_key` 保留原 Key；`clear_api_key: true` 清空 Key 并停用。
 - 修改 Key 或开关后，已缓存会话的下一轮对话使用新配置；进行中的 turn 不受影响。
-- 无效 Key（需联网）时普通聊天正常，工具页的 `amap` 服务状态显示「连接失败」。
+- 无效 Key（需联网）时普通聊天正常，地图工具调用失败；工具页的 `amap` 服务状态以其真实连接结果为准（连接失败时显示「连接失败」）。
 - `GET/PUT /api/maps` 的响应只含 `enabled`、`provider`、`has_api_key`，不含 Key；Key 写入 `data/settings.json`（0600）；CLI stderr 调试日志中的 Key 显示为 `***`，前端响应与运行日志中不出现 Key。
 - 后端测试与前端构建通过。
