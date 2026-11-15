@@ -4,6 +4,7 @@ import {
   KeyboardEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -100,6 +101,8 @@ export function ChatPanel(props: ChatPanelProps) {
   const toolsRef = useRef<HTMLDivElement | null>(null);
   const uploadSeqRef = useRef(0);
   const [expanded, setExpanded] = useState(false);
+  const expandedRef = useRef(false);
+  expandedRef.current = expanded;
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [attachError, setAttachError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -148,19 +151,46 @@ export function ChatPanel(props: ChatPanelProps) {
     };
   }, [menuOpen]);
 
+  const syncHeight = useCallback((allowExpand: boolean) => {
+    const element = textareaRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    const height = Math.min(element.scrollHeight, 220);
+    element.style.height = `${height}px`;
+    if (!allowExpand) return;
+    const hasContent = element.value.trim().length > 0;
+    // Expanding changes the textarea's width, which changes how the text
+    // wraps. Once expanded, keep that layout until the draft is cleared so a
+    // boundary-length draft cannot flip between narrow/wide every keystroke.
+    if (hasContent && element.scrollHeight > 50 && !expandedRef.current) {
+      setExpanded(true);
+    } else if (!hasContent && expandedRef.current) {
+      setExpanded(false);
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    syncHeight(true);
+  }, [props.draft, expanded, syncHeight]);
+
   useEffect(() => {
-    const syncHeight = () => {
-      const element = textareaRef.current;
-      if (!element) return;
-      element.style.height = "auto";
-      const nextHeight = Math.min(element.scrollHeight, 220);
-      element.style.height = `${nextHeight}px`;
-      setExpanded(element.scrollHeight > 50);
+    const element = textareaRef.current;
+    if (!element) return;
+    const onInput = () => syncHeight(false);
+    const onCompositionUpdate = () => syncHeight(false);
+    const onCompositionEnd = () => syncHeight(true);
+    const onResize = () => syncHeight(true);
+    element.addEventListener("input", onInput);
+    element.addEventListener("compositionupdate", onCompositionUpdate);
+    element.addEventListener("compositionend", onCompositionEnd);
+    window.addEventListener("resize", onResize);
+    return () => {
+      element.removeEventListener("input", onInput);
+      element.removeEventListener("compositionupdate", onCompositionUpdate);
+      element.removeEventListener("compositionend", onCompositionEnd);
+      window.removeEventListener("resize", onResize);
     };
-    syncHeight();
-    window.addEventListener("resize", syncHeight);
-    return () => window.removeEventListener("resize", syncHeight);
-  }, [props.draft]);
+  }, [syncHeight]);
 
   function jumpToBottom() {
     follow();
