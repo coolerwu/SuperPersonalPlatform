@@ -1906,17 +1906,7 @@ export type SessionTaskEvent =
     };
 ```
 
-把 `FrozenLive` 中的 `tasks` 字段删除：
-
-```typescript
-export type FrozenLive = {
-  streamText: string;
-  streamReasoning: string;
-  activity: LiveToolCall[];
-  subagents: Record<string, LiveSubagent>;
-  artifacts: MessageArtifact[];
-};
-```
+把 `FrozenLive` 中的 `tasks` 字段**保留到 Task 7**；Task 6 只新增类型和任务状态/SSE，避免 `ChatPanel`/`MessageList` 尚未修改时构建失败。Task 7 删除 `FrozenLive.tasks`、`SessionLive.tasks`、`EMPTY_LIVE.tasks` 以及 App 中的所有 live/frozen tasks 引用。
 
 - [ ] **Step 2: 增加 API URL**
 
@@ -2069,7 +2059,7 @@ import { applyTaskEvent, sessionTaskToLive } from "./taskFormat";
 import type { SessionTaskEvent } from "./types";
 ```
 
-把现有的 `emptyTask` 函数从 `App.tsx` 删除（已移到 `taskFormat.ts`），并删除 `SessionLive`/`EMPTY_LIVE` 中的 `tasks` 字段：
+把现有的 `emptyTask` 函数从 `App.tsx` 删除（已移到 `taskFormat.ts`）。**本任务保留 `SessionLive`/`EMPTY_LIVE` 和 `FrozenLive` 中的 `tasks` 字段**，因为 `ChatPanel`/`MessageList` 还没改；Task 7 会和 UI 一起删除这些字段。
 
 ```typescript
 type SessionLive = FrozenLive & {
@@ -2083,6 +2073,7 @@ const EMPTY_LIVE: SessionLive = {
   streamReasoning: "",
   activity: [],
   subagents: {},
+  tasks: {},
   artifacts: [],
   notice: "",
   tracking: false,
@@ -2165,18 +2156,9 @@ const EMPTY_LIVE: SessionLive = {
       }
 ```
 
-- [ ] **Step 5: 移除 live/frozen 中的 tasks**
+- [ ] **Step 5: 保留 live/frozen 中的 tasks**
 
-在 `App.tsx` 中搜索并删除以下位置的 `tasks`：
-
-- `openStream()` 的新流初始化对象里的 `tasks: {}`。
-- `refreshTranscript()` 的 `tasks: streaming ? current.tasks : {},`。
-- `cancel()` 的 frozen 对象里的 `tasks: current.tasks,`。
-- `finishTurn`/其他 `updateLive` 中引用 `current.tasks` 的地方。
-- `emptyTask` 的旧实现。
-- `FrozenLive` 相关的任务复制。
-
-保留 `LiveTask` 类型和 `taskFormat.ts` 的辅助函数。
+**本任务不删除** `App.tsx` 中 `live.tasks` / `FrozenLive.tasks` 的现有引用（`openStream`、`refreshTranscript`、`cancel`、`finishTurn`、`emptyTask` 之外的副本）；`ChatPanel`/`MessageList` 仍在用这些 props。Task 7 会和 UI 一起删除。Task 6 只需要把四个 `task_*` case 改为写 `updateTasks`，旧 `live.tasks` 会保持为空但不影响构建。
 
 - [ ] **Step 6: 增加会话 SSE 订阅**
 
@@ -2384,6 +2366,8 @@ import { SessionTaskPanel } from "./SessionTaskPanel";
 - `LiveProcess` 调用处的 `tasks={...}`。
 - `MessageList` 的 `FrozenReply`/`LiveProcess` 相关 `tasks` 参数。
 - `taskStatusClass`/`taskStatusLabel` 如果只被任务列表使用，删除；`SessionTaskPanel` 使用 `taskFormat.ts` 的版本。
+
+同时在 `types.ts` 删除 `FrozenLive.tasks`，在 `App.tsx` 删除 `SessionLive.tasks`、`EMPTY_LIVE.tasks` 以及 `openStream()`、`refreshTranscript()`、`cancel()`、`finishTurn`、`freezeLive` 中所有 `live.tasks`/`current.tasks`/`frozen.tasks` 引用。完成后再 `npm run build`。
 
 - [ ] **Step 4: 增加样式**
 
