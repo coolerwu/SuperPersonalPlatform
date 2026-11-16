@@ -113,14 +113,25 @@ export function Sidebar(props: SidebarProps) {
         : props.settingsActive
           ? "platform"
           : null;
-  const [openMenu, setOpenMenu] = useState<MenuSection | null>(
-    activeMenu ?? "trade",
+  const [openMenus, setOpenMenus] = useState<ReadonlySet<MenuSection>>(
+    () => new Set<MenuSection>(["trade", "capability", "platform"]),
   );
   useLayoutEffect(() => {
-    if (activeMenu) setOpenMenu(activeMenu);
+    if (!activeMenu) return;
+    setOpenMenus((current) =>
+      current.has(activeMenu) ? current : new Set(current).add(activeMenu),
+    );
   }, [activeMenu]);
   const toggleMenu = (menu: MenuSection) =>
-    setOpenMenu((current) => (current === menu ? null : menu));
+    setOpenMenus((current) => {
+      const next = new Set(current);
+      if (next.has(menu)) {
+        next.delete(menu);
+      } else {
+        next.add(menu);
+      }
+      return next;
+    });
 
   return (
     <>
@@ -316,7 +327,7 @@ export function Sidebar(props: SidebarProps) {
           <>
             <SidebarMenu
               title="交易"
-              open={openMenu === "trade"}
+              open={openMenus.has("trade")}
               onToggle={() => toggleMenu("trade")}
             >
               <button
@@ -375,7 +386,7 @@ export function Sidebar(props: SidebarProps) {
 
             <SidebarMenu
               title="Agent 能力"
-              open={openMenu === "capability"}
+              open={openMenus.has("capability")}
               onToggle={() => toggleMenu("capability")}
             >
               <div className="sidebar-capabilities">
@@ -458,7 +469,7 @@ export function Sidebar(props: SidebarProps) {
 
             <SidebarMenu
               title="平台"
-              open={openMenu === "platform"}
+              open={openMenus.has("platform")}
               onToggle={() => toggleMenu("platform")}
             >
               <div className="sidebar-platform-actions">
