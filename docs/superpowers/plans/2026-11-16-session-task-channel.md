@@ -2269,6 +2269,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Create: `apps/web/src/components/SessionTaskPanel.tsx`
 - Modify: `apps/web/src/components/ChatPanel.tsx`
 - Modify: `apps/web/src/components/MessageList.tsx`
+- Modify: `apps/web/src/types.ts`
+- Modify: `apps/web/src/App.tsx`
 - Modify: `apps/web/src/styles.css`
 
 - [ ] **Step 1: 新建任务区组件**
@@ -2291,7 +2293,10 @@ export function SessionTaskPanel({
   const list = sortTasks(tasks);
   if (list.length === 0) return null;
   const running = list.filter(
-    (task) => task.status === "running" || task.status === "in_progress",
+    (task) =>
+      task.status === "running" ||
+      task.status === "in_progress" ||
+      task.status === "pending",
   ).length;
   return (
     <details className="session-tasks" open>
@@ -2428,8 +2433,20 @@ import { SessionTaskPanel } from "./SessionTaskPanel";
   background: #16a34a;
 }
 
+.session-task.ok .session-task-dot {
+  background: #16a34a;
+}
+
 .session-task.failed .session-task-dot {
   background: #dc2626;
+}
+
+.session-task.stopped .session-task-dot {
+  background: #98a2b3;
+}
+
+.session-task.paused .session-task-dot {
+  background: #d97706;
 }
 
 .session-task.interrupted .session-task-dot {
@@ -2472,7 +2489,7 @@ Expected: 构建成功。
 - [ ] **Step 6: 提交**
 
 ```bash
-git add apps/web/src/components/SessionTaskPanel.tsx apps/web/src/components/ChatPanel.tsx apps/web/src/components/MessageList.tsx apps/web/src/styles.css apps/web/dist
+git add apps/web/src/components/SessionTaskPanel.tsx apps/web/src/components/ChatPanel.tsx apps/web/src/components/MessageList.tsx apps/web/src/types.ts apps/web/src/App.tsx apps/web/src/styles.css apps/web/dist
 git commit -m "Show background tasks above the composer
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
