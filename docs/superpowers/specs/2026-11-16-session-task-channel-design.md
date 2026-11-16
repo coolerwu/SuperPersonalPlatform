@@ -292,3 +292,19 @@ API：
 - `CLAUDE.md` 更新插件/聊天段落的运行约定：`running_sessions` 的 `has_turn` 语义、任务区、保活和重启中断。
 - `README.md` 更新聊天/运行时说明与验收步骤。
 - 实施后复核 F2 第 3/5 条与 F16 描述是否与实现一致。
+
+## 实施补充：turn 后 tail reader
+
+评审发现 F26 验收标准 1「turn 结束后任务区仍实时更新」在原实现中不成立：`run()` 在本轮 `ResultMessage` 处 break，turn 结束后没有 reader，之后产生的 `task_*` 帧留在 SDK 缓冲里，只有下一轮读取时才发布；turn 后完成的任务因此长时间停留在「运行中」，被逐出时才被误标「已中断」。补充如下，仍保持最小架构，不引入每 turn 队列。
+
+- **归属**：`_CachedClient` 增加 `tail_reader: asyncio.Task[None] | None`。同一 `receive_messages()` 同一时刻只允许一个消费者。
+- **turn 开始**：`run()` 拿到缓存 client 后、`query()` 之前调用 `_stop_tail_reader()`；`await` 返回即表示旧 tail reader 已停止发布，之后本轮循环独占消息流。
+- **turn 结束**：本轮收到自己的 `ResultMessage`、未失败/超时/取消、且不会被逐出时（`result_received and not evict and not keep_lease`），在 `end_turn` 之后启动 tail reader。turn 内事件仍由 turn 循环同时写入 turn stream 与会话级 service；tail reader 只处理 turn 之后的事件。
+- **只发布 `task_*`**：tail reader 对每条消息调用 `task_event()`，非任务消息直接丢弃。注入轮（任务通知、peer、channel）本来就被平台抑制，不应泄漏进会话级任务通道。
+- **停止路径**：
+  - `_evict_key()`：在 session 锁内、`mark_interrupted()` 之前 stop，保证 tail reader 不会在任务被标记中断之后再发布。
+  - `_disconnect_for_shutdown()`：改为接收 `_CachedClient`，在关机预算判断与 `mark_interrupted()` 之前 stop（`close_all()` 传入 cached）。
+  - `_client()` 配置指纹重建：先 stop 再 `_disconnect()`。连接超时的 client 尚未进入缓存，没有 tail reader。
+  - `_stop_tail_reader()` 用 `asyncio.current_task().cancelling()` 区分「tail reader 被取消」与「调用方自身被取消（关机、超时）」：后者继续抛出，不吞掉外层取消。
+- **已知取舍**：交接瞬间，如果 anyio 消息流已经把一帧交给 tail reader 而它恰好在发布前被取消，这一帧会丢失；窗口仅为一次 stop/start 切换，不为此引入每 turn 队列或消息重放。
+- **测试**：`QueueClient`（`receive_messages` 持续消费 `asyncio.Queue`，`query` 入队 `ResultMessage`）验证 turn 结束后无第二轮仍能发布、第二轮开始前完成交接且不重复发布、`close()` 停止 reader 后事件不再发布；原有有限消息列表的任务测试改为一次性 reader，避免 tail reader 重放。

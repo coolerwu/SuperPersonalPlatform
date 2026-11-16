@@ -96,6 +96,9 @@ class _CachedClient:
     agent_id: str
     fingerprint: str
     last_used: float
+    # Background-task reader that owns ``client.receive_messages()`` between
+    # turns; the turn loop owns the stream while a turn is running.
+    tail_reader: asyncio.Task[None] | None = None
 
 
 def _memory_stamp(home: Path | None) -> str:
@@ -435,6 +438,7 @@ class ClaudeTurnRunner:
                     # busy; rebuild instead of running with stale settings.
                     self._clients.pop(key, None)
                     try:
+                        await self._stop_tail_reader(cached)
                         await self._disconnect(cached.client, turn.session_id)
                     except asyncio.CancelledError:
                         # Keep the reference so shutdown can still close it.
@@ -671,6 +675,66 @@ class ClaudeTurnRunner:
                 return
             await self._evict_key(key, expected=cached)
 
+    async def _stop_tail_reader(self, cached: _CachedClient) -> None:
+        """Stop the between-turns task reader so the turn loop owns the stream.
+
+        The await is part of the handoff: once it returns the cancelled reader
+        can no longer publish, so eviction can safely mark its tasks interrupted
+        and a new turn can read the same client.
+        """
+        task = cached.tail_reader
+        if task is None:
+            return
+        cached.tail_reader = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                # This coroutine itself is being cancelled (shutdown, turn
+                # timeout); never swallow the outer cancellation.
+                raise
+        except Exception:
+            logger.exception("session task tail reader failed")
+
+    def _start_tail_reader(self, key: ClientKey, cached: _CachedClient) -> None:
+        if self._session_tasks is None or cached.tail_reader is not None:
+            return
+        cached.tail_reader = asyncio.create_task(
+            self._drain_tail(key, cached),
+            name=f"session-task-tail-{key[1]}",
+        )
+
+    async def _drain_tail(self, key: ClientKey, cached: _CachedClient) -> None:
+        """Publish background task events that arrive after a turn's result.
+
+        The CLI keeps emitting ``task_*`` frames while a background task runs;
+        without a reader here they would sit in the SDK buffer until the next
+        turn, which is exactly the window F26 must cover. Only task lifecycle
+        events are published: injected turns are suppressed by the platform and
+        must not leak into the chat.
+        """
+        try:
+            async for message in cached.client.receive_messages():
+                mapped = task_event(message)
+                if mapped is None:
+                    continue
+                if self._session_tasks is not None:
+                    try:
+                        await self._session_tasks.publish(key[1], mapped)
+                    except Exception:
+                        logger.exception(
+                            "failed to publish tail task event session=%s",
+                            key[1],
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "session task tail reader ended session=%s", key[1], exc_info=True
+            )
+
     async def run(
         self,
         turn: Turn,
@@ -754,6 +818,11 @@ class ClaudeTurnRunner:
                     return outcome
                 client = await self._client(turn, agent, settings.maps)
                 self._touch(key)
+                # The previous turn's tail reader must yield the stream before
+                # this turn reads it; two consumers would split the messages.
+                cached = self._clients.get(key)
+                if cached is not None:
+                    await self._stop_tail_reader(cached)
                 if turn.source == "resume":
                     prompt = (
                         "上次任务因服务重启被中断。请先检查当前状态，"
@@ -1014,6 +1083,15 @@ class ClaudeTurnRunner:
                             turn.session_id,
                             exc_info=True,
                         )
+            # Background task frames that arrive after this turn's result stay
+            # in the client; a tail reader publishes them to the session-level
+            # channel until the next turn (or eviction/shutdown) takes over.
+            # Failed, cancelled, timed-out and to-be-evicted clients get none:
+            # their disconnect marks tasks interrupted instead.
+            if result_received and not evict and not keep_lease:
+                cached = self._clients.get(key)
+                if cached is not None:
+                    self._start_tail_reader(key, cached)
             # Delivery teardown. Shutdown cancellation keeps the lease for
             # recovery, so the obligation stays empty and pending there and the
             # resumed turn reattaches it; sending now could double reply or mark
@@ -1218,6 +1296,9 @@ class ClaudeTurnRunner:
             cached = self._clients.get(key)
             if cached is None or (expected is not None and cached is not expected):
                 return False
+            # Stop the tail reader before the interruption mark: once it
+            # returns, no task event can land after the tasks are marked.
+            await self._stop_tail_reader(cached)
             if self._session_tasks is not None:
                 try:
                     await self._session_tasks.mark_interrupted(
@@ -1307,7 +1388,7 @@ class ClaudeTurnRunner:
         await asyncio.gather(
             *(
                 self._disconnect_for_shutdown(
-                    cached.client, key[1], deadline
+                    cached, key[1], deadline
                 )
                 for key, cached in snapshot
             )
@@ -1319,10 +1400,11 @@ class ClaudeTurnRunner:
             )
 
     async def _disconnect_for_shutdown(
-        self, client: Any, session_id: str, deadline: float
+        self, cached: _CachedClient, session_id: str, deadline: float
     ) -> None:
-        # Mark before the budget check: even a client kept as an orphan cannot
-        # publish its background task events anymore.
+        # Stop the tail reader and mark before the budget check: even a client
+        # kept as an orphan cannot publish its background task events anymore.
+        await self._stop_tail_reader(cached)
         if self._session_tasks is not None:
             try:
                 await self._session_tasks.mark_interrupted(
@@ -1339,13 +1421,13 @@ class ClaudeTurnRunner:
                 "shutdown budget exhausted; keeping client reference session=%s",
                 session_id,
             )
-            self._retain_orphan(client)
+            self._retain_orphan(cached.client)
             return
         try:
             async with asyncio.timeout(
                 min(_DISCONNECT_TIMEOUT_SECONDS, remaining)
             ):
-                await client.disconnect()
+                await cached.client.disconnect()
         except TimeoutError:
             # Timing out raw-cancels the SDK's shielded cleanup and skips its
             # SIGTERM/SIGKILL escalation; keep the reference so the CLI is not
@@ -1356,10 +1438,10 @@ class ClaudeTurnRunner:
                 "keeping reference",
                 session_id,
             )
-            self._retain_orphan(client)
+            self._retain_orphan(cached.client)
         except Exception:
             logger.exception(
                 "client disconnect failed during shutdown session=%s",
                 session_id,
             )
-            self._retain_orphan(client)
+            self._retain_orphan(cached.client)

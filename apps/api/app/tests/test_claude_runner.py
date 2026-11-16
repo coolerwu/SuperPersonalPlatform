@@ -27,11 +27,13 @@ SESSION_ID = "11111111-1111-1111-1111-111111111111"
 
 @pytest.fixture(autouse=True)
 async def _cancel_client_sweepers():
-    """Do not leave background sweep tasks behind between tests."""
+    """Do not leave background sweep/tail tasks behind between tests."""
     yield
     current = asyncio.current_task()
     for task in asyncio.all_tasks():
-        if task is current or task.get_name() != "claude-client-sweep":
+        if task is current or not task.get_name().startswith(
+            ("claude-client-sweep", "session-task-tail-")
+        ):
             continue
         task.cancel()
         try:
@@ -84,6 +86,67 @@ class StopsAfterResultClient(FakeClient):
             yield message
             if type(message).__name__ == "ResultMessage":
                 return
+
+
+class OneShotClient(FakeClient):
+    """Yield the scripted messages once; later reads see an empty stream.
+
+    The runner starts a background tail reader after a completed turn, so a
+    finite message list must not be replayed to it or every task event would
+    be published twice.
+    """
+
+    def __init__(self, messages=None, *, fail=False):
+        super().__init__(messages, fail=fail)
+        self._consumed = False
+
+    async def receive_messages(self):
+        if self._consumed:
+            return
+        self._consumed = True
+        async for message in super().receive_messages():
+            yield message
+
+
+class QueueClient(FakeClient):
+    """Message stream fed by the test; each query enqueues one result.
+
+    ``receive_messages`` stays open until disconnect, which is what a real CLI
+    does while background tasks are still running.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.queue: asyncio.Queue = asyncio.Queue()
+
+    async def receive_messages(self):
+        while True:
+            message = await self.queue.get()
+            if message is None:
+                return
+            yield message
+
+    async def query(self, prompt):
+        self.queries.append(prompt)
+        self.queried.set()
+        await self.queue.put(ResultMessage())
+
+    async def disconnect(self):
+        self.disconnected = True
+        await self.queue.put(None)
+
+
+async def wait_for_published(tasks, count, timeout=2):
+    """Wait until ``tasks.published`` has at least ``count`` entries."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while len(tasks.published) < count:
+        if loop.time() >= deadline:
+            raise AssertionError(
+                f"timed out waiting for {count} published task event(s); "
+                f"got {tasks.published!r}"
+            )
+        await asyncio.sleep(0.01)
 
 
 class FakeStore:
@@ -2196,7 +2259,7 @@ class OrderedDisconnectClient(FakeClient):
 async def test_task_events_publish_to_session_service(tmp_path):
     await init_db()
     tasks = FakeTaskService()
-    client = FakeClient([TaskMessage(), ResultMessage()])
+    client = OneShotClient([TaskMessage(), ResultMessage()])
     runner = ClaudeTurnRunner(
         store=FakeStore(make_agent()),
         home=tmp_path,
@@ -2216,6 +2279,106 @@ async def test_task_events_publish_to_session_service(tmp_path):
         "description": "回测",
         "task_type": None,
     })]
+    await runner.close(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_tail_reader_publishes_task_events_after_turn(tmp_path):
+    """F26: a task finishing after turn_end still reaches the session channel."""
+    await init_db()
+    tasks = FakeTaskService()
+    client = QueueClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+    turn = make_turn(
+        session_id="51515151-5151-5151-5151-515151515151"
+    )
+
+    await runner.run(turn, TurnStream())
+
+    assert tasks.published == []
+    cached = runner._clients[("default", turn.session_id)]
+    assert cached.tail_reader is not None
+
+    # No second turn: the event arrives while the session is idle.
+    await client.queue.put(TaskMessage())
+
+    await wait_for_published(tasks, 1)
+    assert tasks.published == [(turn.session_id, {
+        "type": "task_started",
+        "task_id": "t1",
+        "tool_use_id": "toolu_1",
+        "description": "回测",
+        "task_type": None,
+    })]
+    await runner.close(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_tail_reader_hands_stream_back_to_next_turn(tmp_path):
+    await init_db()
+    tasks = FakeTaskService()
+    client = QueueClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+    turn = make_turn(
+        session_id="52525252-5252-5252-5252-525252525252"
+    )
+
+    await runner.run(turn, TurnStream())
+    await client.queue.put(TaskMessage())
+    await wait_for_published(tasks, 1)
+    assert len(tasks.published) == 1
+
+    outcome = await runner.run(turn, TurnStream())
+
+    assert outcome.status == "completed"
+    # The event was published once by the tail reader, not replayed by the
+    # second turn or by a duplicated reader.
+    assert len(tasks.published) == 1
+    cached = runner._clients[("default", turn.session_id)]
+    assert cached.tail_reader is not None
+
+    await client.queue.put(TaskMessage("t2"))
+    await wait_for_published(tasks, 2)
+    assert tasks.published[1][1]["task_id"] == "t2"
+    await runner.close(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_close_stops_tail_reader_and_drops_late_events(tmp_path):
+    await init_db()
+    tasks = FakeTaskService()
+    client = QueueClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+    turn = make_turn(
+        session_id="53535353-5353-5353-5353-535353535353"
+    )
+
+    await runner.run(turn, TurnStream())
+    cached = runner._clients[("default", turn.session_id)]
+    assert cached.tail_reader is not None
+
+    await runner.close(turn.session_id)
+
+    assert cached.tail_reader is None
+    assert client.disconnected is True
+    await client.queue.put(TaskMessage())
+    await asyncio.sleep(0.05)
+    assert tasks.published == []
 
 
 @pytest.mark.asyncio
@@ -2363,7 +2526,7 @@ async def test_flush_failure_still_ends_turn_lease(tmp_path):
 async def test_task_publish_failure_does_not_break_turn(tmp_path):
     await init_db()
     tasks = FailingPublishTaskService()
-    client = FakeClient([TaskMessage(), ResultMessage()])
+    client = OneShotClient([TaskMessage(), ResultMessage()])
     runner = ClaudeTurnRunner(
         store=FakeStore(make_agent()),
         home=tmp_path,
@@ -2377,6 +2540,7 @@ async def test_task_publish_failure_does_not_break_turn(tmp_path):
     outcome = await runner.run(turn, TurnStream())
 
     assert outcome.status == "completed"
+    await runner.close(turn.session_id)
 
 
 @pytest.mark.asyncio
