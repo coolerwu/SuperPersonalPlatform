@@ -13,7 +13,7 @@ function sessionTime(value: number): string {
   });
 }
 
-type MenuSection = "trade" | "capability" | "platform";
+type MenuSection = "trade" | "platform";
 
 function SidebarMenu({
   title,
@@ -97,31 +97,35 @@ type SidebarProps = {
 };
 
 export function Sidebar(props: SidebarProps) {
+  const capabilitiesActive =
+    props.skillsActive ||
+    props.toolsActive ||
+    props.pluginsActive ||
+    props.channelsActive ||
+    props.cronActive ||
+    props.memoryActive;
   const activeMenu: MenuSection | null =
     props.backtestActive ||
     props.journalActive ||
     props.allocationActive ||
     props.chanActive
       ? "trade"
-      : props.skillsActive ||
-          props.toolsActive ||
-          props.pluginsActive ||
-          props.channelsActive ||
-          props.cronActive ||
-          props.memoryActive
-        ? "capability"
-        : props.settingsActive
-          ? "platform"
-          : null;
+      : props.settingsActive
+        ? "platform"
+        : null;
   const [openMenus, setOpenMenus] = useState<ReadonlySet<MenuSection>>(
-    () => new Set<MenuSection>(["trade", "capability", "platform"]),
+    () => new Set<MenuSection>(["trade", "platform"]),
   );
+  const [capabilitiesOpen, setCapabilitiesOpen] = useState(true);
   useLayoutEffect(() => {
     if (!activeMenu) return;
     setOpenMenus((current) =>
       current.has(activeMenu) ? current : new Set(current).add(activeMenu),
     );
   }, [activeMenu]);
+  useLayoutEffect(() => {
+    if (capabilitiesActive) setCapabilitiesOpen(true);
+  }, [capabilitiesActive]);
   const toggleMenu = (menu: MenuSection) =>
     setOpenMenus((current) => {
       const next = new Set(current);
@@ -304,73 +308,12 @@ export function Sidebar(props: SidebarProps) {
             ))}
           </div>
         </div>
-          </>
-        ) : (
-          <>
-            <SidebarMenu
-              title="交易"
-              open={openMenus.has("trade")}
-              onToggle={() => toggleMenu("trade")}
-            >
-              <button
-                className={`sidebar-action sidebar-standalone ${props.backtestActive ? "active" : ""}`}
-                onClick={props.onOpenBacktest}
-              >
-                <span className="sidebar-action-icon">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M4 20h16" />
-                    <path d="M7 17V9M12 15V5M17 18v-7" />
-                    <rect x="5" y="10" width="4" height="5" rx="1" />
-                    <rect x="10" y="6" width="4" height="6" rx="1" />
-                    <rect x="15" y="12" width="4" height="4" rx="1" />
-                  </svg>
-                </span>
-                <span>回测</span>
-              </button>
-              <button
-                className={`sidebar-action sidebar-standalone ${props.journalActive ? "active" : ""}`}
-                onClick={props.onOpenJournal}
-              >
-                <span className="sidebar-action-icon">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M5 4h14v16H5z" />
-                    <path d="M8 8h8M8 12h8M8 16h5" />
-                  </svg>
-                </span>
-                <span>交易记录</span>
-              </button>
-              <button
-                className={`sidebar-action sidebar-standalone ${props.allocationActive ? "active" : ""}`}
-                onClick={props.onOpenAllocation}
-              >
-                <span className="sidebar-action-icon">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="M12 3v9h9" />
-                  </svg>
-                </span>
-                <span>资产配置</span>
-              </button>
-              <button
-                className={`sidebar-action sidebar-standalone ${props.chanActive ? "active" : ""}`}
-                onClick={props.onOpenChan}
-              >
-                <span className="sidebar-action-icon">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M4 18 8 9l4 6 4-9 4 12" />
-                    <path d="M4 20h16" />
-                  </svg>
-                </span>
-                <span>缠论图</span>
-              </button>
-              <p className="sidebar-features-hint">手动操作 · 本地工具</p>
-            </SidebarMenu>
 
-            <SidebarMenu
-              title="Agent 能力"
-              open={openMenus.has("capability")}
-              onToggle={() => toggleMenu("capability")}
-            >
+        <SidebarMenu
+          title="Agent 能力"
+          open={capabilitiesOpen}
+          onToggle={() => setCapabilitiesOpen((current) => !current)}
+        >
               <div className="sidebar-capabilities">
                 <button
                   className={`sidebar-action ${props.skillsActive ? "active" : ""}`}
@@ -447,6 +390,67 @@ export function Sidebar(props: SidebarProps) {
                   <span>记忆</span>
                 </button>
               </div>
+        </SidebarMenu>
+          </>
+        ) : (
+          <>
+            <SidebarMenu
+              title="交易"
+              open={openMenus.has("trade")}
+              onToggle={() => toggleMenu("trade")}
+            >
+              <button
+                className={`sidebar-action sidebar-standalone ${props.backtestActive ? "active" : ""}`}
+                onClick={props.onOpenBacktest}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 20h16" />
+                    <path d="M7 17V9M12 15V5M17 18v-7" />
+                    <rect x="5" y="10" width="4" height="5" rx="1" />
+                    <rect x="10" y="6" width="4" height="6" rx="1" />
+                    <rect x="15" y="12" width="4" height="4" rx="1" />
+                  </svg>
+                </span>
+                <span>回测</span>
+              </button>
+              <button
+                className={`sidebar-action sidebar-standalone ${props.journalActive ? "active" : ""}`}
+                onClick={props.onOpenJournal}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M5 4h14v16H5z" />
+                    <path d="M8 8h8M8 12h8M8 16h5" />
+                  </svg>
+                </span>
+                <span>交易记录</span>
+              </button>
+              <button
+                className={`sidebar-action sidebar-standalone ${props.allocationActive ? "active" : ""}`}
+                onClick={props.onOpenAllocation}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 3v9h9" />
+                  </svg>
+                </span>
+                <span>资产配置</span>
+              </button>
+              <button
+                className={`sidebar-action sidebar-standalone ${props.chanActive ? "active" : ""}`}
+                onClick={props.onOpenChan}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 18 8 9l4 6 4-9 4 12" />
+                    <path d="M4 20h16" />
+                  </svg>
+                </span>
+                <span>缠论图</span>
+              </button>
+              <p className="sidebar-features-hint">手动操作 · 本地工具</p>
             </SidebarMenu>
 
             <SidebarMenu

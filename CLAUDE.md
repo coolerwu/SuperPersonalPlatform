@@ -34,7 +34,7 @@
 - Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区，彻底删除会删除工作区与 transcript 目录。
 - 运行时目录 `~/.super-personal-platform/`：`claude/`（含 `skills/` 技能库、`plugins/` 集市与插件、`settings.json`、`CLAUDE.md` 画像）、`workspaces/<agent>/`（含 Agent 记忆 `CLAUDE.md`）、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
 - 生产：宿主机 systemd 用户服务 + venv + SQLite，单进程 8888；FastAPI 直接托管 `apps/web/dist`。
-- UI 沿用珍珠冷光 + 极光 + 玻璃风格；路由为自建 History API（`apps/web/src/routes.ts`），页面 `/chat`、`/config`、`/memory`、`/skills`、`/tools`、`/plugins`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；≤860px 顶部栏 + 抽屉。侧栏分「Agent / 管理」两个工作区，Agent 选择器常驻；管理工作区是交易 / Agent 能力 / 平台三个可折叠菜单，默认三组全部展开，点击标题独立收起或展开，配置和退出登录都在平台菜单；Agent 工作区只留 Agent 工作台。点「管理」回本次打开页面期间最后停留的管理页（初始按当前路由，否则回测），已在管理页时不跳转。
+- UI 沿用珍珠冷光 + 极光 + 玻璃风格；路由为自建 History API（`apps/web/src/routes.ts`），页面 `/chat`、`/config`、`/memory`、`/skills`、`/tools`、`/plugins`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；≤860px 顶部栏 + 抽屉。侧栏分「Agent / 管理」两个工作区，Agent 选择器常驻；Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组，管理工作区是交易 / 平台两个可折叠菜单，配置和退出登录都在平台菜单；各菜单默认全部展开，点击标题独立收起或展开，进入某页自动展开所在菜单。点「管理」回本次打开页面期间最后停留的管理页（初始按当前路由，否则回测），已在管理页时不跳转。
 
 ## 运行约定
 

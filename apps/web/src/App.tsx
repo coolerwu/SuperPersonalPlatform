@@ -39,12 +39,6 @@ import { Sidebar } from "./components/Sidebar";
 
 const FEATURES_VIEWS = new Set<View>([
   "settings",
-  "memory",
-  "skills",
-  "tools",
-  "plugins",
-  "channels",
-  "cron",
   "backtest",
   "journal",
   "chan",
