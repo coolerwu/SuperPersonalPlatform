@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from claude_agent_sdk.types import TERMINAL_TASK_STATUSES
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.db import SessionLocal
 from app.models import RunningSession
@@ -100,6 +101,7 @@ class SessionTaskService:
         self._cleaner: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        self._stop.clear()
         if self._writer is None:
             self._writer = asyncio.create_task(
                 self._writer_loop(), name="session-task-writer"
@@ -119,6 +121,8 @@ class SessionTaskService:
                     await task
                 except asyncio.CancelledError:
                     pass
+        self._writer = None
+        self._cleaner = None
         async with self._lock:
             for session_id, tasks in list(self._live.items()):
                 if not tasks:
@@ -141,19 +145,25 @@ class SessionTaskService:
                 now = self._now()
                 now_iso = _iso(now)
                 for row in rows:
-                    tasks = _load_tasks(row.tasks_json)
-                    changed = False
-                    for task in tasks.values():
-                        if _is_terminal(task):
-                            continue
-                        task["status"] = "interrupted"
-                        task["summary"] = "服务重启，任务已中断"
-                        task["updated_at"] = now_iso
-                        task["completed_at"] = now_iso
-                        changed = True
-                    if changed:
-                        row.tasks_json = _dump_tasks(tasks)
-                        row.updated_at = now
+                    try:
+                        tasks = _load_tasks(row.tasks_json)
+                        changed = False
+                        for task in tasks.values():
+                            if _is_terminal(task):
+                                continue
+                            task["status"] = "interrupted"
+                            task["summary"] = "服务重启，任务已中断"
+                            task["updated_at"] = now_iso
+                            task["completed_at"] = now_iso
+                            changed = True
+                        if changed:
+                            row.tasks_json = _dump_tasks(tasks)
+                            row.updated_at = now
+                    except Exception:
+                        logger.exception(
+                            "session task startup cleanup failed session=%s",
+                            row.session_id,
+                        )
                 await db.commit()
             self._live.clear()
 
@@ -216,6 +226,11 @@ class SessionTaskService:
             elif kind == "task_updated":
                 status = event.get("status")
                 if status:
+                    if (
+                        _is_terminal(task)
+                        and str(status) not in TERMINAL_STATUSES
+                    ):
+                        return
                     task["status"] = str(status)
                     if str(status) in TERMINAL_STATUSES:
                         task["completed_at"] = task.get("completed_at") or now_iso
@@ -341,9 +356,16 @@ class SessionTaskService:
                 queue.put_nowait(None)
             async with SessionLocal() as db:
                 row = await db.get(RunningSession, session_id)
-                if row is not None:
-                    await db.delete(row)
-                    await db.commit()
+                if row is None:
+                    return
+                if row.has_turn:
+                    logger.warning(
+                        "refusing to forget active turn lease session=%s",
+                        session_id,
+                    )
+                    return
+                await db.delete(row)
+                await db.commit()
 
     async def cleanup_once(self) -> None:
         async with self._lock:
@@ -352,58 +374,74 @@ class SessionTaskService:
             async with SessionLocal() as db:
                 rows = list(await db.scalars(select(RunningSession)))
                 for row in rows:
-                    tasks = self._live.get(row.session_id)
-                    if tasks is None:
-                        tasks = _load_tasks(row.tasks_json)
-                        self._live[row.session_id] = tasks
-                    changed = False
-                    removed: list[str] = []
-                    for task_id, task in list(tasks.items()):
-                        if _is_terminal(task):
-                            completed = _task_time(task, "completed_at") or _task_time(
-                                task, "updated_at"
+                    try:
+                        tasks = self._live.get(row.session_id)
+                        if tasks is None:
+                            tasks = _load_tasks(row.tasks_json)
+                            self._live[row.session_id] = tasks
+                        changed = False
+                        removed: list[str] = []
+                        for task_id, task in list(tasks.items()):
+                            if _is_terminal(task):
+                                completed = _task_time(
+                                    task, "completed_at"
+                                ) or _task_time(task, "updated_at")
+                                if (
+                                    completed is None
+                                    or now - completed > self.retention
+                                ):
+                                    tasks.pop(task_id, None)
+                                    removed.append(task_id)
+                                    changed = True
+                            else:
+                                started = _task_time(
+                                    task, "started_at"
+                                ) or _task_time(task, "updated_at")
+                                if (
+                                    started is not None
+                                    and now - started > self.retention
+                                ):
+                                    task["status"] = "interrupted"
+                                    task["summary"] = "后台任务超过保活上限"
+                                    task["updated_at"] = now_iso
+                                    task["completed_at"] = now_iso
+                                    changed = True
+                                    self._broadcast(
+                                        row.session_id,
+                                        {
+                                            "type": "task_notification",
+                                            "task_id": task_id,
+                                            "status": "interrupted",
+                                            "summary": "后台任务超过保活上限",
+                                            "usage": task.get("usage"),
+                                        },
+                                    )
+                        if changed:
+                            row.tasks_json = _dump_tasks(tasks)
+                            row.updated_at = now
+                        for task_id in removed:
+                            self._broadcast(
+                                row.session_id,
+                                {"type": "task_removed", "task_id": task_id},
                             )
-                            if completed is None or now - completed > self.retention:
-                                tasks.pop(task_id, None)
-                                removed.append(task_id)
-                                changed = True
-                        else:
-                            started = _task_time(task, "started_at") or _task_time(
-                                task, "updated_at"
-                            )
-                            if started is not None and now - started > self.retention:
-                                task["status"] = "interrupted"
-                                task["summary"] = "后台任务超过保活上限"
-                                task["updated_at"] = now_iso
-                                task["completed_at"] = now_iso
-                                changed = True
-                                self._broadcast(
-                                    row.session_id,
-                                    {
-                                        "type": "task_notification",
-                                        "task_id": task_id,
-                                        "status": "interrupted",
-                                        "summary": "后台任务超过保活上限",
-                                        "usage": task.get("usage"),
-                                    },
+                        if not row.has_turn and not tasks:
+                            await db.execute(
+                                delete(RunningSession).where(
+                                    RunningSession.session_id == row.session_id,
+                                    RunningSession.has_turn.is_(False),
                                 )
-                    if changed:
-                        row.tasks_json = _dump_tasks(tasks)
-                        row.updated_at = now
-                    for task_id in removed:
-                        self._broadcast(
-                            row.session_id,
-                            {"type": "task_removed", "task_id": task_id},
-                        )
-                    if not row.has_turn and not tasks:
-                        await db.execute(
-                            delete(RunningSession).where(
-                                RunningSession.session_id == row.session_id,
-                                RunningSession.has_turn.is_(False),
                             )
+                            self._live.pop(row.session_id, None)
+                    except Exception:
+                        logger.exception(
+                            "session task cleanup failed session=%s",
+                            row.session_id,
                         )
-                        self._live.pop(row.session_id, None)
                 await db.commit()
+            row_ids = {row.session_id for row in rows}
+            for key in list(self._live):
+                if key not in row_ids and not self._subscribers.get(key):
+                    self._live.pop(key, None)
 
     async def _row_tasks(self, session_id: str) -> dict[str, dict[str, Any]]:
         async with SessionLocal() as db:
@@ -416,17 +454,20 @@ class SessionTaskService:
         raw = _dump_tasks(tasks)
         now = self._now()
         async with SessionLocal() as db:
-            row = await db.get(RunningSession, session_id)
-            if row is None:
-                row = RunningSession(
+            stmt = (
+                sqlite_insert(RunningSession)
+                .values(
                     session_id=session_id,
                     has_turn=False,
-                    tasks_json="[]",
+                    tasks_json=raw,
                     updated_at=now,
                 )
-                db.add(row)
-            row.tasks_json = raw
-            row.updated_at = now
+                .on_conflict_do_update(
+                    index_elements=[RunningSession.session_id],
+                    set_={"tasks_json": raw, "updated_at": now},
+                )
+            )
+            await db.execute(stmt)
             await db.commit()
 
     async def _persist_safely(
