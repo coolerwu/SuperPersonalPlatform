@@ -198,7 +198,7 @@ async def recover_running_sessions(
         return
     agents = {agent.id: agent for agent in settings.agents}
     try:
-        session_ids = await turn_lease.list_all()
+        session_ids = await turn_lease.list_turn_leases()
     except Exception:
         logger.exception("recovery could not read running sessions")
         return

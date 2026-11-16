@@ -154,11 +154,17 @@ class Backtest(Base):
 
 
 class RunningSession(Base):
-    """Runtime lease marking a session with an active turn.
+    """Per-session row for an active turn or retained background tasks.
 
-    Startup recovery consumes this table to find sessions that were mid-run.
+    ``has_turn`` distinguishes a real turn lease from a task-only row;
+    startup recovery must only consume ``has_turn=True`` rows.
     """
 
     __tablename__ = "running_sessions"
 
     session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    has_turn: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    tasks_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=utcnow, nullable=False
+    )
