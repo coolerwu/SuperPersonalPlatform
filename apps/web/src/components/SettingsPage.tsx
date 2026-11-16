@@ -1,7 +1,13 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { api, errorText } from "../api";
-import type { Agent, AgentSavePayload, Provider, SystemInfo } from "../types";
+import type {
+  Agent,
+  AgentSavePayload,
+  Provider,
+  SettingsTab,
+  SystemInfo,
+} from "../types";
 import { AgentEditor } from "./AgentEditor";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { KnowledgeSettings } from "./KnowledgeSettings";
@@ -12,6 +18,8 @@ import { ProviderSettings } from "./ProviderSettings";
 type SettingsPageProps = {
   agents: Agent[];
   agentId: string;
+  tab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
   providers: Provider[];
   onSaveAgent: (payload: AgentSavePayload) => Promise<void>;
   onSaveProvider: (
@@ -44,9 +52,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
 };
 
 export function SettingsPage(props: SettingsPageProps) {
-  const [tab, setTab] = useState<
-    "provider" | "agent" | "knowledge" | "maps" | "runtime"
-  >("provider");
+  const tab = props.tab;
   const [providerId, setProviderId] = useState("");
   const [providerEditing, setProviderEditing] = useState(false);
   const [agentEditing, setAgentEditing] = useState(false);
@@ -190,35 +196,35 @@ export function SettingsPage(props: SettingsPageProps) {
             <button
               type="button"
               className={tab === "provider" ? "active" : ""}
-              onClick={() => setTab("provider")}
+              onClick={() => props.onTabChange("provider")}
             >
               Provider
             </button>
             <button
               type="button"
               className={tab === "agent" ? "active" : ""}
-              onClick={() => setTab("agent")}
+              onClick={() => props.onTabChange("agent")}
             >
               Agent
             </button>
             <button
               type="button"
               className={tab === "knowledge" ? "active" : ""}
-              onClick={() => setTab("knowledge")}
+              onClick={() => props.onTabChange("knowledge")}
             >
               知识库
             </button>
             <button
               type="button"
               className={tab === "maps" ? "active" : ""}
-              onClick={() => setTab("maps")}
+              onClick={() => props.onTabChange("maps")}
             >
               地图
             </button>
             <button
               type="button"
               className={tab === "runtime" ? "active" : ""}
-              onClick={() => setTab("runtime")}
+              onClick={() => props.onTabChange("runtime")}
             >
               运行环境
             </button>

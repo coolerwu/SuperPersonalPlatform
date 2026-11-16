@@ -12,6 +12,8 @@ export type Agent = {
   updated_at: string;
 };
 
+export type SettingsTab = "provider" | "agent" | "knowledge" | "maps" | "runtime";
+
 export type AgentSavePayload = {
   name: string;
   instructions: string;

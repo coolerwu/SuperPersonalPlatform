@@ -1,5 +1,5 @@
 import { useLayoutEffect, useState, type ReactNode } from "react";
-import type { Agent, SessionSummary } from "../types";
+import type { Agent, SessionSummary, SettingsTab } from "../types";
 import { Select } from "./Select";
 
 /** `SessionSummary.last_modified` is epoch milliseconds. */
@@ -13,7 +13,7 @@ function sessionTime(value: number): string {
   });
 }
 
-type MenuSection = "trade" | "platform";
+type MenuSection = "trade" | "config";
 
 function SidebarMenu({
   title,
@@ -71,7 +71,6 @@ type SidebarProps = {
   newSessionActive: boolean;
   onDeleteSession: (id: string) => void;
   onRenameSession: (id: string) => void;
-  onOpenSettings: () => void;
   onOpenMemory: () => void;
   onOpenSkills: () => void;
   onOpenTools: () => void;
@@ -83,6 +82,8 @@ type SidebarProps = {
   onOpenChan: () => void;
   onOpenAllocation: () => void;
   settingsActive: boolean;
+  settingsTab: SettingsTab;
+  onOpenSettingsTab: (tab: SettingsTab) => void;
   memoryActive: boolean;
   skillsActive: boolean;
   toolsActive: boolean;
@@ -111,10 +112,10 @@ export function Sidebar(props: SidebarProps) {
     props.chanActive
       ? "trade"
       : props.settingsActive
-        ? "platform"
+        ? "config"
         : null;
   const [openMenus, setOpenMenus] = useState<ReadonlySet<MenuSection>>(
-    () => new Set<MenuSection>(["trade", "platform"]),
+    () => new Set<MenuSection>(["trade", "config"]),
   );
   const [capabilitiesOpen, setCapabilitiesOpen] = useState(true);
   useLayoutEffect(() => {
@@ -178,6 +179,7 @@ export function Sidebar(props: SidebarProps) {
           </button>
         </div>
 
+        {props.workspace === "agent" && (
         <div className="sidebar-section">
           <div className="agent-row">
             <span className="agent-row-icon" aria-hidden="true">
@@ -214,6 +216,7 @@ export function Sidebar(props: SidebarProps) {
             />
           </div>
         </div>
+        )}
 
         {props.workspace === "agent" ? (
           <>
@@ -454,35 +457,81 @@ export function Sidebar(props: SidebarProps) {
             </SidebarMenu>
 
             <SidebarMenu
-              title="平台"
-              open={openMenus.has("platform")}
-              onToggle={() => toggleMenu("platform")}
+              title="Agent全局配置"
+              open={openMenus.has("config")}
+              onToggle={() => toggleMenu("config")}
             >
-              <div className="sidebar-platform-actions">
-                <button
-                  className={`sidebar-action ${props.settingsActive ? "active" : ""}`}
-                  onClick={props.onOpenSettings}
-                >
-                  <span className="sidebar-action-icon">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-                      <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
-                      <circle cx="16" cy="7" r="2" />
-                      <circle cx="8" cy="17" r="2" />
-                    </svg>
-                  </span>
-                  <span>配置</span>
-                </button>
-                <button className="sidebar-action" onClick={props.onLogout}>
-                  <span className="sidebar-action-icon">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                      <path d="m16 17 5-5-5-5" />
-                      <path d="M21 12H9" />
-                    </svg>
-                  </span>
-                  <span>退出登录</span>
-                </button>
-              </div>
+              <button
+                className={`sidebar-action ${props.settingsActive && props.settingsTab === "provider" ? "active" : ""}`}
+                onClick={() => props.onOpenSettingsTab("provider")}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="7" rx="2" />
+                    <rect x="3" y="13" width="18" height="7" rx="2" />
+                    <path d="M7 7.5h.01M7 16.5h.01" />
+                  </svg>
+                </span>
+                <span>Provider</span>
+              </button>
+              <button
+                className={`sidebar-action ${props.settingsActive && props.settingsTab === "agent" ? "active" : ""}`}
+                onClick={() => props.onOpenSettingsTab("agent")}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="8" r="3" />
+                    <path d="M5 20c0-3.3 2.7-6 6-6s6 2.7 6 6" />
+                  </svg>
+                </span>
+                <span>Agent</span>
+              </button>
+              <button
+                className={`sidebar-action ${props.settingsActive && props.settingsTab === "knowledge" ? "active" : ""}`}
+                onClick={() => props.onOpenSettingsTab("knowledge")}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5z" />
+                    <path d="M8 3v18" />
+                  </svg>
+                </span>
+                <span>知识库</span>
+              </button>
+              <button
+                className={`sidebar-action ${props.settingsActive && props.settingsTab === "maps" ? "active" : ""}`}
+                onClick={() => props.onOpenSettingsTab("maps")}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11z" />
+                    <circle cx="12" cy="10" r="2.5" />
+                  </svg>
+                </span>
+                <span>地图</span>
+              </button>
+              <button
+                className={`sidebar-action ${props.settingsActive && props.settingsTab === "runtime" ? "active" : ""}`}
+                onClick={() => props.onOpenSettingsTab("runtime")}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="m5 7 4 4-4 4" />
+                    <path d="M12 17h7" />
+                  </svg>
+                </span>
+                <span>运行环境</span>
+              </button>
+              <button className="sidebar-action" onClick={props.onLogout}>
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <path d="m16 17 5-5-5-5" />
+                    <path d="M21 12H9" />
+                  </svg>
+                </span>
+                <span>退出登录</span>
+              </button>
             </SidebarMenu>
           </>
         )}

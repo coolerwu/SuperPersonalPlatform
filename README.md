@@ -83,13 +83,13 @@ npm run dev
 ### 地图
 
 1. 在高德开放平台创建 **Web 服务** Key（不是 JS API Key）：`https://lbs.amap.com/api/mcp-server/create-project-and-key`。
-2. 登录平台 → 配置 → 地图，填入 Key 并启用，保存。
+2. 登录后进入「管理 → Agent全局配置 → 地图」，填入 Key 并启用，保存。
 3. 下一轮对话起，Agent 可以调用高德 MCP 的 POI、地理编码、路线、距离和天气工具；在「工具」页可以查看 `amap` 服务的连接状态。
 4. Key 只保存在后端；清除 Key 会同时停用地图工具。地图工具失败不影响普通聊天。
 
 ## 配置页
 
-侧栏「管理 → 平台 → 配置」进入配置页，顶部用 `Provider / Agent / 知识库 / 地图 / 运行环境` 五个 tab 切换。
+侧栏「管理 → Agent全局配置 → Provider/Agent/知识库/地图/运行环境」直接打开配置页对应分区，页面顶部仍可切五个 tab。
 
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
 - **Agent**：列出全部 Agent 摘要（Provider/model、权限档位、记忆开关、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态与「完全访问」开关；新建 Agent 默认「仅工作区」，未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。权限档位：`default`（Assistant）固定「完全访问」（`bypassPermissions`）；其他 Agent 默认「仅工作区」（`dontAsk` + 白名单 + `PreToolUse` hook），文件类工具只能读写自己的工作区，`..`、绝对越界、符号链接逃逸和本机/内网 WebFetch 都会被拒绝，Bash、Task 与插件工具暂不受限。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
@@ -102,7 +102,7 @@ npm run dev
 
 ## 技能、工具与插件页面
 
-侧栏顶部是「Agent / 管理」两个工作区 tab（默认 Agent），Agent 选择器在两个工作区都显示，是全站 per-agent 配置的唯一来源。Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组：工作台放新对话和会话列表，Agent 能力放技能、工具、插件、渠道、定时、记忆。管理工作区是「交易」（回测、交易记录、资产配置、缠论图）与「平台」（配置、退出登录）两个可折叠菜单，不显示会话列表。各菜单默认全部展开，点击标题独立收起或展开，进入页面时自动展开所在菜单。点「管理」回到本次打开页面期间最后停留的管理页（还没进过管理页时为回测）；已在管理页时不跳转。
+侧栏顶部是「Agent / 管理」两个工作区 tab（默认 Agent），Agent 选择器只在 Agent 工作区显示，是全站 per-agent 配置的唯一来源。Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组：工作台放新对话和会话列表，Agent 能力放技能、工具、插件、渠道、定时、记忆。管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图；「Agent全局配置」展开后是 Provider、Agent、知识库、地图、运行环境五个配置分区和退出登录，点分区直接打开配置页对应 tab（tab 选择只在内存，刷新回 Provider）。各菜单默认全部展开，点击标题独立收起或展开，进入页面时自动展开所在菜单。管理页不显示会话列表与 Agent 选择器。点「管理」回到本次打开页面期间最后停留的管理页（还没进过管理页时为回测）；已在管理页时不跳转。
 
 - **技能**：列出全局技能库，按「初始化技能」和「其他技能」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、「已调整」标记、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；任何技能都可删除（只删技能目录）。
 - **工具**：读取当前 Agent 最近一轮对话的运行时 init frame，展示 Claude Code 实际加载的内置工具、MCP server 与工具、技能、插件和插件加载失败；平台业务工具以 `mcp__platform_tools__*` 出现，描述来自平台注册表。没有运行时数据时提示先发一条消息。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）通过进程内 `platform_tools` MCP 接入，插件自带的 MCP 继续并存。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。

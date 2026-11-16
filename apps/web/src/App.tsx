@@ -21,6 +21,7 @@ import type {
   Provider,
   QueuedInfo,
   SessionSummary,
+  SettingsTab,
   SkillInfo,
   TranscriptMessage,
   TurnStreamEvent,
@@ -308,6 +309,7 @@ export default function App() {
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [view, setView] = useState<View>(initialRoute?.view ?? "chat");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("provider");
   const [lastFeaturesView, setLastFeaturesView] = useState<View>(() => {
     const start = initialRoute?.view ?? "chat";
     return isFeaturesView(start) ? start : "backtest";
@@ -2468,7 +2470,11 @@ export default function App() {
           setSidebarOpen(false);
           setSessionToRename(sessions.find((item) => item.id === id) ?? null);
         }}
-        onOpenSettings={() => openView("settings")}
+        settingsTab={settingsTab}
+        onOpenSettingsTab={(tab) => {
+          setSettingsTab(tab);
+          openView("settings");
+        }}
         onOpenMemory={() => openView("memory")}
         onOpenSkills={() => openView("skills")}
         onOpenTools={() => openView("tools")}
@@ -2532,6 +2538,8 @@ export default function App() {
         <SettingsPage
           agents={agents}
           agentId={agentId}
+          tab={settingsTab}
+          onTabChange={setSettingsTab}
           providers={providers}
           onSaveAgent={saveAgent}
           onSaveProvider={saveProvider}

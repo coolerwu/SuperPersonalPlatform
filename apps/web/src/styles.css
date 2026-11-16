@@ -4577,15 +4577,13 @@ textarea {
   border-top: 1px solid rgba(26, 30, 38, 0.07);
 }
 
-.pearl .sidebar-capabilities,
-.pearl .sidebar-platform-actions {
+.pearl .sidebar-capabilities {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
 }
 
-.pearl .sidebar-capabilities .sidebar-action,
-.pearl .sidebar-platform-actions .sidebar-action {
+.pearl .sidebar-capabilities .sidebar-action {
   min-width: 0;
   padding: 8px 10px;
 }
