@@ -33,17 +33,21 @@ export function SessionTaskPanel({
             key={task.id}
           >
             <span className="session-task-dot" aria-hidden="true" />
-            <span className="session-task-label">
+            <span className="session-task-label" title={task.description || task.id}>
               {task.description || task.id}
             </span>
             <span className="session-task-status">
               {taskStatusLabel(task.status)}
             </span>
             {task.lastToolName && (
-              <span className="session-task-tool">{task.lastToolName}</span>
+              <span className="session-task-tool" title={task.lastToolName}>
+                {task.lastToolName}
+              </span>
             )}
             {task.summary && (
-              <small className="session-task-summary">{task.summary}</small>
+              <small className="session-task-summary" title={task.summary}>
+                {task.summary}
+              </small>
             )}
           </div>
         ))}

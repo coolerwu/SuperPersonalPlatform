@@ -211,7 +211,13 @@ function LiveProcess({
       <summary>
         <span>执行过程</span>
         <span className="run-trace-count">
-          {totalTools > 0 ? `${totalTools} 个工具` : "思考"}
+          {totalTools > 0
+            ? `${totalTools} 个工具`
+            : hasReasoning
+              ? "思考"
+              : subagentList.length > 0
+                ? "子 Agent"
+                : "执行过程"}
         </span>
       </summary>
       <div className="run-trace-steps">

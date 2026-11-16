@@ -992,25 +992,13 @@ export default function App() {
         });
         break;
       }
-      case "task_started": {
-        updateTasks(forSession, (current) =>
-          applyTaskEvent(current, event),
-        );
-        break;
-      }
-      case "task_progress": {
-        updateTasks(forSession, (current) =>
-          applyTaskEvent(current, event),
-        );
-        break;
-      }
-      case "task_updated": {
-        updateTasks(forSession, (current) =>
-          applyTaskEvent(current, event),
-        );
-        break;
-      }
+      case "task_started":
+      case "task_progress":
+      case "task_updated":
       case "task_notification": {
+        // The session event stream is authoritative; the turn stream only
+        // fills in while that stream is disconnected.
+        if (sessionEventsRef.current[forSession]) break;
         updateTasks(forSession, (current) =>
           applyTaskEvent(current, event),
         );

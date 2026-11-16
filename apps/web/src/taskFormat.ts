@@ -36,6 +36,18 @@ type LiveTaskEvent = Exclude<
   { type: "tasks_snapshot" } | { type: "task_removed" }
 >;
 
+const TERMINAL_TASK_STATUSES = new Set([
+  "completed",
+  "failed",
+  "stopped",
+  "killed",
+  "interrupted",
+]);
+
+function isTerminalTaskStatus(status: string | undefined): boolean {
+  return status ? TERMINAL_TASK_STATUSES.has(status) : false;
+}
+
 export function applyTaskEvent(
   tasks: Record<string, LiveTask>,
   event: LiveTaskEvent,
@@ -44,7 +56,11 @@ export function applyTaskEvent(
   if (event.type === "task_updated" && !tasks[id]) return tasks;
   const toolUseId = "tool_use_id" in event ? (event.tool_use_id ?? null) : null;
   const existing = tasks[id] ?? emptyTask(id, toolUseId);
+  const updatedAt = new Date().toISOString();
   if (event.type === "task_started") {
+    // Replayed turn events must not revive a task the session stream already
+    // finished.
+    if (isTerminalTaskStatus(existing.status)) return tasks;
     return {
       ...tasks,
       [id]: {
@@ -53,6 +69,8 @@ export function applyTaskEvent(
         description: event.description || existing.description,
         status: "running",
         summary: "",
+        startedAt: existing.startedAt ?? updatedAt,
+        updatedAt,
         completedAt: null,
       },
     };
@@ -65,15 +83,22 @@ export function applyTaskEvent(
         description: event.description || existing.description,
         lastToolName: event.last_tool_name || existing.lastToolName,
         usage: event.usage ?? existing.usage,
+        updatedAt,
       },
     };
   }
   if (event.type === "task_updated") {
+    const nextStatus = event.status || existing.status;
     return {
       ...tasks,
       [id]: {
         ...existing,
-        status: event.status || existing.status,
+        status:
+          isTerminalTaskStatus(existing.status) &&
+          !isTerminalTaskStatus(nextStatus)
+            ? existing.status
+            : nextStatus,
+        updatedAt,
       },
     };
   }
@@ -85,6 +110,7 @@ export function applyTaskEvent(
         status: event.status || existing.status,
         summary: event.summary || existing.summary,
         usage: event.usage ?? existing.usage,
+        updatedAt,
       },
     };
   }
@@ -128,6 +154,7 @@ export function taskStatusLabel(status: string): string {
 
 export function taskStatusClass(status: string): string {
   if (status === "completed") return "ok";
+  if (status === "pending") return "pending";
   if (status === "failed") return "failed";
   if (status === "stopped" || status === "killed") return "stopped";
   if (status === "interrupted") return "interrupted";
