@@ -1355,16 +1355,50 @@ Expected: FAIL，`session_tasks` 构造参数不存在，任务事件未发布�
             if lease_added and not keep_lease:
                 try:
                     await turn_lease.remove(turn.session_id)
+                except BaseException as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        logger.warning(
+                            "turn lease removal cancelled session=%s", turn.session_id
+                        )
+                    else:
+                        logger.warning(
+                            "failed to remove turn lease session=%s",
+                            turn.session_id,
+                            exc_info=True,
+                        )
 ```
 
-改为：
+改为（**flush 与 end_turn 必须分开 try**；flush 失败不能跳过 end_turn，否则已完成的 turn 会留下 has_turn=True 并在重启时被误恢复）：
 
 ```python
             if lease_added and not keep_lease:
-                try:
-                    if self._session_tasks is not None:
+                if self._session_tasks is not None:
+                    try:
                         await self._session_tasks.flush(turn.session_id)
+                    except BaseException as exc:
+                        if isinstance(exc, asyncio.CancelledError):
+                            logger.warning(
+                                "task flush cancelled session=%s", turn.session_id
+                            )
+                        else:
+                            logger.warning(
+                                "failed to flush session tasks session=%s",
+                                turn.session_id,
+                                exc_info=True,
+                            )
+                try:
                     await turn_lease.end_turn(turn.session_id)
+                except BaseException as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        logger.warning(
+                            "turn lease end cancelled session=%s", turn.session_id
+                        )
+                    else:
+                        logger.warning(
+                            "failed to end turn lease session=%s",
+                            turn.session_id,
+                            exc_info=True,
+                        )
 ```
 
 - [ ] **Step 6: 逐出时标记中断**
