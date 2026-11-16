@@ -216,7 +216,60 @@ export type LiveTask = {
   summary: string;
   lastToolName: string;
   usage: LiveTaskUsage | null;
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string | null;
 };
+
+export type SessionTask = {
+  task_id: string;
+  tool_use_id?: string | null;
+  description?: string;
+  status?: string;
+  summary?: string;
+  last_tool_name?: string | null;
+  usage?: LiveTaskUsage | null;
+  started_at?: string;
+  updated_at?: string;
+  completed_at?: string | null;
+};
+
+export type SessionTaskEvent =
+  | {
+      type: "tasks_snapshot";
+      has_turn: boolean;
+      updated_at: string | null;
+      tasks: SessionTask[];
+    }
+  | { type: "task_removed"; task_id: string }
+  | {
+      type: "task_started";
+      task_id: string;
+      tool_use_id?: string | null;
+      description?: string;
+      task_type?: string | null;
+    }
+  | {
+      type: "task_progress";
+      task_id: string;
+      tool_use_id?: string | null;
+      description?: string;
+      last_tool_name?: string | null;
+      usage?: LiveTaskUsage | null;
+    }
+  | {
+      type: "task_updated";
+      task_id: string;
+      status?: string | null;
+    }
+  | {
+      type: "task_notification";
+      task_id: string;
+      tool_use_id?: string | null;
+      status?: string;
+      summary?: string;
+      usage?: LiveTaskUsage | null;
+    };
 
 export type FrozenLive = {
   streamText: string;

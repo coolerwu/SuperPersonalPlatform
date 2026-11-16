@@ -21,6 +21,7 @@ import type {
   Provider,
   QueuedInfo,
   SessionSummary,
+  SessionTaskEvent,
   SettingsTab,
   SkillInfo,
   TranscriptMessage,
@@ -28,6 +29,7 @@ import type {
 } from "./types";
 import { isBareSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
+import { applyTaskEvent, sessionTaskToLive } from "./taskFormat";
 import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
 import { sessionSummariesEqual } from "./sessionSummary";
 import { ChatPanel } from "./components/ChatPanel";
@@ -150,22 +152,6 @@ const EMPTY_LIVE: SessionLive = {
 
 function emptySubagent(parent: string): LiveSubagent {
   return { parent, text: "", tools: [] };
-}
-
-function emptyTask(
-  id: string,
-  toolUseId: string | null,
-  description = "",
-): LiveTask {
-  return {
-    id,
-    toolUseId,
-    description,
-    status: "running",
-    summary: "",
-    lastToolName: "",
-    usage: null,
-  };
 }
 
 function mergeArtifact(
@@ -305,6 +291,9 @@ export default function App() {
   const [loadedSessions, setLoadedSessions] = useState<Record<string, true>>({});
   const [loadErrorBySession, setLoadErrorBySession] = useState<Record<string, string>>({});
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
+  const [tasksBySession, setTasksBySession] = useState<
+    Record<string, Record<string, LiveTask>>
+  >({});
   const [error, setError] = useState("");
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -358,6 +347,9 @@ export default function App() {
   const restoreSessionRef = useRef(initialRoute?.sessionId ?? "");
   const lastEventIndexRef = useRef<Record<string, number>>({});
   const reconnectAttemptsRef = useRef<Record<string, number>>({});
+  const tasksBySessionRef = useRef<Record<string, Record<string, LiveTask>>>({});
+  const sessionEventsRef = useRef<Record<string, EventSource>>({});
+  const sessionEventRetryRef = useRef<Record<string, number>>({});
   const streamGenerationRef = useRef(0);
   const cancelQueuedRef = useRef(cancelQueued);
   cancelQueuedRef.current = cancelQueued;
@@ -447,6 +439,37 @@ export default function App() {
   function updateLive(id: string, patch: (current: SessionLive) => SessionLive) {
     if (!id) return;
     setLiveBySession((current) => ({ ...current, [id]: patch(current[id] ?? EMPTY_LIVE) }));
+  }
+
+  function updateTasks(
+    id: string,
+    patch: (current: Record<string, LiveTask>) => Record<string, LiveTask>,
+  ) {
+    const current = tasksBySessionRef.current[id] ?? {};
+    const next = patch(current);
+    if (next === current) return;
+    tasksBySessionRef.current = {
+      ...tasksBySessionRef.current,
+      [id]: next,
+    };
+    setTasksBySession(tasksBySessionRef.current);
+  }
+
+  function replaceTasks(id: string, next: Record<string, LiveTask>) {
+    tasksBySessionRef.current = {
+      ...tasksBySessionRef.current,
+      [id]: next,
+    };
+    setTasksBySession(tasksBySessionRef.current);
+  }
+
+  function removeTask(id: string, taskId: string) {
+    updateTasks(id, (current) => {
+      if (!current[taskId]) return current;
+      const next = { ...current };
+      delete next[taskId];
+      return next;
+    });
   }
 
   function clearLiveNotice(id: string) {
@@ -963,81 +986,27 @@ export default function App() {
         break;
       }
       case "task_started": {
-        const id = event.task_id;
-        updateLive(forSession, (current) => ({
-          ...current,
-          tasks: {
-            ...current.tasks,
-            [id]: emptyTask(
-              id,
-              event.tool_use_id ?? null,
-              event.description ?? "",
-            ),
-          },
-          notice: "",
-        }));
+        updateTasks(forSession, (current) =>
+          applyTaskEvent(current, event),
+        );
         break;
       }
       case "task_progress": {
-        const id = event.task_id;
-        updateLive(forSession, (current) => {
-          const existing =
-            current.tasks[id] ??
-            emptyTask(id, event.tool_use_id ?? null, event.description ?? "");
-          return {
-            ...current,
-            tasks: {
-              ...current.tasks,
-              [id]: {
-                ...existing,
-                description: event.description || existing.description,
-                lastToolName: event.last_tool_name || existing.lastToolName,
-                usage: event.usage ?? existing.usage,
-              },
-            },
-            notice: "",
-          };
-        });
+        updateTasks(forSession, (current) =>
+          applyTaskEvent(current, event),
+        );
         break;
       }
       case "task_updated": {
-        const id = event.task_id;
-        updateLive(forSession, (current) => {
-          const existing = current.tasks[id];
-          if (!existing) return current;
-          return {
-            ...current,
-            tasks: {
-              ...current.tasks,
-              [id]: {
-                ...existing,
-                status: event.status || existing.status,
-              },
-            },
-            notice: "",
-          };
-        });
+        updateTasks(forSession, (current) =>
+          applyTaskEvent(current, event),
+        );
         break;
       }
       case "task_notification": {
-        const id = event.task_id;
-        updateLive(forSession, (current) => {
-          const existing =
-            current.tasks[id] ?? emptyTask(id, event.tool_use_id ?? null);
-          return {
-            ...current,
-            tasks: {
-              ...current.tasks,
-              [id]: {
-                ...existing,
-                status: event.status || existing.status,
-                summary: event.summary || existing.summary,
-                usage: event.usage ?? existing.usage,
-              },
-            },
-            notice: "",
-          };
-        });
+        updateTasks(forSession, (current) =>
+          applyTaskEvent(current, event),
+        );
         break;
       }
       case "turn_end": {
@@ -1137,6 +1106,62 @@ export default function App() {
       reconnectAttemptsRef.current[forSession] = attempt;
       closeStream(forSession);
       void reconnectStream(forSession, reconnectTurnId, attachMode, attempt);
+    };
+  }
+
+  function applySessionTaskEvent(
+    forSession: string,
+    event: SessionTaskEvent,
+  ) {
+    if (event.type === "tasks_snapshot") {
+      const next: Record<string, LiveTask> = {};
+      for (const task of event.tasks) {
+        next[task.task_id] = sessionTaskToLive(task);
+      }
+      replaceTasks(forSession, next);
+      return;
+    }
+    if (event.type === "task_removed") {
+      removeTask(forSession, event.task_id);
+      return;
+    }
+    updateTasks(forSession, (current) => applyTaskEvent(current, event));
+  }
+
+  function closeSessionEvents(forSession: string) {
+    const source = sessionEventsRef.current[forSession];
+    if (source) {
+      source.close();
+      delete sessionEventsRef.current[forSession];
+    }
+    delete sessionEventRetryRef.current[forSession];
+  }
+
+  function openSessionEvents(forSession: string) {
+    if (sessionEventsRef.current[forSession]) return;
+    const source = new EventSource(api.sessionEventsUrl(forSession));
+    sessionEventsRef.current[forSession] = source;
+    source.onmessage = (message) => {
+      let event: SessionTaskEvent;
+      try {
+        event = JSON.parse(message.data) as SessionTaskEvent;
+      } catch {
+        return;
+      }
+      applySessionTaskEvent(forSession, event);
+    };
+    source.onerror = () => {
+      if (sessionEventsRef.current[forSession] !== source) return;
+      source.close();
+      delete sessionEventsRef.current[forSession];
+      const attempt = (sessionEventRetryRef.current[forSession] ?? 0) + 1;
+      sessionEventRetryRef.current[forSession] = attempt;
+      const delay = Math.min(1000 * 2 ** Math.min(attempt, 4), 15000);
+      window.setTimeout(() => {
+        if (sessionIdRef.current === forSession) {
+          openSessionEvents(forSession);
+        }
+      }, delay);
     };
   }
 
@@ -1477,6 +1502,13 @@ export default function App() {
     if (document.visibilityState === "visible" && document.hasFocus()) {
       clearUnread(sessionId);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    openSessionEvents(sessionId);
+    return () => closeSessionEvents(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 

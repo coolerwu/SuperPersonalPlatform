@@ -236,6 +236,10 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}?agent_id=${encodeURIComponent(agentId)}`,
       { method: "DELETE" },
     ),
+  sessionTasksUrl: (sessionId: string) =>
+    `/api/sessions/${encodeURIComponent(sessionId)}/tasks`,
+  sessionEventsUrl: (sessionId: string) =>
+    `/api/sessions/${encodeURIComponent(sessionId)}/events`,
   /** `after` is the buffer index of the first event to replay (inclusive). */
   sessionStreamUrl: (sessionId: string, turnId?: string, after?: number) => {
     const params = new URLSearchParams();
