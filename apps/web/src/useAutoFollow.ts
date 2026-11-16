@@ -3,7 +3,11 @@ import type { RefObject } from "react";
 
 const BOTTOM_THRESHOLD = 96;
 const INTENT_WINDOW_MS = 600;
-const SHRINK_WINDOW_MS = 250;
+// Virtualized lists re-measure rows while a session loads and can move
+// scrollTop on their own. Treat those scrolls as content-driven for a short
+// window instead of mistaking them for the user scrolling up.
+const CONTENT_CHANGE_WINDOW_MS = 400;
+const PROGRAMMATIC_WINDOW_MS = 1200;
 
 function isScrollKey(key: string): boolean {
   return ["ArrowUp", "PageUp", "Home", " "].includes(key);
@@ -21,7 +25,8 @@ export function useAutoFollow(
   const stickRef = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
   const intentUntilRef = useRef(0);
-  const shrinkUntilRef = useRef(0);
+  const contentChangeUntilRef = useRef(0);
+  const programmaticUntilRef = useRef(0);
   const lastHeightRef = useRef(0);
   const lastTopRef = useRef(0);
 
@@ -36,6 +41,7 @@ export function useAutoFollow(
     if (!element) return;
     element.scrollTop = element.scrollHeight;
     lastTopRef.current = element.scrollTop;
+    programmaticUntilRef.current = performance.now() + PROGRAMMATIC_WINDOW_MS;
   }, [scrollRef]);
 
   const follow = useCallback(() => {
@@ -78,10 +84,20 @@ export function useAutoFollow(
         setStick(true);
         return;
       }
-      if (performance.now() < shrinkUntilRef.current) return;
-      if (performance.now() < intentUntilRef.current || delta < -8) {
+      const now = performance.now();
+      // Real user input always releases the pin, even while content is
+      // still settling.
+      if (now < intentUntilRef.current) {
         setStick(false);
+        return;
       }
+      if (
+        now < programmaticUntilRef.current ||
+        now < contentChangeUntilRef.current
+      ) {
+        return;
+      }
+      if (delta < -8) setStick(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -115,8 +131,9 @@ export function useAutoFollow(
     if (!content || !element) return;
     const observer = new ResizeObserver(() => {
       const height = element.scrollHeight;
-      if (height < lastHeightRef.current) {
-        shrinkUntilRef.current = performance.now() + SHRINK_WINDOW_MS;
+      if (height !== lastHeightRef.current) {
+        contentChangeUntilRef.current =
+          performance.now() + CONTENT_CHANGE_WINDOW_MS;
       }
       lastHeightRef.current = height;
       followNow();
