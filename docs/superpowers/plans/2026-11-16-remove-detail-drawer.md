@@ -1,6 +1,6 @@
 # Remove the Chat Detail Drawer Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 删除聊天页右上角「详情」按钮、它打开的详情抽屉（`Drawer`）以及配套的样式和类型，保留后端不动。
 
@@ -384,7 +384,7 @@ git commit -m "Drop detail drawer styles"
 **Files:**
 - Modify: `docs/intent.md:347`
 
-- [ ] **Step 1: 更新 F14 响应式描述**
+- [x] **Step 1: 更新 F14 响应式描述**
 
 把：
 
@@ -398,12 +398,12 @@ git commit -m "Drop detail drawer styles"
 4. ≤860px 使用顶部栏 + 汉堡菜单；侧栏变抽屉；输入区适配 `visualViewport` 与安全区；管理页表格改卡片。
 ```
 
-- [ ] **Step 2: 核查 CLAUDE.md / README.md**
+- [x] **Step 2: 核查 CLAUDE.md / README.md**
 
 Run: `grep -n "详情" CLAUDE.md README.md docs/intent.md`
 Expected: 无输出。两处的「抽屉」都指移动端侧栏抽屉（保留），不涉及详情抽屉，不需要改。
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add docs/intent.md
@@ -416,22 +416,22 @@ git commit -m "Sync intent for the removed detail drawer"
 
 **Files:** 无新改动（只验证）
 
-- [ ] **Step 1: 后端测试**
+- [x] **Step 1: 后端测试**
 
 Run: `.venv/bin/python -m pytest apps/api/app/tests`
 Expected: 全部通过（本次不改后端，作为回归确认）。
 
-- [ ] **Step 2: 前端构建**
+- [x] **Step 2: 前端构建**
 
 Run: `cd apps/web && npm run build`
 Expected: 构建成功，`apps/web/dist` 更新并已随前面的提交进入仓库；若 dist 有变更，补一次 `git add apps/web/dist && git commit -m "Rebuild web dist"`。
 
-- [ ] **Step 3: 确认改动范围**
+- [x] **Step 3: 确认改动范围**
 
 Run: `git status --short && git log --oneline -3`
 Expected: 工作区干净；提交只包含 `App.tsx`、`types.ts`、`Drawer.tsx`（删除）、`styles.css`、`docs/intent.md`、`apps/web/dist`，没有 `.env`、`data/`、`.super-personal-platform/`。
 
-- [ ] **Step 4: 按项目约定提交/推送（如需要）**
+- [x] **Step 4: 按项目约定提交/推送（如需要）**
 
 执行 `.claude/skills/project-commit/SKILL.md` 的流程；只 push `origin`。
 
