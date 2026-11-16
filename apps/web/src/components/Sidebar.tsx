@@ -1,3 +1,4 @@
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import type { Agent, SessionSummary } from "../types";
 import { Select } from "./Select";
 
@@ -10,6 +11,48 @@ function sessionTime(value: number): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+type MenuSection = "trade" | "capability" | "platform";
+
+function SidebarMenu({
+  title,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`sidebar-menu ${open ? "open" : ""}`}>
+      <button
+        type="button"
+        className="sidebar-group-head sidebar-menu-head"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <span className="sidebar-group-label">{title}</span>
+        <svg
+          className="sidebar-menu-chevron"
+          viewBox="0 0 24 24"
+          width="13"
+          height="13"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m9 6 6 6-6 6" />
+        </svg>
+      </button>
+      {open && <div className="sidebar-menu-body">{children}</div>}
+    </div>
+  );
 }
 
 type SidebarProps = {
@@ -54,6 +97,31 @@ type SidebarProps = {
 };
 
 export function Sidebar(props: SidebarProps) {
+  const activeMenu: MenuSection | null =
+    props.backtestActive ||
+    props.journalActive ||
+    props.allocationActive ||
+    props.chanActive
+      ? "trade"
+      : props.skillsActive ||
+          props.toolsActive ||
+          props.pluginsActive ||
+          props.channelsActive ||
+          props.cronActive ||
+          props.memoryActive
+        ? "capability"
+        : props.settingsActive
+          ? "platform"
+          : null;
+  const [openMenu, setOpenMenu] = useState<MenuSection | null>(
+    activeMenu ?? "trade",
+  );
+  useLayoutEffect(() => {
+    if (activeMenu) setOpenMenu(activeMenu);
+  }, [activeMenu]);
+  const toggleMenu = (menu: MenuSection) =>
+    setOpenMenu((current) => (current === menu ? null : menu));
+
   return (
     <>
       <div
@@ -246,10 +314,11 @@ export function Sidebar(props: SidebarProps) {
           </>
         ) : (
           <>
-            <div className="sidebar-group sidebar-features">
-              <div className="sidebar-group-head">
-                <span className="sidebar-group-label">交易</span>
-              </div>
+            <SidebarMenu
+              title="交易"
+              open={openMenu === "trade"}
+              onToggle={() => toggleMenu("trade")}
+            >
               <button
                 className={`sidebar-action sidebar-standalone ${props.backtestActive ? "active" : ""}`}
                 onClick={props.onOpenBacktest}
@@ -302,12 +371,13 @@ export function Sidebar(props: SidebarProps) {
                 <span>缠论图</span>
               </button>
               <p className="sidebar-features-hint">手动操作 · 本地工具</p>
-            </div>
+            </SidebarMenu>
 
-            <div className="sidebar-group">
-              <div className="sidebar-group-head">
-                <span className="sidebar-group-label">Agent 能力</span>
-              </div>
+            <SidebarMenu
+              title="Agent 能力"
+              open={openMenu === "capability"}
+              onToggle={() => toggleMenu("capability")}
+            >
               <div className="sidebar-capabilities">
                 <button
                   className={`sidebar-action ${props.skillsActive ? "active" : ""}`}
@@ -384,12 +454,13 @@ export function Sidebar(props: SidebarProps) {
                   <span>记忆</span>
                 </button>
               </div>
-            </div>
+            </SidebarMenu>
 
-            <div className="sidebar-group sidebar-group-platform">
-              <div className="sidebar-group-head">
-                <span className="sidebar-group-label">平台</span>
-              </div>
+            <SidebarMenu
+              title="平台"
+              open={openMenu === "platform"}
+              onToggle={() => toggleMenu("platform")}
+            >
               <div className="sidebar-platform-actions">
                 <button
                   className={`sidebar-action ${props.settingsActive ? "active" : ""}`}
@@ -415,7 +486,7 @@ export function Sidebar(props: SidebarProps) {
                   <span>退出登录</span>
                 </button>
               </div>
-            </div>
+            </SidebarMenu>
           </>
         )}
       </aside>
