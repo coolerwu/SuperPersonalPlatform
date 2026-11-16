@@ -1,7 +1,7 @@
 # 会话级后台任务事件通道设计
 
 - 日期：2026-11-16
-- 状态：待实施
+- 状态：已实现（分支 feature/session-task-channel，待合并）
 - 关联问题：审计 W3（跨轮后台任务事件延迟/丢失）
 - 关联实现：`apps/api/app/models.py`、`apps/api/app/services/turn_lease.py`、`apps/api/app/services/recovery.py`、`apps/api/app/services/claude_runner.py`、新增 `apps/api/app/services/session_tasks.py`、`apps/api/app/routers/sessions.py`、`apps/web/src/App.tsx`
 
@@ -299,7 +299,7 @@ API：
 
 - **归属**：`_CachedClient` 增加 `tail_reader: asyncio.Task[None] | None`。同一 `receive_messages()` 同一时刻只允许一个消费者。
 - **turn 开始**：`run()` 拿到缓存 client 后、`query()` 之前调用 `_stop_tail_reader()`；`await` 返回即表示旧 tail reader 已停止发布，之后本轮循环独占消息流。
-- **turn 结束**：本轮收到自己的 `ResultMessage`、未失败/超时/取消、且不会被逐出时（`result_received and not evict and not keep_lease`），在 `end_turn` 之后启动 tail reader。turn 内事件仍由 turn 循环同时写入 turn stream 与会话级 service；tail reader 只处理 turn 之后的事件。
+- **turn 结束**：本轮收到自己的 `ResultMessage`、未失败/超时/取消、且不会被逐出时（`result_received and not evict and not keep_lease`），在 `run` 的 finally 开头、清除 `_active` 之前启动 tail reader；此时清扫的 `_evict_key` 会因 active 跳过，清除 active 后由 `_evict_key` 先 `_stop_tail_reader` 再 `mark_interrupted`。启动早于 `turn_end` 发布、`flush` 与 `end_turn`，这些步骤的先后顺序不变；turn 内事件仍由 turn 循环同时写入 turn stream 与会话级 service，tail reader 只处理 turn 之后的事件。
 - **只发布 `task_*`**：tail reader 对每条消息调用 `task_event()`，非任务消息直接丢弃。注入轮（任务通知、peer、channel）本来就被平台抑制，不应泄漏进会话级任务通道。
 - **停止路径**：
   - `_evict_key()`：在 session 锁内、`mark_interrupted()` 之前 stop，保证 tail reader 不会在任务被标记中断之后再发布。
