@@ -1202,12 +1202,13 @@ class ClaudeTurnRunner:
     ) -> bool:
         """Evict one cached client if it is still the one we meant to remove.
 
-        The check, the pop and the task-interruption mark happen under the
+        The check, the task-interruption mark and the pop happen under the
         session lock, so a turn starting during a prior entry's disconnect
         can neither be disconnected by a stale sweep snapshot nor publish new
-        tasks between the pop and the mark and have them marked interrupted.
-        The mark runs before the (slow) disconnect to cover its timeout and
-        cancellation paths as well.
+        tasks between the mark and the pop and have them marked interrupted.
+        The mark runs before the pop so a cancellation while marking leaves the
+        client cached instead of silently dropping it, and before the (slow)
+        disconnect to cover its timeout and cancellation paths as well.
         """
         session_id = key[1]
         lock = self._client_lock(session_id)
@@ -1217,7 +1218,6 @@ class ClaudeTurnRunner:
             cached = self._clients.get(key)
             if cached is None or (expected is not None and cached is not expected):
                 return False
-            self._clients.pop(key, None)
             if self._session_tasks is not None:
                 try:
                     await self._session_tasks.mark_interrupted(
@@ -1228,6 +1228,7 @@ class ClaudeTurnRunner:
                         "failed to mark background tasks interrupted session=%s",
                         session_id,
                     )
+            self._clients.pop(key, None)
         try:
             await self._disconnect(cached.client, session_id, mark_tasks=False)
         except asyncio.CancelledError:

@@ -1266,6 +1266,7 @@ async def test_changed_instructions_rebuild_a_cached_client(tmp_path):
     await init_db()
     captured = []
     clients = [FakeClient([ResultMessage()]), FakeClient([ResultMessage()])]
+    tasks = FakeTaskService()
 
     def factory(options):
         captured.append(options)
@@ -1274,7 +1275,10 @@ async def test_changed_instructions_rebuild_a_cached_client(tmp_path):
     agent = make_agent()
     agent.instructions = "旧指令"
     runner = ClaudeTurnRunner(
-        store=FakeStore(agent), home=tmp_path, client_factory=factory
+        store=FakeStore(agent),
+        home=tmp_path,
+        client_factory=factory,
+        session_tasks=tasks,
     )
     turn = make_turn(session_id="16161616-1616-1616-1616-161616161616")
     await runner.run(turn, TurnStream())
@@ -1284,6 +1288,7 @@ async def test_changed_instructions_rebuild_a_cached_client(tmp_path):
     assert len(captured) == 2
     assert clients[0].disconnected is True
     assert captured[1].system_prompt["append"] == "新指令"
+    assert tasks.interrupted == [(turn.session_id, "SDK client 已断开")]
 
 
 @pytest.mark.asyncio
@@ -2403,3 +2408,57 @@ async def test_capacity_evicts_oldest_pinned_client_after_grace(tmp_path):
 
     assert len(runner._clients) == 3
     assert tasks.interrupted == [(session_ids[0], "SDK client 已断开")]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_budget_exhausted_still_marks_tasks(tmp_path, monkeypatch):
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_SHUTDOWN_BUDGET_SECONDS", 0)
+    tasks = FakeTaskService()
+    session_id = "46464646-4646-4646-4646-464646464646"
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        session_tasks=tasks,
+    )
+    runner._clients[("default", session_id)] = _CachedClient(
+        client=FakeClient([ResultMessage()]),
+        agent_id="default",
+        fingerprint="fingerprint",
+        last_used=0.0,
+    )
+
+    await runner.close_all()
+
+    assert tasks.interrupted == [
+        (session_id, "服务关机，SDK client 已断开")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_close_all_marks_each_client_once(tmp_path):
+    await init_db()
+    tasks = FakeTaskService()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        session_tasks=tasks,
+    )
+    session_ids = [
+        "47474747-4747-4747-4747-474747474747",
+        "48484848-4848-4848-4848-484848484848",
+    ]
+    for index, session_id in enumerate(session_ids):
+        runner._clients[("default", session_id)] = _CachedClient(
+            client=FakeClient([ResultMessage()]),
+            agent_id="default",
+            fingerprint="fingerprint",
+            last_used=float(index),
+        )
+
+    await runner.close_all()
+
+    assert sorted(tasks.interrupted) == sorted(
+        (session_id, "服务关机，SDK client 已断开")
+        for session_id in session_ids
+    )
