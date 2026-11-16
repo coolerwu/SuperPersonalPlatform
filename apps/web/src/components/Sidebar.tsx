@@ -453,7 +453,6 @@ export function Sidebar(props: SidebarProps) {
                 </span>
                 <span>缠论图</span>
               </button>
-              <p className="sidebar-features-hint">手动操作 · 本地工具</p>
             </SidebarMenu>
 
             <SidebarMenu

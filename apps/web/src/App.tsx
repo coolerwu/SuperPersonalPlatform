@@ -2556,30 +2556,31 @@ export default function App() {
               <span className="chat-topbar-title">{agent?.name ?? "Agent"}</span>
               <span className="chat-topbar-sub">{sessionTitle}</span>
             </div>
-            <button
-              type="button"
-              className={`topbar-button ${drawerOpen ? "active" : ""}`}
-              title={drawerOpen ? "收起详情" : "打开详情"}
-              aria-label={drawerOpen ? "收起详情" : "打开详情"}
-              aria-pressed={drawerOpen}
-              onClick={() => setDrawerOpen((current) => !current)}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
+            {!drawerOpen && (
+              <button
+                type="button"
+                className="topbar-button"
+                title="打开详情"
+                aria-label="打开详情"
+                onClick={() => setDrawerOpen(true)}
               >
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <path d="M15 4v16" />
-              </svg>
-              <span>{drawerOpen ? "收起详情" : "详情"}</span>
-            </button>
+                <svg
+                  viewBox="0 0 24 24"
+                  width="15"
+                  height="15"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="4" width="18" height="16" rx="2" />
+                  <path d="M15 4v16" />
+                </svg>
+                <span>详情</span>
+              </button>
+            )}
           </header>
           {agents.length === 0 ? (
             <div className="chat-empty full">
