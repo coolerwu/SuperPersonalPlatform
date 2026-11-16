@@ -2554,7 +2554,6 @@ export default function App() {
           agents={agents}
           agentId={agentId}
           tab={settingsTab}
-          onTabChange={setSettingsTab}
           providers={providers}
           onSaveAgent={saveAgent}
           onSaveProvider={saveProvider}

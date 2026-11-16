@@ -90,7 +90,7 @@ npm run dev
 
 ## 配置页
 
-侧栏「管理 → Agent全局配置 → Provider/Agent/知识库/地图/运行环境」直接打开配置页对应分区，页面顶部仍可切五个 tab。
+侧栏「管理 → Agent全局配置 → Provider/Agent/知识库/地图/运行环境」直接打开配置页对应分区；页面只显示该分区，切换分区走侧栏。
 
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
 - **Agent**：列出全部 Agent 摘要（Provider/model、权限档位、记忆开关、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态与「完全访问」开关；新建 Agent 默认「仅工作区」，未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。权限档位：`default`（Assistant）固定「完全访问」（`bypassPermissions`）；其他 Agent 默认「仅工作区」（`dontAsk` + 白名单 + `PreToolUse` hook），文件类工具只能读写自己的工作区，`..`、绝对越界、符号链接逃逸和本机/内网 WebFetch 都会被拒绝，Bash、Task 与插件工具暂不受限。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
@@ -103,7 +103,7 @@ npm run dev
 
 ## 技能、工具与插件页面
 
-侧栏顶部是「Agent / 管理」两个工作区 tab（默认 Agent），Agent 选择器只在 Agent 工作区显示，是全站 per-agent 配置的唯一来源。Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组：工作台放新对话和会话列表，Agent 能力放技能、工具、插件、渠道、定时、记忆。管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图；「Agent全局配置」展开后是 Provider、Agent、知识库、地图、运行环境五个配置分区和退出登录，点分区直接打开配置页对应 tab（tab 选择只在内存，刷新回 Provider）。各菜单默认全部展开，点击标题独立收起或展开，进入页面时自动展开所在菜单。管理页不显示会话列表与 Agent 选择器。点「管理」回到本次打开页面期间最后停留的管理页（还没进过管理页时为回测）；已在管理页时不跳转。
+侧栏顶部是「Agent / 管理」两个工作区 tab（默认 Agent），Agent 选择器只在 Agent 工作区显示，是全站 per-agent 配置的唯一来源。Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组：工作台放新对话和会话列表，Agent 能力放技能、工具、插件、渠道、定时、记忆。管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图；「Agent全局配置」展开后是 Provider、Agent、知识库、地图、运行环境五个配置分区和退出登录，点分区直接打开配置页对应分区（页面内无分区 tab 栏，分区选择只在内存，刷新回 Provider）。各菜单默认全部展开，点击标题独立收起或展开，进入页面时自动展开所在菜单。管理页不显示会话列表与 Agent 选择器。点「管理」回到本次打开页面期间最后停留的管理页（还没进过管理页时为回测）；已在管理页时不跳转。
 
 - **技能**：列出全局技能库，按「初始化技能」和「其他技能」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、「已调整」标记、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；任何技能都可删除（只删技能目录）。
 - **工具**：读取当前 Agent 最近一轮对话的运行时 init frame，展示 Claude Code 实际加载的内置工具、MCP server 与工具、技能、插件和插件加载失败；平台业务工具以 `mcp__platform_tools__*` 出现，描述来自平台注册表。没有运行时数据时提示先发一条消息。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）通过进程内 `platform_tools` MCP 接入，插件自带的 MCP 继续并存。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。
@@ -193,7 +193,7 @@ metadata:
 
 平台在生产机维护一份本地镜像（默认 `~/.super-personal-platform/knowledge/`），由 `KnowledgeSyncRuntime` 在 API 进程内与坚果云 WebDAV 双向同步：服务启动后立即同步一次（已配置时），之后按配置页的间隔增量同步（默认 300 秒）。只传输新增或变化的文件，不监听文件系统。
 
-- 配置在「配置」页的「知识库」tab：启用开关、WebDAV 地址（例如 `https://dav.jianguoyun.com/dav/`）、账号、应用密码（坚果云「第三方应用密码」，不是登录密码）、根目录、同步间隔。保存后立即唤醒同步，不需要重启服务；密码只写入 `settings.json`，接口只返回 `has_password`。`.env` 的 `KB_WEBDAV_*` 只在还没有配置时作为首次种子。
+- 配置在「配置」页的「知识库」分区：启用开关、WebDAV 地址（例如 `https://dav.jianguoyun.com/dav/`）、账号、应用密码（坚果云「第三方应用密码」，不是登录密码）、根目录、同步间隔。保存后立即唤醒同步，不需要重启服务；密码只写入 `settings.json`，接口只返回 `has_password`。`.env` 的 `KB_WEBDAV_*` 只在还没有配置时作为首次种子。
 - 同步规则：远端和本地都改过同一文件时，远端版本保留原名，本地版本另存为 `<name>.conflict-local-<时间戳>` 并上传；远端删除且本地未修改时删除本地；本地删除或移动传播到远端，但要连续两次同步都确认文件仍缺失且远端未变化才执行（第一次同步只记录待确认，不删除也不恢复），移动表现为远端旧路径删除、新路径上传；单轮待传播删除达到 20 个且超过已跟踪文件一半时按本地镜像事故处理，不删远端并恢复本地副本。单文件默认上限 50 MB（`KB_MAX_FILE_BYTES`），超出跳过；路径限制在配置的根目录内，拒绝 `..` 和符号链接。
 - 坚果云限流：免费账号每 30 分钟约 600 次 WebDAV 请求（所有第三方应用共享），单次 `PROPFIND` 最多 750 项，且不支持 `Depth: infinity`。平台默认每 4.5 秒最多发一个请求（`KB_REQUEST_INTERVAL_SECONDS`），默认跳过 `.obsidian`、`.git`、`.trash`、`node_modules`、`.DS_Store`（`KB_EXCLUDE_DIRS`）；收到 `BlockedTemporarily` 时暂停约 30 分钟（`KB_BLOCKED_RETRY_SECONDS`）。列表达到 750 项、被截断或某个子目录读取失败时，本轮不做删除判断。
 - 更改 WebDAV 地址、账号或根目录时，本地镜像和同步状态会移到 `.old-<时间戳>` 备份后按新配置重建，避免旧文件被上传到新根目录。
@@ -359,7 +359,7 @@ mkdir -p ~/.super-personal-platform/data
 cp deploy/.env.example ~/.super-personal-platform/.env
 # 编辑 ~/.super-personal-platform/.env，填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
 # 外网访问需要代理时，设置 HTTP_PROXY 和 HTTPS_PROXY（生产机可用 http://192.168.1.2:7893）
-# 知识库优先在配置页的「知识库」tab 配置；KB_* 仅作为首次启动的种子
+# 知识库优先在配置页的「知识库」分区配置；KB_* 仅作为首次启动的种子
 cp deploy/agent-command-center.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now agent-command-center.service

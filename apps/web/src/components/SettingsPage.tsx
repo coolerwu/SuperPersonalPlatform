@@ -19,7 +19,6 @@ type SettingsPageProps = {
   agents: Agent[];
   agentId: string;
   tab: SettingsTab;
-  onTabChange: (tab: SettingsTab) => void;
   providers: Provider[];
   onSaveAgent: (payload: AgentSavePayload) => Promise<void>;
   onSaveProvider: (
@@ -192,44 +191,6 @@ export function SettingsPage(props: SettingsPageProps) {
 
       <div className="settings-scroll" ref={scrollRef}>
         <div className="settings-lane">
-          <div className="settings-tabs">
-            <button
-              type="button"
-              className={tab === "provider" ? "active" : ""}
-              onClick={() => props.onTabChange("provider")}
-            >
-              Provider
-            </button>
-            <button
-              type="button"
-              className={tab === "agent" ? "active" : ""}
-              onClick={() => props.onTabChange("agent")}
-            >
-              Agent
-            </button>
-            <button
-              type="button"
-              className={tab === "knowledge" ? "active" : ""}
-              onClick={() => props.onTabChange("knowledge")}
-            >
-              知识库
-            </button>
-            <button
-              type="button"
-              className={tab === "maps" ? "active" : ""}
-              onClick={() => props.onTabChange("maps")}
-            >
-              地图
-            </button>
-            <button
-              type="button"
-              className={tab === "runtime" ? "active" : ""}
-              onClick={() => props.onTabChange("runtime")}
-            >
-              运行环境
-            </button>
-          </div>
-
           {tab === "provider" && (
           <section className="settings-card">
             <div className="settings-card-head">

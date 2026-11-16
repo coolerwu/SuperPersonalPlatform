@@ -1897,30 +1897,6 @@ textarea {
   margin: 0 auto;
 }
 
-.settings-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--panel-3);
-  width: max-content;
-}
-
-.settings-tabs button {
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 12px;
-}
-
-.settings-tabs button.active {
-  background: #fff;
-  color: var(--accent);
-  box-shadow: var(--shadow-sm);
-}
-
 .settings-card {
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -3515,14 +3491,6 @@ textarea {
     width: 100%;
   }
 
-  .settings-tabs {
-    width: 100%;
-  }
-
-  .settings-tabs button {
-    flex: 1;
-  }
-
   .memory-form-row {
     flex-wrap: wrap;
   }
@@ -3621,10 +3589,6 @@ textarea {
   .composer-card {
     border-radius: 16px;
     padding: 8px 10px 7px;
-  }
-
-  .settings-tabs button {
-    padding: 6px 8px;
   }
 
   .settings-card-actions {
@@ -4512,16 +4476,6 @@ textarea {
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.72);
   box-shadow: 0 14px 40px rgba(28, 34, 52, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9);
-}
-
-.pearl .settings-tabs {
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.5);
-}
-
-.pearl .settings-tabs button.active {
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow: 0 4px 14px rgba(28, 34, 52, 0.08);
 }
 
 .pearl .settings-provider-row,
