@@ -41,6 +41,7 @@ export function applyTaskEvent(
   event: LiveTaskEvent,
 ): Record<string, LiveTask> {
   const id = event.task_id;
+  if (event.type === "task_updated" && !tasks[id]) return tasks;
   const toolUseId = "tool_use_id" in event ? (event.tool_use_id ?? null) : null;
   const existing = tasks[id] ?? emptyTask(id, toolUseId);
   if (event.type === "task_started") {
@@ -51,6 +52,8 @@ export function applyTaskEvent(
         toolUseId: event.tool_use_id ?? existing.toolUseId,
         description: event.description || existing.description,
         status: "running",
+        summary: "",
+        completedAt: null,
       },
     };
   }
@@ -74,20 +77,25 @@ export function applyTaskEvent(
       },
     };
   }
-  return {
-    ...tasks,
-    [id]: {
-      ...existing,
-      status: event.status || existing.status,
-      summary: event.summary || existing.summary,
-      usage: event.usage ?? existing.usage,
-    },
-  };
+  if (event.type === "task_notification") {
+    return {
+      ...tasks,
+      [id]: {
+        ...existing,
+        status: event.status || existing.status,
+        summary: event.summary || existing.summary,
+        usage: event.usage ?? existing.usage,
+      },
+    };
+  }
+  return tasks;
 }
 
 export function sortTasks(tasks: Record<string, LiveTask>): LiveTask[] {
   const rank = (status: string) =>
-    status === "running" || status === "in_progress" ? 0 : 1;
+    status === "running" || status === "in_progress" || status === "pending"
+      ? 0
+      : 1;
   return Object.values(tasks).sort((left, right) => {
     const byRank = rank(left.status) - rank(right.status);
     if (byRank !== 0) return byRank;
@@ -100,6 +108,10 @@ export function taskStatusLabel(status: string): string {
     case "running":
     case "in_progress":
       return "运行中";
+    case "pending":
+      return "等待中";
+    case "paused":
+      return "已暂停";
     case "completed":
       return "已完成";
     case "failed":
@@ -119,5 +131,6 @@ export function taskStatusClass(status: string): string {
   if (status === "failed") return "failed";
   if (status === "stopped" || status === "killed") return "stopped";
   if (status === "interrupted") return "interrupted";
+  if (status === "paused") return "paused";
   return "running";
 }

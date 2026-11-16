@@ -472,6 +472,14 @@ export default function App() {
     });
   }
 
+  function forgetTasks(id: string) {
+    if (!tasksBySessionRef.current[id]) return;
+    const next = { ...tasksBySessionRef.current };
+    delete next[id];
+    tasksBySessionRef.current = next;
+    setTasksBySession(next);
+  }
+
   function clearLiveNotice(id: string) {
     if (!id) return;
     setLiveBySession((current) => {
@@ -1141,6 +1149,11 @@ export default function App() {
     if (sessionEventsRef.current[forSession]) return;
     const source = new EventSource(api.sessionEventsUrl(forSession));
     sessionEventsRef.current[forSession] = source;
+    source.onopen = () => {
+      if (sessionEventsRef.current[forSession] === source) {
+        delete sessionEventRetryRef.current[forSession];
+      }
+    };
     source.onmessage = (message) => {
       let event: SessionTaskEvent;
       try {
@@ -1506,11 +1519,11 @@ export default function App() {
   }, [sessionId]);
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !agentId) return;
     openSessionEvents(sessionId);
     return () => closeSessionEvents(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [agentId, sessionId]);
 
   useEffect(() => {
     const clearActive = () => {
@@ -2225,6 +2238,18 @@ export default function App() {
 
   async function deleteAgentPermanently(id: string) {
     const result = await api.deleteAgentPermanently(id);
+    const ownedSessions = new Set(
+      Object.entries(sessionAgentRef.current)
+        .filter(([, owner]) => owner === id)
+        .map(([session]) => session),
+    );
+    if (id === agentId) {
+      for (const session of sessionsRef.current) ownedSessions.add(session.id);
+    }
+    for (const session of ownedSessions) {
+      closeSessionEvents(session);
+      forgetTasks(session);
+    }
     for (const key of Object.keys(draftsRef.current)) {
       if (key.startsWith(`${id}:`)) delete draftsRef.current[key];
     }
@@ -2285,6 +2310,8 @@ export default function App() {
     try {
       await api.deleteSession(id, forAgent);
       closeStream(id);
+      closeSessionEvents(id);
+      forgetTasks(id);
       delete draftsRef.current[key];
       delete sessionAgentRef.current[id];
       forgetPendingUsers(id);
@@ -2369,6 +2396,12 @@ export default function App() {
 
   async function logout() {
     closeAllStreams();
+    for (const id of Object.keys(sessionEventsRef.current)) {
+      closeSessionEvents(id);
+    }
+    sessionEventRetryRef.current = {};
+    tasksBySessionRef.current = {};
+    setTasksBySession({});
     await api.logout().catch(() => undefined);
     setAuth(false);
     setAgents([]);
