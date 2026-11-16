@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -32,6 +33,11 @@ class FakeTaskService:
 
     def unsubscribe(self, session_id, queue):
         self.unsubscribed.append((session_id, queue))
+
+
+class FailingTaskService(FakeTaskService):
+    async def snapshot(self, session_id):
+        raise RuntimeError("snapshot failed")
 
 
 def test_session_tasks_snapshot(client):
@@ -80,6 +86,23 @@ def test_session_tasks_without_service_is_503(client):
     )
 
 
+def test_session_events_without_service_is_503(client):
+    client.app.state.session_tasks = None
+    assert (
+        client.get(f"/api/sessions/{SESSION_ID}/events").status_code == 503
+    )
+
+
+def test_session_events_unsubscribes_when_snapshot_fails(client):
+    service = FailingTaskService()
+    client.app.state.session_tasks = service
+
+    with pytest.raises(RuntimeError):
+        client.get(f"/api/sessions/{SESSION_ID}/events")
+
+    assert service.unsubscribed == [(SESSION_ID, service.queue)]
+
+
 def test_session_events_sends_snapshot_then_events(client):
     service = FakeTaskService(
         snapshot={"has_turn": True, "updated_at": None, "tasks": []},
@@ -93,6 +116,7 @@ def test_session_events_sends_snapshot_then_events(client):
     with client.stream(
         "GET", f"/api/sessions/{SESSION_ID}/events"
     ) as response:
+        assert response.status_code == 200
         lines = [
             line
             for line in response.iter_lines()

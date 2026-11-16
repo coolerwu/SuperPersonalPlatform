@@ -125,8 +125,8 @@ async def session_events(
     service = _session_tasks(request)
     queue = service.subscribe(session_id)
     try:
-        snapshot = await service.snapshot(session_id)
-    except Exception:
+        snapshot = SessionTasksOut(**await service.snapshot(session_id)).model_dump()
+    except BaseException:
         service.unsubscribe(session_id, queue)
         raise
 
