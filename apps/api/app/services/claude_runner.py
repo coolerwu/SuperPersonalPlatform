@@ -1141,23 +1141,35 @@ class ClaudeTurnRunner:
         A timed-out or failed client is retained in ``_orphaned_clients``:
         timing out raw-cancels the SDK's shielded cleanup, skipping its
         SIGTERM/SIGKILL escalation, and an exception may leave the CLI child
-        alive, so the reference is never silently dropped.
+        alive, so the reference is never silently dropped. Whichever way the
+        disconnect ends, the session's background tasks are marked interrupted
+        because this client was the only reader of their events.
         """
+        disconnected = False
         try:
             async with asyncio.timeout(_DISCONNECT_TIMEOUT_SECONDS):
                 await client.disconnect()
-            return True
+            disconnected = True
         except TimeoutError:
             logger.warning(
                 "client disconnect timed out session=%s; keeping reference",
                 session_id,
             )
             self._retain_orphan(client)
-            return False
         except Exception:
             logger.exception("client disconnect failed session=%s", session_id)
             self._retain_orphan(client)
-            return False
+        if self._session_tasks is not None:
+            try:
+                await self._session_tasks.mark_interrupted(
+                    session_id, "SDK client 已断开"
+                )
+            except Exception:
+                logger.exception(
+                    "failed to mark background tasks interrupted session=%s",
+                    session_id,
+                )
+        return disconnected
 
     async def _evict_key(
         self, key: ClientKey, *, expected: _CachedClient | None = None
@@ -1184,16 +1196,6 @@ class ClaudeTurnRunner:
             # so the shutdown path can still report/close the CLI.
             self._retain_orphan(cached.client)
             raise
-        if self._session_tasks is not None:
-            try:
-                await self._session_tasks.mark_interrupted(
-                    session_id, "SDK client 已断开"
-                )
-            except Exception:
-                logger.exception(
-                    "failed to mark background tasks interrupted session=%s",
-                    session_id,
-                )
         return True
 
     def _retain_orphan(self, client: Any) -> None:

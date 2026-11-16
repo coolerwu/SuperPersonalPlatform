@@ -2219,3 +2219,21 @@ async def test_eviction_marks_background_tasks_interrupted(tmp_path):
 
     assert tasks.flushed == [turn.session_id]
     assert tasks.interrupted[0][0] == turn.session_id
+
+
+@pytest.mark.asyncio
+async def test_disconnect_marks_background_tasks_interrupted(tmp_path):
+    await init_db()
+    tasks = FakeTaskService()
+    client = FakeClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+    session_id = "34343434-3434-3434-3434-343434343434"
+
+    assert await runner._disconnect(client, session_id) is True
+
+    assert tasks.interrupted == [(session_id, "SDK client 已断开")]

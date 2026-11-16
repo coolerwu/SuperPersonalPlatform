@@ -111,10 +111,8 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 runner = ClaudeTurnRunner(
                     store,
                     deliver_callback=_enqueue_delivery,
+                    session_tasks=session_tasks,
                 )
-                # Attach the task service outside the constructor so a patched
-                # runner only has to accept the store and delivery callback.
-                runner._session_tasks = session_tasks
                 app.state.runner = runner
                 registry = SessionRegistry(
                     runner, concurrency=settings.run_concurrency

@@ -37,9 +37,10 @@ def quiet_background_workers(monkeypatch):
 
 def _patch_runtime_classes(monkeypatch, order):
     class FakeRunner:
-        def __init__(self, store, *, deliver_callback=None):
+        def __init__(self, store, *, deliver_callback=None, session_tasks=None):
             self.store = store
             self.deliver_callback = deliver_callback
+            self.session_tasks = session_tasks
 
         async def close_all(self):
             order.append("runner.close_all")
