@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -2115,3 +2116,106 @@ async def test_result_error_redacts_amap_key(tmp_path):
     assert end["type"] == "turn_end"
     assert "secret123" not in (end["error"] or "")
     assert "key=***" in (end["error"] or "")
+
+
+class FakeTaskService:
+    def __init__(self, *, keep_until=None):
+        self.published = []
+        self.interrupted = []
+        self.flushed = []
+        self.keep_until = keep_until
+
+    async def publish(self, session_id, event):
+        self.published.append((session_id, event))
+
+    async def keep_alive_until(self, session_id):
+        return self.keep_until
+
+    async def mark_interrupted(self, session_id, reason):
+        self.interrupted.append((session_id, reason))
+
+    async def flush(self, session_id):
+        self.flushed.append(session_id)
+
+
+class TaskMessage:
+    def __init__(self, task_id="t1"):
+        self.subtype = "task_started"
+        self.task_id = task_id
+        self.tool_use_id = "toolu_1"
+        self.description = "回测"
+
+    def __getattr__(self, name):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_task_events_publish_to_session_service(tmp_path):
+    await init_db()
+    tasks = FakeTaskService()
+    client = FakeClient([TaskMessage(), ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+    turn = make_turn(
+        session_id="31313131-3131-3131-3131-313131313131"
+    )
+
+    await runner.run(turn, TurnStream())
+
+    assert tasks.published == [(turn.session_id, {
+        "type": "task_started",
+        "task_id": "t1",
+        "tool_use_id": "toolu_1",
+        "description": "回测",
+        "task_type": None,
+    })]
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_client_with_active_background_task(tmp_path):
+    await init_db()
+    keep_until = datetime.now(timezone.utc) + timedelta(minutes=5)
+    tasks = FakeTaskService(keep_until=keep_until)
+    client = FakeClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        client_ttl_seconds=0,
+        sweep_seconds=3600,
+        session_tasks=tasks,
+    )
+    turn = make_turn(
+        session_id="32323232-3232-3232-3232-323232323232"
+    )
+    await runner.run(turn, TurnStream())
+    await asyncio.sleep(0.01)
+
+    assert await runner.sweep_idle_clients() == 0
+    assert client.disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_eviction_marks_background_tasks_interrupted(tmp_path):
+    await init_db()
+    tasks = FakeTaskService()
+    client = FakeClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+    turn = make_turn(
+        session_id="33333333-4444-4444-4444-444444444444"
+    )
+    await runner.run(turn, TurnStream())
+
+    await runner.close(turn.session_id)
+
+    assert tasks.flushed == [turn.session_id]
+    assert tasks.interrupted[0][0] == turn.session_id

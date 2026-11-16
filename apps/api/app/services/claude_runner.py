@@ -33,6 +33,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
@@ -297,6 +298,7 @@ class ClaudeTurnRunner:
         max_clients: int | None = None,
         sweep_seconds: float | None = None,
         connect_timeout_seconds: float | None = None,
+        session_tasks: Any | None = None,
     ) -> None:
         self._store = store
         self._home = home
@@ -305,6 +307,9 @@ class ClaudeTurnRunner:
         self._clients: dict[ClientKey, _CachedClient] = {}
         self._factory = client_factory
         self._deliver_callback = deliver_callback
+        # Session-level background task state: task events are published here
+        # and active tasks pin a cached client past its idle TTL.
+        self._session_tasks = session_tasks
         self._locks: dict[str, asyncio.Lock] = {}
         self._active: set[ClientKey] = set()
         # Turn id currently attached to each cached client key. /stop uses it
@@ -605,7 +610,12 @@ class ClaudeTurnRunner:
         """
         expired = self._idle_entries()
         evicted = 0
+        now = datetime.now(timezone.utc)
         for key, cached in expired:
+            if self._session_tasks is not None:
+                deadline = await self._session_tasks.keep_alive_until(key[1])
+                if deadline is not None and deadline > now:
+                    continue
             if await self._evict_key(key, expected=cached):
                 evicted += 1
         await self._enforce_capacity()
@@ -615,7 +625,9 @@ class ClaudeTurnRunner:
         return evicted
 
     async def _enforce_capacity(self) -> None:
-        overflow = len(self._clients) - max(1, self._max_clients)
+        # Keep at least one client cached even if the cap is misconfigured to 0.
+        limit = max(1, self._max_clients)
+        overflow = len(self._clients) - limit
         if overflow <= 0:
             return
         idle = sorted(
@@ -626,7 +638,23 @@ class ClaudeTurnRunner:
             ),
             key=lambda item: item[0],
         )
-        for _, key, cached in idle[:overflow]:
+        now = datetime.now(timezone.utc)
+        skipped: list[tuple[float, ClientKey, _CachedClient]] = []
+        for item in idle:
+            if len(self._clients) <= limit:
+                return
+            _, key, cached = item
+            if self._session_tasks is not None:
+                deadline = await self._session_tasks.keep_alive_until(key[1])
+                if deadline is not None and deadline > now:
+                    skipped.append(item)
+                    continue
+            await self._evict_key(key, expected=cached)
+        # Background tasks may pin clients past the normal cap; allow a small
+        # grace, then evict the oldest pinned client and mark its tasks.
+        for _, key, cached in skipped:
+            if len(self._clients) <= limit + 2:
+                return
             await self._evict_key(key, expected=cached)
 
     async def run(
@@ -757,6 +785,10 @@ class ClaudeTurnRunner:
                         # Task lifecycle is a fact even when the surrounding
                         # notification turn is not shown in this chat.
                         stream.publish(mapped_task)
+                        if self._session_tasks is not None:
+                            await self._session_tasks.publish(
+                                turn.session_id, mapped_task
+                            )
                         continue
 
                     if type(message).__name__ == "UserMessage":
@@ -935,16 +967,30 @@ class ClaudeTurnRunner:
                 else:
                     await self._evict_key(key)
             if lease_added and not keep_lease:
+                if self._session_tasks is not None:
+                    try:
+                        await self._session_tasks.flush(turn.session_id)
+                    except BaseException as exc:
+                        if isinstance(exc, asyncio.CancelledError):
+                            logger.warning(
+                                "task flush cancelled session=%s", turn.session_id
+                            )
+                        else:
+                            logger.warning(
+                                "failed to flush session tasks session=%s",
+                                turn.session_id,
+                                exc_info=True,
+                            )
                 try:
-                    await turn_lease.remove(turn.session_id)
+                    await turn_lease.end_turn(turn.session_id)
                 except BaseException as exc:
                     if isinstance(exc, asyncio.CancelledError):
                         logger.warning(
-                            "turn lease removal cancelled session=%s", turn.session_id
+                            "turn lease end cancelled session=%s", turn.session_id
                         )
                     else:
                         logger.warning(
-                            "failed to remove turn lease session=%s",
+                            "failed to end turn lease session=%s",
                             turn.session_id,
                             exc_info=True,
                         )
@@ -1138,6 +1184,16 @@ class ClaudeTurnRunner:
             # so the shutdown path can still report/close the CLI.
             self._retain_orphan(cached.client)
             raise
+        if self._session_tasks is not None:
+            try:
+                await self._session_tasks.mark_interrupted(
+                    session_id, "SDK client 已断开"
+                )
+            except Exception:
+                logger.exception(
+                    "failed to mark background tasks interrupted session=%s",
+                    session_id,
+                )
         return True
 
     def _retain_orphan(self, client: Any) -> None:
@@ -1253,3 +1309,13 @@ class ClaudeTurnRunner:
                 session_id,
             )
             self._retain_orphan(client)
+        if self._session_tasks is not None:
+            try:
+                await self._session_tasks.mark_interrupted(
+                    session_id, "服务关机，SDK client 已断开"
+                )
+            except Exception:
+                logger.exception(
+                    "failed to mark background tasks interrupted session=%s",
+                    session_id,
+                )
