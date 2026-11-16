@@ -143,7 +143,6 @@ const EMPTY_LIVE: SessionLive = {
   streamReasoning: "",
   activity: [],
   subagents: {},
-  tasks: {},
   artifacts: [],
   notice: "",
   tracking: false,
@@ -1100,7 +1099,6 @@ export default function App() {
             streamReasoning: "",
             activity: [],
             subagents: {},
-            tasks: {},
             artifacts: [],
           },
     );
@@ -1431,7 +1429,6 @@ export default function App() {
         streamReasoning: streaming ? current.streamReasoning : "",
         activity: streaming ? current.activity : [],
         subagents: streaming ? current.subagents : {},
-        tasks: streaming ? current.tasks : {},
         artifacts: streaming ? current.artifacts : [],
         notice: failure || current.notice,
         // Keep the lane marked while a queued turn is about to be attached.
@@ -2147,14 +2144,12 @@ export default function App() {
             streamReasoning: current.streamReasoning,
             activity: current.activity,
             subagents: current.subagents,
-            tasks: current.tasks,
             artifacts: current.artifacts,
           },
           streamText: "",
           streamReasoning: "",
           activity: [],
           subagents: {},
-          tasks: {},
           artifacts: [],
         }));
       }
@@ -2665,7 +2660,7 @@ export default function App() {
               streamReasoning={live.streamReasoning}
               activity={live.activity}
               subagents={live.subagents}
-              tasks={live.tasks}
+              tasks={sessionId ? tasksBySession[sessionId] ?? {} : {}}
               liveArtifacts={live.artifacts}
               frozen={live.frozen}
               sending={chatSending}

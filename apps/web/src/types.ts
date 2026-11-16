@@ -276,7 +276,6 @@ export type FrozenLive = {
   streamReasoning: string;
   activity: LiveToolCall[];
   subagents: Record<string, LiveSubagent>;
-  tasks: Record<string, LiveTask>;
   artifacts: MessageArtifact[];
 };
 

@@ -31,6 +31,7 @@ import { describeApiError } from "../errors";
 import { useAutoFollow } from "../useAutoFollow";
 import { useThrottledText } from "../useThrottledText";
 import { MessageList } from "./MessageList";
+import { SessionTaskPanel } from "./SessionTaskPanel";
 
 type ChatPanelProps = {
   messages: TranscriptMessage[];
@@ -332,7 +333,6 @@ export function ChatPanel(props: ChatPanelProps) {
             streamReasoning={throttledStreamReasoning}
             activity={props.activity}
             subagents={props.subagents}
-            tasks={props.tasks}
             liveArtifacts={props.liveArtifacts}
             frozen={props.frozen}
             sending={props.sending}
@@ -363,6 +363,7 @@ export function ChatPanel(props: ChatPanelProps) {
             <span>回到最新</span>
           </button>
         )}
+        <SessionTaskPanel tasks={props.tasks} />
         {props.notice && (
           <div className="composer-notice" role="status">
             {props.notice}

@@ -7823,3 +7823,101 @@ body:has(.app-shell.pearl) .select-empty {
     padding: 24px 6px;
   }
 }
+
+.session-tasks {
+  border: 1px solid rgba(120, 130, 180, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.45);
+  margin: 0 0 8px;
+  padding: 6px 10px;
+}
+
+.session-tasks summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted, #667085);
+  list-style: none;
+}
+
+.session-tasks summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-tasks-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+}
+
+.session-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.session-task-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #98a2b3;
+  flex: none;
+}
+
+.session-task.running .session-task-dot {
+  background: #16a34a;
+}
+
+.session-task.ok .session-task-dot {
+  background: #16a34a;
+}
+
+.session-task.failed .session-task-dot {
+  background: #dc2626;
+}
+
+.session-task.stopped .session-task-dot {
+  background: #98a2b3;
+}
+
+.session-task.paused .session-task-dot {
+  background: #d97706;
+}
+
+.session-task.interrupted .session-task-dot {
+  background: #d97706;
+}
+
+.session-task-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-task-status {
+  margin-left: auto;
+  color: var(--muted, #667085);
+  flex: none;
+}
+
+.session-task-tool {
+  color: var(--muted, #667085);
+  flex: none;
+}
+
+.session-task-summary {
+  color: var(--muted, #667085);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

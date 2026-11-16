@@ -13,7 +13,6 @@ import { api } from "../api";
 import type {
   FrozenLive,
   LiveSubagent,
-  LiveTask,
   LiveToolCall,
   MessageArtifact,
   QueuedInfo,
@@ -162,51 +161,22 @@ function AssistantProcess({
   );
 }
 
-function taskStatusLabel(status: string): string {
-  switch (status) {
-    case "running":
-      return "运行中";
-    case "pending":
-      return "等待中";
-    case "paused":
-      return "已暂停";
-    case "completed":
-      return "已完成";
-    case "failed":
-      return "失败";
-    case "stopped":
-    case "killed":
-      return "已停止";
-    default:
-      return status || "进行中";
-  }
-}
-
-function taskStatusClass(status: string): string {
-  return ["completed", "failed", "stopped", "killed", "paused"].includes(status)
-    ? status
-    : "running";
-}
-
 function LiveProcess({
   reasoning,
   activity,
   subagents,
-  tasks,
   streamingText,
   agentId,
 }: {
   reasoning: string;
   activity: LiveToolCall[];
   subagents: Record<string, LiveSubagent>;
-  tasks: Record<string, LiveTask>;
   streamingText: boolean;
   agentId: string;
 }) {
   const [open, setOpen] = useState(true);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef(true);
-  const taskList = Object.values(tasks);
   const subagentList = Object.values(subagents);
   const subagentTextLength = subagentList.reduce(
     (total, item) => total + item.text.length,
@@ -223,12 +193,11 @@ function LiveProcess({
     const body = bodyRef.current;
     if (!body || !open || !followRef.current) return;
     body.scrollTop = body.scrollHeight;
-  }, [reasoning, activity.length, taskList.length, subagentTextLength, open]);
+  }, [reasoning, activity.length, subagentTextLength, open]);
   const hasReasoning = Boolean(reasoning.trim());
   if (
     !hasReasoning &&
     activity.length === 0 &&
-    taskList.length === 0 &&
     subagentList.length === 0
   ) {
     return null;
@@ -242,39 +211,10 @@ function LiveProcess({
       <summary>
         <span>执行过程</span>
         <span className="run-trace-count">
-          {[
-            totalTools > 0 ? `${totalTools} 个工具` : "",
-            taskList.length > 0 ? `${taskList.length} 个任务` : "",
-          ]
-            .filter(Boolean)
-            .join(" · ") || "思考"}
+          {totalTools > 0 ? `${totalTools} 个工具` : "思考"}
         </span>
       </summary>
       <div className="run-trace-steps">
-        {taskList.length > 0 && (
-          <div className="run-trace-tasks">
-            {taskList.map((task) => (
-              <div
-                className={`run-trace-task ${taskStatusClass(task.status)}`}
-                key={task.id}
-              >
-                <span className="run-trace-task-dot" aria-hidden="true" />
-                <span className="run-trace-tool-label">
-                  {task.description || task.id}
-                </span>
-                <span className="run-trace-task-status">
-                  {taskStatusLabel(task.status)}
-                </span>
-                {task.lastToolName && (
-                  <span className="run-trace-tool-name">{task.lastToolName}</span>
-                )}
-                {task.summary && (
-                  <small className="run-trace-task-summary">{task.summary}</small>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
         {hasReasoning && (
           <div className="run-trace-reasoning">
             <div className="run-trace-step-label">思考</div>
@@ -532,7 +472,6 @@ function StreamingRow({
   streamReasoning,
   activity,
   subagents,
-  tasks,
   liveArtifacts,
   agentId,
   agentName,
@@ -542,7 +481,6 @@ function StreamingRow({
   streamReasoning: string;
   activity: LiveToolCall[];
   subagents: Record<string, LiveSubagent>;
-  tasks: Record<string, LiveTask>;
   liveArtifacts: MessageArtifact[];
   agentId: string;
   agentName: string;
@@ -570,7 +508,6 @@ function StreamingRow({
           reasoning={streamReasoning}
           activity={activity}
           subagents={subagents}
-          tasks={tasks}
           streamingText={Boolean(streamText)}
           agentId={agentId}
         />
@@ -600,7 +537,6 @@ export type MessageListProps = {
   streamReasoning: string;
   activity: LiveToolCall[];
   subagents: Record<string, LiveSubagent>;
-  tasks: Record<string, LiveTask>;
   liveArtifacts: MessageArtifact[];
   frozen: FrozenLive | null;
   sending: boolean;
@@ -807,7 +743,6 @@ export const MessageList = memo(function MessageList(props: MessageListProps) {
           streamReasoning={props.frozen.streamReasoning}
           activity={props.frozen.activity}
           subagents={props.frozen.subagents}
-          tasks={props.frozen.tasks}
           liveArtifacts={props.frozen.artifacts}
           agentId={props.agentId}
           agentName={props.agentName}
@@ -821,7 +756,6 @@ export const MessageList = memo(function MessageList(props: MessageListProps) {
           streamReasoning={props.streamReasoning}
           activity={props.activity}
           subagents={props.subagents}
-          tasks={props.tasks}
           liveArtifacts={props.liveArtifacts}
           agentId={props.agentId}
           agentName={props.agentName}
