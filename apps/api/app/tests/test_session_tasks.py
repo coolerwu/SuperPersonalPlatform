@@ -528,7 +528,9 @@ async def test_forget_keeps_active_turn_lease(caplog):
     with caplog.at_level(logging.WARNING):
         await service.forget(SESSION_ID)
 
-    assert await queue.get() is None
+    assert queue.empty()
+    assert SESSION_ID in service._subscribers
+    assert SESSION_ID in service._live
     async with SessionLocal() as db:
         row = await db.get(RunningSession, SESSION_ID)
         assert row is not None
@@ -587,3 +589,40 @@ async def test_writer_loop_persists_progress():
     finally:
         await service.stop()
         await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_prunes_empty_live_entry():
+    await init_db()
+    service = _service()
+    await service.snapshot(SESSION_ID)
+    assert SESSION_ID in service._live
+
+    await service.cleanup_once()
+
+    assert SESSION_ID not in service._live
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_live_entry_with_subscriber():
+    await init_db()
+    service = _service()
+    await service.snapshot(SESSION_ID)
+    queue = service.subscribe(SESSION_ID)
+
+    await service.cleanup_once()
+
+    assert SESSION_ID in service._live
+    service.unsubscribe(SESSION_ID, queue)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_dirty_live_entry():
+    await init_db()
+    service = _service()
+    await service.snapshot(SESSION_ID)
+    service._dirty.add(SESSION_ID)
+
+    await service.cleanup_once()
+
+    assert SESSION_ID in service._live

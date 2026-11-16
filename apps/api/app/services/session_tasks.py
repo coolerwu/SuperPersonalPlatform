@@ -350,22 +350,21 @@ class SessionTaskService:
 
     async def forget(self, session_id: str) -> None:
         async with self._lock:
-            self._live.pop(session_id, None)
-            self._dirty.discard(session_id)
-            for queue in self._subscribers.pop(session_id, set()):
-                queue.put_nowait(None)
             async with SessionLocal() as db:
                 row = await db.get(RunningSession, session_id)
-                if row is None:
-                    return
-                if row.has_turn:
+                if row is not None and row.has_turn:
                     logger.warning(
                         "refusing to forget active turn lease session=%s",
                         session_id,
                     )
                     return
-                await db.delete(row)
-                await db.commit()
+                self._live.pop(session_id, None)
+                self._dirty.discard(session_id)
+                for queue in self._subscribers.pop(session_id, set()):
+                    queue.put_nowait(None)
+                if row is not None:
+                    await db.delete(row)
+                    await db.commit()
 
     async def cleanup_once(self) -> None:
         async with self._lock:
@@ -440,7 +439,11 @@ class SessionTaskService:
                 await db.commit()
             row_ids = {row.session_id for row in rows}
             for key in list(self._live):
-                if key not in row_ids and not self._subscribers.get(key):
+                if (
+                    key not in row_ids
+                    and not self._subscribers.get(key)
+                    and key not in self._dirty
+                ):
                     self._live.pop(key, None)
 
     async def _row_tasks(self, session_id: str) -> dict[str, dict[str, Any]]:
