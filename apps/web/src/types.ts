@@ -426,8 +426,6 @@ export type MapsConfig = {
   has_api_key: boolean;
 };
 
-export type DrawerTab = "run" | "agent";
-
 export type BacktestStatus =
   | "queued"
   | "fetching"

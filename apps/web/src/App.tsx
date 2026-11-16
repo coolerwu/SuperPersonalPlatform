@@ -13,7 +13,6 @@ import type {
   Agent,
   AgentSavePayload,
   Attachment,
-  DrawerTab,
   FrozenLive,
   LiveSubagent,
   LiveTask,
@@ -32,7 +31,6 @@ import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
 import { sessionSummariesEqual } from "./sessionSummary";
 import { ChatPanel } from "./components/ChatPanel";
 import { ConfirmDialog } from "./components/ConfirmDialog";
-import { Drawer } from "./components/Drawer";
 import { Login } from "./components/Login";
 import { NewAgentDialog } from "./components/NewAgentDialog";
 import { RenameSessionDialog } from "./components/RenameSessionDialog";
@@ -306,8 +304,6 @@ export default function App() {
   const [loadErrorBySession, setLoadErrorBySession] = useState<Record<string, string>>({});
   const [liveBySession, setLiveBySession] = useState<Record<string, SessionLive>>({});
   const [error, setError] = useState("");
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [view, setView] = useState<View>(initialRoute?.view ?? "chat");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("provider");
   const [lastFeaturesView, setLastFeaturesView] = useState<View>(() => {
@@ -2381,11 +2377,7 @@ export default function App() {
   }
 
   return (
-    <div
-      className={["app-shell", "pearl", view === "chat" && drawerOpen ? "with-drawer" : ""]
-        .filter(Boolean)
-        .join(" ")}
-    >
+    <div className="app-shell pearl">
       <header className="mobile-bar">
         <button
           type="button"
@@ -2413,32 +2405,7 @@ export default function App() {
           <span className="mobile-bar-name">{viewTitle}</span>
           {view === "chat" && <span className="mobile-bar-sub">{sessionTitle}</span>}
         </div>
-        {view === "chat" ? (
-          <button
-            type="button"
-            className={`mobile-bar-button ${drawerOpen ? "active" : ""}`}
-            onClick={() => setDrawerOpen((current) => !current)}
-            aria-label={drawerOpen ? "收起详情" : "打开详情"}
-            title={drawerOpen ? "收起详情" : "打开详情"}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              width="18"
-              height="18"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <rect x="3" y="4" width="18" height="16" rx="2" />
-              <path d="M15 4v16" />
-            </svg>
-          </button>
-        ) : (
-          <span className="mobile-bar-spacer" />
-        )}
+        <span className="mobile-bar-spacer" />
       </header>
 
       <Sidebar
@@ -2556,31 +2523,6 @@ export default function App() {
               <span className="chat-topbar-title">{agent?.name ?? "Agent"}</span>
               <span className="chat-topbar-sub">{sessionTitle}</span>
             </div>
-            {!drawerOpen && (
-              <button
-                type="button"
-                className="topbar-button"
-                title="打开详情"
-                aria-label="打开详情"
-                onClick={() => setDrawerOpen(true)}
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width="15"
-                  height="15"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <rect x="3" y="4" width="18" height="16" rx="2" />
-                  <path d="M15 4v16" />
-                </svg>
-                <span>详情</span>
-              </button>
-            )}
           </header>
           {agents.length === 0 ? (
             <div className="chat-empty full">
@@ -2637,19 +2579,6 @@ export default function App() {
         </main>
       )}
       </Suspense>
-
-      {view === "chat" && drawerOpen && (
-        <Drawer
-          tab={drawerTab}
-          onTab={setDrawerTab}
-          activity={live.activity.map((item) => item.name)}
-          reasoning={live.streamReasoning}
-          agent={agent}
-          providers={providers}
-          onSaveAgent={saveAgent}
-          onClose={() => setDrawerOpen(false)}
-        />
-      )}
 
       <ConfirmDialog
         open={sessionToDelete !== null}
