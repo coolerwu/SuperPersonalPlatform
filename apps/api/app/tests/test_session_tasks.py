@@ -574,7 +574,12 @@ async def test_writer_loop_persists_progress():
                 "description": "progress",
             },
         )
-        deadline = asyncio.get_running_loop().time() + 2.0
+        # The writer debounces progress for a second; the started snapshot is
+        # still what the database holds immediately after publish.
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert json.loads(row.tasks_json)[0]["description"] == "回测 BTC 1h"
+        deadline = asyncio.get_running_loop().time() + 3.0
         while True:
             async with SessionLocal() as db:
                 row = await db.get(RunningSession, SESSION_ID)

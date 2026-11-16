@@ -526,6 +526,18 @@ class SessionTaskService:
             except asyncio.TimeoutError:
                 pass
             self._wake.clear()
+            if not self._dirty:
+                continue
+            # Debounce progress bursts: hold dirty state for one second so a
+            # fast sequence of task_progress events collapses into one write.
+            # Terminal events persist in publish(); turn end and shutdown
+            # flush explicitly, so the delay cannot lose state.
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+            if self._stop.is_set():
+                break
             async with self._lock:
                 dirty = list(self._dirty)
                 self._dirty.clear()
