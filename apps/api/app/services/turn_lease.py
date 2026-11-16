@@ -8,10 +8,10 @@ reads only rows with ``has_turn=True`` to find sessions that were mid-run.
 
 from __future__ import annotations
 
-import json
 import logging
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,27 +24,27 @@ logger = logging.getLogger(__name__)
 async def add_in(db: AsyncSession, session_id: str) -> None:
     """Insert or reactivate a turn lease inside the caller's transaction.
 
-    Idempotent for a lease that is already committed/visible. Reactivating a
-    task-only row preserves its retained tasks. A concurrent insert for the
-    same session raises ``IntegrityError`` from the flush; the caller must roll
-    back its own transaction. The executor relies on the one-turn-per-session
-    invariant to avoid this. Same-session turns are serialized; cleanup only
-    deletes ``has_turn=False`` rows.
+    Idempotent for a lease that is already committed/visible. The upsert is
+    atomic, so a task-only row inserted concurrently by the tail reader or the
+    session task service conflicts cleanly and keeps its retained tasks. The
+    executor relies on the one-turn-per-session invariant to serialize turns;
+    cleanup only deletes ``has_turn=False`` rows.
     """
-    existing = await db.get(RunningSession, session_id)
-    if existing is not None:
-        existing.has_turn = True
-        existing.updated_at = utcnow()
-        await db.flush()
-        return
-    db.add(
-        RunningSession(
+    now = utcnow()
+    stmt = (
+        sqlite_insert(RunningSession)
+        .values(
             session_id=session_id,
             has_turn=True,
             tasks_json="[]",
-            updated_at=utcnow(),
+            updated_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[RunningSession.session_id],
+            set_={"has_turn": True, "updated_at": now},
         )
     )
+    await db.execute(stmt)
     await db.flush()
 
 
@@ -88,24 +88,25 @@ async def end_turn(session_id: str) -> None:
     Teardown must call this even if the task-state flush fails; callers must
     wrap flush and ``end_turn`` in separate try blocks so a flush failure
     cannot leave ``has_turn=True`` and trigger a false resume.
+
+    The UPDATE takes the row's write lock first, so a concurrent task publish
+    is serialized behind it; the DELETE then re-evaluates the empty-task
+    condition at execution time and cannot remove a task written meanwhile.
     """
+    now = utcnow()
     async with SessionLocal() as db:
-        row = await db.get(RunningSession, session_id)
-        if row is None:
-            return
-        row.has_turn = False
-        row.updated_at = utcnow()
-        try:
-            tasks = json.loads(row.tasks_json or "[]")
-        except ValueError:
-            logger.warning(
-                "keeping row with malformed tasks_json session=%s",
-                session_id,
-                exc_info=True,
+        await db.execute(
+            update(RunningSession)
+            .where(RunningSession.session_id == session_id)
+            .values(has_turn=False, updated_at=now)
+        )
+        await db.execute(
+            delete(RunningSession).where(
+                RunningSession.session_id == session_id,
+                RunningSession.has_turn.is_(False),
+                RunningSession.tasks_json == "[]",
             )
-            tasks = None
-        if isinstance(tasks, list) and not tasks:
-            await db.delete(row)
+        )
         await db.commit()
 
 

@@ -1,5 +1,5 @@
+import asyncio
 import json
-import logging
 from datetime import datetime, timezone
 
 import pytest
@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.db import SessionLocal, _ensure_running_session_columns, init_db
 from app.models import RunningSession
 from app.services import turn_lease
+from app.services.session_tasks import SessionTaskService
 
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -176,7 +177,81 @@ async def test_begin_turn_reactivates_task_row():
 
 
 @pytest.mark.asyncio
-async def test_end_turn_keeps_row_with_malformed_tasks_json(caplog):
+async def test_add_upserts_task_only_row():
+    await init_db()
+    await turn_lease.remove(SESSION_ID)
+    try:
+        async with SessionLocal() as db:
+            db.add(
+                RunningSession(
+                    session_id=SESSION_ID,
+                    has_turn=False,
+                    tasks_json=json.dumps([_task("t1")]),
+                )
+            )
+            await db.commit()
+
+        await turn_lease.add(SESSION_ID)
+
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row is not None
+            assert row.has_turn is True
+            assert json.loads(row.tasks_json)[0]["task_id"] == "t1"
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_add_turn_with_concurrent_task_publish():
+    await init_db()
+    await turn_lease.remove(SESSION_ID)
+    service = SessionTaskService()
+    try:
+        await asyncio.gather(
+            turn_lease.add(SESSION_ID),
+            service.publish(
+                SESSION_ID,
+                {"type": "task_started", "task_id": "t1", "description": "t1"},
+            ),
+        )
+
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row is not None
+            assert row.has_turn is True
+            task_ids = {task["task_id"] for task in json.loads(row.tasks_json)}
+            assert "t1" in task_ids
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_end_turn_with_concurrent_task_publish():
+    await init_db()
+    await turn_lease.remove(SESSION_ID)
+    await turn_lease.add(SESSION_ID)
+    service = SessionTaskService()
+    try:
+        await asyncio.gather(
+            turn_lease.end_turn(SESSION_ID),
+            service.publish(
+                SESSION_ID,
+                {"type": "task_started", "task_id": "t1", "description": "t1"},
+            ),
+        )
+
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row is not None
+            task_ids = {task["task_id"] for task in json.loads(row.tasks_json)}
+            assert "t1" in task_ids
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_end_turn_keeps_row_with_malformed_tasks_json():
     await init_db()
     await turn_lease.add(SESSION_ID)
     try:
@@ -185,15 +260,13 @@ async def test_end_turn_keeps_row_with_malformed_tasks_json(caplog):
             row.tasks_json = "not-json"
             await db.commit()
 
-        with caplog.at_level(logging.WARNING):
-            await turn_lease.end_turn(SESSION_ID)
+        await turn_lease.end_turn(SESSION_ID)
 
         async with SessionLocal() as db:
             row = await db.get(RunningSession, SESSION_ID)
             assert row is not None
             assert row.has_turn is False
             assert row.tasks_json == "not-json"
-        assert "malformed tasks_json" in caplog.text
     finally:
         await turn_lease.remove(SESSION_ID)
 
