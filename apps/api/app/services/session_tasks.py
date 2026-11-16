@@ -41,8 +41,10 @@ def _load_tasks(raw: str) -> dict[str, dict[str, Any]]:
     try:
         data = json.loads(raw or "[]")
     except ValueError:
+        logger.warning("ignoring malformed tasks_json", exc_info=True)
         return {}
     if not isinstance(data, list):
+        logger.warning("ignoring non-list tasks_json")
         return {}
     tasks: dict[str, dict[str, Any]] = {}
     for item in data:
@@ -235,8 +237,7 @@ class SessionTaskService:
                 self._dirty.add(session_id)
                 self._wake.set()
             else:
-                await self._persist(session_id, tasks)
-                self._dirty.discard(session_id)
+                await self._persist_safely(session_id, tasks)
 
     async def snapshot(self, session_id: str) -> dict[str, Any]:
         async with self._lock:
@@ -246,12 +247,22 @@ class SessionTaskService:
             if tasks is None:
                 tasks = _load_tasks(row.tasks_json) if row is not None else {}
                 self._live[session_id] = tasks
+            cutoff = self._now() - self.retention
+            visible: list[dict[str, Any]] = []
+            for task in tasks.values():
+                if _is_terminal(task):
+                    completed = _task_time(task, "completed_at") or _task_time(
+                        task, "updated_at"
+                    )
+                    if completed is not None and completed < cutoff:
+                        continue
+                visible.append(dict(task))
             return {
                 "has_turn": bool(row.has_turn) if row is not None else False,
                 "updated_at": _iso(row.updated_at)
                 if row is not None and row.updated_at
                 else None,
-                "tasks": [dict(task) for task in tasks.values()],
+                "tasks": visible,
             }
 
     def subscribe(self, session_id: str) -> asyncio.Queue[dict[str, Any] | None]:
@@ -296,8 +307,7 @@ class SessionTaskService:
                     },
                 )
             if changed:
-                await self._persist(session_id, tasks)
-                self._dirty.discard(session_id)
+                await self._persist_safely(session_id, tasks)
 
     async def keep_alive_until(self, session_id: str) -> datetime | None:
         async with self._lock:
@@ -321,8 +331,7 @@ class SessionTaskService:
             tasks = self._live.get(session_id)
             if tasks is None:
                 return
-            await self._persist(session_id, tasks)
-            self._dirty.discard(session_id)
+            await self._persist_safely(session_id, tasks)
 
     async def forget(self, session_id: str) -> None:
         async with self._lock:
@@ -354,7 +363,7 @@ class SessionTaskService:
                             completed = _task_time(task, "completed_at") or _task_time(
                                 task, "updated_at"
                             )
-                            if completed is None or now - completed >= self.retention:
+                            if completed is None or now - completed > self.retention:
                                 tasks.pop(task_id, None)
                                 removed.append(task_id)
                                 changed = True
@@ -362,7 +371,7 @@ class SessionTaskService:
                             started = _task_time(task, "started_at") or _task_time(
                                 task, "updated_at"
                             )
-                            if started is not None and now - started >= self.retention:
+                            if started is not None and now - started > self.retention:
                                 task["status"] = "interrupted"
                                 task["summary"] = "后台任务超过保活上限"
                                 task["updated_at"] = now_iso
@@ -419,6 +428,19 @@ class SessionTaskService:
             row.tasks_json = raw
             row.updated_at = now
             await db.commit()
+
+    async def _persist_safely(
+        self, session_id: str, tasks: dict[str, dict[str, Any]]
+    ) -> None:
+        try:
+            await self._persist(session_id, tasks)
+            self._dirty.discard(session_id)
+        except Exception:
+            logger.exception(
+                "session task write failed session=%s", session_id
+            )
+            self._dirty.add(session_id)
+            self._wake.set()
 
     def _broadcast(self, session_id: str, event: dict[str, Any]) -> None:
         for queue in list(self._subscribers.get(session_id, ())):

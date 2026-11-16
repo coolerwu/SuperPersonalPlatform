@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -108,8 +109,10 @@ async def test_mark_interrupted_updates_running_tasks():
 async def test_keep_alive_uses_task_start_not_progress():
     await init_db()
     await turn_lease.add(SESSION_ID)
-    service = _service()
+    now = [NOW]
+    service = _service(now=lambda: now[0])
     await service.publish(SESSION_ID, _started())
+    now[0] = NOW + timedelta(minutes=5)
     await service.publish(
         SESSION_ID,
         {"type": "task_progress", "task_id": "t1", "description": "still"},
@@ -205,4 +208,248 @@ async def test_publish_creates_task_only_row():
         assert row is not None
         assert row.has_turn is False
         assert json.loads(row.tasks_json)[0]["task_id"] == "t1"
+    await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_progress_after_terminal_is_ignored():
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    service = _service()
+    await service.publish(SESSION_ID, _started())
+    await service.publish(
+        SESSION_ID,
+        {
+            "type": "task_notification",
+            "task_id": "t1",
+            "status": "completed",
+            "summary": "完成",
+            "usage": {"tool_uses": 3},
+        },
+    )
+
+    await service.publish(
+        SESSION_ID,
+        {
+            "type": "task_progress",
+            "task_id": "t1",
+            "description": "不应覆盖",
+            "last_tool_name": "Bash",
+            "usage": {"tool_uses": 9},
+        },
+    )
+
+    task = (await service.snapshot(SESSION_ID))["tasks"][0]
+    assert task["status"] == "completed"
+    assert task["summary"] == "完成"
+    assert task["last_tool_name"] == ""
+    assert task["usage"] == {"tool_uses": 3}
+    await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.parametrize("status", ["failed", "stopped"])
+@pytest.mark.asyncio
+async def test_notification_terminal_statuses_set_completed_at(status):
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    service = _service()
+    await service.publish(SESSION_ID, _started())
+    await service.publish(
+        SESSION_ID,
+        {
+            "type": "task_notification",
+            "task_id": "t1",
+            "status": status,
+            "summary": "end",
+        },
+    )
+
+    task = (await service.snapshot(SESSION_ID))["tasks"][0]
+    assert task["status"] == status
+    assert task["completed_at"] is not None
+    await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_task_limit_drops_oldest_terminal_and_emits_removed():
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    service = _service()
+    queue = service.subscribe(SESSION_ID)
+
+    for index in range(33):
+        await service.publish(
+            SESSION_ID,
+            {
+                "type": "task_notification",
+                "task_id": f"t{index}",
+                "status": "completed",
+                "summary": "done",
+            },
+        )
+    await service.publish(SESSION_ID, _started(task_id="running"))
+
+    snapshot = await service.snapshot(SESSION_ID)
+    ids = {task["task_id"] for task in snapshot["tasks"]}
+    assert len(ids) == 32
+    assert "running" in ids
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    removed = [
+        event["task_id"] for event in events if event["type"] == "task_removed"
+    ]
+    assert removed
+    service.unsubscribe(SESSION_ID, queue)
+    await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_json_limit_drops_terminal_tasks_and_keeps_running():
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    service = _service()
+    await service.publish(SESSION_ID, _started(task_id="running"))
+    for index in range(4):
+        await service.publish(
+            SESSION_ID,
+            {
+                "type": "task_notification",
+                "task_id": f"t{index}",
+                "status": "completed",
+                "summary": "x" * 30_000 + f"-{index}",
+            },
+        )
+
+    snapshot = await service.snapshot(SESSION_ID)
+    ids = {task["task_id"] for task in snapshot["tasks"]}
+    assert "running" in ids
+    assert len(ids) == 3
+    assert len(json.dumps(snapshot["tasks"]).encode("utf-8")) <= 64 * 1024
+    await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_turn_row():
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    now = [NOW]
+    service = _service(now=lambda: now[0], retention_seconds=10)
+    await service.publish(
+        SESSION_ID,
+        {
+            "type": "task_notification",
+            "task_id": "t1",
+            "status": "completed",
+            "summary": "done",
+        },
+    )
+    now[0] = NOW + timedelta(seconds=11)
+
+    await service.cleanup_once()
+
+    assert (await service.snapshot(SESSION_ID))["tasks"] == []
+    async with SessionLocal() as db:
+        row = await db.get(RunningSession, SESSION_ID)
+        assert row is not None
+        assert row.has_turn is True
+    await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_forget_closes_subscribers_and_deletes_row():
+    await init_db()
+    service = _service()
+    await service.publish(SESSION_ID, _started())
+    queue = service.subscribe(SESSION_ID)
+
+    await service.forget(SESSION_ID)
+
+    assert await queue.get() is None
+    async with SessionLocal() as db:
+        assert await db.get(RunningSession, SESSION_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_leaves_other_subscribers():
+    await init_db()
+    service = _service()
+    first = service.subscribe(SESSION_ID)
+    second = service.subscribe(SESSION_ID)
+
+    await service.publish(SESSION_ID, _started())
+    assert (await first.get())["type"] == "task_started"
+    assert (await second.get())["type"] == "task_started"
+
+    service.unsubscribe(SESSION_ID, first)
+    await service.publish(
+        SESSION_ID,
+        {"type": "task_updated", "task_id": "t1", "status": "completed"},
+    )
+
+    assert (await second.get())["type"] == "task_updated"
+    assert first.empty()
+    await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_publish_persist_failure_is_best_effort(monkeypatch):
+    await init_db()
+    service = _service()
+
+    async def _boom(session_id, tasks):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(service, "_persist", _boom)
+
+    await service.publish(SESSION_ID, _started())
+
+    snapshot = await service.snapshot(SESSION_ID)
+    assert snapshot["tasks"][0]["task_id"] == "t1"
+    assert SESSION_ID in service._dirty
+    await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_stop_flushes_dirty_progress():
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    service = _service()
+    await service.publish(SESSION_ID, _started())
+    await service.publish(
+        SESSION_ID,
+        {"type": "task_progress", "task_id": "t1", "description": "progress"},
+    )
+    async with SessionLocal() as db:
+        row = await db.get(RunningSession, SESSION_ID)
+        assert json.loads(row.tasks_json)[0]["description"] == "回测 BTC 1h"
+
+    await service.stop()
+
+    async with SessionLocal() as db:
+        row = await db.get(RunningSession, SESSION_ID)
+        assert json.loads(row.tasks_json)[0]["description"] == "progress"
+    await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_ignores_malformed_tasks_json(caplog):
+    await init_db()
+    async with SessionLocal() as db:
+        db.add(
+            RunningSession(
+                session_id=SESSION_ID,
+                has_turn=False,
+                tasks_json="{bad",
+            )
+        )
+        await db.commit()
+    service = _service()
+
+    with caplog.at_level(logging.WARNING):
+        snapshot = await service.snapshot(SESSION_ID)
+
+    assert snapshot["tasks"] == []
+    assert "malformed tasks_json" in caplog.text
     await turn_lease.remove(SESSION_ID)
