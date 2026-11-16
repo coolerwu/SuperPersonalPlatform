@@ -58,16 +58,21 @@ from app.services.turn_stream import TurnStream
 logger = logging.getLogger(__name__)
 
 # The SDK's transport close closes stdin, waits, sends SIGTERM, waits, then
-# SIGKILL, with roughly a 20 s worst-case bound. An asyncio.timeout shorter
-# than that raw-cancels the SDK's shielded cleanup and skips the escalation,
-# so wait longer than the SDK itself before treating a close as an orphan.
-_DISCONNECT_TIMEOUT_SECONDS = 25
-# Total time ``close_all`` may spend disconnecting cached clients. The deploy
-# unit allows 60 s for the whole shutdown; ``SessionRegistry.close`` may take
-# up to 10 s, leaving room for the other runtimes.
-_SHUTDOWN_BUDGET_SECONDS = 30
+# SIGKILL, with roughly a 20 s worst-case bound. Before that, Query.close()
+# waits up to 5 s for each in-process SDK MCP bridge to wind down; the platform
+# always has one (``platform_tools``). An asyncio.timeout at that boundary
+# raw-cancels the SDK's shielded cleanup and skips the escalation, so leave
+# 20 + 5 + 5 s of margin before treating a close as an orphan.
+_DISCONNECT_TIMEOUT_SECONDS = 30
+# Total time ``close_all`` may spend disconnecting cached clients. Clients are
+# disconnected concurrently, so the budget covers one SDK close, not the sum.
+# The deploy unit allows 60 s for the whole shutdown; ``SessionRegistry.close``
+# may take up to 10 s, leaving room for the other runtimes.
+_SHUTDOWN_BUDGET_SECONDS = 35
 # A connect that wedges would otherwise hold a concurrency permit forever.
-_CONNECT_TIMEOUT_SECONDS = 60
+# The SDK's own initialize timeout is max(CLAUDE_CODE_STREAM_CLOSE_TIMEOUT, 60s),
+# so leave it room to report its error before this outer timeout fires.
+_CONNECT_TIMEOUT_SECONDS = 75
 _INTERRUPT_LOCK_TIMEOUT_SECONDS = 5
 # Big tool results and file reads must not overflow the SDK's default 1 MB
 # CLI frame buffer and fail the turn.
@@ -304,6 +309,9 @@ class ClaudeTurnRunner:
         # Turn id currently attached to each cached client key. /stop uses it
         # so a late interrupt cannot hit the session's next turn.
         self._active_turns: dict[ClientKey, str] = {}
+        # Keys whose prompt has been written to the CLI. An interrupt before
+        # this point must wait for the runner to send it after query().
+        self._query_sent: set[ClientKey] = set()
         self._cancel_requested: set[ClientKey] = set()
         # Turns that ended in a state that must not be resumed reuse; the
         # registry drains these after releasing its concurrency permit.
@@ -696,6 +704,25 @@ class ClaudeTurnRunner:
                     )
                     return outcome
                 await client.query(prompt)
+                self._query_sent.add(key)
+                if key in self._cancel_requested:
+                    # /stop arrived while the prompt was being written; the
+                    # interrupt sent then may have reached the CLI before the
+                    # prompt, so send one now that the turn is in flight.
+                    try:
+                        await asyncio.wait_for(
+                            client.interrupt(), timeout=5
+                        )
+                    except Exception:
+                        # The turn is not actually cancelled; let it finish
+                        # and deliver its reply instead of leaving the marker
+                        # that suppresses channel delivery.
+                        self._cancel_requested.discard(key)
+                        logger.warning(
+                            "interrupt after queued prompt failed session=%s",
+                            turn.session_id,
+                            exc_info=True,
+                        )
                 # Drain the full stream: receive_response() would stop at the
                 # first ResultMessage, which may be an injected background
                 # task notification rather than this turn's result.
@@ -813,6 +840,10 @@ class ClaudeTurnRunner:
                     # would only fail again on the next turn.
                     if outcome.status != "completed":
                         evict = True
+                    # Stop here: this turn's SSE stream closes with turn_end.
+                    # Any background-task frames that arrive later stay in the
+                    # client's message buffer and are published by the next
+                    # turn that reads it; eviction before then drops them.
                     break
         except TimeoutError:
             outcome = TurnOutcome(
@@ -844,6 +875,7 @@ class ClaudeTurnRunner:
             # delivery decision can still see it.
             interrupted = key in self._cancel_requested
             self._active.discard(key)
+            self._query_sent.discard(key)
             if self._active_turns.get(key) == turn.id:
                 self._active_turns.pop(key, None)
             self._touch(key)
@@ -1004,9 +1036,9 @@ class ClaudeTurnRunner:
                 return False
             for key in active:
                 self._cancel_requested.add(key)
-        client = next(
+        target = next(
             (
-                cached.client
+                (key, cached.client)
                 for key, cached in self._clients.items()
                 if key[1] == session_id
                 and (agent_id is None or key[0] == agent_id)
@@ -1014,22 +1046,34 @@ class ClaudeTurnRunner:
             ),
             None,
         )
-        if client is not None:
-            try:
-                await asyncio.wait_for(client.interrupt(), timeout=5)
-            except Exception:
-                logger.warning(
-                    "interrupt failed session=%s", session_id, exc_info=True
-                )
+        if target is not None:
+            target_key, client = target
+            # Before the prompt is written, an interrupt control request can
+            # reach the CLI with nothing to abort. The runner re-sends it after
+            # query() returns, so only send it here once the prompt is in
+            # flight.
+            if target_key in self._query_sent:
+                try:
+                    await asyncio.wait_for(client.interrupt(), timeout=5)
+                except Exception:
+                    # The control request failed, so the turn is not actually
+                    # cancelled; do not leave it marked as interrupted.
+                    self._cancel_requested.discard(target_key)
+                    logger.warning(
+                        "interrupt failed session=%s",
+                        session_id,
+                        exc_info=True,
+                    )
+                    return False
         return True
 
     async def _disconnect(self, client: Any, session_id: str) -> bool:
         """Disconnect one client within the shared timeout.
 
-        A timed-out client is retained in ``_orphaned_clients``: timing out
-        raw-cancels the SDK's shielded cleanup, skipping its SIGTERM/SIGKILL
-        escalation, so the reference is never silently dropped; exceptions are
-        logged and treated as a completed teardown.
+        A timed-out or failed client is retained in ``_orphaned_clients``:
+        timing out raw-cancels the SDK's shielded cleanup, skipping its
+        SIGTERM/SIGKILL escalation, and an exception may leave the CLI child
+        alive, so the reference is never silently dropped.
         """
         try:
             async with asyncio.timeout(_DISCONNECT_TIMEOUT_SECONDS):
@@ -1044,7 +1088,8 @@ class ClaudeTurnRunner:
             return False
         except Exception:
             logger.exception("client disconnect failed session=%s", session_id)
-            return True
+            self._retain_orphan(client)
+            return False
 
     async def _evict_key(
         self, key: ClientKey, *, expected: _CachedClient | None = None
@@ -1105,6 +1150,7 @@ class ClaudeTurnRunner:
                 continue
             except Exception:
                 logger.exception("orphan client disconnect failed")
+                continue
             self._orphaned_clients = [
                 item for item in self._orphaned_clients if item is not client
             ]
@@ -1135,37 +1181,53 @@ class ClaudeTurnRunner:
         self._clients.clear()
         self._evict_pending.clear()
         deadline = asyncio.get_running_loop().time() + _SHUTDOWN_BUDGET_SECONDS
-        for key, cached in snapshot:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                logger.warning(
-                    "shutdown budget exhausted; keeping client reference session=%s",
-                    key[1],
+        # Disconnect every cached client concurrently: each may need the full
+        # SDK close budget, so a sequential loop would exhaust the shutdown
+        # budget after one or two slow clients.
+        await asyncio.gather(
+            *(
+                self._disconnect_for_shutdown(
+                    cached.client, key[1], deadline
                 )
-                self._retain_orphan(cached.client)
-                continue
-            try:
-                async with asyncio.timeout(
-                    min(_DISCONNECT_TIMEOUT_SECONDS, remaining)
-                ):
-                    await cached.client.disconnect()
-            except TimeoutError:
-                # Timing out raw-cancels the SDK's shielded cleanup and skips
-                # its SIGTERM/SIGKILL escalation; keep the reference so the CLI
-                # is not silently orphaned in the cache and report it. The
-                # process exits with ours.
-                logger.warning(
-                    "client disconnect exceeded shutdown budget session=%s; "
-                    "keeping reference",
-                    key[1],
-                )
-                self._retain_orphan(cached.client)
-            except Exception:
-                logger.exception(
-                    "client disconnect failed during shutdown session=%s", key[1]
-                )
+                for key, cached in snapshot
+            )
+        )
         if self._orphaned_clients:
             logger.warning(
                 "%d SDK client(s) did not disconnect within the shutdown budget",
                 len(self._orphaned_clients),
             )
+
+    async def _disconnect_for_shutdown(
+        self, client: Any, session_id: str, deadline: float
+    ) -> None:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            logger.warning(
+                "shutdown budget exhausted; keeping client reference session=%s",
+                session_id,
+            )
+            self._retain_orphan(client)
+            return
+        try:
+            async with asyncio.timeout(
+                min(_DISCONNECT_TIMEOUT_SECONDS, remaining)
+            ):
+                await client.disconnect()
+        except TimeoutError:
+            # Timing out raw-cancels the SDK's shielded cleanup and skips its
+            # SIGTERM/SIGKILL escalation; keep the reference so the CLI is not
+            # silently orphaned in the cache and report it. The process exits
+            # with ours.
+            logger.warning(
+                "client disconnect exceeded shutdown budget session=%s; "
+                "keeping reference",
+                session_id,
+            )
+            self._retain_orphan(client)
+        except Exception:
+            logger.exception(
+                "client disconnect failed during shutdown session=%s",
+                session_id,
+            )
+            self._retain_orphan(client)

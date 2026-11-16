@@ -555,6 +555,91 @@ async def test_close_all_disconnects_cached_clients(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_close_all_disconnects_cached_clients_concurrently(
+    tmp_path, monkeypatch
+):
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(claude_runner, "_SHUTDOWN_BUDGET_SECONDS", 0.5)
+
+    started = 0
+    all_started = asyncio.Event()
+
+    class ConcurrentClient(FakeClient):
+        async def disconnect(self):
+            nonlocal started
+            started += 1
+            if started == 4:
+                all_started.set()
+            await all_started.wait()
+            await super().disconnect()
+
+    agent = make_agent()
+    runner = ClaudeTurnRunner(store=FakeStore(agent), home=tmp_path)
+    clients = [ConcurrentClient([ResultMessage()]) for _ in range(4)]
+    for index, client in enumerate(clients):
+        runner._clients[(agent.id, f"session-{index}")] = (
+            claude_runner._CachedClient(
+                client=client,
+                agent_id=agent.id,
+                fingerprint="",
+                last_used=0.0,
+            )
+        )
+
+    await asyncio.wait_for(runner.close_all(), 1)
+
+    assert started == len(clients)
+    assert all(client.disconnected for client in clients)
+    assert runner._orphaned_clients == []
+
+
+@pytest.mark.asyncio
+async def test_disconnect_exception_retains_orphan(tmp_path):
+    class ExplodingClient(FakeClient):
+        async def disconnect(self):
+            raise RuntimeError("boom")
+
+    agent = make_agent()
+    client = ExplodingClient([ResultMessage()])
+    runner = ClaudeTurnRunner(store=FakeStore(agent), home=tmp_path)
+    session_id = "dddddddd-1111-1111-1111-111111111111"
+    runner._clients[(agent.id, session_id)] = claude_runner._CachedClient(
+        client=client,
+        agent_id=agent.id,
+        fingerprint="",
+        last_used=0.0,
+    )
+
+    await runner.close(session_id)
+
+    assert runner._clients == {}
+    assert runner._orphaned_clients == [client]
+
+
+@pytest.mark.asyncio
+async def test_close_all_exception_retains_orphan(tmp_path):
+    class ExplodingClient(FakeClient):
+        async def disconnect(self):
+            raise RuntimeError("boom")
+
+    agent = make_agent()
+    client = ExplodingClient([ResultMessage()])
+    runner = ClaudeTurnRunner(store=FakeStore(agent), home=tmp_path)
+    runner._clients[(agent.id, "session")] = claude_runner._CachedClient(
+        client=client,
+        agent_id=agent.id,
+        fingerprint="",
+        last_used=0.0,
+    )
+
+    await runner.close_all()
+
+    assert runner._clients == {}
+    assert runner._orphaned_clients == [client]
+
+
+@pytest.mark.asyncio
 async def test_close_all_bounds_each_disconnect_and_keeps_orphans(
     tmp_path, monkeypatch, caplog
 ):
@@ -593,7 +678,10 @@ async def test_close_all_bounds_each_disconnect_and_keeps_orphans(
     assert first.disconnect_started.is_set()
     assert second.disconnect_started.is_set()
     assert runner._clients == {}
-    assert runner._orphaned_clients == [first, second]
+    assert {id(item) for item in runner._orphaned_clients} == {
+        id(first),
+        id(second),
+    }
     assert any(
         "exceeded shutdown budget" in record.getMessage()
         for record in caplog.records
@@ -601,11 +689,18 @@ async def test_close_all_bounds_each_disconnect_and_keeps_orphans(
 
 
 def test_disconnect_budget_covers_the_sdk_close():
-    assert claude_runner._DISCONNECT_TIMEOUT_SECONDS >= 20
+    # 20 s transport close + 5 s SDK MCP bridge grace + 5 s margin.
+    assert claude_runner._DISCONNECT_TIMEOUT_SECONDS >= 30
     assert (
         claude_runner._SHUTDOWN_BUDGET_SECONDS
         > claude_runner._DISCONNECT_TIMEOUT_SECONDS
     )
+
+
+def test_connect_timeout_exceeds_sdk_initialize():
+    # The SDK's initialize timeout is max(env timeout, 60 s); let the SDK
+    # report its own error before the platform's outer timeout fires.
+    assert claude_runner._CONNECT_TIMEOUT_SECONDS >= 75
 
 
 @pytest.mark.asyncio
@@ -715,6 +810,138 @@ async def test_interrupt_with_a_stale_turn_id_is_ignored(tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await task
         await turn_lease.remove(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_waits_for_query_before_sending_control_request(
+    tmp_path,
+):
+    await init_db()
+    release = asyncio.Event()
+
+    class RacingClient(FakeClient):
+        def __init__(self):
+            super().__init__([ResultMessage()])
+            self.events: list[str] = []
+            self.query_started = asyncio.Event()
+
+        async def query(self, prompt):
+            self.events.append("query-start")
+            self.query_started.set()
+            await release.wait()
+            self.events.append("query-end")
+
+        async def interrupt(self):
+            self.events.append("interrupt")
+            self.interrupted = True
+
+    client = RacingClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="aaaaaaaa-3333-3333-3333-333333333333")
+    task = asyncio.create_task(runner.run(turn, TurnStream()))
+    try:
+        await asyncio.wait_for(client.query_started.wait(), 1)
+
+        assert await runner.interrupt(turn.session_id) is True
+        assert client.events == ["query-start"]
+
+        release.set()
+        await asyncio.wait_for(task, 1)
+        assert client.events == ["query-start", "query-end", "interrupt"]
+    finally:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        await turn_lease.remove(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_returns_false_when_control_request_fails(tmp_path):
+    class FailingInterruptClient(HangingClient):
+        async def interrupt(self):
+            raise RuntimeError("control channel closed")
+
+    await init_db()
+    client = FailingInterruptClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="aaaaaaaa-4444-4444-4444-444444444444")
+    task = asyncio.create_task(runner.run(turn, TurnStream()))
+    try:
+        await asyncio.wait_for(client.queried.wait(), 1)
+        await asyncio.sleep(0)
+
+        assert await runner.interrupt(turn.session_id) is False
+        assert (
+            turn.agent_id,
+            turn.session_id,
+        ) not in runner._cancel_requested
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await turn_lease.remove(turn.session_id)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_after_query_failure_lets_turn_finish(tmp_path):
+    release_query = asyncio.Event()
+
+    class RacingFailingClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.query_started = asyncio.Event()
+            self.receive_started = asyncio.Event()
+            self.interrupt_attempts = 0
+
+        async def query(self, prompt):
+            self.query_started.set()
+            await release_query.wait()
+
+        async def interrupt(self):
+            self.interrupt_attempts += 1
+            raise RuntimeError("control channel closed")
+
+        async def receive_messages(self):
+            self.receive_started.set()
+            await asyncio.Event().wait()
+            yield  # pragma: no cover - never reached
+
+    await init_db()
+    client = RacingFailingClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="aaaaaaaa-5555-5555-5555-555555555555")
+    task = asyncio.create_task(runner.run(turn, TurnStream()))
+    try:
+        await asyncio.wait_for(client.query_started.wait(), 1)
+        assert await runner.interrupt(turn.session_id) is True
+        release_query.set()
+        await asyncio.wait_for(client.receive_started.wait(), 1)
+
+        assert client.interrupt_attempts == 1
+        assert (
+            turn.agent_id,
+            turn.session_id,
+        ) not in runner._cancel_requested
+    finally:
+        task.cancel()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            await turn_lease.remove(turn.session_id)
 
 
 @pytest.mark.asyncio
@@ -1287,6 +1514,31 @@ async def test_orphan_retry_releases_a_client_that_recovers(tmp_path, monkeypatc
     assert await runner.sweep_idle_clients() == 1
     assert client.disconnect_calls == 2
     assert runner._orphaned_clients == []
+
+
+@pytest.mark.asyncio
+async def test_orphan_retry_keeps_client_after_failure(tmp_path, monkeypatch):
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 0.01)
+
+    class FailingClient(FakeClient):
+        async def disconnect(self):
+            raise RuntimeError("boom")
+
+    client = FailingClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        client_ttl_seconds=0.01,
+        sweep_seconds=3600,
+    )
+    turn = make_turn(session_id="28282828-2828-2828-2828-282828282828")
+    await runner.run(turn, TurnStream())
+    await asyncio.sleep(0.02)
+
+    assert await runner.sweep_idle_clients() == 1
+    assert runner._orphaned_clients == [client]
 
 
 def test_orphan_list_is_bounded():
