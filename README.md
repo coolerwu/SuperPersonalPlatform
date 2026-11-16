@@ -77,7 +77,7 @@ npm run dev
 - 草稿、附件和引用按会话隔离（key 为 `agent_id + session_id`，未创建会话时用 `__new__`）；切换会话恢复各自内容。发送时强制滚到底部，输出期间上滑显示「回到最新」。
 - 会话列表由 SDK `list_sessions()` 生成：标题取 SDK summary，按最后修改时间倒序；微信会话带「微信」徽标，忙碌会话显示「忙碌」。删除会话前会拒绝正在执行的会话。
 - 空状态提供建议提示词；顶部轻量栏显示当前 Agent 和会话标题。
-- 响应式：桌面为侧栏 + 对话；窄屏（≤860px）用顶部栏和汉堡菜单打开侧栏抽屉，输入区适配 `visualViewport` 与安全区。功能工作区（回测、交易记录、资产配置、缠论图）同样使用顶部栏和抽屉。
+- 响应式：桌面为侧栏 + 对话；窄屏（≤860px）用顶部栏和汉堡菜单打开侧栏抽屉，输入区适配 `visualViewport` 与安全区。管理工作区（交易页、Agent 能力页与配置页）同样使用顶部栏和抽屉。
 - 聊天细节：运行中的追问按提交顺序显示「排队中 N/M」并可单条撤回；turn 进入终态后按 turn id 清理未被历史匹配的乐观用户行（上下文压缩后历史从压缩摘要行开始，内容匹配会失效；断线错过 `turn_end` 的轮次在重连探活确认结束后同样清理），避免提问残留在回答下面；停止后保留已生成的半截回复，历史已落盘则与原历史行收敛；切走会话或页面不可见时，完成/失败会在侧栏显示未读点（成功绿色、失败红色）并在标签标题显示计数，仅存在内存；侧栏会话行可重命名。
 
 ### 地图
@@ -89,7 +89,7 @@ npm run dev
 
 ## 配置页
 
-侧栏「平台 → 配置」进入配置页，顶部用 `Provider / Agent / 知识库 / 地图 / 运行环境` 五个 tab 切换。
+侧栏「管理 → 平台 → 配置」进入配置页，顶部用 `Provider / Agent / 知识库 / 地图 / 运行环境` 五个 tab 切换。
 
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
 - **Agent**：列出全部 Agent 摘要（Provider/model、记忆开关、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
@@ -102,7 +102,7 @@ npm run dev
 
 ## 技能、工具与插件页面
 
-侧栏顶部是「Agent / 功能」两个工作区 tab（默认 Agent）。Agent 工作区按「Agent 工作台 / Agent 能力 / 平台」分组：Agent 工作台放 Agent 选择器、新对话和会话列表；「Agent 能力」组提供技能、工具、插件、渠道、定时、记忆；「平台」组放配置和退出登录。功能工作区放回测、交易记录、资产配置、缠论图，不显示 Agent 选择器和会话。
+侧栏顶部是「Agent / 管理」两个工作区 tab（默认 Agent），Agent 选择器在两个工作区都显示，是全站 per-agent 配置的唯一来源。Agent 工作区按「Agent 工作台 / 平台」分组：Agent 工作台放新对话和会话列表；「平台」组放退出登录。管理工作区放「交易」组（回测、交易记录、资产配置、缠论图）、「Agent 能力」组（技能、工具、插件、渠道、定时、记忆）和「平台」组（配置、退出登录），不显示会话列表。点「管理」回到本次打开页面期间最后停留的管理页（还没进过管理页时为回测）；已在管理页时不跳转。
 
 - **技能**：列出全局技能库，按「初始化技能」和「其他技能」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、「已调整」标记、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；任何技能都可删除（只删技能目录）。
 - **工具**：读取当前 Agent 最近一轮对话的运行时 init frame，展示 Claude Code 实际加载的内置工具、MCP server 与工具、技能、插件和插件加载失败；平台业务工具以 `mcp__platform_tools__*` 出现，描述来自平台注册表。没有运行时数据时提示先发一条消息。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）通过进程内 `platform_tools` MCP 接入，插件自带的 MCP 继续并存。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。
@@ -145,7 +145,7 @@ metadata:
 
 ## 记忆
 
-侧栏「Agent 能力 → 记忆」有两张卡片，跟随左上角选中的 Agent：
+侧栏「管理 → Agent 能力 → 记忆」有两张卡片，跟随左上角选中的 Agent：
 
 - **用户画像**：`~/.super-personal-platform/claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent，跨 Agent 生效。保存时旧版本保留为同目录 `CLAUDE.md.bak`，文件权限 0600；文件 mtime/size 纳入 client 配置指纹，下一次 turn 自动重建受影响的缓存 client（已有会话下一次发消息即生效）。
 - **Agent 记忆**：`~/.super-personal-platform/workspaces/<agent_id>/CLAUDE.md`，作为项目级 CLAUDE.md 只加载给当前 Agent。保存同样保留 `.bak`、权限 0600，mtime/size 纳入 client 配置指纹；切换 Agent 时卡片重新加载，未保存的修改丢弃。
@@ -155,7 +155,7 @@ metadata:
 
 ## 渠道（微信个人号）
 
-侧栏「Agent 能力 → 渠道」按当前 Agent 管理渠道；一个 Agent 可以绑定多个微信渠道。
+侧栏「管理 → Agent 能力 → 渠道」按当前 Agent 管理渠道；一个 Agent 可以绑定多个微信渠道。
 
 - 新建渠道后立即显示 iLink 二维码；用微信扫码并在手机上确认，状态变为「已连接」。登录成功后，平台在 API 进程内为该渠道启动一个 `getupdates` 长轮询任务；不需要公网入口、Webhook、Node 或第三方网关。
 - 每个与 bot 私聊的联系人映射为一个独立 SDK 会话（侧栏带「微信」徽标），在网页端可见并可继续对话；群聊忽略。
@@ -174,7 +174,7 @@ metadata:
 
 ## 定时任务（Cron）
 
-侧栏「Agent 能力 → 定时」按当前 Agent 管理定时任务。
+侧栏「管理 → Agent 能力 → 定时」按当前 Agent 管理定时任务。
 
 - 新建任务时填写名称、任务内容（每轮发给 Agent 的消息）、5 字段 cron 表达式（分 时 日 月 周）、IANA 时区和是否启用；表达式非法、无法计算下一次触发、名称或内容为空、同一 Agent 重名都会被拒绝并显示中文错误。
 - 每个任务保存一个 UUID 作为专属 SDK 会话；每次触发在同一 transcript 上入队一个 turn，用户在该会话的追问共享上下文。transcript 不存在时（会话被删除）下次触发重新生成 session id。
@@ -201,7 +201,7 @@ metadata:
 
 ## 量化回测
 
-顶部「功能」tab 的「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
+顶部「管理」tab 的「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
 
 - 行情：Bitget 公共 REST（无需 API Key），按需抓取并增量缓存到 `data/market.db`。周期支持 `1min/3min/5min/15min/30min/1h/4h/6h/12h/1day/1week/1M`；日/周/月使用 Bitget 的 UTC 变体（`1Dutc/1Wutc/1Mutc`）对齐，回测只使用已完成的 K 线。同一交易对和周期第二次回测只抓取缺失的首尾区间；每次回测还会扫描区间内的中间缺口并尝试补齐（`MARKET_GAP_REPAIR_BARS` 默认 50000 根、`MARKET_GAP_REPAIR_RANGES` 默认 50 段）。
 - 网络：`api.bitget.com` 在部分网络无法直连，需要在 `~/.super-personal-platform/.env` 设置统一的 `HTTP_PROXY`/`HTTPS_PROXY`（生产机为 `http://192.168.1.2:7893`）。这些变量会作用于所有出站 HTTP 调用（模型、微信、行情）。页面「测试连接」或 `GET /api/market/probe` 可诊断代理与交易对。
@@ -214,7 +214,7 @@ metadata:
 
 ## 交易记录
 
-「交易记录」在功能工作区有独立页面。记录保存在 `data/trade-journal.jsonl`，一行一笔，便于查看、复制和备份；不新增数据库表。页面支持状态/市场/关键词筛选、新建/编辑、平仓和统计；不提供删除、图表、附件或回测导入。
+「交易记录」在管理工作区有独立页面。记录保存在 `data/trade-journal.jsonl`，一行一笔，便于查看、复制和备份；不新增数据库表。页面支持状态/市场/关键词筛选、新建/编辑、平仓和统计；不提供删除、图表、附件或回测导入。
 
 - 字段：`symbol`、`direction`、`entry_at`、`entry_price`、`thesis` 必填；`exit_at`、`exit_price` 平仓时同时提供；可选 `market`、`currency`、`instrument_type`、`stop_loss`、`quantity`、`fees`、`review`、`tags`、`followed_plan`、`meta`。
 - 市场：`crypto` 默认 `USDT`/`spot`，代码如 `BTCUSDT`；`a_share` 默认 `CNY`/`stock`，代码建议 `600519.SH`、`000001.SZ`。`market` 可省略，平台会从代码推断。
@@ -226,7 +226,7 @@ metadata:
 
 ## 资产配置
 
-功能工作区「交易」组提供独立的长期组合账本，不绑定 Agent，也**不读取交易记录**。它记录长期资金、持仓、目标比例和再平衡纪律，与短线交易记录完全分开。
+管理工作区「交易」组提供独立的长期组合账本，不绑定 Agent，也**不读取交易记录**。它记录长期资金、持仓、目标比例和再平衡纪律，与短线交易记录完全分开。
 
 - 组合：可建多个命名组合，每个组合一个基础币种（USDT、CNY……）；跨组合在顶部「总览」按 USD 折算合计（USD 与 USDT 按 1:1，CNY 按自动抓取的 USD/CNY 汇率）。
 - 流水：入金、出金、初始持仓、买入、卖出、分红、费用；一行一笔存在 `data/allocation-ledger.jsonl`。`初始持仓` 不改变现金，用于录入已有仓位；初始现金另记入金。
@@ -235,14 +235,14 @@ metadata:
 - 价格：`GET /api/allocation` 只读配置、流水、手动价和 `market.db` 缓存；点「刷新全部账本」才抓所有组合的 Bitget 1min 最新价，打开页面时也会自动刷新一次（同一浏览器会话 60 秒内不重复请求，失败保留旧价格并提示）。刷新同时抓 USD/CNY 汇率（东方财富 `133.USDCNH`，失败用 Yahoo `CNY=X` 兜底），成功后保存到 `allocation.json`，失败沿用上次值。优先级：实时 > 手动价 > 缓存 > 成本价；裸 ticker（如 `ETH`）会映射为 `ETHUSDT` 再请求；美股 ticker（如 `SPY`）先走东方财富 push2（105/106/107），失败再用 Yahoo Finance chart v8 兜底（Yahoo 需要代理，USD 计价，USDT 组合近似 1:1）；6 位 A 股基金代码（如 `000307`）通过东方财富基金接口抓最新公布净值，A 股股票按手动价。A 股股票、手动价和利息不会自动更新。
 - 固定收益：在组合配置里给标的设置年化利率、起息日和是否复投，每次读取按天累计到持仓市值和浮盈（单利或按年复利）；配置了计息的标的刷新时不再抓行情。
 - 总览：顶部「总览」把所有组合折算成 USD 合并：显示总资产、现金、投入本金、浮盈、已实现、总收益、总收益率和近似 XIRR（历史现金流按当前汇率折算），以及合并持仓明细（同一标的跨组合合并）。不支持的币种不计入并提示。
-- 页面：功能 → 资产配置；不分 tab。上面是总览和合并持仓，中间是所有组合合并的流水（可按组合/标的筛选），最下面是组合设置（目标、再平衡、编辑/记一笔入口）。
+- 页面：管理 → 资产配置；不分 tab。上面是总览和合并持仓，中间是所有组合合并的流水（可按组合/标的筛选），最下面是组合设置（目标、再平衡、编辑/记一笔入口）。
 - 接口：`GET /api/allocation`、`POST /api/allocation/refresh`、`POST/PUT/DELETE /api/allocation/portfolios...`、`GET/POST /api/allocation/portfolios/{id}/entries`、`PUT/DELETE /api/allocation/portfolios/{id}/entries/{entry_id}`。
 - Agent 可使用 `allocation` 初始化技能；六个 `allocation_*` 工具已通过进程内 `platform_tools` MCP 接入。
 - 边界：不接券商/交易所、不自动下单、不自动再平衡；没有每日估值快照，不做净值曲线、最大回撤和收益归因；总览的汇率和 XIRR 为近似值；不做税务批次、做空、保证金或借币成本。
 
 ## 缠论图
 
-功能工作区「交易」组提供只读的缠论结构图，不绑定 Agent，也不产生交易信号。
+管理工作区「交易」组提供只读的缠论结构图，不绑定 Agent，也不产生交易信号。
 
 - 数据：复用 Bitget 公共 REST 和 `market.db` 增量缓存，只使用已收盘 K 线；按需刷新，不引入 WebSocket。
 - 范围：crypto 现货、`15min/1h/4h/1day/1week`；分析范围用 UTC 时间窗口（精确到所选周期、结束时间包含，默认最近 500 根对应窗口，20–1000 根）。

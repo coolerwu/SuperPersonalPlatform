@@ -37,6 +37,24 @@ import { NewAgentDialog } from "./components/NewAgentDialog";
 import { RenameSessionDialog } from "./components/RenameSessionDialog";
 import { Sidebar } from "./components/Sidebar";
 
+const FEATURES_VIEWS = new Set<View>([
+  "settings",
+  "memory",
+  "skills",
+  "tools",
+  "plugins",
+  "channels",
+  "cron",
+  "backtest",
+  "journal",
+  "chan",
+  "allocation",
+]);
+
+function isFeaturesView(next: View): boolean {
+  return FEATURES_VIEWS.has(next);
+}
+
 const PAGE_LOADERS = {
   settings: () =>
     import("./components/SettingsPage").then((module) => ({
@@ -296,6 +314,10 @@ export default function App() {
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("run");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [view, setView] = useState<View>(initialRoute?.view ?? "chat");
+  const [lastFeaturesView, setLastFeaturesView] = useState<View>(() => {
+    const start = initialRoute?.view ?? "chat";
+    return isFeaturesView(start) ? start : "backtest";
+  });
   const [focusSignal, setFocusSignal] = useState(0);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [creatingAgent, setCreatingAgent] = useState(false);
@@ -414,6 +436,7 @@ export default function App() {
                       : view === "allocation"
                         ? "资产配置"
                         : (agent?.name ?? "Agent");
+  const featuresWorkspace = isFeaturesView(view);
 
   function setAgentError(message: string, forAgent: string) {
     if (forAgent !== agentIdRef.current) return;
@@ -1593,6 +1616,12 @@ export default function App() {
   }, [auth, view, sessionId]);
 
   useEffect(() => {
+    if (isFeaturesView(view)) {
+      setLastFeaturesView(view);
+    }
+  }, [view]);
+
+  useEffect(() => {
     const onPopState = () => {
       const route = parsePath(window.location.pathname);
       if (!route) {
@@ -2419,10 +2448,16 @@ export default function App() {
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        workspace={view === "backtest" || view === "journal" || view === "chan" || view === "allocation" ? "features" : "agent"}
-        onWorkspaceChange={(workspace) =>
-          openView(workspace === "features" ? "backtest" : "chat")
-        }
+        workspace={featuresWorkspace ? "features" : "agent"}
+        onWorkspaceChange={(workspace) => {
+          if (workspace === "agent") {
+            openView("chat");
+          } else if (!featuresWorkspace) {
+            openView(lastFeaturesView);
+          } else {
+            setSidebarOpen(false);
+          }
+        }}
         agents={agents}
         agentId={agentId}
         onAgentChange={changeAgent}
