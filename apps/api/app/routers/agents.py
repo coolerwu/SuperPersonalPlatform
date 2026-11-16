@@ -108,6 +108,7 @@ def _agent_out(agent: AgentSection) -> AgentOut:
         provider_name=agent.provider.name,
         model=agent.provider.model,
         status=agent.status,
+        access=agent.access,
         auto_memory=agent.auto_memory,
         created_at=created,
         updated_at=agent.updated_at or created,
@@ -202,6 +203,7 @@ async def create_agent(payload: AgentCreate, request: Request) -> AgentOut:
         name=name,
         instructions=payload.instructions.strip() or DEFAULT_AGENT_INSTRUCTIONS,
         status="active",
+        access=payload.access or "workspace",
         provider=_fallback_provider(snapshot.agents),
         auto_memory=payload.auto_memory,
         created_at=now,
@@ -246,6 +248,14 @@ async def update_agent(
         fields["status"] = str(data["status"])
     if "auto_memory" in data and data["auto_memory"] is not None:
         fields["auto_memory"] = bool(data["auto_memory"])
+    if "access" in data and data["access"] is not None:
+        access = str(data["access"])
+        if agent_id == "default" and access != "full":
+            raise HTTPException(
+                status_code=400,
+                detail="default agent must keep full access",
+            )
+        fields["access"] = access
     if fields:
         fields["updated_at"] = _now_iso()
         await store.update_agent_fields(agent_id, **fields)

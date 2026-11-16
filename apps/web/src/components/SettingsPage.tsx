@@ -332,6 +332,9 @@ export function SettingsPage(props: SettingsPageProps) {
                       {item.provider_name} · {item.model}
                     </span>
                     <span className="agent-row-badges">
+                      <span className="agent-status">
+                        {item.access === "workspace" ? "仅工作区" : "完全访问"}
+                      </span>
                       <span className="agent-status">记忆 {item.auto_memory ? "开" : "关"}</span>
                       <span className="agent-status">
                         {item.status === "archived"

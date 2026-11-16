@@ -92,7 +92,7 @@ npm run dev
 侧栏「管理 → 平台 → 配置」进入配置页，顶部用 `Provider / Agent / 知识库 / 地图 / 运行环境` 五个 tab 切换。
 
 - **Provider**：单例（id `default`），编辑 default Agent 的 Provider（base_url 自动补 `/anthropic`、model、api_key）；接口只返回 `has_api_key`。保存后关闭该 Agent 的空闲缓存 client，下一个 turn 生效。
-- **Agent**：列出全部 Agent 摘要（Provider/model、记忆开关、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态；新建 Agent 未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
+- **Agent**：列出全部 Agent 摘要（Provider/model、权限档位、记忆开关、状态，含「已归档」），点击行切换全局选中的 Agent；编辑名称、instructions、Provider、状态与「完全访问」开关；新建 Agent 默认「仅工作区」，未填 instructions 时使用默认中文个人助手提示词。Agent 工作区固定 `workspaces/<agent_id>/`。权限档位：`default`（Assistant）固定「完全访问」（`bypassPermissions`）；其他 Agent 默认「仅工作区」（`dontAsk` + 白名单 + `PreToolUse` hook），文件类工具只能读写自己的工作区，`..`、绝对越界、符号链接逃逸和本机/内网 WebFetch 都会被拒绝，Bash、Task 与插件工具暂不受限。状态语义：`active` 正常接收网页、渠道与定时任务；`paused` 和 `archived` 都拒绝网页新消息（409）、暂停渠道轮询（保留 cursor）并跳过定时任务；两种非 active 状态下渠道页仍可查看、编辑和删除渠道；在配置页把状态改回 `active` 即可恢复（archived 也会重新出现在列表里），微信轮询随状态变更自动重启。
 - **知识库**：启用开关、WebDAV 地址、账号、应用密码、根目录、同步间隔；密码只写入 `settings.json`，接口只返回 `has_password`。
 - **地图**：全局启用高德官方 HTTP MCP（`amap`），填写高德 Web 服务 Key；所有 Agent 共用，与当前选中的 Agent 无关。接口只返回 `enabled`、`provider`、`has_api_key`；启用但无 Key 时保存返回 400，空白 Key 保留原值，清除 Key 会同时停用。保存后同一已缓存会话的下一轮对话重建 client 并生效。本期不做聊天内地图渲染或独立地图页面。
 - **运行环境**：版本、执行核、数据库类型、单轮执行超时（`RUN_TIMEOUT_SECONDS`）、transcript 计数和能力开关（`GET /api/system`）；可设置会话保留天数（默认 30，0 不清理，`GET/PUT /api/settings`）。平台把它写成 Claude 的 `cleanupPeriodDays`，由 Claude 自己清理 transcript，平台不跑清理任务。

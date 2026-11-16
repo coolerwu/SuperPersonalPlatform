@@ -58,6 +58,10 @@ class AgentSection(BaseModel):
     name: str
     instructions: str = ""
     status: str = "active"
+    # "full" keeps the historical unrestricted behaviour; "workspace" runs
+    # the Agent with dontAsk and a PreToolUse guard that confines file tools
+    # to its own workspace. Missing values from older settings mean "full".
+    access: Literal["full", "workspace"] = "full"
     provider: ProviderSection = Field(default_factory=ProviderSection)
     # Kept for the existing Agent API/UI. The SDK manages auto memory itself,
     # so the runtime does not consult this flag.

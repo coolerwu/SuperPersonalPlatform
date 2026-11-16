@@ -6,6 +6,7 @@ export type Agent = {
   provider_name: string;
   model: string;
   status: string;
+  access: "full" | "workspace";
   auto_memory: boolean;
   created_at: string;
   updated_at: string;
@@ -15,6 +16,7 @@ export type AgentSavePayload = {
   name: string;
   instructions: string;
   provider_id: string;
+  access: "full" | "workspace";
   auto_memory: boolean;
   status?: "active" | "paused";
 };

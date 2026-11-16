@@ -562,3 +562,26 @@
 - 无效 Key（需联网）时普通聊天正常，地图工具调用失败；工具页的 `amap` 服务状态以其真实连接结果为准（连接失败时显示「连接失败」）。
 - `GET/PUT /api/maps` 的响应只含 `enabled`、`provider`、`has_api_key`，不含 Key；Key 写入 `data/settings.json`（0600）；CLI stderr 调试日志中的 Key 显示为 `***`，前端响应与运行日志中不出现 Key。
 - 后端测试与前端构建通过。
+
+### F25 Agent 权限档位（超级 / 受限）
+
+- 状态：现行
+- 日期：2026-11-16
+- 来源：2026-11-16 Agent 权限档位设计（`docs/superpowers/specs/2026-11-16-agent-permission-tiers-design.md`）
+
+#### 功能点
+
+1. `settings.json` 的 `agents[].access` 取 `"full"` 或 `"workspace"`，缺省按 `"full"`；`default`（Assistant）固定 `"full"`，新建 Agent 默认 `"workspace"`；配置页 Agent 编辑区提供「完全访问（超级 Agent）」开关，列表显示档位。
+2. 受限 Agent（`workspace`）以 `permission_mode="dontAsk"` 运行，只放行白名单工具：工作区文件工具、WebSearch/WebFetch、Bash、Task、TodoWrite、Skill、平台业务工具、启用时的 `mcp__amap`、已安装插件的 MCP server；白名单之外的工具有权限错误，不弹审批。
+3. 受限 Agent 挂 `PreToolUse` hook（`on_failure="block"`）：Read/Write/Edit/MultiEdit 的 `file_path`、NotebookEdit 的 `notebook_path`、Glob/Grep 的 `path` 与绝对 `pattern` 一律按工作区解析并 `realpath`，越界（含 `..`、绝对外部路径、符号链接逃逸）拒绝；WebFetch 拒绝 localhost、回环与私有网段；对其他工具不发表意见，不代行放行。
+4. Bash、Task 与插件工具在白名单内，仍可越过工作区边界；这是首版已知限制，命令级与插件级的精细限制不在本期。
+5. `access` 纳入 client 配置指纹；切换档位后空闲缓存 client 重建，下一轮对话生效。
+6. 超级 Agent 行为不变（`bypassPermissions`、不挂 hook）。
+
+#### 验收标准
+
+- 新建 Agent 返回 `access="workspace"`；`PUT /api/agents/{id}` 可以把非 default Agent 切到 `full` 再切回；`PUT /api/agents/default` 改成 `workspace` 返回 400。
+- 受限 Agent 的 SDK 选项为 `permission_mode="dontAsk"`、`allowed_tools` 含白名单与平台工具、`hooks["PreToolUse"]` 存在且 `on_failure="block"`；超级 Agent 仍为 `bypassPermissions` 且无 hooks。
+- hook 单测覆盖工作区内相对/绝对路径、`..`、符号链接逃逸、Glob/Grep 越界、WebFetch 本机/内网、非文件工具返回空决策、异常输入拒绝。
+- 切换档位使配置指纹变化；前端构建与后端测试通过。
+- 人工验收：受限 Agent 用 Read 读 `~/.super-personal-platform/knowledge/` 与另一工作区被拒；读写自己工作区、联网搜索、Bash、平台回测工具正常；超级 Agent 不受影响。

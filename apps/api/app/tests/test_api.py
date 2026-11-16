@@ -46,6 +46,30 @@ def test_new_agent_defaults_to_hermes_instructions(client) -> None:
     assert "简体中文" in instructions
 
 
+def test_new_agent_defaults_to_workspace_access(client) -> None:
+    created = client.post("/api/agents", json={"name": "Family"})
+    assert created.status_code == 201
+    assert created.json()["access"] == "workspace"
+
+    promoted = client.put(
+        f"/api/agents/{created.json()['id']}", json={"access": "full"}
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["access"] == "full"
+
+    restricted = client.put(
+        f"/api/agents/{created.json()['id']}", json={"access": "workspace"}
+    )
+    assert restricted.status_code == 200
+    assert restricted.json()["access"] == "workspace"
+
+
+def test_default_agent_keeps_full_access(client) -> None:
+    response = client.put("/api/agents/default", json={"access": "workspace"})
+    assert response.status_code == 400
+    assert client.get("/api/agents/default").json()["access"] == "full"
+
+
 def _provider_state(client):
     store = client.app.state.settings_store
     snapshot = client.portal.call(store.get)

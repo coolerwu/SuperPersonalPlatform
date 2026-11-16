@@ -40,6 +40,12 @@ def options_class() -> Any:
     return ClaudeAgentOptions
 
 
+def hook_matcher_class() -> Any:
+    from claude_agent_sdk import HookMatcher
+
+    return HookMatcher
+
+
 def list_sessions(directory: str | None = None) -> list[Any]:
     # ``directory=None`` scans every project dir, which is what the session
     # catalog needs: ``CLAUDE_CODE_PROJECT_DIR_NAME`` decouples the on-disk

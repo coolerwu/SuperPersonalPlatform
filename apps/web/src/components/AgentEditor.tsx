@@ -16,6 +16,7 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
   const [instructions, setInstructions] = useState("");
   const [providerId, setProviderId] = useState("");
   const [autoMemory, setAutoMemory] = useState(true);
+  const [access, setAccess] = useState<"full" | "workspace">("full");
   const [status, setStatus] = useState<string>("active");
   const [error, setError] = useState("");
 
@@ -24,9 +25,10 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
     setInstructions(agent?.instructions ?? "");
     setProviderId(agent?.provider_id ?? providers[0]?.id ?? "");
     setAutoMemory(agent?.auto_memory ?? true);
+    setAccess(agent?.access ?? "full");
     setStatus(agent?.status ?? "active");
     setError("");
-  }, [agent?.id, agent?.name, agent?.instructions, agent?.provider_id, agent?.auto_memory, agent?.status, providers]);
+  }, [agent?.id, agent?.name, agent?.instructions, agent?.provider_id, agent?.access, agent?.auto_memory, agent?.status, providers]);
 
   if (!agent) {
     return <div className="empty-note">选择一个 Agent 后编辑。</div>;
@@ -41,6 +43,7 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
         name: name.trim(),
         instructions,
         provider_id: providerId,
+        access,
         auto_memory: autoMemory,
         ...(status === "active" || status === "paused" ? { status } : {}),
       });
@@ -83,6 +86,26 @@ export function AgentEditor({ agent, providers, saving, workspaceRoot, onSave }:
       <div className="hint workspace-path-preview">
         机器目录：{workspaceRoot || "~/.super-personal-platform/workspaces"}/{agent.id}
       </div>
+
+      <label className="toggle-row" htmlFor="agent-access">
+        <input
+          id="agent-access"
+          type="checkbox"
+          checked={access === "full"}
+          disabled={agent.id === "default"}
+          onChange={(event) =>
+            setAccess(event.target.checked ? "full" : "workspace")
+          }
+        />
+        <span>
+          <strong>完全访问（超级 Agent）</strong>
+          <small>
+            {agent.id === "default"
+              ? "default Agent 固定为完全访问。"
+              : "开启：不受工作区限制。关闭：文件类工具只能读写自己的工作区；Bash 与插件工具暂不受此限制。"}
+          </small>
+        </span>
+      </label>
 
       <label className="field-label" htmlFor="agent-instructions">Instructions</label>
       <textarea

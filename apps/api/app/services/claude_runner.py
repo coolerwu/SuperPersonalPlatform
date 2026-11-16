@@ -39,7 +39,7 @@ from urllib.parse import quote
 
 from app.config import settings as app_settings
 from app.db import SessionLocal
-from app.services import channel_delivery, platform_mcp, sdk_bridge, turn_lease
+from app.services import agent_guard, channel_delivery, platform_mcp, sdk_bridge, turn_lease
 from app.services.claude_env import build_claude_env, claude_paths, workspace_for
 from app.services.identifiers import valid_agent_id
 from app.services.sdk_events import (
@@ -182,6 +182,7 @@ def _config_fingerprint(
     payload = json.dumps(
         {
             "instructions": agent.instructions or "",
+            "access": getattr(agent, "access", "full"),
             "base_url": provider.base_url,
             "model": provider.model,
             "api_key": provider.api_key,
@@ -460,7 +461,6 @@ class ClaudeTurnRunner:
                 # forwarded and the chat cannot follow what it is doing.
                 "forward_subagent_text": True,
                 "setting_sources": ["user", "project"],
-                "permission_mode": app_settings.claude_permission_mode,
                 "max_buffer_size": _MAX_BUFFER_SIZE,
                 # Surface CLI stderr at debug level so a failed turn is
                 # diagnosable without exposing it to the chat.
@@ -486,8 +486,30 @@ class ClaudeTurnRunner:
                     "url": f"{_AMAP_MCP_URL}?key={quote(amap_key, safe='')}",
                 }
             kwargs["mcp_servers"] = mcp_servers
-            # Map MCP tools are available; bypassPermissions auto-approves them.
-            kwargs["allowed_tools"] = platform_mcp.allowed_tool_names()
+            access = getattr(agent, "access", "full")
+            if access == "workspace":
+                maps_enabled = (
+                    maps.provider == "amap" and bool(maps.enabled) and bool(amap_key)
+                )
+                kwargs["permission_mode"] = "dontAsk"
+                kwargs["allowed_tools"] = agent_guard.build_restricted_allowed_tools(
+                    maps_enabled=maps_enabled,
+                    plugin_servers=agent_guard.installed_mcp_server_names(self._home),
+                )
+                matcher_class = sdk_bridge.hook_matcher_class()
+                kwargs["hooks"] = {
+                    "PreToolUse": [
+                        matcher_class(
+                            matcher=None,
+                            hooks=[agent_guard.workspace_guard(workspace)],
+                            on_failure="block",
+                        )
+                    ]
+                }
+            else:
+                kwargs["permission_mode"] = app_settings.claude_permission_mode
+                # Map MCP tools are available; bypassPermissions auto-approves them.
+                kwargs["allowed_tools"] = platform_mcp.allowed_tool_names()
             # Keep Claude Code's default system prompt and append the Agent's
             # own instructions. The preset without ``append`` adds no CLI flag,
             # so an empty instruction set leaves the default prompt untouched.

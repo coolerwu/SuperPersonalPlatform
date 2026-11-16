@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -45,6 +46,7 @@ class AgentCreate(BaseModel):
     instructions: str = ""
     provider_id: str | None = None
     auto_memory: bool = True
+    access: Literal["full", "workspace"] | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -53,6 +55,7 @@ class AgentUpdate(BaseModel):
     provider_id: str | None = None
     status: str | None = None
     auto_memory: bool | None = None
+    access: Literal["full", "workspace"] | None = None
 
 
 class AgentOut(BaseModel):
@@ -63,6 +66,7 @@ class AgentOut(BaseModel):
     provider_name: str = ""
     model: str = ""
     status: str
+    access: Literal["full", "workspace"] = "full"
     auto_memory: bool = True
     created_at: datetime
     updated_at: datetime

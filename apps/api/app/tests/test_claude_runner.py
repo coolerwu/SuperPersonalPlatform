@@ -1128,6 +1128,64 @@ async def test_options_raise_frame_buffer_and_wire_stderr_logging(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_restricted_agent_uses_dont_ask_and_workspace_guard(tmp_path):
+    await init_db()
+    captured = []
+    agent = make_agent()
+    agent.access = "workspace"
+    runner = ClaudeTurnRunner(
+        store=FakeStore(agent),
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options)
+        or FakeClient([ResultMessage()]),
+    )
+    await runner.run(make_turn(), TurnStream())
+
+    options = captured[0]
+    assert options.permission_mode == "dontAsk"
+    for name in ("Read", "Bash", "Task", "WebSearch", "mcp__platform_tools__backtest_run"):
+        assert name in options.allowed_tools
+    matchers = options.hooks["PreToolUse"]
+    assert matchers[0].on_failure == "block"
+    guard = matchers[0].hooks[0]
+    decision = await guard(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/etc/passwd"},
+            "tool_use_id": "tool-1",
+        },
+        "tool-1",
+        {},
+    )
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.asyncio
+async def test_full_access_agent_keeps_bypass_and_no_hooks(tmp_path):
+    await init_db()
+    captured = []
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options)
+        or FakeClient([ResultMessage()]),
+    )
+    await runner.run(make_turn(), TurnStream())
+
+    assert captured[0].permission_mode == "bypassPermissions"
+    assert not captured[0].hooks
+
+
+def test_config_fingerprint_includes_access():
+    agent = make_agent()
+    full = claude_runner._config_fingerprint(agent)
+    agent.access = "workspace"
+    restricted = claude_runner._config_fingerprint(agent)
+    assert full != restricted
+
+
+@pytest.mark.asyncio
 async def test_idle_client_is_evicted_after_ttl(tmp_path):
     await init_db()
     client = FakeClient([ResultMessage()])

@@ -67,6 +67,7 @@ export function NewAgentDialog({ open, providers, busy, onClose, onCreate }: New
           placeholder="你是一个……"
         />
         {error && <div className="error-banner">{error}</div>}
+        <div className="hint">新建 Agent 默认只能读写自己的工作区；创建后可在编辑里改为「完全访问」。</div>
         <div className="modal-actions">
           <button type="button" className="ghost-button" onClick={onClose}>取消</button>
           <button className="primary" type="submit" disabled={busy || !name.trim()}>
