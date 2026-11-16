@@ -89,10 +89,10 @@ async def _ensure_running_session_columns(conn) -> None:  # noqa: ANN001
         await conn.exec_driver_sql(
             "ALTER TABLE running_sessions ADD COLUMN updated_at DATETIME"
         )
-        await conn.exec_driver_sql(
-            "UPDATE running_sessions "
-            "SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
-        )
+    await conn.exec_driver_sql(
+        "UPDATE running_sessions SET updated_at = CURRENT_TIMESTAMP "
+        "WHERE updated_at IS NULL"
+    )
 
 
 async def init_db() -> None:

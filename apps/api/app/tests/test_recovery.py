@@ -224,7 +224,7 @@ async def test_recovery_survives_lease_listing_failure(tmp_path, monkeypatch):
     async def boom():
         raise RuntimeError("lease table unavailable")
 
-    monkeypatch.setattr(turn_lease, "list_all", boom)
+    monkeypatch.setattr(turn_lease, "list_turn_leases", boom)
     try:
         # Must not raise and must not drop the lease.
         await recovery.recover_running_sessions(
