@@ -11,6 +11,7 @@ from app.services import claude_runner, turn_lease
 from app.services.claude_runner import (
     ClaudeTurnRunner,
     Turn,
+    _CachedClient,
     transcript_path,
 )
 from app.services.settings_store import (
@@ -2149,6 +2150,43 @@ class TaskMessage:
         return None
 
 
+class FailingFlushTaskService(FakeTaskService):
+    async def flush(self, session_id):
+        raise RuntimeError("flush exploded")
+
+
+class FailingPublishTaskService(FakeTaskService):
+    async def publish(self, session_id, event):
+        raise RuntimeError("publish exploded")
+
+
+class SlowDisconnectClient(FakeClient):
+    async def disconnect(self):
+        await asyncio.sleep(5)
+        self.disconnected = True
+
+
+class FailingDisconnectClient(FakeClient):
+    async def disconnect(self):
+        raise RuntimeError("disconnect exploded")
+
+
+class OrderedDisconnectClient(FakeClient):
+    """Record whether task interruption was marked before disconnecting."""
+
+    def __init__(self, tasks, session_id):
+        super().__init__([ResultMessage()])
+        self.tasks = tasks
+        self.session_id = session_id
+        self.marked_before_disconnect: bool | None = None
+
+    async def disconnect(self):
+        self.marked_before_disconnect = any(
+            sid == self.session_id for sid, _ in self.tasks.interrupted
+        )
+        await super().disconnect()
+
+
 @pytest.mark.asyncio
 async def test_task_events_publish_to_session_service(tmp_path):
     await init_db()
@@ -2218,7 +2256,7 @@ async def test_eviction_marks_background_tasks_interrupted(tmp_path):
     await runner.close(turn.session_id)
 
     assert tasks.flushed == [turn.session_id]
-    assert tasks.interrupted[0][0] == turn.session_id
+    assert tasks.interrupted == [(turn.session_id, "SDK client 已断开")]
 
 
 @pytest.mark.asyncio
@@ -2237,3 +2275,131 @@ async def test_disconnect_marks_background_tasks_interrupted(tmp_path):
     assert await runner._disconnect(client, session_id) is True
 
     assert tasks.interrupted == [(session_id, "SDK client 已断开")]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_marks_tasks_before_disconnecting(tmp_path):
+    await init_db()
+    tasks = FakeTaskService()
+    session_id = "35353535-3535-3535-3535-353535353535"
+    client = OrderedDisconnectClient(tasks, session_id)
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+
+    assert await runner._disconnect(client, session_id) is True
+
+    assert client.marked_before_disconnect is True
+
+
+@pytest.mark.asyncio
+async def test_disconnect_timeout_marks_background_tasks_interrupted(
+    tmp_path, monkeypatch
+):
+    await init_db()
+    monkeypatch.setattr(claude_runner, "_DISCONNECT_TIMEOUT_SECONDS", 0.01)
+    tasks = FakeTaskService()
+    session_id = "36363636-3636-3636-3636-363636363636"
+    client = SlowDisconnectClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+
+    assert await runner._disconnect(client, session_id) is False
+
+    assert tasks.interrupted == [(session_id, "SDK client 已断开")]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_failure_marks_background_tasks_interrupted(tmp_path):
+    await init_db()
+    tasks = FakeTaskService()
+    session_id = "37373737-3737-3737-3737-373737373737"
+    client = FailingDisconnectClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+
+    assert await runner._disconnect(client, session_id) is False
+
+    assert tasks.interrupted == [(session_id, "SDK client 已断开")]
+
+
+@pytest.mark.asyncio
+async def test_flush_failure_still_ends_turn_lease(tmp_path):
+    await init_db()
+    tasks = FailingFlushTaskService()
+    client = FakeClient([ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+    turn = make_turn(
+        session_id="38383838-3838-3838-3838-383838383838"
+    )
+
+    await runner.run(turn, TurnStream())
+
+    assert await turn_lease.is_running(turn.session_id) is False
+
+
+@pytest.mark.asyncio
+async def test_task_publish_failure_does_not_break_turn(tmp_path):
+    await init_db()
+    tasks = FailingPublishTaskService()
+    client = FakeClient([TaskMessage(), ResultMessage()])
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+    turn = make_turn(
+        session_id="39393939-3939-3939-3939-393939393939"
+    )
+
+    outcome = await runner.run(turn, TurnStream())
+
+    assert outcome.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_capacity_evicts_oldest_pinned_client_after_grace(tmp_path):
+    await init_db()
+    keep_until = datetime.now(timezone.utc) + timedelta(minutes=5)
+    tasks = FakeTaskService(keep_until=keep_until)
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        max_clients=1,
+        session_tasks=tasks,
+    )
+    session_ids = [
+        "41414141-4141-4141-4141-414141414141",
+        "42424242-4242-4242-4242-424242424242",
+        "43434343-4343-4343-4343-434343434343",
+        "44444444-4444-4444-4444-444444444444",
+    ]
+    for index, session_id in enumerate(session_ids):
+        runner._clients[("default", session_id)] = _CachedClient(
+            client=FakeClient([ResultMessage()]),
+            agent_id="default",
+            fingerprint="fingerprint",
+            last_used=float(index),
+        )
+
+    await runner._enforce_capacity()
+
+    assert len(runner._clients) == 3
+    assert tasks.interrupted == [(session_ids[0], "SDK client 已断开")]

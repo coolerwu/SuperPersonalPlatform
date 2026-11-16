@@ -94,6 +94,16 @@ def test_worker_app_wires_runtime_state(quiet_background_workers):
         assert state.runner is not None
         assert state.registry is not None
         assert state.session_catalog is not None
+        assert state.session_tasks is not None
+        assert state.session_tasks._writer is not None
+        assert state.session_tasks._cleaner is not None
+
+
+def test_non_worker_app_creates_task_service_without_loops(client):
+    service = client.app.state.session_tasks
+    assert service is not None
+    assert service._writer is None
+    assert service._cleaner is None
 
 
 def test_shutdown_closes_registry_before_runner(
