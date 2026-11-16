@@ -2354,6 +2354,36 @@ async def test_tail_reader_hands_stream_back_to_next_turn(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_tail_reader_starts_before_client_leaves_active(tmp_path, monkeypatch):
+    """The sweep must not see the client idle before its tail reader exists."""
+    await init_db()
+    tasks = FakeTaskService()
+    client = QueueClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+        session_tasks=tasks,
+    )
+    turn = make_turn(
+        session_id="54545454-5454-5454-5454-545454545454"
+    )
+    active_at_start = []
+    start = runner._start_tail_reader
+
+    def spy(key, cached):
+        active_at_start.append(key in runner._active)
+        start(key, cached)
+
+    monkeypatch.setattr(runner, "_start_tail_reader", spy)
+
+    await runner.run(turn, TurnStream())
+
+    assert active_at_start == [True]
+    await runner.close(turn.session_id)
+
+
+@pytest.mark.asyncio
 async def test_close_stops_tail_reader_and_drops_late_events(tmp_path):
     await init_db()
     tasks = FakeTaskService()

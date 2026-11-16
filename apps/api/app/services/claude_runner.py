@@ -1017,13 +1017,22 @@ class ClaudeTurnRunner:
             # channel reply. The marker is cleared at the end of teardown so the
             # delivery decision can still see it.
             interrupted = key in self._cancel_requested
+            if not result_received:
+                evict = True
+            # Attach the between-turns reader while the client is still marked
+            # active: a sweep that saw it idle before the reader started could
+            # otherwise evict it and mark its tasks interrupted underneath us.
+            # Starting while active is safe; once active is cleared below, a
+            # later eviction stops the reader before marking anything.
+            if result_received and not evict and not keep_lease:
+                cached = self._clients.get(key)
+                if cached is not None:
+                    self._start_tail_reader(key, cached)
             self._active.discard(key)
             self._query_sent.discard(key)
             if self._active_turns.get(key) == turn.id:
                 self._active_turns.pop(key, None)
             self._touch(key)
-            if not result_received:
-                evict = True
             # A local CLI slash command (and any turn the CLI did not stream)
             # only reports its text in the result. Publish it once so the chat
             # is not empty; streamed turns already collected it in text_parts.
@@ -1083,15 +1092,6 @@ class ClaudeTurnRunner:
                             turn.session_id,
                             exc_info=True,
                         )
-            # Background task frames that arrive after this turn's result stay
-            # in the client; a tail reader publishes them to the session-level
-            # channel until the next turn (or eviction/shutdown) takes over.
-            # Failed, cancelled, timed-out and to-be-evicted clients get none:
-            # their disconnect marks tasks interrupted instead.
-            if result_received and not evict and not keep_lease:
-                cached = self._clients.get(key)
-                if cached is not None:
-                    self._start_tail_reader(key, cached)
             # Delivery teardown. Shutdown cancellation keeps the lease for
             # recovery, so the obligation stays empty and pending there and the
             # resumed turn reattaches it; sending now could double reply or mark
