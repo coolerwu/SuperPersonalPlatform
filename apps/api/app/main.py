@@ -38,6 +38,7 @@ from app.services.cron_service import CronRuntime
 from app.services.knowledge_sync import KnowledgeSyncRuntime
 from app.services.market_data import market_service
 from app.services.backtest_worker import BacktestWorker, set_active_worker
+from app.services.session_tasks import SessionTaskService
 from app.services.skills import seed_default_skills
 from app.services.weixin_runtime import WeixinRuntime
 from app.services.workspace import ensure_agent_workspaces
@@ -87,6 +88,9 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 )
             seed_default_skills()
             await init_db()
+            session_tasks = SessionTaskService()
+            await session_tasks.startup()
+            app.state.session_tasks = session_tasks
             await init_market_db()
             await ensure_agent_workspaces(store)
             weixin = WeixinRuntime(store=store)
@@ -105,7 +109,9 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                     weixin.schedule_delivery(delivery_id)
 
                 runner = ClaudeTurnRunner(
-                    store, deliver_callback=_enqueue_delivery
+                    store,
+                    deliver_callback=_enqueue_delivery,
+                    session_tasks=session_tasks,
                 )
                 app.state.runner = runner
                 registry = SessionRegistry(
@@ -118,6 +124,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 # sweeps pending deliveries: a delivery row created at turn
                 # start has no content until the turn completes.
                 await recover_running_sessions(registry, store)
+                await session_tasks.start()
 
                 await weixin.start()
                 cron = CronRuntime(store=store, registry=registry)
@@ -166,6 +173,14 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                             await runner.close_all()
                         except Exception:
                             logger.exception("runner shutdown failed")
+                    session_tasks = getattr(app.state, "session_tasks", None)
+                    if session_tasks is not None:
+                        try:
+                            await session_tasks.stop()
+                        except Exception:
+                            logger.exception(
+                                "session task service shutdown failed"
+                            )
                     knowledge = getattr(app.state, "knowledge", None)
                     if knowledge is not None:
                         try:

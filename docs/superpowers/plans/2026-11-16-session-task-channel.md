@@ -1355,16 +1355,50 @@ Expected: FAIL，`session_tasks` 构造参数不存在，任务事件未发布�
             if lease_added and not keep_lease:
                 try:
                     await turn_lease.remove(turn.session_id)
+                except BaseException as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        logger.warning(
+                            "turn lease removal cancelled session=%s", turn.session_id
+                        )
+                    else:
+                        logger.warning(
+                            "failed to remove turn lease session=%s",
+                            turn.session_id,
+                            exc_info=True,
+                        )
 ```
 
-改为：
+改为（**flush 与 end_turn 必须分开 try**；flush 失败不能跳过 end_turn，否则已完成的 turn 会留下 has_turn=True 并在重启时被误恢复）：
 
 ```python
             if lease_added and not keep_lease:
-                try:
-                    if self._session_tasks is not None:
+                if self._session_tasks is not None:
+                    try:
                         await self._session_tasks.flush(turn.session_id)
+                    except BaseException as exc:
+                        if isinstance(exc, asyncio.CancelledError):
+                            logger.warning(
+                                "task flush cancelled session=%s", turn.session_id
+                            )
+                        else:
+                            logger.warning(
+                                "failed to flush session tasks session=%s",
+                                turn.session_id,
+                                exc_info=True,
+                            )
+                try:
                     await turn_lease.end_turn(turn.session_id)
+                except BaseException as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        logger.warning(
+                            "turn lease end cancelled session=%s", turn.session_id
+                        )
+                    else:
+                        logger.warning(
+                            "failed to end turn lease session=%s",
+                            turn.session_id,
+                            exc_info=True,
+                        )
 ```
 
 - [ ] **Step 6: 逐出时标记中断**
@@ -1872,17 +1906,7 @@ export type SessionTaskEvent =
     };
 ```
 
-把 `FrozenLive` 中的 `tasks` 字段删除：
-
-```typescript
-export type FrozenLive = {
-  streamText: string;
-  streamReasoning: string;
-  activity: LiveToolCall[];
-  subagents: Record<string, LiveSubagent>;
-  artifacts: MessageArtifact[];
-};
-```
+把 `FrozenLive` 中的 `tasks` 字段**保留到 Task 7**；Task 6 只新增类型和任务状态/SSE，避免 `ChatPanel`/`MessageList` 尚未修改时构建失败。Task 7 删除 `FrozenLive.tasks`、`SessionLive.tasks`、`EMPTY_LIVE.tasks` 以及 App 中的所有 live/frozen tasks 引用。
 
 - [ ] **Step 2: 增加 API URL**
 
@@ -2035,7 +2059,7 @@ import { applyTaskEvent, sessionTaskToLive } from "./taskFormat";
 import type { SessionTaskEvent } from "./types";
 ```
 
-把现有的 `emptyTask` 函数从 `App.tsx` 删除（已移到 `taskFormat.ts`），并删除 `SessionLive`/`EMPTY_LIVE` 中的 `tasks` 字段：
+把现有的 `emptyTask` 函数从 `App.tsx` 删除（已移到 `taskFormat.ts`）。**本任务保留 `SessionLive`/`EMPTY_LIVE` 和 `FrozenLive` 中的 `tasks` 字段**，因为 `ChatPanel`/`MessageList` 还没改；Task 7 会和 UI 一起删除这些字段。
 
 ```typescript
 type SessionLive = FrozenLive & {
@@ -2049,6 +2073,7 @@ const EMPTY_LIVE: SessionLive = {
   streamReasoning: "",
   activity: [],
   subagents: {},
+  tasks: {},
   artifacts: [],
   notice: "",
   tracking: false,
@@ -2131,18 +2156,9 @@ const EMPTY_LIVE: SessionLive = {
       }
 ```
 
-- [ ] **Step 5: 移除 live/frozen 中的 tasks**
+- [ ] **Step 5: 保留 live/frozen 中的 tasks**
 
-在 `App.tsx` 中搜索并删除以下位置的 `tasks`：
-
-- `openStream()` 的新流初始化对象里的 `tasks: {}`。
-- `refreshTranscript()` 的 `tasks: streaming ? current.tasks : {},`。
-- `cancel()` 的 frozen 对象里的 `tasks: current.tasks,`。
-- `finishTurn`/其他 `updateLive` 中引用 `current.tasks` 的地方。
-- `emptyTask` 的旧实现。
-- `FrozenLive` 相关的任务复制。
-
-保留 `LiveTask` 类型和 `taskFormat.ts` 的辅助函数。
+**本任务不删除** `App.tsx` 中 `live.tasks` / `FrozenLive.tasks` 的现有引用（`openStream`、`refreshTranscript`、`cancel`、`finishTurn`、`emptyTask` 之外的副本）；`ChatPanel`/`MessageList` 仍在用这些 props。Task 7 会和 UI 一起删除。Task 6 只需要把四个 `task_*` case 改为写 `updateTasks`，旧 `live.tasks` 会保持为空但不影响构建。
 
 - [ ] **Step 6: 增加会话 SSE 订阅**
 
@@ -2253,6 +2269,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Create: `apps/web/src/components/SessionTaskPanel.tsx`
 - Modify: `apps/web/src/components/ChatPanel.tsx`
 - Modify: `apps/web/src/components/MessageList.tsx`
+- Modify: `apps/web/src/types.ts`
+- Modify: `apps/web/src/App.tsx`
 - Modify: `apps/web/src/styles.css`
 
 - [ ] **Step 1: 新建任务区组件**
@@ -2275,7 +2293,10 @@ export function SessionTaskPanel({
   const list = sortTasks(tasks);
   if (list.length === 0) return null;
   const running = list.filter(
-    (task) => task.status === "running" || task.status === "in_progress",
+    (task) =>
+      task.status === "running" ||
+      task.status === "in_progress" ||
+      task.status === "pending",
   ).length;
   return (
     <details className="session-tasks" open>
@@ -2351,6 +2372,8 @@ import { SessionTaskPanel } from "./SessionTaskPanel";
 - `MessageList` 的 `FrozenReply`/`LiveProcess` 相关 `tasks` 参数。
 - `taskStatusClass`/`taskStatusLabel` 如果只被任务列表使用，删除；`SessionTaskPanel` 使用 `taskFormat.ts` 的版本。
 
+同时在 `types.ts` 删除 `FrozenLive.tasks`，在 `App.tsx` 删除 `SessionLive.tasks`、`EMPTY_LIVE.tasks` 以及 `openStream()`、`refreshTranscript()`、`cancel()`、`finishTurn`、`freezeLive` 中所有 `live.tasks`/`current.tasks`/`frozen.tasks` 引用。完成后再 `npm run build`。
+
 - [ ] **Step 4: 增加样式**
 
 在 `apps/web/src/styles.css` 末尾追加：
@@ -2410,8 +2433,20 @@ import { SessionTaskPanel } from "./SessionTaskPanel";
   background: #16a34a;
 }
 
+.session-task.ok .session-task-dot {
+  background: #16a34a;
+}
+
 .session-task.failed .session-task-dot {
   background: #dc2626;
+}
+
+.session-task.stopped .session-task-dot {
+  background: #98a2b3;
+}
+
+.session-task.paused .session-task-dot {
+  background: #d97706;
 }
 
 .session-task.interrupted .session-task-dot {
@@ -2454,7 +2489,7 @@ Expected: 构建成功。
 - [ ] **Step 6: 提交**
 
 ```bash
-git add apps/web/src/components/SessionTaskPanel.tsx apps/web/src/components/ChatPanel.tsx apps/web/src/components/MessageList.tsx apps/web/src/styles.css apps/web/dist
+git add apps/web/src/components/SessionTaskPanel.tsx apps/web/src/components/ChatPanel.tsx apps/web/src/components/MessageList.tsx apps/web/src/types.ts apps/web/src/App.tsx apps/web/src/styles.css apps/web/dist
 git commit -m "Show background tasks above the composer
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"

@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.auth import require_auth
-from app.schemas import SessionSummaryOut, TranscriptMessageOut
+from app.schemas import (
+    SessionSummaryOut,
+    SessionTasksOut,
+    TranscriptMessageOut,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["sessions"], dependencies=[Depends(require_auth)])
 
@@ -17,6 +24,19 @@ def _catalog(request: Request):
     if catalog is None:
         raise HTTPException(status_code=503, detail="session catalog is not ready")
     return catalog
+
+
+def _session_tasks(request: Request):
+    service = getattr(request.app.state, "session_tasks", None)
+    if service is None:
+        raise HTTPException(
+            status_code=503, detail="session task service is not ready"
+        )
+    return service
+
+
+def _sse(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
 @router.get("/agents/{agent_id}/sessions", response_model=list[SessionSummaryOut])
@@ -86,6 +106,54 @@ async def stream_session(
     )
 
 
+@router.get(
+    "/sessions/{session_id}/tasks",
+    response_model=SessionTasksOut,
+)
+async def session_tasks_snapshot(
+    session_id: str, request: Request
+) -> SessionTasksOut:
+    service = _session_tasks(request)
+    snapshot = await service.snapshot(session_id)
+    return SessionTasksOut(**snapshot)
+
+
+@router.get("/sessions/{session_id}/events")
+async def session_events(
+    session_id: str, request: Request
+) -> StreamingResponse:
+    service = _session_tasks(request)
+    queue = service.subscribe(session_id)
+    try:
+        snapshot = SessionTasksOut(**await service.snapshot(session_id)).model_dump()
+    except BaseException:
+        service.unsubscribe(session_id, queue)
+        raise
+
+    async def generator():
+        try:
+            yield _sse({"type": "tasks_snapshot", **snapshot})
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                except TimeoutError:
+                    yield ": ping\n\n"
+                    continue
+                if event is None:
+                    return
+                yield _sse(event)
+        finally:
+            service.unsubscribe(session_id, queue)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/sessions/{session_id}/turn")
 async def session_turn(
     session_id: str, request: Request, turn_id: str | None = None
@@ -141,6 +209,14 @@ async def delete_session(session_id: str, agent_id: str, request: Request) -> di
         deleted = await catalog.delete(agent_id, session_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="session not found")
+        service = getattr(request.app.state, "session_tasks", None)
+        if service is not None:
+            try:
+                await service.forget(session_id)
+            except Exception:
+                logger.exception(
+                    "session task cleanup failed session=%s", session_id
+                )
         if registry is not None:
             await registry.close_session(session_id)
     finally:

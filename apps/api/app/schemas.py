@@ -302,6 +302,25 @@ class TranscriptMessageOut(BaseModel):
     artifacts: list[dict] = []
 
 
+class SessionTaskOut(BaseModel):
+    task_id: str
+    tool_use_id: str | None = None
+    description: str = ""
+    status: str = "running"
+    summary: str = ""
+    last_tool_name: str = ""
+    usage: dict | None = None
+    started_at: str = ""
+    updated_at: str = ""
+    completed_at: str | None = None
+
+
+class SessionTasksOut(BaseModel):
+    has_turn: bool
+    updated_at: str | None = None
+    tasks: list[SessionTaskOut]
+
+
 class ChatCommandRequest(BaseModel):
     agent_id: str = Field(min_length=1)
     session_id: str | None = None

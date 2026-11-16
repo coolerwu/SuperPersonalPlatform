@@ -1,8 +1,8 @@
 # Intent
 
 - 状态：现行
-- 最后更新：2026-11-15
-- 编号水位：F24
+- 最后更新：2026-11-16
+- 编号水位：F26
 
 本文件是新项目的需求唯一来源。2026-11-11 已按 Claude Agent SDK 迁移后的实现重写；旧的 F1–F90 需求记录（deepagents/LangGraph、记忆系统、rubric、eval、会话全文搜索、Run 历史）随迁移废止，历史文本见 git 历史（cf67560 及之前）。编号从 F1 重新起算。
 
@@ -75,9 +75,9 @@
 
 1. 每条用户消息创建一个 turn，在 `SessionRegistry` 中按 session 串行执行；不同 session 并发，上限为 `BROWSER_CONCURRENCY`（默认 5）。同一会话在运行中可继续发送，新 turn 排队。
 2. `POST /api/chat/messages` 入队并返回 `{session_id, turn_id, accepted}`；`GET /api/sessions/{uuid}/stream?turn_id=...` 以 SSE 转发该轮事件（`assistant_delta`、`reasoning_delta`、`tool_call`（带 tool_use id）、`subagent_text`、`subagent_tool_call`、`task_started`、`task_progress`、`task_updated`、`task_notification`、`turn_end`）。子 Agent 事件带 `parent_tool_use_id`，用于挂到对应的 Task 工具调用下；后台任务事件按 `task_id` 合并状态。
-3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。子 Agent 与后台任务只实时显示，不写入主 transcript；刷新后只保留主 Agent 的执行过程（子 Agent 历史需单独读取 subagent transcript，本版未接入）。Claude Code 的中断合成消息不进聊天气泡：`[Request interrupted by user]` 返回为 `system` 行「本轮对话已被中断」，`No response requested.` 不返回。
+3. `GET /api/sessions/{uuid}/messages?agent_id=...` 一次性返回 transcript 中的用户/assistant 消息；执行过程从 transcript 的 thinking / tool_use 块尽量重建，信息少于实时流。子 Agent 只实时显示，不写入主 transcript；后台任务由会话级任务区展示并可在刷新/重连后恢复（F26），也不写入主 transcript；刷新后主 Agent 的执行过程仍从 transcript 重建（子 Agent 历史需单独读取 subagent transcript，本版未接入）。Claude Code 的中断合成消息不进聊天气泡：`[Request interrupted by user]` 返回为 `system` 行「本轮对话已被中断」，`No response requested.` 不返回。
 4. `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约；返回 `{interrupted, cancelled_turn_ids}`，前端只丢弃这些 turn 的本地占位消息；与中断竞争、未被取消的排队 turn 继续执行并保持流式订阅。未取消任何 turn 时 `interrupted=false`。
-5. 服务重启时 `running_sessions` 中的会话自动 resume，追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。渠道消息在入站时先写 `queued` 投递行再入队；turn 开始时提升为 `pending`。排队期间服务重启或优雅关闭时，启动后由 `_answer_queued_deliveries` 填入「服务重启时这条消息尚未开始处理，请重新发送」并发送；用户 `/stop` 会丢弃排队 turn 的投递行。
+5. 服务重启时，仍在跑 turn 的 `running_sessions` 租约自动 resume 并追加「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」；只有后台任务或已结束任务的记录不触发续跑；没有 transcript 的租约删除，但渠道消息不会被静默丢弃：空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并在启动补发中送达；没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志；暂停/归档 Agent 的租约保留到 Agent 恢复。停机时每个缓存 client 限时断开，`deploy/agent-command-center.service` 的 `TimeoutStopSec=60` 覆盖整体关机预算。渠道消息在入站时先写 `queued` 投递行再入队；turn 开始时提升为 `pending`。排队期间服务重启或优雅关闭时，启动后由 `_answer_queued_deliveries` 填入「服务重启时这条消息尚未开始处理，请重新发送」并发送；用户 `/stop` 会丢弃排队 turn 的投递行。
 6. 命令：平台处理 `/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示。其余以 `/` 开头的裸命令只有出现在 Claude Code 运行时 init frame 的 `slash_commands` 中才由 `forward=true` 指示前端作为普通用户消息转发给 Agent；不在列表中的回复「未知命令」并列出当前可用命令，列表尚未加载时提示先发送一条普通消息。`GET /api/chat/slash-commands?agent_id=...` 返回该列表（排除 `terminal_slash_commands` 与平台命令重名项），按 Agent 进程内缓存，首次 turn 后可用。
 7. 输入框 `/` 前缀弹出命令面板：列出平台命令和 Claude Code 运行时命令，↑/↓ 选择，Enter/Tab 填入，Esc 关闭；面板只填入不执行。
 8. 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片支持选择、粘贴、拖拽，浏览器端缩到最长边 1600 px；发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具读取。图片作为文件由 Agent 的 Read 工具查看；本版不再单独构造 `image_url` 模型输入。旧 transcript 里的绝对 `/uploads/<name>` 仍按兼容路径解析，但可能失效，优先在 `uploads/` 下查找。Agent 为 paused/archived 时上传接口返回 409；读取历史附件放行（只读）。
@@ -93,8 +93,8 @@
 
 - 新建会话 → 发消息 → 流式回复 → 会话出现在列表；刷新后历史可读。
 - 执行中停止 → 状态为已停止，租约删除。
-- Agent 派生子 Agent 时，实时「执行过程」出现标注父 Task 工具的子 Agent 文本和工具调用；后台任务显示运行状态、最近工具和完成摘要；刷新后这些实时区消失，主 Agent 的思考/工具仍在。
-- 执行中重启服务 → 会话自动 resume 并完成，`running_sessions` 清空。
+- Agent 派生子 Agent 时，实时「执行过程」出现标注父 Task 工具的子 Agent 文本和工具调用；后台任务显示运行状态、最近工具和完成摘要；刷新后子 Agent 实时区消失，后台任务由会话级任务区恢复（F26），主 Agent 的思考/工具仍在。
+- 执行中重启服务 → 有 turn 在跑的会话自动 resume 并完成；没有后台任务时 `running_sessions` 清空，有后台任务的记录保留并标记中断（F26）。
 - 同一会话第二个 turn 排队，不同会话可并发。
 - 输入 `/` 能看到平台命令和 Claude Code 运行时命令；选择 Claude Code 命令后作为消息发送并产生 turn；不在运行时长列表中的 `/` 命令会收到「未知命令」并列出当前可用命令。
 - 附件上传后可被 Agent 读取；引用以 `> ` 块进入消息。
@@ -395,7 +395,7 @@
 10. `/memory` 指令与整理记忆。
 11. 过期会话的 transcript 由 Claude Code 删除，但平台不再随保留期清理其投递历史与旧截图目录；渠道绑定在下次入站时重建并清掉旧投递行。
 
-已知能力损失（已接受）：进程重启后丢当前流式输出（同进程刷新会在数秒内从 `current_turn_id` 重放缓冲；同一 turn 内断线按事件序号续传）、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失、上下文自动压缩后压缩前的消息不再出现在历史里（SDK `get_session_messages` 只返回压缩点之后的链，历史从压缩摘要行开始）、过期会话的投递历史与旧截图目录不再自动清理、子 Agent 与后台任务只实时可见且刷新后不保留；后台任务事件只在当前 turn 的流读取期间发布，turn 结束后到达的事件要等下一轮消费同一 client 的缓冲才发布，client 在空闲 TTL 内被逐出则丢失（实时跨轮需要 session 级事件流，本版未做）；`langchain-core` 暂留。
+已知能力损失（已接受）：进程重启后丢当前流式输出（同进程刷新会在数秒内从 `current_turn_id` 重放缓冲；同一 turn 内断线按事件序号续传）、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失、上下文自动压缩后压缩前的消息不再出现在历史里（SDK `get_session_messages` 只返回压缩点之后的链，历史从压缩摘要行开始）、过期会话的投递历史与旧截图目录不再自动清理、子 Agent 只实时可见且刷新后不保留；后台任务相关的跨轮丢失与刷新不保留已由 F26 取代；`langchain-core` 暂留。
 
 ### F17 官方插件集市
 
@@ -586,3 +586,31 @@
 - hook 单测覆盖工作区内相对/绝对路径、`..`、符号链接逃逸、Glob/Grep 越界、WebFetch 本机/内网、非文件工具返回空决策、异常输入拒绝。
 - 切换档位使配置指纹变化；前端构建与后端测试通过。
 - 人工验收：受限 Agent 用 Read 读 `~/.super-personal-platform/knowledge/` 与另一工作区被拒；读写自己工作区、联网搜索、Bash、平台回测工具正常；超级 Agent 不受影响。
+
+### F26 会话级后台任务事件
+
+- 状态：现行
+- 日期：2026-11-16
+- 来源：2026-11-16 会话级后台任务事件通道设计（`docs/superpowers/specs/2026-11-16-session-task-channel-design.md`）
+
+#### 功能点
+
+1. turn 结束后仍在运行的后台任务，其 `task_started` / `task_progress` / `task_updated` / `task_notification` 通过会话级 SSE 实时送到前端，不再等到下一轮对话才送达前端。
+2. 聊天页新增会话级任务区（页面显示为「后台任务」），位于输入框上方，跨 turn 保留；运行中优先展示，任务结束后保留 10 分钟。
+3. 会话的运行时记录区分「有 turn 在跑」与「只有后台任务/已结束任务」：服务重启只续跑前者，后者不触发自动续跑。
+4. 任务状态保存在会话的运行时记录中；页面刷新或断线重连用快照恢复任务区（会话级 SSE 首帧快照）。
+5. 有运行中任务时 client 不按 5 分钟空闲 TTL 逐出；每个任务从开始时间起最多保活 10 分钟，超过 10 分钟保活上限或被逐出时标记「已中断」。
+6. 服务重启时所有非终态任务标记「已中断」并保留 10 分钟；有 turn 在跑的会话仍按现有恢复流程续跑。
+7. 每轮「执行过程」不再显示任务列表，任务只在会话级任务区出现；子 Agent、思考、工具调用仍在「执行过程」。
+8. 不把后台任务写入 transcript；刷新历史或重开会话不恢复任务；不提供任务取消或跨会话总览。
+
+#### 验收标准
+
+- 启动一个超过当前 turn 的后台任务：turn 结束后会话级任务区继续显示「运行中」，完成/失败/停止时实时更新。
+- 会话级任务区位于输入框上方；有运行中任务时排在已完成任务之前。
+- 刷新页面或断线重连后运行中任务恢复；任务结束后 10 分钟内可见，之后消失。
+- 服务重启：运行中任务显示「已中断」10 分钟；有 turn 在跑的会话正常续跑，只有后台任务的记录不触发续跑。
+- 有运行中任务的 client 不被 5 分钟空闲 TTL 逐出；最多保活 10 分钟；逐出后任务标记「已中断」。
+- 每轮「执行过程」不再出现任务列表；会话级任务区无重复渲染。
+- 任务事件不写入 transcript；刷新历史或重开会话不恢复任务区；任务区没有取消或跨会话总览入口。
+- 后端测试与前端构建通过。

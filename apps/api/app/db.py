@@ -69,6 +69,32 @@ async def _drop_stale_channel_inbounds(conn) -> None:  # noqa: ANN001
     await conn.exec_driver_sql("DROP TABLE channel_inbounds")
 
 
+async def _ensure_running_session_columns(conn) -> None:  # noqa: ANN001
+    """Add the task columns to a pre-F26 running_sessions table."""
+    result = await conn.exec_driver_sql("PRAGMA table_info(running_sessions)")
+    columns = {row[1] for row in result.fetchall()}
+    if not columns:
+        return
+    if "has_turn" not in columns:
+        await conn.exec_driver_sql(
+            "ALTER TABLE running_sessions "
+            "ADD COLUMN has_turn INTEGER NOT NULL DEFAULT 1"
+        )
+    if "tasks_json" not in columns:
+        await conn.exec_driver_sql(
+            "ALTER TABLE running_sessions "
+            "ADD COLUMN tasks_json TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "updated_at" not in columns:
+        await conn.exec_driver_sql(
+            "ALTER TABLE running_sessions ADD COLUMN updated_at DATETIME"
+        )
+    await conn.exec_driver_sql(
+        "UPDATE running_sessions SET updated_at = CURRENT_TIMESTAMP "
+        "WHERE updated_at IS NULL"
+    )
+
+
 async def init_db() -> None:
     from app import models  # noqa: F401
 
@@ -76,6 +102,7 @@ async def init_db() -> None:
         if settings.app_database_url.startswith("sqlite"):
             await _drop_stale_channel_deliveries(conn)
             await _drop_stale_channel_inbounds(conn)
+            await _ensure_running_session_columns(conn)
         await conn.run_sync(Base.metadata.create_all)
 
 

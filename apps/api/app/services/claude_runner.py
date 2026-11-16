@@ -33,6 +33,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
@@ -95,6 +96,9 @@ class _CachedClient:
     agent_id: str
     fingerprint: str
     last_used: float
+    # Background-task reader that owns ``client.receive_messages()`` between
+    # turns; the turn loop owns the stream while a turn is running.
+    tail_reader: asyncio.Task[None] | None = None
 
 
 def _memory_stamp(home: Path | None) -> str:
@@ -297,6 +301,7 @@ class ClaudeTurnRunner:
         max_clients: int | None = None,
         sweep_seconds: float | None = None,
         connect_timeout_seconds: float | None = None,
+        session_tasks: Any | None = None,
     ) -> None:
         self._store = store
         self._home = home
@@ -305,6 +310,9 @@ class ClaudeTurnRunner:
         self._clients: dict[ClientKey, _CachedClient] = {}
         self._factory = client_factory
         self._deliver_callback = deliver_callback
+        # Session-level background task state: task events are published here
+        # and active tasks pin a cached client past its idle TTL.
+        self._session_tasks = session_tasks
         self._locks: dict[str, asyncio.Lock] = {}
         self._active: set[ClientKey] = set()
         # Turn id currently attached to each cached client key. /stop uses it
@@ -430,6 +438,7 @@ class ClaudeTurnRunner:
                     # busy; rebuild instead of running with stale settings.
                     self._clients.pop(key, None)
                     try:
+                        await self._stop_tail_reader(cached)
                         await self._disconnect(cached.client, turn.session_id)
                     except asyncio.CancelledError:
                         # Keep the reference so shutdown can still close it.
@@ -605,7 +614,19 @@ class ClaudeTurnRunner:
         """
         expired = self._idle_entries()
         evicted = 0
+        now = datetime.now(timezone.utc)
         for key, cached in expired:
+            if self._session_tasks is not None:
+                try:
+                    deadline = await self._session_tasks.keep_alive_until(key[1])
+                except Exception:
+                    logger.exception(
+                        "failed to read session task keep-alive session=%s",
+                        key[1],
+                    )
+                    deadline = None
+                if deadline is not None and deadline > now:
+                    continue
             if await self._evict_key(key, expected=cached):
                 evicted += 1
         await self._enforce_capacity()
@@ -615,7 +636,9 @@ class ClaudeTurnRunner:
         return evicted
 
     async def _enforce_capacity(self) -> None:
-        overflow = len(self._clients) - max(1, self._max_clients)
+        # Keep at least one client cached even if the cap is misconfigured to 0.
+        limit = max(1, self._max_clients)
+        overflow = len(self._clients) - limit
         if overflow <= 0:
             return
         idle = sorted(
@@ -626,8 +649,91 @@ class ClaudeTurnRunner:
             ),
             key=lambda item: item[0],
         )
-        for _, key, cached in idle[:overflow]:
+        now = datetime.now(timezone.utc)
+        skipped: list[tuple[float, ClientKey, _CachedClient]] = []
+        for item in idle:
+            if len(self._clients) <= limit:
+                return
+            _, key, cached = item
+            if self._session_tasks is not None:
+                try:
+                    deadline = await self._session_tasks.keep_alive_until(key[1])
+                except Exception:
+                    logger.exception(
+                        "failed to read session task keep-alive session=%s",
+                        key[1],
+                    )
+                    deadline = None
+                if deadline is not None and deadline > now:
+                    skipped.append(item)
+                    continue
             await self._evict_key(key, expected=cached)
+        # Background tasks may pin clients past the normal cap; allow a small
+        # grace, then evict the oldest pinned client and mark its tasks.
+        for _, key, cached in skipped:
+            if len(self._clients) <= limit + 2:
+                return
+            await self._evict_key(key, expected=cached)
+
+    async def _stop_tail_reader(self, cached: _CachedClient) -> None:
+        """Stop the between-turns task reader so the turn loop owns the stream.
+
+        The await is part of the handoff: once it returns the cancelled reader
+        can no longer publish, so eviction can safely mark its tasks interrupted
+        and a new turn can read the same client.
+        """
+        task = cached.tail_reader
+        if task is None:
+            return
+        cached.tail_reader = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                # This coroutine itself is being cancelled (shutdown, turn
+                # timeout); never swallow the outer cancellation.
+                raise
+        except Exception:
+            logger.exception("session task tail reader failed")
+
+    def _start_tail_reader(self, key: ClientKey, cached: _CachedClient) -> None:
+        if self._session_tasks is None or cached.tail_reader is not None:
+            return
+        cached.tail_reader = asyncio.create_task(
+            self._drain_tail(key, cached),
+            name=f"session-task-tail-{key[1]}",
+        )
+
+    async def _drain_tail(self, key: ClientKey, cached: _CachedClient) -> None:
+        """Publish background task events that arrive after a turn's result.
+
+        The CLI keeps emitting ``task_*`` frames while a background task runs;
+        without a reader here they would sit in the SDK buffer until the next
+        turn, which is exactly the window F26 must cover. Only task lifecycle
+        events are published: injected turns are suppressed by the platform and
+        must not leak into the chat.
+        """
+        try:
+            async for message in cached.client.receive_messages():
+                mapped = task_event(message)
+                if mapped is None:
+                    continue
+                if self._session_tasks is not None:
+                    try:
+                        await self._session_tasks.publish(key[1], mapped)
+                    except Exception:
+                        logger.exception(
+                            "failed to publish tail task event session=%s",
+                            key[1],
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "session task tail reader ended session=%s", key[1], exc_info=True
+            )
 
     async def run(
         self,
@@ -712,6 +818,11 @@ class ClaudeTurnRunner:
                     return outcome
                 client = await self._client(turn, agent, settings.maps)
                 self._touch(key)
+                # The previous turn's tail reader must yield the stream before
+                # this turn reads it; two consumers would split the messages.
+                cached = self._clients.get(key)
+                if cached is not None:
+                    await self._stop_tail_reader(cached)
                 if turn.source == "resume":
                     prompt = (
                         "上次任务因服务重启被中断。请先检查当前状态，"
@@ -757,6 +868,16 @@ class ClaudeTurnRunner:
                         # Task lifecycle is a fact even when the surrounding
                         # notification turn is not shown in this chat.
                         stream.publish(mapped_task)
+                        if self._session_tasks is not None:
+                            try:
+                                await self._session_tasks.publish(
+                                    turn.session_id, mapped_task
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "failed to publish session task event session=%s",
+                                    turn.session_id,
+                                )
                         continue
 
                     if type(message).__name__ == "UserMessage":
@@ -896,13 +1017,22 @@ class ClaudeTurnRunner:
             # channel reply. The marker is cleared at the end of teardown so the
             # delivery decision can still see it.
             interrupted = key in self._cancel_requested
+            if not result_received:
+                evict = True
+            # Attach the between-turns reader while the client is still marked
+            # active: a sweep that saw it idle before the reader started could
+            # otherwise evict it and mark its tasks interrupted underneath us.
+            # Starting while active is safe; once active is cleared below, a
+            # later eviction stops the reader before marking anything.
+            if result_received and not evict and not keep_lease:
+                cached = self._clients.get(key)
+                if cached is not None:
+                    self._start_tail_reader(key, cached)
             self._active.discard(key)
             self._query_sent.discard(key)
             if self._active_turns.get(key) == turn.id:
                 self._active_turns.pop(key, None)
             self._touch(key)
-            if not result_received:
-                evict = True
             # A local CLI slash command (and any turn the CLI did not stream)
             # only reports its text in the result. Publish it once so the chat
             # is not empty; streamed turns already collected it in text_parts.
@@ -935,16 +1065,30 @@ class ClaudeTurnRunner:
                 else:
                     await self._evict_key(key)
             if lease_added and not keep_lease:
+                if self._session_tasks is not None:
+                    try:
+                        await self._session_tasks.flush(turn.session_id)
+                    except BaseException as exc:
+                        if isinstance(exc, asyncio.CancelledError):
+                            logger.warning(
+                                "task flush cancelled session=%s", turn.session_id
+                            )
+                        else:
+                            logger.warning(
+                                "failed to flush session tasks session=%s",
+                                turn.session_id,
+                                exc_info=True,
+                            )
                 try:
-                    await turn_lease.remove(turn.session_id)
+                    await turn_lease.end_turn(turn.session_id)
                 except BaseException as exc:
                     if isinstance(exc, asyncio.CancelledError):
                         logger.warning(
-                            "turn lease removal cancelled session=%s", turn.session_id
+                            "turn lease end cancelled session=%s", turn.session_id
                         )
                     else:
                         logger.warning(
-                            "failed to remove turn lease session=%s",
+                            "failed to end turn lease session=%s",
                             turn.session_id,
                             exc_info=True,
                         )
@@ -1089,38 +1233,60 @@ class ClaudeTurnRunner:
                     return False
         return True
 
-    async def _disconnect(self, client: Any, session_id: str) -> bool:
+    async def _disconnect(
+        self, client: Any, session_id: str, mark_tasks: bool = True
+    ) -> bool:
         """Disconnect one client within the shared timeout.
 
         A timed-out or failed client is retained in ``_orphaned_clients``:
         timing out raw-cancels the SDK's shielded cleanup, skipping its
         SIGTERM/SIGKILL escalation, and an exception may leave the CLI child
         alive, so the reference is never silently dropped.
+
+        The session's background tasks are marked interrupted before the
+        disconnect starts, because this client is the only reader of their
+        events and an early mark also covers a timeout, a failed close or an
+        outer cancellation. Callers that already marked under the session lock
+        pass ``mark_tasks=False``.
         """
+        if mark_tasks and self._session_tasks is not None:
+            try:
+                await self._session_tasks.mark_interrupted(
+                    session_id, "SDK client 已断开"
+                )
+            except Exception:
+                logger.exception(
+                    "failed to mark background tasks interrupted session=%s",
+                    session_id,
+                )
+        disconnected = False
         try:
             async with asyncio.timeout(_DISCONNECT_TIMEOUT_SECONDS):
                 await client.disconnect()
-            return True
+            disconnected = True
         except TimeoutError:
             logger.warning(
                 "client disconnect timed out session=%s; keeping reference",
                 session_id,
             )
             self._retain_orphan(client)
-            return False
         except Exception:
             logger.exception("client disconnect failed session=%s", session_id)
             self._retain_orphan(client)
-            return False
+        return disconnected
 
     async def _evict_key(
         self, key: ClientKey, *, expected: _CachedClient | None = None
     ) -> bool:
         """Evict one cached client if it is still the one we meant to remove.
 
-        The check and the pop happen with no await between them while holding
-        the session lock, so a turn starting during a prior entry's disconnect
-        can never be disconnected by a stale sweep snapshot.
+        The check, the task-interruption mark and the pop happen under the
+        session lock, so a turn starting during a prior entry's disconnect
+        can neither be disconnected by a stale sweep snapshot nor publish new
+        tasks between the mark and the pop and have them marked interrupted.
+        The mark runs before the pop so a cancellation while marking leaves the
+        client cached instead of silently dropping it, and before the (slow)
+        disconnect to cover its timeout and cancellation paths as well.
         """
         session_id = key[1]
         lock = self._client_lock(session_id)
@@ -1130,9 +1296,22 @@ class ClaudeTurnRunner:
             cached = self._clients.get(key)
             if cached is None or (expected is not None and cached is not expected):
                 return False
+            # Stop the tail reader before the interruption mark: once it
+            # returns, no task event can land after the tasks are marked.
+            await self._stop_tail_reader(cached)
+            if self._session_tasks is not None:
+                try:
+                    await self._session_tasks.mark_interrupted(
+                        session_id, "SDK client 已断开"
+                    )
+                except Exception:
+                    logger.exception(
+                        "failed to mark background tasks interrupted session=%s",
+                        session_id,
+                    )
             self._clients.pop(key, None)
         try:
-            await self._disconnect(cached.client, session_id)
+            await self._disconnect(cached.client, session_id, mark_tasks=False)
         except asyncio.CancelledError:
             # The entry is already out of the cache; retain the reference
             # so the shutdown path can still report/close the CLI.
@@ -1209,7 +1388,7 @@ class ClaudeTurnRunner:
         await asyncio.gather(
             *(
                 self._disconnect_for_shutdown(
-                    cached.client, key[1], deadline
+                    cached, key[1], deadline
                 )
                 for key, cached in snapshot
             )
@@ -1221,21 +1400,34 @@ class ClaudeTurnRunner:
             )
 
     async def _disconnect_for_shutdown(
-        self, client: Any, session_id: str, deadline: float
+        self, cached: _CachedClient, session_id: str, deadline: float
     ) -> None:
+        # Stop the tail reader and mark before the budget check: even a client
+        # kept as an orphan cannot publish its background task events anymore.
+        await self._stop_tail_reader(cached)
+        if self._session_tasks is not None:
+            try:
+                await self._session_tasks.mark_interrupted(
+                    session_id, "服务关机，SDK client 已断开"
+                )
+            except Exception:
+                logger.exception(
+                    "failed to mark background tasks interrupted session=%s",
+                    session_id,
+                )
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             logger.warning(
                 "shutdown budget exhausted; keeping client reference session=%s",
                 session_id,
             )
-            self._retain_orphan(client)
+            self._retain_orphan(cached.client)
             return
         try:
             async with asyncio.timeout(
                 min(_DISCONNECT_TIMEOUT_SECONDS, remaining)
             ):
-                await client.disconnect()
+                await cached.client.disconnect()
         except TimeoutError:
             # Timing out raw-cancels the SDK's shielded cleanup and skips its
             # SIGTERM/SIGKILL escalation; keep the reference so the CLI is not
@@ -1246,10 +1438,10 @@ class ClaudeTurnRunner:
                 "keeping reference",
                 session_id,
             )
-            self._retain_orphan(client)
+            self._retain_orphan(cached.client)
         except Exception:
             logger.exception(
                 "client disconnect failed during shutdown session=%s",
                 session_id,
             )
-            self._retain_orphan(client)
+            self._retain_orphan(cached.client)

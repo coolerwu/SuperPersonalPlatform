@@ -37,9 +37,10 @@ def quiet_background_workers(monkeypatch):
 
 def _patch_runtime_classes(monkeypatch, order):
     class FakeRunner:
-        def __init__(self, store, *, deliver_callback=None):
+        def __init__(self, store, *, deliver_callback=None, session_tasks=None):
             self.store = store
             self.deliver_callback = deliver_callback
+            self.session_tasks = session_tasks
 
         async def close_all(self):
             order.append("runner.close_all")
@@ -93,6 +94,16 @@ def test_worker_app_wires_runtime_state(quiet_background_workers):
         assert state.runner is not None
         assert state.registry is not None
         assert state.session_catalog is not None
+        assert state.session_tasks is not None
+        assert state.session_tasks._writer is not None
+        assert state.session_tasks._cleaner is not None
+
+
+def test_non_worker_app_creates_task_service_without_loops(client):
+    service = client.app.state.session_tasks
+    assert service is not None
+    assert service._writer is None
+    assert service._cleaner is None
 
 
 def test_shutdown_closes_registry_before_runner(

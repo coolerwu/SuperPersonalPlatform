@@ -1,7 +1,32 @@
-import pytest
+import asyncio
+import json
+from datetime import datetime, timezone
 
-from app.db import SessionLocal, init_db
+import pytest
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from app.db import SessionLocal, _ensure_running_session_columns, init_db
+from app.models import RunningSession
 from app.services import turn_lease
+from app.services.session_tasks import SessionTaskService
+
+SESSION_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def _task(task_id: str, status: str = "running") -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "task_id": task_id,
+        "tool_use_id": None,
+        "description": task_id,
+        "status": status,
+        "summary": "",
+        "last_tool_name": "",
+        "usage": None,
+        "started_at": now,
+        "updated_at": now,
+        "completed_at": now if status != "running" else None,
+    }
 
 
 @pytest.mark.asyncio
@@ -63,3 +88,229 @@ async def test_add_in_joins_caller_transaction():
     finally:
         await turn_lease.remove(committed_id)
         await turn_lease.remove(rolled_back_id)
+
+
+@pytest.mark.asyncio
+async def test_begin_turn_and_end_turn_keep_task_row():
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    try:
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            row.tasks_json = json.dumps([_task("t1")])
+            await db.commit()
+
+        await turn_lease.end_turn(SESSION_ID)
+
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row is not None
+            assert row.has_turn is False
+            assert json.loads(row.tasks_json)[0]["task_id"] == "t1"
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_end_turn_deletes_empty_row():
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    try:
+        await turn_lease.end_turn(SESSION_ID)
+
+        async with SessionLocal() as db:
+            assert await db.get(RunningSession, SESSION_ID) is None
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_list_turn_leases_ignores_task_only_rows():
+    await init_db()
+    other = "22222222-2222-2222-2222-222222222222"
+    await turn_lease.add(SESSION_ID)
+    try:
+        async with SessionLocal() as db:
+            db.add(
+                RunningSession(
+                    session_id=other,
+                    has_turn=False,
+                    tasks_json=json.dumps([_task("t2")]),
+                )
+            )
+            await db.commit()
+
+        leases = await turn_lease.list_turn_leases()
+        assert SESSION_ID in leases
+        assert other not in leases
+        assert await turn_lease.is_running(SESSION_ID) is True
+        assert await turn_lease.is_running(other) is False
+    finally:
+        await turn_lease.remove(SESSION_ID)
+        await turn_lease.remove(other)
+
+
+@pytest.mark.asyncio
+async def test_begin_turn_reactivates_task_row():
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    try:
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            row.tasks_json = json.dumps([_task("t1")])
+            await db.commit()
+
+        await turn_lease.end_turn(SESSION_ID)
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row is not None
+            assert row.has_turn is False
+
+        await turn_lease.add(SESSION_ID)
+
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row.has_turn is True
+            assert json.loads(row.tasks_json)[0]["task_id"] == "t1"
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_add_upserts_task_only_row():
+    await init_db()
+    await turn_lease.remove(SESSION_ID)
+    try:
+        async with SessionLocal() as db:
+            db.add(
+                RunningSession(
+                    session_id=SESSION_ID,
+                    has_turn=False,
+                    tasks_json=json.dumps([_task("t1")]),
+                )
+            )
+            await db.commit()
+
+        await turn_lease.add(SESSION_ID)
+
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row is not None
+            assert row.has_turn is True
+            assert json.loads(row.tasks_json)[0]["task_id"] == "t1"
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_add_turn_with_concurrent_task_publish():
+    await init_db()
+    await turn_lease.remove(SESSION_ID)
+    service = SessionTaskService()
+    try:
+        await asyncio.gather(
+            turn_lease.add(SESSION_ID),
+            service.publish(
+                SESSION_ID,
+                {"type": "task_started", "task_id": "t1", "description": "t1"},
+            ),
+        )
+
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row is not None
+            assert row.has_turn is True
+            task_ids = {task["task_id"] for task in json.loads(row.tasks_json)}
+            assert "t1" in task_ids
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_end_turn_with_concurrent_task_publish():
+    await init_db()
+    await turn_lease.remove(SESSION_ID)
+    await turn_lease.add(SESSION_ID)
+    service = SessionTaskService()
+    try:
+        await asyncio.gather(
+            turn_lease.end_turn(SESSION_ID),
+            service.publish(
+                SESSION_ID,
+                {"type": "task_started", "task_id": "t1", "description": "t1"},
+            ),
+        )
+
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row is not None
+            task_ids = {task["task_id"] for task in json.loads(row.tasks_json)}
+            assert "t1" in task_ids
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_end_turn_keeps_row_with_malformed_tasks_json():
+    await init_db()
+    await turn_lease.add(SESSION_ID)
+    try:
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            row.tasks_json = "not-json"
+            await db.commit()
+
+        await turn_lease.end_turn(SESSION_ID)
+
+        async with SessionLocal() as db:
+            row = await db.get(RunningSession, SESSION_ID)
+            assert row is not None
+            assert row.has_turn is False
+            assert row.tasks_json == "not-json"
+    finally:
+        await turn_lease.remove(SESSION_ID)
+
+
+@pytest.mark.asyncio
+async def test_end_turn_missing_row_is_idempotent():
+    await init_db()
+    await turn_lease.remove(SESSION_ID)
+
+    await turn_lease.end_turn(SESSION_ID)
+
+    async with SessionLocal() as db:
+        assert await db.get(RunningSession, SESSION_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_running_session_columns_migrates_old_table(tmp_path):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'old.db'}", future=True
+    )
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            "CREATE TABLE running_sessions (session_id VARCHAR(36) PRIMARY KEY)"
+        )
+        await conn.exec_driver_sql(
+            "INSERT INTO running_sessions (session_id) VALUES ('old-session')"
+        )
+        await _ensure_running_session_columns(conn)
+        result = await conn.exec_driver_sql("PRAGMA table_info(running_sessions)")
+        columns = {row[1] for row in result.fetchall()}
+        assert {"has_turn", "tasks_json", "updated_at"} <= columns
+        result = await conn.exec_driver_sql(
+            "SELECT has_turn, tasks_json, updated_at FROM running_sessions "
+            "WHERE session_id = 'old-session'"
+        )
+        row = result.fetchone()
+        assert row[0] == 1
+        assert row[1] == "[]"
+        assert row[2] is not None
+        first_updated_at = row[2]
+
+        await _ensure_running_session_columns(conn)
+        result = await conn.exec_driver_sql(
+            "SELECT updated_at FROM running_sessions WHERE session_id = 'old-session'"
+        )
+        assert result.fetchone()[0] == first_updated_at
+    await engine.dispose()
