@@ -63,10 +63,11 @@ npm run dev
 ## Chat
 
 - 执行核为 `ClaudeSDKClient`：每个平台会话一个 UUID，直接作为 SDK `session_id`；transcript 在 `claude/projects/<agent_id>/<uuid>.jsonl`。同一会话的 turn 串行，不同会话并发（上限 `BROWSER_CONCURRENCY`，默认 5）。
-- 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。执行过程中，子 Agent 的工具/文本和后台任务状态实时显示在「执行过程」；它们只存在于实时流里，刷新后只重建主 Agent 的 thinking/tool_use。后台任务事件只在当前 turn 的流读取期间发布；turn 结束后到达的事件要等下一轮消费同一 client 的缓冲才发布，client 在空闲 TTL 内被逐出则丢失。
+- 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。执行过程中，子 Agent 的工具/文本实时显示在「执行过程」；子 Agent 只存在于实时流里，刷新后只重建主 Agent 的 thinking/tool_use。
+- 后台任务使用输入框上方的会话级任务区：turn 结束后仍实时更新；`GET /api/sessions/{id}/tasks` 返回快照，`GET /api/sessions/{id}/events` 推送 `task_*` / `task_removed`；任务状态保存在 `running_sessions` 的 `tasks_json`，已完成任务保留 10 分钟，有运行中任务时 client 最多保活 10 分钟；client 逐出或服务重启后显示「已中断」。每轮「执行过程」只保留思考/工具/子 Agent。
 - 刷新后当前流式输出可能丢失：同一进程内前端会在数秒内通过 `current_turn_id` 重新订阅并重放当前轮缓冲；SSE 断线会自动探测轮次并按事件序号续传，不重复、不清空。进程重启时只能从 transcript 读回历史，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
 - `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约，返回 `{interrupted, cancelled_turn_ids}`；前端只移除真正被取消的消息占位，与中断竞争、未被取消的排队追问继续执行并保持流式订阅。历史里的中断合成消息按系统行展示（「本轮对话已被中断」），`No response requested.` 不显示。
-- 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
+- 服务重启时，`running_sessions` 中持有 turn 租约（`has_turn=1`）的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
 - 命令：平台处理 `/new`（或 `/clear`）、`/stop`、`/status`、`/help`，不区分大小写；网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾的临时卡片显示。输入框以 `/` 开头时弹出命令面板，除平台命令外还列出 Claude Code 运行时 init frame 里的 `slash_commands`（排除终端绑定项与重名项）；只有列表里的 Claude Code 命令才作为普通消息转发给 Agent，未知命令会回复当前可用命令列表，列表未加载时提示先发送一条普通消息。
 - `CLAUDE.md` 全局规则由 SDK 作为 user 级说明加载；Agent 记忆是工作区的项目级 `CLAUDE.md`，只加载给该 Agent；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
 - assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、链接、`$$...$$` 数学公式（KaTeX；单 `$` 按普通文本处理）。`markdown`/`md`/`text`/`txt`/`plaintext`/`log` 围栏自动换行，其他代码围栏保持横向滚动。
@@ -261,7 +262,7 @@ metadata:
   - `channel_inbounds`：入站幂等键（渠道 + 外部消息 id），同时保存入站文本/联系人供引用找回；
   - `channel_deliveries`：出站投递义务与重试（pending/attempting/sent/failed）；
   - `backtests`：回测任务与结果；
-  - `running_sessions`：运行时租约（`session_id` 主键）。
+  - `running_sessions`：运行时租约与后台任务保留（`session_id` 主键；`has_turn=1` 为 turn 租约，`has_turn=0` 保留 `tasks_json` 中的任务记录）。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles` 和 `market_sync_state`；可以独立删除，下次回测会重新抓取。
 - `trade-journal.jsonl`、`allocation.json`、`allocation-ledger.jsonl`：交易记录与资产配置数据，权限 0600，不建数据库表。
 - `browser_state.json`：浏览器 cookies/localStorage（0600）；平台浏览器工具接入后用于跨会话、跨轮次保持登录态。
