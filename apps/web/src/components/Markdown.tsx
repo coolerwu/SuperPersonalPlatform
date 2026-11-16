@@ -21,12 +21,24 @@ function textOf(node: ReactNode): string {
   return "";
 }
 
+// Prose fences are file/text dumps; wrap them instead of hiding the tail
+// behind a horizontal scrollbar. Real code keeps horizontal scrolling.
+const WRAPPED_LANGUAGES = new Set([
+  "markdown",
+  "md",
+  "text",
+  "txt",
+  "plaintext",
+  "log",
+]);
+
 function CodeBlock({ children }: { children?: ReactNode }) {
   const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
   const text = textOf(children);
   const first = Children.toArray(children)[0];
   const className = isValidElement<{ className?: string }>(first) ? first.props.className ?? "" : "";
   const language = /language-([\w-]+)/.exec(className)?.[1] ?? "";
+  const wrapped = WRAPPED_LANGUAGES.has(language.toLowerCase());
 
   async function copy() {
     const copied = await copyText(text);
@@ -35,7 +47,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   }
 
   return (
-    <div className="code-block">
+    <div className={wrapped ? "code-block code-block-prose" : "code-block"}>
       <div className="code-block-head">
         <span>{language || "code"}</span>
         <button type="button" onClick={() => void copy()}>

@@ -1393,6 +1393,13 @@ textarea {
   background: transparent;
 }
 
+/* Markdown/text dumps are prose: wrap long lines instead of clipping them. */
+.code-block-prose pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .markdown table {
   width: 100%;
   margin: 12px 0;
