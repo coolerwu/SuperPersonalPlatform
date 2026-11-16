@@ -37,7 +37,7 @@
 6. 微信个人号渠道：扫码登录、iLink 长轮询、5 秒打包、命令、引用找回、图片/文件、回复投递与补发。
 7. 定时任务：5 字段 cron、IANA 时区、专属会话、忙时跳过并更新 `last_skipped_at`、可选推送到微信联系人、停机后最多补跑一次。
 8. 会话保留清理：按 transcript mtime 与保留天数删除，跳过运行中会话，保留 auto memory。
-9. 记忆：记忆页有用户画像（`claude/CLAUDE.md`，跨 Agent）与 Agent 记忆（`workspaces/<agent_id>/CLAUDE.md`）；Agent 指令 = `settings.json`；Claude auto memory 在记忆页只读展示。
+9. 记忆：记忆页有全局规则（`claude/CLAUDE.md`，跨 Agent，每次对话开头完整注入）与 Agent 记忆（`workspaces/<agent_id>/CLAUDE.md`）；Agent 指令 = `settings.json`；Claude auto memory 在记忆页只读展示。
 10. 配置页：Provider、Agent、知识库、地图、运行环境；所有平台配置写入 `data/settings.json`，密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。
 11. 技能库：全局 `claude/skills/` 目录（Claude Code 用户级技能），初始化技能 seed 与哈希跟踪；技能是说明文档，没有技能创作工具。
 12. 知识库：WebDAV 双向镜像到 `knowledge/`，配置与同步状态在设置接口；本版尚未挂载给 Agent。
@@ -143,14 +143,14 @@
 - 配置文件写入原子、损坏可回退；密钥不出现在接口响应和日志。
 - 彻底删除 Agent 后其会话、工作区、渠道、定时任务被清理；归档只改状态，不删文件。
 
-### F5 记忆、用户画像与 Agent 记忆
+### F5 记忆、全局规则与 Agent 记忆
 
 - 状态：现行
-- 日期：2026-11-11
+- 日期：2026-11-16
 
 #### 功能点
 
-1. 用户画像 = `claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent；记忆页编辑这个 Markdown 文档，保存时保留 `CLAUDE.md.bak`，原子写入，权限 0600。文件 mtime/size 纳入 client 配置指纹，保存后下一次 turn 自动重建受影响的缓存 client。
+1. 全局规则 = `claude/CLAUDE.md`，由 SDK 作为 user 级说明在每次对话开头完整注入每个 Agent 的系统提示，不按相关性筛选，写多少占多少上下文；适合放必须遵守的规则（代码规范、提交格式、禁止操作）。记忆页编辑这个 Markdown 文档，保存时保留 `CLAUDE.md.bak`，原子写入，权限 0600。文件 mtime/size 纳入 client 配置指纹，保存后下一次 turn 自动重建受影响的缓存 client。
 2. Agent 记忆 = `workspaces/<agent_id>/CLAUDE.md`，由记忆页按侧栏选中的 Agent 编辑。runner 以该工作区为 cwd 并启用 `project` setting source，CLI 把它作为项目级 CLAUDE.md 只加载给这个 Agent；保存同样保留 `.bak`、权限 0600，mtime/size 纳入 client 配置指纹。
 3. Agent 指令在 `settings.json` 的 `agents[].instructions`，通过 preset+append 注入系统提示词，与 Agent 记忆是两份不同内容。
 4. Claude auto memory 由 Claude 管理（`claude/projects/<project>/memory/`，`MEMORY.md` 索引 + 主题文件），记忆页只读展示，平台不写入、不整理、不提供记忆工具；单文件 128 KB、总量 1 MB、最多 200 个文件，超出部分跳过并在页面提示。`agents[].auto_memory` 仅为兼容保留，运行时不再读取。
@@ -158,8 +158,8 @@
 
 #### 验收标准
 
-- 记忆页有两张卡片：「用户画像」跨 Agent 生效；「Agent 记忆」跟随侧栏选中的 Agent，只影响该 Agent。
-- 用户画像与 Agent 记忆保存后下一轮对话生效，旧版本保留为 `.bak`；切换 Agent 时 Agent 卡片重新加载，未保存的 Agent 修改丢弃。
+- 记忆页有两张卡片：「全局规则」跨 Agent 生效；「Agent 记忆」跟随侧栏选中的 Agent，只影响该 Agent。
+- 全局规则与 Agent 记忆保存后下一轮对话生效，旧版本保留为 `.bak`；切换 Agent 时 Agent 卡片重新加载，未保存的 Agent 修改丢弃。
 - Claude auto memory 在 Agent 卡片内只读展示；平台不存在记忆表、记忆工具或整理记忆入口。
 
 ### F6 微信个人号渠道
@@ -394,7 +394,7 @@
 10. `/memory` 指令与整理记忆。
 11. 过期会话的 transcript 由 Claude Code 删除，但平台不再随保留期清理其投递历史与旧截图目录；渠道绑定在下次入站时重建并清掉旧投递行。
 
-已知能力损失（已接受）：进程重启后丢当前流式输出（同进程刷新会在数秒内从 `current_turn_id` 重放缓冲；同一 turn 内断线按事件序号续传）、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失、上下文自动压缩后压缩前的消息不再出现在历史里（SDK `get_session_messages` 只返回压缩点之后的链，历史从压缩摘要行开始）、过期会话的投递历史与旧截图目录不再自动清理、子 Agent 与后台任务只实时可见且刷新后不保留；`langchain-core` 暂留。
+已知能力损失（已接受）：进程重启后丢当前流式输出（同进程刷新会在数秒内从 `current_turn_id` 重放缓冲；同一 turn 内断线按事件序号续传）、聊天气泡无时间戳、无会话全文搜索、失败 turn 无过程重建（用户重发即可）、排队中的追问在重启后丢失、上下文自动压缩后压缩前的消息不再出现在历史里（SDK `get_session_messages` 只返回压缩点之后的链，历史从压缩摘要行开始）、过期会话的投递历史与旧截图目录不再自动清理、子 Agent 与后台任务只实时可见且刷新后不保留；后台任务事件只在当前 turn 的流读取期间发布，turn 结束后到达的事件要等下一轮消费同一 client 的缓冲才发布，client 在空闲 TTL 内被逐出则丢失（实时跨轮需要 session 级事件流，本版未做）；`langchain-core` 暂留。
 
 ### F17 官方插件集市
 

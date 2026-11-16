@@ -18,7 +18,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 ~/.super-personal-platform/
 ├── .env                    # APP_AUTH_TOKEN、LLM_* 等配置
 ├── claude/                 # CLAUDE_CONFIG_DIR（权限 0700）
-│   ├── CLAUDE.md           # 用户画像，跨 Agent 生效（记忆页编辑）
+│   ├── CLAUDE.md           # 全局规则，跨 Agent 生效（记忆页编辑）
 │   ├── settings.json       # Claude Code 自身配置（插件启用状态等）
 │   ├── skills/             # 全局技能库（.seed_state.json 记录初始化技能哈希）
 │   ├── plugins/            # 官方集市与已安装插件（插件页管理）
@@ -63,12 +63,12 @@ npm run dev
 ## Chat
 
 - 执行核为 `ClaudeSDKClient`：每个平台会话一个 UUID，直接作为 SDK `session_id`；transcript 在 `claude/projects/<agent_id>/<uuid>.jsonl`。同一会话的 turn 串行，不同会话并发（上限 `BROWSER_CONCURRENCY`，默认 5）。
-- 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。执行过程中，子 Agent 的工具/文本和后台任务状态实时显示在「执行过程」；它们只存在于实时流里，刷新后只重建主 Agent 的 thinking/tool_use。
+- 流式输出、停止生成、运行中排队追问：发送返回 `{session_id, turn_id, accepted}`，前端订阅 `GET /api/sessions/{uuid}/stream?turn_id=...`；运行中继续发送会排队，当前 turn 结束后按顺序执行。执行过程中，子 Agent 的工具/文本和后台任务状态实时显示在「执行过程」；它们只存在于实时流里，刷新后只重建主 Agent 的 thinking/tool_use。后台任务事件只在当前 turn 的流读取期间发布；turn 结束后到达的事件要等下一轮消费同一 client 的缓冲才发布，client 在空闲 TTL 内被逐出则丢失。
 - 刷新后当前流式输出可能丢失：同一进程内前端会在数秒内通过 `current_turn_id` 重新订阅并重放当前轮缓冲；SSE 断线会自动探测轮次并按事件序号续传，不重复、不清空。进程重启时只能从 transcript 读回历史，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
 - `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约，返回 `{interrupted, cancelled_turn_ids}`；前端只移除真正被取消的消息占位，与中断竞争、未被取消的排队追问继续执行并保持流式订阅。历史里的中断合成消息按系统行展示（「本轮对话已被中断」），`No response requested.` 不显示。
 - 服务重启时，`running_sessions` 中的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
 - 命令：平台处理 `/new`（或 `/clear`）、`/stop`、`/status`、`/help`，不区分大小写；网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾的临时卡片显示。输入框以 `/` 开头时弹出命令面板，除平台命令外还列出 Claude Code 运行时 init frame 里的 `slash_commands`（排除终端绑定项与重名项）；只有列表里的 Claude Code 命令才作为普通消息转发给 Agent，未知命令会回复当前可用命令列表，列表未加载时提示先发送一条普通消息。
-- `CLAUDE.md` 用户画像由 SDK 作为用户级说明加载；Agent 记忆是工作区的项目级 `CLAUDE.md`，只加载给该 Agent；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
+- `CLAUDE.md` 全局规则由 SDK 作为 user 级说明加载；Agent 记忆是工作区的项目级 `CLAUDE.md`，只加载给该 Agent；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
 - assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、链接、`$$...$$` 数学公式（KaTeX；单 `$` 按普通文本处理）。`markdown`/`md`/`text`/`txt`/`plaintext`/`log` 围栏自动换行，其他代码围栏保持横向滚动。
 - 消息操作：复制、引用；按钮位于气泡下方，引用内容显示在输入框上方并可单独取消，发送时以 `> ` 引用块写入消息；失败或停止后显示提示，重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成或删除单条消息。
 - 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；支持选择、粘贴、拖拽图片，大图在浏览器端缩到最长边 1600 px。发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 仍兼容解析。图片由 Agent 用 Read 工具查看。上传文件通过 `GET /api/agents/{agent_id}/uploads/{filename}` 读取；Agent 为 paused/archived 时上传返回 409，读取历史附件仍放行（只读）。
@@ -145,9 +145,9 @@ metadata:
 
 ## 记忆
 
-侧栏「管理 → Agent 能力 → 记忆」有两张卡片，跟随左上角选中的 Agent：
+侧栏「管理 → Agent 能力 → 记忆」有一张跨 Agent 的「全局规则」卡片和跟随左上角选中 Agent 的「Agent 记忆」卡片：
 
-- **用户画像**：`~/.super-personal-platform/claude/CLAUDE.md`，由 SDK 作为用户级说明加载到每个 Agent，跨 Agent 生效。保存时旧版本保留为同目录 `CLAUDE.md.bak`，文件权限 0600；文件 mtime/size 纳入 client 配置指纹，下一次 turn 自动重建受影响的缓存 client（已有会话下一次发消息即生效）。
+- **全局规则**：`~/.super-personal-platform/claude/CLAUDE.md`，由 SDK 作为 user 级说明在每次对话开头完整注入每个 Agent，不按相关性筛选，写多少占多少上下文；适合放必须遵守的规则（代码规范、提交格式、禁止操作）。保存时旧版本保留为同目录 `CLAUDE.md.bak`，文件权限 0600；文件 mtime/size 纳入 client 配置指纹，下一次 turn 自动重建受影响的缓存 client（已有会话下一次发消息即生效）。
 - **Agent 记忆**：`~/.super-personal-platform/workspaces/<agent_id>/CLAUDE.md`，作为项目级 CLAUDE.md 只加载给当前 Agent。保存同样保留 `.bak`、权限 0600，mtime/size 纳入 client 配置指纹；切换 Agent 时卡片重新加载，未保存的修改丢弃。
 - **Claude auto memory**：`claude/projects/<agent_id>/memory/`（`MEMORY.md` 索引 + 主题文件），由 Claude 在对话中自动维护；记忆页只读展示，单文件 128 KB、总量 1 MB、最多 200 个文件，平台不写入、不整理。
 - **Agent 指令**：在 `settings.json` 的 `agents[].instructions`，通过 preset+append 追加到系统提示词，和 Agent 记忆是两份不同内容。
@@ -267,7 +267,7 @@ metadata:
 - `browser_state.json`：浏览器 cookies/localStorage（0600）；平台浏览器工具接入后用于跨会话、跨轮次保持登录态。
 - `knowledge_sync_state.json`：知识库同步状态（etag + 本地哈希 + 待确认删除标记）。
 - `backtests/`：回测策略临时文件。
-- `~/.super-personal-platform/claude/`：SDK 配置、用户画像 `CLAUDE.md`、会话 transcript 与 auto memory；权限 0700。SDK transcript 是会话历史的唯一来源。
+- `~/.super-personal-platform/claude/`：SDK 配置、全局规则 `CLAUDE.md`、会话 transcript 与 auto memory；权限 0700。SDK transcript 是会话历史的唯一来源。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区；归档 Agent 不会删除这里的文件，彻底删除会连同工作区目录一起删除。
 - `~/.super-personal-platform/claude/skills/`：全局技能库（Claude Code 用户级技能目录）。
 - `~/.super-personal-platform/claude/plugins/`：官方插件集市与已安装插件的缓存；启用状态在 `claude/settings.json` 的 `enabledPlugins`，由插件页调用 Claude Code CLI 维护。

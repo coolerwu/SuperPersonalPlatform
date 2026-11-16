@@ -234,7 +234,7 @@ export function MemoryPage({ agent, agentId, onClose }: MemoryPageProps) {
         <div>
           <div className="eyebrow">MEMORY</div>
           <h1>记忆</h1>
-          <p>用户画像跨 Agent 生效；Agent 记忆只属于当前 Agent。</p>
+          <p>全局规则跨 Agent 生效；Agent 记忆只属于当前 Agent。</p>
         </div>
         <button className="ghost-button" onClick={onClose}>返回对话</button>
       </header>
@@ -244,9 +244,9 @@ export function MemoryPage({ agent, agentId, onClose }: MemoryPageProps) {
           <section className="settings-card">
             <div className="settings-card-head">
               <div>
-                <h2>用户画像</h2>
+                <h2>全局规则</h2>
                 <p>
-                  这份 Markdown 会作为用户级说明加载到每个 Agent 的上下文中，跨 Agent 生效。
+                  每次对话开头完整注入每个 Agent 的上下文，不按相关性筛选；只放必须遵守的规则，跨 Agent 生效。
                 </p>
               </div>
             </div>
@@ -256,9 +256,9 @@ export function MemoryPage({ agent, agentId, onClose }: MemoryPageProps) {
               load={api.getMemory}
               save={api.saveMemory}
               path="~/.super-personal-platform/claude/CLAUDE.md"
-              placeholder={"# 我\n- 偏好中文回复\n- 回答先给结论"}
-              ariaLabel="CLAUDE.md 用户画像"
-              savedMessage="已保存，下一轮对话会加载这份用户画像。"
+              placeholder={"# 必须遵守\n- 中文回复，先给结论\n- 代码改动后跑测试"}
+              ariaLabel="CLAUDE.md 全局规则"
+              savedMessage="已保存，下一轮对话会加载这份全局规则。"
             />
           </section>
 
