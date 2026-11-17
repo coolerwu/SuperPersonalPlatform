@@ -394,7 +394,6 @@ export default function App() {
     return info;
   }, [pendingUserBySession, sessionId]);
   const messagesLoading = loadingBySession[sessionId] ?? false;
-  const sessionTitle = currentSession?.title || "新对话";
   const viewTitle =
     view === "settings"
       ? "配置"
@@ -2449,10 +2448,11 @@ export default function App() {
             <path d="M4 7h16M4 12h16M4 17h16" />
           </svg>
         </button>
-        <div className="mobile-bar-title">
-          <span className="mobile-bar-name">{viewTitle}</span>
-          {view === "chat" && <span className="mobile-bar-sub">{sessionTitle}</span>}
-        </div>
+        {view !== "chat" && (
+          <div className="mobile-bar-title">
+            <span className="mobile-bar-name">{viewTitle}</span>
+          </div>
+        )}
         <span className="mobile-bar-spacer" />
       </header>
 
@@ -2565,12 +2565,6 @@ export default function App() {
         />
       ) : (
         <main className="chat-column">
-          <header className="chat-topbar">
-            <div className="chat-topbar-main">
-              <span className="chat-topbar-title">{agent?.name ?? "Agent"}</span>
-              <span className="chat-topbar-sub">{sessionTitle}</span>
-            </div>
-          </header>
           {agents.length === 0 ? (
             <div className="chat-empty full">
               <div className="chat-empty-mark">ACC</div>

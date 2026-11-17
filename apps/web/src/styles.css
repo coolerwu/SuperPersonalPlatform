@@ -657,48 +657,6 @@ textarea {
   letter-spacing: 0.08em;
 }
 
-.chat-topbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  height: 56px;
-  padding: 0 max(clamp(18px, 4vw, 42px), calc((100% - var(--chat-lane)) / 2));
-  border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.45);
-  backdrop-filter: blur(14px);
-  z-index: 5;
-}
-
-.chat-topbar-main {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.chat-topbar-title {
-  flex: 0 0 auto;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-
-.chat-topbar-sub {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--faint);
-  font-size: 12px;
-}
-
-.chat-topbar-sub::before {
-  content: "·";
-  margin-right: 8px;
-  color: var(--border-strong);
-}
-
 .chat-panel {
   flex: 1;
   min-height: 0;
@@ -3360,10 +3318,6 @@ textarea {
     height: 30px;
   }
 
-  .chat-topbar {
-    display: none;
-  }
-
   .chat-column,
   .settings-page,
   .memory-page,
@@ -4556,25 +4510,6 @@ body:has(.app-shell.pearl) .select-option.selected {
 body:has(.app-shell.pearl) .select-option-description,
 body:has(.app-shell.pearl) .select-empty {
   color: #77818e;
-}
-
-/* Topbar */
-
-.pearl .chat-topbar {
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: none;
-  box-shadow: 0 10px 30px rgba(28, 34, 52, 0.06);
-}
-
-.pearl .chat-topbar-title {
-  font-size: 13.5px;
-  letter-spacing: -0.01em;
-}
-
-.pearl .chat-topbar-sub {
-  font-size: 11.5px;
 }
 
 /* Messages */
