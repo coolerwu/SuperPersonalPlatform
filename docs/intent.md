@@ -30,7 +30,7 @@
 #### 功能点清单
 
 1. 单用户 token 登录（cookie）。
-2. 网页 Chat：流式输出、历史会话、停止、运行中排队追问、Markdown/公式渲染、附件、引用；失败或停止后重新发送即可，不提供单条消息重试。
+2. 网页 Chat：流式输出、历史会话、停止、运行中排队追问、Markdown/公式渲染、附件、引用（整条与划词）；聊天页不显示顶部标题栏；失败或停止后重新发送即可，不提供单条消息重试。
 3. 多 Agent：名称、instructions、Provider、状态；每个 Agent 独立工作区与会话目录；左上角 Agent 选择器是全站 per-agent 配置的唯一来源。
 4. 执行核：`ClaudeSDKClient`；会话 UUID 即 SDK `session_id`；transcript 存 `claude/projects/<agent_id>/<uuid>.jsonl`；会话列表/历史/重命名/删除走 SDK。
 5. 重启恢复：`running_sessions` 运行时租约 + SDK `resume`；启动时自动续跑，恢复提示要求不重复已完成步骤。
@@ -81,7 +81,7 @@
 6. 命令：平台处理 `/new`、`/clear`、`/stop`、`/status`、`/help`（大小写不敏感）。网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾临时卡片显示。其余以 `/` 开头的裸命令只有出现在 Claude Code 运行时 init frame 的 `slash_commands` 中才由 `forward=true` 指示前端作为普通用户消息转发给 Agent；不在列表中的回复「未知命令」并列出当前可用命令，列表尚未加载时提示先发送一条普通消息。`GET /api/chat/slash-commands?agent_id=...` 返回该列表（排除 `terminal_slash_commands` 与平台命令重名项），按 Agent 进程内缓存，首次 turn 后可用。
 7. 输入框 `/` 前缀弹出命令面板：列出平台命令和 Claude Code 运行时命令，↑/↓ 选择，Enter/Tab 填入，Esc 关闭；面板只填入不执行。
 8. 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片支持选择、粘贴、拖拽，浏览器端缩到最长边 1600 px；发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具读取。图片作为文件由 Agent 的 Read 工具查看；本版不再单独构造 `image_url` 模型输入。旧 transcript 里的绝对 `/uploads/<name>` 仍按兼容路径解析，但可能失效，优先在 `uploads/` 下查找。Agent 为 paused/archived 时上传接口返回 409；读取历史附件放行（只读）。
-9. 消息操作：复制、引用；失败或停止后显示提示，用户重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成、删除单条消息。
+9. 消息操作：复制、引用（整条引用，及在单条消息内选中片段后的划词引用）；失败或停止后显示提示，用户重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成、删除单条消息。
 10. assistant 消息按 Markdown 渲染（GFM、代码高亮、KaTeX `$$...$$`）；流式文本约 80ms 节流。`markdown`/`md`/`text`/`txt`/`plaintext`/`log` 围栏自动换行，其他代码围栏保持横向滚动。
 11. 消息不显示时间戳。同一进程内刷新会在数秒内通过 `current_turn_id` 重放当前轮缓冲；同一 turn 内订阅断开按事件序号续传；进程重启或 turn 结束后才丢失当前输出。
 12. 网页消息只接受 active Agent；paused 与 archived 都返回 409 和中文提示。`session_id` 必须属于该 Agent：已有 transcript 必须是同一 Agent 的，否则 409；同一个 session id 不会跨 Agent 复用 client。
@@ -97,7 +97,8 @@
 - 执行中重启服务 → 有 turn 在跑的会话自动 resume 并完成；没有后台任务时 `running_sessions` 清空，有后台任务的记录保留并标记中断（F26）。
 - 同一会话第二个 turn 排队，不同会话可并发。
 - 输入 `/` 能看到平台命令和 Claude Code 运行时命令；选择 Claude Code 命令后作为消息发送并产生 turn；不在运行时长列表中的 `/` 命令会收到「未知命令」并列出当前可用命令。
-- 附件上传后可被 Agent 读取；引用以 `> ` 块进入消息。
+- 附件上传后可被 Agent 读取；整条引用与划词引用都以 `> ` 块进入消息。
+- 聊天页不显示顶部标题栏；手机端聊天视图顶栏只保留菜单按钮，其他页面标题栏不变。
 - Agent 在工作区保存截图并在回复中用相对路径引用时，页面直接显示图片；点击可在新标签打开原文件。
 - Agent 写入工作区文件后，回复下方出现「产物」列表（图片为缩略图，其他文件为文件方块，展示形式见 F23），流式过程中出现，刷新后仍在。
 
