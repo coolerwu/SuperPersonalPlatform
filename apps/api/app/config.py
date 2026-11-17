@@ -97,8 +97,12 @@ class Settings(BaseSettings):
     channel_reply_max_chars: int = 1800
     channel_delivery_max_attempts: int = 3
     channel_inbound_max_chars: int = 8000
-    channel_inbound_batch_seconds: float = 5.0
-    channel_inbound_batch_max_seconds: float = 15.0
+    # A batch flushes after this many seconds without a new message from the
+    # same contact. ``channel_inbound_batch_max_seconds`` optionally caps how
+    # long repeated messages may keep postponing the flush; ``None`` means no
+    # ceiling (an explicit 0 still flushes immediately).
+    channel_inbound_batch_seconds: float = 6.0
+    channel_inbound_batch_max_seconds: float | None = None
     channel_media_max_bytes: int = 20 * 1024 * 1024
     channel_media_max_items: int = 4
     weixin_long_poll_timeout_ms: int = 35_000

@@ -161,7 +161,7 @@ metadata:
 - 新建渠道后立即显示 iLink 二维码；用微信扫码并在手机上确认，状态变为「已连接」。登录成功后，平台在 API 进程内为该渠道启动一个 `getupdates` 长轮询任务；不需要公网入口、Webhook、Node 或第三方网关。
 - 每个与 bot 私聊的联系人映射为一个独立 SDK 会话（侧栏带「微信」徽标），在网页端可见并可继续对话；群聊忽略。
 - 入站支持文字、图片、文件与文本引用：图片/文件从 iLink CDN 下载、AES-128-ECB 解密后保存到该 Agent 的 `uploads/`，并以附件清单进入会话（消息里是相对路径 `uploads/<name>`）；引用回包通常不含原文，平台按 `msg_id` / `create_time_ms` 在本地入站记录与机器人回复中反查，查不到时标注「引用原文不可用」。语音/视频不下载、不落盘；纯语音/视频直接回固定提示且不创建对话，混合消息只处理文字/图片/文件。Agent 为 paused/archived 时该 Agent 的渠道轮询暂停并保留 `sync_buf`，恢复 active 后继续；渠道页仍可查看、编辑和删除这些渠道。
-- 同一联系人的连续消息在 5 秒窗口内合并成一个 turn（最长 15 秒）；打包窗口内不保存 `sync_buf`，服务重启时由 iLink 重放消息，重复消息按 `external_message_id` 幂等吸收。
+- 同一联系人的连续消息在最后一条之后静默 6 秒合并成一个 turn（默认无总时长上限；累计超过 8000 字会立即打包）；打包窗口内不保存 `sync_buf`，服务重启时由 iLink 重放消息，重复消息按 `external_message_id` 幂等吸收。
 - 回复在 turn 结束时立即发送，按 1800 字在段落/代码围栏边界切块（最多 10 块，超出截断并标注）；发送失败按 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 重试。服务崩溃后启动时补发未完成回复；`attempting` 行补发时加「♻️ 上一条回复可能已部分送达，以下为完整内容：」前缀。一次发送在至少一块已送达后失败（含登录过期）也保持 `attempting`，后续补发同样带前缀；发送 claim 已计入 attempts，达到 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 后标记终态 `failed`、不再自动补发（已知限制：部分送达前缀只在重试期间保留）。只有一块都没发出才回到 pending。取消的 turn 不回信。渠道消息在入队前创建 `queued` 投递行；排队中重启会由启动兜底发送「尚未开始处理，请重新发送」。
 - 微信里可以发命令：`/new`（或 `/clear`）为当前联系人开始新会话（旧会话保留）、`/stop` 取消并丢弃待打包消息、`/status` 查看 Agent/会话/忙闲、`/help`。命令不经过 Agent、不产生消息或 turn，确认回复直接通过 iLink 发送（进程崩溃时可能丢失确认）。上一批仍在入库时，命令最多等待 30 秒；超时回复「正在处理上一条消息，请稍后重试」，本次 `/new` 不重绑、`/stop` 不取消。
 - 网页聊天框支持同一套命令；网页里在渠道会话中手动发消息不会推回微信。
@@ -302,8 +302,8 @@ metadata:
 | `CHANNEL_REPLY_MAX_CHARS` | 微信回复单块字符上限 | `1800` |
 | `CHANNEL_DELIVERY_MAX_ATTEMPTS` | 单次发送与补发的尝试上限 | `3` |
 | `CHANNEL_INBOUND_MAX_CHARS` | 单条微信入站文本上限 | `8000` |
-| `CHANNEL_INBOUND_BATCH_SECONDS` | 同一联系人连续消息的打包窗口（秒，0 关闭） | `5` |
-| `CHANNEL_INBOUND_BATCH_MAX_SECONDS` | 连续消息不断刷新时的最长打包时间（秒） | `15` |
+| `CHANNEL_INBOUND_BATCH_SECONDS` | 同一联系人连续消息的打包窗口（秒，0 关闭） | `6` |
+| `CHANNEL_INBOUND_BATCH_MAX_SECONDS` | 连续消息不断刷新时的最长打包时间（秒，不设置则不限制） | （不限制） |
 | `CHANNEL_MEDIA_MAX_BYTES` | 单个微信图片/文件下载上限 | `20971520` |
 | `CHANNEL_MEDIA_MAX_ITEMS` | 单条微信消息最多下载的媒体数 | `4` |
 | `VISION_MAX_IMAGE_EDGE` | 图片附件压缩后的最长边（像素） | `1600` |

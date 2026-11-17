@@ -2,6 +2,7 @@ import asyncio
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import delete
@@ -1322,3 +1323,111 @@ async def test_inflight_timeout_refuses_command_without_rebinding(
         runtime._inflight_events.pop(key, None)
         await runtime.stop()
         await _cleanup_inbound(channel.id, [message_id])
+
+
+def _delay_batch(*, first_at: float, last_at: float) -> PendingBatch:
+    return PendingBatch(
+        texts=["hi"],
+        media=[],
+        ids=["delay-1"],
+        sender_name="Alice",
+        context_token=None,
+        first_at=first_at,
+        last_at=last_at,
+    )
+
+
+def test_flush_delay_waits_for_idle_window_without_ceiling():
+    runtime = _runtime(
+        FakeStore([_channel()]), FakeRegistry(), client=FakeClient(), batch_seconds=6.0
+    )
+    runtime.batch_max_seconds = None
+    batch = _delay_batch(first_at=0.0, last_at=8.0)
+    assert runtime._flush_delay(batch, now=10.0) == 4.0
+
+
+def test_flush_delay_restarts_with_each_new_message():
+    runtime = _runtime(
+        FakeStore([_channel()]), FakeRegistry(), client=FakeClient(), batch_seconds=6.0
+    )
+    runtime.batch_max_seconds = None
+    batch = _delay_batch(first_at=0.0, last_at=9.5)
+    assert runtime._flush_delay(batch, now=10.0) == 5.5
+
+
+def test_flush_delay_applies_explicit_ceiling():
+    runtime = _runtime(
+        FakeStore([_channel()]), FakeRegistry(), client=FakeClient(), batch_seconds=6.0
+    )
+    runtime.batch_max_seconds = 15.0
+    batch = _delay_batch(first_at=0.0, last_at=13.5)
+    assert runtime._flush_delay(batch, now=14.0) == 1.0
+
+
+def test_flush_delay_zero_ceiling_is_immediate():
+    runtime = _runtime(
+        FakeStore([_channel()]), FakeRegistry(), client=FakeClient(), batch_seconds=6.0
+    )
+    runtime.batch_max_seconds = 0.0
+    batch = _delay_batch(first_at=0.0, last_at=9.0)
+    assert runtime._flush_delay(batch, now=10.0) == -10.0
+
+
+def test_runtime_reads_unbounded_ceiling_from_settings(monkeypatch):
+    monkeypatch.setattr(
+        weixin_runtime_module,
+        "settings",
+        SimpleNamespace(
+            channel_inbound_batch_seconds=6.0,
+            channel_inbound_batch_max_seconds=None,
+        ),
+    )
+    runtime = WeixinRuntime(
+        store=FakeStore([_channel()]),
+        registry=FakeRegistry(),
+        client_factory=lambda **kwargs: FakeClient(),
+    )
+    assert runtime.batch_seconds == 6.0
+    assert runtime.batch_max_seconds is None
+
+
+def test_batch_enqueue_flushes_immediately_when_over_char_limit(monkeypatch):
+    runtime = _runtime(
+        FakeStore([_channel()]), FakeRegistry(), client=FakeClient(), batch_seconds=6.0
+    )
+    scheduled: list[tuple] = []
+    monkeypatch.setattr(
+        runtime, "_schedule_flush", lambda key, delay=None: scheduled.append((key, delay))
+    )
+    channel = _channel()
+    runtime._enqueue(
+        _credentials(channel),
+        sender_id="wx-1",
+        message_id="big-1",
+        text="字" * (weixin_runtime_module.settings.channel_inbound_max_chars + 1),
+        media=[],
+        context_token=None,
+        sender_name="Alice",
+    )
+    assert scheduled and scheduled[0][1] == 0
+
+
+def test_batch_enqueue_flushes_immediately_when_batching_disabled(monkeypatch):
+    runtime = _runtime(
+        FakeStore([_channel()]), FakeRegistry(), client=FakeClient(), batch_seconds=0.0
+    )
+    scheduled: list[tuple] = []
+    monkeypatch.setattr(
+        runtime, "_schedule_flush", lambda key, delay=None: scheduled.append((key, delay))
+    )
+    channel = _channel()
+    runtime._enqueue(
+        _credentials(channel),
+        sender_id="wx-1",
+        message_id="off-1",
+        text="hi",
+        media=[],
+        context_token=None,
+        sender_name="Alice",
+    )
+    assert scheduled and scheduled[0][1] == 0

@@ -34,7 +34,7 @@
 3. 多 Agent：名称、instructions、Provider、状态；每个 Agent 独立工作区与会话目录；左上角 Agent 选择器是全站 per-agent 配置的唯一来源。
 4. 执行核：`ClaudeSDKClient`；会话 UUID 即 SDK `session_id`；transcript 存 `claude/projects/<agent_id>/<uuid>.jsonl`；会话列表/历史/重命名/删除走 SDK。
 5. 重启恢复：`running_sessions` 运行时租约 + SDK `resume`；启动时自动续跑，恢复提示要求不重复已完成步骤。
-6. 微信个人号渠道：扫码登录、iLink 长轮询、5 秒打包、命令、引用找回、图片/文件、回复投递与补发。
+6. 微信个人号渠道：扫码登录、iLink 长轮询、入站打包、命令、引用找回、图片/文件、回复投递与补发。
 7. 定时任务：5 字段 cron、IANA 时区、专属会话、忙时跳过并更新 `last_skipped_at`、可选推送到微信联系人、停机后最多补跑一次。
 8. 会话保留清理：按 transcript mtime 与保留天数删除，跳过运行中会话，保留 auto memory。
 9. 记忆：记忆页有全局规则（`claude/CLAUDE.md`，跨 Agent，每次对话开头完整注入）与 Agent 记忆（`workspaces/<agent_id>/CLAUDE.md`）；Agent 指令 = `settings.json`；Claude auto memory 在记忆页只读展示。
@@ -174,7 +174,7 @@
 3. 入站：
    - 群聊忽略；语音/视频不下载、不落盘；纯语音/视频直接回提示且不创建 turn；混合消息只处理文字/图片/文件。
    - 图片/文件从 iLink CDN 下载、AES-128-ECB 解密后保存到 `workspaces/<agent_id>/uploads/wx-<hash>-<name>`，以附件清单写入用户消息，路径为相对工作区的 `uploads/<name>`（旧 transcript 的 `/uploads/<name>` 仍兼容解析）。
-   - 同一联系人连续消息在 `CHANNEL_INBOUND_BATCH_SECONDS`（默认 5 秒，最长 15 秒）内打包成一个 turn。
+   - 同一联系人连续消息在 `CHANNEL_INBOUND_BATCH_SECONDS`（默认 6 秒静默，无总时长上限；`CHANNEL_INBOUND_BATCH_MAX_SECONDS` 显式配置时仍生效）内打包成一个 turn；累计超过 8000 字时立即打包。
    - 入站按 `(channel_id, external_message_id)` 幂等；打包窗口内不保存 `sync_buf`，崩溃后由 iLink 重放、幂等表吸收。
    - 引用回包通常只有 `msg_id` / `create_time_ms`：先按消息 id 查 `channel_inbounds`，再在目标时间前 2 秒、后 30 秒窗口内查入站文本与机器人回复；查不到写「引用原文不可用」。
    - 命令 `/new`、`/clear`、`/stop`、`/status`、`/help`：`/new` 先等待在途打包批次落库到旧会话，再 flush 待打包消息并新建 UUID 重绑；`/stop` 先等待在途批次完成，再丢弃待打包消息并中断当前会话；等待有界（30 秒），超时后回复「正在处理上一条消息，请稍后重试」并放弃本次命令，不重绑也不丢弃。`/status` 返回 Agent、会话 UUID、忙闲；命令不进 Agent、不建 turn，确认消息直接 `sendmessage`。
@@ -189,7 +189,7 @@
 
 #### 验收标准
 
-- 微信入站 → 5 秒打包 → 回复发回同一联系人；断网重放不重复处理。
+- 微信入站 → 静默 6 秒打包 → 回复发回同一联系人；断网重放不重复处理。
 - 微信会话 `/new`、`/stop`、`/status` 正常。
 - 命令不创建 turn 或消息；确认消息可丢失但不影响会话状态。
 - 服务重启后未发送回复补发；已取消的 turn 不回信。

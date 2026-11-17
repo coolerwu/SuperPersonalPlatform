@@ -122,10 +122,15 @@ class WeixinRuntime:
             if batch_seconds is None
             else max(0.0, batch_seconds)
         )
-        self.batch_max_seconds = (
+        # ``None`` from settings means no total-duration ceiling; the idle
+        # window alone decides when the batch flushes.
+        resolved_max = (
             settings.channel_inbound_batch_max_seconds
             if batch_max_seconds is None
             else max(0.0, batch_max_seconds)
+        )
+        self.batch_max_seconds = (
+            None if resolved_max is None else max(0.0, resolved_max)
         )
         self._poll_tasks: dict[str, asyncio.Task[Any]] = {}
         self._start_locks: dict[str, asyncio.Lock] = {}
@@ -264,6 +269,18 @@ class WeixinRuntime:
             self._drop_pending(key)
         self._pending_sync.pop(channel_id, None)
 
+    def _flush_delay(self, batch: PendingBatch, now: float) -> float:
+        """Seconds until this batch flushes.
+
+        Every new message restarts the idle window; an optional total-duration
+        ceiling bounds how long repeated messages may postpone the flush. A
+        ceiling of 0 yields a non-positive delay (the caller clamps to 0).
+        """
+        idle_delay = self.batch_seconds - (now - batch.last_at)
+        if self.batch_max_seconds is None:
+            return idle_delay
+        return min(idle_delay, self.batch_max_seconds - (now - batch.first_at))
+
     def _schedule_flush(
         self, key: tuple[str, str], delay: float | None = None
     ) -> None:
@@ -274,11 +291,7 @@ class WeixinRuntime:
         if batch is None:
             return
         if delay is None:
-            now = time.monotonic()
-            delay = min(
-                self.batch_seconds - (now - batch.last_at),
-                self.batch_max_seconds - (now - batch.first_at),
-            )
+            delay = self._flush_delay(batch, time.monotonic())
         task = asyncio.create_task(
             self._flush_after(key, max(0.0, delay)),
             name=f"weixin-flush-{key[0]}-{key[1][:8]}",

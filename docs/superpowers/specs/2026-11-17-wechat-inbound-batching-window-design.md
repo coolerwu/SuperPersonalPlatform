@@ -1,7 +1,7 @@
 # 微信入站打包窗口调整设计
 
 - 日期：2026-11-17
-- 状态：设计已确认，待实现
+- 状态：已实现（2026-11-17）
 - 关联模块：`apps/api/app/config.py`、`apps/api/app/services/weixin_runtime.py`
 - 关联需求：`docs/intent.md` F6 微信个人号渠道
 
