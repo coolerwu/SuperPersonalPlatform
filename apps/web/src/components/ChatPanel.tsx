@@ -31,6 +31,7 @@ import { describeApiError } from "../errors";
 import { useAutoFollow } from "../useAutoFollow";
 import { useThrottledText } from "../useThrottledText";
 import { MessageList } from "./MessageList";
+import { SelectionQuote } from "./SelectionQuote";
 import { SessionTaskPanel } from "./SessionTaskPanel";
 
 type ChatPanelProps = {
@@ -349,6 +350,8 @@ export function ChatPanel(props: ChatPanelProps) {
           />
         </div>
       </div>
+
+      <SelectionQuote scrollRef={scrollRef} onQuote={quoteFromMessage} />
 
       <div className="composer">
         {!atBottom && (props.sending || props.streamText) && (

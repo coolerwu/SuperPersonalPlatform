@@ -706,6 +706,36 @@ textarea {
   flex-direction: column;
 }
 
+.selection-quote {
+  position: fixed;
+  z-index: 30;
+  height: 30px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.selection-quote:hover {
+  background: var(--panel-2);
+}
+
+.pearl .selection-quote {
+  border-color: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.92);
+  color: #5b4bf0;
+  box-shadow: 0 8px 22px rgba(28, 34, 52, 0.14);
+}
+
 .message-scroll {
   flex: 1;
   min-height: 0;

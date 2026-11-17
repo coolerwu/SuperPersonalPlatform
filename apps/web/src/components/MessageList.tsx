@@ -363,7 +363,7 @@ const UserMessageRow = memo(function UserMessageRow({
           </button>
         </div>
       )}
-      <div className="message-bubble user">
+      <div className="message-bubble user" data-quoteable="">
         {parsed.kind === "attachments" ? (
           <>
             {parsed.files.some((file) => isImageName(file.name)) && (
@@ -449,7 +449,7 @@ const AssistantMessageRow = memo(function AssistantMessageRow({
       id={`message-${message.id}`}
       className={`message-row assistant ${highlighted ? "message-focus" : ""}`}
     >
-      <div className="message-bubble assistant">
+      <div className="message-bubble assistant" data-quoteable="">
         <div className="message-head">
           <span className="message-author">{agentName || "Agent"}</span>
         </div>
@@ -495,7 +495,7 @@ function StreamingRow({
   const latestActivity = activity[activity.length - 1]?.name ?? "";
   return (
     <div className="message-row assistant">
-      <div className="message-bubble assistant streaming">
+      <div className="message-bubble assistant streaming" data-quoteable="">
         <div className="message-head">
           <span className="message-author">{agentName || "Agent"}</span>
           {stopped && (
