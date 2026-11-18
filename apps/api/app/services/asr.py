@@ -15,13 +15,15 @@ FFMPEG_TIMEOUT_SECONDS = 30.0
 WAV_HEADER_BYTES = 44
 BYTES_PER_SECOND = 16000 * 2
 
-_STATUS_MESSAGES = {
-    400: "语音识别无法处理这段音频",
-    408: "音频上传超时，请重试",
-    413: "录音文件过大",
-    429: "语音识别服务繁忙，请稍后再试",
-    503: "语音识别服务暂不可用",
-    504: "语音识别超时，请重试",
+_STATUS_MAPPING = {
+    400: (400, "语音识别无法处理这段音频"),
+    401: (400, "DeepSeek API Key 无效或已失效，请在配置页重新填写"),
+    403: (403, "DeepSeek 账号无权使用语音识别，请检查账号权限"),
+    408: (408, "音频上传超时，请重试"),
+    413: (413, "录音文件过大"),
+    429: (429, "语音识别服务繁忙，请稍后再试"),
+    503: (503, "语音识别服务暂不可用"),
+    504: (504, "语音识别超时，请重试"),
 }
 
 
@@ -104,11 +106,10 @@ async def transcribe_wav(
             response.status_code,
             response.text[:500],
         )
-        known = response.status_code in _STATUS_MESSAGES
-        raise AsrError(
-            response.status_code if known else 502,
-            _STATUS_MESSAGES.get(response.status_code, "语音识别服务返回异常"),
-        )
+        mapped = _STATUS_MAPPING.get(response.status_code)
+        if mapped is None:
+            raise AsrError(502, "语音识别服务返回异常")
+        raise AsrError(mapped[0], mapped[1])
     try:
         payload = response.json()
     except ValueError as exc:

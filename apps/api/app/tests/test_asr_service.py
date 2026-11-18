@@ -152,18 +152,22 @@ async def test_transcribe_allows_empty_text() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "detail"),
+    ("status", "platform_status", "detail"),
     [
-        (400, "语音识别无法处理这段音频"),
-        (408, "音频上传超时，请重试"),
-        (413, "录音文件过大"),
-        (429, "语音识别服务繁忙，请稍后再试"),
-        (503, "语音识别服务暂不可用"),
-        (504, "语音识别超时，请重试"),
+        (400, 400, "语音识别无法处理这段音频"),
+        (401, 400, "DeepSeek API Key 无效或已失效，请在配置页重新填写"),
+        (403, 403, "DeepSeek 账号无权使用语音识别，请检查账号权限"),
+        (408, 408, "音频上传超时，请重试"),
+        (413, 413, "录音文件过大"),
+        (429, 429, "语音识别服务繁忙，请稍后再试"),
+        (503, 503, "语音识别服务暂不可用"),
+        (504, 504, "语音识别超时，请重试"),
     ],
 )
 @pytest.mark.asyncio
-async def test_transcribe_maps_status(status: int, detail: str) -> None:
+async def test_transcribe_maps_status(
+    status: int, platform_status: int, detail: str
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(status)
 
@@ -171,7 +175,7 @@ async def test_transcribe_maps_status(status: int, detail: str) -> None:
         with pytest.raises(AsrError) as info:
             await transcribe_wav(b"wav-bytes", "key", client=client)
 
-    assert info.value.status_code == status
+    assert info.value.status_code == platform_status
     assert info.value.detail == detail
 
 
