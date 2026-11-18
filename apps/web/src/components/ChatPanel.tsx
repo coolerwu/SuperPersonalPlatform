@@ -128,6 +128,7 @@ export function ChatPanel(props: ChatPanelProps) {
   const voiceTimerRef = useRef<number | null>(null);
   const voiceStartedAtRef = useRef(0);
   const voiceLimitRef = useRef(false);
+  const voiceActionRef = useRef<"draft" | "send">("draft");
   const mountedRef = useRef(true);
   const waveformRef = useRef<HTMLCanvasElement | null>(null);
   const voiceAnalyserRef = useRef<AnalyserNode | null>(null);
@@ -486,13 +487,21 @@ export function ChatPanel(props: ChatPanelProps) {
           ? current + text
           : `${current} ${text}`
         : text;
-      const sent = await onSendRef.current(attachmentsRef.current, content);
-      if (sent) {
-        setVoiceNotice("");
+      if (voiceActionRef.current === "send") {
+        const sent = await onSendRef.current(attachmentsRef.current, content);
+        if (sent) {
+          setVoiceNotice("");
+        } else {
+          onDraftChangeRef.current(content);
+          textareaRef.current?.focus();
+          setVoiceNotice("已转写，但当前无法发送，内容已放入输入框");
+        }
       } else {
         onDraftChangeRef.current(content);
         textareaRef.current?.focus();
-        setVoiceNotice("已转写，但当前无法发送，内容已放入输入框");
+        setVoiceNotice(
+          voiceLimitRef.current ? "已到 2 分钟上限，文字已放入输入框" : "",
+        );
       }
     } catch (exc) {
       setVoiceNotice(errorText(exc));
@@ -502,12 +511,15 @@ export function ChatPanel(props: ChatPanelProps) {
     }
   }
 
-  function stopVoiceRecording(reason: "user" | "limit") {
+  function stopVoiceRecording(action: "draft" | "send" | "limit") {
     const recorder = recorderRef.current;
     if (!recorder || recorder.state === "inactive") return;
-    if (reason === "limit") {
+    if (action === "limit") {
       voiceLimitRef.current = true;
+      voiceActionRef.current = "draft";
       setVoiceNotice("已到 2 分钟上限，正在转写…");
+    } else {
+      voiceActionRef.current = action;
     }
     recorder.stop();
   }
@@ -523,6 +535,7 @@ export function ChatPanel(props: ChatPanelProps) {
     }
     setVoiceNotice("");
     voiceLimitRef.current = false;
+    voiceActionRef.current = "draft";
     voiceStatusRef.current = "starting";
     setVoiceStatus("starting");
     try {
@@ -821,7 +834,7 @@ export function ChatPanel(props: ChatPanelProps) {
                   voiceStatus === "transcribing"
                 }
                 onClick={() => {
-                  if (voiceStatus === "recording") stopVoiceRecording("user");
+                  if (voiceStatus === "recording") stopVoiceRecording("draft");
                   else void startVoiceRecording();
                 }}
               >
@@ -888,11 +901,14 @@ export function ChatPanel(props: ChatPanelProps) {
             </div>
           ) : null}
           {voiceStatus === "recording" && (
-            <canvas
-              ref={waveformRef}
-              className="composer-waveform"
-              aria-hidden="true"
-            />
+            <div className="composer-waveform-wrap">
+              <span className="composer-waveform-dot" aria-hidden="true" />
+              <canvas
+                ref={waveformRef}
+                className="composer-waveform"
+                aria-hidden="true"
+              />
+            </div>
           )}
           <textarea
             ref={textareaRef}
@@ -924,48 +940,88 @@ export function ChatPanel(props: ChatPanelProps) {
             disabled={!props.canSend}
           />
           <div className="composer-actions">
-            {props.tracking && (
-              <button
-                className="composer-send-button stop"
-                type="button"
-                onClick={props.onCancel}
-                aria-label="停止生成"
-                title="停止生成"
-              >
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
-                  <rect x="6" y="6" width="12" height="12" rx="2" />
-                </svg>
-              </button>
+            {voiceStatus === "recording" ? (
+              <>
+                <button
+                  className="composer-send-button stop"
+                  type="button"
+                  onClick={() => stopVoiceRecording("draft")}
+                  aria-label="终止录音并转成文字"
+                  title="终止录音并转成文字"
+                >
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                </button>
+                <button
+                  className="composer-send-button"
+                  type="button"
+                  onClick={() => stopVoiceRecording("send")}
+                  aria-label="停止录音并发送"
+                  title="停止录音并发送"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="15"
+                    height="15"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M22 2 11 13" />
+                    <path d="M22 2 15 22l-4-9-9-4Z" />
+                  </svg>
+                </button>
+              </>
+            ) : (
+              <>
+                {props.tracking && (
+                  <button
+                    className="composer-send-button stop"
+                    type="button"
+                    onClick={props.onCancel}
+                    aria-label="停止生成"
+                    title="停止生成"
+                  >
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+                      <rect x="6" y="6" width="12" height="12" rx="2" />
+                    </svg>
+                  </button>
+                )}
+                <button
+                  className="composer-send-button"
+                  type="button"
+                  onClick={() => void submit()}
+                  disabled={!canSubmit}
+                  aria-label={props.tracking ? "排队追问" : "发送"}
+                  title={props.tracking ? "排队追问" : "发送"}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="15"
+                    height="15"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M22 2 11 13" />
+                    <path d="M22 2 15 22l-4-9-9-4Z" />
+                  </svg>
+                </button>
+              </>
             )}
-            <button
-              className="composer-send-button"
-              type="button"
-              onClick={() => void submit()}
-              disabled={!canSubmit}
-              aria-label={props.tracking ? "排队追问" : "发送"}
-              title={props.tracking ? "排队追问" : "发送"}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.9"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M22 2 11 13" />
-                <path d="M22 2 15 22l-4-9-9-4Z" />
-              </svg>
-            </button>
           </div>
         </div>
         {asrEnabled && voiceStatus !== "idle" && (
           <div className="composer-voice-status" role="status">
             {voiceStatus === "recording"
-              ? `${voiceClock(voiceSeconds)} / 2:00 · 再点麦克风停止`
+              ? `${voiceClock(voiceSeconds)} / 2:00 · 终止转文字 · 发送直接发出`
               : voiceNotice || "正在转写…"}
           </div>
         )}

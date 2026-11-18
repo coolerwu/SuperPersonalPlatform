@@ -1775,19 +1775,46 @@ textarea {
   box-shadow: none;
 }
 
-.composer-waveform {
-  grid-area: input;
-  width: 100%;
-  height: 100%;
-  min-height: 44px;
-  max-height: 220px;
-  display: block;
-  color: var(--accent);
-  pointer-events: none;
+.composer-card.recording {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "input actions";
+  min-height: 62px;
+}
+
+.composer-card.recording .composer-tools,
+.composer-card.recording .composer-files {
+  display: none;
 }
 
 .composer-card.recording textarea {
-  visibility: hidden;
+  display: none;
+}
+
+.composer-waveform-wrap {
+  grid-area: input;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-waveform-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e2483d;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.composer-waveform {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 38px;
+  display: block;
+  color: var(--accent);
+  pointer-events: none;
 }
 
 .composer-actions {
