@@ -1775,18 +1775,22 @@ textarea {
   box-shadow: none;
 }
 
-.composer-card.recording {
+.composer-card.recording,
+.composer-card.transcribing {
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: "input actions";
   min-height: 62px;
 }
 
 .composer-card.recording .composer-tools,
-.composer-card.recording .composer-files {
+.composer-card.recording .composer-files,
+.composer-card.transcribing .composer-tools,
+.composer-card.transcribing .composer-files {
   display: none;
 }
 
-.composer-card.recording textarea {
+.composer-card.recording textarea,
+.composer-card.transcribing textarea {
   display: none;
 }
 
@@ -1815,6 +1819,32 @@ textarea {
   display: block;
   color: var(--accent);
   pointer-events: none;
+}
+
+.composer-voice-loading {
+  grid-area: input;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.composer-voice-spinner {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: voice-spin 0.8s linear infinite;
+}
+
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .composer-actions {

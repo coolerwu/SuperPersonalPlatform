@@ -691,7 +691,9 @@ export function ChatPanel(props: ChatPanelProps) {
         <div
           className={`composer-card ${expanded ? "expanded" : ""} ${
             props.attachments.length > 0 || uploading || attachError ? "has-files" : ""
-          } ${voiceStatus === "recording" ? "recording" : ""}`}
+          } ${voiceStatus === "recording" ? "recording" : ""} ${
+            voiceStatus === "transcribing" ? "transcribing" : ""
+          }`}
           onDrop={handleDrop}
           onDragOver={(event) => event.preventDefault()}
         >
@@ -910,6 +912,12 @@ export function ChatPanel(props: ChatPanelProps) {
               />
             </div>
           )}
+          {voiceStatus === "transcribing" && (
+            <div className="composer-voice-loading" role="status">
+              <span className="composer-voice-spinner" aria-hidden="true" />
+              <span>{voiceNotice || "正在转写…"}</span>
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             value={props.draft}
@@ -976,6 +984,29 @@ export function ChatPanel(props: ChatPanelProps) {
                   </svg>
                 </button>
               </>
+            ) : voiceStatus === "transcribing" ? (
+              <button
+                className="composer-send-button"
+                type="button"
+                disabled
+                aria-label="正在转写"
+                title="正在转写"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="15"
+                  height="15"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M22 2 11 13" />
+                  <path d="M22 2 15 22l-4-9-9-4Z" />
+                </svg>
+              </button>
             ) : (
               <>
                 {props.tracking && (
@@ -1018,11 +1049,9 @@ export function ChatPanel(props: ChatPanelProps) {
             )}
           </div>
         </div>
-        {asrEnabled && voiceStatus !== "idle" && (
+        {asrEnabled && voiceStatus === "recording" && (
           <div className="composer-voice-status" role="status">
-            {voiceStatus === "recording"
-              ? `${voiceClock(voiceSeconds)} / 2:00 · 终止转文字 · 发送直接发出`
-              : voiceNotice || "正在转写…"}
+            {`${voiceClock(voiceSeconds)} / 2:00 · 终止转文字 · 发送直接发出`}
           </div>
         )}
         {asrEnabled && voiceStatus === "idle" && voiceNotice && (
