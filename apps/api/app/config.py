@@ -165,6 +165,10 @@ class Settings(BaseSettings):
         return self.app_data_dir / "knowledge_sync_state.json"
 
     @property
+    def knowledge_deck_path(self) -> Path:
+        return self.app_data_dir / "knowledge_deck.json"
+
+    @property
     def market_db_path(self) -> Path:
         return self.app_data_dir / "market.db"
 

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import random
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -122,3 +125,81 @@ async def get_note_index(
     _index_entries = entries
     _index_at = time.monotonic()
     return dict(entries)
+
+
+CYCLE_RESET_NOTICE = "本轮已看完，重新洗牌"
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass
+class DeckState:
+    cycle_started_at: str = ""
+    seen: set[str] = field(default_factory=set)
+
+
+def load_deck_state(path: Path) -> DeckState:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return DeckState(cycle_started_at=_utcnow())
+    except (OSError, ValueError):
+        logger.warning("knowledge notes: resetting unreadable deck state %s", path)
+        return DeckState(cycle_started_at=_utcnow())
+    if not isinstance(payload, dict):
+        logger.warning("knowledge notes: resetting malformed deck state %s", path)
+        return DeckState(cycle_started_at=_utcnow())
+    seen_raw = payload.get("seen")
+    seen = (
+        {item for item in seen_raw if isinstance(item, str)}
+        if isinstance(seen_raw, list)
+        else set()
+    )
+    cycle = payload.get("cycle_started_at")
+    return DeckState(
+        cycle_started_at=cycle if isinstance(cycle, str) and cycle else _utcnow(),
+        seen=seen,
+    )
+
+
+def save_deck_state(path: Path, state: DeckState) -> None:
+    payload = json.dumps(
+        {"cycle_started_at": state.cycle_started_at, "seen": sorted(state.seen)},
+        ensure_ascii=False,
+        indent=2,
+    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(f"{path.name}.tmp")
+        with temp.open("w", encoding="utf-8") as handle:
+            handle.write(payload + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    except OSError as exc:
+        logger.warning("knowledge notes: cannot save deck state %s: %s", path, exc)
+
+
+def candidate_order(
+    entries: dict[str, NoteEntry],
+    state: DeckState,
+    exclude: str | None,
+    rng: random.Random | None = None,
+) -> tuple[list[str], bool]:
+    """Ordered candidates; second value is True when a new cycle starts."""
+    picker = rng or random.Random()
+    known = set(entries)
+    unseen = sorted(known - (state.seen & known))
+    if unseen:
+        picker.shuffle(unseen)
+        candidates, reset = unseen, False
+    else:
+        candidates = sorted(known)
+        picker.shuffle(candidates)
+        reset = True
+    if exclude in candidates and len(candidates) > 1:
+        candidates.remove(exclude)
+        candidates.append(exclude)
+    return candidates, reset

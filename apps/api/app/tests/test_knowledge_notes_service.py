@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import os
+import random
 
 import pytest
 
 from app.services import knowledge_notes
-from app.services.knowledge_notes import note_title, reset_index_cache, scan_notes
+from app.services.knowledge_notes import (
+    DeckState,
+    NoteEntry,
+    candidate_order,
+    load_deck_state,
+    note_title,
+    reset_index_cache,
+    save_deck_state,
+    scan_notes,
+)
 
 
 def test_scan_notes_filters_and_reads_titles(tmp_path):
@@ -116,3 +126,53 @@ async def test_missing_root_is_not_cached(tmp_path):
     (root / "a.md").write_text("# A", encoding="utf-8")
 
     assert set(await knowledge_notes.get_note_index(root)) == {"a.md"}
+
+
+def _entries(*paths: str) -> dict[str, NoteEntry]:
+    return {path: NoteEntry(path=path, title=path, size=1) for path in paths}
+
+
+def test_candidate_order_skips_seen_and_respects_exclude():
+    entries = _entries("a.md", "b.md", "c.md")
+    order, reset = candidate_order(
+        entries, DeckState(seen={"a.md"}), None, random.Random(1)
+    )
+    assert reset is False
+    assert "a.md" not in order
+    assert set(order) == {"b.md", "c.md"}
+
+    order, _ = candidate_order(entries, DeckState(seen=set()), "b.md", random.Random(0))
+    assert order[-1] == "b.md"
+    assert set(order) == {"a.md", "b.md", "c.md"}
+
+
+def test_candidate_order_resets_when_everything_seen():
+    entries = _entries("a.md", "b.md")
+    order, reset = candidate_order(
+        entries, DeckState(seen={"a.md", "b.md"}), None, random.Random(2)
+    )
+    assert reset is True
+    assert set(order) == {"a.md", "b.md"}
+
+
+def test_candidate_order_ignores_seen_paths_that_disappeared():
+    entries = _entries("a.md", "b.md")
+    order, reset = candidate_order(
+        entries, DeckState(seen={"gone.md", "a.md"}), None, random.Random(3)
+    )
+    assert reset is False
+    assert order == ["b.md"]
+
+
+def test_deck_state_roundtrip_and_corruption(tmp_path):
+    path = tmp_path / "knowledge_deck.json"
+    state = DeckState(cycle_started_at="2026-11-18T00:00:00+00:00", seen={"a.md"})
+    save_deck_state(path, state)
+    loaded = load_deck_state(path)
+    assert loaded.seen == {"a.md"}
+    assert loaded.cycle_started_at == "2026-11-18T00:00:00+00:00"
+
+    path.write_text("{not json", encoding="utf-8")
+    fresh = load_deck_state(path)
+    assert fresh.seen == set()
+    assert fresh.cycle_started_at
