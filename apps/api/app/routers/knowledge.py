@@ -7,6 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.auth import require_auth
 from app.config import settings
 from app.schemas import KnowledgeConfigUpdate
+from app.services.knowledge_notes import (
+    KnowledgeNotesEmpty,
+    NoteReadError,
+    draw_random_note,
+)
 from app.services.knowledge_sync import MIN_SYNC_INTERVAL_SECONDS
 from app.services.settings_store import KnowledgeSection, SettingsStore, get_settings_store
 
@@ -117,3 +122,25 @@ async def sync_knowledge(request: Request) -> dict[str, object]:
             )
         runtime.wake()
     return {"queued": True, "status": _runtime_status(request)}
+
+
+@router.get("/notes/random")
+async def random_note(exclude: str = "") -> dict[str, object]:
+    try:
+        entry, content, meta = await draw_random_note(exclude.strip() or None)
+    except KnowledgeNotesEmpty as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="知识库没有可用的笔记，先去配置页检查知识库同步",
+        ) from exc
+    except NoteReadError as exc:
+        raise HTTPException(status_code=500, detail="读取笔记失败") from exc
+    return {
+        "note": {
+            "path": entry.path,
+            "title": entry.title,
+            "content": content,
+            "size": entry.size,
+        },
+        "meta": meta,
+    }
