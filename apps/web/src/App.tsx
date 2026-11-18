@@ -1972,8 +1972,11 @@ export default function App() {
     }
   }
 
-  async function send(attachments: Attachment[] = []): Promise<boolean> {
-    let text = draft.trim();
+  async function send(
+    attachments: Attachment[] = [],
+    textOverride?: string,
+  ): Promise<boolean> {
+    let text = (textOverride ?? draft).trim();
     const sendAgentId = agentIdRef.current || agentId;
     const sendKey = sessionKey(sendAgentId, sessionIdRef.current);
     const quoteText = (quotesByKey[sendKey] ?? "").trim();
@@ -2612,7 +2615,7 @@ export default function App() {
               onClearQuote={() => clearQuoteFor(activeKey)}
               onAddAttachment={(file) => addAttachmentFor(activeKey, file)}
               onRemoveAttachment={(path) => removeAttachmentFor(activeKey, path)}
-              onSend={(sent) => send(sent)}
+              onSend={(sent, text) => send(sent, text)}
               onCancel={() => void cancel()}
               onQuote={quote}
             />

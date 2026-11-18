@@ -72,7 +72,7 @@ type ChatPanelProps = {
   onClearQuote: () => void;
   onAddAttachment: (file: Attachment) => void;
   onRemoveAttachment: (path: string) => void;
-  onSend: (attachments: Attachment[]) => Promise<boolean>;
+  onSend: (attachments: Attachment[], textOverride?: string) => Promise<boolean>;
   onCancel: () => void;
   onQuote: (text: string) => void;
 };
@@ -99,6 +99,10 @@ export function ChatPanel(props: ChatPanelProps) {
   onReloadRef.current = props.onReload;
   const onDraftChangeRef = useRef(props.onDraftChange);
   onDraftChangeRef.current = props.onDraftChange;
+  const onSendRef = useRef(props.onSend);
+  onSendRef.current = props.onSend;
+  const attachmentsRef = useRef(props.attachments);
+  attachmentsRef.current = props.attachments;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const toolsRef = useRef<HTMLDivElement | null>(null);
   const uploadSeqRef = useRef(0);
@@ -125,6 +129,9 @@ export function ChatPanel(props: ChatPanelProps) {
   const voiceStartedAtRef = useRef(0);
   const voiceLimitRef = useRef(false);
   const mountedRef = useRef(true);
+  const waveformRef = useRef<HTMLCanvasElement | null>(null);
+  const voiceAnalyserRef = useRef<AnalyserNode | null>(null);
+  const voiceAudioContextRef = useRef<AudioContext | null>(null);
   const voiceStatusRef = useRef(voiceStatus);
   voiceStatusRef.current = voiceStatus;
   const draftRef = useRef(props.draft);
@@ -183,11 +190,72 @@ export function ChatPanel(props: ChatPanelProps) {
         recorder.stop();
       }
       voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
-      recorderRef.current = null;
       voiceStreamRef.current = null;
+      recorderRef.current = null;
       voiceChunksRef.current = [];
+      voiceAnalyserRef.current = null;
+      const audioContext = voiceAudioContextRef.current;
+      voiceAudioContextRef.current = null;
+      if (audioContext) void audioContext.close();
     };
   }, []);
+
+  useEffect(() => {
+    if (voiceStatus !== "recording") return;
+    const canvas = waveformRef.current;
+    const analyser = voiceAnalyserRef.current;
+    if (!canvas || !analyser) return;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const data = new Uint8Array(analyser.fftSize);
+    const accent = getComputedStyle(canvas).color || "#5b4bf0";
+    let frame = 0;
+    const render = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      if (width === 0 || height === 0) {
+        frame = window.requestAnimationFrame(render);
+        return;
+      }
+      if (
+        canvas.width !== Math.round(width * dpr) ||
+        canvas.height !== Math.round(height * dpr)
+      ) {
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+      }
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      context.clearRect(0, 0, width, height);
+      const middle = height / 2;
+      context.strokeStyle = "rgba(122, 108, 255, 0.18)";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(0, middle);
+      context.lineTo(width, middle);
+      context.stroke();
+      analyser.getByteTimeDomainData(data);
+      context.strokeStyle = accent;
+      context.lineWidth = 2;
+      context.lineJoin = "round";
+      context.lineCap = "round";
+      context.beginPath();
+      for (let x = 0; x <= width; x += 2) {
+        const index = Math.min(
+          data.length - 1,
+          Math.floor((x / width) * data.length),
+        );
+        const value = (data[index] - 128) / 128;
+        const y = middle + value * (height * 0.42);
+        if (x === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      }
+      context.stroke();
+      frame = window.requestAnimationFrame(render);
+    };
+    render();
+    return () => window.cancelAnimationFrame(frame);
+  }, [voiceStatus]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -378,17 +446,10 @@ export function ChatPanel(props: ChatPanelProps) {
     voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
     voiceStreamRef.current = null;
     recorderRef.current = null;
-  }
-
-  function appendVoiceText(text: string) {
-    const current = draftRef.current;
-    const next = current.trim()
-      ? /\s$/.test(current)
-        ? current + text
-        : `${current} ${text}`
-      : text;
-    onDraftChangeRef.current(next);
-    textareaRef.current?.focus();
+    voiceAnalyserRef.current = null;
+    const audioContext = voiceAudioContextRef.current;
+    voiceAudioContextRef.current = null;
+    if (audioContext) void audioContext.close();
   }
 
   async function finishVoiceRecording(mimeType: string) {
@@ -417,9 +478,21 @@ export function ChatPanel(props: ChatPanelProps) {
       const text = result.text.trim();
       if (!text) {
         setVoiceNotice("没有识别到语音内容");
-      } else {
-        appendVoiceText(text);
+        return;
+      }
+      const current = draftRef.current;
+      const content = current.trim()
+        ? /\s$/.test(current)
+          ? current + text
+          : `${current} ${text}`
+        : text;
+      const sent = await onSendRef.current(attachmentsRef.current, content);
+      if (sent) {
         setVoiceNotice("");
+      } else {
+        onDraftChangeRef.current(content);
+        textareaRef.current?.focus();
+        setVoiceNotice("已转写，但当前无法发送，内容已放入输入框");
       }
     } catch (exc) {
       setVoiceNotice(errorText(exc));
@@ -463,6 +536,24 @@ export function ChatPanel(props: ChatPanelProps) {
       if (!mountedRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         return;
+      }
+      try {
+        const AudioCtor =
+          window.AudioContext ??
+          (window as unknown as { webkitAudioContext?: typeof AudioContext })
+            .webkitAudioContext;
+        if (AudioCtor) {
+          const context = new AudioCtor();
+          const analyser = context.createAnalyser();
+          analyser.fftSize = 2048;
+          analyser.smoothingTimeConstant = 0.8;
+          context.createMediaStreamSource(stream).connect(analyser);
+          voiceAudioContextRef.current = context;
+          voiceAnalyserRef.current = analyser;
+          void context.resume();
+        }
+      } catch {
+        // The waveform is cosmetic; recording still works without it.
       }
       const candidates = [
         "audio/webm;codecs=opus",
@@ -587,7 +678,7 @@ export function ChatPanel(props: ChatPanelProps) {
         <div
           className={`composer-card ${expanded ? "expanded" : ""} ${
             props.attachments.length > 0 || uploading || attachError ? "has-files" : ""
-          }`}
+          } ${voiceStatus === "recording" ? "recording" : ""}`}
           onDrop={handleDrop}
           onDragOver={(event) => event.preventDefault()}
         >
@@ -796,6 +887,13 @@ export function ChatPanel(props: ChatPanelProps) {
               {attachError && <span className="composer-upload-error">{attachError}</span>}
             </div>
           ) : null}
+          {voiceStatus === "recording" && (
+            <canvas
+              ref={waveformRef}
+              className="composer-waveform"
+              aria-hidden="true"
+            />
+          )}
           <textarea
             ref={textareaRef}
             value={props.draft}
