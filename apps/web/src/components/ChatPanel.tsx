@@ -450,6 +450,7 @@ export function ChatPanel(props: ChatPanelProps) {
     }
     setVoiceNotice("");
     voiceLimitRef.current = false;
+    voiceStatusRef.current = "starting";
     setVoiceStatus("starting");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
