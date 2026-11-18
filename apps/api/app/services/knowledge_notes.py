@@ -1,4 +1,4 @@
-"""Knowledge-base note discovery and cached index for the random notes page."""
+"""Random knowledge notes: discovery and TTL index, shuffle-deck state, and draw orchestration."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -152,14 +154,28 @@ def load_deck_state(path: Path) -> DeckState:
         logger.warning("knowledge notes: resetting malformed deck state %s", path)
         return DeckState(cycle_started_at=_utcnow())
     seen_raw = payload.get("seen")
-    seen = (
-        {item for item in seen_raw if isinstance(item, str)}
-        if isinstance(seen_raw, list)
-        else set()
-    )
+    if isinstance(seen_raw, list):
+        strings = [item for item in seen_raw if isinstance(item, str)]
+        seen = set(strings)
+        if len(strings) != len(seen_raw):
+            logger.warning(
+                "knowledge notes: dropping non-string seen entries in deck state %s",
+                path,
+            )
+    else:
+        if "seen" in payload:
+            logger.warning(
+                "knowledge notes: ignoring non-list seen in deck state %s", path
+            )
+        seen = set()
     cycle = payload.get("cycle_started_at")
+    cycle_ok = isinstance(cycle, str) and bool(cycle)
+    if "cycle_started_at" in payload and not cycle_ok:
+        logger.warning(
+            "knowledge notes: replacing unusable cycle_started_at in deck state %s", path
+        )
     return DeckState(
-        cycle_started_at=cycle if isinstance(cycle, str) and cycle else _utcnow(),
+        cycle_started_at=cycle if cycle_ok else _utcnow(),
         seen=seen,
     )
 
@@ -203,3 +219,61 @@ def candidate_order(
         candidates.remove(exclude)
         candidates.append(exclude)
     return candidates, reset
+
+
+class KnowledgeNotesEmpty(Exception):
+    """No readable notes under the knowledge directory."""
+
+
+class NoteReadError(Exception):
+    """A note could not be read safely."""
+
+
+def read_note_text(root: Path, rel_path: str) -> str:
+    root_resolved = root.resolve()
+    target = (root / rel_path).resolve()
+    if root_resolved != target and root_resolved not in target.parents:
+        raise NoteReadError(f"path escapes knowledge dir: {rel_path}")
+    if not target.is_file():
+        raise NoteReadError(f"note is not a readable file: {rel_path}")
+    try:
+        return target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise NoteReadError(f"cannot read note: {rel_path}") from exc
+
+
+_deck_lock = asyncio.Lock()
+
+
+async def draw_random_note(
+    exclude: str | None,
+) -> tuple[NoteEntry, str, dict[str, object]]:
+    root = settings.knowledge_dir
+    entries = await get_note_index(root)
+    if not entries:
+        raise KnowledgeNotesEmpty()
+    state_path = settings.knowledge_deck_path
+    async with _deck_lock:
+        state = load_deck_state(state_path)
+        candidates, cycle_reset = candidate_order(entries, state, exclude)
+        last_error: Exception | None = None
+        for rel in candidates:
+            try:
+                content = await asyncio.to_thread(read_note_text, root, rel)
+            except NoteReadError as exc:
+                last_error = exc
+                logger.warning("knowledge notes: skipping unreadable note %s", rel)
+                continue
+            if cycle_reset:
+                state = DeckState(cycle_started_at=_utcnow(), seen={rel})
+            else:
+                state.seen.add(rel)
+            save_deck_state(state_path, state)
+            known = set(entries)
+            meta: dict[str, object] = {
+                "seen": len(state.seen & known),
+                "total": len(known),
+                "notice": CYCLE_RESET_NOTICE if cycle_reset else "",
+            }
+            return entries[rel], content, meta
+        raise NoteReadError("读取笔记失败") from last_error

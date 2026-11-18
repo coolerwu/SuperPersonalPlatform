@@ -494,7 +494,7 @@ def candidate_order(
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_knowledge_notes_service.py -q`
-Expected: `8 passed`。
+Expected: `14 passed`。
 
 - [ ] **Step 5: 提交**
 
@@ -650,7 +650,7 @@ async def draw_random_note(
         last_error: Exception | None = None
         for rel in candidates:
             try:
-                content = read_note_text(root, rel)
+                content = await asyncio.to_thread(read_note_text, root, rel)
             except NoteReadError as exc:
                 last_error = exc
                 logger.warning("knowledge notes: skipping unreadable note %s", rel)
@@ -673,7 +673,7 @@ async def draw_random_note(
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_knowledge_notes_service.py -q`
-Expected: `13 passed`。
+Expected: `21 passed`。
 
 - [ ] **Step 5: 提交**
 
@@ -793,7 +793,7 @@ Expected: `3 passed`。
 
 再跑一次全量后端测试：
 Run: `.venv/bin/python -m pytest apps/api/app/tests -q`
-Expected: 全部通过（基线 974 passed, 3 skipped，新增 16 个用例后约 990 passed）。
+Expected: 全部通过（基线 974 passed, 3 skipped，新增 21 个 service 用例 + 3 个 API 用例后约 998 passed）。
 
 - [ ] **Step 5: 提交**
 

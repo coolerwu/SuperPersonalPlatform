@@ -5,13 +5,18 @@ import random
 
 import pytest
 
+from app.config import settings
 from app.services import knowledge_notes
 from app.services.knowledge_notes import (
     DeckState,
+    KnowledgeNotesEmpty,
     NoteEntry,
+    NoteReadError,
     candidate_order,
+    draw_random_note,
     load_deck_state,
     note_title,
+    read_note_text,
     reset_index_cache,
     save_deck_state,
     scan_notes,
@@ -176,3 +181,89 @@ def test_deck_state_roundtrip_and_corruption(tmp_path):
     fresh = load_deck_state(path)
     assert fresh.seen == set()
     assert fresh.cycle_started_at
+
+
+def test_load_deck_state_missing_file_starts_fresh(tmp_path):
+    state = load_deck_state(tmp_path / "knowledge_deck_missing.json")
+    assert state.seen == set()
+    assert state.cycle_started_at
+
+
+def test_candidate_order_reset_cycle_also_defers_exclude():
+    entries = _entries("a.md", "b.md")
+    order, reset = candidate_order(
+        entries, DeckState(seen={"a.md", "b.md"}), "a.md", random.Random(4)
+    )
+    assert reset is True
+    assert order[-1] == "a.md"
+
+
+def _prepare_knowledge(tmp_path, monkeypatch):
+    reset_index_cache()
+    root = tmp_path / "knowledge"
+    root.mkdir()
+    monkeypatch.setattr(settings, "app_knowledge_dir", root)
+    monkeypatch.setattr(settings, "app_data_dir", tmp_path / "data")
+    return root
+
+
+def test_read_note_text_rejects_traversal(tmp_path):
+    (tmp_path / "ok.md").write_text("内容", encoding="utf-8")
+    assert read_note_text(tmp_path, "ok.md") == "内容"
+    with pytest.raises(NoteReadError):
+        read_note_text(tmp_path, "../outside.md")
+
+
+def test_read_note_text_replaces_invalid_utf8(tmp_path):
+    (tmp_path / "bad.txt").write_bytes(b"\xff\xfehello")
+    assert read_note_text(tmp_path, "bad.txt") == "��hello"
+
+
+@pytest.mark.asyncio
+async def test_draw_random_note_consumes_deck(tmp_path, monkeypatch):
+    root = _prepare_knowledge(tmp_path, monkeypatch)
+    (root / "a.md").write_text("# A\n内容 A", encoding="utf-8")
+    (root / "b.md").write_text("# B\n内容 B", encoding="utf-8")
+
+    first, content, meta = await draw_random_note(None)
+    assert first.path in {"a.md", "b.md"}
+    label = "A" if first.path == "a.md" else "B"
+    assert content == f"# {label}\n内容 {label}"
+    assert meta == {"seen": 1, "total": 2, "notice": ""}
+
+    second, _, meta2 = await draw_random_note(first.path)
+    assert second.path != first.path
+    assert meta2["seen"] == 2
+    assert meta2["notice"] == ""
+
+    third, _, meta3 = await draw_random_note(second.path)
+    assert third.path != second.path
+    assert meta3["notice"] == "本轮已看完，重新洗牌"
+    assert meta3["seen"] == 1
+    assert meta3["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_draw_random_note_empty_knowledge(tmp_path, monkeypatch):
+    _prepare_knowledge(tmp_path, monkeypatch)
+    with pytest.raises(KnowledgeNotesEmpty):
+        await draw_random_note(None)
+
+
+@pytest.mark.asyncio
+async def test_draw_random_note_skips_unreadable(tmp_path, monkeypatch):
+    root = _prepare_knowledge(tmp_path, monkeypatch)
+    (root / "a.md").write_text("# A\n内容 A", encoding="utf-8")
+    (root / "b.md").write_text("# B\n内容 B", encoding="utf-8")
+
+    original = knowledge_notes.read_note_text
+
+    def fake_read(root_path, rel_path):
+        if rel_path == "a.md":
+            raise NoteReadError("boom")
+        return original(root_path, rel_path)
+
+    monkeypatch.setattr(knowledge_notes, "read_note_text", fake_read)
+    note, _, meta = await draw_random_note(None)
+    assert note.path == "b.md"
+    assert meta["seen"] == 1
