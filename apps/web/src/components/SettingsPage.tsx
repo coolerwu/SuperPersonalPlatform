@@ -9,6 +9,7 @@ import type {
   SystemInfo,
 } from "../types";
 import { AgentEditor } from "./AgentEditor";
+import { AsrSettings } from "./AsrSettings";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { KnowledgeSettings } from "./KnowledgeSettings";
 import { MapsSettings } from "./MapsSettings";
@@ -368,6 +369,18 @@ export function SettingsPage(props: SettingsPageProps) {
               </div>
             </div>
             <MapsSettings />
+          </section>
+          )}
+
+          {tab === "asr" && (
+          <section className="settings-card">
+            <div className="settings-card-head">
+              <div>
+                <h2>语音识别</h2>
+                <p>DeepSeek 语音识别；音频仅用于转写，不保存；按音频时长计费。</p>
+              </div>
+            </div>
+            <AsrSettings />
           </section>
           )}
 

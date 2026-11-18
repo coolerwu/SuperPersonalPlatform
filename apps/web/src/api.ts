@@ -9,6 +9,7 @@ import type {
   AllocationPortfolioUpdatePayload,
   AllocationSnapshot,
   AppSettings,
+  AsrConfig,
   ArtifactPreview,
   Attachment,
   BacktestDetail,
@@ -45,6 +46,7 @@ import type {
   TradeJournalStats,
   TradeJournalUpdatePayload,
   TranscriptMessage,
+  TranscribeResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -379,6 +381,28 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  getAsrConfig: () => request<AsrConfig>("/api/asr"),
+  updateAsrConfig: (payload: {
+    enabled?: boolean;
+    api_key?: string;
+    clear_api_key?: boolean;
+  }) =>
+    request<AsrConfig>("/api/asr", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  transcribeAudio: (file: File): Promise<TranscribeResult> => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetch("/api/asr/transcribe", {
+      method: "POST",
+      credentials: "include",
+      body: form,
+    }).then(async (response) => {
+      if (!response.ok) throw await responseError(response);
+      return (await response.json()) as TranscribeResult;
+    });
+  },
   listSkills: () => request<SkillCatalog>("/api/skills"),
   getSkill: (directory: string) =>
     request<SkillDetail>(`/api/skills/${encodeURIComponent(directory)}`),

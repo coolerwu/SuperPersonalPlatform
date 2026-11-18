@@ -12,7 +12,13 @@ export type Agent = {
   updated_at: string;
 };
 
-export type SettingsTab = "provider" | "agent" | "knowledge" | "maps" | "runtime";
+export type SettingsTab =
+  | "provider"
+  | "agent"
+  | "knowledge"
+  | "maps"
+  | "asr"
+  | "runtime";
 
 export type AgentSavePayload = {
   name: string;
@@ -476,6 +482,16 @@ export type MapsConfig = {
   enabled: boolean;
   provider: "amap";
   has_api_key: boolean;
+};
+
+export type AsrConfig = {
+  enabled: boolean;
+  has_api_key: boolean;
+};
+
+export type TranscribeResult = {
+  text: string;
+  duration_ms: number;
 };
 
 export type BacktestStatus =
