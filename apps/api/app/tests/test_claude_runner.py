@@ -799,6 +799,36 @@ async def test_shutdown_cancellation_keeps_lease_for_recovery(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cli_signal_exit_keeps_lease_for_recovery(tmp_path):
+    await init_db()
+
+    class SignalExitClient(FakeClient):
+        async def receive_messages(self):
+            from claude_agent_sdk._errors import ProcessError
+
+            raise ProcessError("Command failed with exit code 143 (exit code: 143)")
+            yield  # pragma: no cover - never reached
+
+    client = SignalExitClient()
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: client,
+    )
+    turn = make_turn(session_id="cccccccc-cccc-cccc-cccc-cccccccccccc")
+    stream = TurnStream()
+    queue = await stream.subscribe()
+    await runner.run(turn, stream)
+    end = (await drain_until_end(queue))[-1]
+    assert end["type"] == "turn_end"
+    assert end["status"] == "cancelled"
+    # systemd SIGTERM killed the CLI before the app could cancel the turn;
+    # keep the lease so startup recovery resumes the session.
+    assert await turn_lease.is_running(turn.session_id) is True
+    await turn_lease.remove(turn.session_id)
+
+
+@pytest.mark.asyncio
 async def test_interrupt_ignores_idle_cached_client(tmp_path):
     await init_db()
     client = FakeClient([ResultMessage()])

@@ -163,6 +163,23 @@ def _redact_cli_line(line: str) -> str:
     return _AMAP_KEY_RE.sub(r"\1" + _AMAP_MCP_PATH + "?key=***", line)
 
 
+_SIGNAL_EXIT_CODES = {"143", "137", "-15", "-9"}
+
+
+def _is_signal_exit(exc: BaseException) -> bool:
+    """Whether the SDK CLI was killed by a signal.
+
+    systemd sends SIGTERM to the whole unit cgroup on restart (until
+    KillMode=mixed is deployed), so the CLI can exit with 143 before the app
+    cancels the turn. Treat that as an interruption: keep the lease and let
+    startup recovery resume it.
+    """
+    if type(exc).__name__ != "ProcessError":
+        return False
+    match = re.search(r"exit code (-?\d+)", str(exc))
+    return bool(match and match.group(1) in _SIGNAL_EXIT_CODES)
+
+
 def _maps_stamp(maps: Any) -> str:
     return json.dumps(
         {
@@ -1001,17 +1018,29 @@ class ClaudeTurnRunner:
             keep_lease = True
             raise
         except Exception as exc:
-            logger.exception(
-                "claude turn failed session=%s agent=%s",
-                turn.session_id,
-                turn.agent_id,
-            )
-            outcome = TurnOutcome(
-                status="failed",
-                output="".join(text_parts),
-                error=_redact_cli_line(str(exc)),
-            )
-            evict = True
+            if _is_signal_exit(exc):
+                logger.warning(
+                    "claude process stopped by signal; keeping lease session=%s agent=%s",
+                    turn.session_id,
+                    turn.agent_id,
+                )
+                outcome = TurnOutcome(
+                    status="cancelled", output="".join(text_parts)
+                )
+                evict = True
+                keep_lease = True
+            else:
+                logger.exception(
+                    "claude turn failed session=%s agent=%s",
+                    turn.session_id,
+                    turn.agent_id,
+                )
+                outcome = TurnOutcome(
+                    status="failed",
+                    output="".join(text_parts),
+                    error=_redact_cli_line(str(exc)),
+                )
+                evict = True
         finally:
             # Snapshot before clearing: an interrupt without a result owes no
             # channel reply. The marker is cleared at the end of teardown so the

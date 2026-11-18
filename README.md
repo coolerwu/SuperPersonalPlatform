@@ -350,7 +350,7 @@ cd apps/web && npm install && npm run build
 
 ## V1 生产部署（宿主机 systemd + SQLite）
 
-生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。systemd unit 设置 `TimeoutStopSec=60`，用于覆盖停机时逐个缓存 client 的限时断开；不要在 unit 里改回 20 秒，否则 CLI 子进程可能被 SIGKILL。
+生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。systemd unit 使用 `KillMode=mixed`：重启时 SIGTERM 只发给 uvicorn，SDK CLI 子进程保持到应用自己取消 turn、保留恢复租约后再退出；uvicorn 带 `--timeout-graceful-shutdown 10`，避免长连接 SSE 拖住关闭。`TimeoutStopSec=60` 覆盖整体停机预算。不要把 `KillMode` 改回默认值或去掉这两个参数，否则 systemd 会先杀掉 CLI，运行中的 turn 会被当作失败清理，重启后无法续跑。
 
 ### 首次准备
 

@@ -5,11 +5,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Send SIGTERM only to uvicorn, not the whole cgroup: the SDK CLI child must
+# stay alive until the app cancels the running turn and keeps its lease.
+KillMode=mixed
 WorkingDirectory=%h/SuperPersonalPlatform-v1-deploy
 EnvironmentFile=%h/.super-personal-platform/.env
 Environment=APP_DATA_DIR=%h/.super-personal-platform/data
 Environment=APP_DATABASE_URL=sqlite+aiosqlite:///%h/.super-personal-platform/data/app.db
-ExecStart=%h/SuperPersonalPlatform-v1-deploy/.venv/bin/uvicorn app.main:app --app-dir apps/api --host 0.0.0.0 --port 8888
+ExecStart=%h/SuperPersonalPlatform-v1-deploy/.venv/bin/uvicorn app.main:app --app-dir apps/api --host 0.0.0.0 --port 8888 --timeout-graceful-shutdown 10
 Restart=always
 RestartSec=3
 TimeoutStopSec=60
