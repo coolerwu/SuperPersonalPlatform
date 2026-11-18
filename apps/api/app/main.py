@@ -17,6 +17,7 @@ from app.market_db import init_market_db
 from app.routers.agents import router as agents_router
 from app.routers.allocation import router as allocation_router
 from app.routers.app_settings import router as app_settings_router
+from app.routers.asr import router as asr_router
 from app.routers.backtests import router as backtests_router
 from app.routers.channels import router as channels_router
 from app.routers.chat import router as chat_router
@@ -215,6 +216,7 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
     app.include_router(providers_router)
     app.include_router(agents_router)
     app.include_router(app_settings_router)
+    app.include_router(asr_router)
     app.include_router(channels_router)
     app.include_router(sessions_router)
     app.include_router(chat_router)

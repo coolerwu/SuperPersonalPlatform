@@ -300,6 +300,7 @@ def _parse(raw: dict[str, Any]) -> PlatformSettings:
         runtime=_section(RuntimeSection, raw.get("runtime")),
         knowledge=_section(KnowledgeSection, raw.get("knowledge")),
         maps=_section(MapsSection, raw.get("maps")),
+        asr=_section(AsrSection, raw.get("asr")),
         agents=agents,
         channels=channels,
         channel_conversations=conversations,

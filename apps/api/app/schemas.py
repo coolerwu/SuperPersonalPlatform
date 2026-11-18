@@ -497,6 +497,12 @@ class MapsConfigUpdate(BaseModel):
     clear_api_key: bool = False
 
 
+class AsrConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    api_key: str | None = Field(default=None, max_length=200)
+    clear_api_key: bool = False
+
+
 class TradeJournalCreate(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
     entry_at: str = Field(min_length=1, max_length=64)
