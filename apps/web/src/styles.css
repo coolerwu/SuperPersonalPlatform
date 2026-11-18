@@ -1536,16 +1536,30 @@ textarea {
   }
 }
 
-.composer-voice-status {
+.composer-voice-tip {
+  width: fit-content;
   max-width: var(--chat-lane);
-  margin: 6px auto 0;
-  color: var(--muted);
+  margin: 0 auto 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(32, 36, 42, 0.86);
+  color: #fff;
   font-size: 12px;
+  line-height: 1.4;
   text-align: center;
+  pointer-events: none;
+  animation: voice-tip-in 160ms ease-out;
 }
 
-.composer-voice-status.error {
-  color: #c0392b;
+@keyframes voice-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .composer-menu {
@@ -1821,6 +1835,13 @@ textarea {
   pointer-events: none;
 }
 
+.composer-waveform-time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .composer-voice-loading {
   grid-area: input;
   min-width: 0;
@@ -1886,6 +1907,19 @@ textarea {
 .composer-send-button.stop:hover {
   background: #000;
   border-color: #000;
+}
+
+.composer-send-button.cancel {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.composer-send-button.cancel:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 
 .composer-send-button:disabled {
@@ -5254,6 +5288,18 @@ body:has(.app-shell.pearl) .select-empty {
 
 .pearl .composer-send-button.stop:hover {
   background: #0d1015;
+}
+
+.pearl .composer-send-button.cancel {
+  border-color: rgba(26, 30, 38, 0.1);
+  color: #667080;
+  box-shadow: none;
+}
+
+.pearl .composer-send-button.cancel:hover:not(:disabled) {
+  border-color: rgba(122, 108, 255, 0.35);
+  background: rgba(255, 255, 255, 0.95);
+  color: #5b4bf0;
 }
 
 .pearl .composer-send-button:disabled {

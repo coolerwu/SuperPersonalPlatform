@@ -106,11 +106,11 @@ class AsrSection(BaseModel):
 - 点击麦克风：`navigator.mediaDevices.getUserMedia({audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true}})`；不可用或拒绝 → 提示「无法访问麦克风，请检查浏览器权限」。
 - `MediaRecorder` 按优先级选择 `audio/webm;codecs=opus` → `audio/ogg;codecs=opus` → `audio/mp4` → 浏览器默认；`start(1000)` 每秒收块。
 - 状态机 `idle → starting → recording → transcribing → idle`：
-  - recording：输入框位置显示随声音起伏的实时波形线与计时；右侧两个按钮：「终止」停止并把转写文字放进草稿，「发送」停止并立即发出；到 120 秒自动停止，按终止处理并提示「已到 2 分钟上限」。
+  - recording：输入框位置显示随声音起伏的实时波形线与计时；右侧三个按钮：「取消」丢弃录音、不转写，「终止」停止并把转写文字放进草稿，「发送」停止并立即发出；到 120 秒自动停止，按终止处理并提示「已到 2 分钟上限」。
   - transcribing：输入框位置显示转圈与「正在转写…」，输入框隐藏，发送按钮禁用；转写和随后的发送都完成或失败后恢复。
   - 停止：释放麦克风轨道；录音短于 0.5 秒 → 提示「录音太短，请重试」，不上传。
   - 上传：`POST /api/asr/transcribe`，`multipart/form-data`，字段名 `file`，文件名按容器类型取 `recording.webm` / `.ogg` / `.mp4`。
-  - 成功：`text.trim()` 为空 → 提示「没有识别到语音内容」；否则把文字追加到当前草稿（草稿为空直接写入，非空且末尾无空白时补一个空格）。终止只写入草稿；发送则把草稿与转写文字一起发出，发送失败时文字保留在草稿并提示。
+  - 成功：`text.trim()` 为空 → 提示「没有识别到语音内容」；否则把文字追加到当前草稿（草稿为空直接写入，非空且末尾无空白时补一个空格）。终止只写入草稿；发送则把草稿与转写文字一起发出，发送失败时文字保留在草稿并提示。提示统一以输入框上方的临时 tips 展示，约 3 秒后自动消失。
   - 失败：展示后端中文错误；不保留音频，不写草稿。
 - 录音或转写期间发送按钮禁用；麦克风按钮在 transcribing 时禁用并显示「正在转写…」。
 - 切换会话/Agent、离开聊天页、组件卸载：停止录音、释放轨道、丢弃已录数据，不上传。

@@ -202,6 +202,12 @@ export function ChatPanel(props: ChatPanelProps) {
   }, []);
 
   useEffect(() => {
+    if (!voiceNotice || voiceStatus !== "idle") return;
+    const timer = window.setTimeout(() => setVoiceNotice(""), 3200);
+    return () => window.clearTimeout(timer);
+  }, [voiceNotice, voiceStatus]);
+
+  useEffect(() => {
     if (voiceStatus !== "recording") return;
     const canvas = waveformRef.current;
     const analyser = voiceAnalyserRef.current;
@@ -511,8 +517,7 @@ export function ChatPanel(props: ChatPanelProps) {
     }
   }
 
-  function stopVoiceRecording(action: "draft" | "send" | "limit") {
-    const recorder = recorderRef.current;
+  function stopVoiceRecording(action: "draft" | "send" | "limit") {    const recorder = recorderRef.current;
     if (!recorder || recorder.state === "inactive") return;
     if (action === "limit") {
       voiceLimitRef.current = true;
@@ -522,6 +527,19 @@ export function ChatPanel(props: ChatPanelProps) {
       voiceActionRef.current = action;
     }
     recorder.stop();
+  }
+
+  function cancelVoiceRecording() {
+    const recorder = recorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      if (recorder.state !== "inactive") recorder.stop();
+    }
+    voiceChunksRef.current = [];
+    releaseVoiceStream();
+    setVoiceStatus("idle");
+    setVoiceNotice("");
   }
 
   async function startVoiceRecording() {
@@ -686,6 +704,11 @@ export function ChatPanel(props: ChatPanelProps) {
             >
               ×
             </button>
+          </div>
+        )}
+        {asrEnabled && voiceStatus === "idle" && voiceNotice && (
+          <div className="composer-voice-tip" role="status">
+            {voiceNotice}
           </div>
         )}
         <div
@@ -910,6 +933,9 @@ export function ChatPanel(props: ChatPanelProps) {
                 className="composer-waveform"
                 aria-hidden="true"
               />
+              <span className="composer-waveform-time">
+                {voiceClock(voiceSeconds)} / 2:00
+              </span>
             </div>
           )}
           {voiceStatus === "transcribing" && (
@@ -950,6 +976,26 @@ export function ChatPanel(props: ChatPanelProps) {
           <div className="composer-actions">
             {voiceStatus === "recording" ? (
               <>
+                <button
+                  className="composer-send-button cancel"
+                  type="button"
+                  onClick={cancelVoiceRecording}
+                  aria-label="取消录音"
+                  title="取消录音"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
+                </button>
                 <button
                   className="composer-send-button stop"
                   type="button"
@@ -1049,16 +1095,6 @@ export function ChatPanel(props: ChatPanelProps) {
             )}
           </div>
         </div>
-        {asrEnabled && voiceStatus === "recording" && (
-          <div className="composer-voice-status" role="status">
-            {`${voiceClock(voiceSeconds)} / 2:00 · 终止转文字 · 发送直接发出`}
-          </div>
-        )}
-        {asrEnabled && voiceStatus === "idle" && voiceNotice && (
-          <div className="composer-voice-status error" role="status">
-            {voiceNotice}
-          </div>
-        )}
         <input
           ref={fileInputRef}
           type="file"
