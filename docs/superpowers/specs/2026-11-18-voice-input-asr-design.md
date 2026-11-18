@@ -3,7 +3,7 @@
 - 日期：2026-11-18
 - 状态：设计已确认，待实现
 - 关联模块：`apps/api/app/services/settings_store.py`、`apps/api/app/routers/asr.py`（新增）、`apps/api/app/services/asr.py`（新增）、`apps/api/app/schemas.py`、`apps/api/app/main.py`、`apps/web/src/components/ChatPanel.tsx`、`apps/web/src/components/AsrSettings.tsx`（新增）、`apps/web/src/components/SettingsPage.tsx`、`apps/web/src/components/Sidebar.tsx`、`apps/web/src/api.ts`、`apps/web/src/types.ts`、`apps/web/src/styles.css`
-- 关联需求：`docs/intent.md` F18 网页语音输入（新增）、F2 网页 Chat
+- 关联需求：`docs/intent.md` F27 网页语音输入（新增）、F2 网页 Chat
 
 ## 背景
 
@@ -159,7 +159,7 @@ class AsrSection(BaseModel):
 
 ## 文档同步
 
-- `docs/intent.md`：新增 **F18 网页语音输入**（功能点、边界、验收）；F2 功能点补一句「输入框支持语音转文字」。
+- `docs/intent.md`：新增 **F27 网页语音输入**（功能点、边界、验收），编号水位改为 F27；F2 功能点补一句「输入框支持语音转文字」。
 - `CLAUDE.md`：配置分区从五个改为六个（Provider、Agent、知识库、地图、语音识别、运行环境）；补充 `asr` 配置节、`/api/asr` 接口、ffmpeg 依赖、音频不落盘与 120 秒限制。
 - `README.md`：聊天功能增加语音输入；配置页分区列表增加「语音识别」；本地开发依赖说明 `brew install ffmpeg`；生产说明 ffmpeg 已预装、麦克风需要 HTTPS/localhost。
 - 不新增环境变量，`deploy/.env.example` 不变。
