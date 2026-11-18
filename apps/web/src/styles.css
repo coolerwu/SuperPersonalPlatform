@@ -3970,6 +3970,67 @@ textarea {
   width: 64%;
 }
 
+/* Text artifacts read as documents: one per row at full lane width, capped
+   height with the content scrolling inside. A square thumbnail only fits
+   images and type icons. */
+.artifact-tile-doc {
+  grid-column: 1 / -1;
+  aspect-ratio: auto;
+}
+
+.artifact-tile-doc .artifact-tile-body {
+  min-height: 132px;
+  max-height: min(58vh, 520px);
+  padding: 14px 16px;
+}
+
+.artifact-tile-doc .artifact-tile-markdown .markdown {
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+.artifact-tile-doc .artifact-tile-markdown .markdown h1,
+.artifact-tile-doc .artifact-tile-markdown .markdown h2,
+.artifact-tile-doc .artifact-tile-markdown .markdown h3 {
+  margin: 0.8em 0 0.4em;
+  line-height: 1.4;
+}
+
+.artifact-tile-doc .artifact-tile-markdown .markdown h1 {
+  font-size: 17px;
+}
+
+.artifact-tile-doc .artifact-tile-markdown .markdown h2 {
+  font-size: 15.5px;
+}
+
+.artifact-tile-doc .artifact-tile-markdown .markdown h3 {
+  font-size: 14.5px;
+}
+
+.artifact-tile-doc .artifact-tile-markdown .markdown p,
+.artifact-tile-doc .artifact-tile-markdown .markdown ul,
+.artifact-tile-doc .artifact-tile-markdown .markdown ol {
+  margin: 0.45em 0;
+}
+
+.artifact-tile-doc .artifact-tile-text {
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* The document body's min-height is larger than this block's content, so an
+   auto height would park 无法预览 at the top; match the body's inner height. */
+.artifact-tile-doc .artifact-error {
+  min-height: 104px;
+}
+
+.artifact-tile-doc .artifact-empty {
+  display: grid;
+  place-items: center;
+  min-height: 104px;
+}
+
 @keyframes artifact-skeleton-pulse {
   0%, 100% { opacity: 0.45; }
   50% { opacity: 1; }

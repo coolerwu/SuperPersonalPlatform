@@ -164,7 +164,7 @@ function TextArtifactTile({
   const preview = useArtifactPreview(agentId, artifact, true);
 
   return (
-    <div className="artifact-tile">
+    <div className="artifact-tile artifact-tile-doc">
       <TileHead artifact={artifact} />
       <div
         className="artifact-tile-body"
