@@ -60,6 +60,8 @@ npm run dev
 
 打开 `http://localhost:5173`，默认 token 见 `APP_AUTH_TOKEN`（默认 `dev-token`）。本地聊天需要有效模型密钥：通过 `export LLM_API_KEY=...`、`~/.super-personal-platform/.env` 或启动目录 `.env` 配置，也可以登录后在「配置」页填写；不要提交。
 
+语音输入需要本机有 `ffmpeg`：macOS 可 `brew install ffmpeg`，Ubuntu 可 `sudo apt install ffmpeg`。没有 ffmpeg 时接口会返回「服务器未安装 ffmpeg，无法处理语音」，其余聊天功能不受影响。
+
 ## Chat
 
 - 执行核为 `ClaudeSDKClient`：每个平台会话一个 UUID，直接作为 SDK `session_id`；transcript 在 `claude/projects/<agent_id>/<uuid>.jsonl`。同一会话的 turn 串行，不同会话并发（上限 `BROWSER_CONCURRENCY`，默认 5）。
@@ -72,6 +74,7 @@ npm run dev
 - `CLAUDE.md` 全局规则由 SDK 作为 user 级说明加载；Agent 记忆是工作区的项目级 `CLAUDE.md`，只加载给该 Agent；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
 - assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、链接、`$$...$$` 数学公式（KaTeX；单 `$` 按普通文本处理）。`markdown`/`md`/`text`/`txt`/`plaintext`/`log` 围栏自动换行，其他代码围栏保持横向滚动。
 - 消息操作：复制、引用；按钮位于气泡下方，引用内容显示在输入框上方并可单独取消，发送时以 `> ` 引用块写入消息。除整条引用外，在单条消息内选中一段文字会在选区旁浮出「引用」按钮，点击后只引用所选片段，已有引用会被替换；跨消息或纯空白选区不出现按钮。失败或停止后显示提示，重新发送内容即可，没有单独的重试按钮。不做编辑、重新生成或删除单条消息。
+- 语音输入：配置页「语音识别」填写全局 DeepSeek API Key 并启用后，输入框出现麦克风按钮；点击开始录音、再点停止，录音上传 `POST /api/asr/transcribe`，后端用 ffmpeg 转成 16 kHz 单声道 WAV 后调用 DeepSeek ASR，转写文字追加到当前草稿。单次最长 120 秒，音频只用于转写、不落盘；录音需要 HTTPS 或 localhost 访问。
 - 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；支持选择、粘贴、拖拽图片，大图在浏览器端缩到最长边 1600 px。发送时把文件名、相对工作区路径（`uploads/<name>`）和字节数写入用户消息，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 仍兼容解析。图片由 Agent 用 Read 工具查看。上传文件通过 `GET /api/agents/{agent_id}/uploads/{filename}` 读取；Agent 为 paused/archived 时上传返回 409，读取历史附件仍放行（只读）。
 - Agent 产物：回复里的相对图片/文件链接按当前 Agent 工作区解析，图片直接显示、文件可点开；文件通过 `GET /api/agents/{agent_id}/files/{path}` 只读读取，HTML/SVG/JS/XML 等类型强制下载。回复下方另列「产物」（来自 `Write`/`Edit`/`MultiEdit`/`NotebookEdit` 与截图/存 PDF 类 MCP 工具），同一路径去重；工作区外文件与 MCP 直接返回的图片不在列表中。
 - 产物卡片：回复末尾的「产物」使用响应式网格。文本文件是整行宽度的文档卡片（高度约半屏、超出在卡片内滚动；`.md` 渲染 Markdown，其他文本等宽原样）；内容由 `GET /api/agents/{agent_id}/file-preview/{path}` 提供，服务端做文本扩展名白名单与 512 KB 截断。图片显示方块缩略图（不裁切），PDF、Office、压缩包显示类型图标；点击「打开」走现有文件下载接口。预览缓存在页面内，文件删除或读取失败时回落到图标。
@@ -103,7 +106,7 @@ npm run dev
 
 ## 技能、工具与插件页面
 
-侧栏顶部是「Agent / 管理」两个工作区 tab（默认 Agent），Agent 选择器只在 Agent 工作区显示，是全站 per-agent 配置的唯一来源。Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组：工作台放新对话和会话列表，Agent 能力放技能、工具、插件、渠道、定时、记忆。管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图；「Agent全局配置」展开后是 Provider、Agent、知识库、地图、运行环境五个配置分区和退出登录，点分区直接打开配置页对应分区（页面内无分区 tab 栏，分区选择只在内存，刷新回 Provider）。各菜单默认全部展开，点击标题独立收起或展开，进入页面时自动展开所在菜单。管理页不显示会话列表与 Agent 选择器。点「管理」回到本次打开页面期间最后停留的管理页（还没进过管理页时为回测）；已在管理页时不跳转。
+侧栏顶部是「Agent / 管理」两个工作区 tab（默认 Agent），Agent 选择器只在 Agent 工作区显示，是全站 per-agent 配置的唯一来源。Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组：工作台放新对话和会话列表，Agent 能力放技能、工具、插件、渠道、定时、记忆。管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图；「Agent全局配置」展开后是 Provider、Agent、知识库、地图、语音识别、运行环境六个配置分区和退出登录，点分区直接打开配置页对应分区（页面内无分区 tab 栏，分区选择只在内存，刷新回 Provider）。各菜单默认全部展开，点击标题独立收起或展开，进入页面时自动展开所在菜单。管理页不显示会话列表与 Agent 选择器。点「管理」回到本次打开页面期间最后停留的管理页（还没进过管理页时为回测）；已在管理页时不跳转。
 
 - **技能**：列出全局技能库，按「初始化技能」和「其他技能」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、「已调整」标记、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；任何技能都可删除（只删技能目录）。
 - **工具**：读取当前 Agent 最近一轮对话的运行时 init frame，展示 Claude Code 实际加载的内置工具、MCP server 与工具、技能、插件和插件加载失败；平台业务工具以 `mcp__platform_tools__*` 出现，描述来自平台注册表。没有运行时数据时提示先发一条消息。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）通过进程内 `platform_tools` MCP 接入，插件自带的 MCP 继续并存。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。
@@ -359,6 +362,7 @@ mkdir -p ~/.super-personal-platform/data
 cp deploy/.env.example ~/.super-personal-platform/.env
 # 编辑 ~/.super-personal-platform/.env，填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL
 # 外网访问需要代理时，设置 HTTP_PROXY 和 HTTPS_PROXY（生产机可用 http://192.168.1.2:7893）
+# 语音输入需要 ffmpeg/ffprobe（Ubuntu 可 apt install ffmpeg；当前生产机已预装）
 # 知识库优先在配置页的「知识库」分区配置；KB_* 仅作为首次启动的种子
 cp deploy/agent-command-center.service ~/.config/systemd/user/
 systemctl --user daemon-reload
