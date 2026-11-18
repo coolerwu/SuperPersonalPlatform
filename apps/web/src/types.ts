@@ -478,7 +478,7 @@ export type RandomNote = {
   path: string;
   title: string;
   content: string;
-  size: number;
+  size: number; // UTF-8 byte size of the note content
 };
 
 export type RandomNoteMeta = {
