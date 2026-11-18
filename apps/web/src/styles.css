@@ -1496,6 +1496,58 @@ textarea {
   background: var(--accent-soft);
 }
 
+.composer-voice {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--muted);
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.composer-voice:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: rgb(var(--accent-rgb) / 0.3);
+  background: var(--accent-soft);
+}
+
+.composer-voice.recording {
+  color: #fff;
+  border-color: #e2483d;
+  background: #e2483d;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.composer-voice:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(226, 72, 61, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(226, 72, 61, 0);
+  }
+}
+
+.composer-voice-status {
+  max-width: var(--chat-lane);
+  margin: 6px auto 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.composer-voice-status.error {
+  color: #c0392b;
+}
+
 .composer-menu {
   position: absolute;
   left: 0;
@@ -3354,7 +3406,8 @@ textarea {
     padding: 4px 6px;
   }
 
-  .composer-plus {
+  .composer-plus,
+  .composer-voice {
     width: 32px;
     height: 32px;
   }
@@ -5072,6 +5125,23 @@ body:has(.app-shell.pearl) .select-empty {
   border-color: rgba(122, 108, 255, 0.35);
   background: rgba(255, 255, 255, 0.95);
   color: #5b4bf0;
+}
+
+.pearl .composer-voice {
+  border-color: rgba(26, 30, 38, 0.1);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.pearl .composer-voice:hover:not(:disabled) {
+  border-color: rgba(122, 108, 255, 0.35);
+  background: rgba(255, 255, 255, 0.95);
+  color: #5b4bf0;
+}
+
+.pearl .composer-voice.recording {
+  border-color: #e2483d;
+  background: #e2483d;
+  color: #fff;
 }
 
 .pearl .composer textarea {

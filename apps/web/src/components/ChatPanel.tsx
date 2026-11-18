@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 
-import { api } from "../api";
+import { api, errorText } from "../api";
 import type {
   Attachment,
   FrozenLive,
@@ -112,6 +112,23 @@ export function ChatPanel(props: ChatPanelProps) {
   const [commandMenuDismissed, setCommandMenuDismissed] = useState(false);
   const throttledStreamText = useThrottledText(props.streamText);
   const throttledStreamReasoning = useThrottledText(props.streamReasoning);
+  const [asrEnabled, setAsrEnabled] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<
+    "idle" | "starting" | "recording" | "transcribing"
+  >("idle");
+  const [voiceSeconds, setVoiceSeconds] = useState(0);
+  const [voiceNotice, setVoiceNotice] = useState("");
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceTimerRef = useRef<number | null>(null);
+  const voiceStartedAtRef = useRef(0);
+  const voiceLimitRef = useRef(false);
+  const mountedRef = useRef(true);
+  const voiceStatusRef = useRef(voiceStatus);
+  voiceStatusRef.current = voiceStatus;
+  const draftRef = useRef(props.draft);
+  draftRef.current = props.draft;
 
   const uploading = uploads.length > 0;
   const commandQuery = slashCommandQuery(props.draft);
@@ -136,6 +153,41 @@ export function ChatPanel(props: ChatPanelProps) {
   useEffect(() => {
     if (props.focusSignal > 0) textareaRef.current?.focus();
   }, [props.focusSignal]);
+
+  useEffect(() => {
+    let active = true;
+    void api
+      .getAsrConfig()
+      .then((config) => {
+        if (active) setAsrEnabled(config.enabled);
+      })
+      .catch(() => {
+        if (active) setAsrEnabled(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (voiceTimerRef.current !== null) {
+        window.clearInterval(voiceTimerRef.current);
+        voiceTimerRef.current = null;
+      }
+      const recorder = recorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.onstop = null;
+        recorder.stop();
+      }
+      voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recorderRef.current = null;
+      voiceStreamRef.current = null;
+      voiceChunksRef.current = [];
+    };
+  }, []);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -201,6 +253,8 @@ export function ChatPanel(props: ChatPanelProps) {
   const canSubmit =
     props.canSend &&
     !props.pendingSend &&
+    voiceStatus !== "recording" &&
+    voiceStatus !== "transcribing" &&
     (props.draft.trim().length > 0 ||
       props.attachments.length > 0 ||
       props.quote.trim().length > 0);
@@ -315,6 +369,141 @@ export function ChatPanel(props: ChatPanelProps) {
   }, []);
 
   const reloadSession = useCallback(() => onReloadRef.current(), []);
+
+  function releaseVoiceStream() {
+    if (voiceTimerRef.current !== null) {
+      window.clearInterval(voiceTimerRef.current);
+      voiceTimerRef.current = null;
+    }
+    voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    voiceStreamRef.current = null;
+    recorderRef.current = null;
+  }
+
+  function appendVoiceText(text: string) {
+    const current = draftRef.current;
+    const next = current.trim()
+      ? /\s$/.test(current)
+        ? current + text
+        : `${current} ${text}`
+      : text;
+    onDraftChangeRef.current(next);
+    textareaRef.current?.focus();
+  }
+
+  async function finishVoiceRecording(mimeType: string) {
+    const chunks = voiceChunksRef.current;
+    voiceChunksRef.current = [];
+    releaseVoiceStream();
+    const seconds = (Date.now() - voiceStartedAtRef.current) / 1000;
+    if (seconds < 0.5) {
+      setVoiceStatus("idle");
+      setVoiceNotice("录音太短，请重试");
+      return;
+    }
+    const type = mimeType || "audio/webm";
+    const extension = type.includes("mp4")
+      ? "mp4"
+      : type.includes("ogg")
+        ? "ogg"
+        : "webm";
+    const file = new File(chunks, `recording.${extension}`, { type });
+    setVoiceStatus("transcribing");
+    setVoiceNotice(
+      voiceLimitRef.current ? "已到 2 分钟上限，正在转写…" : "正在转写…",
+    );
+    try {
+      const result = await api.transcribeAudio(file);
+      const text = result.text.trim();
+      if (!text) {
+        setVoiceNotice("没有识别到语音内容");
+      } else {
+        appendVoiceText(text);
+        setVoiceNotice("");
+      }
+    } catch (exc) {
+      setVoiceNotice(errorText(exc));
+    } finally {
+      voiceLimitRef.current = false;
+      setVoiceStatus("idle");
+    }
+  }
+
+  function stopVoiceRecording(reason: "user" | "limit") {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+    if (reason === "limit") {
+      voiceLimitRef.current = true;
+      setVoiceNotice("已到 2 分钟上限，正在转写…");
+    }
+    recorder.stop();
+  }
+
+  async function startVoiceRecording() {
+    if (voiceStatusRef.current !== "idle" || !props.canSend) return;
+    if (
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      setVoiceNotice("当前浏览器无法录音");
+      return;
+    }
+    setVoiceNotice("");
+    voiceLimitRef.current = false;
+    setVoiceStatus("starting");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const candidates = [
+        "audio/webm;codecs=opus",
+        "audio/ogg;codecs=opus",
+        "audio/mp4",
+      ];
+      const mimeType =
+        candidates.find((item) => MediaRecorder.isTypeSupported(item)) ?? "";
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      voiceChunksRef.current = [];
+      voiceStreamRef.current = stream;
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) voiceChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        void finishVoiceRecording(recorder.mimeType || mimeType);
+      };
+      voiceStartedAtRef.current = Date.now();
+      setVoiceSeconds(0);
+      setVoiceStatus("recording");
+      recorder.start(1000);
+      voiceTimerRef.current = window.setInterval(() => {
+        const seconds = Math.floor(
+          (Date.now() - voiceStartedAtRef.current) / 1000,
+        );
+        setVoiceSeconds(seconds);
+        if (seconds >= 120) stopVoiceRecording("limit");
+      }, 500);
+    } catch {
+      releaseVoiceStream();
+      setVoiceStatus("idle");
+      setVoiceNotice("无法访问麦克风，请检查浏览器权限");
+    }
+  }
+
+  function voiceClock(seconds: number) {
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+  }
 
   return (
     <section className="chat-panel">
@@ -514,6 +703,53 @@ export function ChatPanel(props: ChatPanelProps) {
                 </button>
               </div>
             )}
+            {asrEnabled && (
+              <button
+                type="button"
+                className={`composer-voice ${
+                  voiceStatus === "recording" ? "recording" : ""
+                }`}
+                aria-label={
+                  voiceStatus === "recording"
+                    ? "停止录音并转写"
+                    : voiceStatus === "transcribing"
+                      ? "正在转写"
+                      : "语音输入"
+                }
+                title={
+                  voiceStatus === "recording"
+                    ? "停止录音并转写"
+                    : voiceStatus === "transcribing"
+                      ? "正在转写"
+                      : "语音输入"
+                }
+                disabled={
+                  !props.canSend ||
+                  voiceStatus === "starting" ||
+                  voiceStatus === "transcribing"
+                }
+                onClick={() => {
+                  if (voiceStatus === "recording") stopVoiceRecording("user");
+                  else void startVoiceRecording();
+                }}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="9" y="3" width="6" height="11" rx="3" />
+                  <path d="M5 11a7 7 0 0 0 14 0" />
+                  <path d="M12 18v3" />
+                </svg>
+              </button>
+            )}
           </div>
           {props.attachments.length > 0 || uploading || attachError ? (
             <div className="composer-files">
@@ -627,6 +863,18 @@ export function ChatPanel(props: ChatPanelProps) {
             </button>
           </div>
         </div>
+        {asrEnabled && voiceStatus !== "idle" && (
+          <div className="composer-voice-status" role="status">
+            {voiceStatus === "recording"
+              ? `${voiceClock(voiceSeconds)} / 2:00 · 再点麦克风停止`
+              : voiceNotice || "正在转写…"}
+          </div>
+        )}
+        {asrEnabled && voiceStatus === "idle" && voiceNotice && (
+          <div className="composer-voice-status error" role="status">
+            {voiceNotice}
+          </div>
+        )}
         <input
           ref={fileInputRef}
           type="file"
