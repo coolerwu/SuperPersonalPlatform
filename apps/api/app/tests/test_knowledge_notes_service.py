@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import random
 
@@ -267,3 +269,52 @@ async def test_draw_random_note_skips_unreadable(tmp_path, monkeypatch):
     note, _, meta = await draw_random_note(None)
     assert note.path == "b.md"
     assert meta["seen"] == 1
+    assert meta["total"] == 2
+    deck = json.loads(settings.knowledge_deck_path.read_text(encoding="utf-8"))
+    assert deck["seen"] == ["b.md"]
+
+
+@pytest.mark.asyncio
+async def test_draw_random_note_all_unreadable_keeps_deck_untouched(
+    tmp_path, monkeypatch
+):
+    root = _prepare_knowledge(tmp_path, monkeypatch)
+    (root / "a.md").write_text("# A", encoding="utf-8")
+    (root / "b.md").write_text("# B", encoding="utf-8")
+
+    def always_fail(root_path, rel_path):
+        raise NoteReadError("boom")
+
+    monkeypatch.setattr(knowledge_notes, "read_note_text", always_fail)
+    with pytest.raises(NoteReadError):
+        await draw_random_note(None)
+    deck_path = settings.knowledge_deck_path
+    if deck_path.exists():
+        payload = json.loads(deck_path.read_text(encoding="utf-8"))
+        assert not payload.get("seen")
+
+
+@pytest.mark.asyncio
+async def test_draw_random_note_concurrent_draws_are_serialized(tmp_path, monkeypatch):
+    root = _prepare_knowledge(tmp_path, monkeypatch)
+    (root / "a.md").write_text("# A", encoding="utf-8")
+    (root / "b.md").write_text("# B", encoding="utf-8")
+
+    first, second = await asyncio.gather(
+        draw_random_note(None), draw_random_note(None)
+    )
+    assert first[0].path != second[0].path
+    assert {first[2]["seen"], second[2]["seen"]} == {1, 2}
+
+
+def test_read_note_text_rejects_symlink_escape(tmp_path):
+    root = tmp_path / "knowledge"
+    root.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("外部内容", encoding="utf-8")
+    try:
+        os.symlink(outside, root / "link.md")
+    except OSError:
+        pytest.skip("symlinks are not supported on this platform")
+    with pytest.raises(NoteReadError):
+        read_note_text(root, "link.md")

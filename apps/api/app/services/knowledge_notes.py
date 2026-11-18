@@ -9,6 +9,7 @@ import os
 import random
 import re
 import time
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -230,19 +231,35 @@ class NoteReadError(Exception):
 
 
 def read_note_text(root: Path, rel_path: str) -> str:
-    root_resolved = root.resolve()
-    target = (root / rel_path).resolve()
-    if root_resolved != target and root_resolved not in target.parents:
-        raise NoteReadError(f"path escapes knowledge dir: {rel_path}")
-    if not target.is_file():
-        raise NoteReadError(f"note is not a readable file: {rel_path}")
     try:
-        return target.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
+        root_resolved = root.resolve()
+        target = (root / rel_path).resolve()
+        if not target.is_relative_to(root_resolved):
+            raise NoteReadError(f"path escapes knowledge dir: {rel_path}")
+        if not target.is_file():
+            raise NoteReadError(f"note is not a readable file: {rel_path}")
+        if target.stat().st_size > MAX_NOTE_BYTES:
+            raise NoteReadError(f"note exceeds size limit: {rel_path}")
+        return target.read_text(encoding="utf-8-sig", errors="replace")
+    except NoteReadError:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
         raise NoteReadError(f"cannot read note: {rel_path}") from exc
 
 
-_deck_lock = asyncio.Lock()
+_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _deck_lock() -> asyncio.Lock:
+    """Deck lock for the current event loop (fresh loops in tests rebuild it)."""
+    loop = asyncio.get_running_loop()
+    lock = _LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _LOCKS[loop] = lock
+    return lock
 
 
 async def draw_random_note(
@@ -253,7 +270,7 @@ async def draw_random_note(
     if not entries:
         raise KnowledgeNotesEmpty()
     state_path = settings.knowledge_deck_path
-    async with _deck_lock:
+    async with _deck_lock():
         state = load_deck_state(state_path)
         candidates, cycle_reset = candidate_order(entries, state, exclude)
         last_error: Exception | None = None
@@ -268,8 +285,9 @@ async def draw_random_note(
                 state = DeckState(cycle_started_at=_utcnow(), seen={rel})
             else:
                 state.seen.add(rel)
-            save_deck_state(state_path, state)
             known = set(entries)
+            state.seen &= known
+            save_deck_state(state_path, state)
             meta: dict[str, object] = {
                 "seen": len(state.seen & known),
                 "total": len(known),

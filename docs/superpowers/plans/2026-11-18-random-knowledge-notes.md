@@ -596,6 +596,8 @@ async def test_draw_random_note_skips_unreadable(tmp_path, monkeypatch):
     assert meta["seen"] == 1
 ```
 
+代码评审后另补充 3 个用例：全部候选不可读（抛 `NoteReadError` 且不改写 deck）、并发抽卡（`asyncio.gather` 两次不重复、seen 分别为 1 和 2）、符号链接逃逸（`read_note_text` 抛 `NoteReadError`）。
+
 - [ ] **Step 2: 运行测试确认失败**
 
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_knowledge_notes_service.py -q`
@@ -606,6 +608,8 @@ Expected: ImportError（`read_note_text` 等不存在）。
 在 `knowledge_notes.py` 顶部 import 增加：
 
 ```python
+import weakref
+
 from app.config import settings
 ```
 
@@ -621,19 +625,35 @@ class NoteReadError(Exception):
 
 
 def read_note_text(root: Path, rel_path: str) -> str:
-    root_resolved = root.resolve()
-    target = (root / rel_path).resolve()
-    if root_resolved != target and root_resolved not in target.parents:
-        raise NoteReadError(f"path escapes knowledge dir: {rel_path}")
-    if not target.is_file():
-        raise NoteReadError(f"note is not a readable file: {rel_path}")
     try:
-        return target.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
+        root_resolved = root.resolve()
+        target = (root / rel_path).resolve()
+        if not target.is_relative_to(root_resolved):
+            raise NoteReadError(f"path escapes knowledge dir: {rel_path}")
+        if not target.is_file():
+            raise NoteReadError(f"note is not a readable file: {rel_path}")
+        if target.stat().st_size > MAX_NOTE_BYTES:
+            raise NoteReadError(f"note exceeds size limit: {rel_path}")
+        return target.read_text(encoding="utf-8-sig", errors="replace")
+    except NoteReadError:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
         raise NoteReadError(f"cannot read note: {rel_path}") from exc
 
 
-_deck_lock = asyncio.Lock()
+_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _deck_lock() -> asyncio.Lock:
+    """Deck lock for the current event loop (fresh loops in tests rebuild it)."""
+    loop = asyncio.get_running_loop()
+    lock = _LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _LOCKS[loop] = lock
+    return lock
 
 
 async def draw_random_note(
@@ -644,7 +664,7 @@ async def draw_random_note(
     if not entries:
         raise KnowledgeNotesEmpty()
     state_path = settings.knowledge_deck_path
-    async with _deck_lock:
+    async with _deck_lock():
         state = load_deck_state(state_path)
         candidates, cycle_reset = candidate_order(entries, state, exclude)
         last_error: Exception | None = None
@@ -659,8 +679,9 @@ async def draw_random_note(
                 state = DeckState(cycle_started_at=_utcnow(), seen={rel})
             else:
                 state.seen.add(rel)
-            save_deck_state(state_path, state)
             known = set(entries)
+            state.seen &= known
+            save_deck_state(state_path, state)
             meta: dict[str, object] = {
                 "seen": len(state.seen & known),
                 "total": len(known),
@@ -673,7 +694,7 @@ async def draw_random_note(
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_knowledge_notes_service.py -q`
-Expected: `21 passed`。
+Expected: `24 passed`。
 
 - [ ] **Step 5: 提交**
 
@@ -793,7 +814,7 @@ Expected: `3 passed`。
 
 再跑一次全量后端测试：
 Run: `.venv/bin/python -m pytest apps/api/app/tests -q`
-Expected: 全部通过（基线 974 passed, 3 skipped，新增 21 个 service 用例 + 3 个 API 用例后约 998 passed）。
+Expected: 全部通过（基线 974 passed, 3 skipped，新增 24 个 service 用例 + 3 个 API 用例后约 1001 passed）。
 
 - [ ] **Step 5: 提交**
 
@@ -1336,7 +1357,7 @@ git commit -m "Wire random notes page into routes and sidebar"
 cd apps/web && npm run build
 ```
 
-Expected: 后端全部通过（基线 974 + 新增 16 个用例），前端构建通过。
+Expected: 后端全部通过（基线 974 passed + 24 个 service 用例 + 3 个 API 用例，共约 1001 passed），前端构建通过。
 
 - [ ] **Step 5: 提交并推送**
 
