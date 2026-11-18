@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 ASR_URL = "https://api.deepseek.com/v1/tools/asr"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
@@ -87,13 +90,20 @@ async def transcribe_wav(
             files={"file": ("speech.wav", wav, "audio/wav")},
         )
     except httpx.TimeoutException as exc:
+        logger.warning("DeepSeek ASR request timed out: %r", exc)
         raise AsrError(504, "语音识别超时，请重试") from exc
     except httpx.HTTPError as exc:
+        logger.warning("DeepSeek ASR request failed: %r", exc)
         raise AsrError(502, "语音识别服务返回异常") from exc
     finally:
         if owns_client:
             await client.aclose()
     if response.status_code != 200:
+        logger.warning(
+            "DeepSeek ASR returned %s: %s",
+            response.status_code,
+            response.text[:500],
+        )
         known = response.status_code in _STATUS_MESSAGES
         raise AsrError(
             response.status_code if known else 502,
