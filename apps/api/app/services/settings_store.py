@@ -46,6 +46,11 @@ class MapsSection(BaseModel):
     api_key: str = ""
 
 
+class AsrSection(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+
+
 class ProviderSection(BaseModel):
     name: str = "deepseek"
     base_url: str = ""
@@ -99,6 +104,7 @@ class PlatformSettings(BaseModel):
     runtime: RuntimeSection = Field(default_factory=RuntimeSection)
     knowledge: KnowledgeSection = Field(default_factory=KnowledgeSection)
     maps: MapsSection = Field(default_factory=MapsSection)
+    asr: AsrSection = Field(default_factory=AsrSection)
     agents: list[AgentSection] = Field(default_factory=list)
     channels: list[ChannelSection] = Field(default_factory=list)
     channel_conversations: dict[str, ConversationSection] = Field(default_factory=dict)
@@ -601,6 +607,38 @@ class SettingsStore:
                     raise ValueError("请先填写高德 Web 服务 Key")
             raw.update(_validated_update(MapsSection, fields))
             result = _section(MapsSection, raw)
+
+        await self._json.update(mutate)
+        return result
+
+    async def update_asr(
+        self,
+        *,
+        enabled: bool | None = None,
+        api_key: str | None = None,
+        clear_api_key: bool = False,
+    ) -> AsrSection:
+        """Apply a speech-recognition update under the store lock."""
+        result = AsrSection()
+
+        def mutate(data: dict[str, Any]) -> None:
+            nonlocal result
+            raw = _dict_section(data, "asr")
+            current = _section(AsrSection, raw)
+            if clear_api_key:
+                fields: dict[str, Any] = {"api_key": "", "enabled": False}
+            else:
+                fields = {}
+                if api_key is not None and api_key.strip():
+                    fields["api_key"] = api_key.strip()
+                if enabled is not None:
+                    fields["enabled"] = bool(enabled)
+                next_key = str(fields.get("api_key", current.api_key) or "").strip()
+                next_enabled = bool(fields.get("enabled", current.enabled))
+                if next_enabled and not next_key:
+                    raise ValueError("请先填写 DeepSeek API Key")
+            raw.update(_validated_update(AsrSection, fields))
+            result = _section(AsrSection, raw)
 
         await self._json.update(mutate)
         return result

@@ -598,3 +598,29 @@ async def test_ensure_seeded_leaves_a_complete_valid_file_unchanged(
     assert path.read_text("utf-8") == before
     assert [agent.id for agent in settings.agents] == ["default"]
     assert settings.knowledge.root == "/kb"
+
+
+@pytest.mark.asyncio
+async def test_update_asr_returns_state_and_enforces_key(tmp_path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+
+    with pytest.raises(ValueError):
+        await store.update_asr(enabled=True)
+    assert not path.exists()
+
+    section = await store.update_asr(api_key="  key-a  ")
+    assert section.api_key == "key-a"
+    assert section.enabled is False
+
+    section = await store.update_asr(enabled=True)
+    assert section.enabled is True
+    assert section.api_key == "key-a"
+
+    section = await store.update_asr(api_key="key-b")
+    assert section.enabled is True
+    assert section.api_key == "key-b"
+
+    section = await store.update_asr(clear_api_key=True)
+    assert section.enabled is False
+    assert section.api_key == ""
