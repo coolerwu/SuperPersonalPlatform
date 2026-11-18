@@ -474,6 +474,24 @@ export type KnowledgeState = {
   status: KnowledgeStatus;
 };
 
+export type RandomNote = {
+  path: string;
+  title: string;
+  content: string;
+  size: number;
+};
+
+export type RandomNoteMeta = {
+  seen: number;
+  total: number;
+  notice: string;
+};
+
+export type RandomNoteResponse = {
+  note: RandomNote;
+  meta: RandomNoteMeta;
+};
+
 export type AppSettings = {
   session_retention_days: number;
 };

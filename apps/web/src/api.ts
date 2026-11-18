@@ -32,6 +32,7 @@ import type {
   MemoryDocument,
   AgentAutoMemory,
   Provider,
+  RandomNoteResponse,
   SessionSummary,
   SessionTurnStatus,
   SkillCatalog,
@@ -354,6 +355,12 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getKnowledge: () => request<KnowledgeState>("/api/knowledge"),
+  randomNote: (exclude?: string) =>
+    request<RandomNoteResponse>(
+      `/api/knowledge/notes/random${
+        exclude ? `?exclude=${encodeURIComponent(exclude)}` : ""
+      }`,
+    ),
   updateKnowledge: (payload: {
     enabled?: boolean;
     webdav_url?: string;
