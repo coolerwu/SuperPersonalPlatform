@@ -44,6 +44,8 @@
 ```python
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.services import knowledge_notes
@@ -72,10 +74,52 @@ def test_scan_notes_missing_root_returns_empty(tmp_path):
     assert scan_notes(tmp_path / "nope") == {}
 
 
+def test_scan_notes_skips_symlinked_notes(tmp_path):
+    target = tmp_path / "real.md"
+    target.write_text("# 真实", encoding="utf-8")
+    link = tmp_path / "link.md"
+    try:
+        os.symlink(target, link)
+    except OSError:
+        pytest.skip("symlinks are not supported on this platform")
+
+    entries = scan_notes(tmp_path)
+
+    assert set(entries) == {"real.md"}
+
+
+def test_scan_notes_accepts_uppercase_suffix(tmp_path):
+    (tmp_path / "UPPER.MD").write_text("# 大写", encoding="utf-8")
+
+    entries = scan_notes(tmp_path)
+
+    assert set(entries) == {"UPPER.MD"}
+
+
+def test_scan_notes_size_boundary(tmp_path):
+    (tmp_path / "exact.md").write_bytes(b"a" * knowledge_notes.MAX_NOTE_BYTES)
+    (tmp_path / "over.md").write_bytes(b"a" * (knowledge_notes.MAX_NOTE_BYTES + 1))
+
+    entries = scan_notes(tmp_path)
+
+    assert set(entries) == {"exact.md"}
+
+
 def test_note_title_ignores_fenced_headings_and_falls_back():
     text = "```\n# 代码里的注释\n```\n# 真标题\n正文"
     assert note_title("a.md", text) == "真标题"
     assert note_title("目录/我的笔记.md", "没有标题") == "我的笔记"
+
+
+def test_note_title_skips_frontmatter_and_matches_fences_by_marker():
+    frontmatter = "---\ntitle: 元数据\n# 不是标题\n---\n# 真标题 ###\n正文"
+    assert note_title("a.md", frontmatter) == "真标题"
+
+    tilde = "~~~\n# 围栏内的注释\n```\n# 仍在围栏内\n~~~\n# 标题"
+    assert note_title("b.md", tilde) == "标题"
+
+    backtick = "```\n~~~\n# 围栏内\n```\n# 标题"
+    assert note_title("c.md", backtick) == "标题"
 
 
 @pytest.mark.asyncio
@@ -92,6 +136,30 @@ async def test_index_cache_uses_ttl_and_reset(tmp_path):
     reset_index_cache()
     refreshed = await knowledge_notes.get_note_index(tmp_path)
     assert set(refreshed) == {"a.md", "b.md"}
+
+
+@pytest.mark.asyncio
+async def test_index_cache_expires_with_ttl(tmp_path):
+    reset_index_cache()
+    (tmp_path / "a.md").write_text("# A", encoding="utf-8")
+    await knowledge_notes.get_note_index(tmp_path)
+
+    (tmp_path / "b.md").write_text("# B", encoding="utf-8")
+    refreshed = await knowledge_notes.get_note_index(tmp_path, ttl=0)
+
+    assert set(refreshed) == {"a.md", "b.md"}
+
+
+@pytest.mark.asyncio
+async def test_missing_root_is_not_cached(tmp_path):
+    reset_index_cache()
+    root = tmp_path / "knowledge"
+    assert await knowledge_notes.get_note_index(root) == {}
+
+    root.mkdir()
+    (root / "a.md").write_text("# A", encoding="utf-8")
+
+    assert set(await knowledge_notes.get_note_index(root)) == {"a.md"}
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -104,11 +172,14 @@ Expected: 收集错误/导入失败（`ModuleNotFoundError: No module named 'app
 创建 `apps/api/app/services/knowledge_notes.py`：
 
 ```python
+"""Knowledge-base note discovery and cached index for the random notes page."""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +190,8 @@ NOTE_SUFFIXES = frozenset({".md", ".txt"})
 MAX_NOTE_BYTES = 2 * 1024 * 1024
 TITLE_PREFIX_BYTES = 8192
 INDEX_TTL_SECONDS = 60.0
+
+_CLOSING_HASHES = re.compile(r"(?:^|\s+)#+\s*$")
 
 
 @dataclass(frozen=True)
@@ -131,20 +204,36 @@ class NoteEntry:
 def _read_prefix(path: Path, limit: int = TITLE_PREFIX_BYTES) -> str:
     with path.open("rb") as handle:
         raw = handle.read(limit)
-    return raw.decode("utf-8", errors="replace")
+    return raw.decode("utf-8-sig", errors="replace")
 
 
 def note_title(rel_path: str, text: str) -> str:
-    in_fence = False
-    for line in text.splitlines():
+    lines = text.splitlines()
+    start = 0
+    if lines and lines[0] == "---":
+        for index in range(1, len(lines)):
+            if lines[index] == "---":
+                start = index + 1
+                break
+    fence: str | None = None
+    for line in lines[start:]:
         stripped = line.strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
+        if stripped.startswith("```"):
+            if fence is None:
+                fence = "```"
+            elif fence == "```":
+                fence = None
             continue
-        if in_fence:
+        if stripped.startswith("~~~"):
+            if fence is None:
+                fence = "~~~"
+            elif fence == "~~~":
+                fence = None
+            continue
+        if fence is not None:
             continue
         if stripped.startswith("# "):
-            title = stripped[2:].strip()
+            title = _CLOSING_HASHES.sub("", stripped[2:].strip()).strip()
             if title:
                 return title
     stem = Path(rel_path).stem.strip()
@@ -152,6 +241,7 @@ def note_title(rel_path: str, text: str) -> str:
 
 
 def scan_notes(root: Path) -> dict[str, NoteEntry]:
+    """Collect readable notes under root keyed by POSIX relative path."""
     entries: dict[str, NoteEntry] = {}
     if not root.is_dir():
         return entries
@@ -178,13 +268,13 @@ def scan_notes(root: Path) -> dict[str, NoteEntry]:
     return entries
 
 
-_index_lock = asyncio.Lock()
 _index_root: Path | None = None
 _index_entries: dict[str, NoteEntry] = {}
 _index_at = 0.0
 
 
 def reset_index_cache() -> None:
+    """Clear the module-level index cache (test hook)."""
     global _index_root, _index_entries, _index_at
     _index_root = None
     _index_entries = {}
@@ -194,22 +284,24 @@ def reset_index_cache() -> None:
 async def get_note_index(
     root: Path, *, ttl: float = INDEX_TTL_SECONDS
 ) -> dict[str, NoteEntry]:
+    """Return the cached note index, rescanning in a worker thread when stale."""
     global _index_root, _index_entries, _index_at
-    now = time.monotonic()
-    async with _index_lock:
-        if _index_root == root and now - _index_at < ttl:
-            return dict(_index_entries)
-        entries = scan_notes(root)
-        _index_root = root
-        _index_entries = entries
-        _index_at = now
-        return dict(entries)
+    if not root.is_dir():
+        # The mirror is briefly renamed aside during resets; never cache that.
+        return {}
+    if _index_root == root and time.monotonic() - _index_at < ttl:
+        return dict(_index_entries)
+    entries = await asyncio.to_thread(scan_notes, root)
+    _index_root = root
+    _index_entries = entries
+    _index_at = time.monotonic()
+    return dict(entries)
 ```
 
 - [ ] **Step 4: 运行测试确认通过**
 
 Run: `.venv/bin/python -m pytest apps/api/app/tests/test_knowledge_notes_service.py -q`
-Expected: `4 passed`。
+Expected: `10 passed`。
 
 - [ ] **Step 5: 提交**
 

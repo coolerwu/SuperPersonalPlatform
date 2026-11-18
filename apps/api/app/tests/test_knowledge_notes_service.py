@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.services import knowledge_notes
@@ -28,10 +30,52 @@ def test_scan_notes_missing_root_returns_empty(tmp_path):
     assert scan_notes(tmp_path / "nope") == {}
 
 
+def test_scan_notes_skips_symlinked_notes(tmp_path):
+    target = tmp_path / "real.md"
+    target.write_text("# 真实", encoding="utf-8")
+    link = tmp_path / "link.md"
+    try:
+        os.symlink(target, link)
+    except OSError:
+        pytest.skip("symlinks are not supported on this platform")
+
+    entries = scan_notes(tmp_path)
+
+    assert set(entries) == {"real.md"}
+
+
+def test_scan_notes_accepts_uppercase_suffix(tmp_path):
+    (tmp_path / "UPPER.MD").write_text("# 大写", encoding="utf-8")
+
+    entries = scan_notes(tmp_path)
+
+    assert set(entries) == {"UPPER.MD"}
+
+
+def test_scan_notes_size_boundary(tmp_path):
+    (tmp_path / "exact.md").write_bytes(b"a" * knowledge_notes.MAX_NOTE_BYTES)
+    (tmp_path / "over.md").write_bytes(b"a" * (knowledge_notes.MAX_NOTE_BYTES + 1))
+
+    entries = scan_notes(tmp_path)
+
+    assert set(entries) == {"exact.md"}
+
+
 def test_note_title_ignores_fenced_headings_and_falls_back():
     text = "```\n# 代码里的注释\n```\n# 真标题\n正文"
     assert note_title("a.md", text) == "真标题"
     assert note_title("目录/我的笔记.md", "没有标题") == "我的笔记"
+
+
+def test_note_title_skips_frontmatter_and_matches_fences_by_marker():
+    frontmatter = "---\ntitle: 元数据\n# 不是标题\n---\n# 真标题 ###\n正文"
+    assert note_title("a.md", frontmatter) == "真标题"
+
+    tilde = "~~~\n# 围栏内的注释\n```\n# 仍在围栏内\n~~~\n# 标题"
+    assert note_title("b.md", tilde) == "标题"
+
+    backtick = "```\n~~~\n# 围栏内\n```\n# 标题"
+    assert note_title("c.md", backtick) == "标题"
 
 
 @pytest.mark.asyncio
@@ -48,3 +92,27 @@ async def test_index_cache_uses_ttl_and_reset(tmp_path):
     reset_index_cache()
     refreshed = await knowledge_notes.get_note_index(tmp_path)
     assert set(refreshed) == {"a.md", "b.md"}
+
+
+@pytest.mark.asyncio
+async def test_index_cache_expires_with_ttl(tmp_path):
+    reset_index_cache()
+    (tmp_path / "a.md").write_text("# A", encoding="utf-8")
+    await knowledge_notes.get_note_index(tmp_path)
+
+    (tmp_path / "b.md").write_text("# B", encoding="utf-8")
+    refreshed = await knowledge_notes.get_note_index(tmp_path, ttl=0)
+
+    assert set(refreshed) == {"a.md", "b.md"}
+
+
+@pytest.mark.asyncio
+async def test_missing_root_is_not_cached(tmp_path):
+    reset_index_cache()
+    root = tmp_path / "knowledge"
+    assert await knowledge_notes.get_note_index(root) == {}
+
+    root.mkdir()
+    (root / "a.md").write_text("# A", encoding="utf-8")
+
+    assert set(await knowledge_notes.get_note_index(root)) == {"a.md"}

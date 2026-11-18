@@ -1,8 +1,11 @@
+"""Knowledge-base note discovery and cached index for the random notes page."""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +16,8 @@ NOTE_SUFFIXES = frozenset({".md", ".txt"})
 MAX_NOTE_BYTES = 2 * 1024 * 1024
 TITLE_PREFIX_BYTES = 8192
 INDEX_TTL_SECONDS = 60.0
+
+_CLOSING_HASHES = re.compile(r"(?:^|\s+)#+\s*$")
 
 
 @dataclass(frozen=True)
@@ -25,20 +30,36 @@ class NoteEntry:
 def _read_prefix(path: Path, limit: int = TITLE_PREFIX_BYTES) -> str:
     with path.open("rb") as handle:
         raw = handle.read(limit)
-    return raw.decode("utf-8", errors="replace")
+    return raw.decode("utf-8-sig", errors="replace")
 
 
 def note_title(rel_path: str, text: str) -> str:
-    in_fence = False
-    for line in text.splitlines():
+    lines = text.splitlines()
+    start = 0
+    if lines and lines[0] == "---":
+        for index in range(1, len(lines)):
+            if lines[index] == "---":
+                start = index + 1
+                break
+    fence: str | None = None
+    for line in lines[start:]:
         stripped = line.strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
+        if stripped.startswith("```"):
+            if fence is None:
+                fence = "```"
+            elif fence == "```":
+                fence = None
             continue
-        if in_fence:
+        if stripped.startswith("~~~"):
+            if fence is None:
+                fence = "~~~"
+            elif fence == "~~~":
+                fence = None
+            continue
+        if fence is not None:
             continue
         if stripped.startswith("# "):
-            title = stripped[2:].strip()
+            title = _CLOSING_HASHES.sub("", stripped[2:].strip()).strip()
             if title:
                 return title
     stem = Path(rel_path).stem.strip()
@@ -46,6 +67,7 @@ def note_title(rel_path: str, text: str) -> str:
 
 
 def scan_notes(root: Path) -> dict[str, NoteEntry]:
+    """Collect readable notes under root keyed by POSIX relative path."""
     entries: dict[str, NoteEntry] = {}
     if not root.is_dir():
         return entries
@@ -72,13 +94,13 @@ def scan_notes(root: Path) -> dict[str, NoteEntry]:
     return entries
 
 
-_index_lock = asyncio.Lock()
 _index_root: Path | None = None
 _index_entries: dict[str, NoteEntry] = {}
 _index_at = 0.0
 
 
 def reset_index_cache() -> None:
+    """Clear the module-level index cache (test hook)."""
     global _index_root, _index_entries, _index_at
     _index_root = None
     _index_entries = {}
@@ -88,13 +110,15 @@ def reset_index_cache() -> None:
 async def get_note_index(
     root: Path, *, ttl: float = INDEX_TTL_SECONDS
 ) -> dict[str, NoteEntry]:
+    """Return the cached note index, rescanning in a worker thread when stale."""
     global _index_root, _index_entries, _index_at
-    now = time.monotonic()
-    async with _index_lock:
-        if _index_root == root and now - _index_at < ttl:
-            return dict(_index_entries)
-        entries = scan_notes(root)
-        _index_root = root
-        _index_entries = entries
-        _index_at = now
-        return dict(entries)
+    if not root.is_dir():
+        # The mirror is briefly renamed aside during resets; never cache that.
+        return {}
+    if _index_root == root and time.monotonic() - _index_at < ttl:
+        return dict(_index_entries)
+    entries = await asyncio.to_thread(scan_notes, root)
+    _index_root = root
+    _index_entries = entries
+    _index_at = time.monotonic()
+    return dict(entries)
