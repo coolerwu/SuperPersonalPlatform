@@ -204,14 +204,14 @@ metadata:
 - 本版知识库镜像不挂载给 Agent（知识库工具未接入）；页面配置与同步正常运行。
 - 接口：`GET/PUT /api/knowledge` 读取和保存配置（响应包含同步状态，不含密码），`POST /api/knowledge/sync` 立即触发一次同步；`GET /api/system` 的 `knowledge` 字段也返回同步状态。
 
-### 随机笔记
+## 随机笔记
 
 侧栏「Agent 能力 → 随机笔记」（`/knowledge`）每次随机展示 `knowledge/` 下的一整篇 `.md`/`.txt` 笔记原文，按 Markdown 渲染、卡片内滚动，顶部显示「本轮已看 N / 共 M · 剩余 R」。
 
 - 洗牌不重复：本轮看过的笔记不再出现，全库看完一轮后自动重置并提示「本轮已看完，重新洗牌」；进度保存在 `data/knowledge_deck.json`（原子写；缺失或损坏按新一轮处理）。
-- 扫描跳过隐藏目录/文件、符号链接与超过 2 MiB 的文件；标题取文件前 8 KiB 内首个 `#` 级标题（跳过 frontmatter 与代码围栏），缺省用文件名；索引缓存 60 秒。
+- 扫描跳过隐藏目录/文件、符号链接与超过 2 MiB 的文件；标题取文件前 8 KiB 内首个一级（H1）标题（跳过 frontmatter 与代码围栏），缺省用文件名；索引缓存 60 秒。
 - 接口：`GET /api/knowledge/notes/random?exclude=<路径>` 返回 `{note: {path, title, content, size}, meta: {seen, total, notice}}`；知识库为空 404，读取失败 500。
-- 卡片「追问」切到聊天页并新建会话，输入框预置引用：笔记相对路径、完整原文路径（`~/.super-personal-platform/knowledge/<路径>`）与正文前 6000 字（超出注明已截断）。纯前端实现，不调用模型，不需要 Provider。
+- 卡片「追问」切到聊天页并新建会话，输入框预置引用：笔记相对路径、完整原文路径（默认 `~/.super-personal-platform/knowledge/<路径>`）与正文前 6000 字（超出注明已截断）。纯前端实现，不调用模型，不需要 Provider。
 
 ## 量化回测
 

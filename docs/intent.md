@@ -19,7 +19,7 @@
 
 - 状态：现行
 - 日期：2026-11-11
-- 范围：网页 Chat、多 Agent 配置、微信个人号渠道、定时任务、技能库、官方插件集市、知识库镜像、量化回测、交易记录、资产配置、缠论图
+- 范围：网页 Chat、多 Agent 配置、微信个人号渠道、定时任务、技能库、官方插件集市、知识库镜像、随机笔记、量化回测、交易记录、资产配置、缠论图
 
 #### 背景与目标
 
@@ -343,8 +343,8 @@
 #### 功能点
 
 1. 视觉：珍珠冷光画布 + 极光弥散 + 悬浮玻璃；主色浅紫，运行态青绿到紫渐变；assistant 整列玻璃卡片，user 右对齐深色气泡。
-2. 路由：自建轻量 History API（不引入路由库）；`/chat`（可选 `/chat/<session_id>`）、`/config`、`/memory`、`/skills`、`/tools`、`/plugins`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；未知路径回聊天页。选中的 Agent 写在路径前缀 `/a/<agent_id>`（如 `/a/default/chat/<session_id>`、`/a/default/chan?symbol=...`），刷新、书签与分享链接都回到同一 Agent；没有前缀的旧链接回落到 `localStorage` 里最近的选择。
-3. 侧栏顶部「Agent / 管理」两个工作区；Agent 选择器只在 Agent 工作区显示（全站 per-agent 配置的唯一来源）。Agent 工作区分「Agent 工作台 / Agent 能力」两个可折叠菜单：工作台放新对话与会话列表，能力放技能、工具、插件、渠道、定时、记忆；管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图，「Agent全局配置」展开后是 Provider、Agent、知识库、地图、运行环境五个配置分区和退出登录，点分区直接打开配置页并切到对应分区（页面内不再有分区 tab 栏）；管理页不显示会话列表与 Agent 选择器。各菜单默认全部展开，点击标题独立收起或展开，进入某页时自动展开该页所在菜单。配置页分区选择只存在本次页面内存，刷新后回到 Provider。点「管理」回到本次打开页面期间最后停留的管理页（初始取当前路由，否则回测）；已在管理页时不跳转。
+2. 路由：自建轻量 History API（不引入路由库）；`/chat`（可选 `/chat/<session_id>`）、`/config`、`/memory`、`/knowledge`、`/skills`、`/tools`、`/plugins`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；未知路径回聊天页。选中的 Agent 写在路径前缀 `/a/<agent_id>`（如 `/a/default/chat/<session_id>`、`/a/default/chan?symbol=...`），刷新、书签与分享链接都回到同一 Agent；没有前缀的旧链接回落到 `localStorage` 里最近的选择。
+3. 侧栏顶部「Agent / 管理」两个工作区；Agent 选择器只在 Agent 工作区显示（全站 per-agent 配置的唯一来源）。Agent 工作区分「Agent 工作台 / Agent 能力」两个可折叠菜单：工作台放新对话与会话列表，能力放技能、工具、插件、渠道、定时、记忆、随机笔记；管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图，「Agent全局配置」展开后是 Provider、Agent、知识库、地图、运行环境五个配置分区和退出登录，点分区直接打开配置页并切到对应分区（页面内不再有分区 tab 栏）；管理页不显示会话列表与 Agent 选择器。各菜单默认全部展开，点击标题独立收起或展开，进入某页时自动展开该页所在菜单。配置页分区选择只存在本次页面内存，刷新后回到 Provider。点「管理」回到本次打开页面期间最后停留的管理页（初始取当前路由，否则回测）；已在管理页时不跳转。
 4. ≤860px 使用顶部栏 + 汉堡菜单；侧栏变抽屉；输入区适配 `visualViewport` 与安全区；管理页表格改卡片。
 5. 会话列表由 SDK transcript 生成，显示忙碌徽标和最后修改时间；微信会话带「微信」徽标；输入区提示网页回复不会发回微信。
 6. Chat 内容列（header、消息流、composer）统一 `--chat-lane` 宽度；发送时滚到底部，输出期间上滑显示「回到最新」。
@@ -365,7 +365,7 @@
 #### 功能点
 
 1. 生产：宿主机 systemd 用户服务 + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`（SPA fallback），没有 nginx/Postgres 容器。
-2. 运行时目录 `~/.super-personal-platform/`：`claude/`（含 `skills/`、`plugins/`、`settings.json` 与 `CLAUDE.md`）、`workspaces/<agent>/`、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
+2. 运行时目录 `~/.super-personal-platform/`：`claude/`（含 `skills/`、`plugins/`、`settings.json` 与 `CLAUDE.md`）、`workspaces/<agent>/`、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, knowledge_deck.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
 3. 新库的 `app.db` 只创建五张表：`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留旧表，旧 `providers`/`agents`/`channels`/`sessions`/`messages`/`runs`/`run_events`/`memory_items` 等表不再读写，`app_configs` 仅在首次启动读取一次保留天数后不再使用。
 4. 升级：本版不做数据迁移。先备份 `data/app.db` 与 `data/settings.json`；旧库可直接沿用，启动时检测并重建旧结构 `channel_deliveries` / `channel_inbounds`（旧待投递与入站去重记录丢失，iLink 可能重放一次）；旧 `providers` / `agents` / `channels` / `knowledge_configs` 配置不会导入，`settings.json` 用环境变量和默认值重新种子（仅首次启动读取旧 `app_configs.session_retention_days` 一次）；旧用户记忆与旧 `sessions/messages/runs/...` 聊天历史不会导入；旧微信渠道凭据不在 settings.json，需重新扫码绑定；旧定时任务列结构不兼容时，定时 tick 会持续记录 `cron tick failed`、任务列表接口可能 500，先备份再决定删除重建；回测历史保留。启动时会把逐字节等于旧默认的 Agent instructions 更新为新默认（用户改过的保留，写出保留 `.bak`）。
 5. 彻底重建：删除 `data/app.db` 后重启，会丢失回测历史、定时任务、未完成投递与入站去重记录；`data/settings.json` 和会话 transcript 不受影响，微信绑定在 settings.json 中，不需要因此重新扫码。
@@ -654,9 +654,9 @@
 
 1. 侧栏「Agent 能力」新增「随机笔记」入口，页面 `/knowledge` 每次随机展示 `knowledge/` 下的一篇 `.md`/`.txt` 笔记原文，按 Markdown 渲染、卡片内滚动；顶部显示「本轮已看 N / 共 M · 剩余 R」。
 2. 洗牌不重复：本轮看过的笔记不再出现，全库看完一轮后自动重置并提示「本轮已看完，重新洗牌」；进度存 `data/knowledge_deck.json`（原子写，缺失或损坏按新一轮处理）。
-3. 扫描跳过隐藏目录/文件、符号链接与超过 2 MiB 的文件；标题取文件前 8 KiB 内首个 `#` 级标题（跳过 frontmatter 与代码围栏），缺省用文件名；索引缓存 60 秒。
+3. 扫描跳过隐藏目录/文件、符号链接与超过 2 MiB 的文件；标题取文件前 8 KiB 内首个一级（H1）标题（跳过 frontmatter 与代码围栏），缺省用文件名；索引缓存 60 秒。
 4. 接口 `GET /api/knowledge/notes/random?exclude=<路径>` 返回 `{note: {path, title, content, size}, meta: {seen, total, notice}}`；知识库为空 404，读取失败 500。
-5. 卡片「追问」切到聊天页并新建会话，输入框预置引用：笔记相对路径、完整原文路径（`~/.super-personal-platform/knowledge/<路径>`）与正文前 6000 字（超出注明已截断）。纯前端实现，不调用模型，不需要 Provider。
+5. 卡片「追问」切到聊天页并新建会话，输入框预置引用：笔记相对路径、完整原文路径（默认 `~/.super-personal-platform/knowledge/<路径>`）与正文前 6000 字（超出注明已截断）。纯前端实现，不调用模型，不需要 Provider。
 
 #### 验收标准
 

@@ -2311,7 +2311,7 @@ export default function App() {
     const key = sessionKey(agentId, "");
     setQuotesByKey((current) => ({ ...current, [key]: noteQuote(note) }));
     setDraftFor(key, "");
-    setAttachmentsByKey((current) => ({ ...current, [key]: [] }));
+    clearAttachmentsFor(key);
     setFocusSignal((current) => current + 1);
   }
 
