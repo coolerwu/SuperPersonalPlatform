@@ -106,8 +106,7 @@ export function Sidebar(props: SidebarProps) {
     props.pluginsActive ||
     props.channelsActive ||
     props.cronActive ||
-    props.memoryActive ||
-    props.knowledgeActive;
+    props.memoryActive;
   const activeMenu: MenuSection | null =
     props.backtestActive ||
     props.journalActive ||
@@ -395,25 +394,28 @@ export function Sidebar(props: SidebarProps) {
                   </span>
                   <span>记忆</span>
                 </button>
-                <button
-                  className={`sidebar-action ${props.knowledgeActive ? "active" : ""}`}
-                  onClick={props.onOpenKnowledge}
-                >
-                  <span className="sidebar-action-icon">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M6 3h9l3 3v15H6z" />
-                      <path d="M9 8h6" />
-                      <path d="M9 12h6" />
-                      <path d="M9 16h4" />
-                    </svg>
-                  </span>
-                  <span>随机笔记</span>
-                </button>
               </div>
         </SidebarMenu>
           </>
         ) : (
           <>
+            <div className="sidebar-menu">
+              <button
+                className={`sidebar-action sidebar-standalone ${props.knowledgeActive ? "active" : ""}`}
+                onClick={props.onOpenKnowledge}
+              >
+                <span className="sidebar-action-icon">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M6 3h9l3 3v15H6z" />
+                    <path d="M9 8h6" />
+                    <path d="M9 12h6" />
+                    <path d="M9 16h4" />
+                  </svg>
+                </span>
+                <span>随机笔记</span>
+              </button>
+            </div>
+
             <SidebarMenu
               title="交易"
               open={openMenus.has("trade")}
