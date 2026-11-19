@@ -2,6 +2,7 @@ export type View =
   | "chat"
   | "settings"
   | "memory"
+  | "knowledge"
   | "skills"
   | "tools"
   | "plugins"
@@ -16,6 +17,7 @@ const VIEW_PATHS: Record<View, string> = {
   chat: "/chat",
   settings: "/config",
   memory: "/memory",
+  knowledge: "/knowledge",
   skills: "/skills",
   tools: "/tools",
   plugins: "/plugins",

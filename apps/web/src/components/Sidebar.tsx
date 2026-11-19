@@ -72,6 +72,7 @@ type SidebarProps = {
   onDeleteSession: (id: string) => void;
   onRenameSession: (id: string) => void;
   onOpenMemory: () => void;
+  onOpenKnowledge: () => void;
   onOpenSkills: () => void;
   onOpenTools: () => void;
   onOpenPlugins: () => void;
@@ -85,6 +86,7 @@ type SidebarProps = {
   settingsTab: SettingsTab;
   onOpenSettingsTab: (tab: SettingsTab) => void;
   memoryActive: boolean;
+  knowledgeActive: boolean;
   skillsActive: boolean;
   toolsActive: boolean;
   pluginsActive: boolean;
@@ -104,7 +106,8 @@ export function Sidebar(props: SidebarProps) {
     props.pluginsActive ||
     props.channelsActive ||
     props.cronActive ||
-    props.memoryActive;
+    props.memoryActive ||
+    props.knowledgeActive;
   const activeMenu: MenuSection | null =
     props.backtestActive ||
     props.journalActive ||
@@ -391,6 +394,20 @@ export function Sidebar(props: SidebarProps) {
                     </svg>
                   </span>
                   <span>记忆</span>
+                </button>
+                <button
+                  className={`sidebar-action ${props.knowledgeActive ? "active" : ""}`}
+                  onClick={props.onOpenKnowledge}
+                >
+                  <span className="sidebar-action-icon">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M6 3h9l3 3v15H6z" />
+                      <path d="M9 8h6" />
+                      <path d="M9 12h6" />
+                      <path d="M9 16h4" />
+                    </svg>
+                  </span>
+                  <span>随机笔记</span>
                 </button>
               </div>
         </SidebarMenu>

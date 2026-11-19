@@ -19,6 +19,7 @@ import type {
   MessageArtifact,
   Provider,
   QueuedInfo,
+  RandomNote,
   SessionSummary,
   SessionTaskEvent,
   SettingsTab,
@@ -28,6 +29,7 @@ import type {
 } from "./types";
 import { isBareSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
+import { noteQuote } from "./noteQuote";
 import { applyTaskEvent, sessionTaskToLive } from "./taskFormat";
 import { parsePath, pathForView, type View } from "./routes";
 import { sessionSummariesEqual } from "./sessionSummary";
@@ -58,6 +60,10 @@ const PAGE_LOADERS = {
   memory: () =>
     import("./components/MemoryPage").then((module) => ({
       default: module.MemoryPage,
+    })),
+  knowledge: () =>
+    import("./components/RandomNotesPage").then((module) => ({
+      default: module.RandomNotesPage,
     })),
   skills: () =>
     import("./components/SkillsPage").then((module) => ({
@@ -99,6 +105,7 @@ const PAGE_LOADERS = {
 
 const SettingsPage = lazy(PAGE_LOADERS.settings);
 const MemoryPage = lazy(PAGE_LOADERS.memory);
+const RandomNotesPage = lazy(PAGE_LOADERS.knowledge);
 const SkillsPage = lazy(PAGE_LOADERS.skills);
 const ToolsPage = lazy(PAGE_LOADERS.tools);
 const PluginsPage = lazy(PAGE_LOADERS.plugins);
@@ -402,7 +409,9 @@ export default function App() {
       ? "配置"
       : view === "memory"
         ? "记忆"
-        : view === "skills"
+        : view === "knowledge"
+          ? "随机笔记"
+          : view === "skills"
           ? "技能"
           : view === "tools"
             ? "工具"
@@ -2292,6 +2301,16 @@ export default function App() {
     pushPath(pathForView("chat", "", agentIdRef.current));
   }
 
+  /** Ask about a random note in a fresh chat with the note quoted. */
+  function askAboutNote(note: RandomNote) {
+    if (!agentId) return;
+    newSession();
+    const key = sessionKey(agentId, "");
+    setQuotesByKey((current) => ({ ...current, [key]: noteQuote(note) }));
+    setDraftFor(key, "");
+    setFocusSignal((current) => current + 1);
+  }
+
   async function renameSession(sessionId: string, title: string) {
     const owner = sessionAgentRef.current[sessionId] ?? agentId;
     await api.renameSession(sessionId, owner, title);
@@ -2513,6 +2532,7 @@ export default function App() {
           openView("settings");
         }}
         onOpenMemory={() => openView("memory")}
+        onOpenKnowledge={() => openView("knowledge")}
         onOpenSkills={() => openView("skills")}
         onOpenTools={() => openView("tools")}
         onOpenPlugins={() => openView("plugins")}
@@ -2524,6 +2544,7 @@ export default function App() {
         onOpenAllocation={() => openView("allocation")}
         settingsActive={view === "settings"}
         memoryActive={view === "memory"}
+        knowledgeActive={view === "knowledge"}
         skillsActive={view === "skills"}
         toolsActive={view === "tools"}
         pluginsActive={view === "plugins"}
@@ -2542,6 +2563,15 @@ export default function App() {
           agent={agent}
           agentId={agentId}
           onClose={() => openView("chat")}
+        />
+      ) : view === "knowledge" ? (
+        <RandomNotesPage
+          onAsk={askAboutNote}
+          onClose={() => openView("chat")}
+          onOpenKnowledgeSettings={() => {
+            setSettingsTab("knowledge");
+            openView("settings");
+          }}
         />
       ) : view === "skills" ? (
         <SkillsPage
