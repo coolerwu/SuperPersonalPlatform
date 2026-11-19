@@ -83,6 +83,11 @@ export function RandomNotesPage({
             <button className="primary" onClick={onOpenKnowledgeSettings}>
               去配置知识库
             </button>
+            {loading ? null : (
+              <button className="ghost-button" onClick={() => void load()}>
+                重试
+              </button>
+            )}
           </div>
         ) : error ? (
           <div className="knowledge-empty" role="alert">

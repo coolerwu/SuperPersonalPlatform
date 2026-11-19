@@ -127,7 +127,7 @@ async def sync_knowledge(request: Request) -> dict[str, object]:
 @router.get("/notes/random")
 async def random_note(exclude: str = "") -> dict[str, object]:
     try:
-        entry, content, meta = await draw_random_note(exclude.strip() or None)
+        entry, content, meta = await draw_random_note(exclude or None)
     except KnowledgeNotesEmpty as exc:
         raise HTTPException(
             status_code=404,
