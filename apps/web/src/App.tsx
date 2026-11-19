@@ -412,8 +412,8 @@ export default function App() {
         : view === "knowledge"
           ? "随机笔记"
           : view === "skills"
-          ? "技能"
-          : view === "tools"
+            ? "技能"
+            : view === "tools"
             ? "工具"
             : view === "plugins"
               ? "插件"
@@ -2303,11 +2303,15 @@ export default function App() {
 
   /** Ask about a random note in a fresh chat with the note quoted. */
   function askAboutNote(note: RandomNote) {
-    if (!agentId) return;
+    if (!agentId) {
+      openView("chat");
+      return;
+    }
     newSession();
     const key = sessionKey(agentId, "");
     setQuotesByKey((current) => ({ ...current, [key]: noteQuote(note) }));
     setDraftFor(key, "");
+    setAttachmentsByKey((current) => ({ ...current, [key]: [] }));
     setFocusSignal((current) => current + 1);
   }
 

@@ -1,6 +1,6 @@
 # Agent Command Center
 
-v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`ClaudeSDKClient`），模型走 DeepSeek 的 Anthropic 兼容端点。包含多 Agent 配置、微信个人号渠道、定时任务、技能库、知识库镜像，以及不绑定 Agent 的量化回测、交易记录、资产配置和缠论图页面。
+v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`ClaudeSDKClient`），模型走 DeepSeek 的 Anthropic 兼容端点。包含多 Agent 配置、微信个人号渠道、定时任务、技能库、知识库镜像、随机笔记，以及不绑定 Agent 的量化回测、交易记录、资产配置和缠论图页面。
 
 - `apps/api`：FastAPI + Claude Agent SDK（Python）
 - `apps/web`：React + Vite + TypeScript
@@ -33,6 +33,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
     ├── app.db              # SQLite（新库五张表；升级库保留旧表）
     ├── market.db           # Bitget 行情缓存
     ├── knowledge_sync_state.json
+    ├── knowledge_deck.json  # 随机笔记的洗牌进度
     ├── trade-journal.jsonl
     ├── allocation.json
     ├── allocation-ledger.jsonl
@@ -106,7 +107,7 @@ npm run dev
 
 ## 技能、工具与插件页面
 
-侧栏顶部是「Agent / 管理」两个工作区 tab（默认 Agent），Agent 选择器只在 Agent 工作区显示，是全站 per-agent 配置的唯一来源。Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组：工作台放新对话和会话列表，Agent 能力放技能、工具、插件、渠道、定时、记忆。管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图；「Agent全局配置」展开后是 Provider、Agent、知识库、地图、语音识别、运行环境六个配置分区和退出登录，点分区直接打开配置页对应分区（页面内无分区 tab 栏，分区选择只在内存，刷新回 Provider）。各菜单默认全部展开，点击标题独立收起或展开，进入页面时自动展开所在菜单。管理页不显示会话列表与 Agent 选择器。点「管理」回到本次打开页面期间最后停留的管理页（还没进过管理页时为回测）；已在管理页时不跳转。
+侧栏顶部是「Agent / 管理」两个工作区 tab（默认 Agent），Agent 选择器只在 Agent 工作区显示，是全站 per-agent 配置的唯一来源。Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组：工作台放新对话和会话列表，Agent 能力放技能、工具、插件、渠道、定时、记忆、随机笔记。管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图；「Agent全局配置」展开后是 Provider、Agent、知识库、地图、语音识别、运行环境六个配置分区和退出登录，点分区直接打开配置页对应分区（页面内无分区 tab 栏，分区选择只在内存，刷新回 Provider）。各菜单默认全部展开，点击标题独立收起或展开，进入页面时自动展开所在菜单。管理页不显示会话列表与 Agent 选择器。点「管理」回到本次打开页面期间最后停留的管理页（还没进过管理页时为回测）；已在管理页时不跳转。
 
 - **技能**：列出全局技能库，按「初始化技能」和「其他技能」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、「已调整」标记、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；任何技能都可删除（只删技能目录）。
 - **工具**：读取当前 Agent 最近一轮对话的运行时 init frame，展示 Claude Code 实际加载的内置工具、MCP server 与工具、技能、插件和插件加载失败；平台业务工具以 `mcp__platform_tools__*` 出现，描述来自平台注册表。没有运行时数据时提示先发一条消息。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）通过进程内 `platform_tools` MCP 接入，插件自带的 MCP 继续并存。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。
@@ -203,6 +204,15 @@ metadata:
 - 本版知识库镜像不挂载给 Agent（知识库工具未接入）；页面配置与同步正常运行。
 - 接口：`GET/PUT /api/knowledge` 读取和保存配置（响应包含同步状态，不含密码），`POST /api/knowledge/sync` 立即触发一次同步；`GET /api/system` 的 `knowledge` 字段也返回同步状态。
 
+### 随机笔记
+
+侧栏「Agent 能力 → 随机笔记」（`/knowledge`）每次随机展示 `knowledge/` 下的一整篇 `.md`/`.txt` 笔记原文，按 Markdown 渲染、卡片内滚动，顶部显示「本轮已看 N / 共 M · 剩余 R」。
+
+- 洗牌不重复：本轮看过的笔记不再出现，全库看完一轮后自动重置并提示「本轮已看完，重新洗牌」；进度保存在 `data/knowledge_deck.json`（原子写；缺失或损坏按新一轮处理）。
+- 扫描跳过隐藏目录/文件、符号链接与超过 2 MiB 的文件；标题取文件前 8 KiB 内首个 `#` 级标题（跳过 frontmatter 与代码围栏），缺省用文件名；索引缓存 60 秒。
+- 接口：`GET /api/knowledge/notes/random?exclude=<路径>` 返回 `{note: {path, title, content, size}, meta: {seen, total, notice}}`；知识库为空 404，读取失败 500。
+- 卡片「追问」切到聊天页并新建会话，输入框预置引用：笔记相对路径、完整原文路径（`~/.super-personal-platform/knowledge/<路径>`）与正文前 6000 字（超出注明已截断）。纯前端实现，不调用模型，不需要 Provider。
+
 ## 量化回测
 
 顶部「管理」tab 的「回测」是独立页面，不绑定 Agent；首版只做加密货币现货、单标的、历史回测，不接实时行情与实盘交易。
@@ -270,6 +280,7 @@ metadata:
 - `trade-journal.jsonl`、`allocation.json`、`allocation-ledger.jsonl`：交易记录与资产配置数据，权限 0600，不建数据库表。
 - `browser_state.json`：浏览器 cookies/localStorage（0600）；平台浏览器工具接入后用于跨会话、跨轮次保持登录态。
 - `knowledge_sync_state.json`：知识库同步状态（etag + 本地哈希 + 待确认删除标记）。
+- `knowledge_deck.json`：随机笔记的洗牌进度（本轮已看路径与轮次起始时间），原子写；缺失或损坏按新一轮处理。
 - `backtests/`：回测策略临时文件。
 - `~/.super-personal-platform/claude/`：SDK 配置、全局规则 `CLAUDE.md`、会话 transcript 与 auto memory；权限 0700。SDK transcript 是会话历史的唯一来源。
 - `~/.super-personal-platform/workspaces/`：每个 Agent 的固定工作区；归档 Agent 不会删除这里的文件，彻底删除会连同工作区目录一起删除。
