@@ -29,7 +29,7 @@ import type {
 import { isBareSlashCommand } from "./messageContent";
 import { describeApiError } from "./errors";
 import { applyTaskEvent, sessionTaskToLive } from "./taskFormat";
-import { DEFAULT_PATH, parsePath, pathForView, type View } from "./routes";
+import { parsePath, pathForView, type View } from "./routes";
 import { sessionSummariesEqual } from "./sessionSummary";
 import { ChatPanel } from "./components/ChatPanel";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -271,7 +271,7 @@ export default function App() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [skillsErrors, setSkillsErrors] = useState<string[]>([]);
-  const [agentId, setAgentId] = useState("");
+  const [agentId, setAgentId] = useState(initialRoute?.agentId ?? "");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState(initialRoute?.sessionId ?? "");
   const [messagesBySession, setMessagesBySession] = useState<Record<string, TranscriptMessage[]>>({});
@@ -333,7 +333,10 @@ export default function App() {
   const transcriptUserCountsRef = useRef<Record<string, Record<string, number>>>({});
   const sessionIdRef = useRef("");
   const sessionsRequestRef = useRef(0);
-  const agentIdRef = useRef("");
+  const agentIdRef = useRef(initialRoute?.agentId ?? "");
+  // The popstate listener is registered once; it needs the current agent list
+  // to reject a stale agent id coming from browser history.
+  const agentsRef = useRef<Agent[]>([]);
   const draftsRef = useRef<Record<string, string>>({});
   const draftKeyRef = useRef("");
   const pendingSessionsRef = useRef<Record<string, true>>({});
@@ -1603,7 +1606,7 @@ export default function App() {
     setView(next);
     setSessionId(nextSessionId);
     setSidebarOpen(false);
-    pushPath(pathForView(next, nextSessionId));
+    pushPath(pathForView(next, nextSessionId, agentIdRef.current));
   }
 
   function openView(next: View) {
@@ -1617,24 +1620,19 @@ export default function App() {
     setSessionId("");
     setFocus(null);
     setCommandReply(null);
-    if (view === "chat") {
-      const path = pathForView("chat", "");
-      if (window.location.pathname !== path) {
-        window.history.replaceState(null, "", path);
-      }
-    }
     setAgentId(next);
   }
 
-  // Keep the address bar in step with derived state (session auto-selection,
-  // deep-link fallback) without stacking a history entry for every change.
+  // Keep the address bar in step with derived state (agent choice, session
+  // auto-selection, deep-link fallback) without stacking a history entry for
+  // every change.
   useEffect(() => {
-    if (!auth) return;
-    const path = pathForView(view, sessionId);
+    if (!auth || !agentId) return;
+    const path = pathForView(view, sessionId, agentId);
     if (window.location.pathname !== path) {
       window.history.replaceState(null, "", path);
     }
-  }, [auth, view, sessionId]);
+  }, [auth, agentId, view, sessionId]);
 
   useEffect(() => {
     if (isFeaturesView(view)) {
@@ -1643,10 +1641,18 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
+    agentsRef.current = agents;
+  }, [agents]);
+
+  useEffect(() => {
     const onPopState = () => {
       const route = parsePath(window.location.pathname);
       if (!route) {
-        window.history.replaceState(null, "", DEFAULT_PATH);
+        window.history.replaceState(
+          null,
+          "",
+          pathForView("chat", "", agentIdRef.current),
+        );
         setView("chat");
         setSessionId("");
         return;
@@ -1655,6 +1661,19 @@ export default function App() {
       if (route.view === "chat") {
         setFocus(null);
         setCommandReply(null);
+      }
+      const switchingAgent =
+        Boolean(route.agentId) &&
+        route.agentId !== agentIdRef.current &&
+        agentsRef.current.some((item) => item.id === route.agentId);
+      if (switchingAgent) {
+        // The agent effect clears the session; hand the URL's session to the
+        // session-list load so it can reopen under the agent it belongs to.
+        restoreSessionRef.current = route.view === "chat" ? route.sessionId : "";
+        sessionIdRef.current = "";
+        setSessionId("");
+        setAgentId(route.agentId);
+      } else if (route.view === "chat") {
         setSessionId(route.sessionId);
       }
       setView(route.view);
@@ -2270,7 +2289,7 @@ export default function App() {
     sessionIdRef.current = "";
     setSessionId("");
     setError("");
-    pushPath(DEFAULT_PATH);
+    pushPath(pathForView("chat", "", agentIdRef.current));
   }
 
   async function renameSession(sessionId: string, title: string) {

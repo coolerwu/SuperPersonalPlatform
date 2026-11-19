@@ -343,7 +343,7 @@
 #### 功能点
 
 1. 视觉：珍珠冷光画布 + 极光弥散 + 悬浮玻璃；主色浅紫，运行态青绿到紫渐变；assistant 整列玻璃卡片，user 右对齐深色气泡。
-2. 路由：自建轻量 History API（不引入路由库）；`/chat`（可选 `/chat/<session_id>`）、`/config`、`/memory`、`/skills`、`/tools`、`/plugins`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；未知路径回聊天页。选中的 Agent 记在 `localStorage`。
+2. 路由：自建轻量 History API（不引入路由库）；`/chat`（可选 `/chat/<session_id>`）、`/config`、`/memory`、`/skills`、`/tools`、`/plugins`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；未知路径回聊天页。选中的 Agent 写在路径前缀 `/a/<agent_id>`（如 `/a/default/chat/<session_id>`、`/a/default/chan?symbol=...`），刷新、书签与分享链接都回到同一 Agent；没有前缀的旧链接回落到 `localStorage` 里最近的选择。
 3. 侧栏顶部「Agent / 管理」两个工作区；Agent 选择器只在 Agent 工作区显示（全站 per-agent 配置的唯一来源）。Agent 工作区分「Agent 工作台 / Agent 能力」两个可折叠菜单：工作台放新对话与会话列表，能力放技能、工具、插件、渠道、定时、记忆；管理工作区是「交易」与「Agent全局配置」两个可折叠菜单：「交易」放回测、交易记录、资产配置、缠论图，「Agent全局配置」展开后是 Provider、Agent、知识库、地图、运行环境五个配置分区和退出登录，点分区直接打开配置页并切到对应分区（页面内不再有分区 tab 栏）；管理页不显示会话列表与 Agent 选择器。各菜单默认全部展开，点击标题独立收起或展开，进入某页时自动展开该页所在菜单。配置页分区选择只存在本次页面内存，刷新后回到 Provider。点「管理」回到本次打开页面期间最后停留的管理页（初始取当前路由，否则回测）；已在管理页时不跳转。
 4. ≤860px 使用顶部栏 + 汉堡菜单；侧栏变抽屉；输入区适配 `visualViewport` 与安全区；管理页表格改卡片。
 5. 会话列表由 SDK transcript 生成，显示忙碌徽标和最后修改时间；微信会话带「微信」徽标；输入区提示网页回复不会发回微信。

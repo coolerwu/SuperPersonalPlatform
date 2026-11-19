@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, errorText } from "../api";
 import { peekPageCache, storePageCache } from "../pageCache";
+import { parsePath, pathForView } from "../routes";
 import { parseUtcInput } from "../timeRange";
 import type { ChanAnalysis } from "../types";
 import { ChanBacktestPanel } from "./ChanBacktestPanel";
@@ -179,8 +180,9 @@ export function ChanPage() {
   }, []);
 
   useEffect(() => {
-    if (window.location.pathname.replace(/\/+$/, "") !== "/chan") return;
-    const next = `/chan?${chanSearch({
+    const route = parsePath(window.location.pathname);
+    if (route?.view !== "chan") return;
+    const next = `${pathForView("chan", "", route.agentId)}?${chanSearch({
       symbol,
       granularity,
       start,
