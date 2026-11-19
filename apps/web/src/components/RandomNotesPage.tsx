@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, api, errorText } from "../api";
+import { ApiError, api } from "../api";
+import { describeApiError } from "../errors";
 import { formatBytes } from "../messageContent";
 import { Markdown } from "./Markdown";
 import type { RandomNote, RandomNoteMeta } from "../types";
@@ -21,6 +22,7 @@ export function RandomNotesPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [empty, setEmpty] = useState(false);
+  const startedRef = useRef(false);
 
   const load = useCallback(async (exclude?: string) => {
     setLoading(true);
@@ -36,7 +38,7 @@ export function RandomNotesPage({
         setNote(null);
         setMeta(null);
       } else {
-        setError(errorText(exc) || "加载失败，请重试");
+        setError(describeApiError(exc) || "加载失败，请重试");
       }
     } finally {
       setLoading(false);
@@ -44,6 +46,9 @@ export function RandomNotesPage({
   }, []);
 
   useEffect(() => {
+    // StrictMode runs effects twice in dev; avoid consuming two draws.
+    if (startedRef.current) return;
+    startedRef.current = true;
     void load();
   }, [load]);
 
@@ -66,9 +71,9 @@ export function RandomNotesPage({
               本轮已看 <b>{meta.seen}</b> / 共 <b>{meta.total}</b> · 剩余{" "}
               {Math.max(meta.total - meta.seen, 0)}
             </span>
-          ) : (
+          ) : loading ? (
             <span>正在整理笔记列表…</span>
-          )}
+          ) : null}
           {meta?.notice ? <em className="knowledge-notice">{meta.notice}</em> : null}
         </div>
 
@@ -80,7 +85,7 @@ export function RandomNotesPage({
             </button>
           </div>
         ) : error ? (
-          <div className="knowledge-empty">
+          <div className="knowledge-empty" role="alert">
             <p>{error}</p>
             <button className="primary" onClick={() => void load(note?.path)}>
               重试
@@ -98,7 +103,7 @@ export function RandomNotesPage({
                   <span className="knowledge-card-size">{formatBytes(note.size)}</span>
                 </header>
                 <div className="knowledge-card-body">
-                  <Markdown content={note.content} />
+                  <Markdown content={note.content} highlight={false} />
                 </div>
               </>
             ) : (
