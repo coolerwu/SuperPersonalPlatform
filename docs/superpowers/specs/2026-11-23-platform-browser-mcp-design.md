@@ -2,7 +2,7 @@
 
 - 日期：2026-11-23
 - 状态：已实现（2026-11-23）
-- 范围：`apps/api` 服务层、执行核、权限白名单；生产运行时 `web-browser` skill 文本；部署配置；系统能力标志 `browser: true` 与设置页能力标签「浏览器工具」（原「浏览器工具（未接入）」）的文案调整。无新依赖（`playwright` 已在 `apps/api/pyproject.toml`）、无数据库变更。
+- 范围：`apps/api` 服务层、执行核、权限白名单；`web-browser` skill 模板（纳入 `seed_skills` 随平台分发）；部署配置；系统能力标志 `browser: true` 与设置页能力标签「浏览器工具」（原「浏览器工具（未接入）」）的文案调整。无新依赖（`playwright` 已在 `apps/api/pyproject.toml`）、无数据库变更。
 
 ## 背景
 
@@ -144,13 +144,13 @@ mcp_servers: dict[str, Any] = {
 
 ## 清理与迁移
 
-1. **卸载集市插件**：生产环境中用户已在插件页手动卸载 `playwright@claude-plugins-official`（`settings.json` 的 `enabledPlugins` 条目与 `plugins/installed_plugins.json` 记录均已移除；`plugins/cache` 目录保留，可随时从集市重新安装），并删除 `~/.super-personal-platform/.env` 中 `PLAYWRIGHT_MCP_HEADLESS`、`PLAYWRIGHT_MCP_USER_AGENT`、`PLAYWRIGHT_MCP_USER_DATA_DIR` 三行。旧插件的 `data/playwright-profile` 目录保留（属于用户数据），平台不再使用。
+1. **卸载集市插件**：生产环境中用户已在插件页手动卸载 `playwright@claude-plugins-official`（`settings.json` 的 `enabledPlugins` 条目与 `plugins/installed_plugins.json` 记录均已移除，`plugins/cache` 中的 playwright 目录也已删除，需要时可从集市重新安装），并删除 `~/.super-personal-platform/.env` 中 `PLAYWRIGHT_MCP_HEADLESS`、`PLAYWRIGHT_MCP_USER_AGENT`、`PLAYWRIGHT_MCP_USER_DATA_DIR` 三行。旧插件的 `data/playwright-profile` 目录一并删除（登录态不迁移，用户需要重新登录一次）；平台使用 `data/browser_state.json`。
 2. **删除死代码**：`browser_tools.py` 旧函数式工具包装、`skill_tools.SkillToolContext.browser` 与 `_session_for`；对应测试同步调整。
-3. **运行时 skill**：生产 `claude/skills/web-browser/SKILL.md` 重写：
+3. **web-browser 改为种子技能**：模板进入 `apps/api/app/seed_skills/web-browser/SKILL.md`（按「工具清单 / 组合方式 / 硬契约」组织，不声明 `include_tools`），随平台版本分发：
    - 工具名改为 `mcp__browser__*`（短名 navigate/snapshot/click/...）；
    - 删除“旧平台工具 browser_open 已不存在/浏览器来自插件”的表述；
    - 保留站点来源规则（Bing/B 站/小红书）、二维码登录流程、验证页停止、截图谨慎、多会话约定改为“每个会话有独立 tab，共享登录态”；
-   - `metadata.include_tools` 同步新工具名。
+   - 生产删除手写副本后由启动 seed 生成为初始化技能（`source=initial`），之后未修改的随版本更新、改过的永久跳过。
 4. **`.env` 模板**：`deploy/.env.example` 补充 `# BROWSER_CONCURRENCY=5`、`# BROWSER_IDLE_SECONDS=300` 说明（如未列出）。
 
 ## 错误处理

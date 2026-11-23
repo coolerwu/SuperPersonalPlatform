@@ -28,7 +28,8 @@
 - `wait_for` 的多个条件共享 5 分钟总预算，`fill_form` 上限 20 个字段；
 - `BrowserSession.aclose()` 改为先 `context.close()` 再依次关闭 browser / playwright，逐项独立超时（状态 8 + context 8 + browser 5 + stop 3，最坏约 24 秒）；
 - systemd `TimeoutStopSec` 60 → 90 秒，覆盖整体停机最坏情况；
-- 集市 `playwright` 插件最终由用户在插件页手动卸载（`enabledPlugins` 条目与 `plugins/installed_plugins.json` 记录移除，`plugins/cache` 保留）；生产 `.env` 的 `PLAYWRIGHT_MCP_*` 三行已删除。
+- 集市 `playwright` 插件最终由用户在插件页手动卸载（`enabledPlugins` 条目与 `plugins/installed_plugins.json` 记录移除，`plugins/cache` 与旧 `data/playwright-profile` 一并删除）；生产 `.env` 的 `PLAYWRIGHT_MCP_*` 三行已删除。登录态不迁移，用户重新登录一次。
+- `web-browser` skill 最终作为种子技能入库（`apps/api/app/seed_skills/web-browser/SKILL.md`，工具清单/组合方式/硬契约，不声明 include_tools）；生产删除手写副本后由启动 seed 生成，`source=initial`。
 
 ---
 
