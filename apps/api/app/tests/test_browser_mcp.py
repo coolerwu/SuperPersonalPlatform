@@ -65,6 +65,9 @@ class FakeService:
     def __init__(self, session: FakeSession | None = None) -> None:
         self.session = session or FakeSession()
         self.reset_calls = 0
+        self.select_calls: list = []
+        self.close_calls: list = []
+        self.new_calls: list = []
 
     @asynccontextmanager
     async def use(self):
@@ -82,12 +85,15 @@ class FakeService:
         ]
 
     async def new_tab(self, session, session_id, url=None):
+        self.new_calls.append(url)
         return {"index": 2, "name": "chat-abc-1-2"}
 
     async def select_tab(self, session, session_id, tab=None):
+        self.select_calls.append(tab)
         return "chat-abc-1"
 
     async def close_tabs(self, session, session_id, tab=None):
+        self.close_calls.append(tab)
         return "Closed chat-abc-1. Open tabs: none."
 
 
@@ -118,15 +124,24 @@ async def test_navigate_returns_snapshot_text(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_snapshot_returns_session_snapshot(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "snapshot").handler({})
+    assert result["content"][0]["text"] == "SNAP chat-abc-1"
+
+
+@pytest.mark.asyncio
 async def test_browser_error_becomes_is_error(tmp_path) -> None:
     class Broken(FakeSession):
         async def click(self, target, tab):
             raise BrowserToolError("ref s1e3 is stale")
 
-    tools = build_tools(tmp_path, session=Broken())
+    service = FakeService(Broken())
+    tools = build_tools(tmp_path, service=service)
     result = await find(tools, "click").handler({"target": "s1e3"})
     assert result["is_error"] is True
     assert result["content"][0]["text"] == "error: ref s1e3 is stale"
+    assert service.reset_calls == 0
 
 
 @pytest.mark.asyncio
@@ -147,10 +162,39 @@ async def test_dead_browser_error_resets_service(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_generic_dead_browser_error_resets_service(tmp_path) -> None:
+    class GenericDead(FakeSession):
+        async def click(self, target, tab):
+            raise RuntimeError("Target closed")
+
+    service = FakeService(GenericDead())
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "click").handler({"target": "s1e3"})
+    assert result["is_error"] is True
+    assert service.reset_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_wait_for_without_condition_is_error(tmp_path) -> None:
     tools = build_tools(tmp_path)
     result = await find(tools, "wait_for").handler({})
     assert result["is_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_type_submits_when_requested(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "type").handler(
+        {"target": "#q", "text": "hello", "submit": True}
+    )
+    assert "submit=True" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_type_does_not_submit_by_default(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "type").handler({"target": "#q", "text": "hello"})
+    assert "submit=False" in result["content"][0]["text"]
 
 
 @pytest.mark.asyncio
@@ -160,6 +204,48 @@ async def test_fill_form_passes_fields(tmp_path) -> None:
         {"fields": [{"target": "#a", "value": "1"}, {"target": "#b", "value": "2"}]}
     )
     assert result["content"][0]["text"] == "Filled 2 field(s)"
+
+
+@pytest.mark.asyncio
+async def test_press_key_returns_key(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "press_key").handler({"key": "Enter"})
+    assert result["content"][0]["text"] == "Pressed Enter"
+
+
+@pytest.mark.asyncio
+async def test_select_option_passes_target_and_values(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "select_option").handler(
+        {"target": "#sel", "values": ["1", "2"]}
+    )
+    assert result["content"][0]["text"] == "Selected ['1', '2'] at #sel"
+
+
+@pytest.mark.asyncio
+async def test_navigate_back_returns_text(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "navigate_back").handler({})
+    assert result["content"][0]["text"] == "Went back"
+
+
+@pytest.mark.asyncio
+async def test_console_messages_formats_entries(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "console_messages").handler({})
+    text = result["content"][0]["text"]
+    assert "2026-11-23T00:00:00+00:00" in text
+    assert "[log]" in text
+    assert "hello" in text
+
+
+@pytest.mark.asyncio
+async def test_close_tool_closes_all_tabs(tmp_path) -> None:
+    service = FakeService()
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "close").handler({})
+    assert service.close_calls == [None]
+    assert result["content"][0]["text"] == "Closed chat-abc-1. Open tabs: none."
 
 
 @pytest.mark.asyncio
@@ -178,6 +264,16 @@ async def test_screenshot_saves_file_and_returns_image(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_screenshot_without_filename_does_not_write(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "take_screenshot").handler({})
+    assert list(tmp_path.iterdir()) == []
+    texts = [block["text"] for block in result["content"] if block["type"] == "text"]
+    assert "Saved to" not in texts[0]
+    assert any(block["type"] == "image" for block in result["content"])
+
+
+@pytest.mark.asyncio
 async def test_screenshot_rejects_workspace_escape(tmp_path) -> None:
     tools = build_tools(tmp_path)
     result = await find(tools, "take_screenshot").handler(
@@ -188,8 +284,99 @@ async def test_screenshot_rejects_workspace_escape(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_screenshot_rejects_absolute_path(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "take_screenshot").handler(
+        {"filename": str(tmp_path.parent / "x.png")}
+    )
+    assert result["is_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_screenshot_rejects_symlink_escape(tmp_path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    tools = build_tools(tmp_path)
+    result = await find(tools, "take_screenshot").handler({"filename": "link/x.png"})
+    assert result["is_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_screenshot_requires_png_suffix(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "take_screenshot").handler({"filename": "shot.jpg"})
+    assert result["is_error"] is True
+    assert ".png suffix" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_tabs_list_reports_current_tab(tmp_path) -> None:
     tools = build_tools(tmp_path)
     result = await find(tools, "tabs").handler({"action": "list"})
     assert "chat-abc-1" in result["content"][0]["text"]
     assert "https://example.com/" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_tabs_new_records_url(tmp_path) -> None:
+    service = FakeService()
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "tabs").handler(
+        {"action": "new", "url": "https://example.com"}
+    )
+    assert service.new_calls == ["https://example.com"]
+    assert "Opened tab 2" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_tabs_select_passes_index(tmp_path) -> None:
+    service = FakeService()
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "tabs").handler({"action": "select", "index": 2})
+    assert service.select_calls == [2]
+    assert "Selected tab" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_tabs_select_without_index_is_error(tmp_path) -> None:
+    service = FakeService()
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "tabs").handler({"action": "select"})
+    assert result["is_error"] is True
+    assert service.select_calls == []
+
+
+@pytest.mark.asyncio
+async def test_tabs_close_passes_index(tmp_path) -> None:
+    service = FakeService()
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "tabs").handler({"action": "close", "index": 1})
+    assert service.close_calls == [1]
+    assert result["content"][0]["text"] == "Closed chat-abc-1. Open tabs: none."
+
+
+@pytest.mark.asyncio
+async def test_tabs_close_without_index_is_error(tmp_path) -> None:
+    service = FakeService()
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "tabs").handler({"action": "close"})
+    assert result["is_error"] is True
+    assert service.close_calls == []
+
+
+@pytest.mark.asyncio
+async def test_tabs_unknown_action_is_error(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "tabs").handler({"action": "bogus"})
+    assert result["is_error"] is True
+
+
+def test_build_server_config(tmp_path) -> None:
+    server = browser_mcp.build_server(
+        FakeService(), agent_id="default", session_id="abc-1", workspace=tmp_path
+    )
+    assert server["type"] == "sdk"
+    assert server["name"] == "browser"
+    assert server["timeout"] == browser_mcp.TOOL_TIMEOUT_MS
+    assert server["disableAutoBackground"] is True

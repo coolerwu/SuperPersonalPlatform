@@ -56,6 +56,8 @@ class BrowserService:
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._reaper: asyncio.Task[None] | None = None
         self._closed = False
+        self._session_created_at = 0.0
+        self._last_reset_at = 0.0
 
     async def startup(self) -> None:
         if self._closed:
@@ -107,15 +109,25 @@ class BrowserService:
                 raise BrowserToolError("browser service is shutting down")
             if self._session is None or self._session.closed:
                 self._session = self._session_factory()
+                self._session_created_at = time.monotonic()
                 logger.info("browser started for shared sessions")
             self._last_used = time.monotonic()
             return self._session
 
     async def reset(self) -> None:
         async with self._lock:
+            if (
+                self._session is not None
+                and self._session_created_at > self._last_reset_at
+                and self._last_reset_at > 0
+            ):
+                # 旧会话崩溃后已由新会话取代；多个工具同时触发 reset 时不要连带关闭新会话。
+                return
             session = self._session
             self._session = None
             self._default_tabs.clear()
+            if session is not None:
+                self._last_reset_at = time.monotonic()
         if session is None:
             return
         try:

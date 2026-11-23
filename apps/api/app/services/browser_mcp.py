@@ -8,19 +8,24 @@ shared while tab names never leak across sessions.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from app.services.browser_tools import BrowserToolError
+from app.services.browser_tools import MAX_WAIT_FOR_MS, BrowserToolError
+
+if TYPE_CHECKING:
+    from app.services.browser_service import BrowserService
+    from app.services.browser_tools import BrowserSession
 
 logger = logging.getLogger(__name__)
 
 SERVER_NAME = "browser"
 SERVER_VERSION = "1.0.0"
 # 5 分钟 wait_for 预算加上启动与快照，必须能放进一次工具调用。
-TOOL_TIMEOUT_MS = 420_000
+TOOL_TIMEOUT_MS = MAX_WAIT_FOR_MS + 120_000
 _DEAD_BROWSER_MARKERS = (
     "target closed",
     "target page, context or browser has been closed",
@@ -65,7 +70,7 @@ def _error(message: str) -> dict[str, Any]:
     }
 
 
-async def _maybe_reset(service: Any, message: str) -> None:
+async def _maybe_reset(service: BrowserService, message: str) -> None:
     lowered = message.lower()
     if not any(marker in lowered for marker in _DEAD_BROWSER_MARKERS):
         return
@@ -76,7 +81,7 @@ async def _maybe_reset(service: Any, message: str) -> None:
 
 
 def _guard_factory(
-    service: Any,
+    service: BrowserService, *, agent_id: str, session_id: str
 ) -> Callable[[str, Callable[[], Awaitable[dict[str, Any]]]], Awaitable[dict[str, Any]]]:
     async def guard(
         name: str, call: Callable[[], Awaitable[dict[str, Any]]]
@@ -88,7 +93,12 @@ def _guard_factory(
             await _maybe_reset(service, message)
             return _error(message)
         except Exception as exc:
-            logger.exception("browser tool %s failed", name)
+            logger.exception(
+                "browser tool %s failed (agent=%s session=%s)",
+                name,
+                agent_id,
+                session_id,
+            )
             message = f"{type(exc).__name__}: {exc}"[:4000]
             await _maybe_reset(service, message)
             return _error(message)
@@ -112,14 +122,20 @@ def _workspace_path(workspace: Path, filename: str) -> Path:
     return target
 
 
+def _write_png(path: Path, data: bytes) -> None:
+    # 建目录与写文件放在同一个线程调用里，避免阻塞事件循环。
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
 def _build_tools(
-    service: Any, *, agent_id: str, session_id: str, workspace: Path
+    service: BrowserService, *, agent_id: str, session_id: str, workspace: Path
 ) -> list[Any]:
     from claude_agent_sdk import tool
 
-    _guard = _guard_factory(service)
+    _guard = _guard_factory(service, agent_id=agent_id, session_id=session_id)
 
-    async def tab_for(session: Any, args: dict[str, Any]) -> str:
+    async def tab_for(session: BrowserSession, args: dict[str, Any]) -> str:
         return await service.resolve_tab(session, session_id, args.get("tab"))
 
     @tool(
@@ -356,7 +372,9 @@ def _build_tools(
 
     @tool(
         "tabs",
-        "Manage this session's tabs: list, open a new tab, select one, or close one.",
+        "Manage this session's tabs: list, open a new tab, select one (needs "
+        "index), or close one (needs index). The separate close tool closes all "
+        "tabs when tab is omitted.",
         {
             "type": "object",
             "properties": {
@@ -380,6 +398,23 @@ def _build_tools(
     async def tabs(args: dict[str, Any]) -> dict[str, Any]:
         async def call() -> dict[str, Any]:
             action = str(args.get("action") or "").strip()
+            # 未知名或缺失下标时先失败，不能因为一次坏调用懒启动 Chromium。
+            if action not in ("list", "new", "select", "close"):
+                raise BrowserToolError("action must be list, new, select, or close")
+            index = args.get("index")
+            if action in ("select", "close"):
+                if index is None:
+                    raise BrowserToolError(
+                        f"tabs {action} needs index; "
+                        "use the close tool to close all tabs"
+                    )
+                try:
+                    index = int(index)
+                except (TypeError, ValueError) as exc:
+                    raise BrowserToolError(
+                        f"tabs {action} needs index; "
+                        "use the close tool to close all tabs"
+                    ) from exc
             async with service.use() as session:
                 if action == "list":
                     rows = await service.list_tabs(session, session_id)
@@ -399,18 +434,10 @@ def _build_tools(
                     )
                     return _text(f"Opened tab {info['index']} ({info['name']}).")
                 if action == "select":
-                    name = await service.select_tab(
-                        session, session_id, args.get("index")
-                    )
+                    name = await service.select_tab(session, session_id, index)
                     return _text(f"Selected tab {name!r}.")
-                if action == "close":
-                    return _text(
-                        await service.close_tabs(
-                            session, session_id, args.get("index")
-                        )
-                    )
-                raise BrowserToolError(
-                    "action must be list, new, select, or close"
+                return _text(
+                    await service.close_tabs(session, session_id, index)
                 )
 
         return await _guard("tabs", call)
@@ -424,7 +451,7 @@ def _build_tools(
             "properties": {
                 "filename": {
                     "type": "string",
-                    "description": "Workspace-relative path to save the PNG.",
+                    "description": "Workspace-relative .png path to save the image.",
                 },
                 "full_page": {
                     "type": "boolean",
@@ -436,6 +463,15 @@ def _build_tools(
     )
     async def take_screenshot(args: dict[str, Any]) -> dict[str, Any]:
         async def call() -> dict[str, Any]:
+            target_path: Path | None = None
+            relative = ""
+            if args.get("filename"):
+                raw = str(args["filename"]).strip()
+                # 后缀与越界校验放在截图之前，坏文件名不应启动浏览器。
+                if not raw.lower().endswith(".png"):
+                    raise BrowserToolError("filename must end with the .png suffix")
+                target_path = _workspace_path(workspace, raw)
+                relative = target_path.relative_to(Path(workspace).resolve()).as_posix()
             async with service.use() as session:
                 tab = await tab_for(session, args)
                 blocks = await session.screenshot(
@@ -443,11 +479,10 @@ def _build_tools(
                 )
             header = str(blocks[0].get("text") or "")
             payload = str(blocks[1]["image_url"]["url"]).split(",", 1)[1]
-            if args.get("filename"):
-                path = _workspace_path(workspace, str(args["filename"]))
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(base64.b64decode(payload))
-                relative = path.relative_to(Path(workspace).resolve()).as_posix()
+            if target_path is not None:
+                await asyncio.to_thread(
+                    _write_png, target_path, base64.b64decode(payload)
+                )
                 header = f"{header}\nSaved to {relative}"
             return {
                 "content": [
@@ -512,7 +547,7 @@ def _build_tools(
 
 
 def build_server(
-    service: Any, *, agent_id: str, session_id: str, workspace: Path
+    service: BrowserService, *, agent_id: str, session_id: str, workspace: Path
 ) -> Any:
     """Build the in-process ``browser`` MCP server for one Agent/session."""
     from claude_agent_sdk import create_sdk_mcp_server

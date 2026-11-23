@@ -265,6 +265,37 @@ async def test_reset_closes_session_and_next_use_is_fresh() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reset_skips_newer_session_after_earlier_reset() -> None:
+    first = FakeSession()
+    second = FakeSession()
+    third = FakeSession()
+    sessions = [first, second, third]
+    service = BrowserService(
+        session_factory=lambda: sessions.pop(0), idle_seconds=300
+    )
+
+    async with service.use() as live:
+        assert live is first
+    await service.reset()
+    assert first.aclose_calls == 1
+
+    async with service.use() as live:
+        assert live is second
+    # 新会话在最近一次 reset 之后创建，级联 reset 不应连带关闭它。
+    await service.reset()
+    assert second.aclose_calls == 0
+
+    # 模拟旧会话崩溃：use() 创建新会话，reset 仍保护这个更新会话。
+    second.closed = True
+    async with service.use() as live:
+        assert live is third
+    await service.reset()
+    assert third.aclose_calls == 0
+
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_idle_reaper_skips_active_session() -> None:
     session = FakeSession()
     service = make_service(session, idle_seconds=0.02, sweep_seconds=0.01)
