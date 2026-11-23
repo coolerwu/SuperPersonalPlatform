@@ -121,9 +121,11 @@ def test_restricted_allowed_tools_include_whitelist_and_mcp(tmp_path):
     assert "mcp__platform_tools__backtest_run" in tools
     assert "mcp__amap" in tools
     assert "mcp__playwright" in tools
+    assert "mcp__browser" in tools
 
     without = agent_guard.build_restricted_allowed_tools(maps_enabled=False)
     assert "mcp__amap" not in without
+    assert "mcp__browser" in without
 
 
 def test_installed_mcp_server_names_reads_plugin_manifests(tmp_path):
