@@ -77,8 +77,8 @@ ClaudeTurnRunner（每个缓存 client 构建一次）
 - 进程内单例，`main.py` 的 `lifespan` 启动时创建、关闭时调用 `shutdown()`（带超时，`save_storage_state` 后关闭 context/browser/playwright）。
 - 懒启动：首次工具调用时才实例化 `BrowserSession` 并拉起 Chromium；启动失败转换为可读错误（提示 `playwright install chromium`）。
 - 空闲回收：最后一次工具调用后超过 `browser_idle_seconds`（默认 300）自动关闭浏览器并落状态；下一次调用重新拉起。profile 中的 cookie/localStorage 跨回收保留。
-- 崩溃恢复：`BrowserSession` 内部异常（浏览器退出、页面失效）后，服务层丢弃旧实例并在下一次调用重建；会话 tab 自动重建。
-- 会话 tab：`tab_name = f"chat-{session_id[:8]}"`；服务层只允许操作属于本会话的 tab（拒绝其他会话名、拒绝未知名）。tab 上限沿用 `BrowserSession(concurrency=BROWSER_CONCURRENCY)`；同一 tab 的操作由既有 `tab.lock` 串行，不同 tab 天然并行。
+- 崩溃恢复：`BrowserSession` 内部异常（浏览器退出）后，服务层丢弃旧实例并在下一次调用重建；页面渲染进程崩溃由 `page.on("crash")` 标记，`tabs_state` / 取用 tab 时摘除并释放槽位，`navigate` 自动重建该会话标签页；单页崩溃不重置共享浏览器。
+- 会话 tab：`tab_name = f"chat-{session_id[:8]}"`；服务层只允许操作属于本会话的 tab（拒绝其他会话名、拒绝未知名）。全局 tab 上限沿用 `BrowserSession(concurrency=BROWSER_CONCURRENCY)`；满额时 `prepare_tab` / `new_tab` 按创建顺序关闭其它会话的标签页（本会话标签页不动），只有本会话自己占满时才返回 `shared browser tabs` 错误。同一 tab 的操作由既有 `tab.lock` 串行，不同 tab 天然并行；驱逐走 `drop_tab`，不等目标 tab 的操作锁。
 - 不在服务层再加全局信号量：并发边界就是“tab 数上限 + 每 tab 串行”，与旧实现的语义一致。
 
 ### BrowserMcp（`apps/api/app/services/browser_mcp.py`）
@@ -126,7 +126,7 @@ mcp_servers: dict[str, Any] = {
 - 每个动作类工具执行后自动附带一次新快照（沿用 `_action_result`），模型不需要手动 `snapshot`。
 - 快照格式沿用 `format_snapshot`：`Page/URL`、`Interactive elements` 列表（`[ref=s1e3] role "label" ...`）、`--- page text ---`。与现有 skill 中的 ref 约定完全一致。
 - `take_screenshot` 的 `filename` 必须是工作区相对路径；`..`、绝对路径、符号链接逃逸一律拒绝。
-- `tabs new`（包括 `navigate` 隐式新建 tab）超过全局 tab 上限（`BROWSER_CONCURRENCY`）时返回错误，提示先关闭不用的 tab，不排队等待。
+- `tabs new`（包括 `navigate` 隐式新建 tab）在全局 tab 上限（`BROWSER_CONCURRENCY`）时先按创建顺序关闭其它会话的标签页；仍满（本会话自己占满）返回 `this session is using all N shared browser tabs` 错误，提示先关闭不用的 tab，不排队等待。
 - console 采集：tab 创建时挂 `page.on("console")` 环形缓冲（每 tab 最近 50 条，含 level/text/时间），`console_messages` 只读本会话 tab 的缓冲。
 - 人机验证页（验证码、`verify you are human` 等）沿用 `verification_reason` 检测，直接返回错误文本，要求模型停下并告知用户。
 - `take_screenshot` 无可视化 UI 依赖；图片是否可被模型消费取决于 Provider 是否支持图片输入（与现状一致，skill 中保留提醒）。

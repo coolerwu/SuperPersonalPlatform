@@ -172,13 +172,27 @@ async def test_wait_for_text_and_time() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wait_for_reports_budget_exhaustion(monkeypatch) -> None:
+async def test_wait_for_full_budget_time_succeeds() -> None:
+    page = FakePage()
+    session = make_session(page)
+
+    output = await session.wait_for("main", time_ms=MAX_WAIT_FOR_MS)
+
+    assert len(page.waited) == 1
+    assert MAX_WAIT_FOR_MS - 1_000 <= page.waited[0] <= MAX_WAIT_FOR_MS
+    assert "SNAP:main" in output
+
+
+@pytest.mark.asyncio
+async def test_wait_for_succeeds_when_budget_expires(monkeypatch) -> None:
     page = FakePage()
     session = make_session(page)
     monkeypatch.setattr(browser_tools, "MAX_WAIT_FOR_MS", 0)
 
-    with pytest.raises(BrowserToolError, match="5-minute budget"):
-        await session.wait_for("main", time_ms=0)
+    # 预算耗尽不再误报错误；条件满足就返回快照。
+    output = await session.wait_for("main", time_ms=0)
+
+    assert "SNAP:main" in output
 
 
 @pytest.mark.asyncio
@@ -267,4 +281,109 @@ async def test_console_listener_records_and_truncates() -> None:
     assert entries[0]["type"] == "error"
     assert entries[0]["text"] == "x" * 500
     assert entries[0]["time"]
+
+
+@pytest.mark.asyncio
+async def test_crash_handler_prunes_tab_and_releases_slot() -> None:
+    page = FakePage()
+    session = BrowserSession(concurrency=1)
+
+    async def _noop():
+        return None
+
+    session._ensure_started = _noop  # type: ignore[method-assign]
+    session._context = _FakeContext(page)  # type: ignore[assignment]
+
+    await session.new_tab("crashy")
+    assert session._tab_slots.locked()
+    page.handlers["crash"]()
+
+    assert await session.tabs_state() == []
+    assert not session._tab_slots.locked()
+
+
+@pytest.mark.asyncio
+async def test_click_on_crashed_tab_raises_reopen_message() -> None:
+    page = FakePage()
+    session = BrowserSession(concurrency=1)
+
+    async def _noop():
+        return None
+
+    session._ensure_started = _noop  # type: ignore[method-assign]
+    session._context = _FakeContext(page)  # type: ignore[assignment]
+
+    await session.new_tab("crashy")
+    page.handlers["crash"]()
+
+    with pytest.raises(BrowserToolError, match="crashed; call navigate"):
+        await session.click("#go", "crashy")
+
+
+@pytest.mark.asyncio
+async def test_new_tab_recreates_crashed_tab() -> None:
+    page = FakePage()
+    session = BrowserSession(concurrency=2)
+
+    async def _noop():
+        return None
+
+    session._ensure_started = _noop  # type: ignore[method-assign]
+    session._context = _FakeContext(page)  # type: ignore[assignment]
+
+    await session.new_tab("main")
+    page.handlers["crash"]()
+
+    name = await session.new_tab("main")
+
+    assert name == "main"
+    assert session._tabs["main"].crashed is False
+    assert [tab["name"] for tab in await session.tabs_state()] == ["main"]
+
+
+@pytest.mark.asyncio
+async def test_close_tab_removes_crashed_tab_without_waiting_on_lock() -> None:
+    page = FakePage()
+    session = BrowserSession(concurrency=2)
+
+    async def _noop():
+        return None
+
+    session._ensure_started = _noop  # type: ignore[method-assign]
+    session._context = _FakeContext(page)  # type: ignore[assignment]
+
+    await session.new_tab("main")
+    page.handlers["crash"]()
+    tab = session._tabs["main"]
+    await tab.lock.acquire()
+    try:
+        message = await asyncio.wait_for(session.close_tab("main"), timeout=0.5)
+    finally:
+        tab.lock.release()
+
+    assert "Closed tab 'main'" in message
+    assert session._tabs == {}
+
+
+@pytest.mark.asyncio
+async def test_drop_tab_does_not_wait_on_operation_lock() -> None:
+    page = FakePage()
+    session = BrowserSession(concurrency=2)
+
+    async def _noop():
+        return None
+
+    session._ensure_started = _noop  # type: ignore[method-assign]
+    session._context = _FakeContext(page)  # type: ignore[assignment]
+
+    await session.new_tab("main")
+    tab = session._tabs["main"]
+    await tab.lock.acquire()
+    try:
+        result = await asyncio.wait_for(session.drop_tab("main"), timeout=0.5)
+    finally:
+        tab.lock.release()
+
+    assert result == "Dropped tab 'main'"
+    assert session._tabs == {}
 

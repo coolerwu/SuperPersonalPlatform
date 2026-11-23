@@ -70,7 +70,7 @@ npm run dev
 - 后台任务使用输入框上方的会话级任务区：turn 结束后仍实时更新；`GET /api/sessions/{id}/tasks` 返回快照，`GET /api/sessions/{id}/events` 推送 `task_*` / `task_removed`；任务状态保存在 `running_sessions` 的 `tasks_json`，已完成任务保留 10 分钟，有运行中任务时 client 最多保活 10 分钟；client 逐出或服务重启后显示「已中断」。每轮「执行过程」只保留思考/工具/子 Agent。
 - 刷新后当前流式输出可能丢失：同一进程内前端会在数秒内通过 `current_turn_id` 重新订阅并重放当前轮缓冲；SSE 断线会自动探测轮次并按事件序号续传，不重复、不清空。进程重启时只能从 transcript 读回历史，执行过程从 thinking / tool_use 块尽量重建，信息少于实时流。消息不显示时间戳。
 - `POST /api/sessions/{uuid}/interrupt` 停止当前会话：取消排队 turn、打断正在执行的 turn、删除租约，返回 `{interrupted, cancelled_turn_ids}`；前端只移除真正被取消的消息占位，与中断竞争、未被取消的排队追问继续执行并保持流式订阅。历史里的中断合成消息按系统行展示（「本轮对话已被中断」），`No response requested.` 不显示。
-- 服务重启时，`running_sessions` 中持有 turn 租约（`has_turn=1`）的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=60` 覆盖整体停机预算。
+- 服务重启时，`running_sessions` 中持有 turn 租约（`has_turn=1`）的会话会自动 resume，并收到「上次任务因服务重启被中断，请检查状态并继续，不要重复已完成步骤」的提示。没有 transcript 的租约删除；渠道消息的空投递行会填入「服务重启时这条消息尚未开始处理，请重新发送」并由启动补发送达，没有租约的空投递行也在启动时做同样兜底；网页来源没有投递行时写 warning 日志。暂停/归档 Agent 的租约保留到 Agent 恢复。缓存 client 在停机时逐个限时断开，`TimeoutStopSec=90` 覆盖整体停机预算。
 - 命令：平台处理 `/new`（或 `/clear`）、`/stop`、`/status`、`/help`，不区分大小写；网页命令由 `POST /api/chat/commands` 处理，不创建会话/turn/消息，回复以聊天流末尾的临时卡片显示。输入框以 `/` 开头时弹出命令面板，除平台命令外还列出 Claude Code 运行时 init frame 里的 `slash_commands`（排除终端绑定项与重名项）；只有列表里的 Claude Code 命令才作为普通消息转发给 Agent，未知命令会回复当前可用命令列表，列表未加载时提示先发送一条普通消息。
 - `CLAUDE.md` 全局规则由 SDK 作为 user 级说明加载；Agent 记忆是工作区的项目级 `CLAUDE.md`，只加载给该 Agent；Agent 自己的 instructions 追加到 Claude Code 默认系统提示词。修改后，空闲会话的缓存 client 会在保存 Agent/Provider 时关闭，下一个 turn 生效。
 - assistant 消息按 Markdown 渲染：GFM 表格/列表、代码高亮、链接、`$$...$$` 数学公式（KaTeX；单 `$` 按普通文本处理）。`markdown`/`md`/`text`/`txt`/`plaintext`/`log` 围栏自动换行，其他代码围栏保持横向滚动。
@@ -120,7 +120,7 @@ npm run dev
 - 平台调用 SDK 自带的内置 CLI（与 chat 运行时同一个二进制，随 venv 安装）执行 `claude plugin` 命令；启动和页面读取不联网，只有添加/更新集市与安装/更新插件需要访问 GitHub。添加集市会克隆官方仓库、安装/更新插件会先刷新集市，慢链路可能需要数分钟。
 - 安装、启停、更新或卸载插件后，下一轮对话会重建受影响会话的缓存 client 并加载最新插件；进行中的 turn 不受影响。
 - 插件可能包含 skills、命令、hooks 与 MCP server，其中 hooks/MCP 会以宿主机用户权限执行代码，平台不提供沙箱。只安装可信插件；移除集市前必须先卸载其下的插件。
-- 浏览器工具由平台进程内的 `browser` SDK MCP server 提供（Playwright + venv 自带 Chromium，按会话隔离标签页、共享 `data/browser_state.json` 登录态，不需要 Node/npx）；集市 `playwright` 插件已停用（`enabledPlugins=false`），安装记录保留。
+- 浏览器工具由平台进程内的 `browser` SDK MCP server 提供（Playwright + venv 自带 Chromium，按会话隔离标签页、共享 `data/browser_state.json` 登录态，不需要 Node/npx）；全局标签页满额时按创建顺序关闭其它会话的标签页（本会话标签页不动），本会话自己占满才报共享配额错误；单页渲染进程崩溃只摘除并重建该标签页，不重置共享浏览器。集市 `playwright` 插件已停用（`enabledPlugins=false`），安装记录保留。
 
 ### Skills 文件格式
 
@@ -362,7 +362,7 @@ cd apps/web && npm install && npm run build
 
 ## V1 生产部署（宿主机 systemd + SQLite）
 
-生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。systemd unit 使用 `KillMode=mixed`：重启时 SIGTERM 只发给 uvicorn，SDK CLI 子进程保持到应用自己取消 turn、保留恢复租约后再退出；uvicorn 带 `--timeout-graceful-shutdown 10`，避免长连接 SSE 拖住关闭。断开每个 client 最多等 30 秒，close_all 总预算 35 秒；关机顺序为 registry → runner → browser → 其他服务，registry 约 10 秒、browser 最长 15 秒，正常可在 `TimeoutStopSec=90` 内完成。不要把 `KillMode` 改回默认值或去掉这两个参数，否则 systemd 会先杀掉 CLI，运行中的 turn 会被当作失败清理，重启后无法续跑。
+生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。systemd unit 使用 `KillMode=mixed`：重启时 SIGTERM 只发给 uvicorn，SDK CLI 子进程保持到应用自己取消 turn、保留恢复租约后再退出；uvicorn 带 `--timeout-graceful-shutdown 10`，避免长连接 SSE 拖住关闭。断开每个 client 最多等 30 秒，close_all 总预算 35 秒；关机顺序为 registry → runner → browser → 其他服务，registry 约 10 秒、browser 最长 30 秒，正常可在 `TimeoutStopSec=90` 内完成。不要把 `KillMode` 改回默认值或去掉这两个参数，否则 systemd 会先杀掉 CLI，运行中的 turn 会被当作失败清理，重启后无法续跑。
 
 ### 首次准备
 

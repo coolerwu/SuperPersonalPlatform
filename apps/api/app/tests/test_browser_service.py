@@ -14,6 +14,7 @@ class FakeSession:
         self.concurrency = concurrency
         self.tabs = [dict(tab) for tab in (tabs or [])]
         self.closed_tabs: list[str] = []
+        self.dropped_tabs: list[str] = []
         self.opened: list[tuple[str, str]] = []
         self.aclose_calls = 0
 
@@ -39,6 +40,13 @@ class FakeSession:
         self.closed_tabs.append(name)
         self.tabs = [tab for tab in self.tabs if tab["name"] != name]
         return f"Closed {name}"
+
+    async def drop_tab(self, name: str) -> str:
+        if not any(tab["name"] == name for tab in self.tabs):
+            raise BrowserToolError(f"tab {name!r} is not open")
+        self.dropped_tabs.append(name)
+        self.tabs = [tab for tab in self.tabs if tab["name"] != name]
+        return f"Dropped {name}"
 
     async def aclose(self) -> None:
         self.aclose_calls += 1
@@ -376,8 +384,9 @@ async def test_prepare_tab_evicts_oldest_other_session_tab() -> None:
         name = await service.prepare_tab(live, "ddd-1")
 
     assert name == "chat-ddd-1"
-    # 只关掉最老的其它会话标签页，其余会话标签保持不变。
-    assert session.closed_tabs == ["chat-aaa-1"]
+    # 只驱逐最老的其它会话标签页，其余会话标签保持不变。
+    assert session.dropped_tabs == ["chat-aaa-1"]
+    assert session.closed_tabs == []
     remaining = {tab["name"] for tab in session.tabs}
     assert "chat-aaa-1" not in remaining
     assert remaining == {
@@ -389,7 +398,7 @@ async def test_prepare_tab_evicts_oldest_other_session_tab() -> None:
 
 
 @pytest.mark.asyncio
-async def test_evict_raises_when_all_tabs_belong_to_caller() -> None:
+async def test_new_tab_raises_when_all_tabs_belong_to_caller() -> None:
     session = FakeSession(
         [
             {"name": "chat-aaa-1", "url": "about:blank"},
@@ -403,10 +412,11 @@ async def test_evict_raises_when_all_tabs_belong_to_caller() -> None:
     service = make_service(session, idle_seconds=300)
 
     async with service.use() as live:
+        # 通过公开的 new_tab 触发配额错误；本会话自己的标签页不能被驱逐。
         with pytest.raises(BrowserToolError, match="using all 5 shared browser tabs"):
-            await service._evict_other_tabs(live, "aaa-1")  # noqa: SLF001
+            await service.new_tab(live, "aaa-1")
 
-    # 本会话的标签页绝不能被当成可驱逐对象。
+    assert session.dropped_tabs == []
     assert session.closed_tabs == []
 
 
@@ -426,11 +436,42 @@ async def test_new_tab_at_capacity_evicts_other_session_first() -> None:
         info = await service.new_tab(live, "bbb-1")
 
     assert info["name"] == "chat-bbb-1"
-    assert session.closed_tabs == ["chat-aaa-1"]
+    assert session.dropped_tabs == ["chat-aaa-1"]
     assert "chat-aaa-1" not in {tab["name"] for tab in session.tabs}
     assert "chat-bbb-1" in {tab["name"] for tab in session.tabs}
 
     await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_eviction_uses_drop_tab_without_waiting_on_operation_lock() -> None:
+    class LockedSession(FakeSession):
+        def __init__(self, tabs: list[dict], *, concurrency: int) -> None:
+            super().__init__(tabs, concurrency=concurrency)
+            self.operation_lock = asyncio.Lock()
+
+        async def close_tab(self, name: str) -> str:
+            # 正常关闭要等操作锁；驱逐必须走 drop_tab 才不会被挂起的动作阻塞。
+            async with self.operation_lock:
+                return await super().close_tab(name)
+
+    session = LockedSession(
+        [
+            {"name": "chat-aaa-1", "url": "about:blank"},
+            {"name": "chat-bbb-1", "url": "about:blank"},
+        ],
+        concurrency=2,
+    )
+    await session.operation_lock.acquire()
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        name = await asyncio.wait_for(
+            service.prepare_tab(live, "ccc-1"), timeout=0.5
+        )
+
+    assert name == "chat-ccc-1"
+    assert session.dropped_tabs == ["chat-aaa-1"]
 
 
 @pytest.mark.asyncio

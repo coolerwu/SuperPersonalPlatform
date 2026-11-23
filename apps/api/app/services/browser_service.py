@@ -21,11 +21,11 @@ from app.services.browser_tools import BrowserSession, BrowserToolError
 logger = logging.getLogger(__name__)
 
 TAB_PREFIX = "chat-"
-# BrowserSession.aclose() 最坏约 40 秒（存状态 + 5 个标签页）；关闭超时只记日志，
-# Chromium 可能残存为孤儿进程。
-RESET_CLOSE_TIMEOUT_SECONDS = 10.0
-REAP_CLOSE_TIMEOUT_SECONDS = 12.0
-SHUTDOWN_CLOSE_TIMEOUT_SECONDS = 15.0
+# BrowserSession.aclose() 最坏约 24 秒（状态 + context + browser + playwright）；
+# 外层超时要大于它，避免在 browser/playwright 停止前被取消。
+RESET_CLOSE_TIMEOUT_SECONDS = 25.0
+REAP_CLOSE_TIMEOUT_SECONDS = 26.0
+SHUTDOWN_CLOSE_TIMEOUT_SECONDS = 30.0
 # 多个工具并发观察到同一次崩溃时，不要依次 reset 刚重建的新会话；窗口内的
 # reset 视为同一次事故而跳过，窗口过后仍可正常恢复。
 DEFAULT_RESET_DEBOUNCE_SECONDS = 5.0
@@ -221,7 +221,7 @@ class BrowserService:
             if is_own(name):
                 continue
             try:
-                await session.close_tab(name)
+                await session.drop_tab(name)
             except BrowserToolError:
                 continue
             logger.info("evicted tab %s to free shared browser quota", name)

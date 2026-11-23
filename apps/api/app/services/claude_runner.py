@@ -74,7 +74,7 @@ logger = logging.getLogger(__name__)
 _DISCONNECT_TIMEOUT_SECONDS = 30
 # Total time ``close_all`` may spend disconnecting cached clients. Clients are
 # disconnected concurrently, so the budget covers one SDK close, not the sum.
-# The deploy unit allows 60 s for the whole shutdown; ``SessionRegistry.close``
+# The deploy unit allows 90 s for the whole shutdown; ``SessionRegistry.close``
 # may take up to 10 s, leaving room for the other runtimes.
 _SHUTDOWN_BUDGET_SECONDS = 35
 # A connect that wedges would otherwise hold a concurrency permit forever.

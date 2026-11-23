@@ -193,6 +193,34 @@ async def test_network_error_does_not_reset_service(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_target_crashed_does_not_reset_service(tmp_path) -> None:
+    class Crashed(FakeSession):
+        async def click(self, target, tab):
+            raise BrowserToolError("Target crashed")
+
+    service = FakeService(Crashed())
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "click").handler({"target": "s1e3"})
+    assert result["is_error"] is True
+    # 单页崩溃由标签页层恢复，不能重置所有会话共享的浏览器。
+    assert service.reset_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_target_closed_does_not_reset_service(tmp_path) -> None:
+    class PageClosed(FakeSession):
+        async def click(self, target, tab):
+            raise BrowserToolError("Target closed")
+
+    service = FakeService(PageClosed())
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "click").handler({"target": "s1e3"})
+    assert result["is_error"] is True
+    # 单个标签页被关闭是页级错误，不应重置共享浏览器。
+    assert service.reset_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_wait_for_without_condition_is_error(tmp_path) -> None:
     tools = build_tools(tmp_path)
     result = await find(tools, "wait_for").handler({})

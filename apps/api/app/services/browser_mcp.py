@@ -14,7 +14,11 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from app.services.browser_tools import MAX_WAIT_FOR_MS, BrowserToolError
+from app.services.browser_tools import (
+    MAX_WAIT_FOR_MS,
+    BrowserToolError,
+    validate_browser_url_syntax,
+)
 
 if TYPE_CHECKING:
     from app.services.browser_service import BrowserService
@@ -170,6 +174,9 @@ def _build_tools(
             url = str(args.get("url") or "").strip()
             if not url:
                 raise BrowserToolError("url must not be empty")
+            # 先做纯语法校验（DNS 仍由 session.open 的带代理感知逻辑负责），
+            # 避免非法 URL 触发 prepare_tab 驱逐别的会话标签页。
+            validate_browser_url_syntax(url)
             async with service.use() as session:
                 tab = await service.prepare_tab(
                     session, session_id, args.get("tab")
@@ -247,7 +254,8 @@ def _build_tools(
 
     @tool(
         "fill_form",
-        "Fill several inputs at once, each field given as target and value.",
+        "Fill several inputs at once, each field given as target and value. "
+        "最多 20 个字段。",
         {
             "type": "object",
             "properties": {

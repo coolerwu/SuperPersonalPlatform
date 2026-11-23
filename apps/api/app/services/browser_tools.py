@@ -510,6 +510,7 @@ class _Tab:
     page: Any
     lock: asyncio.Lock
     generation: int = 0
+    crashed: bool = False
     console: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=CONSOLE_BUFFER_SIZE)
     )
@@ -925,11 +926,16 @@ class BrowserSession:
             tab = self._tabs.get(key)
             if tab is not None:
                 is_closed = getattr(tab.page, "is_closed", None)
-                if is_closed is not None and is_closed():
-                    self._tabs.pop(key, None)
-                    self._tab_slots.release()
-                else:
+                closed = is_closed is not None and is_closed()
+                if not tab.crashed and not closed:
                     return tab
+                # 崩溃的页面 is_closed() 仍可能为 False，按已关闭处理并释放槽位。
+                self._tabs.pop(key, None)
+                self._tab_slots.release()
+                if tab.crashed and not create:
+                    raise BrowserToolError(
+                        f"tab {key!r} crashed; call navigate to reopen it"
+                    )
             if not create:
                 raise BrowserToolError(
                     f"tab {key!r} is not open; call navigate(url=..., tab={key!r})"
@@ -967,6 +973,17 @@ class BrowserSession:
                     page.on("console", _record_console)
                 except Exception:
                     logger.debug("failed to attach console listener", exc_info=True)
+
+                def _mark_crashed(_page: Any = None, _tab: _Tab = tab) -> None:
+                    try:
+                        _tab.crashed = True
+                    except Exception:
+                        pass
+
+                try:
+                    page.on("crash", _mark_crashed)
+                except Exception:
+                    logger.debug("failed to attach crash listener", exc_info=True)
                 self._tabs[key] = tab
                 return tab
             except BaseException:
@@ -1334,8 +1351,6 @@ class BrowserSession:
                     )
             except Exception as exc:
                 raise BrowserToolError(f"wait_for failed: {_short_error(exc)}") from exc
-            if remaining_ms() <= 0:
-                raise BrowserToolError("wait_for exceeded its 5-minute budget")
             return await self._action_result(
                 f"Waited in tab {tab_state.name!r}", tab_state
             )
@@ -1362,7 +1377,7 @@ class BrowserSession:
         async with self._tabs_lock:
             for key, tab_state in list(self._tabs.items()):
                 is_closed = getattr(tab_state.page, "is_closed", None)
-                if is_closed is not None and is_closed():
+                if tab_state.crashed or (is_closed is not None and is_closed()):
                     if self._tabs.pop(key, None) is not None:
                         self._tab_slots.release()
                     continue
@@ -1389,6 +1404,17 @@ class BrowserSession:
             tab_state = self._tabs.get(key)
         if tab_state is None:
             raise BrowserToolError(f"tab {key!r} is not open")
+        if tab_state.crashed:
+            # 崩溃页面可能无法正常关闭，也不该等它的操作锁；先摘除释放槽位，再尽力关闭。
+            async with self._tabs_lock:
+                if self._tabs.pop(key, None) is not None:
+                    self._tab_slots.release()
+                remaining = sorted(self._tabs)
+            try:
+                await asyncio.wait_for(tab_state.page.close(), timeout=3)
+            except Exception:
+                pass
+            return f"Closed tab {key!r}. Open tabs: {', '.join(remaining) or 'none'}"
         async with tab_state.lock:
             try:
                 await asyncio.wait_for(tab_state.page.close(), timeout=5)
@@ -1400,21 +1426,40 @@ class BrowserSession:
             remaining = sorted(self._tabs)
         return f"Closed tab {key!r}. Open tabs: {', '.join(remaining) or 'none'}"
 
+    async def drop_tab(self, tab: str = DEFAULT_TAB) -> str:
+        """Evict a tab without waiting on its operation lock.
+
+        Used when the shared tab quota is exhausted: an in-flight action on the
+        dropped tab will surface a target-closed error, which is acceptable.
+        """
+        key = normalize_tab_name(tab)
+        async with self._tabs_lock:
+            tab_state = self._tabs.pop(key, None)
+            if tab_state is not None:
+                self._tab_slots.release()
+        if tab_state is None:
+            raise BrowserToolError(f"tab {key!r} is not open")
+        try:
+            await asyncio.wait_for(tab_state.page.close(), timeout=3)
+        except Exception:
+            pass
+        return f"Dropped tab {key!r}"
+
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
         try:
-            await asyncio.wait_for(self._save_storage_state(), timeout=10)
+            await asyncio.wait_for(self._save_storage_state(), timeout=8)
         except Exception:
             logger.warning("browser state save failed", exc_info=True)
         self._tabs.clear()
         # context.close() 会一并关闭其页面；再依次关浏览器与 Playwright 驱动，
-        # 各自独立超时，最坏约 30 秒（状态 10 + context 10 + browser 5 + stop 5）。
+        # 各自独立超时，最坏约 24 秒（状态 8 + context 8 + browser 5 + stop 3）。
         for closer, timeout in (
-            (getattr(self._context, "close", None), 10),
+            (getattr(self._context, "close", None), 8),
             (getattr(self._browser, "close", None), 5),
-            (getattr(self._playwright, "stop", None), 5),
+            (getattr(self._playwright, "stop", None), 3),
         ):
             if closer is None:
                 continue
