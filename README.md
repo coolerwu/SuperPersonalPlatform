@@ -362,7 +362,7 @@ cd apps/web && npm install && npm run build
 
 ## V1 生产部署（宿主机 systemd + SQLite）
 
-生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。systemd unit 使用 `KillMode=mixed`：重启时 SIGTERM 只发给 uvicorn，SDK CLI 子进程保持到应用自己取消 turn、保留恢复租约后再退出；uvicorn 带 `--timeout-graceful-shutdown 10`，避免长连接 SSE 拖住关闭。关机顺序为 registry → runner → browser → 其他服务；runner 断开约 30 秒，其后浏览器关闭最长 15 秒，仍在 `TimeoutStopSec=60` 之内。不要把 `KillMode` 改回默认值或去掉这两个参数，否则 systemd 会先杀掉 CLI，运行中的 turn 会被当作失败清理，重启后无法续跑。
+生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。systemd unit 使用 `KillMode=mixed`：重启时 SIGTERM 只发给 uvicorn，SDK CLI 子进程保持到应用自己取消 turn、保留恢复租约后再退出；uvicorn 带 `--timeout-graceful-shutdown 10`，避免长连接 SSE 拖住关闭。断开每个 client 最多等 30 秒，close_all 总预算 35 秒；关机顺序为 registry → runner → browser → 其他服务，registry 约 10 秒、browser 最长 15 秒，正常可在 `TimeoutStopSec=60` 内完成。不要把 `KillMode` 改回默认值或去掉这两个参数，否则 systemd 会先杀掉 CLI，运行中的 turn 会被当作失败清理，重启后无法续跑。
 
 ### 首次准备
 

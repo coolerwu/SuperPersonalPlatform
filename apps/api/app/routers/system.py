@@ -60,9 +60,8 @@ async def system_info(request: Request) -> dict[str, object]:
             "checkpoints": False,
             "filesystem": True,
             "shell": True,
-            # Browser tooling exists in the repo but is not wired into the SDK
-            # runtime; the tool-layer migration will turn this on.
-            "browser": False,
+            # Browser tools are served by the in-process browser SDK MCP server.
+            "browser": True,
             "skills": True,
             "plugins": True,
             "memory": True,

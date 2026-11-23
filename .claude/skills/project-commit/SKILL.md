@@ -114,8 +114,11 @@ If the user explicitly asks to deploy v1 on the target machine:
   - the default tool set is Claude Code's own (the runner does not set `tools`);
   - platform business tools (backtest/market/journal/allocation/chan) are
     mounted as an in-process `platform` SDK MCP server and appear as
-    `mcp__platform_tools__*`; platform browser/search tools and `skill_save` remain
-    unwired; tool declarations in skills do not gate availability;
+    `mcp__platform_tools__*`; browser tools are served by an in-process `browser`
+    SDK MCP server (`mcp__browser__*`, per-session `chat-<id>` tabs, shared
+    `data/browser_state.json` login state, idle recycle, graceful shutdown);
+    `web_search`/`web_fetch` and `skill_save` remain unwired; tool declarations
+    in skills do not gate availability;
   - skills are file documents under `skills/`; editing them does not require a
     form, and the platform business tools are available through the MCP server;
   - memory is the shared user profile `claude/CLAUDE.md` plus per-Agent
@@ -124,7 +127,7 @@ If the user explicitly asks to deploy v1 on the target machine:
     skill;
   - rubric evaluation, QuickJS `eval`, session full-text search and Run history
     are removed;
-  - browser screenshots are not pushed to WeChat until the tool layer is wired.
+  - browser screenshots are not pushed to WeChat yet (browser tools are wired; `channel_images` has no callers).
 - Production uses systemd + venv + SQLite. Docker deployment is deprecated:
   do not reintroduce Docker Compose, Dockerfiles, nginx, or Postgres.
 - If a commit workflow change is requested, update both `CLAUDE.md` and this

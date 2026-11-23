@@ -19,7 +19,9 @@
 - CSS selector 多匹配时报错，不再静默取第一个；ref 与 selector 都可用于动作工具；
 - `take_screenshot` 的 `filename` 必须工作区相对且以 `.png` 结尾；
 - console 记录含 UTC 时间字段；
-- `BrowserService.reset()` 使用 5 秒去抖窗口（并发同事故不重复重建，窗口后仍可恢复）。
+- `BrowserService.reset()` 使用 5 秒去抖窗口（并发同事故不重复重建，窗口后仍可恢复）；
+- `new_tab(url=...)` 在打开 URL 失败时会关闭刚创建的标签页再抛错；
+- full 档 `allowed_tools` 在有浏览器服务时显式并入 `browser_mcp.allowed_tool_names()`。
 
 ---
 

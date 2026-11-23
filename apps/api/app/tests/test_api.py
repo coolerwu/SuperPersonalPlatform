@@ -124,6 +124,7 @@ def test_provider_create_and_system_info(client) -> None:
         assert info["capabilities"]["skills"] is True
         assert info["capabilities"]["chat"] is True
         assert info["capabilities"]["memory"] is True
+        assert info["capabilities"]["browser"] is True
         assert info["skills_root"]
         assert info["counts"]["providers"] == 1
         assert info["counts"]["agents"] >= 1

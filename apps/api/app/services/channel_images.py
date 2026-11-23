@@ -5,9 +5,9 @@ must reach the user while the browser is still open. This module uploads a
 screenshot to the iLink CDN and sends it as an image message as soon as the
 screenshot is taken.
 
-Channel configuration lives in ``settings.json`` now. The tool layer that
-produces screenshots is not wired into the SDK runtime yet, so nothing calls
-``send_session_image`` in this version; it is kept ready for that migration.
+Channel configuration lives in ``settings.json`` now. Browser tools are served
+by the in-process browser MCP server, but nothing calls ``send_session_image``
+yet; it is kept ready for the channel push wiring.
 """
 
 from __future__ import annotations
