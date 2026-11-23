@@ -36,6 +36,13 @@ _DEAD_BROWSER_MARKERS = (
     "browser closed unexpectedly",
     "playwright connection closed",
 )
+# Playwright 的 node driver 断开时 Browser.is_connected() 仍然为 True，必须靠
+# 传输层错误文本强制重置，否则浏览器工具会一直失败到空闲回收。
+_DRIVER_DEAD_MARKERS = (
+    "reading from the driver",
+    "connection closed while reading",
+    "driver has been closed",
+)
 TOOL_NAMES = (
     "navigate",
     "snapshot",
@@ -75,6 +82,8 @@ def _error(message: str) -> dict[str, Any]:
 
 def _is_dead_browser(message: str) -> bool:
     lowered = message.lower()
+    if any(marker in lowered for marker in _DRIVER_DEAD_MARKERS):
+        return True
     # 网络/DNS 类错误不是浏览器崩溃，重置共享浏览器会误伤所有会话。
     if "net::" in lowered or "err_" in lowered:
         return False
@@ -84,8 +93,10 @@ def _is_dead_browser(message: str) -> bool:
 async def _maybe_reset(service: BrowserService, message: str) -> None:
     if not _is_dead_browser(message):
         return
+    lowered = message.lower()
+    force = any(marker in lowered for marker in _DRIVER_DEAD_MARKERS)
     try:
-        await service.reset()
+        await service.reset(force=force)
     except Exception:
         logger.warning("browser reset failed after a dead-browser error", exc_info=True)
 

@@ -69,6 +69,7 @@ class FakeService:
     def __init__(self, session: FakeSession | None = None) -> None:
         self.session = session or FakeSession()
         self.reset_calls = 0
+        self.last_force: bool | None = None
         self.select_calls: list = []
         self.close_calls: list = []
         self.new_calls: list = []
@@ -77,9 +78,10 @@ class FakeService:
     async def use(self):
         yield self.session
 
-    async def reset(self) -> None:
-        # 模拟 BrowserService.reset：连接仍正常时不重置共享浏览器。
-        if self.session.is_connected():
+    async def reset(self, force: bool = False) -> None:
+        # 模拟 BrowserService.reset：连接仍正常且未强制时不重置共享浏览器。
+        self.last_force = force
+        if self.session.is_connected() and not force:
             return
         self.reset_calls += 1
 
@@ -188,6 +190,27 @@ async def test_dead_browser_error_skips_reset_when_connected(tmp_path) -> None:
     assert result["is_error"] is True
     # 浏览器进程仍连通（如别的会话驱逐了标签页），不能重置共享实例。
     assert service.reset_calls == 0
+    assert service.last_force is False
+
+
+@pytest.mark.asyncio
+async def test_driver_death_forces_reset_even_when_connected(tmp_path) -> None:
+    class DriverDead(FakeSession):
+        def is_connected(self) -> bool:
+            return True
+
+        async def click(self, target, tab):
+            raise BrowserToolError(
+                "Page.title: Connection closed while reading from the driver"
+            )
+
+    service = FakeService(DriverDead())
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "click").handler({"target": "s1e3"})
+    assert result["is_error"] is True
+    # driver 断开时 Browser.is_connected() 仍为 True，必须强制重置。
+    assert service.reset_calls == 1
+    assert service.last_force is True
 
 
 @pytest.mark.asyncio

@@ -119,7 +119,7 @@ class BrowserService:
             self._last_used = time.monotonic()
             return self._session
 
-    async def reset(self) -> None:
+    async def reset(self, force: bool = False) -> None:
         async with self._lock:
             if (
                 self._last_reset_at > 0
@@ -129,7 +129,7 @@ class BrowserService:
                 # 刚重建的新会话正处于同一轮崩溃的防抖窗口内，跳过级联 reset。
                 return
             session = self._session
-            if session is not None and session.is_connected():
+            if not force and session is not None and session.is_connected():
                 # 页面级错误（如别的会话驱逐标签页）不该重置仍连通的共享浏览器。
                 logger.debug("browser still connected; skipping reset")
                 return
@@ -234,13 +234,14 @@ class BrowserService:
                 return
         fresh = await session.tabs_state()
         if len(fresh) >= limit:
-            busy_now = await session.busy_tabs()
             others = [
                 str(tab.get("name") or "")
                 for tab in fresh
                 if not is_own(str(tab.get("name") or ""))
             ]
-            if others and all(name in busy_now for name in others):
+            # 还有其它会话的标签页（忙碌或关闭失败）时给中性的“稍后重试”提示；
+            # 只有本会话自己占满时才提示用户关闭自己的标签页。
+            if others:
                 raise BrowserToolError(
                     "shared browser tabs are full; other sessions are using "
                     "theirs right now, retry shortly"

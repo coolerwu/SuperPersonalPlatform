@@ -120,7 +120,7 @@ npm run dev
 - 平台调用 SDK 自带的内置 CLI（与 chat 运行时同一个二进制，随 venv 安装）执行 `claude plugin` 命令；启动和页面读取不联网，只有添加/更新集市与安装/更新插件需要访问 GitHub。添加集市会克隆官方仓库、安装/更新插件会先刷新集市，慢链路可能需要数分钟。
 - 安装、启停、更新或卸载插件后，下一轮对话会重建受影响会话的缓存 client 并加载最新插件；进行中的 turn 不受影响。
 - 插件可能包含 skills、命令、hooks 与 MCP server，其中 hooks/MCP 会以宿主机用户权限执行代码，平台不提供沙箱。只安装可信插件；移除集市前必须先卸载其下的插件。
-- 浏览器工具由平台进程内的 `browser` SDK MCP server 提供（Playwright + venv 自带 Chromium，按会话隔离标签页、共享 `data/browser_state.json` 登录态，不需要 Node/npx）；全局标签页满额时按创建顺序关闭其它会话的标签页（本会话标签页不动），本会话自己占满才报共享配额错误；单页渲染进程崩溃只摘除并重建该标签页，不重置共享浏览器。集市 `playwright` 插件已停用（`enabledPlugins=false`），安装记录保留。
+- 浏览器工具由平台进程内的 `browser` SDK MCP server 提供（Playwright + venv 自带 Chromium，按会话隔离标签页、共享 `data/browser_state.json` 登录态，不需要 Node/npx）；全局标签页满额时按创建顺序关闭其它会话的标签页（本会话标签页不动），本会话自己占满才报共享配额错误；其它会话的标签页都在执行操作时不会驱逐，返回“稍后重试”的共享配额错误。单页渲染进程崩溃只摘除并重建该标签页，不重置共享浏览器。集市 `playwright` 插件已停用（`enabledPlugins=false`），安装记录保留。
 
 ### Skills 文件格式
 

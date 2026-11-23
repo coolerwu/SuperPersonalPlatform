@@ -505,6 +505,22 @@ async def test_reset_skips_connected_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reset_force_closes_connected_session() -> None:
+    session = FakeSession(connected=True)
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use():
+        pass
+    await service.reset()
+    assert session.aclose_calls == 0
+
+    # Playwright driver 断开时连接状态可能仍为 True，强制重置必须生效。
+    await service.reset(force=True)
+    assert session.aclose_calls == 1
+    assert service._session is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_eviction_skips_busy_tabs() -> None:
     session = FakeSession(
         [
