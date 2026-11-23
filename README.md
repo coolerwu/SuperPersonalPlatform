@@ -370,6 +370,7 @@ cd apps/web && npm install && npm run build
 cd ~/SuperPersonalPlatform-v1-deploy
 python3.12 -m venv .venv
 .venv/bin/pip install -e apps/api
+.venv/bin/playwright install chromium
 mkdir -p ~/.super-personal-platform/data
 cp deploy/.env.example ~/.super-personal-platform/.env
 # 编辑 ~/.super-personal-platform/.env，填 APP_AUTH_TOKEN、LLM_API_KEY、LLM_BASE_URL、LLM_MODEL

@@ -254,8 +254,7 @@ def _build_tools(
 
     @tool(
         "fill_form",
-        "Fill several inputs at once, each field given as target and value. "
-        "最多 20 个字段。",
+        "一次填写多个输入框，每个字段给出 target 与 value；最多 20 个字段。",
         {
             "type": "object",
             "properties": {

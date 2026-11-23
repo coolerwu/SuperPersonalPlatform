@@ -9,14 +9,29 @@ from app.services.browser_tools import BrowserToolError
 
 
 class FakeSession:
-    def __init__(self, tabs: list[dict] | None = None, *, concurrency: int = 2) -> None:
+    def __init__(
+        self,
+        tabs: list[dict] | None = None,
+        *,
+        concurrency: int = 2,
+        connected: bool = False,
+    ) -> None:
         self.closed = False
+        self.connected = connected
         self.concurrency = concurrency
         self.tabs = [dict(tab) for tab in (tabs or [])]
+        self.busy: set[str] = set()
         self.closed_tabs: list[str] = []
         self.dropped_tabs: list[str] = []
         self.opened: list[tuple[str, str]] = []
         self.aclose_calls = 0
+
+    def is_connected(self) -> bool:
+        # 默认模拟浏览器进程已崩溃；reset 只在未连通时生效。
+        return self.connected
+
+    async def busy_tabs(self) -> set[str]:
+        return set(self.busy)
 
     async def tabs_state(self) -> list[dict]:
         await asyncio.sleep(0)
@@ -472,6 +487,63 @@ async def test_eviction_uses_drop_tab_without_waiting_on_operation_lock() -> Non
 
     assert name == "chat-ccc-1"
     assert session.dropped_tabs == ["chat-aaa-1"]
+
+
+@pytest.mark.asyncio
+async def test_reset_skips_connected_session() -> None:
+    session = FakeSession(connected=True)
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use():
+        pass
+    await service.reset()
+
+    # 连接仍然正常时，页面级错误不应重置共享浏览器。
+    assert session.aclose_calls == 0
+    assert service._session is session  # noqa: SLF001
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_eviction_skips_busy_tabs() -> None:
+    session = FakeSession(
+        [
+            {"name": "chat-old-1", "url": "about:blank"},
+            {"name": "chat-idle-1", "url": "about:blank"},
+        ],
+        concurrency=2,
+    )
+    session.busy = {"chat-old-1"}
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        name = await service.prepare_tab(live, "ddd-1")
+
+    assert name == "chat-ddd-1"
+    # 忙碌的 tab 不驱逐，改关后面空闲的其它会话 tab。
+    assert session.dropped_tabs == ["chat-idle-1"]
+    assert "chat-old-1" in {tab["name"] for tab in session.tabs}
+
+
+@pytest.mark.asyncio
+async def test_eviction_all_others_busy_raises_retry_message() -> None:
+    session = FakeSession(
+        [
+            {"name": "chat-old-1", "url": "about:blank"},
+            {"name": "chat-old-2", "url": "about:blank"},
+        ],
+        concurrency=2,
+    )
+    session.busy = {"chat-old-1", "chat-old-2"}
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        with pytest.raises(
+            BrowserToolError, match="other sessions are using theirs right now"
+        ):
+            await service.prepare_tab(live, "ddd-1")
+
+    assert session.dropped_tabs == []
 
 
 @pytest.mark.asyncio

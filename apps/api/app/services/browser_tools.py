@@ -653,6 +653,15 @@ class BrowserSession:
     def closed(self) -> bool:
         return self._closed
 
+    def is_connected(self) -> bool:
+        browser = self._browser
+        if browser is None:
+            return True
+        try:
+            return bool(getattr(browser, "is_connected", lambda: True)())
+        except Exception:
+            return False
+
     def _playwright_proxy(self) -> dict[str, str] | None:
         """Chromium ignores HTTP_PROXY; hand it the proxy explicitly."""
         server = self.proxy_url
@@ -884,6 +893,13 @@ class BrowserSession:
         except Exception:
             pass
 
+    async def _safe_close(self, page: Any) -> None:
+        # 后台清理崩溃页面；失败或超时都忽略，绝不阻塞调用方。
+        try:
+            await asyncio.wait_for(page.close(), timeout=3)
+        except Exception:
+            pass
+
     async def _handle_route(self, route: Any) -> None:
         request = route.request
         url = str(request.url)
@@ -932,6 +948,9 @@ class BrowserSession:
                 # 崩溃的页面 is_closed() 仍可能为 False，按已关闭处理并释放槽位。
                 self._tabs.pop(key, None)
                 self._tab_slots.release()
+                if tab.crashed:
+                    # 页面可能已经无法关闭；后台尽力清理，避免死页面积压。
+                    asyncio.create_task(self._safe_close(tab.page))
                 if tab.crashed and not create:
                     raise BrowserToolError(
                         f"tab {key!r} crashed; call navigate to reopen it"
@@ -1380,6 +1399,8 @@ class BrowserSession:
                 if tab_state.crashed or (is_closed is not None and is_closed()):
                     if self._tabs.pop(key, None) is not None:
                         self._tab_slots.release()
+                        if tab_state.crashed:
+                            asyncio.create_task(self._safe_close(tab_state.page))
                     continue
                 try:
                     url = str(tab_state.page.url)
@@ -1387,6 +1408,12 @@ class BrowserSession:
                     url = ""
                 state.append({"name": tab_state.name, "url": url})
         return state
+
+    async def busy_tabs(self) -> set[str]:
+        async with self._tabs_lock:
+            return {
+                name for name, tab_state in self._tabs.items() if tab_state.lock.locked()
+            }
 
     async def console_messages(
         self, tab: str = DEFAULT_TAB

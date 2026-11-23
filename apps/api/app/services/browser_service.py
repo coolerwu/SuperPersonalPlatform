@@ -129,6 +129,10 @@ class BrowserService:
                 # 刚重建的新会话正处于同一轮崩溃的防抖窗口内，跳过级联 reset。
                 return
             session = self._session
+            if session is not None and session.is_connected():
+                # 页面级错误（如别的会话驱逐标签页）不该重置仍连通的共享浏览器。
+                logger.debug("browser still connected; skipping reset")
+                return
             self._session = None
             self._default_tabs.clear()
             if session is not None:
@@ -209,16 +213,17 @@ class BrowserService:
         limit = getattr(session, "concurrency", 1)
         if len(tabs) < limit:
             return
+        busy = await session.busy_tabs()
         base = self.prefix(session_id)
         nested = f"{base}-"
 
         def is_own(name: str) -> bool:
             return name == base or name.startswith(nested)
 
-        # tabs_state 按创建顺序返回，先关最老的，尽量少影响其他会话。
+        # tabs_state 按创建顺序返回，先关最老的；正在执行动作的 tab 不驱逐。
         for tab in tabs:
             name = str(tab.get("name") or "")
-            if is_own(name):
+            if is_own(name) or name in busy:
                 continue
             try:
                 await session.drop_tab(name)
@@ -227,7 +232,19 @@ class BrowserService:
             logger.info("evicted tab %s to free shared browser quota", name)
             if len(await session.tabs_state()) < limit:
                 return
-        if len(await session.tabs_state()) >= limit:
+        fresh = await session.tabs_state()
+        if len(fresh) >= limit:
+            busy_now = await session.busy_tabs()
+            others = [
+                str(tab.get("name") or "")
+                for tab in fresh
+                if not is_own(str(tab.get("name") or ""))
+            ]
+            if others and all(name in busy_now for name in others):
+                raise BrowserToolError(
+                    "shared browser tabs are full; other sessions are using "
+                    "theirs right now, retry shortly"
+                )
             raise BrowserToolError(
                 f"this session is using all {limit} shared browser tabs; "
                 "close one with tabs(action='close', index=...)"

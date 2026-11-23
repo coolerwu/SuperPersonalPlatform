@@ -77,8 +77,8 @@ ClaudeTurnRunner（每个缓存 client 构建一次）
 - 进程内单例，`main.py` 的 `lifespan` 启动时创建、关闭时调用 `shutdown()`（带超时，`save_storage_state` 后关闭 context/browser/playwright）。
 - 懒启动：首次工具调用时才实例化 `BrowserSession` 并拉起 Chromium；启动失败转换为可读错误（提示 `playwright install chromium`）。
 - 空闲回收：最后一次工具调用后超过 `browser_idle_seconds`（默认 300）自动关闭浏览器并落状态；下一次调用重新拉起。profile 中的 cookie/localStorage 跨回收保留。
-- 崩溃恢复：`BrowserSession` 内部异常（浏览器退出）后，服务层丢弃旧实例并在下一次调用重建；页面渲染进程崩溃由 `page.on("crash")` 标记，`tabs_state` / 取用 tab 时摘除并释放槽位，`navigate` 自动重建该会话标签页；单页崩溃不重置共享浏览器。
-- 会话 tab：`tab_name = f"chat-{session_id[:8]}"`；服务层只允许操作属于本会话的 tab（拒绝其他会话名、拒绝未知名）。全局 tab 上限沿用 `BrowserSession(concurrency=BROWSER_CONCURRENCY)`；满额时 `prepare_tab` / `new_tab` 按创建顺序关闭其它会话的标签页（本会话标签页不动），只有本会话自己占满时才返回 `shared browser tabs` 错误。同一 tab 的操作由既有 `tab.lock` 串行，不同 tab 天然并行；驱逐走 `drop_tab`，不等目标 tab 的操作锁。
+- 崩溃恢复：`BrowserSession` 内部异常（浏览器退出）后，服务层丢弃旧实例并在下一次调用重建；只有浏览器连接断开时才重置共享浏览器，页面级 target-closed 不重置。页面渲染进程崩溃由 `page.on("crash")` 标记，`tabs_state` / 取用 tab 时摘除并释放槽位，`navigate` 自动重建该会话标签页；单页崩溃不重置共享浏览器。
+- 会话 tab：`tab_name = f"chat-{session_id[:8]}"`；常规工具调用只允许操作本会话的 tab；全局满额时服务层会驱逐其它会话最老的空闲 tab，忙碌 tab 不驱逐；其它会话的忙碌 tab 占满时返回 `shared browser tabs are full` 错误，本会话自己占满时返回 `this session is using all N shared browser tabs`。同一 tab 的操作由既有 `tab.lock` 串行，不同 tab 天然并行；驱逐走 `drop_tab`，不等目标 tab 的操作锁。
 - 不在服务层再加全局信号量：并发边界就是“tab 数上限 + 每 tab 串行”，与旧实现的语义一致。
 
 ### BrowserMcp（`apps/api/app/services/browser_mcp.py`）

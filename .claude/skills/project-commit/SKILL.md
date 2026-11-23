@@ -60,7 +60,8 @@ If the user explicitly asks to deploy v1 on the target machine:
    `cd ~/SuperPersonalPlatform-v1-deploy && git pull --ff-only origin main`
    Verify `git rev-parse HEAD` equals the pushed SHA and `git status --short` is clean.
 3. If `apps/api/pyproject.toml` changed, run `.venv/bin/pip install -e apps/api`.
-   If Playwright was added or upgraded, also run
+   Always verify a Chromium build is present for the venv Playwright before
+   restarting: `ls ~/.cache/ms-playwright | grep '^chromium-'`; if missing, run
    `.venv/bin/playwright install chromium` (prefix
    `PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright` when the
    default download is slow). If Chromium fails to start for missing shared

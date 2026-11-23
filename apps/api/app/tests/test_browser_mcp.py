@@ -12,6 +12,10 @@ from app.services.browser_tools import BrowserToolError
 class FakeSession:
     closed = False
 
+    def is_connected(self) -> bool:
+        # 默认模拟浏览器已断开，便于既有 reset 用例继续生效。
+        return False
+
     async def open(self, url: str, tab: str) -> str:
         return f"Opened {url} in {tab}"
 
@@ -74,6 +78,9 @@ class FakeService:
         yield self.session
 
     async def reset(self) -> None:
+        # 模拟 BrowserService.reset：连接仍正常时不重置共享浏览器。
+        if self.session.is_connected():
+            return
         self.reset_calls += 1
 
     async def resolve_tab(self, session, session_id, tab=None) -> str:
@@ -162,6 +169,25 @@ async def test_dead_browser_error_resets_service(tmp_path) -> None:
     result = await find(tools, "click").handler({"target": "s1e3"})
     assert result["is_error"] is True
     assert service.reset_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_dead_browser_error_skips_reset_when_connected(tmp_path) -> None:
+    class ConnectedDead(FakeSession):
+        def is_connected(self) -> bool:
+            return True
+
+        async def click(self, target, tab):
+            raise BrowserToolError(
+                "Target page, context or browser has been closed"
+            )
+
+    service = FakeService(ConnectedDead())
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "click").handler({"target": "s1e3"})
+    assert result["is_error"] is True
+    # 浏览器进程仍连通（如别的会话驱逐了标签页），不能重置共享实例。
+    assert service.reset_calls == 0
 
 
 @pytest.mark.asyncio
