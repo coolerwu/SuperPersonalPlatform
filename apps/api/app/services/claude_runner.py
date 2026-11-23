@@ -40,7 +40,14 @@ from urllib.parse import quote
 
 from app.config import settings as app_settings
 from app.db import SessionLocal
-from app.services import agent_guard, channel_delivery, platform_mcp, sdk_bridge, turn_lease
+from app.services import (
+    agent_guard,
+    browser_mcp,
+    channel_delivery,
+    platform_mcp,
+    sdk_bridge,
+    turn_lease,
+)
 from app.services.claude_env import build_claude_env, claude_paths, workspace_for
 from app.services.identifiers import valid_agent_id
 from app.services.sdk_events import (
@@ -319,6 +326,7 @@ class ClaudeTurnRunner:
         sweep_seconds: float | None = None,
         connect_timeout_seconds: float | None = None,
         session_tasks: Any | None = None,
+        browser_service: Any | None = None,
     ) -> None:
         self._store = store
         self._home = home
@@ -330,6 +338,9 @@ class ClaudeTurnRunner:
         # Session-level background task state: task events are published here
         # and active tasks pin a cached client past its idle TTL.
         self._session_tasks = session_tasks
+        # Shared browser owned by the app lifespan; when absent the browser
+        # MCP server is not registered at all.
+        self._browser_service = browser_service
         self._locks: dict[str, asyncio.Lock] = {}
         self._active: set[ClientKey] = set()
         # Turn id currently attached to each cached client key. /stop uses it
@@ -505,6 +516,13 @@ class ClaudeTurnRunner:
                     tool_context
                 )
             }
+            if self._browser_service is not None:
+                mcp_servers[browser_mcp.SERVER_NAME] = browser_mcp.build_server(
+                    self._browser_service,
+                    agent_id=agent.id,
+                    session_id=turn.session_id,
+                    workspace=workspace,
+                )
             amap_key = (maps.api_key or "").strip()
             if maps.provider == "amap" and maps.enabled and amap_key:
                 mcp_servers["amap"] = {

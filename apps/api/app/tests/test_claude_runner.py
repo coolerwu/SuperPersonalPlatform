@@ -2686,3 +2686,36 @@ async def test_close_all_marks_each_client_once(tmp_path):
         (session_id, "服务关机，SDK client 已断开")
         for session_id in session_ids
     )
+
+
+@pytest.mark.asyncio
+async def test_browser_mcp_server_registered_when_service_present(tmp_path):
+    await init_db()
+    captured = []
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options)
+        or FakeClient([ResultMessage()]),
+        browser_service=object(),
+    )
+    await runner.run(make_turn(), TurnStream())
+
+    servers = captured[0].mcp_servers
+    assert servers["browser"]["type"] == "sdk"
+    assert servers["browser"]["name"] == "browser"
+
+
+@pytest.mark.asyncio
+async def test_browser_mcp_server_absent_without_service(tmp_path):
+    await init_db()
+    captured = []
+    runner = ClaudeTurnRunner(
+        store=FakeStore(make_agent()),
+        home=tmp_path,
+        client_factory=lambda options: captured.append(options)
+        or FakeClient([ResultMessage()]),
+    )
+    await runner.run(make_turn(), TurnStream())
+
+    assert "browser" not in captured[0].mcp_servers

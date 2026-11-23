@@ -109,10 +109,16 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 async def _enqueue_delivery(delivery_id: int) -> None:
                     weixin.schedule_delivery(delivery_id)
 
+                from app.services.browser_service import BrowserService
+
+                browser_service = BrowserService()
+                await browser_service.startup()
+                app.state.browser_service = browser_service
                 runner = ClaudeTurnRunner(
                     store,
                     deliver_callback=_enqueue_delivery,
                     session_tasks=session_tasks,
+                    browser_service=browser_service,
                 )
                 app.state.runner = runner
                 registry = SessionRegistry(
@@ -174,6 +180,13 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                             await runner.close_all()
                         except Exception:
                             logger.exception("runner shutdown failed")
+                    # Close the browser after all CLI clients are gone; shutdown does not wait for in-flight tool calls.
+                    browser_service = getattr(app.state, "browser_service", None)
+                    if browser_service is not None:
+                        try:
+                            await browser_service.shutdown()
+                        except Exception:
+                            logger.exception("browser service shutdown failed")
                     session_tasks = getattr(app.state, "session_tasks", None)
                     if session_tasks is not None:
                         try:
