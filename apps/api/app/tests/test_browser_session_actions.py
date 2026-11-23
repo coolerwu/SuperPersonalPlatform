@@ -55,6 +55,10 @@ class FakePage:
         self.back_result: object | None = object()
         self.waited: list[int] = []
         self.text_waits: list[tuple[str, str]] = []
+        self.handlers: dict[str, object] = {}
+
+    def on(self, event: str, handler) -> None:
+        self.handlers[event] = handler
 
     def locator(self, selector: str) -> FakeLocator:
         return self.locators.setdefault(selector, FakeLocator(selector))
@@ -199,3 +203,48 @@ async def test_tabs_state_lists_tabs_with_urls() -> None:
     state = await session.tabs_state()
 
     assert state == [{"name": "main", "url": "https://example.com/"}]
+
+
+@pytest.mark.asyncio
+async def test_click_rejects_ambiguous_selector() -> None:
+    page = FakePage()
+    page.locators[".item"] = FakeLocator(".item", count=2)
+    session = make_session(page)
+
+    with pytest.raises(BrowserToolError):
+        await session.click(".item", "main")
+
+
+class _FakeContext:
+    def __init__(self, page) -> None:  # noqa: ANN001
+        self.page = page
+
+    async def new_page(self):  # noqa: ANN201
+        return self.page
+
+
+@pytest.mark.asyncio
+async def test_console_listener_records_and_truncates() -> None:
+    page = FakePage()
+    session = BrowserSession(concurrency=3)
+
+    async def _noop():
+        return None
+
+    session._ensure_started = _noop  # type: ignore[method-assign]
+    session._context = _FakeContext(page)  # type: ignore[assignment]
+
+    await session.new_tab("logs")
+    handler = page.handlers["console"]
+
+    class Message:
+        type = "error"
+        text = "x" * 600
+
+    handler(Message())
+
+    entries = await session.console_messages("logs")
+    assert entries[0]["type"] == "error"
+    assert entries[0]["text"] == "x" * 500
+    assert entries[0]["time"]
+
