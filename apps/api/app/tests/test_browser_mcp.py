@@ -79,6 +79,9 @@ class FakeService:
     async def resolve_tab(self, session, session_id, tab=None) -> str:
         return "chat-abc-1"
 
+    async def prepare_tab(self, session, session_id, tab=None) -> str:
+        return "chat-abc-1"
+
     async def list_tabs(self, session, session_id):
         return [
             {"index": 1, "name": "chat-abc-1", "url": "https://example.com/", "default": True}
@@ -165,13 +168,28 @@ async def test_dead_browser_error_resets_service(tmp_path) -> None:
 async def test_generic_dead_browser_error_resets_service(tmp_path) -> None:
     class GenericDead(FakeSession):
         async def click(self, target, tab):
-            raise RuntimeError("Target closed")
+            raise RuntimeError("Browser has been closed")
 
     service = FakeService(GenericDead())
     tools = build_tools(tmp_path, service=service)
     result = await find(tools, "click").handler({"target": "s1e3"})
     assert result["is_error"] is True
     assert service.reset_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_network_error_does_not_reset_service(tmp_path) -> None:
+    class NetworkDown(FakeSession):
+        async def click(self, target, tab):
+            raise BrowserToolError(
+                "navigation failed: net::ERR_INTERNET_DISCONNECTED"
+            )
+
+    service = FakeService(NetworkDown())
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "click").handler({"target": "s1e3"})
+    assert result["is_error"] is True
+    assert service.reset_calls == 0
 
 
 @pytest.mark.asyncio
@@ -204,6 +222,16 @@ async def test_fill_form_passes_fields(tmp_path) -> None:
         {"fields": [{"target": "#a", "value": "1"}, {"target": "#b", "value": "2"}]}
     )
     assert result["content"][0]["text"] == "Filled 2 field(s)"
+
+
+@pytest.mark.asyncio
+async def test_fill_form_rejects_more_than_20_fields(tmp_path) -> None:
+    tools = build_tools(tmp_path)
+    result = await find(tools, "fill_form").handler(
+        {"fields": [{"target": f"#f{index}", "value": "x"} for index in range(21)]}
+    )
+    assert result["is_error"] is True
+    assert "at most 20 fields" in result["content"][0]["text"]
 
 
 @pytest.mark.asyncio

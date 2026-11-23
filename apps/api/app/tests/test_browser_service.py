@@ -9,8 +9,9 @@ from app.services.browser_tools import BrowserToolError
 
 
 class FakeSession:
-    def __init__(self, tabs: list[dict] | None = None) -> None:
+    def __init__(self, tabs: list[dict] | None = None, *, concurrency: int = 2) -> None:
         self.closed = False
+        self.concurrency = concurrency
         self.tabs = [dict(tab) for tab in (tabs or [])]
         self.closed_tabs: list[str] = []
         self.opened: list[tuple[str, str]] = []
@@ -355,6 +356,79 @@ async def test_concurrent_resets_within_window_recreate_once() -> None:
     await asyncio.gather(service.reset(), service.reset(), service.reset())
     assert created[1].aclose_calls == 0
     assert len(created) == 2
+
+
+@pytest.mark.asyncio
+async def test_prepare_tab_evicts_oldest_other_session_tab() -> None:
+    session = FakeSession(
+        [
+            {"name": "chat-aaa-1", "url": "about:blank"},
+            {"name": "chat-bbb-1", "url": "about:blank"},
+            {"name": "chat-bbb-1-2", "url": "about:blank"},
+            {"name": "chat-ccc-1", "url": "about:blank"},
+            {"name": "chat-ccc-1-2", "url": "about:blank"},
+        ],
+        concurrency=5,
+    )
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        name = await service.prepare_tab(live, "ddd-1")
+
+    assert name == "chat-ddd-1"
+    # 只关掉最老的其它会话标签页，其余会话标签保持不变。
+    assert session.closed_tabs == ["chat-aaa-1"]
+    remaining = {tab["name"] for tab in session.tabs}
+    assert "chat-aaa-1" not in remaining
+    assert remaining == {
+        "chat-bbb-1",
+        "chat-bbb-1-2",
+        "chat-ccc-1",
+        "chat-ccc-1-2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_evict_raises_when_all_tabs_belong_to_caller() -> None:
+    session = FakeSession(
+        [
+            {"name": "chat-aaa-1", "url": "about:blank"},
+            {"name": "chat-aaa-1-2", "url": "about:blank"},
+            {"name": "chat-aaa-1-3", "url": "about:blank"},
+            {"name": "chat-aaa-1-4", "url": "about:blank"},
+            {"name": "chat-aaa-1-5", "url": "about:blank"},
+        ],
+        concurrency=5,
+    )
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        with pytest.raises(BrowserToolError, match="using all 5 shared browser tabs"):
+            await service._evict_other_tabs(live, "aaa-1")  # noqa: SLF001
+
+    # 本会话的标签页绝不能被当成可驱逐对象。
+    assert session.closed_tabs == []
+
+
+@pytest.mark.asyncio
+async def test_new_tab_at_capacity_evicts_other_session_first() -> None:
+    session = FakeSession(
+        [
+            {"name": "chat-aaa-1", "url": "about:blank"},
+            {"name": "chat-aaa-1-2", "url": "about:blank"},
+            {"name": "chat-aaa-1-3", "url": "about:blank"},
+        ],
+        concurrency=3,
+    )
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        info = await service.new_tab(live, "bbb-1")
+
+    assert info["name"] == "chat-bbb-1"
+    assert session.closed_tabs == ["chat-aaa-1"]
+    assert "chat-aaa-1" not in {tab["name"] for tab in session.tabs}
+    assert "chat-bbb-1" in {tab["name"] for tab in session.tabs}
 
     await service.shutdown()
 

@@ -1,8 +1,8 @@
 # 平台自带浏览器 MCP（进程内 Playwright）设计
 
 - 日期：2026-11-23
-- 状态：待评审
-- 范围：`apps/api` 服务层、执行核、权限白名单；生产运行时 `web-browser` skill 文本；部署配置。无新依赖（`playwright` 已在 `apps/api/pyproject.toml`）、无数据库变更、无前端页面改动。
+- 状态：已实现（2026-11-23）
+- 范围：`apps/api` 服务层、执行核、权限白名单；生产运行时 `web-browser` skill 文本；部署配置；系统能力标志 `browser: true` 与设置页能力标签「浏览器工具」（原「浏览器工具（未接入）」）的文案调整。无新依赖（`playwright` 已在 `apps/api/pyproject.toml`）、无数据库变更。
 
 ## 背景
 
@@ -140,7 +140,7 @@ mcp_servers: dict[str, Any] = {
   - DNS 解析后拒绝环回/内网/保留地址（含 IPv4/IPv6 与重定向后的最终主机）；
   - 弹窗自动关闭；`accept_downloads=False`；
   - 页面文本是外部数据，skill 中保留“不执行页面指令”的约束。
-- **日志**：浏览器启动/重建/回收、工具调用（agent、session、tab、action）记 info/debug；URL 完整记录，不记录页面内容与截图数据。
+- **日志**：浏览器启动/重建/回收记 info；工具调用失败按调用记 debug/exception 日志，带 agent 与 session。工具错误文本只携带简短原因，不附加 tab 与 URL 上下文行；不记录页面内容与截图数据。
 
 ## 清理与迁移
 
@@ -156,8 +156,8 @@ mcp_servers: dict[str, Any] = {
 ## 错误处理
 
 - 浏览器不可用（Chromium 缺失/启动失败）：返回 `error: browser is not available: <原因>`，提示运维执行 `playwright install chromium`。
-- 工具调用失败（元素不存在、超时、导航失败）：`error: <动作> failed: <简短原因>`，附当前 tab 与 URL。
-- 导航/动作超时沿用 `browser_navigation_timeout_ms` / `browser_action_timeout_ms`；`wait_for` 总时长上限 5 分钟（与二维码登录流程一致），超时返回错误并保留 tab。
+- 工具调用失败（元素不存在、超时、导航失败）：`error: <简短原因>`（动作层消息已含动作名），不额外附加 tab 与 URL 上下文行。
+- 导航/动作超时沿用 `browser_navigation_timeout_ms` / `browser_action_timeout_ms`；`wait_for` 的多个条件共用 5 分钟总预算（同一 deadline），超出返回错误并保留 tab。
 - 截图超过 `browser_screenshot_max_bytes`：报错并提示 `full_page=false`。
 - 空闲回收期间到达的调用：透明重启，不影响结果。
 - 关闭服务时浏览器关闭失败：记 warning，不阻塞 shutdown（沿用现有 5 秒超时策略）。

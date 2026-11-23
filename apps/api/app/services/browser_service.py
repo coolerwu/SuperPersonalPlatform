@@ -201,6 +201,51 @@ class BrowserService:
                 names.append(name)
         return names
 
+    async def _evict_other_tabs(
+        self, session: BrowserSession, session_id: str
+    ) -> None:
+        """Close other sessions' oldest tabs so this session can open a new one."""
+        tabs = await session.tabs_state()
+        limit = getattr(session, "concurrency", 1)
+        if len(tabs) < limit:
+            return
+        base = self.prefix(session_id)
+        nested = f"{base}-"
+
+        def is_own(name: str) -> bool:
+            return name == base or name.startswith(nested)
+
+        # tabs_state 按创建顺序返回，先关最老的，尽量少影响其他会话。
+        for tab in tabs:
+            name = str(tab.get("name") or "")
+            if is_own(name):
+                continue
+            try:
+                await session.close_tab(name)
+            except BrowserToolError:
+                continue
+            logger.info("evicted tab %s to free shared browser quota", name)
+            if len(await session.tabs_state()) < limit:
+                return
+        if len(await session.tabs_state()) >= limit:
+            raise BrowserToolError(
+                f"this session is using all {limit} shared browser tabs; "
+                "close one with tabs(action='close', index=...)"
+            )
+
+    async def prepare_tab(
+        self, session: BrowserSession, session_id: str, tab: str | int | None = None
+    ) -> str:
+        """Resolve a tab for navigation, evicting other sessions' tabs if needed."""
+        name = await self.resolve_tab(session, session_id, tab)
+        open_names = {
+            str(item.get("name") or "") for item in await session.tabs_state()
+        }
+        if name in open_names:
+            return name
+        await self._evict_other_tabs(session, session_id)
+        return name
+
     async def resolve_tab(
         self, session: BrowserSession, session_id: str, tab: str | int | None = None
     ) -> str:
@@ -260,6 +305,8 @@ class BrowserService:
     ) -> dict[str, object]:
         base = self.prefix(session_id)
         async with self._session_lock(session_id):
+            # 先腾出全局配额，再分配名字，保证计数与建页一致。
+            await self._evict_other_tabs(session, session_id)
             # 分配与建页必须在同一把会话锁内，否则并发 new 会抢到同一个名字。
             names = await self._names(session, session_id)
             taken = set(names)

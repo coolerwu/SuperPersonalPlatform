@@ -1312,21 +1312,30 @@ class BrowserSession:
             raise BrowserToolError("wait_for needs text, textGone, or time")
         tab_state = await self._get_or_create_tab(tab, create=False)
         async with tab_state.lock:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + MAX_WAIT_FOR_MS / 1000
+
+            def remaining_ms() -> int:
+                # 三个条件共用同一 5 分钟预算，避免依次各等 5 分钟。
+                return max(0, int((deadline - loop.time()) * 1000))
+
             try:
                 if text is not None:
                     await tab_state.page.get_by_text(text).first.wait_for(
-                        state="visible", timeout=MAX_WAIT_FOR_MS
+                        state="visible", timeout=max(1, remaining_ms())
                     )
                 if text_gone is not None:
                     await tab_state.page.get_by_text(text_gone).first.wait_for(
-                        state="hidden", timeout=MAX_WAIT_FOR_MS
+                        state="hidden", timeout=max(1, remaining_ms())
                     )
                 if time_ms is not None:
                     await tab_state.page.wait_for_timeout(
-                        max(0, min(int(time_ms), MAX_WAIT_FOR_MS))
+                        max(0, min(int(time_ms), remaining_ms()))
                     )
             except Exception as exc:
                 raise BrowserToolError(f"wait_for failed: {_short_error(exc)}") from exc
+            if remaining_ms() <= 0:
+                raise BrowserToolError("wait_for exceeded its 5-minute budget")
             return await self._action_result(
                 f"Waited in tab {tab_state.name!r}", tab_state
             )
@@ -1399,21 +1408,17 @@ class BrowserSession:
             await asyncio.wait_for(self._save_storage_state(), timeout=10)
         except Exception:
             logger.warning("browser state save failed", exc_info=True)
-        tabs = list(self._tabs.values())
         self._tabs.clear()
-        for tab_state in tabs:
-            try:
-                await asyncio.wait_for(tab_state.page.close(), timeout=5)
-            except Exception:
-                pass
-        for closer in (
-            getattr(self._context, "close", None),
-            getattr(self._browser, "close", None),
-            getattr(self._playwright, "stop", None),
+        # context.close() 会一并关闭其页面；再依次关浏览器与 Playwright 驱动，
+        # 各自独立超时，最坏约 30 秒（状态 10 + context 10 + browser 5 + stop 5）。
+        for closer, timeout in (
+            (getattr(self._context, "close", None), 10),
+            (getattr(self._browser, "close", None), 5),
+            (getattr(self._playwright, "stop", None), 5),
         ):
             if closer is None:
                 continue
             try:
-                await asyncio.wait_for(closer(), timeout=5)
+                await asyncio.wait_for(closer(), timeout=timeout)
             except Exception:
                 pass

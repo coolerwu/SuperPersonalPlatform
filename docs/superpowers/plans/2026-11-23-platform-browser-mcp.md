@@ -21,7 +21,12 @@
 - console 记录含 UTC 时间字段；
 - `BrowserService.reset()` 使用 5 秒去抖窗口（并发同事故不重复重建，窗口后仍可恢复）；
 - `new_tab(url=...)` 在打开 URL 失败时会关闭刚创建的标签页再抛错；
-- full 档 `allowed_tools` 在有浏览器服务时显式并入 `browser_mcp.allowed_tool_names()`。
+- full 档 `allowed_tools` 在有浏览器服务时显式并入 `browser_mcp.allowed_tool_names()`；
+- 跨会话 LRU tab 驱逐：全局 tab 达到上限时 `prepare_tab` / `new_tab` 先关闭其它会话最老的标签页，仍满则报共享配额错误；
+- 收紧死浏览器标记：仅 Playwright「已关闭/连接断开」类错误触发 `reset`，`net::` / `err_` 网络错误不重置共享浏览器；
+- `wait_for` 的多个条件共享 5 分钟总预算，`fill_form` 上限 20 个字段；
+- `BrowserSession.aclose()` 改为先 `context.close()` 再依次关闭 browser / playwright，逐项独立超时（最坏约 30 秒）；
+- systemd `TimeoutStopSec` 60 → 90 秒，覆盖整体停机最坏情况。
 
 ---
 

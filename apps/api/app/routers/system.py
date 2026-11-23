@@ -60,7 +60,7 @@ async def system_info(request: Request) -> dict[str, object]:
             "checkpoints": False,
             "filesystem": True,
             "shell": True,
-            # Browser tools are served by the in-process browser SDK MCP server.
+            # Static capability flag: platform support; runtime readiness depends on Playwright/Chromium.
             "browser": True,
             "skills": True,
             "plugins": True,

@@ -27,11 +27,10 @@ SERVER_VERSION = "1.0.0"
 # 5 分钟 wait_for 预算加上启动与快照，必须能放进一次工具调用。
 TOOL_TIMEOUT_MS = MAX_WAIT_FOR_MS + 120_000
 _DEAD_BROWSER_MARKERS = (
-    "target closed",
     "target page, context or browser has been closed",
     "browser has been closed",
-    "crash",
-    "disconnected",
+    "browser closed unexpectedly",
+    "playwright connection closed",
 )
 TOOL_NAMES = (
     "navigate",
@@ -70,9 +69,16 @@ def _error(message: str) -> dict[str, Any]:
     }
 
 
-async def _maybe_reset(service: BrowserService, message: str) -> None:
+def _is_dead_browser(message: str) -> bool:
     lowered = message.lower()
-    if not any(marker in lowered for marker in _DEAD_BROWSER_MARKERS):
+    # 网络/DNS 类错误不是浏览器崩溃，重置共享浏览器会误伤所有会话。
+    if "net::" in lowered or "err_" in lowered:
+        return False
+    return any(marker in lowered for marker in _DEAD_BROWSER_MARKERS)
+
+
+async def _maybe_reset(service: BrowserService, message: str) -> None:
+    if not _is_dead_browser(message):
         return
     try:
         await service.reset()
@@ -165,7 +171,9 @@ def _build_tools(
             if not url:
                 raise BrowserToolError("url must not be empty")
             async with service.use() as session:
-                tab = await tab_for(session, args)
+                tab = await service.prepare_tab(
+                    session, session_id, args.get("tab")
+                )
                 return _text(await session.open(url, tab))
 
         return await _guard("navigate", call)
@@ -268,6 +276,9 @@ def _build_tools(
             fields = args.get("fields")
             if not isinstance(fields, list):
                 raise BrowserToolError("fields must be a list")
+            if len(fields) > 20:
+                # 每个字段最多等 10 秒，超过 20 个会撑爆工具调用预算。
+                raise BrowserToolError("fill_form accepts at most 20 fields")
             async with service.use() as session:
                 tab = await tab_for(session, args)
                 return _text(await session.fill_many(fields, tab))
@@ -521,8 +532,17 @@ def _build_tools(
 
     @tool(
         "close",
-        "Close one of this session's tabs, or all of them when tab is omitted.",
-        {"type": "object", "properties": {"tab": _TAB}},
+        "Close one of this session's tabs, or every tab of this session when tab "
+        "is omitted.",
+        {
+            "type": "object",
+            "properties": {
+                "tab": {
+                    "type": "string",
+                    "description": "标签页名称或序号；省略时关闭本会话全部标签页",
+                }
+            },
+        },
     )
     async def close(args: dict[str, Any]) -> dict[str, Any]:
         async def call() -> dict[str, Any]:

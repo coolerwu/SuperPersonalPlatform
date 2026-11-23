@@ -4,7 +4,13 @@ import asyncio
 
 import pytest
 
-from app.services.browser_tools import BrowserSession, BrowserToolError, _Tab
+from app.services import browser_tools
+from app.services.browser_tools import (
+    MAX_WAIT_FOR_MS,
+    BrowserSession,
+    BrowserToolError,
+    _Tab,
+)
 
 
 class FakeLocator:
@@ -54,7 +60,7 @@ class FakePage:
         self.url = "https://example.com/"
         self.back_result: object | None = object()
         self.waited: list[int] = []
-        self.text_waits: list[tuple[str, str]] = []
+        self.text_waits: list[tuple[str, str, int]] = []
         self.handlers: dict[str, object] = {}
 
     def on(self, event: str, handler) -> None:
@@ -71,7 +77,7 @@ class FakePage:
                 self.first = self
 
             async def wait_for(self, state: str, timeout: int) -> None:
-                page.text_waits.append((text, state))
+                page.text_waits.append((text, state, timeout))
 
         return _Text()
 
@@ -156,9 +162,23 @@ async def test_wait_for_text_and_time() -> None:
 
     output = await session.wait_for("main", text="加载完成", time_ms=1_000)
 
-    assert ("加载完成", "visible") in page.text_waits
+    assert page.text_waits[0][:2] == ("加载完成", "visible")
+    # 文本等待应拿到共享的 5 分钟预算，而不是导航超时。
+    budget = page.text_waits[0][2]
+    assert MAX_WAIT_FOR_MS - 1_000 <= budget <= MAX_WAIT_FOR_MS
+    assert budget != session.navigation_timeout_ms
     assert page.waited == [1_000]
     assert "SNAP:main" in output
+
+
+@pytest.mark.asyncio
+async def test_wait_for_reports_budget_exhaustion(monkeypatch) -> None:
+    page = FakePage()
+    session = make_session(page)
+    monkeypatch.setattr(browser_tools, "MAX_WAIT_FOR_MS", 0)
+
+    with pytest.raises(BrowserToolError, match="5-minute budget"):
+        await session.wait_for("main", time_ms=0)
 
 
 @pytest.mark.asyncio
