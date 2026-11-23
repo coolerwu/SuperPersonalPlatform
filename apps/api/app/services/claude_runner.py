@@ -552,7 +552,7 @@ class ClaudeTurnRunner:
                 }
             else:
                 kwargs["permission_mode"] = app_settings.claude_permission_mode
-                # Platform, browser and map MCP tools are pre-approved; bypassPermissions also auto-approves them.
+                # Platform and browser MCP tools are pre-approved; map and other MCP tools rely on bypassPermissions.
                 allowed_tools = platform_mcp.allowed_tool_names()
                 if self._browser_service is not None:
                     allowed_tools = allowed_tools + browser_mcp.allowed_tool_names()

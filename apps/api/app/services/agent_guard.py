@@ -82,7 +82,7 @@ def build_restricted_allowed_tools(
             names.append(server)
     if maps_enabled:
         names.append("mcp__amap")
-    # The platform browser MCP server is always registered; restricted Agents
+    # The app lifespan registers the browser MCP server; restricted Agents
     # need the server-level entry or dontAsk denies every browser tool.
     if "mcp__browser" not in names:
         names.append("mcp__browser")

@@ -348,6 +348,16 @@ async def test_tabs_select_without_index_is_error(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tabs_select_with_non_numeric_index_is_error(tmp_path) -> None:
+    service = FakeService()
+    tools = build_tools(tmp_path, service=service)
+    result = await find(tools, "tabs").handler({"action": "select", "index": "abc"})
+    assert result["is_error"] is True
+    assert service.select_calls == []
+    assert service.close_calls == []
+
+
+@pytest.mark.asyncio
 async def test_tabs_close_passes_index(tmp_path) -> None:
     service = FakeService()
     tools = build_tools(tmp_path, service=service)

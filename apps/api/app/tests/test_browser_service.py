@@ -271,7 +271,9 @@ async def test_reset_debounce_skips_newer_session_within_window() -> None:
     third = FakeSession()
     sessions = [first, second, third]
     service = BrowserService(
-        session_factory=lambda: sessions.pop(0), idle_seconds=300
+        session_factory=lambda: sessions.pop(0),
+        idle_seconds=300,
+        reset_debounce_seconds=60,
     )
 
     async with service.use() as live:
@@ -322,6 +324,37 @@ async def test_reset_recovers_after_debounce_window() -> None:
 
     async with service.use() as live:
         assert live is third
+
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_resets_within_window_recreate_once() -> None:
+    created: list[FakeSession] = []
+
+    def factory() -> FakeSession:
+        session = FakeSession()
+        created.append(session)
+        return session
+
+    service = BrowserService(
+        session_factory=factory,
+        idle_seconds=300,
+        reset_debounce_seconds=60,
+    )
+
+    async with service.use() as live:
+        assert live is created[0]
+    await service.reset()
+    assert created[0].aclose_calls == 1
+
+    async with service.use() as live:
+        assert live is created[1]
+    # 新会话正处于防抖窗口内，多个并发 reset 都属于同一次事故：
+    # 既不关闭刚重建的新会话，也不额外创建新会话。
+    await asyncio.gather(service.reset(), service.reset(), service.reset())
+    assert created[1].aclose_calls == 0
+    assert len(created) == 2
 
     await service.shutdown()
 

@@ -90,6 +90,13 @@ def _guard_factory(
             return await call()
         except BrowserToolError as exc:
             message = str(exc)
+            logger.debug(
+                "browser tool %s rejected (agent=%s session=%s): %s",
+                name,
+                agent_id,
+                session_id,
+                message,
+            )
             await _maybe_reset(service, message)
             return _error(message)
         except Exception as exc:
@@ -122,8 +129,9 @@ def _workspace_path(workspace: Path, filename: str) -> Path:
     return target
 
 
-def _write_png(path: Path, data: bytes) -> None:
-    # 建目录与写文件放在同一个线程调用里，避免阻塞事件循环。
+def _write_png(path: Path, payload_b64: str) -> None:
+    # 解码、建目录与写文件放在同一个线程调用里，避免阻塞事件循环。
+    data = base64.b64decode(payload_b64)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
 
@@ -480,9 +488,7 @@ def _build_tools(
             header = str(blocks[0].get("text") or "")
             payload = str(blocks[1]["image_url"]["url"]).split(",", 1)[1]
             if target_path is not None:
-                await asyncio.to_thread(
-                    _write_png, target_path, base64.b64decode(payload)
-                )
+                await asyncio.to_thread(_write_png, target_path, payload)
                 header = f"{header}\nSaved to {relative}"
             return {
                 "content": [

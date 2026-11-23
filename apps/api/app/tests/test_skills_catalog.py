@@ -126,7 +126,6 @@ def test_seeded_skills_do_not_declare_platform_tools() -> None:
     from app.services import (  # noqa: F401 - import registers tool factories
         allocation_tools,
         backtest_tools,
-        browser_tools,
         chan_tools,
         skill_tools,
         trade_journal_tools,
@@ -146,7 +145,6 @@ def test_seeded_skills_do_not_declare_platform_tools() -> None:
         "web_search",
         "web_fetch",
         "backtest_run",
-        "browser_open",
         "chan_analyze",
         "trade_journal_record",
         "allocation_overview",

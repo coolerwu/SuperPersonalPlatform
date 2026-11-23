@@ -4,16 +4,13 @@ import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 from langchain_core.tools import BaseTool, StructuredTool
 
 from app.services.skills import SkillValidationError, create_skill
-
-if TYPE_CHECKING:
-    from app.services.browser_tools import BrowserSession
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +70,6 @@ class SkillToolContext:
     api_key: str
     base_url: str
     http_client: httpx.AsyncClient | None = None
-    browser: BrowserSession | None = None
     agent_id: str = ""
     session_id: str = ""
     skills_dir: Path | None = None
