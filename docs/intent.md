@@ -63,7 +63,7 @@
 
 - 平台级多 Agent 编排、自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）。
 - 事件触发、Webhook、主动推送。
-- 平台自带浏览器/搜索工具、`add_dirs`、技能创作工具接入 Agent——后续版本（平台业务工具已接入）。
+- 平台自带搜索工具、`add_dirs`、技能创作工具接入 Agent——后续版本（平台业务工具与浏览器工具已接入）。
 
 ### F2 执行核与网页聊天
 
@@ -184,7 +184,7 @@
    - 回复按 1800 字在段落/代码围栏边界切块，最多 10 块，超出截断并标注。
    - 崩溃重启后按 pending/attempting 行补发；attempting 行补发文案为「♻️ 上一条回复可能已部分送达，以下为完整内容：」。如果一次发送在至少一块已送达后失败（含登录过期），行保持 attempting，后续补发保留该前缀；发送 claim 已计入 attempts，达到 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 后标记终态 `failed` 并停止自动补发（已知限制：前缀只在重试期间保留）。只有一块都没发出时才回到 pending。渠道暂停/登录过期时保留 pending，恢复后继续；部分送达行仍受尝试上限约束。
    - 网页里在渠道会话中手动发消息不推回微信；定时推送复用同一投递机制。
-5. 运行期截图推送：平台浏览器工具未接入，`channel_images.send_session_image` 已保留但当前没有调用方；下一版本接入浏览器工具后启用。
+5. 运行期截图推送：浏览器工具已由平台进程内 MCP 提供，但 `channel_images.send_session_image` 仍没有调用方（渠道截图实时推送未接线）。
 6. 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；重新扫码后未发送任何分块（pending）的回复补发；部分送达行受 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 约束，达上限为 failed，不再自动补发。
 7. 删除渠道：停止轮询、清空登录态、删除投递/入站记录、清理定时任务推送目标、移除渠道与联系人绑定；已产生的会话与 transcript 保留。渠道所属 Agent 非 active 时轮询暂停（保留 `sync_buf`），恢复 active 后重新启动；渠道管理接口不受 Agent 状态限制。
 
@@ -228,7 +228,7 @@
 2. 初始化模板在 `apps/api/app/seed_skills/<name>/SKILL.md`：`quant-backtest`、`chanlun`、`trade-journal`、`allocation`、`cron-scheduler`。模板按「工具清单 + 组合方式 + 硬契约」组织；平台没有给 Agent 定时任务工具，`cron-scheduler` 只说明页面入口和定时触发会话的语义。启动 seed 规则：从未初始化过的缺失技能写入；未修改（哈希等于 `.seed_state.json` 记录）的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑，只要模板仍在就不再生成；模板移除时只删记录、保留本地文件；保留的副本不再计入「初始化技能」，页面归入「其他技能」。
 3. 技能页按「初始化技能 / 其他技能」分组，可查看和编辑 SKILL.md；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关；任何技能都可删除（只删技能目录），初始化技能删除后不复活；改过的初始化技能标「已调整」。
 4. 平台业务工具已通过进程内 MCP 接入 chat：回测 4 个（`backtest_*`）、行情 2 个（`market_*`）、交易记录 5 个（`trade_journal_*`）、资产配置 6 个（`allocation_*`）、缠论 2 个（`chan_analyze` / `chan_backtest`），共 19 个。runner 为每个缓存的 SDK client 挂一个 `platform_tools` SDK MCP server，工具以 `mcp__platform_tools__*` 出现在 init frame；插件自带的 MCP 继续并存。server 配置 `timeout`（至少 180 秒）和 `disableAutoBackground`，覆盖 `backtest_run` 最长约 90 秒的等待。交易记录与资产配置的写入工具对 Agent 开放。
-5. 工具页读取当前 Agent 最近一轮对话的运行时 init frame：`tools` 按内置 / `mcp__<server>__<tool>` 分类，`mcp_servers` 展示连接状态与来源，`skills`、`plugins`、`plugin_errors` 分别展示；平台业务工具的描述来自注册表。平台不再维护 Claude Code 工具清单；没有运行时数据时提示先发一条消息。平台自带的浏览器工具、`web_search`/`web_fetch` 与 `skill_save` 仍未接入；浏览器使用官方集市 `playwright` 插件，搜索使用 Claude Code 自带的 WebSearch/WebFetch。
+5. 工具页读取当前 Agent 最近一轮对话的运行时 init frame：`tools` 按内置 / `mcp__<server>__<tool>` 分类，`mcp_servers` 展示连接状态与来源，`skills`、`plugins`、`plugin_errors` 分别展示；平台业务工具的描述来自注册表。平台不再维护 Claude Code 工具清单；没有运行时数据时提示先发一条消息。浏览器工具由平台进程内的 `browser` SDK MCP server 提供（`mcp__browser__*`：navigate、snapshot、click、type、fill_form、press_key、select_option、wait_for、navigate_back、tabs、take_screenshot、console_messages、close），复用 `BrowserSession`（venv 的 Playwright + Chromium，不需要 Node/npx）；每个会话独立 `chat-<id 前缀>` 标签页、共享登录态（`data/browser_state.json`），懒启动、空闲回收、关机时优雅关闭。`web_search`/`web_fetch` 与 `skill_save` 仍未接入，搜索使用 Claude Code 自带的 WebSearch/WebFetch。集市 `playwright` 插件已停用。
 6. `langchain-core` 暂留：业务工具仍以 `StructuredTool` 注册，runner 把它们适配成 SDK MCP 工具。
 
 #### 验收标准
@@ -384,7 +384,7 @@
 
 本版明确不包含：
 
-1. 平台自带浏览器/搜索工具、`add_dirs`、技能创作工具、知识库工具接入 Agent；平台业务工具已通过进程内 MCP 接入。
+1. 平台自带搜索工具、`add_dirs`、技能创作工具、知识库工具接入 Agent；平台业务工具与浏览器工具已通过进程内 MCP 接入。
 2. rubric 质检。
 3. QuickJS eval 代码解释器。
 4. 会话全文搜索。
@@ -392,7 +392,7 @@
 6. 进程重启后继续看当前流式输出（同进程刷新会通过 `current_turn_id` 重放缓冲；同一 turn 内断线按事件序号续传）。
 7. 消息时间戳。
 8. Run 历史。
-9. 渠道运行期截图实时推送（等平台浏览器工具接入）。
+9. 渠道运行期截图实时推送（浏览器工具已接入，`channel_images` 接线未做）。
 10. `/memory` 指令与整理记忆。
 11. 过期会话的 transcript 由 Claude Code 删除，但平台不再随保留期清理其投递历史与旧截图目录；渠道绑定在下次入站时重建并清掉旧投递行。
 
@@ -574,7 +574,7 @@
 #### 功能点
 
 1. `settings.json` 的 `agents[].access` 取 `"full"` 或 `"workspace"`，缺省按 `"full"`；`default`（Assistant）固定 `"full"`，新建 Agent 默认 `"workspace"`；配置页 Agent 编辑区提供「完全访问（超级 Agent）」开关，列表显示档位。
-2. 受限 Agent（`workspace`）以 `permission_mode="dontAsk"` 运行，只放行白名单工具：工作区文件工具、WebSearch/WebFetch、Bash、Task、TodoWrite、Skill、平台业务工具、启用时的 `mcp__amap`、已安装插件的 MCP server；白名单之外的工具有权限错误，不弹审批。
+2. 受限 Agent（`workspace`）以 `permission_mode="dontAsk"` 运行，只放行白名单工具：工作区文件工具、WebSearch/WebFetch、Bash、Task、TodoWrite、Skill、平台业务工具、启用时的 `mcp__amap`、已安装插件的 MCP server；白名单之外的工具有权限错误，不弹审批。平台浏览器工具通过服务器级白名单 `mcp__browser` 放行，内网/localhost 地址由浏览器工具自身拒绝。
 3. 受限 Agent 挂 `PreToolUse` hook（`on_failure="block"`）：Read/Write/Edit/MultiEdit 的 `file_path`、NotebookEdit 的 `notebook_path`、Glob/Grep 的 `path` 与绝对 `pattern` 一律按工作区解析并 `realpath`，越界（含 `..`、绝对外部路径、符号链接逃逸）拒绝；WebFetch 拒绝 localhost、回环与私有网段；对其他工具不发表意见，不代行放行。
 4. Bash、Task 与插件工具在白名单内，仍可越过工作区边界；这是首版已知限制，命令级与插件级的精细限制不在本期。
 5. `access` 纳入 client 配置指纹；切换档位后空闲缓存 client 重建，下一轮对话生效。

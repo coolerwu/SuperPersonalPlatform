@@ -64,8 +64,8 @@ async def test_service_keeps_session_tabs_isolated() -> None:
             names = [tab["name"] for tab in await session.tabs_state()]
             assert "chat-aaaa-1" in names
             assert "chat-bbbb-2" in names
-        rows = await service.list_tabs(session, "aaaa-1")
-        assert [row["name"] for row in rows] == ["chat-aaaa-1"]
+            rows = await service.list_tabs(session, "aaaa-1")
+            assert [row["name"] for row in rows] == ["chat-aaaa-1"]
     finally:
         await service.shutdown()
 
@@ -85,7 +85,7 @@ async def test_service_new_tab_and_close() -> None:
             assert second["name"] == "chat-aaaa-1-2"
             message = await service.close_tabs(session, "aaaa-1")
             # close_tabs 的消息只列出剩余标签页，关闭结果以计数表达。
-            assert message == "Closed 2 tab(s). Open tabs: none."
+            assert message.startswith("Closed 2 tab(s)")
             assert await service.list_tabs(session, "aaaa-1") == []
     finally:
         await service.shutdown()

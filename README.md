@@ -8,7 +8,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
 - 生产：宿主机 systemd + venv + SQLite，单进程监听 8888；FastAPI 直接托管 `apps/web/dist`
 - 会话与消息由 SDK transcript 管理；平台配置在 `data/settings.json`；新库的 `app.db` 只创建 `cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions` 五张表（从旧版升级的库会保留未使用的旧表）
 
-本版明确不包含：平台自带浏览器/搜索工具、`add_dirs`、技能创作工具、知识库工具接入 Agent；rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、进程重启后继续看当前输出、消息时间戳、Run 历史。平台业务工具（回测、行情、交易记录、资产配置、缠论）已通过进程内 MCP 接入。同一进程内刷新会在数秒内重放当前轮缓冲；SSE 断线按事件序号续传，进程重启才丢失。`langchain-core` 暂留，用于工具包装。
+本版明确不包含：平台自带搜索工具、`add_dirs`、技能创作工具、知识库工具接入 Agent；rubric 质检、QuickJS eval、会话全文搜索、平台级多 Agent 编排/自定义子 Agent 配置（SDK 内置 Task 子 Agent 可用）、进程重启后继续看当前输出、消息时间戳、Run 历史。平台业务工具（回测、行情、交易记录、资产配置、缠论）已通过进程内 MCP 接入。浏览器工具由进程内 `browser` MCP 提供（`mcp__browser__*`）。同一进程内刷新会在数秒内重放当前轮缓冲；SSE 断线按事件序号续传，进程重启才丢失。`langchain-core` 暂留，用于工具包装。
 
 ## 运行时目录
 
@@ -37,7 +37,7 @@ v1：单用户自托管的网页对话助手，执行核为 Claude Agent SDK（`
     ├── trade-journal.jsonl
     ├── allocation.json
     ├── allocation-ledger.jsonl
-    ├── browser_state.json  # 浏览器登录态（平台浏览器工具接入后使用）
+    ├── browser_state.json  # 浏览器登录态（平台浏览器工具跨会话复用）
     └── backtests/          # 回测策略临时文件
 ```
 
@@ -120,7 +120,7 @@ npm run dev
 - 平台调用 SDK 自带的内置 CLI（与 chat 运行时同一个二进制，随 venv 安装）执行 `claude plugin` 命令；启动和页面读取不联网，只有添加/更新集市与安装/更新插件需要访问 GitHub。添加集市会克隆官方仓库、安装/更新插件会先刷新集市，慢链路可能需要数分钟。
 - 安装、启停、更新或卸载插件后，下一轮对话会重建受影响会话的缓存 client 并加载最新插件；进行中的 turn 不受影响。
 - 插件可能包含 skills、命令、hooks 与 MCP server，其中 hooks/MCP 会以宿主机用户权限执行代码，平台不提供沙箱。只安装可信插件；移除集市前必须先卸载其下的插件。
-- 官方集市的 `playwright` 插件（Microsoft，`npx @playwright/mcp`）用于浏览器操作；启用后 CLI 会自动加载它自带的 MCP server，平台自带的 `browser_tools` 仍未接入 SDK。
+- 浏览器工具由平台进程内的 `browser` SDK MCP server 提供（Playwright + venv 自带 Chromium，按会话隔离标签页、共享 `data/browser_state.json` 登录态，不需要 Node/npx）；集市 `playwright` 插件已停用（`enabledPlugins=false`），安装记录保留。
 
 ### Skills 文件格式
 
@@ -172,7 +172,7 @@ metadata:
 - 登录过期（iLink `-14` 或 `-2 prepare failed`）时渠道变为「登录过期」，轮询停止；点「重新扫码」重新登录，未发送任何分块（pending）的回复在恢复后补发；部分送达行（attempting）仍受 `CHANNEL_DELIVERY_MAX_ATTEMPTS` 约束，达到上限后为 `failed`，不再自动补发。
 - 渠道暂停后停止收发；删除渠道会删除登录凭据、渠道绑定、入站/投递记录并清空定时任务的推送目标，已产生的会话与 transcript 保留。
 - `bot_token` 只存在 `data/settings.json`，接口不返回明文；请保护该文件权限。
-- 运行期 `browser_screenshot` 实时推送截图的逻辑已保留（`channel_images.py`），但本版平台浏览器工具尚未接入 SDK，因此没有调用方；接入后启用。
+- 运行期截图推送逻辑已保留（`channel_images.py`），浏览器工具已接入但该推送链路仍未接线，暂无调用方。
 - iLink 协议实现参考 Nous Research 的 [hermes-agent](https://github.com/NousResearch/hermes-agent) Weixin 适配器（MIT），许可声明见 `THIRD_PARTY_NOTICES.md`。
 
 接口：`GET/POST /api/channels`、`PUT/DELETE /api/channels/{id}`、`GET /api/channels/{id}/conversations`、`POST /api/channels/{id}/wechat/login`、`GET /api/channels/{id}/wechat/login/status`、`POST /api/channels/{id}/wechat/relogin`。
@@ -278,7 +278,7 @@ metadata:
   - `running_sessions`：运行时租约与后台任务保留（`session_id` 主键；`has_turn=1` 为 turn 租约，`has_turn=0` 保留 `tasks_json` 中的任务记录）。
 - `market.db`：Bitget K 线增量缓存（WAL），表 `market_candles` 和 `market_sync_state`；可以独立删除，下次回测会重新抓取。
 - `trade-journal.jsonl`、`allocation.json`、`allocation-ledger.jsonl`：交易记录与资产配置数据，权限 0600，不建数据库表。
-- `browser_state.json`：浏览器 cookies/localStorage（0600）；平台浏览器工具接入后用于跨会话、跨轮次保持登录态。
+- `browser_state.json`：浏览器 cookies/localStorage（0600）；平台浏览器工具用于跨会话、跨轮次保持登录态。
 - `knowledge_sync_state.json`：知识库同步状态（etag + 本地哈希 + 待确认删除标记）。
 - `knowledge_deck.json`：随机笔记的洗牌进度（本轮已看路径与轮次起始时间），原子写；缺失或损坏按新一轮处理。
 - `backtests/`：回测策略临时文件。
@@ -310,6 +310,7 @@ metadata:
 | `CLAUDE_CLIENT_SWEEP_SECONDS` | 空闲 client 清扫间隔（秒） | `60` |
 | `CLAUDE_CONNECT_TIMEOUT_SECONDS` | 连接 SDK CLI 的超时（秒） | `60` |
 | `BROWSER_CONCURRENCY` | 跨 session 并发上限（同时是浏览器标签页上限，供平台浏览器工具使用） | `5` |
+| `BROWSER_IDLE_SECONDS` | 浏览器空闲回收秒数 | `300` |
 | `SESSION_RETENTION_DAYS` | 首次种子：会话保留天数；之后由配置页管理，0 表示不清理（写成 Claude 的 `cleanupPeriodDays`） | `30` |
 | `CRON_TICK_SECONDS` | 定时任务扫描间隔（秒） | `20` |
 | `CRON_DEFAULT_TIMEZONE` | 新建定时任务的默认 IANA 时区 | `Asia/Shanghai` |
@@ -361,7 +362,7 @@ cd apps/web && npm install && npm run build
 
 ## V1 生产部署（宿主机 systemd + SQLite）
 
-生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。systemd unit 使用 `KillMode=mixed`：重启时 SIGTERM 只发给 uvicorn，SDK CLI 子进程保持到应用自己取消 turn、保留恢复租约后再退出；uvicorn 带 `--timeout-graceful-shutdown 10`，避免长连接 SSE 拖住关闭。`TimeoutStopSec=60` 覆盖整体停机预算。不要把 `KillMode` 改回默认值或去掉这两个参数，否则 systemd 会先杀掉 CLI，运行中的 turn 会被当作失败清理，重启后无法续跑。
+生产机：`qiuqiu@192.168.1.3`，代码目录 `~/SuperPersonalPlatform-v1-deploy`，监听 8888。代码从 GitHub `main` 拉取；前端由 FastAPI 直接托管，配置和数据在 `~/.super-personal-platform/`。systemd unit 使用 `KillMode=mixed`：重启时 SIGTERM 只发给 uvicorn，SDK CLI 子进程保持到应用自己取消 turn、保留恢复租约后再退出；uvicorn 带 `--timeout-graceful-shutdown 10`，避免长连接 SSE 拖住关闭。关机顺序为 registry → runner → browser → 其他服务；runner 断开约 30 秒，其后浏览器关闭最长 15 秒，仍在 `TimeoutStopSec=60` 之内。不要把 `KillMode` 改回默认值或去掉这两个参数，否则 systemd 会先杀掉 CLI，运行中的 turn 会被当作失败清理，重启后无法续跑。
 
 ### 首次准备
 
