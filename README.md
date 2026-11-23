@@ -112,7 +112,7 @@ npm run dev
 - **技能**：列出全局技能库，按「初始化技能」和「其他技能」分组；技能由 Claude Code 自动发现、所有 Agent 共享，没有启用开关。展示 description、来源徽标、「已调整」标记、声明的工具、SKILL.md 路径和解析警告；点「查看」可打开 SKILL.md 并直接编辑保存；任何技能都可删除（只删技能目录）。
 - **工具**：读取当前 Agent 最近一轮对话的运行时 init frame，展示 Claude Code 实际加载的内置工具、MCP server 与工具、技能、插件和插件加载失败；平台业务工具以 `mcp__platform_tools__*` 出现，描述来自平台注册表。没有运行时数据时提示先发一条消息。平台业务工具（`backtest_*`、`market_*`、`trade_journal_*`、`allocation_*`、`chan_analyze`/`chan_backtest`，共 19 个）通过进程内 `platform_tools` MCP 接入，插件自带的 MCP 继续并存。runner 未显式限制 `tools`，其余默认工具随 bundled CLI 版本和插件环境变化。
 - **插件**：管理 Claude Code 官方集市与插件，见下节。
-- 初始化技能模板在 `apps/api/app/seed_skills/`：`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`。技能只是初始化参考：`.seed_state.json` 记录初始化内容哈希；从未初始化过的缺失技能写入；未修改的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑，只要模板仍在就不再生成；模板移除时只删记录、保留本地文件；保留的副本不再计入「初始化技能」，页面归入「其他技能」。
+- 初始化技能模板在 `apps/api/app/seed_skills/`：`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`、`web-browser`（平台内置浏览器的使用说明，随平台版本分发）。技能只是初始化参考：`.seed_state.json` 记录初始化内容哈希；从未初始化过的缺失技能写入；未修改的技能随版本更新；改过的永久跳过；用户删除后保留记录作墓碑，只要模板仍在就不再生成；模板移除时只删记录、保留本地文件；保留的副本不再计入「初始化技能」，页面归入「其他技能」。
 
 ### 插件集市
 
@@ -120,7 +120,7 @@ npm run dev
 - 平台调用 SDK 自带的内置 CLI（与 chat 运行时同一个二进制，随 venv 安装）执行 `claude plugin` 命令；启动和页面读取不联网，只有添加/更新集市与安装/更新插件需要访问 GitHub。添加集市会克隆官方仓库、安装/更新插件会先刷新集市，慢链路可能需要数分钟。
 - 安装、启停、更新或卸载插件后，下一轮对话会重建受影响会话的缓存 client 并加载最新插件；进行中的 turn 不受影响。
 - 插件可能包含 skills、命令、hooks 与 MCP server，其中 hooks/MCP 会以宿主机用户权限执行代码，平台不提供沙箱。只安装可信插件；移除集市前必须先卸载其下的插件。
-- 浏览器工具由平台进程内的 `browser` SDK MCP server 提供（Playwright + venv 自带 Chromium，按会话隔离标签页、共享 `data/browser_state.json` 登录态，不需要 Node/npx）；全局标签页满额时按创建顺序关闭其它会话的标签页（本会话标签页不动），本会话自己占满才报共享配额错误；其它会话的标签页都在执行操作时不会驱逐，返回“稍后重试”的共享配额错误。单页渲染进程崩溃只摘除并重建该标签页，不重置共享浏览器。集市 `playwright` 插件已停用（`enabledPlugins=false`），安装记录保留。
+- 浏览器工具由平台进程内的 `browser` SDK MCP server 提供（Playwright + venv 自带 Chromium，按会话隔离标签页、共享 `data/browser_state.json` 登录态，不需要 Node/npx）；全局标签页满额时按创建顺序关闭其它会话的标签页（本会话标签页不动），本会话自己占满才报共享配额错误；其它会话的标签页都在执行操作时不会驱逐，返回“稍后重试”的共享配额错误。单页渲染进程崩溃只摘除并重建该标签页，不重置共享浏览器。集市 `playwright` 插件已卸载（用户手动卸载；`plugins/cache` 保留，可重新安装）。
 
 ### Skills 文件格式
 

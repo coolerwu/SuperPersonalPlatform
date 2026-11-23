@@ -24,10 +24,11 @@
 - full 档 `allowed_tools` 在有浏览器服务时显式并入 `browser_mcp.allowed_tool_names()`；
 - 跨会话 tab 驱逐按创建顺序（FIFO）：全局 tab 达到上限时 `prepare_tab` / `new_tab` 先关闭其它会话最老的标签页（本会话标签页不动），仍满则报共享配额错误；驱逐走 `drop_tab`，不等目标 tab 的操作锁；
 - 崩溃标签页恢复：`page.on("crash")` 标记 `_Tab.crashed`，`tabs_state` / 取用 tab 时摘除并释放槽位，`navigate` 复建；单页崩溃不重置共享浏览器（`Target crashed` / `Target closed` 都不在死浏览器标记内）；
-- 收紧死浏览器标记：仅 Playwright「已关闭/连接断开」类错误触发 `reset`，`net::` / `err_` 网络错误不重置共享浏览器；
+- 收紧死浏览器标记：仅 Playwright「已关闭/连接断开」类错误触发 `reset`，`net::` / `err_` 网络错误不重置共享浏览器；Playwright 驱动进程（node）传输层断开（`Connection closed while reading from the driver`）按强制 `reset(force=True)` 处理，即使 `Browser.is_connected()` 仍为 True；
 - `wait_for` 的多个条件共享 5 分钟总预算，`fill_form` 上限 20 个字段；
 - `BrowserSession.aclose()` 改为先 `context.close()` 再依次关闭 browser / playwright，逐项独立超时（状态 8 + context 8 + browser 5 + stop 3，最坏约 24 秒）；
-- systemd `TimeoutStopSec` 60 → 90 秒，覆盖整体停机最坏情况。
+- systemd `TimeoutStopSec` 60 → 90 秒，覆盖整体停机最坏情况；
+- 集市 `playwright` 插件最终由用户在插件页手动卸载（`enabledPlugins` 条目与 `plugins/installed_plugins.json` 记录移除，`plugins/cache` 保留）；生产 `.env` 的 `PLAYWRIGHT_MCP_*` 三行已删除。
 
 ---
 

@@ -165,10 +165,11 @@ def test_default_skills_seeded(client) -> None:
     # stay, and Agents use plain file tools on it.
     assert "knowledge-base" not in skills
     # Web search/fetch moved to Claude Code's built-in WebSearch/WebFetch;
-    # browser automation comes from the official Playwright plugin.
+    # browser automation is served by the platform's in-process browser MCP.
     assert "web-search" not in skills
     assert "web-fetch" not in skills
-    assert "web-browser" not in skills
+    assert skills["web-browser"]["source"] == "initial"
+    assert skills["web-browser"]["include_tools"] == []
     assert "memory-organizer" not in skills
 
 

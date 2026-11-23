@@ -144,7 +144,7 @@ mcp_servers: dict[str, Any] = {
 
 ## 清理与迁移
 
-1. **停用集市插件**：生产 `claude/settings.json` 的 `enabledPlugins["playwright@claude-plugins-official"] = false`（插件页操作），并删除 `~/.super-personal-platform/.env` 中 `PLAYWRIGHT_MCP_HEADLESS`、`PLAYWRIGHT_MCP_USER_AGENT`、`PLAYWRIGHT_MCP_USER_DATA_DIR` 三行。插件文件与其 `data/playwright-profile` 目录保留（属于用户数据，可随时重新启用做对比），但同一时间只保留一套浏览器工具。
+1. **卸载集市插件**：生产环境中用户已在插件页手动卸载 `playwright@claude-plugins-official`（`settings.json` 的 `enabledPlugins` 条目与 `plugins/installed_plugins.json` 记录均已移除；`plugins/cache` 目录保留，可随时从集市重新安装），并删除 `~/.super-personal-platform/.env` 中 `PLAYWRIGHT_MCP_HEADLESS`、`PLAYWRIGHT_MCP_USER_AGENT`、`PLAYWRIGHT_MCP_USER_DATA_DIR` 三行。旧插件的 `data/playwright-profile` 目录保留（属于用户数据），平台不再使用。
 2. **删除死代码**：`browser_tools.py` 旧函数式工具包装、`skill_tools.SkillToolContext.browser` 与 `_session_for`；对应测试同步调整。
 3. **运行时 skill**：生产 `claude/skills/web-browser/SKILL.md` 重写：
    - 工具名改为 `mcp__browser__*`（短名 navigate/snapshot/click/...）；
@@ -193,7 +193,7 @@ mcp_servers: dict[str, Any] = {
   - 运行期截图推送相关表述（“等平台浏览器工具接入”）按新能力改写或保留为后续项；
   - 权限段补充 `mcp__browser`。
 - `CLAUDE.md`：架构段（浏览器工具、插件集市、权限、运行时目录不变）、运行约定。
-- `README.md`：部署说明（不再需要 `PLAYWRIGHT_MCP_*`；插件停用步骤；无新依赖）。
+- `README.md`：部署说明（不再需要 `PLAYWRIGHT_MCP_*`；插件卸载步骤；无新依赖）。
 - 本 spec 与后续 plan 入 `docs/superpowers/`。
 
 ## 发布与验证

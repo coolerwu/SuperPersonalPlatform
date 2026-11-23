@@ -302,6 +302,7 @@ def test_real_seed_templates_cover_platform_domains() -> None:
         "trade-journal",
         "allocation",
         "chanlun",
+        "web-browser",
     }
     for name, content in templates.items():
         assert content.startswith("---\n")
