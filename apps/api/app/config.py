@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 APP_HOME = Path(os.environ.get("APP_HOME", Path.home() / ".super-personal-platform"))
@@ -82,7 +83,7 @@ class Settings(BaseSettings):
     browser_persist_state: bool = True
     browser_state_path: str = ""
     browser_concurrency: int = 5
-    browser_idle_seconds: int = 300
+    browser_idle_seconds: int = Field(default=300, ge=1)
     browser_navigation_timeout_ms: int = 30_000
     browser_action_timeout_ms: int = 10_000
     browser_settle_ms: int = 500

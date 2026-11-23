@@ -48,6 +48,11 @@ def make_service(session: FakeSession, **kwargs) -> BrowserService:
     return BrowserService(session_factory=lambda: session, **kwargs)
 
 
+class FailingOpenSession(FakeSession):
+    async def open(self, url: str, name: str) -> str:
+        raise BrowserToolError("navigation failed")
+
+
 @pytest.mark.asyncio
 async def test_prefix_sanitizes_session_id() -> None:
     assert BrowserService.prefix("0e1bd714-2246-41b3-91a1-5464e63174d3") == "chat-0e1bd714"
@@ -244,3 +249,85 @@ async def test_reset_closes_session_and_next_use_is_fresh() -> None:
         assert live is second
 
     await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_idle_reaper_skips_active_session() -> None:
+    session = FakeSession()
+    service = make_service(session, idle_seconds=0.02, sweep_seconds=0.01)
+    await service.startup()
+
+    async with service.use():
+        await asyncio.sleep(0.12)
+        assert session.aclose_calls == 0
+        assert service._session is session  # noqa: SLF001
+    await asyncio.sleep(0.12)
+
+    assert session.aclose_calls == 1
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_close_tabs_clears_default() -> None:
+    session = FakeSession(
+        [
+            {"name": "chat-abc-1", "url": "about:blank"},
+            {"name": "chat-abc-1-2", "url": "about:blank"},
+        ]
+    )
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        await service.select_tab(live, "abc-1", "2")
+        await service.close_tabs(live, "abc-1")
+
+    assert service._default_tabs.get("abc-1") is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_stale_default_falls_back() -> None:
+    session = FakeSession(
+        [
+            {"name": "chat-abc-1", "url": "about:blank"},
+            {"name": "chat-abc-1-2", "url": "about:blank"},
+        ]
+    )
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        service._default_tabs["abc-1"] = "chat-abc-1-9"  # noqa: SLF001
+        assert await service.resolve_tab(live, "abc-1") == "chat-abc-1"
+
+
+@pytest.mark.asyncio
+async def test_new_tab_index_is_stable_against_concurrent_close() -> None:
+    session = FakeSession(
+        [
+            {"name": "chat-abc-1", "url": "about:blank"},
+            {"name": "chat-abc-1-2", "url": "about:blank"},
+        ]
+    )
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        _, created = await asyncio.gather(
+            service.close_tabs(live, "abc-1", "1"),
+            service.new_tab(live, "abc-1"),
+        )
+        rows = await service.list_tabs(live, "abc-1")
+
+    position = next(row["index"] for row in rows if row["name"] == created["name"])
+    assert created["index"] == position
+
+
+@pytest.mark.asyncio
+async def test_new_tab_closes_orphan_when_open_fails() -> None:
+    session = FailingOpenSession()
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        with pytest.raises(BrowserToolError):
+            await service.new_tab(live, "abc-1", url="https://example.com")
+
+    assert session.closed_tabs == ["chat-abc-1"]
+    assert session.tabs == []
