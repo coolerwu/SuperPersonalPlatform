@@ -7,7 +7,8 @@ import pytest
 from app.config import settings as app_settings
 from app.db import init_db
 from app.prompts import DEFAULT_AGENT_INSTRUCTIONS
-from app.services import claude_runner, turn_lease
+from app.services import browser_mcp, claude_runner, turn_lease
+from app.services.claude_env import workspace_for
 from app.services.claude_runner import (
     ClaudeTurnRunner,
     Turn,
@@ -2689,21 +2690,50 @@ async def test_close_all_marks_each_client_once(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_browser_mcp_server_registered_when_service_present(tmp_path):
+async def test_browser_mcp_server_registered_when_service_present(
+    tmp_path, monkeypatch
+):
     await init_db()
     captured = []
+    calls = []
+    sentinel_server = {"type": "sdk", "name": "browser"}
+
+    def fake_build_server(service, *, agent_id, session_id, workspace):
+        calls.append(
+            {
+                "service": service,
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "workspace": workspace,
+            }
+        )
+        return sentinel_server
+
+    monkeypatch.setattr(browser_mcp, "build_server", fake_build_server)
+    browser_service = object()
+    turn = make_turn()
     runner = ClaudeTurnRunner(
         store=FakeStore(make_agent()),
         home=tmp_path,
         client_factory=lambda options: captured.append(options)
         or FakeClient([ResultMessage()]),
-        browser_service=object(),
+        browser_service=browser_service,
     )
-    await runner.run(make_turn(), TurnStream())
+    await runner.run(turn, TurnStream())
 
     servers = captured[0].mcp_servers
+    assert servers["browser"] is sentinel_server
     assert servers["browser"]["type"] == "sdk"
     assert servers["browser"]["name"] == "browser"
+    assert "mcp__browser__navigate" in captured[0].allowed_tools
+
+    assert len(calls) == 1
+    assert calls[0]["service"] is browser_service
+    assert calls[0]["agent_id"] == "default"
+    assert calls[0]["session_id"] == turn.session_id
+    workspace = calls[0]["workspace"]
+    assert workspace == workspace_for("default", tmp_path)
+    assert workspace.is_relative_to(tmp_path)
 
 
 @pytest.mark.asyncio
@@ -2719,3 +2749,7 @@ async def test_browser_mcp_server_absent_without_service(tmp_path):
     await runner.run(make_turn(), TurnStream())
 
     assert "browser" not in captured[0].mcp_servers
+    assert not any(
+        name.startswith("mcp__browser__")
+        for name in captured[0].allowed_tools
+    )

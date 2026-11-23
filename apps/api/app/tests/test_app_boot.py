@@ -10,7 +10,12 @@ from app import main as main_module
 from app.config import APP_HOME, settings as app_settings
 from app.db import Base
 from app.main import create_app
-from app.services import claude_runner, recovery, session_registry
+from app.services import (
+    browser_service as browser_service_module,
+    claude_runner,
+    recovery,
+    session_registry,
+)
 from app.services.backtest_worker import BacktestWorker
 from app.services.claude_settings import cleanup_period_days
 from app.services.cron_service import CronRuntime
@@ -35,7 +40,41 @@ def quiet_background_workers(monkeypatch):
         monkeypatch.setattr(worker_class, "start", noop)
 
 
-def _patch_runtime_classes(monkeypatch, order):
+def _patch_browser_service(monkeypatch, order=None, *, fail_startup=False):
+    """Replace BrowserService where the lifespan imports it, recording calls."""
+    instances = []
+
+    class FakeBrowserService:
+        fail_startup = False
+
+        def __init__(self):
+            self.startup_calls = 0
+            self.shutdown_calls = 0
+            self.fail_startup = type(self).fail_startup
+            instances.append(self)
+
+        async def startup(self):
+            self.startup_calls += 1
+            if self.fail_startup:
+                raise RuntimeError("browser startup boom")
+
+        async def shutdown(self):
+            self.shutdown_calls += 1
+            if order is not None:
+                order.append("browser.shutdown")
+
+    FakeBrowserService.fail_startup = fail_startup
+    monkeypatch.setattr(
+        browser_service_module, "BrowserService", FakeBrowserService
+    )
+    return instances
+
+
+def _patch_runtime_classes(monkeypatch, order, *, browser_fail_startup=False):
+    browser_instances = _patch_browser_service(
+        monkeypatch, order, fail_startup=browser_fail_startup
+    )
+
     class FakeRunner:
         def __init__(
             self,
@@ -48,6 +87,7 @@ def _patch_runtime_classes(monkeypatch, order):
             self.store = store
             self.deliver_callback = deliver_callback
             self.session_tasks = session_tasks
+            self.browser_service = browser_service
 
         async def close_all(self):
             order.append("runner.close_all")
@@ -65,7 +105,7 @@ def _patch_runtime_classes(monkeypatch, order):
 
     monkeypatch.setattr(claude_runner, "ClaudeTurnRunner", FakeRunner)
     monkeypatch.setattr(session_registry, "SessionRegistry", FakeRegistry)
-    return FakeRunner, FakeRegistry
+    return FakeRunner, FakeRegistry, browser_instances
 
 
 def test_app_boots_with_settings_store(client):
@@ -92,7 +132,9 @@ def test_settings_file_and_claude_dirs_seeded(client):
     )
 
 
-def test_worker_app_wires_runtime_state(quiet_background_workers):
+def test_worker_app_wires_runtime_state(quiet_background_workers, monkeypatch):
+    browser_instances = _patch_browser_service(monkeypatch)
+
     with TestClient(create_app(start_worker=True)) as client:
         assert client.get("/api/health").json() == {"ok": True}
         assert os.environ["CLAUDE_CONFIG_DIR"] == str(APP_HOME / "claude")
@@ -104,6 +146,10 @@ def test_worker_app_wires_runtime_state(quiet_background_workers):
         assert state.session_tasks is not None
         assert state.session_tasks._writer is not None
         assert state.session_tasks._cleaner is not None
+        browser_service = browser_instances[0]
+        assert state.browser_service is browser_service
+        assert browser_service.startup_calls == 1
+        assert state.runner._browser_service is browser_service
 
 
 def test_non_worker_app_creates_task_service_without_loops(client):
@@ -117,13 +163,13 @@ def test_shutdown_closes_registry_before_runner(
     quiet_background_workers, monkeypatch
 ):
     order = []
-    _, registry_class = _patch_runtime_classes(monkeypatch, order)
+    _, registry_class, _ = _patch_runtime_classes(monkeypatch, order)
 
     with TestClient(create_app(start_worker=True)) as client:
         assert client.get("/api/health").json() == {"ok": True}
         assert isinstance(client.app.state.registry, registry_class)
 
-    assert order == ["registry.close", "runner.close_all"]
+    assert order == ["registry.close", "runner.close_all", "browser.shutdown"]
 
 
 def test_shutdown_stops_turn_producers_before_registry(
@@ -154,7 +200,7 @@ def test_startup_failure_still_tears_down_runtime(
 ):
     order = []
     market_closed = []
-    _patch_runtime_classes(monkeypatch, order)
+    _, _, browser_instances = _patch_runtime_classes(monkeypatch, order)
 
     async def boom_recovery(registry, store):
         raise RuntimeError("recovery boom")
@@ -169,8 +215,26 @@ def test_startup_failure_still_tears_down_runtime(
         with TestClient(create_app(start_worker=True)):
             raise AssertionError("startup should have failed")
 
-    assert order == ["registry.close", "runner.close_all"]
+    assert order == ["registry.close", "runner.close_all", "browser.shutdown"]
+    assert browser_instances[0].shutdown_calls == 1
     assert market_closed == [True]
+
+
+def test_browser_startup_failure_still_tears_down_browser(
+    quiet_background_workers, monkeypatch
+):
+    order = []
+    _, _, browser_instances = _patch_runtime_classes(
+        monkeypatch, order, browser_fail_startup=True
+    )
+
+    with pytest.raises(RuntimeError, match="browser startup boom"):
+        with TestClient(create_app(start_worker=True)):
+            raise AssertionError("startup should have failed")
+
+    assert browser_instances[0].startup_calls == 1
+    assert browser_instances[0].shutdown_calls == 1
+    assert order == ["browser.shutdown"]
 
 
 def test_database_metadata_has_five_tables():

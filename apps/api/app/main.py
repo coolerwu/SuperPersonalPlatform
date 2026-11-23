@@ -112,8 +112,10 @@ def create_app(*, start_worker: bool = True) -> FastAPI:
                 from app.services.browser_service import BrowserService
 
                 browser_service = BrowserService()
-                await browser_service.startup()
+                # Publish the instance before startup so a startup failure is
+                # still torn down by the shutdown path below.
                 app.state.browser_service = browser_service
+                await browser_service.startup()
                 runner = ClaudeTurnRunner(
                     store,
                     deliver_callback=_enqueue_delivery,

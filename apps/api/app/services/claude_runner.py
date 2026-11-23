@@ -553,7 +553,10 @@ class ClaudeTurnRunner:
             else:
                 kwargs["permission_mode"] = app_settings.claude_permission_mode
                 # Map MCP tools are available; bypassPermissions auto-approves them.
-                kwargs["allowed_tools"] = platform_mcp.allowed_tool_names()
+                allowed_tools = platform_mcp.allowed_tool_names()
+                if self._browser_service is not None:
+                    allowed_tools = allowed_tools + browser_mcp.allowed_tool_names()
+                kwargs["allowed_tools"] = allowed_tools
             # Keep Claude Code's default system prompt and append the Agent's
             # own instructions. The preset without ``append`` adds no CLI flag,
             # so an empty instruction set leaves the default prompt untouched.
