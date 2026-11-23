@@ -29,8 +29,8 @@
 
 1. 浏览器工具由平台进程内 SDK MCP server `browser` 提供（模型侧工具名 `mcp__browser__*`），不依赖集市插件、Node、npx、npm registry。
 2. 工具面覆盖现有 `web-browser` skill 的使用方式：导航、快照、点击、输入、表单填写、按键、下拉选择、等待、后退、标签页、截图、控制台消息、关闭。
-3. 会话级 tab 隔离：每个聊天会话使用自己的命名 tab，共享同一个浏览器、同一个固定 profile（登录态跨会话复用）；tab 上限沿用 `BROWSER_CONCURRENCY`；不同会话可并行，同一会话操作串行。
-4. 生命周期可控：懒启动、空闲回收、应用 shutdown 时优雅关闭浏览器并落 `storage_state`，不再产生残留单例锁。
+3. 会话级 tab 隔离：每个聊天会话使用自己的命名 tab，共享同一个浏览器与上下文，登录态经 `storage_state`（`data/browser_state.json`）跨会话、跨回收复用；tab 上限沿用 `BROWSER_CONCURRENCY`；不同会话可并行，同一会话操作串行。
+4. 生命周期可控：懒启动、空闲回收、应用 shutdown 时优雅关闭浏览器并落 `storage_state`；不使用 Chromium `user-data-dir`，天然没有 `SingletonLock` 类残留锁问题。
 5. 安全边界不低于现状：只允许 http/https、拒绝 localhost/内网/file、检测人机验证页、自动关闭弹窗、不支持下载。
 6. 两个权限档位（`full` / `workspace`）都能使用；受限 Agent 通过显式白名单 `mcp__browser` 放行。
 7. 文档与运行时 skill 同步更新；工具页无需改代码即可显示 `browser` server 状态。
@@ -48,7 +48,7 @@
 
 | 资产 | 位置 | 可复用内容 |
 |---|---|---|
-| `BrowserSession` | `apps/api/app/services/browser_tools.py` | 懒启动 Chromium、persistent context + `storage_state` 持久化、代理、UA/locale/时区/语言、localhost/内网解析拦截、快照脚本（ref 格式 `s<generation>e<n>`）、操作后自动快照、人机验证页检测、截图（PNG/base64/大小上限）、命名 tab 与上限、优雅关闭 |
+| `BrowserSession` | `apps/api/app/services/browser_tools.py` | 懒启动 Chromium（普通 launch + `new_context`，非 `user-data-dir`）、`storage_state` 持久化（`data/browser_state.json`，关闭时合并写回）、代理、UA/locale/时区/语言、localhost/内网解析拦截、快照脚本（ref 格式 `s<generation>e<n>`）、操作后自动快照、人机验证页检测、截图（PNG/base64/大小上限）、命名 tab 与上限、优雅关闭 |
 | `settings.browser_*` | `apps/api/app/config.py` | 并发、导航/动作超时、settle、快照元素/正文/总长上限、截图字节上限、身份与状态路径、`no_sandbox` |
 | SDK MCP 模式 | `apps/api/app/services/platform_mcp.py` | `create_sdk_mcp_server` + tool schema/annotation 适配 |
 | 执行核注入点 | `apps/api/app/services/claude_runner.py` | `kwargs["mcp_servers"]` 同时支持 SDK server 与 http server |
@@ -134,7 +134,7 @@ mcp_servers: dict[str, Any] = {
 ## 权限、配置与安全
 
 - **权限**：`agent_guard.build_restricted_allowed_tools` 增加服务器级条目 `mcp__browser`；`full` 档位沿用 `bypassPermissions` 自动放行。
-- **配置**：沿用 `settings.browser_*`；新增 `browser_idle_seconds: int = 300`（env `BROWSER_IDLE_SECONDS`）。`BROWSER_CONCURRENCY` 语义不变（tab 上限，生产现为 5）。profile 仍为 `data/playwright-profile`（`browser_state_path` 缺省值）。
+- **配置**：沿用 `settings.browser_*`；新增 `browser_idle_seconds: int = 300`（env `BROWSER_IDLE_SECONDS`）。`BROWSER_CONCURRENCY` 语义不变（tab 上限，生产现为 5）。登录态仍存 `data/browser_state.json`（`BROWSER_STATE_PATH` 可覆盖），平台不使用 Chromium `user-data-dir`；`data/playwright-profile` 仅是旧插件的遗留目录，不再使用。
 - **安全边界**（均在 `BrowserSession` 已有或补齐）：
   - 仅 `http`/`https`；`file://`、`javascript:` 等拒绝；
   - DNS 解析后拒绝环回/内网/保留地址（含 IPv4/IPv6 与重定向后的最终主机）；
@@ -144,7 +144,7 @@ mcp_servers: dict[str, Any] = {
 
 ## 清理与迁移
 
-1. **停用集市插件**：生产 `claude/settings.json` 的 `enabledPlugins["playwright@claude-plugins-official"] = false`（插件页操作），并删除 `~/.super-personal-platform/.env` 中 `PLAYWRIGHT_MCP_HEADLESS`、`PLAYWRIGHT_MCP_USER_AGENT`、`PLAYWRIGHT_MCP_USER_DATA_DIR` 三行。插件文件保留，可随时重新启用做对比，但同一时间只保留一套浏览器工具。
+1. **停用集市插件**：生产 `claude/settings.json` 的 `enabledPlugins["playwright@claude-plugins-official"] = false`（插件页操作），并删除 `~/.super-personal-platform/.env` 中 `PLAYWRIGHT_MCP_HEADLESS`、`PLAYWRIGHT_MCP_USER_AGENT`、`PLAYWRIGHT_MCP_USER_DATA_DIR` 三行。插件文件与其 `data/playwright-profile` 目录保留（属于用户数据，可随时重新启用做对比），但同一时间只保留一套浏览器工具。
 2. **删除死代码**：`browser_tools.py` 旧函数式工具包装、`skill_tools.SkillToolContext.browser` 与 `_session_for`；对应测试同步调整。
 3. **运行时 skill**：生产 `claude/skills/web-browser/SKILL.md` 重写：
    - 工具名改为 `mcp__browser__*`（短名 navigate/snapshot/click/...）；
@@ -203,7 +203,7 @@ mcp_servers: dict[str, Any] = {
    - 新会话工具页出现 `browser` server 与 13 个工具；
    - 真实网页 navigate/snapshot/click 成功；
    - 两个会话各自 tab、共享登录态；
-   - 重启服务后 `data/playwright-profile` 无 Singleton 残留；
+   - 重启服务后无残留 Chromium 进程；登录态保存在 `data/browser_state.json`（平台不使用 `user-data-dir`，不存在 `SingletonLock`）；
    - 受限（workspace）Agent 能调用浏览器工具。
 3. 回退：重新启用集市插件并恢复 `.env` 三行；两套工具名不同（`mcp__browser__*` vs `mcp__plugin_playwright_playwright__*`），可并存但不建议长期保留。
 
@@ -211,7 +211,7 @@ mcp_servers: dict[str, Any] = {
 
 - **快照质量决定成功率**：现有 `BrowserSession` 快照为旧版生产使用过的实现；如遇具体站点信息缺失（复杂控件、虚拟列表），按站点迭代，不在本期解决。
 - **Provider 图片支持**：`take_screenshot` 返回图片内容块；若 Provider 不支持图片输入会报错。与现状一致，skill 保留“调用前确认 Provider 支持图片”的提示，必要时后续增加“仅保存文件”模式。
-- **单浏览器多会话共享 profile**：cookie 共享是特性；tab 隔离靠命名前缀。极端情况下两个会话同时触发浏览器启动由服务层单例串行保证。
+- **单浏览器多会话共享上下文与登录态**：cookie 共享是特性；tab 隔离靠命名前缀。极端情况下两个会话同时触发浏览器启动由服务层单例串行保证。
 - **Chromium 升级**：由 `pip install -e apps/api` 的 Playwright 版本决定，部署流程已有 `playwright install chromium` 步骤，浏览器版本与 Python 包天然匹配，不再受 MCP 内部 revision 影响。
 
 ## 验收标准
