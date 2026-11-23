@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     browser_persist_state: bool = True
     browser_state_path: str = ""
     browser_concurrency: int = 5
+    browser_idle_seconds: int = 300
     browser_navigation_timeout_ms: int = 30_000
     browser_action_timeout_ms: int = 10_000
     browser_settle_ms: int = 500
