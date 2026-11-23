@@ -11,7 +11,8 @@ import os
 import re
 import socket
 import tempfile
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import unquote, urlsplit
@@ -36,6 +37,8 @@ BROWSER_TOOL_NAMES = frozenset(
 )
 
 DEFAULT_TAB = "main"
+CONSOLE_BUFFER_SIZE = 50
+MAX_WAIT_FOR_MS = 300_000
 MAX_BROWSER_URL_LENGTH = 8192
 MAX_FILL_CHARS = 10_000
 MAX_LABEL_CHARS = 120
@@ -532,6 +535,9 @@ class _Tab:
     page: Any
     lock: asyncio.Lock
     generation: int = 0
+    console: deque[dict[str, str]] = field(
+        default_factory=lambda: deque(maxlen=CONSOLE_BUFFER_SIZE)
+    )
 
 
 class BrowserSession:
@@ -666,6 +672,10 @@ class BrowserSession:
         self._bypass_entries = tuple(
             entry.strip() for entry in self.proxy_bypass.split(",") if entry.strip()
         )
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     def _playwright_proxy(self) -> dict[str, str] | None:
         """Chromium ignores HTTP_PROXY; hand it the proxy explicitly."""
@@ -963,6 +973,22 @@ class BrowserSession:
                 finally:
                     self._creating_page -= 1
                 tab = _Tab(name=key, page=page, lock=asyncio.Lock())
+
+                def _record_console(message: Any, _tab: _Tab = tab) -> None:
+                    try:
+                        _tab.console.append(
+                            {
+                                "type": str(getattr(message, "type", "")),
+                                "text": str(getattr(message, "text", ""))[:500],
+                            }
+                        )
+                    except Exception:
+                        pass
+
+                try:
+                    page.on("console", _record_console)
+                except Exception:
+                    logger.debug("failed to attach console listener", exc_info=True)
                 self._tabs[key] = tab
                 return tab
             except BaseException:
@@ -1083,47 +1109,54 @@ class BrowserSession:
                 await tab_state.page.wait_for_timeout(wait_seconds * 1000)
             return await self._take_snapshot(tab_state)
 
-    async def click(self, ref: str, tab: str = DEFAULT_TAB) -> str:
-        normalized = normalize_ref(ref)
+    def _locator_for(self, page: Any, target: str) -> Any:
+        text = str(target or "").strip()
+        if not text:
+            raise BrowserToolError("target must be a ref like s1e3 or a CSS selector")
+        probe = text.strip("[]")
+        if probe.startswith("ref="):
+            probe = probe[4:].strip()
+        if REF_PATTERN.match(probe):
+            return page.locator(f'[data-sp-ref="{probe}"]')
+        return page.locator(text)
+
+    async def _require_locator(self, locator: Any, target: str) -> None:
+        try:
+            count = await locator.count()
+        except Exception as exc:
+            raise BrowserToolError(
+                f"could not inspect target {target!r}: {_short_error(exc)}"
+            ) from exc
+        if count == 0:
+            raise BrowserToolError(
+                f"target {target!r} is stale or missing; call snapshot and use a current ref"
+            )
+
+    async def click(self, target: str, tab: str = DEFAULT_TAB) -> str:
         tab_state = await self._get_or_create_tab(tab, create=False)
         async with tab_state.lock:
-            locator = tab_state.page.locator(f'[data-sp-ref="{normalized}"]')
-            try:
-                count = await locator.count()
-            except Exception as exc:
-                raise BrowserToolError(f"could not inspect ref {normalized}: {_short_error(exc)}")
-            if count == 0:
-                raise BrowserToolError(
-                    f"ref {normalized} is stale or missing; "
-                    "call browser_snapshot and use a current ref"
-                )
+            locator = self._locator_for(tab_state.page, target)
+            await self._require_locator(locator, target)
             try:
                 await locator.first.click(timeout=self.action_timeout_ms)
             except Exception as exc:
                 raise BrowserToolError(f"click failed: {_short_error(exc)}") from exc
             await self._wait_after_action(tab_state.page)
             return await self._action_result(
-                f"Clicked {normalized} in tab {tab_state.name!r}", tab_state
+                f"Clicked {target!r} in tab {tab_state.name!r}", tab_state
             )
 
-    async def fill(self, ref: str, text: str, tab: str = DEFAULT_TAB, *, submit: bool = False) -> str:
+    async def fill(
+        self, target: str, text: str, tab: str = DEFAULT_TAB, *, submit: bool = False
+    ) -> str:
         if not isinstance(text, str):
             raise BrowserToolError("text must be a string")
         if len(text) > MAX_FILL_CHARS:
             raise BrowserToolError(f"text must be at most {MAX_FILL_CHARS} characters")
-        normalized = normalize_ref(ref)
         tab_state = await self._get_or_create_tab(tab, create=False)
         async with tab_state.lock:
-            locator = tab_state.page.locator(f'[data-sp-ref="{normalized}"]')
-            try:
-                count = await locator.count()
-            except Exception as exc:
-                raise BrowserToolError(f"could not inspect ref {normalized}: {_short_error(exc)}")
-            if count == 0:
-                raise BrowserToolError(
-                    f"ref {normalized} is stale or missing; "
-                    "call browser_snapshot and use a current ref"
-                )
+            locator = self._locator_for(tab_state.page, target)
+            await self._require_locator(locator, target)
             try:
                 element = locator.first
                 tag = await element.evaluate("el => el.tagName.toLowerCase()")
@@ -1136,11 +1169,13 @@ class BrowserSession:
                     await element.fill(text, timeout=self.action_timeout_ms)
                 if submit:
                     await tab_state.page.keyboard.press("Enter")
+            except BrowserToolError:
+                raise
             except Exception as exc:
                 raise BrowserToolError(f"fill failed: {_short_error(exc)}") from exc
             await self._wait_after_action(tab_state.page)
             return await self._action_result(
-                f"Filled {normalized} in tab {tab_state.name!r}", tab_state
+                f"Filled {target!r} in tab {tab_state.name!r}", tab_state
             )
 
     async def press(self, key: str, tab: str = DEFAULT_TAB) -> str:
@@ -1185,6 +1220,147 @@ class BrowserSession:
                 "image_url": {"url": f"data:image/png;base64,{encoded}"},
             },
         ]
+
+    async def fill_many(
+        self, fields: list[dict[str, Any]], tab: str = DEFAULT_TAB
+    ) -> str:
+        if not isinstance(fields, list) or not fields:
+            raise BrowserToolError("fields must be a non-empty list")
+        tab_state = await self._get_or_create_tab(tab, create=False)
+        async with tab_state.lock:
+            for item in fields:
+                if not isinstance(item, dict):
+                    raise BrowserToolError("each field must be an object with target and value")
+                target = str(item.get("target") or "")
+                value = item.get("value")
+                if not isinstance(value, str):
+                    raise BrowserToolError("each field needs a string value")
+                locator = self._locator_for(tab_state.page, target)
+                await self._require_locator(locator, target)
+                try:
+                    element = locator.first
+                    tag = await element.evaluate("el => el.tagName.toLowerCase()")
+                    if tag == "select":
+                        try:
+                            await element.select_option(
+                                label=value, timeout=self.action_timeout_ms
+                            )
+                        except Exception:
+                            await element.select_option(
+                                value=value, timeout=self.action_timeout_ms
+                            )
+                    else:
+                        await element.fill(value, timeout=self.action_timeout_ms)
+                except BrowserToolError:
+                    raise
+                except Exception as exc:
+                    raise BrowserToolError(
+                        f"fill {target!r} failed: {_short_error(exc)}"
+                    ) from exc
+            await self._wait_after_action(tab_state.page)
+            return await self._action_result(
+                f"Filled {len(fields)} field(s) in tab {tab_state.name!r}", tab_state
+            )
+
+    async def select_option(
+        self, target: str, values: list[str], tab: str = DEFAULT_TAB
+    ) -> str:
+        if not isinstance(values, list) or not values:
+            raise BrowserToolError("values must be a non-empty list of strings")
+        selected = [str(value) for value in values]
+        tab_state = await self._get_or_create_tab(tab, create=False)
+        async with tab_state.lock:
+            locator = self._locator_for(tab_state.page, target)
+            await self._require_locator(locator, target)
+            try:
+                await locator.first.select_option(
+                    value=selected, timeout=self.action_timeout_ms
+                )
+            except Exception:
+                try:
+                    await locator.first.select_option(
+                        label=selected, timeout=self.action_timeout_ms
+                    )
+                except Exception as exc:
+                    raise BrowserToolError(
+                        f"select failed: {_short_error(exc)}"
+                    ) from exc
+            await self._wait_after_action(tab_state.page)
+            return await self._action_result(
+                f"Selected {selected!r} at {target!r} in tab {tab_state.name!r}",
+                tab_state,
+            )
+
+    async def wait_for(
+        self,
+        tab: str = DEFAULT_TAB,
+        *,
+        text: str | None = None,
+        text_gone: str | None = None,
+        time_ms: int | None = None,
+    ) -> str:
+        text = (text or "").strip() or None
+        text_gone = (text_gone or "").strip() or None
+        if text is None and text_gone is None and time_ms is None:
+            raise BrowserToolError("wait_for needs text, textGone, or time")
+        tab_state = await self._get_or_create_tab(tab, create=False)
+        async with tab_state.lock:
+            try:
+                if text is not None:
+                    await tab_state.page.get_by_text(text).first.wait_for(
+                        state="visible", timeout=self.navigation_timeout_ms
+                    )
+                if text_gone is not None:
+                    await tab_state.page.get_by_text(text_gone).first.wait_for(
+                        state="hidden", timeout=self.navigation_timeout_ms
+                    )
+                if time_ms is not None:
+                    await tab_state.page.wait_for_timeout(
+                        max(0, min(int(time_ms), MAX_WAIT_FOR_MS))
+                    )
+            except Exception as exc:
+                raise BrowserToolError(f"wait_for failed: {_short_error(exc)}") from exc
+            return await self._action_result(
+                f"Waited in tab {tab_state.name!r}", tab_state
+            )
+
+    async def navigate_back(self, tab: str = DEFAULT_TAB) -> str:
+        tab_state = await self._get_or_create_tab(tab, create=False)
+        async with tab_state.lock:
+            try:
+                response = await tab_state.page.go_back(
+                    timeout=self.navigation_timeout_ms
+                )
+            except Exception as exc:
+                raise BrowserToolError(f"go_back failed: {_short_error(exc)}") from exc
+            if response is None:
+                raise BrowserToolError("no previous page in this tab")
+            await self._wait_after_action(tab_state.page)
+            return await self._action_result(
+                f"Went back in tab {tab_state.name!r}", tab_state
+            )
+
+    async def tabs_state(self) -> list[dict[str, Any]]:
+        async with self._tabs_lock:
+            tabs = list(self._tabs.values())
+        state: list[dict[str, Any]] = []
+        for tab_state in tabs:
+            try:
+                url = str(tab_state.page.url)
+            except Exception:
+                url = ""
+            state.append({"name": tab_state.name, "url": url})
+        return state
+
+    async def console_messages(
+        self, tab: str = DEFAULT_TAB
+    ) -> list[dict[str, str]]:
+        tab_state = await self._get_or_create_tab(tab, create=False)
+        return list(tab_state.console)
+
+    async def new_tab(self, name: str) -> str:
+        tab_state = await self._get_or_create_tab(name, create=True)
+        return tab_state.name
 
     async def close_tab(self, tab: str = DEFAULT_TAB) -> str:
         key = normalize_tab_name(tab)
