@@ -17,9 +17,11 @@ class FakeSession:
         self.aclose_calls = 0
 
     async def tabs_state(self) -> list[dict]:
+        await asyncio.sleep(0)
         return [dict(tab) for tab in self.tabs]
 
     async def new_tab(self, name: str) -> str:
+        await asyncio.sleep(0)
         self.tabs.append({"name": name, "url": "about:blank"})
         return name
 
@@ -179,3 +181,66 @@ async def test_shutdown_closes_browser_and_cancels_reaper() -> None:
     with pytest.raises(BrowserToolError):
         async with service.use():
             pass
+
+
+@pytest.mark.asyncio
+async def test_new_tab_index_matches_list_position_after_close() -> None:
+    session = FakeSession()
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        assert (await service.new_tab(live, "abc-1"))["index"] == 1
+        assert (await service.new_tab(live, "abc-1"))["index"] == 2
+        await service.close_tabs(live, "abc-1", "1")
+        third = await service.new_tab(live, "abc-1")
+        rows = await service.list_tabs(live, "abc-1")
+        position = next(row["index"] for row in rows if row["name"] == third["name"])
+        assert third["index"] == position
+        assert await service.resolve_tab(live, "abc-1", str(third["index"])) == third["name"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_tab_rejects_zero_index() -> None:
+    session = FakeSession()
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        await session.new_tab("chat-abc-1")
+        with pytest.raises(BrowserToolError):
+            await service.resolve_tab(live, "abc-1", 0)
+
+
+@pytest.mark.asyncio
+async def test_list_tabs_reports_indices_and_default() -> None:
+    session = FakeSession()
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        await service.new_tab(live, "abc-1", url="https://a.example")
+        await service.new_tab(live, "abc-1")
+        await service.select_tab(live, "abc-1", "2")
+        rows = await service.list_tabs(live, "abc-1")
+
+    assert [row["index"] for row in rows] == [1, 2]
+    assert [row["name"] for row in rows] == ["chat-abc-1", "chat-abc-1-2"]
+    assert [row["default"] for row in rows] == [False, True]
+    assert rows[0]["url"] == "https://a.example"
+
+
+@pytest.mark.asyncio
+async def test_reset_closes_session_and_next_use_is_fresh() -> None:
+    first = FakeSession()
+    second = FakeSession()
+    sessions = [first, second]
+    service = BrowserService(
+        session_factory=lambda: sessions.pop(0), idle_seconds=300
+    )
+
+    async with service.use() as live:
+        assert live is first
+    await service.reset()
+    assert first.aclose_calls == 1
+    async with service.use() as live:
+        assert live is second
+
+    await service.shutdown()

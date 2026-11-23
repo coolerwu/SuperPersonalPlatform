@@ -167,10 +167,11 @@ class BrowserService:
         return names
 
     async def resolve_tab(
-        self, session: BrowserSession, session_id: str, tab: str | None = None
+        self, session: BrowserSession, session_id: str, tab: str | int | None = None
     ) -> str:
         base = self.prefix(session_id)
-        requested = str(tab or "").strip()
+        # tab=0 是显式下标，不能被当作“未指定”。
+        requested = "" if tab is None else str(tab).strip()
         names = await self._names(session, session_id)
         if not names:
             if requested and requested != base:
@@ -229,31 +230,39 @@ class BrowserService:
         base = self.prefix(session_id)
         async with self._session_lock(session_id):
             # 分配与建页必须在同一把会话锁内，否则并发 new 会抢到同一个名字。
-            taken = set(await self._names(session, session_id))
+            names = await self._names(session, session_id)
+            taken = set(names)
             if base not in taken:
                 name = base
-                index = 1
             else:
-                index = 2
-                while f"{base}-{index}" in taken:
-                    index += 1
-                name = f"{base}-{index}"
+                suffix = 2
+                while f"{base}-{suffix}" in taken:
+                    suffix += 1
+                name = f"{base}-{suffix}"
             await session.new_tab(name)
-            if url:
-                await session.open(str(url), name)
-        return {"index": index, "name": name}
+        # 导航可能长达 30 秒，放到锁外，避免阻塞同会话的其他标签操作。
+        if url:
+            await session.open(str(url), name)
+        return {"index": len(names) + 1, "name": name}
 
     async def select_tab(
-        self, session: BrowserSession, session_id: str, tab: str | None = None
+        self,
+        session: BrowserSession,
+        session_id: str,
+        tab: str | int | None = None,
     ) -> str:
         name = await self.resolve_tab(session, session_id, tab)
         self._default_tabs[session_id] = name
         return name
 
     async def close_tabs(
-        self, session: BrowserSession, session_id: str, tab: str | None = None
+        self,
+        session: BrowserSession,
+        session_id: str,
+        tab: str | int | None = None,
     ) -> str:
-        requested = str(tab or "").strip()
+        # tab=0 是显式下标，不能被当作“关闭全部”。
+        requested = "" if tab is None else str(tab).strip()
         names = await self._names(session, session_id)
         if not names:
             return "No tabs are open for this session."
