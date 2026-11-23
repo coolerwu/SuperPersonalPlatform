@@ -116,7 +116,7 @@ mcp_servers: dict[str, Any] = {
 | `select_option` | `target`、`values: [str]`、`tab?` | `<select>` 选值，返回新快照 |
 | `wait_for` | `text?`、`textGone?`、`time?`（毫秒）、`tab?` | 至少一个条件；等待后返回新快照 |
 | `navigate_back` | `tab?` | 后退，返回新快照 |
-| `tabs` | `action: list\|new\|select\|close`、`index?`、`url?` | 列出/新建/切换/关闭本会话 tab；序号只作用于本会话 tab 列表 |
+| `tabs` | `action: list\|new\|select\|close`、`index`（select/close 必填，1 起）、`url?`（new 时打开）、`tab?` | 列出/新建/切换/关闭本会话 tab；序号只作用于本会话 tab 列表；关闭全部标签页用 `close` 工具 |
 | `take_screenshot` | `filename?`、`full_page=false`、`tab?` | 截图；给 `filename` 时写入 `<workspace>/<filename>` 并出现在「产物」，同时返回图片内容 |
 | `console_messages` | `tab?` | 返回本 tab 最近 50 条 console 记录（level、文本、时间） |
 | `close` | `tab?` | 关闭本会话指定 tab；缺省关闭本会话全部 tab |
