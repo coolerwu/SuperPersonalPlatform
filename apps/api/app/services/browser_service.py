@@ -26,6 +26,9 @@ TAB_PREFIX = "chat-"
 RESET_CLOSE_TIMEOUT_SECONDS = 10.0
 REAP_CLOSE_TIMEOUT_SECONDS = 12.0
 SHUTDOWN_CLOSE_TIMEOUT_SECONDS = 15.0
+# 多个工具并发观察到同一次崩溃时，不要依次 reset 刚重建的新会话；窗口内的
+# reset 视为同一次事故而跳过，窗口过后仍可正常恢复。
+DEFAULT_RESET_DEBOUNCE_SECONDS = 5.0
 
 
 class BrowserService:
@@ -37,6 +40,7 @@ class BrowserService:
         session_factory: Callable[[], BrowserSession] | None = None,
         idle_seconds: float | None = None,
         sweep_seconds: float = 30.0,
+        reset_debounce_seconds: float = DEFAULT_RESET_DEBOUNCE_SECONDS,
     ) -> None:
         self._session_factory = session_factory or BrowserSession
         self._idle_seconds = max(
@@ -48,6 +52,7 @@ class BrowserService:
             ),
         )
         self._sweep_seconds = max(0.01, float(sweep_seconds))
+        self._reset_debounce = max(0.0, float(reset_debounce_seconds))
         self._session: BrowserSession | None = None
         self._lock = asyncio.Lock()
         self._active = 0
@@ -117,11 +122,11 @@ class BrowserService:
     async def reset(self) -> None:
         async with self._lock:
             if (
-                self._session is not None
+                self._last_reset_at > 0
                 and self._session_created_at > self._last_reset_at
-                and self._last_reset_at > 0
+                and time.monotonic() - self._last_reset_at < self._reset_debounce
             ):
-                # 旧会话崩溃后已由新会话取代；多个工具同时触发 reset 时不要连带关闭新会话。
+                # 刚重建的新会话正处于同一轮崩溃的防抖窗口内，跳过级联 reset。
                 return
             session = self._session
             self._session = None

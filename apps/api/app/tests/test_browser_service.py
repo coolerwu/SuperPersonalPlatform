@@ -265,7 +265,7 @@ async def test_reset_closes_session_and_next_use_is_fresh() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reset_skips_newer_session_after_earlier_reset() -> None:
+async def test_reset_debounce_skips_newer_session_within_window() -> None:
     first = FakeSession()
     second = FakeSession()
     third = FakeSession()
@@ -281,16 +281,47 @@ async def test_reset_skips_newer_session_after_earlier_reset() -> None:
 
     async with service.use() as live:
         assert live is second
-    # 新会话在最近一次 reset 之后创建，级联 reset 不应连带关闭它。
+    # 新会话在防抖窗口内，级联 reset 不应连带关闭它。
     await service.reset()
     assert second.aclose_calls == 0
 
-    # 模拟旧会话崩溃：use() 创建新会话，reset 仍保护这个更新会话。
+    # 旧会话崩溃后 use() 重建的新会话同样受窗口保护。
     second.closed = True
     async with service.use() as live:
         assert live is third
     await service.reset()
     assert third.aclose_calls == 0
+
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_reset_recovers_after_debounce_window() -> None:
+    first = FakeSession()
+    second = FakeSession()
+    third = FakeSession()
+    sessions = [first, second, third]
+    service = BrowserService(
+        session_factory=lambda: sessions.pop(0),
+        idle_seconds=300,
+        reset_debounce_seconds=0.01,
+    )
+
+    async with service.use() as live:
+        assert live is first
+    await service.reset()
+    assert first.aclose_calls == 1
+
+    async with service.use() as live:
+        assert live is second
+    await asyncio.sleep(0.05)
+    await service.reset()
+    # 防抖窗口过后 reset 仍能恢复，第二次崩溃会真正关闭当前会话。
+    assert first.aclose_calls + second.aclose_calls == 2
+    assert second.aclose_calls == 1
+
+    async with service.use() as live:
+        assert live is third
 
     await service.shutdown()
 
