@@ -216,6 +216,19 @@ async def test_resolve_tab_rejects_zero_index() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_tab_allows_explicit_base_name_with_no_tabs() -> None:
+    session = FakeSession()
+    service = make_service(session, idle_seconds=300)
+
+    async with service.use() as live:
+        assert await service.resolve_tab(live, "abc-1", "chat-abc-1") == "chat-abc-1"
+        with pytest.raises(BrowserToolError):
+            await service.resolve_tab(live, "abc-1", "chat-other-1")
+        with pytest.raises(BrowserToolError):
+            await service.resolve_tab(live, "abc-1", 1)
+
+
+@pytest.mark.asyncio
 async def test_list_tabs_reports_indices_and_default() -> None:
     session = FakeSession()
     service = make_service(session, idle_seconds=300)

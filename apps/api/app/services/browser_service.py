@@ -192,9 +192,10 @@ class BrowserService:
         requested = "" if tab is None else str(tab).strip()
         names = await self._names(session, session_id)
         if not names:
-            if tab is not None:
-                raise BrowserToolError("this session has no tabs; call navigate first")
-            return base
+            # 显式传入本会话的默认名也算“未指定”，否则 navigate(tab=base) 建不了首个标签页。
+            if not requested or requested == base:
+                return base
+            raise BrowserToolError("this session has no tabs; call navigate first")
         if not requested:
             stored = self._default_tabs.get(session_id)
             return stored if stored in names else names[0]
