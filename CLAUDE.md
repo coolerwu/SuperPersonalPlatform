@@ -89,3 +89,17 @@ cd apps/web && npm run build
 
 - 行为、接口、配置、依赖、目录结构变化时同步更新 `docs/intent.md`、本文件和 `README.md`。
 - 旧架构文档不再作为依据；需要时从 git 历史查看。
+
+## Agent skills
+
+### Issue tracker
+
+Issues 以本地 Markdown 存放在 `.scratch/<feature-slug>/`，每个票据一个文件，spec 为同目录 `spec.md`。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+沿用默认五个标签：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`；本地 tracker 以 issue 文件顶部的 `Status:` 行记录。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文（single-context）：根目录 `GLOSSARY.md` 与 `docs/adr/`，由 `/domain-modeling` 按需创建。见 `docs/agents/domain.md`。
