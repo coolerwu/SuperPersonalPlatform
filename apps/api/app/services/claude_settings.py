@@ -9,7 +9,8 @@ the plugin CLI mutates, so every CLI invocation sees the same policy.
 The lock here is shared with the plugin CLI mutations: both write that file.
 
 The runner must keep the ``user`` setting source enabled for this value to be
-loaded; ``docs/intent.md`` F3 and the runner options both rely on it.
+loaded; the retention decision in ``docs/adr/0001-sessions-as-sdk-transcripts.md``
+and the runner options both rely on it.
 """
 
 from __future__ import annotations

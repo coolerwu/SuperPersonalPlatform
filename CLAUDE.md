@@ -1,42 +1,86 @@
 # CLAUDE.md
 
-本文件是新项目 `Agent Command Center` 的协作约定。默认使用中文回复用户。
+本文件是 `Agent Command Center`（v1）的协作约定，也是当前架构的唯一说明。默认使用中文回复用户。
 
 ## 需求与方案
 
-- `docs/intent.md` 是需求唯一来源（F1–F17，2026-11-11 按 SDK 迁移后的实现重写）；没有它覆盖的改动不进入实现。
-- 方案先定后做；涉及新依赖、破坏性接口、数据迁移或 schema 变更时，动手前先列出并等确认。
+- 需求唯一入口是规格文件：改动先写 `.scratch/<feature-slug>/spec.md`（`/to-spec` 技能；本地 Markdown tracker 约定见 `docs/agents/issue-tracker.md`）；没有规格覆盖的改动不进入实现。
+- 规格只写意图、场景、边界与成功标准，不写技术路线；方案先定后做；涉及新依赖、破坏性接口、数据迁移或 schema 变更时，动手前先列出并等确认。
+- 仍然约束未来改动的决定记录在 `docs/adr/`；与既有 ADR 冲突时，在规格里说明理由并先更新 ADR。
+- 领域词汇以 `GLOSSARY.md` 为准；新概念先加词条，不要另造近义词。
 - 每次修改代码后，按用户要求做 3 次自我 code review，并如实标注发现。
-- 迁移设计与计划见 `docs/superpowers/specs/2026-11-10-claude-agent-sdk-migration-design.md` 与 `docs/superpowers/plans/`。
+- 历史需求账本（F1–F28）与旧 plans / specs 已于 2026-11-29 退役；需要时从 git 历史查看。
 
 ## 当前架构
 
+### 执行核与会话
+
 - v1 从 0 到 1 重建；`apps/api` 使用 FastAPI + Claude Agent SDK（Python，`ClaudeSDKClient`），模型走 DeepSeek 的 Anthropic 兼容端点；`apps/web` 使用 React + Vite + TypeScript。
-- 执行核：`SessionRegistry`（按 session 串行、跨 session 并发，并发数 = `BROWSER_CONCURRENCY`）+ `ClaudeTurnRunner`。缓存 client 按 `(agent_id, session_id)` 区分，默认空闲 TTL 300 秒、上限 8 个、每 60 秒清扫；轮末逐出在并发信号量释放后执行，断开有超时；`close_all` 每个 client 限时断开并把超时对象保留在 `_orphaned_clients` 并记 warning。断开每个 client 最多等 30 秒，close_all 总预算 35 秒；关机顺序为 registry → runner → browser → 其他服务，registry 约 10 秒、browser 最长 30 秒，正常可在 systemd TimeoutStopSec=90 内完成。client 开启 `forward_subagent_text`；每个子 Agent 用独立 `StreamMapper`，其文本/工具按 `parent_tool_use_id` 映射为 `subagent_*` 事件，注入轮（origin 非 human 的通知/peer/channel）不进入当前轮展示。
-- 会话/消息由 SDK transcript 管理：`~/.super-personal-platform/claude/projects/<agent_id>/<uuid>.jsonl`；会话列表/历史/重命名/删除走 `sdk_bridge` / `session_catalog`，平台不建 sessions/messages/runs 表。
-- 平台配置在 `data/settings.json`（`runtime`、`knowledge`、`agents`、`channels`、`channel_conversations`）；单文件、单锁、临时文件 + fsync + `os.replace`，写前留 `.bak`；密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。`.env` 密钥仅在首次种子时复制到 `settings.json`，之后以文件为准，平台不回写 `.env`。
-- 新库的 `app.db` 只创建五张表：`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留未使用的旧表。`market.db` 行情缓存不变。
-- `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 注入；修改 Agent/Provider 后关闭该 Agent 的空闲缓存 client；忙碌会话在下一次 turn 开始时按配置指纹（instructions + provider base_url/model/api_key）检测并重建。
+- 执行核：`SessionRegistry`（按 session 串行、跨 session 并发，并发数 = `BROWSER_CONCURRENCY`）+ `ClaudeTurnRunner`。缓存 client 按 `(agent_id, session_id)` 区分，默认空闲 TTL 300 秒、上限 8 个、每 60 秒清扫；轮末逐出在并发信号量释放后执行，断开有超时；`close_all` 每个 client 限时断开并把超时对象保留在 `_orphaned_clients` 并记 warning。断开每个 client 最多等 30 秒，close_all 总预算 35 秒；关机顺序为 registry → runner → browser → 其他服务，registry 约 10 秒、browser 最长 30 秒，正常可在 systemd `TimeoutStopSec=90` 内完成。client 开启 `forward_subagent_text`；每个子 Agent 用独立 `StreamMapper`，其文本/工具按 `parent_tool_use_id` 映射为 `subagent_*` 事件；注入轮（origin 非 human 的通知/peer/channel）不进入当前轮展示。
+- 会话/消息由 SDK transcript 管理：`~/.super-personal-platform/claude/projects/<agent_id>/<uuid>.jsonl`；会话列表/历史/重命名/删除走 `sdk_bridge` / `session_catalog`，平台不建 sessions/messages/runs 表。见 ADR-0001。
 - 重启恢复：`running_sessions` 租约 + `resume`（只恢复 `has_turn=1` 的 turn 租约，`has_turn=0` 的任务保留行不触发 resume）；恢复提示要求先检查状态、继续原任务、不重复已完成步骤；没有 transcript 的租约删除，但渠道空投递行填入「服务重启时这条消息尚未开始处理，请重新发送」并交由启动补发，网页来源没有投递行时写 warning 日志；暂停/归档 Agent 的租约保留。部署重启依赖 systemd `KillMode=mixed`（SIGTERM 只发给 uvicorn）和 uvicorn `--timeout-graceful-shutdown 10`，让应用先取消 turn 并保留租约；若 CLI 仍被信号杀死（exit 143/137），runner 也按中断保留租约。前端断线探活发现会话仍 busy 时会重新挂到当前 turn。
 - Agent 状态：`active` 正常接收网页/渠道/定时；`paused` 与 `archived` 都拒绝网页新消息（409）、暂停该 Agent 的渠道轮询（保留 cursor）并跳过定时任务；非 active Agent 的渠道仍可在渠道页查看、编辑和删除；配置页把状态改回 `active` 即恢复（archived 也在 `GET /api/agents` 列表中），微信轮询随状态变更自动重启。
-- Agent 权限档位：`agents[].access` 为 `full`（超级，`bypassPermissions`）或 `workspace`（受限，`dontAsk` + 白名单 + `PreToolUse` hook）；`default` 固定 full，新建 Agent 默认 workspace；hook 把文件工具限制在各自工作区（`..`、绝对越界、符号链接逃逸、本机/内网 WebFetch 都拒绝），Bash、Task 与插件工具在白名单内仍可越界（首版已知限制）；`access` 入 client 配置指纹。受限 Agent 的白名单包含服务器级 `mcp__browser`；浏览器工具自身的 URL/主机校验仍是安全边界。
-- 网页聊天：`POST /api/chat/messages` → `{session_id, turn_id, accepted}`；SSE `GET /api/sessions/{uuid}/stream?turn_id=...`；历史 `GET /api/sessions/{uuid}/messages?agent_id=...`；中断 `POST /api/sessions/{uuid}/interrupt` 返回 `{interrupted, cancelled_turn_ids}`，网页只丢弃被取消 turn 的占位消息，未被取消的排队追问继续跟随；历史把 `[Request interrupted by user]` 渲染为系统行，`No response requested.` 不显示；命令 `POST /api/chat/commands`（`/new` `/clear` `/stop` `/status` `/help`）。网页提交校验 Agent 为 active 且 session 属于该 Agent。SSE 事件除 `assistant_delta` / `reasoning_delta` / `tool_call`（带 tool_use id）/ `turn_end` 外，还包括子 Agent 的 `subagent_text` / `subagent_tool_call` 和后台任务的 `task_started` / `task_progress` / `task_updated` / `task_notification`；子 Agent 只实时显示；后台任务由会话级任务区展示并可在刷新/重连后恢复（F26），历史只重建主链的 thinking/tool_use。同进程刷新会在数秒内通过 `current_turn_id` 重放当前轮缓冲；SSE 断线按事件序号自动续传，进程重启才丢失，历史从 transcript 重建。运行中排队的追问按提交顺序显示「排队中 N/M」，可通过 `POST /api/sessions/{uuid}/turns/{turn_id}/cancel` 单独撤回；`/stop` 仍一次取消当前与全部排队。turn 进入终态（完成/失败/取消）后按 turn id 清理未被历史内容匹配上的乐观用户行，避免上下文压缩后历史从压缩摘要开始、内容匹配失效时该行残留在回答下面；断线期间错过 `turn_end` 的轮次在重连探活确认结束后同样清理。SSE 事件带递增 id，`GET /api/sessions/{uuid}/stream?turn_id=...&after=N` 从下标 N（含）开始回放；客户端断线先查 `GET /api/sessions/{uuid}/turn?turn_id=...` 判断该轮是否仍可订阅，再按序号重连。停止时前端冻结当前实时内容，历史已落盘则收敛为历史行，否则显示「已停止」行。切走会话或页面不可见时轮次完成/失败会在侧栏记未读点并在标签标题显示计数（仅内存）。侧栏会话行提供重命名弹窗，调用现有 rename 接口。`GET /api/chat/slash-commands?agent_id=...` 返回 Claude Code init frame 的 `slash_commands`（排除终端绑定与平台重名项），用于输入框命令面板；平台只处理自己实现的五个命令，其余裸命令只有出现在该列表里才作为普通消息转发给 Agent，未知命令回复当前可用列表。Agent 回复里的相对图片/文件链接按当前 Agent 工作区解析，经 `GET /api/agents/{agent_id}/files/{path}` 读取（可执行类型强制下载）；assistant 消息附带「产物」列表，来自 tool_use 的 `file_path` 与截图类工具 `filename`，实时事件 `tool_call.artifact`，工作区外路径不展示。回复末尾的「产物」使用响应式网格：文本文件是整行宽度的文档卡片（高度约半屏、超出在卡片内滚动），通过 `GET /api/agents/{agent_id}/file-preview/{path}` 读取内容（扩展名白名单、512 KB 截断、UTF-8 解码），`.md` 按 Markdown 渲染、其他文本原样滚动；图片是方块缩略图，PDF/Office/压缩包显示类型图标；预览缓存在页面内。回复中的 `markdown`/`md`/`text`/`txt`/`plaintext`/`log` 围栏自动换行，其他代码围栏保持横向滚动。消息操作支持整条复制/引用，也支持在单条消息内选中片段后划词引用；聊天页不显示顶部标题栏，手机端聊天视图顶栏只保留菜单按钮。语音输入：配置页「语音识别」用全局 DeepSeek API Key；输入框麦克风按钮录音后上传 `/api/asr/transcribe`，后端 ffmpeg 转 16 kHz 单声道 WAV 再调 DeepSeek ASR；录音时输入框位置显示实时波形与计时，右侧「取消」丢弃录音、「终止」把文字放进草稿、「发送」立即发出；转写与发送期间输入框显示加载状态，提示以输入框上方临时 tips 展示；已有草稿不会隐式发送，120 秒自动停止按终止处理；单次最长 120 秒，音频不落盘；生产机已装 ffmpeg，本地需自行安装。
-- 后台任务与会话任务区：`running_sessions` 两用——`has_turn=1` 是 turn 租约，启动恢复只处理这种行；`has_turn=0` 保留后台任务或已完成任务的记录。`tasks_json` 保存任务快照，`SessionTaskService` 负责 `task_*` 实时广播、1 秒防抖写库、10 分钟保留、32 任务/64KB 上限和保活；`GET /api/sessions/{id}/tasks` 返回快照，`GET /api/sessions/{id}/events` 是会话级 SSE（先订阅再快照，断线重连靠新快照）。前端在输入框上方显示会话级任务区，跨 turn 保留；有运行中任务时 client 不按空闲 TTL 逐出，每个任务从 `started_at` 起最多保活 10 分钟；client 逐出、连接超时、配置重建、服务关机或重启时任务标记「已中断」。每轮「执行过程」不再显示任务列表，只保留思考/工具/子 Agent；删除会话时同时 `forget` 任务行。
-- 渠道：配置与 `channel_conversations`（key `"{channel_id}:{external_id}"`，含 `context_token`）在 `settings.json`；`channel_inbounds` 幂等去重；`channel_deliveries` 在入队时创建 `queued`、turn 开始时提升为 `pending`，结束回填并发送，重启补发；同一联系人静默 6 秒打包（无总时长上限）；文本/图片/文件、引用找回与渠道命令都保留；运行期截图实时推送的 `channel_images` 接线未做（浏览器工具已接入，当前无调用方）。渠道消息在入队前创建 `queued` 投递行，turn 开始时提升为 `pending`；排队中重启由启动兜底答复，`/stop` 丢弃排队 turn 的投递行。
-- 定时：`cron_jobs.session_id` 是 SDK 会话 UUID；每次触发在专属会话入队一个 turn；会话忙时跳过并更新 `cron_jobs.last_skipped_at`；启动补跑最多一次；推送目标是当前 Agent 的 active 微信渠道下已有 1:1 联系人，复用渠道投递。
-- 清理：Claude Code 按其 `cleanupPeriodDays` 清理 transcript；平台把 `runtime.session_retention_days`（默认 30，0 写成 36500）同步到运行时 `claude/settings.json`，不跑扫描或删除任务。手动删除会话走 SDK `delete_session` 并尽力清理产物（截图、投递、渠道绑定）；渠道绑定指向已删除会话时，下一条入站自动新建会话并清掉旧投递行；`claude/` 下 auto memory 保留。
-- 记忆：记忆页有两张卡片——全局规则 = `claude/CLAUDE.md`（user 级 memory，每次对话开头完整注入、不按相关性筛选，适合必须遵守的规则，跨 Agent，编辑后留 `.bak`，mtime/size 入 client 配置指纹）；Agent 记忆 = `workspaces/<agent_id>/CLAUDE.md`（记忆页按侧栏 Agent 编辑，作为项目级 CLAUDE.md 只对该 Agent 生效，mtime/size 入指纹）。Agent 指令在 `settings.json`；Claude auto memory（`claude/projects/<agent_id>/memory/`）由 Claude 管理，记忆页只读展示；`agents[].auto_memory` 仅为兼容保留。平台没有记忆表、记忆工具、`/memory` 指令或整理记忆。
-- 技能：全局 `claude/skills/<name>/SKILL.md`；初始化模板在 `apps/api/app/seed_skills/`（`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`、`web-browser`），按「工具清单 + 组合方式 + 硬契约」组织；`web-browser` 是平台内置浏览器的使用说明（工具名、快照 ref、标签页与截图契约、站点来源规则），随平台版本分发。技能只是初始化参考：`.seed_state.json` 记录初始化哈希，未修改的随版本更新，改过的永久跳过，用户删除保留墓碑不复活（模板先退役再回归时除外），模板移除只删记录保留本地文件；保留的副本归入「其他技能」。来源分 `initial` / `ai` / `manual`，技能页显示「已调整」，任何技能都可删除；技能没有启用开关，所有 Agent 自动共享；平台没有给 Agent 定时任务工具，也不提供技能创作工具。
-- 插件集市：「插件」页（`/plugins`）管理 Claude Code 官方集市 `anthropics/claude-plugins-official`；插件以 user scope 装进运行时 `claude/`（`settings.json` 的 `enabledPlugins`、`plugins/`），所有 Agent 共享。平台调用 SDK 内置 CLI（与 runner 同一二进制）执行 `plugin` 命令，启动与读取不联网；`settings.json`、`plugins/installed_plugins.json` 与 `.plugins-revision` 纳入 client 配置指纹，安装/启停/更新/卸载后下一轮对话重建。插件可带 hooks/MCP，平台不提供沙箱。集市 `playwright` 插件已卸载（用户在插件页手动卸载，`enabledPlugins` 条目与安装记录均已移除；`plugins/cache` 中的插件文件保留，可随时从集市重新安装），浏览器能力改由平台进程内 MCP 提供。
-- 平台业务工具：回测 4 个、行情 2 个、交易记录 5 个、资产配置 6 个、缠论 2 个，共 19 个，通过进程内 `platform_tools` SDK MCP server 暴露为 `mcp__platform_tools__*`；runner 为每个缓存的 client 构建 server，插件自带 MCP 继续并存。server 配置 `timeout`（至少 180 秒）和 `disableAutoBackground`，覆盖 `backtest_run` 约 90 秒等待。工具页读取每个 Agent 最近一轮 init frame 的 `tools` / `mcp_servers` / `skills` / `plugins` / `plugin_errors`，不维护 Claude 工具清单。平台自带浏览器工具已接入：进程内 `browser` SDK MCP server 提供 `mcp__browser__navigate/snapshot/click/type/fill_form/press_key/select_option/wait_for/navigate_back/tabs/take_screenshot/console_messages/close`，复用 `BrowserSession`（venv 的 Playwright + Chromium，无需 Node/npx）；每个会话独立 `chat-<id 前缀>` 标签页、共享 `data/browser_state.json` 登录态，懒启动、空闲 `BROWSER_IDLE_SECONDS`（默认 300）回收、`runner.close_all()` 之后优雅关闭；截图文件名必须是工作区相对路径且以 `.png` 结尾。全局标签页满额时按创建顺序关闭其它会话的标签页（本会话标签页不动，驱逐不等目标 tab 操作锁），本会话自己占满时才返回 `shared browser tabs` 错误；其它会话的标签页都在执行操作时不会驱逐，返回“稍后重试”的共享配额错误。页面渲染进程崩溃由 `page.on("crash")` 标记，下次访问时摘除并重建该标签页，单页崩溃不重置共享浏览器。`web_search`/`web_fetch`、`skill_save` 仍未接入，搜索走内置 WebSearch/WebFetch。交易记录与资产配置的写入工具对 Agent 开放。`langchain-core` 暂留，用于工具包装。
+- Agent 权限档位：`agents[].access` 为 `full`（超级，`bypassPermissions`）或 `workspace`（受限，`dontAsk` + 白名单 + `PreToolUse` hook）；`default` 固定 full，新建 Agent 默认 workspace；hook 把文件工具限制在各自工作区（`..`、绝对越界、符号链接逃逸、本机/内网 WebFetch 都拒绝），Bash、Task 与插件工具在白名单内仍可越界（首版已知限制）；`access` 入 client 配置指纹。受限 Agent 的白名单包含服务器级 `mcp__browser`；浏览器工具自身的 URL/主机校验仍是安全边界。见 ADR-0003。
+
+### 配置、密钥与数据
+
+- 平台配置在 `data/settings.json`（`runtime`、`knowledge`、`maps`、`asr`、`agents`、`channels`、`channel_conversations`）；单文件、单锁、临时文件 + fsync + `os.replace`，写前留 `.bak`；密钥字段只返回 `has_api_key` / `has_password` / `has_credentials`。`.env` 密钥仅在首次种子时复制到 `settings.json`，之后以文件为准，平台不回写 `.env`。见 ADR-0005。
+- 新库的 `app.db` 只创建五张表：`cron_jobs`、`channel_inbounds`、`channel_deliveries`、`backtests`、`running_sessions`；从旧版升级的库会保留未使用的旧表。`market.db` 行情缓存不变。
+- `instructions` 通过 SDK `system_prompt={type: preset, preset: claude_code, append: instructions}` 注入；修改 Agent/Provider 后关闭该 Agent 的空闲缓存 client；忙碌会话在下一次 turn 开始时按配置指纹（instructions + provider base_url/model/api_key + access + 全局规则/Agent 记忆 mtime/size + 插件状态）检测并重建。
+- Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区，彻底删除会删除工作区与 transcript 目录。
+
+### 网页聊天
+
+- 接口：`POST /api/chat/messages` → `{session_id, turn_id, accepted}`；SSE `GET /api/sessions/{uuid}/stream?turn_id=...`；历史 `GET /api/sessions/{uuid}/messages?agent_id=...`；中断 `POST /api/sessions/{uuid}/interrupt` 返回 `{interrupted, cancelled_turn_ids}`，网页只丢弃被取消 turn 的占位消息，未被取消的排队追问继续跟随；历史把 `[Request interrupted by user]` 渲染为系统行，`No response requested.` 不显示；命令 `POST /api/chat/commands`（`/new` `/clear` `/stop` `/status` `/help`）。
+- 网页提交校验 Agent 为 active 且 session 属于该 Agent。SSE 事件除 `assistant_delta` / `reasoning_delta` / `tool_call`（带 tool_use id）/ `turn_end` 外，还包括子 Agent 的 `subagent_text` / `subagent_tool_call` 和后台任务的 `task_started` / `task_progress` / `task_updated` / `task_notification`；子 Agent 只实时显示；后台任务由会话级任务区展示并可在刷新/重连后恢复，历史只重建主链的 thinking/tool_use。
+- 同进程刷新会在数秒内通过 `current_turn_id` 重放当前轮缓冲；SSE 断线按事件序号自动续传，进程重启才丢失，历史从 transcript 重建。运行中排队的追问按提交顺序显示「排队中 N/M」，可通过 `POST /api/sessions/{uuid}/turns/{turn_id}/cancel` 单独撤回；`/stop` 仍一次取消当前与全部排队。
+- turn 进入终态（完成/失败/取消）后按 turn id 清理未被历史内容匹配上的乐观用户行，避免上下文压缩后历史从压缩摘要开始、内容匹配失效时该行残留在回答下面；断线期间错过 `turn_end` 的轮次在重连探活确认结束后同样清理。SSE 事件带递增 id，`GET /api/sessions/{uuid}/stream?turn_id=...&after=N` 从下标 N（含）开始回放；客户端断线先查 `GET /api/sessions/{uuid}/turn?turn_id=...` 判断该轮是否仍可订阅，再按序号重连。
+- 停止时前端冻结当前实时内容，历史已落盘则收敛为历史行，否则显示「已停止」行。切走会话或页面不可见时轮次完成/失败会在侧栏记未读点并在标签标题显示计数（仅内存）。侧栏会话行提供重命名弹窗，调用现有 rename 接口。
+- 命令面板：`GET /api/chat/slash-commands?agent_id=...` 返回 Claude Code init frame 的 `slash_commands`（排除终端绑定与平台重名项）；平台只处理自己实现的五个命令，其余裸命令只有出现在该列表里才作为普通消息转发给 Agent，未知命令回复当前可用列表。
+- 附件：保存到 `workspaces/<agent_id>/uploads/`，单文件 10 MB；图片浏览器端缩到最长边 1600 px；消息里写文件名、相对工作区路径（`uploads/<name>`）和字节数，Agent 用文件工具按 SDK cwd 解析；旧 transcript 的 `/uploads/<name>` 兼容解析。
+- 产物：Agent 回复里的相对图片/文件链接按当前 Agent 工作区解析，经 `GET /api/agents/{agent_id}/files/{path}` 读取（可执行类型强制下载）；assistant 消息附带「产物」列表，来自 tool_use 的 `file_path` 与截图类工具 `filename`，实时事件 `tool_call.artifact`，工作区外路径不展示。回复末尾「产物」使用响应式网格：文本文件是整行宽度的文档卡片（高度约半屏、超出在卡片内滚动），通过 `GET /api/agents/{agent_id}/file-preview/{path}` 读取（扩展名白名单、512 KB 截断、UTF-8 解码），`.md` 按 Markdown 渲染、其他文本原样滚动；图片是方块缩略图，PDF/Office/压缩包显示类型图标；预览缓存在页面内。
+- 消息操作支持整条复制/引用，也支持在单条消息内选中片段后划词引用；聊天页不显示顶部标题栏，手机端聊天视图顶栏只保留菜单按钮。回复中的 `markdown`/`md`/`text`/`txt`/`plaintext`/`log` 围栏自动换行，其他代码围栏保持横向滚动。
+- 语音输入：配置页「语音识别」用全局 DeepSeek API Key；输入框麦克风按钮录音后上传 `/api/asr/transcribe`，后端 ffmpeg 转 16 kHz 单声道 WAV 再调 DeepSeek ASR；录音时输入框位置显示实时波形与计时，右侧「取消」丢弃录音、「终止」把文字放进草稿、「发送」立即发出；转写与发送期间输入框显示加载状态，提示以输入框上方临时 tips 展示；已有草稿不会隐式发送，120 秒自动停止按终止处理；单次最长 120 秒，音频不落盘；生产机已装 ffmpeg，本地需自行安装。
+
+### 后台任务与会话任务区
+
+- `running_sessions` 两用——`has_turn=1` 是 turn 租约，启动恢复只处理这种行；`has_turn=0` 保留后台任务或已完成任务的记录。`tasks_json` 保存任务快照，`SessionTaskService` 负责 `task_*` 实时广播、1 秒防抖写库、10 分钟保留、32 任务/64KB 上限和保活；`GET /api/sessions/{id}/tasks` 返回快照，`GET /api/sessions/{id}/events` 是会话级 SSE（先订阅再快照，断线重连靠新快照）。
+- 前端在输入框上方显示会话级任务区，跨 turn 保留；有运行中任务时 client 不按空闲 TTL 逐出，每个任务从 `started_at` 起最多保活 10 分钟；client 逐出、连接超时、配置重建、服务关机或重启时任务标记「已中断」。每轮「执行过程」不再显示任务列表，只保留思考/工具/子 Agent；删除会话时同时 `forget` 任务行。
+
+### 渠道
+
+- 渠道配置与 `channel_conversations`（key `"{channel_id}:{external_id}"`，含 `context_token`）在 `settings.json`；`channel_inbounds` 幂等去重；`channel_deliveries` 在入队时创建 `queued`、turn 开始时提升为 `pending`，结束回填并发送，重启补发；同一联系人静默 6 秒打包（无总时长上限）；文本/图片/文件、引用找回与渠道命令都保留；运行期截图实时推送的 `channel_images` 接线未做（浏览器工具已接入，当前无调用方）。
+- 渠道消息在入队前创建 `queued` 投递行，turn 开始时提升为 `pending`；排队中重启由启动兜底答复，`/stop` 丢弃排队 turn 的投递行。
+
+### 定时
+
+- `cron_jobs.session_id` 是 SDK 会话 UUID；每次触发在专属会话入队一个 turn；会话忙时跳过并更新 `cron_jobs.last_skipped_at`；启动补跑最多一次；推送目标是当前 Agent 的 active 微信渠道下已有 1:1 联系人，复用渠道投递。
+
+### 技能、插件与工具
+
+- 技能：全局 `claude/skills/<name>/SKILL.md`；初始化模板在 `apps/api/app/seed_skills/`（`quant-backtest`、`cron-scheduler`、`trade-journal`、`allocation`、`chanlun`、`web-browser`），按「工具清单 + 组合方式 + 硬契约」组织；`web-browser` 是平台内置浏览器的使用说明，随平台版本分发。技能只是初始化参考：`.seed_state.json` 记录初始化哈希，未修改的随版本更新，改过的永久跳过，用户删除保留墓碑不复活（模板先退役再回归时除外），模板移除只删记录保留本地文件；保留的副本归入「其他技能」。来源分 `initial` / `ai` / `manual`，技能页显示「已调整」，任何技能都可删除；技能没有启用开关，所有 Agent 自动共享；平台没有给 Agent 定时任务工具，也不提供技能创作工具。
+- 插件集市：「插件」页（`/plugins`）管理 Claude Code 官方集市 `anthropics/claude-plugins-official`；插件以 user scope 装进运行时 `claude/`（`settings.json` 的 `enabledPlugins`、`plugins/`），所有 Agent 共享。平台调用 SDK 内置 CLI（与 runner 同一二进制）执行 `plugin` 命令，启动与读取不联网；`settings.json`、`plugins/installed_plugins.json` 与 `.plugins-revision` 纳入 client 配置指纹，安装/启停/更新/卸载后下一轮对话重建。插件可带 hooks/MCP，平台不提供沙箱。集市 `playwright` 插件已卸载，浏览器能力改由平台进程内 MCP 提供。
+- 平台业务工具：回测 4 个、行情 2 个、交易记录 5 个、资产配置 6 个、缠论 2 个，共 19 个，通过进程内 `platform_tools` SDK MCP server 暴露为 `mcp__platform_tools__*`；runner 为每个缓存的 client 构建 server，插件自带 MCP 继续并存。server 配置 `timeout`（至少 180 秒）和 `disableAutoBackground`，覆盖 `backtest_run` 约 90 秒等待。工具页读取每个 Agent 最近一轮 init frame 的 `tools` / `mcp_servers` / `skills` / `plugins` / `plugin_errors`，不维护 Claude 工具清单。
+- 浏览器工具：进程内 `browser` SDK MCP server 提供 `mcp__browser__navigate/snapshot/click/type/fill_form/press_key/select_option/wait_for/navigate_back/tabs/take_screenshot/console_messages/close`，复用 `BrowserSession`（venv 的 Playwright + Chromium，无需 Node/npx）；每个会话独立 `chat-<id 前缀>` 标签页、共享 `data/browser_state.json` 登录态，懒启动、空闲 `BROWSER_IDLE_SECONDS`（默认 300）回收、`runner.close_all()` 之后优雅关闭；截图文件名必须是工作区相对路径且以 `.png` 结尾。全局标签页满额时按创建顺序关闭其它会话的标签页（本会话标签页不动，驱逐不等目标 tab 操作锁），本会话自己占满时才返回 `shared browser tabs` 错误；其它会话的标签页都在执行操作时不会驱逐，返回“稍后重试”的共享配额错误。页面渲染进程崩溃由 `page.on("crash")` 标记，下次访问时摘除并重建该标签页，单页崩溃不重置共享浏览器。`web_search`/`web_fetch`、`skill_save` 仍未接入，搜索走内置 WebSearch/WebFetch。见 ADR-0004。
 - 地图工具：配置页「地图」全局启用高德官方 HTTP MCP（`amap`，`https://mcp.amap.com/mcp?key=...`，需要高德 Web 服务 Key）。启用且有 Key 时 Runner 把 `amap` 加入 `mcp_servers`，模型可调用 `mcp__amap__*`（POI、地理编码、路线、距离、天气等）；停用或无 Key 时不连接。Key 存在 `settings.json` 的 `maps` 节，`GET/PUT /api/maps` 只返回 `enabled`、`provider`、`has_api_key`，CLI stderr 调试日志中的 Key 脱敏；改 Key/开关后同一会话的下一轮对话重建 client。Key 会进入 SDK 启动 CLI 的 `--mcp-config` 参数，单用户宿主机上本机用户可通过 ps 查看。本期不做地图 UI，也不做 per-Agent 开关。
+- 交易记录与资产配置的写入工具对 Agent 开放；`langchain-core` 暂留，用于工具包装。
+
+### 记忆、知识库与随机笔记
+
+- 记忆：记忆页有两张卡片——全局规则 = `claude/CLAUDE.md`（user 级 memory，每次对话开头完整注入、不按相关性筛选，适合必须遵守的规则，跨 Agent，编辑后留 `.bak`，mtime/size 入 client 配置指纹）；Agent 记忆 = `workspaces/<agent_id>/CLAUDE.md`（记忆页按侧栏 Agent 编辑，作为项目级 CLAUDE.md 只对该 Agent 生效，mtime/size 入指纹）。Agent 指令在 `settings.json`；Claude auto memory（`claude/projects/<agent_id>/memory/`）由 Claude 管理，记忆页只读展示；平台没有记忆表、记忆工具、`/memory` 指令或整理记忆。
 - 知识库：`KnowledgeSyncRuntime` 在进程内把 WebDAV 目录双向同步到 `knowledge/`；删除双向传播，本地删除要连续两次同步确认（单轮 20 个以上且超过已跟踪文件一半按本地镜像事故处理，不传远端并恢复本地）；配置在 `settings.json` 的 `knowledge` 节；本版不挂载给 Agent。
 - 随机笔记：`/knowledge` 页面每次随机展示 `knowledge/` 下一整篇 `.md`/`.txt` 笔记（Markdown 渲染、卡片内滚动），洗牌不重复、本轮看完自动重置；进度存 `data/knowledge_deck.json`（原子写），索引 60 秒缓存；`GET /api/knowledge/notes/random`；卡片「追问」切到聊天新会话并预置引用（路径 + 正文前 6000 字），纯前端、不调模型。
+
+### 业务页面与前端
+
 - 业务页面（回测、交易记录、资产配置、缠论图）不绑定 Agent，逻辑与旧版一致：`backtests` 表、`trade-journal.jsonl`、`allocation.json` + `allocation-ledger.jsonl`、`market.db`。
-- Agent 工作区固定 `workspaces/<agent_id>/`；归档保留工作区，彻底删除会删除工作区与 transcript 目录。
-- 运行时目录 `~/.super-personal-platform/`：`claude/`（含 `skills/` 技能库、`plugins/` 集市与插件、`settings.json`、`CLAUDE.md` 画像）、`workspaces/<agent>/`（含 Agent 记忆 `CLAUDE.md`）、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, knowledge_deck.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
-- 生产：宿主机 systemd 用户服务 + venv + SQLite，单进程 8888；FastAPI 直接托管 `apps/web/dist`。
 - UI 沿用珍珠冷光 + 极光 + 玻璃风格；路由为自建 History API（`apps/web/src/routes.ts`，选中的 Agent 是路径前缀 `/a/<agent_id>`，无前缀旧链接回落 `localStorage`），页面 `/chat`、`/config`、`/memory`、`/knowledge`、`/skills`、`/tools`、`/plugins`、`/channels`、`/cron`、`/backtest`、`/journal`、`/allocation`、`/chan`；≤860px 顶部栏 + 抽屉。侧栏分「Agent / 管理」两个工作区，Agent 选择器只在 Agent 工作区显示；Agent 工作区按「Agent 工作台 / Agent 能力」两个可折叠菜单分组（「Agent 能力」含技能、工具、插件、渠道、定时、记忆），管理工作区是「交易 / Agent全局配置」两个可折叠菜单与顶部的「随机笔记」入口，后者展开为 Provider、Agent、知识库、地图、语音识别、运行环境六个配置分区和退出登录，点分区直达配置页对应分区（页面内无分区 tab 栏，分区选择只在内存，刷新回 Provider）；各菜单默认全部展开，点击标题独立收起或展开，进入某页自动展开所在菜单。点「管理」回本次打开页面期间最后停留的管理页（初始按当前路由，否则回测），已在管理页时不跳转。
+
+### 部署与清理
+
+- 生产：宿主机 systemd 用户服务 + venv + SQLite，单进程 8888；FastAPI 直接托管 `apps/web/dist`。见 ADR-0006。
+- 清理：Claude Code 按其 `cleanupPeriodDays` 清理 transcript；平台把 `runtime.session_retention_days`（默认 30，0 写成 36500）同步到运行时 `claude/settings.json`，不跑扫描或删除任务。手动删除会话走 SDK `delete_session` 并尽力清理产物（截图、投递、渠道绑定）；渠道绑定指向已删除会话时，下一条入站自动新建会话并清掉旧投递行；`claude/` 下 auto memory 保留。
+- 运行时目录 `~/.super-personal-platform/`：`claude/`（含 `skills/`、`plugins/`、`settings.json`、`CLAUDE.md`）、`workspaces/<agent>/`（含 Agent 记忆 `CLAUDE.md`）、`knowledge/`、`tmp/`、`data/{settings.json, app.db, market.db, knowledge_sync_state.json, knowledge_deck.json, trade-journal.jsonl, allocation.json, allocation-ledger.jsonl, browser_state.json, backtests/}`、`.env`。
 
 ## 运行约定
 
@@ -48,7 +92,7 @@
 - 聊天滚动跟随按用户意图判定：只有主动上滚才暂停跟随，布局变化和程序性滚动不改变跟随状态；消息行与消息列表按引用 memo，侧栏轮询结果等值时不更新状态。
 - 长会话消息列表使用 `@tanstack/react-virtual` 窗口化；历史消息只渲染可视区附近，定位消息通过 `scrollToIndex`，DOM 查找只用于窗口外的排队消息。
 - 非聊天页面通过 `React.lazy` 按路由分包，登录后空闲预取；页面列表数据用 `src/pageCache.ts` 做进程内 stale-while-revalidate，二次进入先渲染缓存再后台刷新，写操作后使对应前缀失效。
-- 定时调度在单进程内；不要为 API 启动多个 worker。
+- 定时调度在单进程内；不要为 API 启动多个 worker。见 ADR-0002。
 - 会话删除：手动删除先调用 SDK `delete_session`，再尽力清理平台产物（截图、投递、渠道绑定），删除期间新提交会被拒绝；过期 transcript 由 Claude Code 清理，平台不再有后台清理路径。渠道绑定指向已删除会话时，下一条入站自动新建会话并清掉旧投递行。
 - 平台配置只写 `data/settings.json`；不要恢复 `app_configs` / `providers` / `agents` / `channels` 等旧表。
 - 密钥只通过环境变量/`settings.json` 提供，不写入仓库、日志或前端响应。
@@ -87,8 +131,9 @@ cd apps/web && npm run build
 
 ## 文档同步
 
-- 行为、接口、配置、依赖、目录结构变化时同步更新 `docs/intent.md`、本文件和 `README.md`。
-- 旧架构文档不再作为依据；需要时从 git 历史查看。
+- 行为、接口、配置、依赖、目录结构变化时同步更新 `README.md`（操作手册）、本文件（架构与约定）与 `GLOSSARY.md`（新术语）。
+- 仍然约束未来改动的决定写入 `docs/adr/`；需求写进 `.scratch/<feature>/spec.md`，不再维护编号账本。见 ADR-0007。
+- `docs/agents/*.md` 是 mattpocock-skills 的仓库配置；切换 issue tracker 或标签词汇时同步。
 
 ## Agent skills
 
@@ -102,4 +147,4 @@ Issues 以本地 Markdown 存放在 `.scratch/<feature-slug>/`，每个票据一
 
 ### Domain docs
 
-单上下文（single-context）：根目录 `GLOSSARY.md` 与 `docs/adr/`，由 `/domain-modeling` 按需创建。见 `docs/agents/domain.md`。
+单上下文（single-context）：根目录 `GLOSSARY.md` 与 `docs/adr/`。见 `docs/agents/domain.md`。

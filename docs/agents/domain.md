@@ -16,10 +16,8 @@ This repo uses the **single-context** layout (no monorepo workspace signals):
 
 ```
 /
-├── GLOSSARY.md                        ← created lazily by /domain-modeling
-├── docs/adr/                          ← created lazily by /domain-modeling
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
+├── GLOSSARY.md                        ← domain vocabulary
+├── docs/adr/                          ← durable decisions
 └── apps/
     ├── api/                           ← FastAPI + Claude Agent SDK
     └── web/                           ← React + Vite
@@ -31,7 +29,7 @@ When your output names a domain concept (in an issue title, a refactor proposal,
 
 If the concept you need isn't in the glossary yet, that's a signal: either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
 
-Note: this project's authoritative requirement source is `docs/intent.md` (F1–F17). Treat its feature names as vocabulary that must not be renamed.
+Requirements live as specs under `.scratch/<feature-slug>/spec.md`; durable decisions live in `docs/adr/`. Neither replaces `GLOSSARY.md` as the vocabulary source.
 
 ## Flag ADR conflicts
 

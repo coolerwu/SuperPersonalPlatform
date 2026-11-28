@@ -1,6 +1,6 @@
 ---
 name: project-commit
-description: Commit workflow for the v1 Agent Command Center (FastAPI + Claude Agent SDK in apps/api, React/Vite in apps/web). Use when asked to prepare, commit, or push changes. Keeps docs/intent.md, CLAUDE.md, README, deploy config, and the API/web checks in sync.
+description: Commit workflow for the v1 Agent Command Center (FastAPI + Claude Agent SDK in apps/api, React/Vite in apps/web). Use when asked to prepare, commit, or push changes. Keeps CLAUDE.md, README, GLOSSARY, ADRs, specs, deploy config, and the API/web checks in sync.
 ---
 
 # Project Commit
@@ -9,14 +9,16 @@ Use this skill to finish changes in `/Users/wulang/Desktop/AI/SuperPersonalPlatf
 
 ## Workflow
 
-1. Read `CLAUDE.md` and `docs/intent.md`.
+1. Read `CLAUDE.md`, and the change's spec at `.scratch/<feature-slug>/spec.md` if one exists.
 2. Run `git status --short` before staging anything.
 3. Inspect the diff and confirm only the intended files are in scope.
 4. Synchronize documentation when behavior, interfaces, dependencies, commands,
    or deployment changed:
-   - `docs/intent.md` for requirements/acceptance changes;
-   - `CLAUDE.md` for agent workflow or long-term collaboration changes;
+   - `.scratch/<feature-slug>/spec.md` for the requirement and its acceptance criteria;
+   - `CLAUDE.md` for agent workflow, architecture or long-term collaboration changes;
    - `README.md` for local/dev/deploy commands and configuration;
+   - `GLOSSARY.md` for new domain terms;
+   - `docs/adr/` for decisions that still constrain future changes;
    - `deploy/.env.example` for new required environment variables;
    - this skill when the commit workflow itself changes.
 5. Run the required checks:
